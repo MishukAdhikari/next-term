@@ -1,4 +1,5 @@
 import AppKit
+import SwiftTerm
 import Network
 import NextTermCore
 
@@ -485,6 +486,7 @@ enum SelfTest {
         await gutterAndCollapseChecks(c, proj: proj)
         await deletedFileChecks(c, proj: proj)
         await updateChecks(c)
+        await platformLinkChecks(c)
         await importChecks(c, proj: proj)
 
         // The tree remembers what was expanded when you switch to a tab in another folder and back.
@@ -831,6 +833,45 @@ enum SelfTest {
         run("rm", "-q", "-r", "src/gone.txt", "src/olddir")
         run("commit", "-qm", "deleted test done")
         _ = await wait(8) { row("gone.txt") == nil && row("olddir") == nil }
+    }
+
+    /// The links agent platforms print (LangGraph's dev server, LangSmith, Weave, MLflow) are found whole:
+    /// a Studio link with a second URL inside it, emoji and colour before them, and one long enough to
+    /// wrap. Pinned here because it rests on SwiftTerm's link pattern, which can change under us.
+    private static func platformLinkChecks(_ c: TerminalWindowController) async {
+        let tab = c.addTab(directory: "/tmp")
+        guard await wait(20, { tab.status.integrated }) else { return check(false, "a tab for the link checks starts") }
+        await pause(0.3)
+        let terminal = tab.view.getTerminal()
+        let cases: [(prefix: String, url: String)] = [
+            ("- \u{1b}[36m🎨 Studio UI: \u{1b}[0m", "https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024"),
+            ("URL: ", "https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024&organizationId=0b0f2c3e-1d2a-4f5b-9c8d-7e6f5a4b3c2d"),
+            ("- 📚 API Docs: ", "http://127.0.0.1:2024/docs"),
+            ("View the run at ", "https://smith.langchain.com/o/0b0f2c3e-1d2a-4f5b-9c8d-7e6f5a4b3c2d/projects/p/4a1b2c3d-5e6f-4a7b-8c9d-0e1f2a3b4c5d/r/"
+                + "9f8e7d6c-5b4a-4c3d-2e1f-0a9b8c7d6e5f?poll=true&trace_id=1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f"),
+            ("🍩 ", "https://wandb.ai/team/rag-eval/r/call/0192a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b"),
+            ("🏃 View run bright-cat-42 at: ", "http://127.0.0.1:5000/#/experiments/1/runs/3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c"),
+        ]
+        var failures: [String] = []
+        var wrapped = false
+        for (prefix, url) in cases {
+            tab.view.feed(text: "\u{1b}[H\u{1b}[2J" + prefix + url + "\r\n")
+            // Columns before the URL: escape codes take none, these emoji two each.
+            let plain = prefix.replacingOccurrences(of: "\u{1b}\\[[0-9;]*m", with: "", options: .regularExpression)
+            let start = plain.unicodeScalars.reduce(0) { $0 + ($1.properties.isEmojiPresentation ? 2 : 1) }
+            let cols = terminal.cols
+            for offset in [8, url.count - 2] {
+                let index = start + offset
+                if index / cols > 0 { wrapped = true }
+                let found = terminal.link(at: .screen(SwiftTerm.Position(col: index % cols, row: index / cols)), mode: .explicitAndImplicit)
+                if found != url { failures.append("\(url.prefix(40))… at \(offset): \(found ?? "nil")") }
+            }
+        }
+        check(failures.isEmpty, "agent platforms' links are found whole (LangGraph Studio, LangSmith, Weave, MLflow)",
+              failures.joined(separator: " | "))
+        check(wrapped, "including a link that wraps onto the next line")
+        tab.view.feed(text: "\u{1b}[H\u{1b}[2J")
+        c.requestClose(tab)
     }
 
     /// A new version: the update window over the front window (the keyboard stays in the terminal), the

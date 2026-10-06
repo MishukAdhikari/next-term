@@ -140,6 +140,16 @@ import Testing
         #expect(AgentSessions.clean("deploy with token=abc123 now").contains("•••"))
         #expect(!AgentSessions.clean("key ghp_abcdefghijklmnopqrstuvwxyz0123").contains("ghp_"))
         #expect(AgentSessions.clean("Fix the login bug") == "Fix the login bug")
+        // RAG projects: LangSmith and the model and search providers they use.
+        // Made up, and put together here so no key-shaped text sits in the source (GitHub's push
+        // protection would take a real-looking one for a leak).
+        let filler = String(repeating: "0123456789abcdef", count: 2)
+        for key in ["lsv2_pt_" + filler + "_0123456789", "lsv2_sk_" + filler, "hf_" + filler, "gsk_" + filler, "tvly-dev-" + filler,
+                    "r8_" + filler, "xai-" + filler, "pcsk_" + filler] {
+            #expect(AgentSessions.clean("set \(key) in .env") == "set ••• in .env", "\(key)")
+            #expect(SecretGuard.looksSecret(key), "\(key)")
+        }
+        #expect(AgentSessions.clean("Trace the LangGraph agent in LangSmith") == "Trace the LangGraph agent in LangSmith")
         #expect(AgentSessions.clean(String(repeating: "word ", count: 100)).count == 200)
         #expect(AgentSessions.clean("two\n\nlines") == "two lines")
     }
