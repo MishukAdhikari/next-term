@@ -26,7 +26,7 @@ enum MCPRegistration {
             let programs = LoginShell.programs
             var results: [String: MCPRegistrar.Status] = [:]
             for target in MCPRegistrar.targets() {
-                let installed = target.programs.contains { programs[$0] != nil }
+                let installed = MCPRegistrar.isInstalled(target, found: programs)
                 results[target.id] = on ? MCPRegistrar.register(target, command: command, programInstalled: installed)
                                         : MCPRegistrar.unregister(target)
             }

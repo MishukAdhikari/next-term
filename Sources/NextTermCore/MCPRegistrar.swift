@@ -28,6 +28,9 @@ public enum MCPRegistrar {
         public let name: String
         /// Program names: when one is installed, a missing configuration file is created.
         public let programs: [String]
+        /// Folders whose existence also means the agent is installed (Cursor's command is now the
+        /// generic `agent`, too common a name to look for; its ~/.cursor folder says it is there).
+        public var markers: [String] = []
         public let file: String
         public let format: Format
         /// JSON: the top-level key holding the servers (`mcpServers`, `mcp`, `amp.mcpServers`).
@@ -59,7 +62,7 @@ public enum MCPRegistrar {
             Target(id: "qwen", name: "Qwen Code", programs: ["qwen"], file: path(".qwen/settings.json"),
                    format: .json(strict: false), container: "mcpServers", preamble: ["$version": "4"],
                    entry: { ["command": $0, "args": ["mcp"], "alwaysLoadTools": true] }),
-            Target(id: "cursor", name: "Cursor", programs: ["cursor-agent"], file: path(".cursor/mcp.json"),
+            Target(id: "cursor", name: "Cursor", programs: ["cursor-agent"], markers: [path(".cursor")], file: path(".cursor/mcp.json"),
                    format: .json(strict: false), container: "mcpServers", preamble: [:],
                    entry: { ["type": "stdio", "command": $0, "args": ["mcp"]] }),
             Target(id: "opencode", name: "opencode", programs: ["opencode"], file: opencode,
@@ -89,6 +92,11 @@ public enum MCPRegistrar {
     public static func isOurs(command: String?) -> Bool {
         guard let command else { return false }
         return (command as NSString).lastPathComponent == "nxtrm" && command.contains(".app/Contents/Resources/bin/")
+    }
+
+    /// Installed: one of its programs is on the PATH (`found` maps names to paths), or a marker folder exists.
+    public static func isInstalled(_ target: Target, found: [String: String]) -> Bool {
+        target.programs.contains { found[$0] != nil } || target.markers.contains { FileManager.default.fileExists(atPath: $0) }
     }
 
     // MARK: register / unregister

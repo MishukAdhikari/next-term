@@ -133,6 +133,16 @@ import Testing
         #expect(try read(codex.file) == quoted)
     }
 
+    @Test func cursorIsFoundByItsFolder() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let cursor = try target("cursor", home: home)
+        #expect(!MCPRegistrar.isInstalled(cursor, found: [:]))
+        try FileManager.default.createDirectory(atPath: home + "/.cursor", withIntermediateDirectories: true)
+        #expect(MCPRegistrar.isInstalled(cursor, found: [:]))
+        #expect(MCPRegistrar.isInstalled(try target("codex", home: home), found: ["codex": "/usr/local/bin/codex"]))
+    }
+
     @Test func notInstalledMeansNothingWritten() throws {
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
