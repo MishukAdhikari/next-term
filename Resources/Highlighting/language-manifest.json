@@ -5,14 +5,20 @@
   "c++": "cpp",
   "cjs": "javascript",
   "clj": "clojure",
+  "coffeescript": "coffee",
   "cs": "csharp",
   "cts": "typescript",
   "dockerfile": "docker",
   "erl": "erlang",
+  "gjs": "glimmer-js",
   "gql": "graphql",
+  "gts": "glimmer-ts",
+  "hbs": "handlebars",
   "hs": "haskell",
+  "jade": "pug",
   "jl": "julia",
   "js": "javascript",
+  "justfile": "just",
   "kt": "kotlin",
   "kts": "kotlin",
   "makefile": "make",
@@ -31,6 +37,7 @@
   "rs": "rust",
   "sh": "shellscript",
   "shell": "shellscript",
+  "styl": "stylus",
   "tf": "terraform",
   "tfvars": "terraform",
   "ts": "typescript",
@@ -40,6 +47,137 @@
   "zsh": "shellscript"
  },
  "languages": [
+  {
+   "aliases": [],
+   "embeddedIn": [
+    "angular-ts",
+    "angular-html"
+   ],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "angular-expression",
+   "injectTo": [],
+   "kind": "injection",
+   "resource": "grammars/angular-expression.json",
+   "scopeName": "expression.ng"
+  },
+  {
+   "aliases": [],
+   "displayName": "Angular HTML",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "html",
+    "angular-expression",
+    "angular-let-declaration",
+    "angular-template",
+    "angular-template-blocks"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "angular-html",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/angular-html.json",
+   "scopeName": "text.html.derivative.ng"
+  },
+  {
+   "aliases": [],
+   "embeddedIn": [
+    "angular-ts"
+   ],
+   "embeddedLangs": [
+    "scss"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "angular-inline-style",
+   "injectTo": [],
+   "kind": "injection",
+   "resource": "grammars/angular-inline-style.json",
+   "scopeName": "inline-styles.ng"
+  },
+  {
+   "aliases": [],
+   "embeddedIn": [
+    "angular-ts"
+   ],
+   "embeddedLangs": [
+    "angular-html",
+    "angular-template"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "angular-inline-template",
+   "injectTo": [],
+   "kind": "injection",
+   "resource": "grammars/angular-inline-template.json",
+   "scopeName": "inline-template.ng"
+  },
+  {
+   "aliases": [],
+   "embeddedIn": [
+    "angular-ts",
+    "angular-html"
+   ],
+   "embeddedLangs": [
+    "angular-expression"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "angular-let-declaration",
+   "injectTo": [],
+   "kind": "injection",
+   "resource": "grammars/angular-let-declaration.json",
+   "scopeName": "template.let.ng"
+  },
+  {
+   "aliases": [],
+   "embeddedIn": [
+    "angular-ts",
+    "angular-html"
+   ],
+   "embeddedLangs": [
+    "angular-expression"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "angular-template",
+   "injectTo": [],
+   "kind": "injection",
+   "resource": "grammars/angular-template.json",
+   "scopeName": "template.ng"
+  },
+  {
+   "aliases": [],
+   "embeddedIn": [
+    "angular-ts",
+    "angular-html"
+   ],
+   "embeddedLangs": [
+    "angular-expression",
+    "angular-template"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "angular-template-blocks",
+   "injectTo": [],
+   "kind": "injection",
+   "resource": "grammars/angular-template-blocks.json",
+   "scopeName": "template.blocks.ng"
+  },
+  {
+   "aliases": [],
+   "displayName": "Angular TypeScript",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "angular-expression",
+    "angular-inline-style",
+    "angular-inline-template",
+    "angular-let-declaration",
+    "angular-template",
+    "angular-template-blocks"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "angular-ts",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/angular-ts.json",
+   "scopeName": "source.ts.ng"
+  },
   {
    "aliases": [],
    "displayName": "Astro",
@@ -53,7 +191,9 @@
     "tsx"
    ],
    "embeddedLangsLazy": [
+    "sass",
     "scss",
+    "stylus",
     "less"
    ],
    "id": "astro",
@@ -119,6 +259,22 @@
    "kind": "grammar",
    "resource": "grammars/cmake.json",
    "scopeName": "source.cmake"
+  },
+  {
+   "aliases": [
+    "coffeescript"
+   ],
+   "displayName": "CoffeeScript",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "javascript"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "coffee",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/coffee.json",
+   "scopeName": "source.coffee"
   },
   {
    "aliases": [
@@ -243,6 +399,51 @@
    "scopeName": "source.dotenv"
   },
   {
+   "aliases": [],
+   "displayName": "Edge",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "typescript",
+    "html",
+    "html-derivative"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "edge",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/edge.json",
+   "scopeName": "text.html.edge"
+  },
+  {
+   "aliases": [],
+   "displayName": "Elixir",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "html"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "elixir",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/elixir.json",
+   "scopeName": "source.elixir"
+  },
+  {
+   "aliases": [],
+   "displayName": "ERB",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "html",
+    "ruby"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "erb",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/erb.json",
+   "scopeName": "text.html.erb"
+  },
+  {
    "aliases": [
     "erl"
    ],
@@ -299,6 +500,44 @@
    "scopeName": "text.git-rebase"
   },
   {
+   "aliases": [
+    "gjs"
+   ],
+   "displayName": "Glimmer JS",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "javascript",
+    "typescript",
+    "css",
+    "html"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "glimmer-js",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/glimmer-js.json",
+   "scopeName": "source.gjs"
+  },
+  {
+   "aliases": [
+    "gts"
+   ],
+   "displayName": "Glimmer TS",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "typescript",
+    "css",
+    "javascript",
+    "html"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "glimmer-ts",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/glimmer-ts.json",
+   "scopeName": "source.gts"
+  },
+  {
    "aliases": [],
    "displayName": "Go",
    "embeddedIn": [],
@@ -351,6 +590,8 @@
    ],
    "embeddedLangsLazy": [
     "ruby",
+    "sass",
+    "coffee",
     "markdown"
    ],
    "id": "haml",
@@ -358,6 +599,25 @@
    "kind": "grammar",
    "resource": "grammars/haml.json",
    "scopeName": "text.haml"
+  },
+  {
+   "aliases": [
+    "hbs"
+   ],
+   "displayName": "Handlebars",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "html",
+    "css",
+    "javascript",
+    "yaml"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "handlebars",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/handlebars.json",
+   "scopeName": "text.html.handlebars"
   },
   {
    "aliases": [
@@ -475,6 +735,36 @@
   },
   {
    "aliases": [],
+   "displayName": "Jinja",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "jinja-html"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "jinja",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/jinja.json",
+   "scopeName": "source.jinja"
+  },
+  {
+   "aliases": [],
+   "displayName": "jinja-html",
+   "embeddedIn": [
+    "jinja"
+   ],
+   "embeddedLangs": [
+    "html"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "jinja-html",
+   "injectTo": [],
+   "kind": "injection",
+   "resource": "grammars/jinja-html.json",
+   "scopeName": "text.html.jinja"
+  },
+  {
+   "aliases": [],
    "displayName": "JSON",
    "embeddedIn": [],
    "embeddedLangs": [],
@@ -555,6 +845,27 @@
   },
   {
    "aliases": [
+    "justfile"
+   ],
+   "displayName": "Just",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "shellscript",
+    "javascript",
+    "typescript",
+    "perl",
+    "python",
+    "ruby"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "just",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/just.json",
+   "scopeName": "source.just"
+  },
+  {
+   "aliases": [
     "kt",
     "kts"
    ],
@@ -579,6 +890,23 @@
    "kind": "grammar",
    "resource": "grammars/less.json",
    "scopeName": "source.css.less"
+  },
+  {
+   "aliases": [],
+   "displayName": "Liquid",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "html",
+    "css",
+    "json",
+    "javascript"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "liquid",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/liquid.json",
+   "scopeName": "text.html.liquid"
   },
   {
    "aliases": [],
@@ -642,6 +970,7 @@
     "xml",
     "yaml",
     "clojure",
+    "coffee",
     "c",
     "cpp",
     "diff",
@@ -650,6 +979,7 @@
     "git-rebase",
     "go",
     "groovy",
+    "pug",
     "javascript",
     "json",
     "jsonc",
@@ -669,8 +999,10 @@
     "tsx",
     "csharp",
     "dart",
+    "handlebars",
     "log",
     "erlang",
+    "elixir",
     "html-derivative"
    ],
    "id": "markdown",
@@ -704,6 +1036,76 @@
    "kind": "injection",
    "resource": "grammars/markdown-vue.json",
    "scopeName": "markdown.vue.codeblock"
+  },
+  {
+   "aliases": [],
+   "displayName": "Marko",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "css",
+    "less",
+    "scss",
+    "typescript"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "marko",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/marko.json",
+   "scopeName": "text.marko"
+  },
+  {
+   "aliases": [],
+   "displayName": "MDX",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [
+    "tsx",
+    "toml",
+    "yaml",
+    "c",
+    "clojure",
+    "coffee",
+    "cpp",
+    "csharp",
+    "css",
+    "diff",
+    "docker",
+    "elixir",
+    "erlang",
+    "go",
+    "graphql",
+    "haskell",
+    "html",
+    "ini",
+    "java",
+    "javascript",
+    "json",
+    "julia",
+    "kotlin",
+    "less",
+    "lua",
+    "make",
+    "markdown",
+    "objective-c",
+    "perl",
+    "python",
+    "r",
+    "ruby",
+    "rust",
+    "scala",
+    "scss",
+    "shellscript",
+    "sql",
+    "xml",
+    "swift",
+    "typescript"
+   ],
+   "id": "mdx",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/mdx.json",
+   "scopeName": "source.mdx"
   },
   {
    "aliases": [],
@@ -838,6 +1240,29 @@
   },
   {
    "aliases": [
+    "jade"
+   ],
+   "displayName": "Pug",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "javascript",
+    "css",
+    "html"
+   ],
+   "embeddedLangsLazy": [
+    "sass",
+    "scss",
+    "stylus",
+    "coffee"
+   ],
+   "id": "pug",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/pug.json",
+   "scopeName": "text.pug"
+  },
+  {
+   "aliases": [
     "py"
    ],
    "displayName": "Python",
@@ -861,6 +1286,21 @@
    "kind": "grammar",
    "resource": "grammars/r.json",
    "scopeName": "source.r"
+  },
+  {
+   "aliases": [],
+   "displayName": "ASP.NET Razor",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "html",
+    "csharp"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "razor",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/razor.json",
+   "scopeName": "text.aspnetcorerazor"
   },
   {
    "aliases": [
@@ -919,6 +1359,18 @@
   },
   {
    "aliases": [],
+   "displayName": "Sass",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "sass",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/sass.json",
+   "scopeName": "source.sass"
+  },
+  {
+   "aliases": [],
    "displayName": "Scala",
    "embeddedIn": [],
    "embeddedLangs": [],
@@ -973,6 +1425,20 @@
    "scopeName": "source.sql"
   },
   {
+   "aliases": [
+    "styl"
+   ],
+   "displayName": "Stylus",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "stylus",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/stylus.json",
+   "scopeName": "source.stylus"
+  },
+  {
    "aliases": [],
    "displayName": "Svelte",
    "embeddedIn": [],
@@ -983,8 +1449,12 @@
     "postcss"
    ],
    "embeddedLangsLazy": [
+    "coffee",
+    "stylus",
+    "sass",
     "scss",
     "less",
+    "pug",
     "markdown"
    ],
    "id": "svelte",
@@ -1004,6 +1474,22 @@
    "kind": "grammar",
    "resource": "grammars/swift.json",
    "scopeName": "source.swift"
+  },
+  {
+   "aliases": [],
+   "displayName": "Templ",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "go",
+    "javascript",
+    "css"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "templ",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/templ.json",
+   "scopeName": "source.templ"
   },
   {
    "aliases": [
@@ -1112,10 +1598,14 @@
    ],
    "embeddedLangsLazy": [
     "markdown",
+    "pug",
+    "stylus",
+    "sass",
     "scss",
     "less",
     "jsx",
     "tsx",
+    "coffee",
     "jsonc",
     "json5",
     "yaml",

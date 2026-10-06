@@ -20,13 +20,22 @@ markdown yaml toml shellscript fish powershell python go rust swift sql xml java
 objective-c lua vue svelte graphql ini diff git-commit git-rebase dotenv perl r dart erlang haskell
 scala clojure groovy hcl terraform nix proto prisma regexp twig astro csv log viml cmake http docker
 make ruby elixir zig ocaml julia
+mdx liquid handlebars jinja pug erb haml razor edge templ angular-html angular-ts marko glimmer-js glimmer-ts
+stylus sass coffee postcss just
 """.split()
 
 # SPDX ids whose terms allow shipping the grammar file in an MIT app with a notice.
 PERMISSIVE = {"MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "0BSD", "Unlicense", "CC0-1.0", "MPL-2.0"}
 # TextMate's own bundles declare no SPDX id; their README grants: "Permission to copy, use, modify,
-# sell and distribute this software is granted." Checked for yaml.tmbundle and toml.tmbundle.
-TEXTMATE_PERMISSIVE = ("https://github.com/textmate/yaml.tmbundle/", "https://github.com/textmate/toml.tmbundle/")
+# sell and distribute this software is granted." Checked for yaml.tmbundle, toml.tmbundle and
+# ruby.tmbundle (erb; no -license file beside it).
+TEXTMATE_PERMISSIVE = ("https://github.com/textmate/yaml.tmbundle/", "https://github.com/textmate/toml.tmbundle/",
+                       "https://github.com/textmate/ruby.tmbundle/")
+# GitHub could not classify these LICENSE files; read by hand (2026-10-06).
+CHECKED = {
+    "sass": "MIT (LICENSE: Robin Bentley, Leonard Grosoli; atom/language-sass)",
+    "elixir": "Apache-2.0 (LICENSE: Copyright 2012 Plataformatec)",
+}
 
 
 def main(checkout: str) -> None:
@@ -38,6 +47,8 @@ def main(checkout: str) -> None:
     assets = {asset["id"]: asset for asset in provenance["assets"] if asset["kind"] in ("grammar", "injection")}
 
     def licence(lang: str):
+        if lang in CHECKED:
+            return CHECKED[lang]
         asset = assets[lang]
         spdx = asset["license"].get("spdx")
         if spdx in PERMISSIVE:

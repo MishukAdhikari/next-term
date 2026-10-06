@@ -106,6 +106,13 @@ import Testing
         #expect(EditorLanguage.id(forFileName: "tool", firstLine: "#!/usr/bin/env -S python3.12 -u") == "python")
         #expect(EditorLanguage.id(forFileName: "artisan") == "php")
         #expect(EditorLanguage.id(forFileName: "notes") == nil)
+        // Framework templates.
+        let templates = ["show.html.erb": "erb", "index.html.twig": "twig", "page.mdx": "mdx", "app.component.html": "angular-html",
+                         "styles.sass": "sass", "base.html.j2": "jinja", "theme.liquid": "liquid", "card.hbs": "handlebars",
+                         "Index.cshtml": "razor", "layout.pug": "pug", "view.haml": "haml", "lib.ex": "elixir", "justfile": "just",
+                         "yarn.lock": "yaml", "composer.lock": "json", "uv.lock": "toml"]
+        for (name, language) in templates { #expect(EditorLanguage.id(forFileName: name) == language, "\(name)") }
+        #expect(EditorLanguage.id(forFileName: "Gemfile.lock") == nil) // its own format: plain, not mis-coloured as JSON
     }
 
     @Test func togglesLineComments() {

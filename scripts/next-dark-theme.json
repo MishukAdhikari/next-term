@@ -388,6 +388,19 @@
       "settings": {
         "foreground": "#CF8E6D"
       }
+    },
+    {
+      "scope": [
+        "punctuation.section.embedded",
+        "entity.other.jinja.delimiter",
+        "punctuation.definition.tag.begin.liquid",
+        "punctuation.definition.tag.end.liquid",
+        "punctuation.section.tag.twig",
+        "punctuation.definition.tag.twig"
+      ],
+      "settings": {
+        "foreground": "#CF8E6D"
+      }
     }
   ]
 }

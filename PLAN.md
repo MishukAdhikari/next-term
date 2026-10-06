@@ -1,6 +1,6 @@
 # Next Term — plan
 
-A native macOS terminal in the spirit of the PhpStorm terminal, built for running AI agents side by side:
+A native macOS terminal and editor, built for running AI agents side by side:
 every tab shows whether its job is working, finished, failed, or waiting on you.
 
 ## Decisions

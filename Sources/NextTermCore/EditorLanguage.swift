@@ -12,6 +12,9 @@ public enum EditorLanguage {
         ".npmrc": "ini", ".vimrc": "viml", "tsconfig.json": "jsonc", "jsconfig.json": "jsonc",
         ".eslintrc": "jsonc", ".babelrc": "jsonc", "devcontainer.json": "jsonc", "artisan": "php",
         "go.mod": "go", "cargo.lock": "toml", "poetry.lock": "toml", "pipfile": "toml", ".prettierrc": "json",
+        "justfile": "just", ".justfile": "just", "uv.lock": "toml", "pdm.lock": "toml", "bun.lock": "jsonc",
+        "yarn.lock": "yaml", "composer.lock": "json", "flake.lock": "json", "deno.lock": "json",
+        "package.resolved": "json",
     ]
 
     static let byExtension: [String: String] = [
@@ -33,13 +36,24 @@ public enum EditorLanguage {
         "prisma": "prisma", "twig": "twig", "astro": "astro", "csv": "csv", "log": "log", "vim": "viml",
         "cmake": "cmake", "http": "http", "rest": "http", "dockerfile": "docker", "mk": "make", "rb": "ruby",
         "rake": "ruby", "gemspec": "ruby", "ru": "ruby", "zig": "zig", "ml": "ocaml", "mli": "ocaml", "jl": "julia",
-        "lock": "json",
+        // Templates and framework languages.
+        "mdx": "mdx", "liquid": "liquid", "hbs": "handlebars", "handlebars": "handlebars", "mustache": "handlebars",
+        "jinja": "jinja", "jinja2": "jinja", "j2": "jinja", "njk": "jinja", "nunjucks": "jinja",
+        "erb": "erb", "rhtml": "erb", "haml": "haml", "pug": "pug", "jade": "pug", "cshtml": "razor", "razor": "razor",
+        "edge": "edge", "templ": "templ", "marko": "marko", "gjs": "glimmer-js", "gts": "glimmer-ts",
+        "styl": "stylus", "stylus": "stylus", "sass": "sass", "pcss": "postcss", "postcss": "postcss",
+        "coffee": "coffee", "just": "just", "ex": "elixir", "exs": "elixir", "svx": "markdown",
+        // No grammar of their own yet: HTML colours the markup around the template tags.
+        "latte": "html", "tpl": "html", "gohtml": "html", "gotmpl": "html", "tmpl": "html", "ejs": "html", "eta": "html",
+        "heex": "html", "eex": "html", "leex": "html",
     ]
 
     /// The grammar for a file, from its name, and for scripts without an extension, its `#!` line.
     public static func id(forFileName name: String, firstLine: String = "") -> String? {
         let lower = name.lowercased()
         if lower.hasSuffix(".blade.php") { return "blade" }
+        if lower.hasSuffix(".component.html") { return "angular-html" }
+        if lower.hasSuffix(".component.ts") { return "angular-ts" }
         if let known = byName[lower] { return known }
         if lower == ".env" || lower.hasPrefix(".env.") { return "dotenv" }
         if lower.hasPrefix("dockerfile.") || lower.hasSuffix(".dockerfile") { return "docker" }
@@ -77,10 +91,11 @@ public enum EditorLanguage {
         switch language {
         case "php", "javascript", "typescript", "tsx", "jsx", "go", "rust", "swift", "java", "kotlin", "c", "cpp",
              "csharp", "objective-c", "scss", "less", "dart", "scala", "groovy", "proto", "prisma", "jsonc", "json5",
-             "zig":
+             "zig", "stylus", "sass", "templ", "angular-ts", "glimmer-js", "glimmer-ts":
             return CommentStyle(prefix: "//", suffix: "")
         case "python", "ruby", "shellscript", "fish", "powershell", "yaml", "toml", "perl", "r", "make", "docker",
-             "dotenv", "cmake", "nix", "hcl", "terraform", "julia", "graphql", "git-commit", "git-rebase", "ini":
+             "dotenv", "cmake", "nix", "hcl", "terraform", "julia", "graphql", "git-commit", "git-rebase", "ini",
+             "coffee", "just", "elixir":
             return CommentStyle(prefix: "#", suffix: "")
         case "sql", "lua", "haskell": return CommentStyle(prefix: "--", suffix: "")
         case "clojure": return CommentStyle(prefix: ";;", suffix: "")
@@ -89,8 +104,14 @@ public enum EditorLanguage {
         case "html", "html-derivative", "xml", "markdown", "vue", "svelte", "astro":
             return CommentStyle(prefix: "<!--", suffix: "-->")
         case "css": return CommentStyle(prefix: "/*", suffix: "*/")
-        case "blade": return CommentStyle(prefix: "{{--", suffix: "--}}")
-        case "twig": return CommentStyle(prefix: "{#", suffix: "#}")
+        case "blade", "edge": return CommentStyle(prefix: "{{--", suffix: "--}}")
+        case "twig", "jinja": return CommentStyle(prefix: "{#", suffix: "#}")
+        case "handlebars": return CommentStyle(prefix: "{{!--", suffix: "--}}")
+        case "erb": return CommentStyle(prefix: "<%#", suffix: "%>")
+        case "razor": return CommentStyle(prefix: "@*", suffix: "*@")
+        case "pug": return CommentStyle(prefix: "//-", suffix: "")
+        case "haml": return CommentStyle(prefix: "-#", suffix: "")
+        case "mdx", "liquid", "angular-html", "marko": return CommentStyle(prefix: "<!--", suffix: "-->")
         case "ocaml": return CommentStyle(prefix: "(*", suffix: "*)")
         default: return nil
         }

@@ -2,7 +2,7 @@
 
 **The missing IDE for the terminal.**
 
-A native macOS terminal for the AI era, in the spirit of the PhpStorm terminal. Run Claude Code, Codex,
+A native macOS terminal and editor for the AI era. Run Claude Code, Codex,
 Command Code, Junie, a test suite and a dev server side by side, one per tab, and see at a glance which
 agents are working, which are done, and which are waiting on your decision.
 
@@ -15,8 +15,9 @@ agents are working, which are done, and which are waiting on your decision.
   agent: directly, through an alias or a shell function, `npx`, or `cd app && claude`.
 - **Code editor.** Double-click a file, pick a Find in Files result, or ⌘-click `src/app.ts:42:7` in any
   output: the file opens above the terminal at that line, coloured by VS Code's TextMate grammars (the
-  family Sublime Text uses) for 77 languages, Blade and PHP, TSX, Vue, Svelte, Python, Go, Rust, YAML and SQL
-  among them. Line numbers, soft wrap, auto-indent, ⌘/ to comment, ⌘L to go to a line, find, undo. Files keep
+  family Sublime Text uses) for 103 languages: PHP and Blade (Laravel, WordPress), Ruby and ERB (Rails),
+  Python and Jinja (Django, Flask), JS/TS/TSX (React, Next.js), Vue, Svelte, Astro, Angular, Liquid, Twig,
+  Go and templ, Rust, Elixir, YAML, SQL and more. Line numbers, soft wrap, auto-indent, ⌘/ to comment, ⌘L to go to a line, find, undo. Files keep
   their encoding, line endings and permissions. When an agent changes a file you have open, the editor
   follows; if you have unsaved edits it asks first.
 - **`nxtrm`, like `subl` or `code`.** `nxtrm .` opens the folder as a project, `nxtrm app/User.php:42` a

@@ -148,7 +148,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             view.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -2),
             view.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -2),
         ])
-        let insertAt = tabs.isEmpty ? 0 : activeIndex + 1 // next to the current tab, like PhpStorm
+        let insertAt = tabs.isEmpty ? 0 : activeIndex + 1 // next to the current tab
         tabs.insert(tab, at: insertAt)
         container.layoutSubtreeIfNeeded() // real size before the shell starts, so it draws once
         tab.start()
@@ -202,7 +202,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             return
         }
         if index == activeIndex {
-            select(max(0, index - 1)) // the left neighbour, like PhpStorm
+            select(max(0, index - 1)) // the left neighbour
         } else {
             // A background tab went away: keep the current one, and keep focus where it is.
             if index < activeIndex { activeIndex -= 1 }
