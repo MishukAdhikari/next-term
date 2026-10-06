@@ -91,6 +91,8 @@ Status reports from the shell carry a random secret for each tab that programs n
 | Split a tab into panes | <kbd>⌘D</kbd> right, <kbd>⇧⌘D</kbd> down |
 | Reorder | Drag a tab sideways |
 
+A tab running a local dev server (`langgraph dev`, `npm run dev`, `uvicorn` and the like) adds its port to its title, such as “app · :5173”, once the server prints its address. **Shell › Open Served URL** opens that address in your browser. It is only for commands you run, not agents, and not remote tabs, where `localhost` is the server’s own.
+
 With two or more tabs, each one shows the shortcut that selects it, where its × button appears (before the × on the selected tab, when there is room). A shortcut you change in Settings shows as changed.
 
 A split tab shows the mark of its most urgent pane; see [Split panes](/docs/layouts/#split-panes). Tabs that do not fit go behind the **»** button, which shows how many are hidden and the most urgent mark among them. A program can set its own tab title; a name you give a tab wins over it.

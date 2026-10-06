@@ -50,7 +50,7 @@ Add a stdio server that runs `nxtrm mcp`. `nxtrm` is on the `PATH` in Next Term�
 
 | Tool | What it does | Changes anything? |
 |---|---|---|
-| `list_tabs` | Every window (one per project) and its tabs: id, title, folder, the program running, and its state — `idle`, `working`, `done`, `failed`, or `attention` with the agent’s question. The caller’s own tab is marked `"you": true`, and panes that share a tab say so. | No |
+| `list_tabs` | Every window (one per project) and its tabs: id, title, folder, the program running, and its state — `idle`, `working`, `done`, `failed`, or `attention` with the agent’s question. A tab running a local dev server also gives its address as `served_url`. The caller’s own tab is marked `"you": true`, and panes that share a tab say so. | No |
 | `read_tab` | The last lines of a tab’s screen (80 by default, up to 2,000) and its state. | No |
 | `wait_for_tab` | Waits until the tab’s agent stops working, or its command finishes, then returns the state and the end of the screen. | No |
 | `list_projects` | The projects open in Next Term and the recently opened ones. | No |

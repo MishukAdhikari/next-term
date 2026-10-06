@@ -14,7 +14,7 @@ Next Term has a real code editor, not a viewer, and it sits right above the term
 
 - **Go to File** (<kbd>⌘P</kbd>): type part of a file’s name or path and pick it. See [below](#go-to-file).
 - **Double-click** a file in the project sidebar, or select it and press <kbd>⌘↓</kbd>.
-- **<kbd>⌘</kbd>-click a path** in terminal output, such as `src/app.ts:42:7` from a compiler, linter or agent: the file opens at that line and column.
+- **<kbd>⌘</kbd>-click a path** in terminal output, such as `src/app.ts:42:7` from a compiler, linter or agent: the file opens at that line and column. A Python traceback’s `File "graph.py", line 42` opens at line 42 (at the frame you clicked, when the same file appears twice), and so do pytest’s and ruff’s `path.py:42:` lines. A `graph.py:graph` reference, as `langgraph.json` writes it, opens at the definition of `graph`.
 - **Pick a result** in [Find in Files](/docs/search/).
 - **Run `nxtrm file:42`** in a tab or any terminal. See [The nxtrm command](/docs/command-line/).
 - **Finder:** use **Open With › Next Term**, or drop a file on Next Term’s Dock icon.
