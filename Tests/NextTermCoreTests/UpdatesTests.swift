@@ -43,6 +43,19 @@ import Testing
         #expect(ReleaseInfo.parse(Data("not json".utf8)) == nil)
     }
 
+    @Test func fallsBackToTheReleasesPage() {
+        let page = URL(string: "https://github.com/MishukAdhikari/next-term/releases/tag/v0.2.0")!
+        let info = ReleaseInfo.fromLatestRedirect(page, repository: "MishukAdhikari/next-term")
+        #expect(info?.version == AppVersion("0.2.0")! && info?.tag == "v0.2.0")
+        #expect(info?.dmgURL?.absoluteString == "https://github.com/MishukAdhikari/next-term/releases/download/v0.2.0/NextTerm-0.2.0.dmg")
+        #expect(info?.checksumURL?.lastPathComponent == "NextTerm-0.2.0.dmg.sha256")
+        // Still on the "latest" page (no releases), another repository, or not GitHub: nothing.
+        #expect(ReleaseInfo.fromLatestRedirect(URL(string: "https://github.com/MishukAdhikari/next-term/releases")!, repository: "MishukAdhikari/next-term") == nil)
+        #expect(ReleaseInfo.fromLatestRedirect(URL(string: "https://github.com/evil/x/releases/tag/v9.0.0")!, repository: "MishukAdhikari/next-term") == nil)
+        #expect(ReleaseInfo.fromLatestRedirect(URL(string: "https://github.com/xMishukAdhikari/next-term/releases/tag/v9.0.0")!, repository: "MishukAdhikari/next-term") == nil)
+        #expect(ReleaseInfo.fromLatestRedirect(URL(string: "https://evil.example/MishukAdhikari/next-term/releases/tag/v9.0.0")!, repository: "MishukAdhikari/next-term") == nil)
+    }
+
     @Test func checksumLines() {
         let hex = String(repeating: "ab", count: 32)
         #expect(ReleaseInfo.checksum(fromShasumLine: "\(hex)  NextTerm-0.1.1.dmg\n") == hex)

@@ -11,7 +11,10 @@ import NextTermCore
 @MainActor
 final class Updater {
     static let shared = Updater()
-    static let feed = URL(string: "https://api.github.com/repos/MishukAdhikari/next-term/releases/latest")!
+    static let repository = "MishukAdhikari/next-term"
+    static let feed = URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!
+    /// Redirects to the newest release's page; used when the API is rate-limited.
+    static let latestPage = URL(string: "https://github.com/\(repository)/releases/latest")!
     static let interval: TimeInterval = 24 * 60 * 60
 
     private var timer: Timer?
@@ -70,11 +73,22 @@ final class Updater {
         URLSession.shared.dataTask(with: request) { data, response, error in
             let status = (response as? HTTPURLResponse)?.statusCode ?? (data != nil ? 200 : 0)
             let release = status == 200 ? data.flatMap { ReleaseInfo.parse($0, allowingFileURLs: allowFiles) } : nil
-            DispatchQueue.main.async {
-                self.checking = false
-                UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "lastUpdateCheck")
-                self.handle(release, current: current, userInitiated: userInitiated, failed: release == nil && status != 404)
+            let finish = { (release: ReleaseInfo?, failed: Bool) in
+                DispatchQueue.main.async {
+                    self.checking = false
+                    UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "lastUpdateCheck")
+                    self.handle(release, current: current, userInitiated: userInitiated, failed: failed)
+                }
             }
+            guard status == 403 || status == 429, !allowFiles else { return finish(release, release == nil && status != 404) }
+            // Rate-limited: the releases page names the newest tag by redirecting to it.
+            var page = URLRequest(url: Self.latestPage, timeoutInterval: 15)
+            page.httpMethod = "HEAD"
+            URLSession.shared.dataTask(with: page) { _, response, _ in
+                let final = (response as? HTTPURLResponse)?.url
+                let fallback = final.flatMap { ReleaseInfo.fromLatestRedirect($0, repository: Self.repository) }
+                finish(fallback, fallback == nil)
+            }.resume()
         }.resume()
     }
 

@@ -70,6 +70,22 @@ public struct ReleaseInfo: Equatable, Sendable {
                            notes: (json["body"] as? String) ?? "")
     }
 
+    /// When the API refuses (60 requests an hour per address, shared behind an office router), the
+    /// releases page still redirects `…/releases/latest` to `…/releases/tag/v1.2.3`; the assets are
+    /// always `NextTerm-1.2.3.dmg` and its `.sha256` (scripts/build-dmg.sh and CI name them so).
+    public static func fromLatestRedirect(_ finalURL: URL, repository: String) -> ReleaseInfo? {
+        // Exactly /owner/repo/releases/tag/<tag>.
+        let parts = finalURL.pathComponents.filter { $0 != "/" }
+        let expected = repository.split(separator: "/").map(String.init)
+        guard finalURL.scheme == "https", finalURL.host?.lowercased() == "github.com", expected.count == 2,
+              parts.count == 5, parts[0].lowercased() == expected[0].lowercased(), parts[1].lowercased() == expected[1].lowercased(),
+              parts[2] == "releases", parts[3] == "tag", let version = AppVersion(parts[4]) else { return nil }
+        let tag = parts[4]
+        let base = "https://github.com/\(repository)/releases/download/\(tag)/NextTerm-\(version).dmg"
+        return ReleaseInfo(version: version, tag: tag, pageURL: finalURL, dmgURL: URL(string: base),
+                           checksumURL: URL(string: base + ".sha256"), notes: "")
+    }
+
     /// The hex SHA-256 from a `shasum -a 256` line ("<hex>  NextTerm-0.1.1.dmg").
     public static func checksum(fromShasumLine text: String) -> String? {
         let hex = text.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).first.map(String.init)?.lowercased() ?? ""
