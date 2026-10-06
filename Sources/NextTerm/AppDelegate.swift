@@ -126,7 +126,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
         }
         server.start(workspaces: controllers.compactMap(\.project))
-        GeminiIDEServer.shared.start(workspaces: agentWorkspaces)
+        let gemini = GeminiIDEServer.shared
+        gemini.onOpenDiff = { [weak self] path, proposed in
+            guard let self, let controller = (NSApp.keyWindow?.windowController as? TerminalWindowController) ?? self.controllers.last else { return }
+            let original = isRegularFile(path) ? ((try? Data(contentsOf: URL(fileURLWithPath: path))).flatMap { TextFile.decode($0)?.text } ?? "") : ""
+            // One proposal per file: a new one replaces the old.
+            for pane in controller.editorArea.proposals where pane.proposal?.tag == "gemini:" + path { controller.editorArea.close(pane) }
+            let proposal = DiffPane.Proposal(original: original, proposed: proposed, author: "Gemini", tag: "gemini:" + path, client: nil)
+            controller.editorArea.openProposal(for: canonicalPath(path), proposal: proposal) { accepted, text in
+                GeminiIDEServer.shared.decided(path, accepted: accepted, content: text)
+            }
+        }
+        gemini.onCloseDiff = { [weak self] path in
+            for controller in self?.controllers ?? [] {
+                for pane in controller.editorArea.proposals where pane.proposal?.tag == "gemini:" + path {
+                    controller.editorArea.close(pane)
+                }
+            }
+        }
+        gemini.start(workspaces: agentWorkspaces)
         enableAgentIDEModes()
     }
 

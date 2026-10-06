@@ -28,6 +28,15 @@ final class GeminiIDEServer: @unchecked Sendable { // mutable state lives on `qu
     /// The latest context, sent to each stream when it opens and whenever it changes.
     private var context: [String: Any] = ["openFiles": [[String: Any]]()]
 
+    /// openDiff: show a proposed edit; the decision goes out with `decided`.
+    var onOpenDiff: ((_ path: String, _ proposed: String) -> Void)?
+    /// closeDiff: close the proposal for this file.
+    var onCloseDiff: ((_ path: String) -> Void)?
+    /// The proposed text of each open proposal (closeDiff answers with it).
+    private var proposed: [String: String] = [:]
+    /// Files whose proposal was closed by the CLI without a notification wanted.
+    private var quiet = Set<String>()
+
     var isRunning: Bool { port != nil }
     var connectedCount: Int { queue.sync { streams.count } }
 
@@ -152,6 +161,27 @@ final class GeminiIDEServer: @unchecked Sendable { // mutable state lives on `qu
         }
     }
 
+    static let tools: [[String: Any]] = [
+        ["name": "openDiff", "description": "Show a proposed change to a file for the user to accept or reject",
+         "inputSchema": ["type": "object", "required": ["filePath", "newContent"],
+                         "properties": ["filePath": ["type": "string"], "newContent": ["type": "string"]]]],
+        ["name": "closeDiff", "description": "Close the proposed change for a file",
+         "inputSchema": ["type": "object", "required": ["filePath"],
+                         "properties": ["filePath": ["type": "string"], "suppressNotification": ["type": "boolean"]]]],
+    ]
+
+    /// The user decided on a proposal: tell the CLIs (unless they closed it themselves).
+    func decided(_ path: String, accepted: Bool, content: String) {
+        queue.async {
+            self.proposed.removeValue(forKey: path)
+            if self.quiet.remove(path) != nil { return }
+            let params: [String: Any] = accepted ? ["filePath": path, "content": content] : ["filePath": path]
+            for stream in self.streams.values {
+                self.push(["jsonrpc": "2.0", "method": accepted ? "ide/diffAccepted" : "ide/diffRejected", "params": params], on: stream)
+            }
+        }
+    }
+
     private func heartbeat() {
         queue.async { for stream in self.streams.values { self.write(Data(": keepalive\n\n".utf8), on: stream) } }
     }
@@ -251,9 +281,32 @@ final class GeminiIDEServer: @unchecked Sendable { // mutable state lives on `qu
         case "ping":
             result = [:]
         case "tools/list":
-            result = ["tools": [[String: Any]]()] // no diff tools yet: the CLIs then use their own prompt
+            result = ["tools": Self.tools] // both diff tools, or the CLIs use their own prompt
         case "tools/call":
-            result = ["content": [["type": "text", "text": "Not available in Next Term"]], "isError": true]
+            let params = message["params"] as? [String: Any] ?? [:]
+            let arguments = params["arguments"] as? [String: Any] ?? [:]
+            switch params["name"] as? String ?? "" {
+            case "openDiff":
+                if let path = arguments["filePath"] as? String, path.hasPrefix("/"), let proposed = arguments["newContent"] as? String {
+                    quiet.remove(path)
+                    self.proposed[path] = proposed
+                    DispatchQueue.main.async { self.onOpenDiff?(path, proposed) }
+                    result = ["content": [[String: Any]]()] // answered now; the decision follows as a notification
+                } else {
+                    error = ["code": -32602, "message": "Invalid params"]
+                }
+            case "closeDiff":
+                let path = arguments["filePath"] as? String ?? ""
+                if arguments["suppressNotification"] as? Bool == true { quiet.insert(path) }
+                // The CLI parses this text as JSON and reads .content.
+                let text = proposed.removeValue(forKey: path) ?? ""
+                DispatchQueue.main.async { self.onCloseDiff?(path) }
+                let json = (try? JSONSerialization.data(withJSONObject: ["content": text], options: .withoutEscapingSlashes))
+                    .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+                result = ["content": [["type": "text", "text": json]]]
+            default:
+                result = ["content": [["type": "text", "text": "Not available in Next Term"]], "isError": true]
+            }
         default:
             error = ["code": -32601, "message": "Method not found: \(method)"]
         }

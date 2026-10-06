@@ -1224,6 +1224,21 @@ enum SelfTest {
             check(await wait(3) { stream.text.contains("\"selectedText\":\"\(selected)") && stream.text.contains("\"isActive\":true") },
                   "Gemini link: a selection goes out to Gemini and Qwen (active file, caret, text)")
         }
+        // Gemini's proposed edit: a diff to accept; the decision goes back on the stream.
+        let target = canonicalPath(c.editorArea.activeEditor?.document.path ?? "")
+        if !target.isEmpty {
+            let call = #"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"openDiff","arguments":{"filePath":"\#(target)","newContent":"proposed by gemini\n"}}}"#
+            let caller = RawHTTPClient(port: port)
+            caller.send(RawHTTPClient.post(call, port: port, token: server.token))
+            check(await wait(3) { c.editorArea.proposals.contains { $0.proposal?.author == "Gemini" } }, "Gemini's proposed edit opens as a diff")
+            if let pane = c.editorArea.proposals.first(where: { $0.proposal?.author == "Gemini" }) {
+                pane.decide(true)
+                c.editorArea.close(pane)
+                check(await wait(3) { stream.text.contains("ide/diffAccepted") && stream.text.contains("proposed by gemini") },
+                      "accepting it tells Gemini (ide/diffAccepted with the text)")
+            }
+            caller.close()
+        }
         stream.close()
     }
 

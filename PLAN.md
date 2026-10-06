@@ -33,7 +33,7 @@ terminal. This file is the map of what is built and what comes next; the README 
 
 1. **MCP tools for every agent** (Codex, Junie, Command Code, Cursor, opencode, Copilot, Amp…): a `next-term`
    MCP server with the editor's selection and open files, registered in each installed agent by default.
-2. **More of the diff view:** Gemini's proposed edits (Claude's are done), fold long unchanged runs, stage
+2. **More of the diff view:** fold long unchanged runs, stage
    selected lines, edit the proposed side before accepting.
 3. **Copilot CLI IDE link** (its protocol is published).
 4. Split panes, session restore, notarized releases.
