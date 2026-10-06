@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # build number = commit count
+
+      - name: Toolchain
+        run: swift --version
+
+      - name: Unit tests
+        run: scripts/test.sh
+
+      - name: zsh integration test
+        run: python3 scripts/zsh-integration-test.py
+
+      - name: Build DMG
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [[ "$GITHUB_REF_TYPE" == "tag" ]] || VERSION="0.0.0-dev"
+          VERSION="$VERSION" scripts/build-dmg.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NextTerm-dmg
+          path: |
+            dist/*.dmg
+            dist/*.sha256
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # only this job can publish
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: NextTerm-dmg
+          path: dist
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "Next Term $GITHUB_REF_NAME" --generate-notes
