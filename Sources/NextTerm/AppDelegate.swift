@@ -791,9 +791,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         DispatchQueue.main.async { [self] in
             NSApp.activate(ignoringOtherApps: true)
             for controller in controllers {
-                if let index = controller.tabs.firstIndex(where: { $0.id.uuidString == tabID }) {
+                if let tab = controller.tabs.first(where: { $0.id.uuidString == tabID }) {
                     controller.window?.makeKeyAndOrderFront(nil)
-                    controller.select(index)
+                    controller.show(tab)
                     break
                 }
             }
@@ -840,6 +840,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(shell, "Save", #selector(TerminalWindowController.saveDocument(_:)), "s")
         item(shell, "Save All", #selector(TerminalWindowController.saveAllDocuments(_:)), "s", [.command, .option])
         shell.addItem(.separator())
+        item(shell, "Split Right", #selector(TerminalWindowController.splitRight(_:)), "d")
+        item(shell, "Split Down", #selector(TerminalWindowController.splitDown(_:)), "d", [.command, .shift])
+        shell.addItem(.separator())
         item(shell, "Rename Tab…", #selector(TerminalWindowController.renameTab(_:)), "r", [.command, .option])
         item(shell, "Use Option as Meta Key", #selector(toggleOptionAsMeta(_:)), "", target: self)
         shell.addItem(.separator())
@@ -883,7 +886,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             entry.representedObject = position.rawValue
         }
         view.addItem(withTitle: "Terminal Position", action: nil, keyEquivalent: "").submenu = positions
-        item(view, "Show Changes", #selector(TerminalWindowController.showChanges(_:)), "d")
+        item(view, "Show Changes", #selector(TerminalWindowController.showChanges(_:)), "g", [.command, .option])
         view.addItem(.separator())
         item(view, "Soft Wrap", #selector(toggleSoftWrap(_:)), "", target: self)
         let heights = NSMenu(title: "Line Height")
@@ -910,6 +913,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         window.addItem(.separator())
         item(window, "Show Next Tab", #selector(TerminalWindowController.showNextTab(_:)), "]", [.command, .shift])
         item(window, "Show Previous Tab", #selector(TerminalWindowController.showPreviousTab(_:)), "[", [.command, .shift])
+        window.addItem(.separator())
+        let arrow = { (key: Int) in String(Character(UnicodeScalar(key)!)) }
+        item(window, "Select Pane on the Left", #selector(TerminalWindowController.selectPaneLeft(_:)), arrow(NSLeftArrowFunctionKey), [.command, .option])
+        item(window, "Select Pane on the Right", #selector(TerminalWindowController.selectPaneRight(_:)), arrow(NSRightArrowFunctionKey), [.command, .option])
+        item(window, "Select Pane Above", #selector(TerminalWindowController.selectPaneAbove(_:)), arrow(NSUpArrowFunctionKey), [.command, .option])
+        item(window, "Select Pane Below", #selector(TerminalWindowController.selectPaneBelow(_:)), arrow(NSDownArrowFunctionKey), [.command, .option])
+        item(window, "Select Next Pane", #selector(TerminalWindowController.selectNextPane(_:)), "]", [.command, .option])
+        item(window, "Select Previous Pane", #selector(TerminalWindowController.selectPreviousPane(_:)), "[", [.command, .option])
+        item(window, "Maximize Pane", #selector(TerminalWindowController.toggleZoomPane(_:)), "\r", [.command, .shift])
+        item(window, "Make Panes Equal", #selector(TerminalWindowController.equalizePanes(_:)), "")
         window.addItem(.separator())
         for n in 1...9 {
             let tabItem = item(window, n == 9 ? "Select Last Tab" : "Select Tab \(n)",

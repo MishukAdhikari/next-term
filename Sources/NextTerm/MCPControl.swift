@@ -250,6 +250,11 @@ enum MCPControl {
             "state": state(tab),
             "front": controller.activeTab === tab,
         ]
+        // Panes split together in one tab of the tab bar share its number.
+        if let index = controller.groups.firstIndex(where: { $0.contains(tab) }) {
+            info["tab_bar_position"] = index + 1
+            if controller.groups[index].isSplit { info["split"] = true }
+        }
         if tab.status.running {
             info["program"] = tab.status.program
             info["agent"] = tab.status.kind == .agent
@@ -373,7 +378,18 @@ enum MCPControl {
         let owners = app.controllers.filter { $0.project.map { directory == $0 || directory.hasPrefix($0 + "/") } ?? false }
         let tab: TerminalTab
         let controller: TerminalWindowController
-        if let owner = owners.max(by: { ($0.project?.count ?? 0) < ($1.project?.count ?? 0) }) {
+        if let besideID = arguments["split_beside"] {
+            // A pane next to another tab, so the user can watch both.
+            guard let beside = findTab(besideID), let owner = self.controller(of: beside) else {
+                return reply(fail("No tab with that split_beside id; list_tabs shows them."))
+            }
+            let down = (arguments["direction"] as? String) == "down"
+            guard let pane = owner.split(vertical: !down, from: beside, directory: directory, focus: false) else {
+                return reply(fail("Could not split that tab."))
+            }
+            controller = owner
+            tab = pane
+        } else if let owner = owners.max(by: { ($0.project?.count ?? 0) < ($1.project?.count ?? 0) }) {
             controller = owner
             tab = owner.addTab(directory: directory, select: false)
         } else {
@@ -468,10 +484,8 @@ enum MCPControl {
     }
 
     private static func showTab(_ tab: TerminalTab) -> MCPServer.CallResult {
-        guard let controller = controller(of: tab), let index = controller.tabs.firstIndex(where: { $0 === tab }) else {
-            return fail("That tab is gone.")
-        }
-        controller.select(index)
+        guard let controller = controller(of: tab) else { return fail("That tab is gone.") }
+        controller.show(tab)
         controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         return ok(["id": tab.id.uuidString.lowercased(), "shown": true])

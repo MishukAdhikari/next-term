@@ -592,6 +592,8 @@ enum SelfTest {
         c.tabBar(c.tabBar, didMove: 0, to: 1)
         check(c.tabs[0] === b && c.tabs[1] === a, "drag reorder moves the tab")
 
+        await paneChecks(c)
+
         // Font size.
         let size = AppDelegate.shared.fontSize
         AppDelegate.shared.increaseFontSize(nil)
@@ -600,6 +602,82 @@ enum SelfTest {
         AppDelegate.shared.fontSize = size
 
         try? FileManager.default.removeItem(at: dir)
+    }
+
+    /// Split panes: ⌘D and ⌘⇧D, moving between panes, zoom, closing one.
+    private static func paneChecks(_ c: TerminalWindowController) async {
+        guard let window = c.window, let base = c.activeTab, let group = c.activeGroup else { return check(false, "a tab to split") }
+        c.show(base)
+        window.makeFirstResponder(base.view)
+        let tabsBefore = c.groups.count
+        func items(_ menu: NSMenu) -> [NSMenuItem] { menu.items.flatMap { [$0] + ($0.submenu.map(items) ?? []) } }
+        let all = items(NSApp.mainMenu ?? NSMenu())
+        let right = all.first { $0.action == #selector(TerminalWindowController.splitRight(_:)) }
+        let down = all.first { $0.action == #selector(TerminalWindowController.splitDown(_:)) }
+        check(right?.keyEquivalent == "d" && right?.keyEquivalentModifierMask == .command
+              && down?.keyEquivalent == "d" && down?.keyEquivalentModifierMask == [.command, .shift],
+              "Shell ▸ Split Right is ⌘D and Split Down ⌘⇧D")
+        if NSApp.keyWindow === window {
+            NSApp.sendAction(#selector(TerminalWindowController.splitRight(_:)), to: nil, from: nil)
+        } else {
+            c.splitRight(nil)
+        }
+        guard let second = c.activeTab, second !== base else { return check(false, "Split Right adds a pane") }
+        check(c.groups.count == tabsBefore && group.panes.count == 2, "a split stays one tab with two panes",
+              "tabs \(c.groups.count), panes \(group.panes.count)")
+        check(window.firstResponder === second.view, "the new pane has the keyboard")
+        check(await wait(20) { second.status.integrated }, "the new pane's shell starts")
+        func frame(_ tab: TerminalTab) -> NSRect { group.paneView(tab).convert(group.paneView(tab).bounds, to: group.view) }
+        check(frame(base).maxX <= frame(second).minX + 2 && abs(frame(base).height - frame(second).height) < 2 && frame(base).width > 100,
+              "Split Right puts them side by side", "\(frame(base)) \(frame(second))")
+        check(second.currentDirectory() == base.currentDirectory(), "a new pane opens in the pane's folder", second.currentDirectory())
+
+        c.splitDown(nil)
+        guard let third = c.activeTab, third !== second else { return check(false, "Split Down adds a pane") }
+        _ = await wait(20) { third.status.integrated }
+        check(frame(third).maxY <= frame(second).minY + 2 && abs(frame(third).minX - frame(second).minX) < 2,
+              "Split Down puts the new pane below", "\(frame(second)) \(frame(third))")
+        check(group.paneView(base).dimmed && group.paneView(second).dimmed && !group.paneView(third).dimmed,
+              "panes without the keyboard are shaded")
+        third.view.send(txt: "\u{15}echo pane three\r")
+        second.view.send(txt: "\u{15}echo pane two\r")
+        await pause(0.5)
+        await screenshot(c, suffix: "split")
+
+        c.selectPaneLeft(nil)
+        check(c.activeTab === base && window.firstResponder === base.view, "⌥⌘← moves to the pane on the left")
+        c.selectPaneRight(nil)
+        let landed = c.activeTab
+        check(landed === second || landed === third, "⌥⌘→ moves back to the right")
+        c.show(second)
+        window.makeFirstResponder(second.view)
+        c.selectPaneBelow(nil)
+        check(c.activeTab === third, "⌥⌘↓ moves to the pane below")
+        c.selectPaneAbove(nil)
+        check(c.activeTab === second, "⌥⌘↑ moves to the pane above")
+        c.selectNextPane(nil)
+        check(c.activeTab === third, "⌥⌘] cycles through the panes")
+
+        c.toggleZoomPane(nil)
+        check(group.zoomed === third && third.view.window != nil && base.view.window == nil && second.view.window == nil,
+              "⌘⇧↩ fills the tab with one pane")
+        c.toggleZoomPane(nil)
+        check(group.zoomed == nil && base.view.window != nil && second.view.window != nil, "and again brings the panes back")
+
+        c.refresh()
+        let bar = c.tabBar.items[safe: c.activeIndex]
+        check(bar?.title.hasSuffix("+2") == true, "the tab says it holds more panes", bar?.title ?? "")
+        c.equalizePanes(nil)
+
+        // Typing goes to the pane with the keyboard; a pane that exits goes, and its neighbour takes over.
+        third.view.send(txt: "\u{15}exit\r")
+        check(await wait(5) { group.panes.count == 2 && !group.contains(third) }, "a pane whose shell exits closes")
+        check(group.contains(c.activeTab ?? base) && c.groups.count == tabsBefore, "the tab stays with its other panes")
+        window.makeFirstResponder(second.view)
+        c.closeTab(nil)
+        check(await wait(3) { group.panes.count == 1 } && group.focused === base && window.firstResponder === base.view,
+              "⌘W closes the focused pane; the other takes the keyboard")
+        check(!group.paneView(base).dimmed, "a single pane is never shaded")
     }
 
     private static func screenshotAllStates(_ c: TerminalWindowController, dir: URL) async {
@@ -1054,7 +1132,7 @@ enum SelfTest {
         try? changed.write(to: file, atomically: true, encoding: .utf8)
 
         c.showChanges(of: file)
-        guard let diff = c.editorArea.activeDiff else { return check(false, "⌘D shows the file's changes") }
+        guard let diff = c.editorArea.activeDiff else { return check(false, "⌥⌘G shows the file’s changes") }
         check(await wait(5) { diff.hunkCount == 2 }, "the diff shows both changes", "\(diff.hunkCount) hunks")
         check(diff.sideTexts.0.contains("line 2\n") && diff.sideTexts.1.contains("line two\n")
               && diff.sideTexts.0.components(separatedBy: "\n").count == diff.sideTexts.1.components(separatedBy: "\n").count,
@@ -1327,6 +1405,15 @@ enum SelfTest {
         let screen = await tool("read_tab", ["tab_id": workerID, "lines": 20])
         check(waited.json?["timed_out"] as? Bool == false && (screen.json?["screen"] as? String)?.contains("mcp-started") == true,
               "MCP: the command ran; wait_for_tab and read_tab see its output", waited.text + " / " + screen.text)
+
+        // A pane beside the worker, so both can be watched.
+        let beside = await tool("new_tab", ["directory": proj.path, "split_beside": workerID, "direction": "down"])
+        let besideID = beside.json?["id"] as? String ?? ""
+        let holder = AppDelegate.shared.controllers.first { $0.tabs.contains { $0 === worker } }
+        let shared = holder?.group(of: worker)
+        check(!beside.isError && shared?.panes.contains { $0.id.uuidString.lowercased() == besideID } == true && shared?.focused === worker,
+              "MCP: new_tab can open a pane beside another tab (without taking the keyboard)", beside.text)
+        _ = await tool("close_tab", ["tab_id": besideID, "force": true])
 
         // A prompt with two lines arrives as one paste and runs on Return.
         _ = await tool("send_to_tab", ["tab_id": workerID, "text": "echo multi-1\necho multi-2"])

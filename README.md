@@ -49,7 +49,11 @@ agents are working, which are done, and which are waiting on your decision.
 - **Project sidebar with git.** The project as a live file tree: changed files and folders coloured, with
   `+12 −3` line counts like a pull request, and the branch, total changes and ahead/behind at the top.
   Files your agents create or change show up on their own.
-- **Changes side by side (⌘D).** A file's diff in a tab: the old version beside the new, rows aligned, the
+- **Split panes.** Split any tab right (⌘D) or down (⌘⇧D), as often as you like: an agent beside its
+  test run, two agents side by side. Move between panes with ⌥⌘ and the arrows, maximize one with
+  ⌘⇧↩, close it with ⌘W. The panes without the keyboard are shaded, and the tab's mark shows the pane
+  that most needs you.
+- **Changes side by side (⌥⌘G).** A file's diff in a tab: the old version beside the new, rows aligned, the
   changed words marked, syntax-coloured, scrolling together. All changes, unstaged or staged; step through
   them and stage, unstage or revert one hunk at a time (⌘Z undoes a revert). Each action first checks the
   file is still what the diff showed, so a change an agent made meanwhile is never overwritten.
@@ -114,7 +118,10 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | New tab (in the project, or the current tab's folder) | ⌘T |
 | New window | ⌘N |
 | Open project / Close project | ⌘O / Shell menu |
-| Close tab | ⌘W |
+| Close tab (or the focused pane in a split tab) | ⌘W |
+| Split right / split down | ⌘D / ⌘⇧D |
+| Move between panes | ⌥⌘← ⌥⌘→ ⌥⌘↑ ⌥⌘↓, or ⌥⌘] / ⌥⌘[ in turn |
+| Maximize the pane (and back) | ⌘⇧↩ |
 | Select tab 1–8 / last tab | ⌘1…⌘8 / ⌘9 |
 | Next / previous tab | ⌘⇧] / ⌘⇧[, Ctrl-Tab / Ctrl-Shift-Tab |
 | Rename tab | ⌥⌘R, or double-click the tab |
@@ -127,6 +134,8 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | Save / Save All | ⌘S / ⌥⌘S |
 | Close the file being edited | ⌘W (with the editor focused) |
 | Comment line / Go to line | ⌘/ / ⌘L |
+| Show changes (side by side) | ⌥⌘G |
+| Send to Agent | ⌥⌘K |
 | Indent / Outdent | ⌘] / ⌘[ (Tab / ⇧Tab on selected lines) |
 | Between editor and terminal | ⌃` |
 | Keyboard Shortcuts (change any of these) | ⌘, |
@@ -200,7 +209,7 @@ front end can reuse it.
 
 ## Roadmap
 
-Next: split panes with keyboard shortcuts, ⌘P to open any file by name, every agent's saved sessions for
+Next: ⌘P to open any file by name, every agent's saved sessions for
 a project on the Welcome screen (resume one in a click), remote development over SSH and Dev Containers,
 and a secure link so agents outside this Mac (ChatGPT, Claude) can use the MCP server. Later: notarized
 releases. A Linux build would need a different UI layer (AppKit is

@@ -29,9 +29,15 @@ final class MoreButton: NSButton {
 }
 
 enum LayoutMenu {
-    /// The terminal's ⋯: where the terminal goes, and the sidebar's side.
+    /// The terminal's ⋯: split the terminal, where the terminal goes, and the sidebar's side.
     static func terminal() -> NSMenu {
         let menu = NSMenu(title: "Terminal")
+        for (title, action, id) in [("Split Right", #selector(TerminalWindowController.splitRight(_:)), "splitRight:"),
+                                    ("Split Down", #selector(TerminalWindowController.splitDown(_:)), "splitDown:")] {
+            let split = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+            KeyboardShortcuts.set(KeyboardShortcuts.shared.chord(for: id), on: split)
+        }
+        menu.addItem(.separator())
         let heading = menu.addItem(withTitle: "Move Terminal To", action: nil, keyEquivalent: "")
         heading.isEnabled = false
         for position in AppDelegate.TerminalPosition.allCases {

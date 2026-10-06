@@ -4,6 +4,14 @@ import NextTermCore
 /// Window that handles Ctrl-Tab / Ctrl-Shift-Tab before the terminal sees it.
 final class TerminalWindow: NSWindow {
     var onControlTab: ((_ backwards: Bool) -> Void)?
+    /// Whatever took the keyboard (a click in a pane, a move between panes).
+    var onFirstResponderChange: ((NSResponder?) -> Void)?
+
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        let made = super.makeFirstResponder(responder)
+        if made { onFirstResponderChange?(firstResponder) }
+        return made
+    }
 
     override func sendEvent(_ event: NSEvent) {
         if event.type == .keyDown, event.keyCode == 48 /* Tab */,
@@ -32,7 +40,11 @@ final class WorkSplitView: NSSplitView {
 final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSplitViewDelegate, NSMenuItemValidation,
                                       TabBarViewDelegate, TerminalTabDelegate, ProjectSidebarDelegate, FindInFilesDelegate,
                                       EditorAreaDelegate {
-    private(set) var tabs: [TerminalTab] = []
+    /// The tabs in the tab bar: each one terminal, or several split side by side.
+    private(set) var groups: [PaneGroup] = []
+    /// Every terminal in the window, tab by tab, pane by pane.
+    var tabs: [TerminalTab] { groups.flatMap(\.panes) }
+    /// The tab bar's selected tab (an index into `groups`).
     private(set) var activeIndex = 0
     let tabBar = TabBarView(frame: .zero)
     let sidebar = ProjectSidebarView(frame: NSRect(x: 0, y: 0, width: ProjectSidebarView.defaultWidth, height: 600))
@@ -64,7 +76,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return controller
     }()
 
-    var activeTab: TerminalTab? { tabs[safe: activeIndex] }
+    var activeGroup: PaneGroup? { groups[safe: activeIndex] }
+    /// The terminal with the keyboard: the selected tab's focused pane.
+    var activeTab: TerminalTab? { activeGroup?.focused }
+    func group(of tab: TerminalTab) -> PaneGroup? { groups.first { $0.contains(tab) } }
 
     init(directory: String?, project: String? = nil) {
         self.project = project.map(canonicalPath)
@@ -86,6 +101,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
         window.delegate = self
         window.onControlTab = { [weak self] backwards in self?.cycleTab(by: backwards ? -1 : 1) }
+        window.onFirstResponderChange = { [weak self] responder in
+            guard let self, let view = responder as? NextTermView, let tab = self.tabs.first(where: { $0.view === view }) else { return }
+            self.paneFocused(tab)
+        }
 
         // [ Project sidebar | tab bar over terminals ], both reaching up into the title bar.
         splitView.isVertical = true
@@ -144,25 +163,24 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// `select` false: the tab opens behind the current one (an agent opening tabs leaves you where you are).
     @discardableResult
     func addTab(directory: String?, select selectIt: Bool = true) -> TerminalTab {
-        let tab = TerminalTab(directory: directory, fontSize: AppDelegate.shared.fontSize)
-        tab.delegate = self
-        // ⌘-click on "src/a.ts:42" in the output opens the editor there.
-        tab.view.openFile = { [weak self] url, line, column in self?.openFile(url, line: line, column: column) }
-        let view = tab.view
+        let tab = makeTab(directory: directory)
+        let group = PaneGroup(tab)
+        let view = group.view
         view.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(view)
         NSLayoutConstraint.activate([
-            view.topAnchor.constraint(equalTo: container.topAnchor, constant: 4),
-            view.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
-            view.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -2),
-            view.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -2),
+            view.topAnchor.constraint(equalTo: container.topAnchor),
+            view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
-        let insertAt = tabs.isEmpty ? 0 : activeIndex + 1 // next to the current tab
-        tabs.insert(tab, at: insertAt)
+        group.layout()
+        let insertAt = groups.isEmpty ? 0 : activeIndex + 1 // next to the current tab
+        groups.insert(group, at: insertAt)
         container.layoutSubtreeIfNeeded() // real size before the shell starts, so it draws once
         tab.start()
         AppDelegate.shared.projectsChanged()
-        if selectIt || tabs.count == 1 {
+        if selectIt || groups.count == 1 {
             select(insertAt)
         } else {
             view.isHidden = true
@@ -172,19 +190,116 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return tab
     }
 
+    private func makeTab(directory: String?) -> TerminalTab {
+        let tab = TerminalTab(directory: directory, fontSize: AppDelegate.shared.fontSize)
+        tab.delegate = self
+        // ⌘-click on "src/a.ts:42" in the output opens the editor there.
+        tab.view.openFile = { [weak self] url, line, column in self?.openFile(url, line: line, column: column) }
+        return tab
+    }
+
+    /// Brings a terminal to the front: its tab selected, its pane focused (and un-zoomed if hidden).
+    func show(_ tab: TerminalTab) {
+        guard let index = groups.firstIndex(where: { $0.contains(tab) }) else { return }
+        let group = groups[index]
+        if let zoomed = group.zoomed, zoomed !== tab {
+            group.zoomed = nil
+            group.layout()
+        }
+        group.focused = tab
+        group.updateDimming()
+        select(index)
+    }
+
+    /// A pane got the keyboard (a click, or a move between panes).
+    private func paneFocused(_ tab: TerminalTab) {
+        guard let group = group(of: tab), group.focused !== tab else { return }
+        group.focused = tab
+        tab.lastSelected = Date()
+        group.updateDimming()
+        refreshVisibility()
+        refresh()
+    }
+
+    // MARK: split panes
+
+    @objc func splitRight(_ sender: Any?) { split(vertical: true) }
+    @objc func splitDown(_ sender: Any?) { split(vertical: false) }
+
+    /// A new terminal beside `from` (the focused pane): to its right or below it, in its folder.
+    @discardableResult
+    func split(vertical: Bool, from: TerminalTab? = nil, directory: String? = nil, focus: Bool = true) -> TerminalTab? {
+        guard let from = from ?? activeTab, let group = group(of: from) else { return nil }
+        let new = makeTab(directory: directory ?? from.currentDirectory())
+        group.split(from, with: new, vertical: vertical)
+        if !focus { group.focused = from }
+        group.layout()
+        container.layoutSubtreeIfNeeded() // the new pane's real size before its shell starts
+        new.start()
+        AppDelegate.shared.projectsChanged()
+        if focus, group === activeGroup { window?.makeFirstResponder(new.view) }
+        refreshVisibility()
+        refresh()
+        return new
+    }
+
+    @objc func selectPaneLeft(_ sender: Any?) { movePaneFocus(.left) }
+    @objc func selectPaneRight(_ sender: Any?) { movePaneFocus(.right) }
+    @objc func selectPaneAbove(_ sender: Any?) { movePaneFocus(.up) }
+    @objc func selectPaneBelow(_ sender: Any?) { movePaneFocus(.down) }
+
+    private func movePaneFocus(_ direction: PaneGroup.Direction) {
+        guard let group = activeGroup, let tab = activeTab, let next = group.neighbor(of: tab, direction) else { return NSSound.beep() }
+        window?.makeFirstResponder(next.view)
+    }
+
+    @objc func selectNextPane(_ sender: Any?) { cyclePane(by: 1) }
+    @objc func selectPreviousPane(_ sender: Any?) { cyclePane(by: -1) }
+
+    private func cyclePane(by delta: Int) {
+        guard let group = activeGroup, group.isSplit, let index = group.panes.firstIndex(where: { $0 === group.focused }) else {
+            return NSSound.beep()
+        }
+        let panes = group.panes
+        let next = panes[(index + delta + panes.count) % panes.count]
+        if group.zoomed != nil {
+            group.zoomed = next
+            group.layout()
+        }
+        window?.makeFirstResponder(next.view)
+    }
+
+    /// ⌘⇧↩: the focused pane fills the tab; again, the panes come back.
+    @objc func toggleZoomPane(_ sender: Any?) {
+        guard let group = activeGroup, group.isSplit else { return NSSound.beep() }
+        group.zoomed = group.zoomed == nil ? group.focused : nil
+        group.layout()
+        container.layoutSubtreeIfNeeded()
+        window?.makeFirstResponder(group.focused.view)
+        refreshVisibility()
+        refresh()
+    }
+
+    @objc func equalizePanes(_ sender: Any?) {
+        guard let group = activeGroup, group.isSplit else { return NSSound.beep() }
+        group.equalize()
+        group.layout()
+    }
+
     func select(_ index: Int) {
-        guard tabs.indices.contains(index) else { return }
+        guard groups.indices.contains(index) else { return }
         activeIndex = index
-        tabs[index].lastSelected = Date()
-        for (i, tab) in tabs.enumerated() { tab.view.isHidden = i != index }
-        window?.makeFirstResponder(tabs[index].view)
+        let group = groups[index]
+        group.focused.lastSelected = Date()
+        for (i, other) in groups.enumerated() { other.view.isHidden = i != index }
+        window?.makeFirstResponder(group.focused.view)
         refreshVisibility()
         refresh()
     }
 
     func cycleTab(by delta: Int) {
-        guard !tabs.isEmpty else { return }
-        select((activeIndex + delta + tabs.count) % tabs.count)
+        guard !groups.isEmpty else { return }
+        select((activeIndex + delta + groups.count) % groups.count)
     }
 
     /// Closes a tab, asking first if closing it would stop something: a running program, or a job
@@ -195,11 +310,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             remove(tab)
             return
         }
+        let isPane = group(of: tab)?.isSplit == true
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Close “\(tab.title)”?"
-        alert.informativeText = "Closing the tab stops \(warning)."
-        alert.addButton(withTitle: "Close Tab")
+        alert.informativeText = "Closing the \(isPane ? "pane" : "tab") stops \(warning)."
+        alert.addButton(withTitle: isPane ? "Close Pane" : "Close Tab")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in
             if response == .alertFirstButtonReturn { self?.remove(tab) }
@@ -208,13 +324,25 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// Closes a tab without asking (callers have asked, or were told to force it).
     func remove(_ tab: TerminalTab) {
-        guard let index = tabs.firstIndex(where: { $0 === tab }) else { return }
+        guard let index = groups.firstIndex(where: { $0.contains(tab) }) else { return }
         // A rename in progress refers to tabs by position: finish it while positions still hold.
         if window?.firstResponder is NSTextView, tabBar.isEditing { window?.makeFirstResponder(nil) }
+        let group = groups[index]
+        let hadKeyboard = window?.firstResponder === tab.view
         tab.terminate()
+        if group.remove(tab) {
+            // One pane fewer; the tab stays. Its neighbour takes the room and, if this one had it, the keyboard.
+            tab.view.removeFromSuperview()
+            group.layout()
+            if hadKeyboard { window?.makeFirstResponder(group.focused.view) }
+            refreshVisibility()
+            refresh()
+            return
+        }
         tab.view.removeFromSuperview()
-        tabs.remove(at: index)
-        if tabs.isEmpty {
+        group.view.removeFromSuperview()
+        groups.remove(at: index)
+        if groups.isEmpty {
             closeConfirmed = true
             window?.close()
             return
@@ -250,10 +378,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func refreshVisibility() {
         let visible = userCanSeeActiveTab
-        for (i, tab) in tabs.enumerated() {
-            let isVisible = visible && i == activeIndex
-            tab.status.setVisible(isVisible)
-            tab.view.beepAllowed = isVisible
+        for (i, group) in groups.enumerated() {
+            for tab in group.panes {
+                // Every pane of the selected tab is on screen (unless another fills the tab).
+                let isVisible = visible && i == activeIndex && (group.zoomed == nil || group.zoomed === tab)
+                tab.status.setVisible(isVisible)
+                tab.view.beepAllowed = isVisible && tab === group.focused
+            }
         }
     }
 
@@ -274,15 +405,29 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func refresh() {
-        let items = tabs.map { tab in
-            TabBarItem(title: tab.title, truncation: tab.titleTruncation, state: tab.status.state, tooltip: tab.tooltip,
-                       accessibilityStatus: tab.stateDescription)
+        let items = groups.map { group -> TabBarItem in
+            let tab = group.focused
+            guard group.isSplit else {
+                return TabBarItem(title: tab.title, truncation: tab.titleTruncation, state: tab.status.state, tooltip: tab.tooltip,
+                                  accessibilityStatus: tab.stateDescription)
+            }
+            // A split tab: named by the pane with the keyboard, marked by the pane that most needs you.
+            let lines = group.panes.map { "\($0.title): \($0.stateDescription)" }
+            return TabBarItem(title: tab.title + "  +\(group.panes.count - 1)", truncation: tab.titleTruncation,
+                              state: Self.mostUrgent(group.panes.map(\.status.state)),
+                              tooltip: lines.joined(separator: "\n"), accessibilityStatus: lines.joined(separator: "; "))
         }
         tabBar.update(items: items, selectedIndex: activeIndex)
         announceBackgroundChanges()
         updateTitle()
         AppDelegate.shared.updateBadge()
         updateProjectRoot()
+    }
+
+    /// Needs you, then working, failed, done, idle.
+    static func mostUrgent(_ states: [TabState]) -> TabState {
+        let order: [TabState] = [.attention, .working, .failed, .done, .idle]
+        return order.first { states.contains($0) } ?? .idle
     }
 
     /// "Alertable.php — xCloud" while editing, "zsh — xCloud" in the terminal.
@@ -295,7 +440,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// Tells VoiceOver users when a background tab finishes, fails or asks for attention: the dots are
     /// visual, so without this they would never know.
     private func announceBackgroundChanges() {
-        for (i, tab) in tabs.enumerated() {
+        for (i, tab) in groups.enumerated().flatMap({ index, group in group.panes.map { (index, $0) } }) {
             let state = tab.status.state
             defer { announcedStates[tab.id] = state }
             guard i != activeIndex, announcedStates[tab.id] != state, [.done, .failed, .attention].contains(state) else { continue }
@@ -378,7 +523,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// A window nobody has used yet: no project, one tab, nothing run in it.
     var isPristine: Bool {
-        guard project == nil, tabs.count == 1, let tab = tabs.first else { return false }
+        guard project == nil, groups.count == 1, tabs.count == 1, let tab = tabs.first else { return false }
         return tab.status.command.isEmpty && !tab.status.running && tab.closeWarning == nil
     }
 
@@ -412,6 +557,17 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             item.title = isEditorFocused ? "Focus Terminal" : "Focus Editor"
             return editorArea.activeEditor != nil
         }
+        if item.action == #selector(closeTab(_:)) {
+            item.title = !isEditorFocused && activeGroup?.isSplit == true ? "Close Pane" : "Close Tab"
+        }
+        let paneActions: [Selector] = [#selector(selectPaneLeft(_:)), #selector(selectPaneRight(_:)), #selector(selectPaneAbove(_:)),
+                                       #selector(selectPaneBelow(_:)), #selector(selectNextPane(_:)), #selector(selectPreviousPane(_:)),
+                                       #selector(toggleZoomPane(_:)), #selector(equalizePanes(_:))]
+        if let action = item.action, paneActions.contains(action) {
+            if action == #selector(toggleZoomPane(_:)) { item.state = activeGroup?.zoomed != nil ? .on : .off }
+            return activeGroup?.isSplit == true
+        }
+        if item.action == #selector(splitRight(_:)) || item.action == #selector(splitDown(_:)) { return activeTab != nil }
         if item.action == #selector(toggleProjectSidebar(_:)) {
             item.title = isSidebarVisible ? "Hide Project Sidebar" : "Show Project Sidebar"
         }
@@ -720,7 +876,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             if path == base { item.path = "." } else if path.hasPrefix(base + "/") { item.path = String(path.dropFirst(base.count + 1)) }
             return item
         }
-        if let index = tabs.firstIndex(where: { $0 === tab }) { select(index) }
+        show(tab)
         defer { window.makeFirstResponder(tab.view) }
         // Claude connected to Next Term: the mentions go into its prompt directly, as from VS Code.
         if let client = AppDelegate.shared.claudeClient(for: tab), items.allSatisfy({ !$0.isFolder && $0.code == nil }) {
@@ -746,7 +902,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     // MARK: diffs
 
-    /// ⌘D: the changes of the file being edited, or the file selected in the sidebar, side by side.
+    /// ⌥⌘G: the changes of the file being edited, or the file selected in the sidebar, side by side.
     @objc func showChanges(_ sender: Any?) {
         if let editor = editorArea.activeEditor, isEditorFocused || window?.firstResponder !== sidebar.outline {
             return showChanges(of: editor.document.url)
@@ -833,7 +989,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     @objc func selectTabByNumber(_ sender: NSMenuItem) {
         // ⌘1…⌘8 pick that tab; ⌘9 is always the last one, as in browsers.
-        select(sender.tag == 9 ? tabs.count - 1 : sender.tag - 1)
+        select(sender.tag == 9 ? groups.count - 1 : sender.tag - 1)
     }
 
     // Not selectNextTab:/selectPreviousTab:: NSWindow implements those (system tabs) and would swallow them.
@@ -902,7 +1058,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         ticker?.invalidate()
         ticker = nil
         for tab in tabs { tab.terminate() }
-        tabs.removeAll()
+        groups.removeAll()
         editorArea.closeAll()
         finder.close()
         onClose?(self, closingProject)
@@ -926,20 +1082,33 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     func tabBar(_ bar: TabBarView, didSelect index: Int) { select(index) }
 
     func tabBar(_ bar: TabBarView, didClose index: Int) {
-        if let tab = tabs[safe: index] { requestClose(tab) }
+        guard let group = groups[safe: index] else { return }
+        guard group.isSplit else { return requestClose(group.focused) }
+        // The tab's × closes all its panes, asking once if that stops anything.
+        let busy = group.panes.filter { $0.closeWarning != nil }
+        guard !busy.isEmpty, let window else { return group.panes.forEach(remove) }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Close this tab and its \(group.panes.count) panes?"
+        alert.informativeText = "Closing it stops " + Self.stopList(busy)
+        alert.addButton(withTitle: "Close Tab")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            if response == .alertFirstButtonReturn { group.panes.forEach { self?.remove($0) } }
+        }
     }
 
     func tabBar(_ bar: TabBarView, didMove from: Int, to: Int) {
-        guard tabs.indices.contains(from), tabs.indices.contains(to) else { return }
-        let active = activeTab
-        let tab = tabs.remove(at: from)
-        tabs.insert(tab, at: to)
-        activeIndex = active.flatMap { a in tabs.firstIndex { $0 === a } } ?? 0
+        guard groups.indices.contains(from), groups.indices.contains(to) else { return }
+        let active = activeGroup
+        let group = groups.remove(at: from)
+        groups.insert(group, at: to)
+        activeIndex = active.flatMap { a in groups.firstIndex { $0 === a } } ?? 0
         refresh()
     }
 
     func tabBar(_ bar: TabBarView, didRename index: Int, to title: String?) {
-        tabs[safe: index]?.userTitle = title
+        groups[safe: index]?.focused.userTitle = title
         refresh()
     }
 
