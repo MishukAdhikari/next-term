@@ -1,12 +1,14 @@
 import type { APIRoute } from 'astro';
 import { DOWNLOAD_DMG, MIN_MACOS, RELEASES_LATEST, REPO, SUMMARY, TAGLINE, VERSION } from '../config';
-import { docsInOrder, pageUrl } from '../lib/docs';
+import { comparisonsInOrder, docsInOrder, pageUrl } from '../lib/docs';
 
 // /llms.txt in the llmstxt.org format: a summary, then the pages worth reading, with what each covers.
 export const GET: APIRoute = async ({ site }) => {
 	if (!site) throw new Error('Set `site` in astro.config.mjs');
 	const docs = await docsInOrder();
-	const link = (id: string) => docs.find((entry) => entry.id === id);
+	const comparisons = await comparisonsInOrder();
+	const pages = [...docs, ...comparisons];
+	const link = (id: string) => pages.find((entry) => entry.id === id);
 	const line = (id: string) => {
 		const entry = link(id);
 		return entry ? `- [${entry.data.title}](${pageUrl(id, site)}): ${entry.data.description ?? ''}` : '';
@@ -17,6 +19,7 @@ export const GET: APIRoute = async ({ site }) => {
 		['Editor and diffs', ['docs/editor', 'docs/diffs', 'docs/search', 'docs/layouts']],
 		['Projects and git', ['docs/projects-and-git', 'docs/command-line']],
 		['Reference', ['docs/keyboard-shortcuts', 'docs/settings', 'docs/security-and-privacy', 'docs/faq']],
+		['Compared with other tools', comparisons.map((entry) => entry.id)],
 	];
 	const text = [
 		'# Next Term',

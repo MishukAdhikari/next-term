@@ -29,6 +29,33 @@ export async function docsInOrder(): Promise<CollectionEntry<'docs'>[]> {
 	return entries.sort((a, b) => rank(a.id) - rank(b.id) || a.id.localeCompare(b.id));
 }
 
+/** The comparison pages in reading order (the sidebar’s order in astro.config.mjs), index first. */
+export const COMPARE_ORDER = [
+	'compare',
+	'compare/vs-code',
+	'compare/jetbrains',
+	'compare/phpstorm',
+	'compare/pycharm',
+	'compare/cursor',
+	'compare/devin-desktop',
+	'compare/zed',
+	'compare/warp',
+	'compare/iterm2',
+	'compare/ghostty',
+] as const;
+
+/** Every comparison page, the index included, in reading order; pages not in the list come last. */
+export async function comparisonsInOrder(): Promise<CollectionEntry<'docs'>[]> {
+	const entries = (await getCollection('docs')).filter(
+		(entry) => entry.id === 'compare' || entry.id.startsWith('compare/')
+	);
+	const rank = (id: string) => {
+		const index = (COMPARE_ORDER as readonly string[]).indexOf(id);
+		return index === -1 ? COMPARE_ORDER.length : index;
+	};
+	return entries.sort((a, b) => rank(a.id) - rank(b.id) || a.id.localeCompare(b.id));
+}
+
 /** A page’s public URL. */
 export function pageUrl(id: string, site: URL) {
 	return new URL(`/${id}/`, site).href;

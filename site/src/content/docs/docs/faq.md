@@ -48,7 +48,7 @@ No. The agent links listen only on your Mac (`127.0.0.1`), with a fresh secret t
 
 ## Is Next Term an open-source alternative to Warp?
 
-If you are looking for an open-source terminal built around AI agents on the Mac, Next Term is one. It is MIT-licensed, written in Swift and AppKit, needs no account, and has no AI of its own: it runs the agent CLIs you choose, shows each one’s status on its tab, and adds a code editor, side-by-side diffs and a git-aware sidebar.
+If you are looking for an open-source terminal built around AI agents on the Mac, Next Term is one. It is MIT-licensed, written in Swift and AppKit, needs no account, and has no AI of its own: it runs the agent CLIs you choose, shows each one’s status on its tab, and adds a code editor, side-by-side diffs and a git-aware sidebar. See [Next Term vs Warp](/compare/warp/).
 
 ## Can one agent control the others?
 
@@ -60,7 +60,7 @@ Yes. <kbd>⌘D</kbd> splits the tab to the right and <kbd>⇧⌘D</kbd> down, as
 
 ## Is Next Term a full IDE?
 
-No. It is built around the terminal tabs where your agents work: every tab shows its agent’s status, decisions arrive as notifications, and an editor, diffs and a git-aware sidebar sit next to them. There is no debugger, language server or extension system.
+No. It is built around the terminal tabs where your agents work: every tab shows its agent’s status, decisions arrive as notifications, and an editor, diffs and a git-aware sidebar sit next to them. There is no debugger, language server or extension system. See [how Next Term compares](/compare/) with VS Code, JetBrains IDEs, Cursor and others.
 
 ## Will my zsh configuration and oh-my-zsh still work?
 
