@@ -77,7 +77,9 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
 - **Every shortcut is yours.** Next Term > Settings (⌘,) > Keyboard Shortcuts lists every command; click one and press
   new keys. The shortcuts below are the defaults.
 - **Updates in one click.** Next Term checks GitHub Releases once a day (or Check for Updates). A new
-  version downloads, is verified against its published SHA-256, and replaces the app when you relaunch.
+  version opens a window with what's new (Install, Remind Me Later or Skip This Version), and a blue
+  Update button at the top right brings it back. It downloads, is verified against its published
+  SHA-256, and replaces the app when you relaunch.
 - **Native.** Swift and AppKit, universal (Apple Silicon and Intel): a 3 MB download, about 8 MB installed.
   macOS 13 or later.
 

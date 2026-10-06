@@ -8,11 +8,18 @@ You install Next Term once. After that it keeps itself current from GitHub Relea
 ## How it works
 
 1. **A daily check.** About 20 seconds after launch, and then once a day, Next Term asks GitHub for the latest release. Drafts and pre-releases are ignored.
-2. **You decide.** When there is a newer version, an alert names it, shows the start of its release notes, and offers **Install and Relaunch**, **Later** and **Release Notes**. On an automatic check you can also tick **Skip this version**.
+2. **You decide.** When there is a newer version, the update window opens over your project with what’s new: the notes of every version since yours, newest first. It offers **Install and Relaunch**, **Remind Me Later** and **Skip This Version**. Opened by the daily check, it doesn’t take the keyboard: what you’re typing to an agent stays in the terminal until you click the window.
 3. **Download and verify.** **Install and Relaunch** downloads the disk image with a progress window and checks it against the SHA-256 published with the release. It then opens the image read-only, copies the new app next to the current one, and checks that it really is Next Term, at the expected version, with an intact code signature.
 4. **Swap on quit.** “Next Term 0.5.0 is ready” offers to relaunch now (running commands and agents stop) or later. The new version replaces the old one when Next Term quits; if anything goes wrong during the swap, the old app is put back.
 
 If any step fails, nothing is replaced. Next Term says what went wrong, and you can download the release from its page instead.
+
+## The Update button
+
+While a new version waits, a blue **Update** button sits at the top right of each project window. Click it to open the update window again. Once the update is downloaded, it reads **Relaunch to Update**.
+
+- **Remind Me Later** (or the window’s close button) keeps the button. The daily check opens the window again after a day.
+- **Skip This Version** hides the window and the button for that version. The next version is offered as usual, and **Check for Updates…** still shows a skipped one.
 
 ## Check now
 
@@ -24,7 +31,7 @@ Untick **Next Term › Check for Updates Automatically**. Next Term then makes n
 
 ## What the check sends
 
-Only a request for the latest release of `MishukAdhikari/next-term` on GitHub, with the app’s version in the `User-Agent` header (“NextTerm/0.5.0”). There is no other identifying data, no account and no analytics. If GitHub’s API is rate-limited, Next Term reads the newest version from the releases page instead. Downloads are accepted only over HTTPS from GitHub.
+Only a request for the latest release of `MishukAdhikari/next-term` on GitHub, with the app’s version in the `User-Agent` header (“NextTerm/0.5.0”). When there is a newer version, a second request reads the recent releases, for the notes of each version since yours. There is no other identifying data, no account and no analytics. If GitHub’s API is rate-limited, Next Term reads the newest version from the releases page instead. Downloads are accepted only over HTTPS from GitHub.
 
 ## Updating from an earlier version
 

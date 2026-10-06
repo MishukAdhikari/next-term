@@ -679,6 +679,38 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         tabBar.setSidebarButton(onRight: sidebarOnRight)
         editorArea.tabBar.setSidebarButton(onRight: sidebarOnRight)
         sidebar.header.onRight = sidebarOnRight
+        updateUpdateButton()
+    }
+
+    /// The bar along the top at the work area's right end: where the Update button goes (as the bar at
+    /// the top-left corner offers back a hidden sidebar). A terminal folded to a strip beside the editor
+    /// has no room, so the editor's bar takes it.
+    var topRightBar: TabBarView {
+        if editorArea.isHidden { return tabBar }
+        switch terminalPosition {
+        case .top: return tabBar
+        case .right: return terminalCollapsed ? editorArea.tabBar : tabBar
+        case .bottom, .left: return editorArea.tabBar
+        }
+    }
+
+    /// Shows, changes or hides the Update button as the updater's state changes.
+    func updateUpdateButton() {
+        let target = topRightBar
+        for bar in [tabBar, editorArea.tabBar] {
+            guard bar === target, let badge = Updater.shared.badge else {
+                if !bar.updateButton.isHidden { bar.setUpdateButton(title: nil) }
+                continue
+            }
+            switch badge {
+            case let .update(version):
+                bar.setUpdateButton(title: "Update", toolTip: "Next Term \(version) is available. Click to see what’s new and install it.")
+            case let .relaunch(version):
+                bar.setUpdateButton(title: "Relaunch to Update", symbol: "arrow.clockwise.circle.fill",
+                                    toolTip: "Next Term \(version) is ready. Click to relaunch into it.")
+            }
+            bar.onUpdate = { Updater.shared.showAvailable() }
+        }
     }
 
     /// The smallest a pane may get along the work split: room for its tabs and a few lines.
@@ -734,6 +766,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let away = ["down": "up", "up": "down", "left": "right", "right": "left"][toward]!
         tabBar.setCollapseButton(symbol: "chevron.\(terminalCollapsed ? away : toward)",
                                  toolTip: terminalCollapsed ? "Expand the terminal (⌘J)" : "Collapse the terminal (⌘J)")
+        updateUpdateButton()
     }
 
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {

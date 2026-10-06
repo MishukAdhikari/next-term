@@ -45,13 +45,41 @@ public struct ReleaseInfo: Equatable, Sendable {
     public let dmgURL: URL?
     public let checksumURL: URL?
     public let notes: String
+    public let published: Date?
+
+    public init(version: AppVersion, tag: String, pageURL: URL, dmgURL: URL?, checksumURL: URL?, notes: String, published: Date? = nil) {
+        self.version = version
+        self.tag = tag
+        self.pageURL = pageURL
+        self.dmgURL = dmgURL
+        self.checksumURL = checksumURL
+        self.notes = notes
+        self.published = published
+    }
 
     /// Parses GitHub's `GET /repos/{owner}/{repo}/releases/latest` JSON. Drafts and pre-releases are
     /// ignored (the endpoint never returns them, but a mirror might). Downloads are accepted only over
     /// https from GitHub, unless `allowingFileURLs` (a local test feed).
     public static func parse(_ data: Data, allowingFileURLs: Bool = false) -> ReleaseInfo? {
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let tag = json["tag_name"] as? String, let version = AppVersion(tag),
+        (try? JSONSerialization.jsonObject(with: data) as? [String: Any]).flatMap { parse(json: $0, allowingFileURLs: allowingFileURLs) }
+    }
+
+    /// Parses `GET /repos/{owner}/{repo}/releases` (newest first): the releases the update window
+    /// shows notes for when more than one came out since this version.
+    public static func parseList(_ data: Data, allowingFileURLs: Bool = false) -> [ReleaseInfo] {
+        ((try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]) ?? []).compactMap { parse(json: $0, allowingFileURLs: allowingFileURLs) }
+    }
+
+    /// The releases to show notes for, newest first: every release after `current` up to `latest`
+    /// (at most `limit`), always including `latest` itself.
+    public static func since(_ current: AppVersion, latest: ReleaseInfo, among releases: [ReleaseInfo], limit: Int = 5) -> [ReleaseInfo] {
+        var newer = releases.filter { current < $0.version && !(latest.version < $0.version) && $0.version != latest.version }
+        newer.sort { $1.version < $0.version }
+        return Array(([latest] + newer).prefix(limit))
+    }
+
+    private static func parse(json: [String: Any], allowingFileURLs: Bool) -> ReleaseInfo? {
+        guard let tag = json["tag_name"] as? String, let version = AppVersion(tag),
               let page = (json["html_url"] as? String).flatMap(URL.init(string:)),
               json["draft"] as? Bool != true, json["prerelease"] as? Bool != true else { return nil }
         let assets = (json["assets"] as? [[String: Any]]) ?? []
@@ -67,7 +95,8 @@ public struct ReleaseInfo: Equatable, Sendable {
                 .flatMap { trusted($0) ? $0 : nil }
         }
         return ReleaseInfo(version: version, tag: tag, pageURL: page, dmgURL: asset(".dmg"), checksumURL: asset(".dmg.sha256"),
-                           notes: (json["body"] as? String) ?? "")
+                           notes: (json["body"] as? String) ?? "",
+                           published: (json["published_at"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) })
     }
 
     /// When the API refuses (60 requests an hour per address, shared behind an office router), the

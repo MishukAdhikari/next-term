@@ -98,6 +98,16 @@ final class TabBarView: NSView {
     static let collapseButtonWidth: CGFloat = 28
     private var collapseWidth: CGFloat { collapseButton.isHidden ? 0 : Self.collapseButtonWidth }
 
+    /// The blue Update button (in the bar at the window's top-right corner, while an update waits).
+    var onUpdate: (() -> Void)?
+    func setUpdateButton(title: String?, symbol: String = "arrow.down.circle.fill", toolTip: String = "") {
+        if let title { updateButton.configure(title: title, symbol: symbol, toolTip: toolTip) }
+        updateButton.isHidden = title == nil
+        needsLayout = true
+    }
+    let updateButton = UpdatePill()
+    private var updateWidth: CGFloat { updateButton.isHidden ? 0 : updateButton.width + 8 }
+
     /// The title for the accessibility tab group and the close button's tooltip.
     var kind = "tab" { didSet { setAccessibilityLabel(kind == "tab" ? "Terminal tabs" : "Editor tabs") } }
 
@@ -147,6 +157,12 @@ final class TabBarView: NSView {
         revealButton.action = #selector(revealClicked)
         revealButton.isHidden = true
         addSubview(revealButton)
+        updateButton.isBordered = false
+        updateButton.bezelStyle = .regularSquare
+        updateButton.target = self
+        updateButton.action = #selector(updateClicked)
+        updateButton.isHidden = true
+        addSubview(updateButton)
         sidebarButton.bezelStyle = .regularSquare
         sidebarButton.isBordered = false
         sidebarButton.contentTintColor = Theme.textDim
@@ -209,7 +225,7 @@ final class TabBarView: NSView {
     /// Width for tabs, keeping a strip on the right for dragging the window.
     private var availableWidth: CGFloat {
         max(0, bounds.width - tabsStart - (allowsNewTab ? Self.newTabButtonWidth : 0) - (moreButton == nil ? 0 : Self.moreButtonWidth)
-            - collapseWidth - revealWidth - 24)
+            - collapseWidth - revealWidth - updateWidth - 24)
     }
 
     /// How many tabs fit at a readable width.
@@ -258,13 +274,18 @@ final class TabBarView: NSView {
             x += Self.overflowButtonWidth
         }
         let more: CGFloat = moreButton == nil ? 0 : Self.moreButtonWidth
-        newTabButton.frame = NSRect(x: min(x, bounds.width - Self.newTabButtonWidth - more - collapseWidth - revealWidth), y: 0,
+        newTabButton.frame = NSRect(x: min(x, bounds.width - Self.newTabButtonWidth - more - collapseWidth - revealWidth - updateWidth), y: 0,
                                     width: Self.newTabButtonWidth, height: bounds.height - 1)
         moreButton?.frame = NSRect(x: bounds.width - Self.moreButtonWidth - 4, y: 0, width: Self.moreButtonWidth, height: bounds.height - 1)
         collapseButton.frame = NSRect(x: bounds.width - more - 4 - Self.collapseButtonWidth, y: 0,
                                       width: Self.collapseButtonWidth, height: bounds.height - 1)
         revealButton.frame = NSRect(x: bounds.width - more - 4 - collapseWidth - Self.collapseButtonWidth, y: 0,
                                     width: Self.collapseButtonWidth, height: bounds.height - 1)
+        if !updateButton.isHidden {
+            let width = updateButton.width
+            updateButton.frame = NSRect(x: bounds.width - more - 4 - collapseWidth - revealWidth - 4 - width, y: 0,
+                                        width: width, height: bounds.height - 1)
+        }
         updateOverflowButton()
     }
 
@@ -279,6 +300,7 @@ final class TabBarView: NSView {
 
     @objc private func collapseClicked() { onToggleCollapse?() }
     @objc private func revealClicked() { onReveal?() }
+    @objc private func updateClicked() { onUpdate?() }
 
     @objc private func showOverflowMenu() {
         let menu = NSMenu()

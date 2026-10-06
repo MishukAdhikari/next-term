@@ -476,6 +476,7 @@ enum SelfTest {
         await editorChecks(c, proj: proj, tab: inProject)
         await goToFileChecks(c, proj: proj)
         await gutterAndCollapseChecks(c, proj: proj)
+        await updateChecks(c)
         await importChecks(c, proj: proj)
 
         // The tree remembers what was expanded when you switch to a tab in another folder and back.
@@ -753,6 +754,88 @@ enum SelfTest {
         shortcuts.preset = savedPreset
         app.setRecentProjects(fullList)
         try? FileManager.default.removeItem(at: extra)
+    }
+
+    /// A new version: the update window over the front window (the keyboard stays in the terminal), the
+    /// Update button at the top right, Remind Me Later, the button bringing it back, Skip This Version.
+    private static func updateChecks(_ c: TerminalWindowController) async {
+        guard let window = c.window else { return }
+        let defaults = UserDefaults.standard
+        let keys = ["skippedVersion", "updateRemindTag", "updateRemindAfter"]
+        let saved = keys.map { defaults.object(forKey: $0) }
+        keys.forEach(defaults.removeObject(forKey:))
+        let updater = Updater.shared
+        let page = URL(string: "https://github.com/MishukAdhikari/next-term/releases/tag/v99.0.0")!
+        let notes = """
+        **A test release.**
+
+        ### Highlights
+        - **The update window.** Skip it, or be reminded later.
+          - Nested, with `code` and a [link](https://example.com).
+        1. A numbered step
+
+        ### Install
+        Drag it to Applications.
+        """
+        let latest = ReleaseInfo(version: AppVersion("99.0.0")!, tag: "v99.0.0", pageURL: page,
+                                 dmgURL: URL(string: "https://github.com/MishukAdhikari/next-term/releases/download/v99.0.0/NextTerm-99.0.0.dmg"),
+                                 checksumURL: URL(string: "https://github.com/MishukAdhikari/next-term/releases/download/v99.0.0/NextTerm-99.0.0.dmg.sha256"),
+                                 notes: notes, published: Date())
+        let older = ReleaseInfo(version: AppVersion("98.1.0")!, tag: "v98.1.0", pageURL: page, dmgURL: nil, checksumURL: nil,
+                                notes: "- An earlier fix.")
+        let current = AppVersion("0.5.0")!
+        let focus = c.activeTab?.view
+        window.makeKeyAndOrderFront(nil)
+        if let focus { window.makeFirstResponder(focus) }
+
+        updater.offer(latest, current: current, userInitiated: false, notes: [latest, older])
+        guard let prompt = updater.prompt, let promptWindow = prompt.window else { return check(false, "a new version opens the update window") }
+        check(promptWindow.isVisible && promptWindow.parent === window, "a new version opens the update window over the front window")
+        check(!promptWindow.isKeyWindow && (focus == nil || window.firstResponder === focus),
+              "opened by the automatic check, it leaves the keyboard in the terminal")
+        let text = prompt.notesView.string
+        check(text.contains("Next Term 99.0.0") && text.contains("Next Term 98.1.0") && text.contains("•\tThe update window.")
+              && text.contains("◦\tNested, with code and a link.") && !text.contains("Drag it to Applications"),
+              "it shows the notes of every version since this one, without the install steps", text)
+        check(prompt.installButton.title == "Install and Relaunch" && prompt.skipButton.title == "Skip This Version"
+              && prompt.laterButton.title == "Remind Me Later", "with Install and Relaunch, Remind Me Later and Skip This Version")
+        let bar = c.topRightBar
+        let other = bar === c.tabBar ? c.editorArea.tabBar : c.tabBar
+        bar.layoutSubtreeIfNeeded()
+        check(!bar.updateButton.isHidden && bar.updateButton.title == "Update" && other.updateButton.isHidden,
+              "the bar at the window's top-right shows the Update button")
+        check(bar.updateButton.frame.maxX <= bar.bounds.width - 4 && bar.updateButton.frame.width > 40,
+              "it sits at the bar's right end", "\(bar.updateButton.frame) in \(bar.bounds)")
+        await screenshot(promptWindow, suffix: "update-window")
+        await screenshot(c, suffix: "update-button")
+
+        prompt.later()
+        check(updater.prompt == nil && !promptWindow.isVisible && defaults.string(forKey: "updateRemindTag") == "v99.0.0",
+              "Remind Me Later closes it and stays quiet about this version for a day")
+        check(!bar.updateButton.isHidden, "the Update button stays")
+        updater.offer(latest, current: current, userInitiated: false, notes: [latest])
+        check(updater.prompt == nil, "the next automatic check does not open it again")
+
+        bar.updateButton.performClick(nil)
+        check(updater.prompt?.window?.isVisible == true, "the Update button opens it again")
+        note("update window key after the button: \(updater.prompt?.window?.isKeyWindow == true), app active: \(NSApp.isActive)")
+
+        updater.prompt?.skip()
+        check(defaults.string(forKey: "skippedVersion") == "v99.0.0" && bar.updateButton.isHidden && other.updateButton.isHidden,
+              "Skip This Version closes it and hides the Update button")
+        updater.offer(latest, current: current, userInitiated: false, notes: [latest])
+        check(updater.prompt == nil && bar.updateButton.isHidden, "a skipped version is not offered again by the automatic check")
+        updater.offer(latest, current: current, userInitiated: true, notes: [latest])
+        check(updater.prompt?.window?.isVisible == true, "Check for Updates… still shows it")
+        updater.prompt?.window?.performClose(nil)
+        check(updater.prompt == nil, "the close button answers like Remind Me Later")
+
+        updater.withdraw()
+        for (key, value) in zip(keys, saved) {
+            if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+        window.makeKeyAndOrderFront(nil)
+        if let focus { window.makeFirstResponder(focus) }
     }
 
     /// The editor gutter marks lines changed since the last commit; the terminal folds to its tab bar and back.
