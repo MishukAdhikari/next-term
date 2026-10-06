@@ -69,6 +69,7 @@ export default defineConfig({
 					items: [
 						{ slug: 'docs', label: 'Overview' },
 						{ slug: 'docs/getting-started' },
+						{ slug: 'docs/switching' },
 						{ slug: 'docs/updates' },
 					],
 				},

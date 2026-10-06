@@ -33,6 +33,8 @@ A window without a project is a plain terminal window. Its sidebar follows the a
 
 ## The project sidebar
 
+**It follows the file you are editing.** Open a file with <kbd>⌘P</kbd>, a search result or a link, or switch editor tabs, and the sidebar opens its folders and selects it, while the keyboard stays in the editor. The scope button at the right of the editor’s tabs (**View › Show File in Project Sidebar**) does it on demand, and brings the sidebar back if it was hidden.
+
 Toggle it with <kbd>⌘B</kbd> (**View › Hide Project Sidebar**). Put it on the left or the right with the sidebar’s ⋯ button or **View › Project Sidebar on the Right**, and drag its edge to resize it.
 
 - **It is live.** Files your agents create, change or delete show up on their own, and commits and checkouts refresh the git state.
