@@ -48,6 +48,8 @@ public struct TabStatus {
     /// Jobs the shell holds (suspended or in the background), reported by the zsh integration.
     public private(set) var jobs = 0
     public private(set) var jobSummary = ""
+    /// Commands started so far (with or without integration): something ran, however briefly.
+    public private(set) var commandsStarted = 0
 
     private var startedAt: TimeInterval = 0
     private var lastInputAt: TimeInterval = -.infinity
@@ -242,6 +244,7 @@ public struct TabStatus {
     // MARK: internals
 
     private mutating func start(_ commandLine: String, kind newKind: CommandKind, at now: TimeInterval) {
+        commandsStarted += 1
         running = true
         command = commandLine
         program = CommandClassifier.programName(commandLine)

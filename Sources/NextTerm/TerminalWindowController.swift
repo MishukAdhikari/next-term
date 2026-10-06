@@ -141,8 +141,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     // MARK: tabs
 
+    /// `select` false: the tab opens behind the current one (an agent opening tabs leaves you where you are).
     @discardableResult
-    func addTab(directory: String?) -> TerminalTab {
+    func addTab(directory: String?, select selectIt: Bool = true) -> TerminalTab {
         let tab = TerminalTab(directory: directory, fontSize: AppDelegate.shared.fontSize)
         tab.delegate = self
         // ⌘-click on "src/a.ts:42" in the output opens the editor there.
@@ -161,7 +162,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         container.layoutSubtreeIfNeeded() // real size before the shell starts, so it draws once
         tab.start()
         AppDelegate.shared.projectsChanged()
-        select(insertAt)
+        if selectIt || tabs.count == 1 {
+            select(insertAt)
+        } else {
+            view.isHidden = true
+            if insertAt <= activeIndex { activeIndex += 1 }
+            refresh()
+        }
         return tab
     }
 
@@ -199,7 +206,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
     }
 
-    private func remove(_ tab: TerminalTab) {
+    /// Closes a tab without asking (callers have asked, or were told to force it).
+    func remove(_ tab: TerminalTab) {
         guard let index = tabs.firstIndex(where: { $0 === tab }) else { return }
         // A rename in progress refers to tabs by position: finish it while positions still hold.
         if window?.firstResponder is NSTextView, tabBar.isEditing { window?.makeFirstResponder(nil) }

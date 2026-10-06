@@ -27,16 +27,20 @@ terminal. This file is the map of what is built and what comes next; the README 
 | Search | Find/Replace in Files (regex, masks, preview, undo), seeded from the selection, same type first |
 | Diffs | Side by side (⌘D), word highlights, all/unstaged/staged, stage/unstage/revert per hunk with blob checks, live refresh |
 | Agents | Send to Agent (⌥⌘K) in each agent's syntax; Claude Code IDE link (live selection, @-mentions, proposed edits as diffs to accept or reject); Gemini CLI and Qwen Code IDE link (open files, selection), IDE mode on by default |
+| MCP | `nxtrm mcp` for any agent: projects and tabs with agent state, new tabs and agents, prompts, keys, waiting, reading screens, the editor; registered in Claude Code, Codex, Gemini, Qwen, Cursor, opencode, Copilot, Amp, Junie and Command Code by default |
 | App | `nxtrm` CLI, layouts (terminal on any side, sidebar left/right, ⋯ menus), Settings (editor, every shortcut), self-update from GitHub Releases (checksum-verified) |
 
 ## Next
 
-1. **MCP tools for every agent** (Codex, Junie, Command Code, Cursor, opencode, Copilot, Amp…): a `next-term`
-   MCP server with the editor's selection and open files, registered in each installed agent by default.
-2. **More of the diff view:** fold long unchanged runs, stage
-   selected lines, edit the proposed side before accepting.
-3. **Copilot CLI IDE link** (its protocol is published).
-4. Split panes, session restore, notarized releases.
+1. **Split panes** in the terminal, with commands and shortcuts for each.
+2. **Go to File (⌘P):** fuzzy file search across the project, instant on large repos.
+3. **Agent sessions per project** on the Welcome screen and in the sidebar (Claude, Codex, Command Code
+   first): resume or fork in one click (research: claudedocs/research_next-term-agent-sessions).
+4. **Remote development** over the system ssh (one shared connection per host, SFTP for files, remote
+   tabs with the shell integration), then Dev Containers (research: claudedocs/research_next-term-remote-dev).
+5. **Remote MCP link** for agents outside this Mac (ChatGPT, Claude), with an explicit security model.
+6. **More of the diff view:** fold long unchanged runs, stage selected lines, edit the proposed side
+   before accepting. Copilot CLI IDE link. Session restore, notarized releases.
 
 ## Verification
 

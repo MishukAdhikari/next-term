@@ -7,7 +7,7 @@ public struct OpenRequest: Codable, Equatable, Sendable {
     public var line: Int?
     public var column: Int?
     public var isDirectory: Bool
-    /// Does not exist yet: the command line tool creates it empty (as `subl new.md` lets you write it).
+    /// Does not exist yet: the command line tool creates it empty (so `nxtrm new.md` lets you write it).
     public var isNew: Bool
 
     public init(path: String, line: Int? = nil, column: Int? = nil, isDirectory: Bool = false, isNew: Bool = false) {

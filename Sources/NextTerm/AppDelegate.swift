@@ -2,7 +2,7 @@ import AppKit
 import NextTermCore
 import UserNotifications
 
-final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, NSMenuDelegate, NSMenuItemValidation {
     // Set in main.swift before the app runs; every window controller talks to it.
     nonisolated(unsafe) static var shared: AppDelegate!
 
@@ -86,6 +86,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    // MARK: MCP
+
+    /// Any AI agent can drive Next Term through its MCP server (`nxtrm mcp`): list projects and tabs,
+    /// start agents, give them prompts, read their screens. On unless turned off in Settings.
+    var agentControl: Bool {
+        get { UserDefaults.standard.object(forKey: "agentControl") as? Bool ?? true }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "agentControl")
+            if newValue { startAgentControl() } else { MCPControlServer.shared.stop(); MCPRegistration.update(on: false) }
+        }
+    }
+
+    func startAgentControl() {
+        MCPControlServer.shared.start(path: SelfTest.isRequested ? SelfTest.mcpSocketPath : nil)
+        MCPRegistration.update(on: true)
+    }
+
     /// Which tab each connected `claude` runs in.
     private(set) var claudeTabs: [ClaudeIDEServer.ClientID: Weak<TerminalTab>] = [:]
 
@@ -150,6 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// Gemini CLI and Qwen Code read their IDE switch when they start: keep it on while Next Term's is.
     func enableAgentIDEModes() {
+        if agentControl { MCPRegistration.update(on: true) } // Gemini can drop it when it rewrites its settings
         guard shareWithClaude, !SelfTest.isRequested else { return } // the self-test never edits your settings
         DispatchQueue.global(qos: .utility).async {
             for file in AgentIDESettings.settingsFiles() { AgentIDESettings.ensureEnabled(file, overridingOff: true) }
@@ -236,6 +254,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Claude Code's IDE link, before the first tab so every tab can use it.
         if shareWithClaude { startClaudeLink() }
+        // The MCP socket too: tabs are told where it is.
+        if agentControl { startAgentControl() }
         NSApp.mainMenu = buildMenu()
         KeyboardShortcuts.shared.capture(NSApp.mainMenu!) // the menus as built are the defaults
         setUpNotifications()
@@ -290,24 +310,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    /// A folder from outside (nxtrm, Finder): its window if it is open, an unused window, or a new one.
-    private func openFolder(_ path: String, newWindow: Bool) {
+    /// A folder from outside (nxtrm, Finder, an agent): its window if it is open, an unused window, or a new one.
+    @discardableResult
+    func openFolder(_ path: String, newWindow: Bool) -> TerminalWindowController {
         let path = canonicalPath(path)
         recent.add(path)
         welcome?.close()
         if !newWindow, let open = controllers.first(where: { $0.project == path }) {
             open.window?.makeKeyAndOrderFront(nil)
+            return open
         } else if !newWindow, let unused = controllers.first(where: \.isPristine) {
             unused.adoptProject(path)
             unused.window?.makeKeyAndOrderFront(nil)
+            return unused
         } else {
-            openWindow(directory: path, project: path)
+            return openWindow(directory: path, project: path)
         }
     }
 
     /// A file from outside: in the window whose project holds it, else the front window, else a new window
     /// on the file's project (its git root, or its folder).
-    private func openFile(_ path: String, line: Int?, column: Int, newWindow: Bool) {
+    func openFile(_ path: String, line: Int?, column: Int, newWindow: Bool) {
         let path = canonicalPath(path)
         let owners = controllers.filter { controller in controller.project.map { path.hasPrefix($0 + "/") } ?? false }
         let owner = owners.max { ($0.project?.count ?? 0) < ($1.project?.count ?? 0) }
@@ -438,6 +461,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        MCPControlServer.shared.stop()
         ClaudeIDEServer.shared.stop() // removes the lock file
         GeminiIDEServer.shared.stop()
         MainActor.assumeIsolated { Updater.shared.installStagedUpdateOnQuit() }

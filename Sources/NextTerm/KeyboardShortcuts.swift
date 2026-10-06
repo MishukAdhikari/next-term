@@ -365,6 +365,8 @@ final class EditorSettingsView: NSView {
     private let wrap = NSButton(checkboxWithTitle: "Wrap long lines at the edge", target: nil, action: nil)
     private let dotIcons = NSButton(checkboxWithTitle: "Icons on configuration folders (.github, .claude, .idea…)", target: nil, action: nil)
     private let claude = NSButton(checkboxWithTitle: "Agents in a tab see the editor (Claude Code, Gemini CLI, Qwen Code)", target: nil, action: nil)
+    private let control = NSButton(checkboxWithTitle: "Let agents control Next Term (MCP: projects, tabs, prompts, the editor)", target: nil, action: nil)
+    private let controlStatus = NSTextField(wrappingLabelWithString: "")
     private let fontSize = NSStepper()
     private let fontSizeValue = NSTextField(labelWithString: "")
 
@@ -382,6 +384,11 @@ final class EditorSettingsView: NSView {
         dotIcons.action = #selector(dotIconsChanged)
         claude.target = self
         claude.action = #selector(claudeChanged)
+        control.target = self
+        control.action = #selector(controlChanged)
+        controlStatus.textColor = .secondaryLabelColor
+        controlStatus.font = .systemFont(ofSize: 11)
+        controlStatus.preferredMaxLayoutWidth = 400
         fontSize.minValue = Double(Theme.fontSizeRange.lowerBound)
         fontSize.maxValue = Double(Theme.fontSizeRange.upperBound)
         fontSize.increment = 1
@@ -408,6 +415,8 @@ final class EditorSettingsView: NSView {
             row("", [wrap]),
             row("Sidebar:", [dotIcons]),
             row("Agents:", [claude]),
+            row("", [control]),
+            row("", [controlStatus]),
             note,
         ])
         stack.orientation = .vertical
@@ -421,9 +430,12 @@ final class EditorSettingsView: NSView {
             stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -24),
         ])
         refresh()
+        NotificationCenter.default.addObserver(self, selector: #selector(registrationsChanged), name: MCPRegistration.changed, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    @objc private func registrationsChanged() { refresh() }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -437,6 +449,10 @@ final class EditorSettingsView: NSView {
         wrap.state = app.softWrap ? .on : .off
         dotIcons.state = app.iconsOnDotFolders ? .on : .off
         claude.state = app.shareWithClaude ? .on : .off
+        control.state = app.agentControl ? .on : .off
+        controlStatus.stringValue = !app.agentControl ? "Off: no agent can reach Next Term, and it is removed from the agents it was added to."
+            : CommandLineTool.script == nil ? "Only the installed app adds itself to your agents."
+            : "Any agent can open projects and tabs, start agents, give them prompts and read their screens. " + MCPRegistration.summary
         fontSize.doubleValue = Double(app.fontSize)
         fontSizeValue.stringValue = "\(Int(app.fontSize)) pt"
     }
@@ -453,6 +469,11 @@ final class EditorSettingsView: NSView {
 
     @objc private func claudeChanged() {
         AppDelegate.shared.shareWithClaude = claude.state == .on
+        refresh()
+    }
+
+    @objc private func controlChanged() {
+        AppDelegate.shared.agentControl = control.state == .on
         refresh()
     }
 

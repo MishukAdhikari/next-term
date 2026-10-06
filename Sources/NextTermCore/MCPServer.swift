@@ -1,0 +1,230 @@
+import Foundation
+
+/// Next Term's MCP server, as AI agents see it: `nxtrm mcp`, a stdio server that hands each tool call to
+/// the running app over a Unix socket. It is for orchestration: an agent (Claude, Codex, Gemini…) can see
+/// every project and tab with its agent's status, start agents in new tabs, give them prompts, wait for
+/// them and read their screens, and use the editor. The tool list is fixed: answering `initialize` and
+/// `tools/list` never needs the app (some clients cache the list, and must see the same one every time).
+public enum MCPServer {
+    public static let name = "next-term"
+    public static let supportedVersions = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
+
+    /// Set in Next Term's tabs to the running app's socket. Agents that clear the environment (Codex)
+    /// fall back to the default path, which is the same unless this is a test run.
+    public static let socketVariable = "NEXTTERM_MCP_SOCKET"
+
+    /// The app's socket. From the home folder, not TMPDIR: some agents start servers without TMPDIR.
+    public static func socketPath(home: String = NSHomeDirectory()) -> String {
+        (home as NSString).appendingPathComponent("Library/Application Support/Next Term/mcp.sock")
+    }
+
+    public static let instructions = """
+        Next Term is the terminal and editor this agent may be running in. Use these tools to orchestrate \
+        work across projects: list_tabs shows every open project and tab with the state of the agent in it \
+        (working, done, needs attention). Start an agent with new_tab (directory plus a command such as \
+        "claude" or "codex"), give it a task with send_to_tab, then wait_for_tab until it stops and \
+        read_tab to see what it said. An agent that needs a decision shows state "attention" and the \
+        question; answer with send_to_tab or press_keys. Never type into your own tab ("you": true). \
+        get_editor_selection returns what the user has selected in the editor.
+        """
+
+    // MARK: tools
+
+    public struct Tool: Sendable {
+        public let name: String
+        public let title: String
+        public let description: String
+        /// JSON Schema for the arguments, as JSON text.
+        public let inputSchema: String
+        public let readOnly: Bool
+        /// Can run commands or stop work (typing into a terminal, closing a tab).
+        public let destructive: Bool
+        public let idempotent: Bool
+        /// Longest a call can take, for the bridge's wait (wait_for_tab sets its own).
+        public let timeout: TimeInterval
+    }
+
+    private static let tabID = #""tab_id": {"type": "string", "description": "A tab's id from list_tabs."}"#
+
+    public static let tools: [Tool] = [
+        Tool(name: "list_tabs", title: "List projects and tabs",
+             description: "Every Next Term window (one per project) and its terminal tabs: id, title, folder, the program running, and its state: idle, working (an agent is busy), done, failed, or attention (an agent waits for a decision; the question is included). The tab you run in has \"you\": true.",
+             inputSchema: #"{"type": "object", "properties": {"project": {"type": "string", "description": "Only the window of this project folder."}}, "additionalProperties": false}"#,
+             readOnly: true, destructive: false, idempotent: true, timeout: 15),
+        Tool(name: "read_tab", title: "Read a tab's screen",
+             description: "The text at the end of a tab's terminal (what the agent or command printed last), and the tab's state.",
+             inputSchema: #"{"type": "object", "properties": {\#(tabID), "lines": {"type": "integer", "minimum": 1, "maximum": 2000, "description": "How many lines from the end. Default 80."}}, "required": ["tab_id"], "additionalProperties": false}"#,
+             readOnly: true, destructive: false, idempotent: true, timeout: 15),
+        Tool(name: "wait_for_tab", title: "Wait for a tab",
+             description: "Waits until the tab's agent stops working (done, or waiting for input or a decision), or until its command finishes, then returns the state and the last lines of the screen. Returns early with \"timed_out\": true; call again to keep waiting.",
+             inputSchema: #"{"type": "object", "properties": {\#(tabID), "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300, "description": "Default 50 (some clients give up on a tool after 60 seconds); call again to keep waiting."}}, "required": ["tab_id"], "additionalProperties": false}"#,
+             readOnly: true, destructive: false, idempotent: true, timeout: 300),
+        Tool(name: "list_projects", title: "List projects",
+             description: "Projects open in Next Term and recently opened ones (folder paths).",
+             inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
+             readOnly: true, destructive: false, idempotent: true, timeout: 15),
+        Tool(name: "get_editor_selection", title: "Get the editor selection",
+             description: "The file open in front in the editor of your window (or the front window), with the selected text and its line range (1-based). Unsaved edits are included.",
+             inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
+             readOnly: true, destructive: false, idempotent: true, timeout: 15),
+        Tool(name: "get_open_files", title: "Get open files",
+             description: "Files open in the editor, per window, with which one is in front and which have unsaved changes.",
+             inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
+             readOnly: true, destructive: false, idempotent: true, timeout: 15),
+        Tool(name: "open_project", title: "Open a project",
+             description: "Opens a folder as a project in its own window (or brings it to the front if open) and returns its tabs.",
+             inputSchema: #"{"type": "object", "properties": {"path": {"type": "string", "description": "Absolute folder path."}}, "required": ["path"], "additionalProperties": false}"#,
+             readOnly: false, destructive: false, idempotent: true, timeout: 30),
+        Tool(name: "new_tab", title: "New tab",
+             description: "Opens a terminal tab in a folder (in the window of the project that holds it, opening the project if needed) and optionally runs a command in it, such as an agent (\"claude\", \"codex\", \"gemini\"). Returns the tab's id.",
+             inputSchema: #"{"type": "object", "properties": {"directory": {"type": "string", "description": "Absolute folder path."}, "command": {"type": "string", "description": "Typed at the prompt and run."}, "title": {"type": "string", "description": "Tab title."}}, "required": ["directory"], "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: false, timeout: 30),
+        Tool(name: "send_to_tab", title: "Type into a tab",
+             description: "Types text into a tab, as if pasted, and presses Return unless submit is false: a prompt for the agent in that tab, an answer to its question, or a shell command.",
+             inputSchema: #"{"type": "object", "properties": {\#(tabID), "text": {"type": "string"}, "submit": {"type": "boolean", "description": "Press Return after the text. Default true."}}, "required": ["tab_id", "text"], "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: false, timeout: 15),
+        Tool(name: "press_keys", title: "Press keys in a tab",
+             description: "Presses keys in a tab, in order: enter, escape, tab, shift+tab, up, down, left, right, backspace, space, ctrl+c, ctrl+d, or a single character such as \"1\" or \"y\". For menus and confirmations in an agent's screen.",
+             inputSchema: #"{"type": "object", "properties": {\#(tabID), "keys": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 20}}, "required": ["tab_id", "keys"], "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: false, timeout: 15),
+        Tool(name: "show_tab", title: "Show a tab",
+             description: "Brings a tab and its window to the front, for the user to see.",
+             inputSchema: #"{"type": "object", "properties": {\#(tabID)}, "required": ["tab_id"], "additionalProperties": false}"#,
+             readOnly: false, destructive: false, idempotent: true, timeout: 15),
+        Tool(name: "close_tab", title: "Close a tab",
+             description: "Closes a tab. A tab with something running is refused unless force is true, which stops it.",
+             inputSchema: #"{"type": "object", "properties": {\#(tabID), "force": {"type": "boolean"}}, "required": ["tab_id"], "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: false, timeout: 15),
+        Tool(name: "open_in_editor", title: "Open in the editor",
+             description: "Opens a file in Next Term's editor, at a line and column if given (1-based).",
+             inputSchema: #"{"type": "object", "properties": {"path": {"type": "string", "description": "Absolute file path."}, "line": {"type": "integer", "minimum": 1}, "column": {"type": "integer", "minimum": 1}}, "required": ["path"], "additionalProperties": false}"#,
+             readOnly: false, destructive: false, idempotent: true, timeout: 15),
+    ]
+
+    public static func tool(named name: String) -> Tool? { tools.first { $0.name == name } }
+
+    static func listing() -> [[String: Any]] {
+        tools.map { tool in
+            [
+                "name": tool.name,
+                "title": tool.title,
+                "description": tool.description,
+                "inputSchema": (try? JSONSerialization.jsonObject(with: Data(tool.inputSchema.utf8))) ?? ["type": "object"],
+                "annotations": [
+                    "title": tool.title,
+                    "readOnlyHint": tool.readOnly,
+                    "destructiveHint": tool.destructive,
+                    "idempotentHint": tool.idempotent,
+                    "openWorldHint": false,
+                ],
+                // Claude Code defers MCP tools behind its tool search; these are few and worth having at hand.
+                "_meta": ["anthropic/alwaysLoad": true],
+            ]
+        }
+    }
+
+    // MARK: JSON-RPC over stdio
+
+    /// What a tool call returns: text for the model, and whether it is an error.
+    public struct CallResult: Sendable {
+        public var text: String
+        public var isError: Bool
+        public init(text: String, isError: Bool = false) {
+            self.text = text
+            self.isError = isError
+        }
+    }
+
+    /// Answers one JSON-RPC message (nil for notifications). `call` runs a tool; it may block.
+    public static func respond(to message: [String: Any], version: String,
+                               call: (_ name: String, _ arguments: [String: Any]) -> CallResult) -> [String: Any]? {
+        guard let method = message["method"] as? String else { return nil } // a response to us: none expected
+        guard let id = message["id"], !(id is NSNull) else { return nil } // a notification
+        func result(_ value: Any) -> [String: Any] { ["jsonrpc": "2.0", "id": id, "result": value] }
+        func error(_ code: Int, _ text: String) -> [String: Any] {
+            ["jsonrpc": "2.0", "id": id, "error": ["code": code, "message": text]]
+        }
+        let params = message["params"] as? [String: Any] ?? [:]
+        switch method {
+        case "initialize":
+            let asked = params["protocolVersion"] as? String ?? ""
+            return result([
+                "protocolVersion": supportedVersions.contains(asked) ? asked : supportedVersions[0],
+                "capabilities": ["tools": ["listChanged": false]],
+                "serverInfo": ["name": name, "title": "Next Term", "version": version],
+                "instructions": instructions,
+            ])
+        case "ping":
+            return result([String: Any]())
+        case "tools/list":
+            return result(["tools": listing()])
+        case "tools/call":
+            guard let name = params["name"] as? String, tool(named: name) != nil else {
+                return error(-32602, "Unknown tool: \(params["name"] as? String ?? "")")
+            }
+            let outcome = call(name, params["arguments"] as? [String: Any] ?? [:])
+            return result(["content": [["type": "text", "text": outcome.text]], "isError": outcome.isError])
+        case "resources/list":
+            return result(["resources": [Any]()])
+        case "prompts/list":
+            return result(["prompts": [Any]()])
+        default:
+            return error(-32601, "Method not found: \(method)")
+        }
+    }
+
+    // MARK: the app socket
+
+    /// One request to the app: a line of JSON. The answer is one line too.
+    public static func request(tool: String, arguments: [String: Any]) -> Data? {
+        guard JSONSerialization.isValidJSONObject(arguments),
+              var data = try? JSONSerialization.data(withJSONObject: ["tool": tool, "arguments": arguments]) else { return nil }
+        data.append(0x0A)
+        return data
+    }
+
+    public static func decodeAnswer(_ line: Data) -> CallResult? {
+        guard let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
+              let text = object["text"] as? String else { return nil }
+        return CallResult(text: text, isError: object["isError"] as? Bool ?? false)
+    }
+
+    public static func encodeAnswer(_ result: CallResult) -> Data {
+        var data = (try? JSONSerialization.data(withJSONObject: ["text": result.text, "isError": result.isError])) ?? Data("{}".utf8)
+        data.append(0x0A)
+        return data
+    }
+
+    /// Model-facing JSON: keys sorted, slashes as they are.
+    public static func json(_ value: Any) -> String {
+        guard JSONSerialization.isValidJSONObject(value),
+              let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .withoutEscapingSlashes, .prettyPrinted]) else {
+            return "\(value)"
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    // MARK: keys
+
+    /// The bytes a key name sends to a terminal (nil: not a key we know).
+    public static func keyBytes(_ name: String) -> String? {
+        switch name.lowercased() {
+        case "enter", "return": return "\r"
+        case "escape", "esc": return "\u{1b}"
+        case "tab": return "\t"
+        case "shift+tab", "backtab": return "\u{1b}[Z"
+        case "up": return "\u{1b}[A"
+        case "down": return "\u{1b}[B"
+        case "right": return "\u{1b}[C"
+        case "left": return "\u{1b}[D"
+        case "backspace": return "\u{7f}"
+        case "space": return " "
+        case "ctrl+c": return "\u{03}"
+        case "ctrl+d": return "\u{04}"
+        default:
+            // One printable character.
+            guard name.count == 1, let scalar = name.unicodeScalars.first, scalar.value >= 0x20, scalar.value != 0x7f else { return nil }
+            return name
+        }
+    }
+}

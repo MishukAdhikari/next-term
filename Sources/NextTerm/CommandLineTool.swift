@@ -6,6 +6,8 @@ import NextTermCore
 /// starts it with the request.
 enum CommandLineTool {
     static func run(_ arguments: [String]) -> Never {
+        // `nxtrm mcp`: the MCP server agents start (see MCPServer). A file named "mcp" is `nxtrm ./mcp`.
+        if arguments == ["mcp"] { MCPBridge.run() }
         switch CommandLineOpen.parse(arguments, cwd: FileManager.default.currentDirectoryPath) {
         case .help:
             print(CommandLineOpen.usage)
@@ -72,7 +74,7 @@ enum CommandLineTool {
     static let installPath = "/usr/local/bin/" + CommandLineOpen.toolName
 
     /// An app run from a disk image or a quarantine location moves; a link to it would break.
-    private static var isInStableLocation: Bool {
+    static var isInStableLocation: Bool {
         let path = Bundle.main.bundlePath
         if path.contains("/AppTranslocation/") || path.hasPrefix("/Volumes/") { return false }
         let readOnly = (try? Bundle.main.bundleURL.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?.volumeIsReadOnly ?? false
@@ -128,7 +130,7 @@ enum CommandLineTool {
             try? FileManager.default.removeItem(atPath: installPath)
             installed = (try? FileManager.default.createSymbolicLink(atPath: installPath, withDestinationPath: script.path)) != nil
         } else {
-            // One password prompt, as editors do for their command (`code`, `subl`).
+            // One password prompt, as editors do for their command line tools.
             let shell = "/bin/mkdir -p \(ShellQuote.quote(directory)) && /bin/ln -sfh \(ShellQuote.quote(script.path)) \(ShellQuote.quote(installPath))"
             let escaped = shell.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
             var error: NSDictionary?
@@ -142,5 +144,87 @@ enum CommandLineTool {
         } else {
             tell("“\(CommandLineOpen.toolName)” could not be installed", "Next Term could not write \(installPath).", style: .warning)
         }
+    }
+}
+
+/// `nxtrm mcp`: MCP over stdio for an agent, one JSON-RPC message per line. `initialize` and `tools/list`
+/// are answered here at once; each tool call goes to the running app over its socket. Ends when the
+/// agent closes stdin.
+enum MCPBridge {
+    private static let output = NSLock()
+
+    static func run() -> Never {
+        signal(SIGPIPE, SIG_IGN)
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        let environment = ProcessInfo.processInfo.environment
+        let socket = environment[MCPServer.socketVariable].flatMap { $0.isEmpty ? nil : $0 } ?? MCPServer.socketPath()
+        let calls = DispatchGroup()
+        while let line = readLine(strippingNewline: true) {
+            guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
+            guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) else {
+                send(["jsonrpc": "2.0", "id": NSNull(), "error": ["code": -32700, "message": "Parse error"]])
+                continue
+            }
+            let messages = (object as? [[String: Any]]) ?? [(object as? [String: Any]) ?? [:]]
+            for message in messages {
+                if message["method"] as? String == "tools/call" {
+                    // Calls can take long (wait_for_tab): answer pings and other calls meanwhile.
+                    DispatchQueue.global().async(group: calls) {
+                        if let response = MCPServer.respond(to: message, version: version, call: { forward($0, $1, socket: socket) }) {
+                            send(response)
+                        }
+                    }
+                } else if let response = MCPServer.respond(to: message, version: version, call: { _, _ in MCPServer.CallResult(text: "") }) {
+                    send(response)
+                }
+            }
+        }
+        calls.wait() // stdin closed: finish the answers in flight (a caller may still read them), then go
+        exit(0)
+    }
+
+    private static func send(_ message: [String: Any]) {
+        guard var data = try? JSONSerialization.data(withJSONObject: message, options: [.withoutEscapingSlashes]) else { return }
+        data.append(0x0A)
+        output.lock()
+        FileHandle.standardOutput.write(data)
+        output.unlock()
+    }
+
+    static func forward(_ tool: String, _ arguments: [String: Any], socket path: String) -> MCPServer.CallResult {
+        let fd = MCPControlServer.connectSocket(path)
+        guard fd >= 0 else {
+            return MCPServer.CallResult(text: "Next Term is not running, or “Let agents control Next Term” is off in its Settings. Open Next Term and try again.", isError: true)
+        }
+        defer { close(fd) }
+        var noSigPipe: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+        let waitSeconds = tool == "wait_for_tab" ? Double(min(300, arguments["timeout_seconds"] as? Int ?? 50)) : (MCPServer.tool(named: tool)?.timeout ?? 30)
+        var timeout = timeval(tv_sec: Int(min(1900, waitSeconds + 30)), tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        guard let request = MCPServer.request(tool: tool, arguments: arguments) else {
+            return MCPServer.CallResult(text: "The arguments are not valid JSON.", isError: true)
+        }
+        let sent = request.withUnsafeBytes { raw -> Bool in
+            var offset = 0
+            while offset < raw.count {
+                let written = write(fd, raw.baseAddress! + offset, raw.count - offset)
+                if written <= 0 { return false }
+                offset += written
+            }
+            return true
+        }
+        guard sent else { return MCPServer.CallResult(text: "Next Term closed the connection.", isError: true) }
+        var answer = Data()
+        var buffer = [UInt8](repeating: 0, count: 65536)
+        while !answer.contains(0x0A) {
+            let count = read(fd, &buffer, buffer.count)
+            if count <= 0 { break }
+            answer.append(contentsOf: buffer[0..<count])
+        }
+        guard let end = answer.firstIndex(of: 0x0A), let result = MCPServer.decodeAnswer(answer[..<end]) else {
+            return MCPServer.CallResult(text: "Next Term did not answer in time.", isError: true)
+        }
+        return result
     }
 }

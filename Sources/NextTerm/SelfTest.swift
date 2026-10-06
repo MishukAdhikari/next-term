@@ -7,6 +7,8 @@ import NextTermCore
 @MainActor
 enum SelfTest {
     nonisolated static var isRequested: Bool { CommandLine.arguments.contains("--self-test") }
+    /// The self-test's own MCP socket, so it never answers for (or takes over from) the Next Term you use.
+    nonisolated static let mcpSocketPath = (NSTemporaryDirectory() as NSString).appendingPathComponent("nextterm-mcp-\(getpid()).sock")
 
     private static var lines: [String] = []
     private static var failures = 0
@@ -820,6 +822,18 @@ enum SelfTest {
             area.applyWrap()
             check(rows() == 1 && wideEditor.textView.frame.width > wideEditor.scrollView.contentSize.width,
                   "without it, the line scrolls sideways", "\(rows()) rows")
+            // The View menu shows the state (validation reaches the app delegate).
+            if let view = NSApp.mainMenu?.items.first(where: { $0.title == "View" })?.submenu,
+               let wrapItem = view.items.first(where: { $0.action == #selector(AppDelegate.toggleSoftWrap(_:)) }) {
+                app.softWrap = true
+                view.update()
+                let shownOn = wrapItem.state == .on
+                app.softWrap = false
+                view.update()
+                check(shownOn && wrapItem.state == .off, "View ▸ Soft Wrap has a checkmark exactly when it is on")
+            } else {
+                check(false, "View ▸ Soft Wrap is in the menu")
+            }
             app.softWrap = saved
             area.applyWrap()
             area.closeActive()
@@ -1138,6 +1152,7 @@ enum SelfTest {
         }
 
         await geminiLinkChecks(c)
+        await mcpChecks(c, proj: proj)
         if ProcessInfo.processInfo.environment["NEXTTERM_REAL_CLAUDE"] == "1" { await realClaudeCheck(c, proj: proj) }
 
         // Claude's proposed edits: shown as a diff to accept or reject; the file is never written by Next Term.
@@ -1267,6 +1282,99 @@ enum SelfTest {
         stream.close()
     }
 
+    /// Next Term's MCP server, driven the way an orchestrating agent drives it: `nxtrm mcp` over stdio.
+    private static func mcpChecks(_ c: TerminalWindowController, proj: URL) async {
+        let server = MCPControlServer.shared
+        let mode = (try? FileManager.default.attributesOfItem(atPath: server.path))?[.posixPermissions] as? Int
+        check(server.isRunning && server.path == mcpSocketPath && mode == 0o600, "MCP: the control socket is up, owner-only",
+              "\(server.path) \(String(describing: mode))")
+        guard let mcp = MCPTestClient(socket: server.path) else { return check(false, "MCP: `nxtrm mcp` starts") }
+        defer { mcp.close() }
+        let initialized = await mcp.call(1, "initialize", ["protocolVersion": "2025-06-18", "capabilities": [:], "clientInfo": ["name": "selftest", "version": "1"]])
+        check((initialized?["result"] as? [String: Any])?["protocolVersion"] as? String == "2025-06-18", "MCP: `nxtrm mcp` answers initialize")
+        let listed = await mcp.call(2, "tools/list", [:])
+        let tools = ((listed?["result"] as? [String: Any])?["tools"] as? [[String: Any]])?.compactMap { $0["name"] as? String } ?? []
+        check(tools.count == MCPServer.tools.count && tools.contains("send_to_tab"), "MCP: the tools are listed", tools.joined(separator: ","))
+
+        var nextID = 10
+        func tool(_ name: String, _ arguments: [String: Any] = [:], timeout: Double = 15) async -> (json: [String: Any]?, text: String, isError: Bool) {
+            nextID += 1
+            let reply = await mcp.call(nextID, "tools/call", ["name": name, "arguments": arguments], timeout: timeout)
+            let result = reply?["result"] as? [String: Any]
+            let text = ((result?["content"] as? [[String: Any]])?.first?["text"] as? String) ?? "(no answer: \(reply ?? [:]))"
+            let json = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]
+            return (json, text, result?["isError"] as? Bool ?? true)
+        }
+
+        let tabs = await tool("list_tabs")
+        let windows = tabs.json?["windows"] as? [[String: Any]] ?? []
+        let ids = windows.flatMap { ($0["tabs"] as? [[String: Any]]) ?? [] }.compactMap { $0["id"] as? String }
+        check(!tabs.isError && ids.contains(c.tabs[0].id.uuidString.lowercased()), "MCP: list_tabs shows every window's tabs with their state", tabs.text.prefix(300).description)
+
+        // An orchestrator starts a worker in the project, without taking the user's tab away.
+        let owner = AppDelegate.shared.controllers.first { $0.project.map { proj.path == $0 || proj.path.hasPrefix($0 + "/") } ?? false }
+        let frontBefore = owner?.activeTab
+        let started = await tool("new_tab", ["directory": proj.path, "command": "printf 'mcp-%s\\n' started", "title": "worker"])
+        let workerID = started.json?["id"] as? String ?? ""
+        let worker = AppDelegate.shared.controllers.flatMap(\.tabs).first { $0.id.uuidString.lowercased() == workerID }
+        check(!started.isError && worker?.title == "worker", "MCP: new_tab opens a titled tab in the project", started.text)
+        guard let worker else { return }
+        if let holder = AppDelegate.shared.controllers.first(where: { $0.tabs.contains { $0 === worker } }), holder.tabs.count > 1 {
+            check(holder.activeTab !== worker && (holder !== owner || holder.activeTab === frontBefore),
+                  "MCP: and leaves the tab you are on in front")
+        }
+        let waited = await tool("wait_for_tab", ["tab_id": workerID, "timeout_seconds": 10])
+        let screen = await tool("read_tab", ["tab_id": workerID, "lines": 20])
+        check(waited.json?["timed_out"] as? Bool == false && (screen.json?["screen"] as? String)?.contains("mcp-started") == true,
+              "MCP: the command ran; wait_for_tab and read_tab see its output", waited.text + " / " + screen.text)
+
+        // A prompt with two lines arrives as one paste and runs on Return.
+        _ = await tool("send_to_tab", ["tab_id": workerID, "text": "echo multi-1\necho multi-2"])
+        _ = await tool("wait_for_tab", ["tab_id": workerID, "timeout_seconds": 10])
+        let lines = worker.screenTail(30)
+        check(lines.contains("multi-1") && lines.contains("multi-2"), "MCP: send_to_tab types a multi-line prompt and submits it",
+              lines.suffix(6).joined(separator: " | "))
+
+        // Keys: Ctrl-C stops what runs; closing a busy tab needs force.
+        _ = await tool("send_to_tab", ["tab_id": workerID, "text": "sleep 30"])
+        _ = await wait(5) { worker.status.running }
+        let refused = await tool("close_tab", ["tab_id": workerID])
+        check(refused.isError && refused.text.contains("force"), "MCP: close_tab will not stop a running command unless forced", refused.text)
+        _ = await tool("press_keys", ["tab_id": workerID, "keys": ["ctrl+c"]])
+        check(await wait(5) { !worker.status.running }, "MCP: press_keys ctrl+c interrupts it")
+        let bogus = await tool("press_keys", ["tab_id": workerID, "keys": ["\u{1b}[200~"]])
+        check(bogus.isError, "MCP: raw escape sequences are not keys", bogus.text)
+        let unknown = await tool("send_to_tab", ["tab_id": "no-such-tab", "text": "x"])
+        check(unknown.isError, "MCP: an unknown tab is an error, not a guess")
+
+        // The caller's own tab is marked, and it cannot type into itself.
+        let out = proj.appendingPathComponent(".mcp-self.json")
+        let binary = ShellQuote.quote(Bundle.main.executablePath ?? CommandLine.arguments[0])
+        let request = #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_tabs","arguments":{}}}"#
+        worker.view.send(txt: "\u{15}printf '%s\\n' \(ShellQuote.quote(request)) | \(binary) --cli mcp > \(ShellQuote.quote(out.path))\r")
+        _ = await wait(10) { ((try? String(contentsOf: out, encoding: .utf8)) ?? "").contains("\\\"you\\\"") }
+        let selfText = (try? String(contentsOf: out, encoding: .utf8)) ?? ""
+        check(selfText.contains("\\\"you\\\" : true") && selfText.contains(workerID), "MCP: an agent sees which tab is its own", String(selfText.prefix(200)))
+        try? FileManager.default.removeItem(at: out)
+
+        // The editor.
+        let file = proj.appendingPathComponent("mcp-target.txt")
+        try? "one\ntwo\nthree\n".write(to: file, atomically: true, encoding: .utf8)
+        let opened = await tool("open_in_editor", ["path": file.path, "line": 2])
+        let selection = await tool("get_editor_selection")
+        let open = await tool("get_open_files")
+        check(!opened.isError && selection.json?["file"] as? String == canonicalPath(file.path)
+              && (selection.json?["start"] as? [String: Any])?["line"] as? Int == 2 && open.text.contains("mcp-target.txt"),
+              "MCP: open_in_editor, get_editor_selection and get_open_files", selection.text)
+        let projects = await tool("list_projects")
+        check((projects.json?["open"] as? [String])?.isEmpty == false, "MCP: list_projects", projects.text)
+
+        let closed = await tool("close_tab", ["tab_id": workerID])
+        check(!closed.isError && !AppDelegate.shared.controllers.flatMap(\.tabs).contains { $0 === worker }, "MCP: close_tab closes an idle tab", closed.text)
+        if let editor = c.editorArea.editors.first(where: { $0.document.path == canonicalPath(file.path) }) { c.editorArea.close(editor) }
+        try? FileManager.default.removeItem(at: file)
+    }
+
     /// Captures the window exactly as it is on screen (an app may always capture its own windows).
     private static func screenshot(_ c: TerminalWindowController, suffix: String) async {
         guard let window = c.window else { return }
@@ -1386,5 +1494,65 @@ final class RawHTTPClient: @unchecked Sendable {
         if let token { request += "Authorization: Bearer \(token)\r\n" }
         request += extra + "Content-Length: \(Data(body.utf8).count)\r\n\r\n" + body
         return request
+    }
+}
+
+/// An agent's side of `nxtrm mcp`, for the self-test: the real command, over stdio.
+final class MCPTestClient: @unchecked Sendable {
+    private let process = Process()
+    private let input = Pipe()
+    private let output = Pipe()
+    private let lock = NSLock()
+    private var buffer = Data()
+
+    init?(socket: String) {
+        process.executableURL = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0])
+        process.arguments = ["--cli", "mcp"]
+        var environment = ProcessInfo.processInfo.environment
+        environment[MCPServer.socketVariable] = socket
+        process.environment = environment
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        output.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard let self, !data.isEmpty else { return }
+            self.lock.lock()
+            self.buffer.append(data)
+            self.lock.unlock()
+        }
+        guard (try? process.run()) != nil else { return nil }
+    }
+
+    /// Sends a request and waits (without blocking the main thread) for the answer with its id.
+    @MainActor
+    func call(_ id: Int, _ method: String, _ params: [String: Any], timeout: Double = 15) async -> [String: Any]? {
+        guard var data = try? JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": id, "method": method, "params": params]) else { return nil }
+        data.append(0x0A)
+        input.fileHandleForWriting.write(data)
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let reply = response(id) { return reply }
+            try? await Task.sleep(nanoseconds: 30_000_000)
+        }
+        return response(id)
+    }
+
+    private func response(_ id: Int) -> [String: Any]? {
+        lock.lock()
+        let text = String(decoding: buffer, as: UTF8.self)
+        lock.unlock()
+        for line in text.split(separator: "\n") {
+            if let object = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any], object["id"] as? Int == id {
+                return object
+            }
+        }
+        return nil
+    }
+
+    func close() {
+        try? input.fileHandleForWriting.close()
+        output.fileHandleForReading.readabilityHandler = nil
+        if process.isRunning { process.terminate() }
     }
 }

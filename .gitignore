@@ -5,3 +5,4 @@ dist/
 xcuserdata/
 DerivedData/
 .DS_Store
+.claude/worktrees/

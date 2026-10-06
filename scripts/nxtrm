@@ -1,5 +1,5 @@
 #!/bin/bash
-# nxtrm: open folders and files in Next Term from any terminal, like `subl` or `code`.
+# nxtrm: open folders and files in Next Term from any terminal.
 #   nxtrm .                 this folder as a project
 #   nxtrm src/app.ts:42:7   a file, at a line and column
 # This script lives in Next Term.app/Contents/Resources/bin; /usr/local/bin/nxtrm links to it.

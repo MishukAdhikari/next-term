@@ -87,6 +87,14 @@ final class NextTermView: LocalProcessTerminalView {
         send(txt: getTerminal().bracketedPasteMode ? "\u{1b}[200~" + clean + "\u{1b}[201~" : clean)
     }
 
+    /// Types text as a paste that keeps its line breaks (a prompt for an agent): other control
+    /// characters are dropped, so the text cannot end the paste early or press keys.
+    func typeText(_ text: String) {
+        let kept = String(text.unicodeScalars.filter { $0 == "\t" || $0 == "\n" || $0 == "\r" || !ShellQuote.isControl($0) })
+        let lines = kept.replacingOccurrences(of: "\r\n", with: "\r").replacingOccurrences(of: "\n", with: "\r")
+        send(txt: getTerminal().bracketedPasteMode ? "\u{1b}[200~" + lines + "\u{1b}[201~" : lines)
+    }
+
     // MARK: links (⌘-click): web and mail links open; files open safely; other schemes are refused
 
     /// Folder that relative paths in the output are relative to.
@@ -461,6 +469,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         // Claude Code connects to Next Term as its IDE (and never to another editor's leftover port).
         ClaudeIDEServer.shared.prepare(&env)
         GeminiIDEServer.shared.prepare(&env, workspace: canonicalPath(ProjectRoot.find(from: directory)))
+        // `nxtrm mcp`, started by an agent in this tab, reaches this copy of Next Term.
+        if MCPControlServer.shared.isRunning { env[MCPServer.socketVariable] = MCPControlServer.shared.path }
         // `nxtrm` works in every tab from the first launch, with no install step.
         if let bin = CommandLineTool.script?.deletingLastPathComponent().path {
             let path = env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"

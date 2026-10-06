@@ -14,8 +14,8 @@ agents are working, which are done, and which are waiting on your decision.
   a notification says so with the question; click it to land on that tab. Works however you start the
   agent: directly, through an alias or a shell function, `npx`, or `cd app && claude`.
 - **Code editor.** Double-click a file, pick a Find in Files result, or ⌘-click `src/app.ts:42:7` in any
-  output: the file opens above the terminal at that line, coloured by VS Code's TextMate grammars (the
-  family Sublime Text uses) for 103 languages: PHP and Blade (Laravel, WordPress), Ruby and ERB (Rails),
+  output: the file opens above the terminal at that line, coloured by VS Code's TextMate grammars for 103
+  languages: PHP and Blade (Laravel, WordPress), Ruby and ERB (Rails),
   Python and Jinja (Django, Flask), JS/TS/TSX (React, Next.js), Vue, Svelte, Astro, Angular, Liquid, Twig,
   Go and templ, Rust, Elixir, YAML, SQL and more. Line numbers, adjustable line height, soft wrap, auto-indent, ⌘/ to comment, ⌘L to go to a line, find, undo. Files keep
   their encoding, line endings and permissions. When an agent changes a file you have open, the editor
@@ -29,8 +29,16 @@ agents are working, which are done, and which are waiting on your decision.
   selected"), and ⌥⌘K puts `@file#L10-20` into Claude's prompt. When Claude wants to edit a file, its change
   opens as a diff to Accept (⌘↩) or Reject, as in VS Code; answering in the terminal works too. Nothing to set up: Next Term turns Gemini's
   and Qwen's IDE mode on for you. Local only, with a fresh secret per launch; `.env` files are never shared;
-  Settings turns it off. Codex and other agents get Send to Agent, and soon an MCP tool for the selection.
-- **`nxtrm`, like `subl` or `code`.** `nxtrm .` opens the folder as a project, `nxtrm app/User.php:42` a
+  Settings turns it off.
+- **Orchestrate agents across projects (MCP).** Next Term is an MCP server for any agent: Claude Code,
+  Codex, Gemini CLI, Qwen Code, Cursor, opencode, Copilot CLI, Amp, Junie and Command Code. One agent can
+  run the others. It sees every project and tab with each agent's state (working, done, waiting for a
+  decision and the question), opens projects, starts an agent in a new tab, gives it a prompt, waits
+  until it stops, reads its screen, answers its questions, and uses the editor (the selection, open
+  files, opening a file at a line). Next Term adds itself to the agents it finds, with nothing to run;
+  Settings turns it off and removes it again. The tools are marked honestly, so agents ask you before
+  they type into a tab. Local only: a private socket, no network port.
+- **`nxtrm`, like `code`.** `nxtrm .` opens the folder as a project, `nxtrm app/User.php:42` a
   file at a line. It works in every Next Term tab from the first launch; Next Term > Install Command Line
   Tool adds it to other terminals.
 - **Your layout.** The terminal below the editor (default), beside it on the right or left, or above it;
@@ -139,6 +147,9 @@ can be dragged to reorder; middle-click closes; tabs that don't fit go behind th
 - **Opening files** from the sidebar or with ⌘-click asks first when the file is an app, a script or an
   executable, including behind a symlink or a Finder alias (cloned repos carry no quarantine flag, so
   Gatekeeper would not ask). Links other than http, https, mailto and local files are refused.
+- **The MCP server** listens on a Unix socket only you can open (0600, and each connection is checked to
+  be yours), never on the network. Agents reach it through `nxtrm mcp`, which they start themselves.
+  Tabs refuse input from their own agent, and a tab running something closes only when told to force it.
 - **Git** runs read-only with `--no-optional-locks`, so the sidebar never holds the index lock while your
   own git commands run.
 
@@ -167,14 +178,16 @@ scripts/selftest.sh                      # end-to-end: drives the real app (open
 The self-test opens real tabs and shells and checks every status transition, agent detection, jobs,
 close confirmations, process cleanup, the security protections, projects, the sidebar with git, file
 operations and undo, tab overflow, the editor (colours, editing, saving, files changed by agents, long
-files), layouts, nxtrm and shortcuts, then writes a report and screenshots.
+files), layouts, nxtrm, shortcuts, the agent links and the MCP server (driven through `nxtrm mcp` as an
+agent would), then writes a report and screenshots.
 
 ## Layout
 
 ```
 Sources/NextTermCore/   platform-neutral logic, no AppKit: TabStatus, AgentScreen, CommandClassifier,
                         ShellIntegration, Git, Diff, HunkOps, FileTree and FileOps, ProjectSearch, TextFile
-                        and LineIndex, EditorLanguage, CommandLineOpen, KeyChord, Updates
+                        and LineIndex, EditorLanguage, CommandLineOpen, KeyChord, Updates, MCPServer and
+                        MCPRegistrar (the agent-facing MCP server and its registration in each agent)
 Sources/NextTerm/       the macOS app: windows, tabs, sidebar, editor, projects, menus, shortcuts, updates,
                         notifications, self-test
 Resources/Highlighting/ the shipped grammars (scripts/update-highlighting.py) and the Next Dark theme
@@ -187,8 +200,9 @@ front end can reuse it.
 
 ## Roadmap
 
-Next: open-source file icons (with framework icons: Laravel, Next.js and more), a side-by-side diff view
-with hunk staging, and sending a selection of code to the agent in a tab. Later: split panes, notarized
+Next: split panes with keyboard shortcuts, ⌘P to open any file by name, every agent's saved sessions for
+a project on the Welcome screen (resume one in a click), remote development over SSH and Dev Containers,
+and a secure link so agents outside this Mac (ChatGPT, Claude) can use the MCP server. Later: notarized
 releases. A Linux build would need a different UI layer (AppKit is
 macOS-only); the core logic would carry over.
 
