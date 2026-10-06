@@ -10,7 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private(set) var isTerminating = false
     private var lastBadge = -1
     /// Last notification per tab, to rate-limit noisy programs.
-    private var lastNotified: [UUID: Date] = [:]
+    private var lastNotified: [UUID: (at: Date, key: String)] = [:]
 
     var fontSize: CGFloat {
         get {
@@ -341,28 +341,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Posts a system notification for a background tab, only when Next Term is not in front:
     /// while you are in the app, the tab dot says it already.
     func post(_ notice: TabNotice, tab: TerminalTab, in controller: TerminalWindowController) {
-        guard !NSApp.isActive, let center = notificationCenter else { return }
-        // At most one every 10 s per tab; each replaces the tab's previous one in Notification Center.
-        if let last = lastNotified[tab.id], Date().timeIntervalSince(last) < 10 { return }
-        lastNotified[tab.id] = Date()
-        let content = UNMutableNotificationContent()
-        content.title = Typography.shortened(tab.title, to: 80)
+        guard let center = notificationCenter else { return }
         let program = Typography.shortened(notice.program, to: 60)
-        switch notice.state {
-        case .done:
-            // Only an agent that is still running is waiting; one that exited (`claude -p …`) finished.
-            content.body = notice.kind == .agent && notice.stillRunning
-                ? "\(program) is waiting for you" : "\(program.isEmpty ? "Command" : program) finished"
-        case .failed:
-            content.body = "\(program.isEmpty ? "Command" : program) failed" + (tab.status.exitCode.map { " (exit \($0))" } ?? "")
-        case .attention:
-            content.body = "\(program.isEmpty ? "The terminal" : program) needs your attention"
-        case .idle, .working:
-            return
+        let content = UNMutableNotificationContent()
+        if let question = notice.question {
+            // An agent is blocked on a decision: say so even while Next Term is in front (the tab itself
+            // is not on screen, or there would be no notice). Clicking it opens the tab.
+            content.title = "\(program.isEmpty ? "The agent" : program) needs your decision"
+            content.subtitle = Typography.shortened(tab.title, to: 80)
+            content.body = question
+        } else {
+            // Finished work: only when you are in another app; in Next Term the tab mark says it.
+            guard !NSApp.isActive else { return }
+            content.title = Typography.shortened(tab.title, to: 80)
+            switch notice.state {
+            case .done:
+                // Only an agent that is still running is waiting; one that exited (`claude -p …`) finished.
+                content.body = notice.kind == .agent && notice.stillRunning
+                    ? "\(program) is waiting for you" : "\(program.isEmpty ? "Command" : program) finished"
+            case .failed:
+                content.body = "\(program.isEmpty ? "Command" : program) failed" + (tab.status.exitCode.map { " (exit \($0))" } ?? "")
+            case .attention:
+                content.body = "\(program.isEmpty ? "The terminal" : program) needs your attention"
+            case .idle, .working:
+                return
+            }
         }
+        // One per tab every 10 s unless it says something new; each replaces the tab's previous one.
+        let key = content.title + "\u{0}" + content.body
+        if let last = lastNotified[tab.id], Date().timeIntervalSince(last.at) < 10, last.key == key { return }
+        lastNotified[tab.id] = (Date(), key)
         content.sound = .default
         content.userInfo = ["tab": tab.id.uuidString]
         center.add(UNNotificationRequest(identifier: tab.id.uuidString, content: content, trigger: nil))
+    }
+
+    /// Show banners even while Next Term is in front (decisions in tabs you are not looking at).
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound, .list])
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,

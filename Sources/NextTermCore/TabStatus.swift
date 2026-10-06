@@ -13,6 +13,8 @@ public struct TabNotice: Equatable, Sendable {
     public let kind: CommandKind
     /// The program is still running (an agent waiting for input), as opposed to finished.
     public let stillRunning: Bool
+    /// An agent's question when it is blocked on a decision ("Do you want to make this edit to x?").
+    public var question: String? = nil
 }
 
 /// The per-tab status state machine. Pure logic, driven by events with explicit timestamps
@@ -38,6 +40,11 @@ public struct TabStatus {
     public private(set) var exitCode: Int32?
     /// done / failed / attention the user has not seen yet.
     public private(set) var unseen: TabState?
+    /// The question an agent is waiting on you to answer, read from its screen.
+    public private(set) var question: String?
+    /// The agent's own screen has shown its working or question hint during this run, so the screen is
+    /// trusted over output timing (an idle agent may keep redrawing a status line).
+    public private(set) var screenSynced = false
     /// Jobs the shell holds (suspended or in the background), reported by the zsh integration.
     public private(set) var jobs = 0
     public private(set) var jobSummary = ""
@@ -53,9 +60,11 @@ public struct TabStatus {
 
     public init() {}
 
+    /// The status mark. Only AI agents show "working", in step with what the agent itself shows;
+    /// other programs show nothing while they run, then done or failed.
     public var state: TabState {
-        if unseen == .attention { return .attention }
-        if running && (kind == .command || busy) { return .working }
+        if unseen == .attention || question != nil { return .attention }
+        if running && kind == .agent && busy { return .working }
         return unseen ?? .idle
     }
 
@@ -138,6 +147,60 @@ public struct TabStatus {
         polledName = process.name
     }
 
+    // MARK: what an agent's screen shows
+
+    /// Call a few times a second for a running agent with what its screen shows.
+    public mutating func observe(agentScreen activity: AgentActivity, at now: TimeInterval) {
+        guard running, kind == .agent else { return }
+        switch activity {
+        case .working:
+            screenSynced = true
+            answered()
+            if !busy {
+                busy = true
+                busySince = now
+                if unseen == .done { unseen = nil }
+            }
+        case .asking(let asked):
+            screenSynced = true
+            if busy { busy = false }
+            guard question != asked else { return }
+            question = asked
+            askedAt = now
+            markQuestion(asked)
+        case .idle:
+            // Before the screen has shown its hints this run, the output timing decides (see tick()).
+            guard screenSynced else { return }
+            answered()
+            if busy {
+                busy = false
+                mark(.done, duration: now - busySince)
+            }
+        }
+    }
+
+    private var askedAt: TimeInterval = 0
+    /// The amber mark came from a question, so answering it clears the mark.
+    private var markedForQuestion = false
+
+    /// The question went away (answered, or the agent moved on).
+    private mutating func answered() {
+        guard question != nil else { return }
+        question = nil
+        if markedForQuestion && unseen == .attention { unseen = nil }
+        markedForQuestion = false
+    }
+
+    /// A decision is needed: amber mark and a notification, even if the agent only just started.
+    private mutating func markQuestion(_ asked: String) {
+        guard !visible else { return }
+        unseen = .attention
+        markedForQuestion = true
+        var notice = TabNotice(state: .attention, command: command, program: program, kind: kind, stillRunning: true)
+        notice.question = asked
+        pendingNotice = notice
+    }
+
     // MARK: activity
 
     public mutating func input(at now: TimeInterval) { lastInputAt = now }
@@ -146,6 +209,7 @@ public struct TabStatus {
     public mutating func output(at now: TimeInterval) {
         if now - lastInputAt < Self.echoWindow { return }
         lastOutputAt = now
+        if screenSynced { return } // the agent's screen says when it works
         if running && kind != .command && !busy {
             busy = true
             busySince = now
@@ -160,7 +224,7 @@ public struct TabStatus {
 
     /// Call a few times a second.
     public mutating func tick(at now: TimeInterval) {
-        guard busy, now - lastOutputAt >= Self.quietAfter else { return }
+        guard busy, !screenSynced, now - lastOutputAt >= Self.quietAfter else { return }
         busy = false
         if running && kind == .agent { mark(.done, duration: lastOutputAt - busySince) }
     }
@@ -184,6 +248,8 @@ public struct TabStatus {
         kind = newKind
         startedAt = now
         busy = false
+        question = nil
+        screenSynced = false
         exitCode = nil
         if unseen == .done || unseen == .failed { unseen = nil }
     }
@@ -192,6 +258,7 @@ public struct TabStatus {
         let finishedKind = kind
         running = false
         busy = false
+        question = nil
         exitCode = code
         // Leaving vim or ssh is not news.
         if finishedKind == .interactive { return }

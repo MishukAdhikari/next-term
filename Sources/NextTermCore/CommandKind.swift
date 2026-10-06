@@ -40,13 +40,14 @@ public enum CommandClassifier {
     static let agents: Set<String> = [
         "claude", "claude-code", "claude.exe", "codex", "gemini", "gemini-cli", "aider", "opencode", "amp",
         "cursor-agent", "goose", "crush", "qwen", "qwen-code", "copilot", "droid", "kiro", "kiro-cli", "q",
-        "kimi", "plandex", "cline",
+        "kimi", "plandex", "cline", "junie", "commandcode", "command-code", "cmd", "auggie",
     ]
     /// Pieces of an executable or script path that give an agent away when its name does not:
     /// Claude Code's native installer runs as ".../claude/versions/2.1.280", the npm build as node + cli.js.
     static let agentPathHints = [
         "@anthropic-ai/claude-code", "/claude/versions/", "/claude-code/", "@openai/codex", "/codex/",
         "@google/gemini-cli", "/opencode", "/aider", "@qwen-code/", "/cursor-agent",
+        "/command-code/", "/junie/versions/", "@augmentcode/",
     ]
     static let interactive: Set<String> = [
         "vim", "nvim", "vi", "nano", "emacs", "less", "more", "man", "top", "htop", "btop",
@@ -155,7 +156,9 @@ public enum CommandClassifier {
             if let known = names.first(where: { agents.contains($0) }) { return known == "claude.exe" ? "claude" : known }
             for hint in agentPathHints where containsHint(process.executablePath + " " + process.arguments.prefix(3).joined(separator: " "), hint) {
                 return hint.contains("claude") ? "claude" : hint.contains("codex") ? "codex"
-                    : hint.contains("gemini") ? "gemini" : baseName(hint.trimmingCharacters(in: CharacterSet(charactersIn: "/@")))
+                    : hint.contains("gemini") ? "gemini" : hint.contains("command-code") ? "commandcode"
+                    : hint.contains("junie") ? "junie"
+                    : baseName(hint.trimmingCharacters(in: CharacterSet(charactersIn: "/@")))
             }
         }
         let name = parse(process.commandLine).name

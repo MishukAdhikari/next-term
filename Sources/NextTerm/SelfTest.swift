@@ -100,7 +100,7 @@ enum SelfTest {
         check(await wait(3) { ProcessInspector.foreground(ptyFileDescriptor: second.view.process.childfd,
                                                           shellPid: second.view.process.shellPid, shellName: "zsh")?.name == "sleep" },
               "foreground process is read from the pty")
-        check(second.status.state == .working, "running command shows working", second.status.state.rawValue)
+        check(second.status.running && second.status.state == .idle, "a plain command shows no spinner (only agents do)", second.status.state.rawValue)
         check(await wait(5) { !second.status.running }, "command end is detected")
 
         // Failure in a background tab.
@@ -109,7 +109,9 @@ enum SelfTest {
         c.select(0)
         check(await wait(5) { second.status.state == .failed }, "background failure shows red", second.status.state.rawValue)
         check(second.status.exitCode == 1, "exit code is captured", "\(String(describing: second.status.exitCode))")
-        check(NSApp.dockTile.badgeLabel == "1", "dock badge counts it", NSApp.dockTile.badgeLabel ?? "nil")
+        let unseenTabs = AppDelegate.shared.controllers.reduce(0) { $0 + $1.unseenTabCount }
+        check(unseenTabs >= 1 && NSApp.dockTile.badgeLabel == String(unseenTabs), "dock badge counts the tabs that need you",
+              "\(NSApp.dockTile.badgeLabel ?? "nil") vs \(unseenTabs)")
         c.select(1)
         c.refreshVisibility()
         if NSApp.isActive && window.isKeyWindow {
@@ -260,6 +262,37 @@ enum SelfTest {
               "\(String(describing: fallback.status.exitCode))")
         c.requestClose(fallback)
         check(!c.tabs.contains { $0 === fallback }, "⌘W closes it")
+
+        // An agent's own screen drives its status: working ("esc to interrupt"), a decision with the
+        // question, then done, while its idle status line keeps redrawing.
+        let asker = dir.appendingPathComponent("claude")
+        try? """
+        #!/bin/sh
+        printf '\\342\\234\\273 Pondering\\342\\200\\246 (2s \\302\\267 esc to interrupt)\\n'; sleep 1.5
+        printf 'Do you want to make this edit to a.txt?\\n\\342\\235\\257 1. Yes\\n  2. Yes, and don'"'"'t ask again this session\\n  3. No, and tell Claude what to do differently (esc)\\n'
+        read answer
+        printf '\\033[2J\\033[H\\342\\234\\273 Applying\\342\\200\\246 (esc to interrupt)\\n'; sleep 1.5
+        printf '\\033[2J\\033[HDone. Ready for your next prompt.\\n'
+        while true; do printf '\\r  ? for shortcuts  %s' "$(date +%S)"; sleep 0.5; done
+        """.write(to: asker, atomically: true, encoding: .utf8)
+        chmod(asker.path, 0o755)
+        c.select(1)
+        second.status.setVisible(true)
+        second.view.send(txt: "PATH=\(dir.path):$PATH claude\r")
+        check(await wait(4) { second.status.running && second.status.kind == .agent && second.status.screenSynced },
+              "the agent's working hint is read from its screen")
+        c.select(0)
+        check(await wait(5) { second.status.question == "Do you want to make this edit to a.txt?" }, "its question is read too",
+              second.status.question ?? "none")
+        check(second.status.state == .attention && second.stateDescription.hasPrefix("Needs your decision"), "and shows as a decision",
+              second.stateDescription)
+        second.view.send(txt: "1\r")
+        check(await wait(4) { second.status.question == nil && second.status.state == .working }, "answering clears it; working again")
+        check(await wait(6) { second.status.state == .done }, "done while its status line keeps redrawing", second.status.state.rawValue)
+        second.view.send(txt: "\u{03}")
+        _ = await wait(4) { !second.status.running }
+        c.select(1)
+        second.status.setVisible(true)
 
         // Snapshot with every state on screen, for a visual check.
         await screenshotAllStates(c, dir: dir)
@@ -517,7 +550,12 @@ enum SelfTest {
     }
 
     private static func screenshotAllStates(_ c: TerminalWindowController, dir: URL) async {
-        let commands = ["sleep 1", "sleep 1; false", "sleep 0.5; printf '\\a'", "sleep 20"]
+        let busyAgent = dir.appendingPathComponent("busy")
+        try? FileManager.default.createDirectory(at: busyAgent, withIntermediateDirectories: true)
+        try? "#!/bin/sh\nwhile true; do printf '\\r\\342\\234\\273 Working (esc to interrupt) %s' $(date +%S); sleep 0.3; done\n"
+            .write(to: busyAgent.appendingPathComponent("codex"), atomically: true, encoding: .utf8)
+        chmod(busyAgent.appendingPathComponent("codex").path, 0o755)
+        let commands = ["sleep 1", "sleep 1; false", "sleep 0.5; printf '\\a'", "PATH=\(busyAgent.path):$PATH codex"]
         var made: [TerminalTab] = []
         for cmd in commands {
             let tab = c.addTab(directory: "/tmp")

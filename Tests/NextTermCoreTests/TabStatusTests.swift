@@ -67,7 +67,7 @@ import Testing
     @Test func commandInBackgroundTabFinishesDone() {
         var s = TabStatus()
         s.commandStarted("make", at: 0)
-        #expect(s.state == .working)
+        #expect(s.running && s.state == .idle) // plain commands show no spinner
         s.commandFinished(exitCode: 0, at: 10)
         #expect(s.state == .done)
         #expect(s.takeNotice() == TabNotice(state: .done, command: "make", program: "make", kind: .command, stillRunning: false))
@@ -107,7 +107,7 @@ import Testing
         s.commandStarted("false", at: 0)
         s.commandFinished(exitCode: 1, at: 1)
         s.commandStarted("sleep 5", at: 2)
-        #expect(s.state == .working)
+        #expect(s.running && s.state == .idle)
     }
 
     @Test func agentWorksThenWaits() {
@@ -142,7 +142,7 @@ import Testing
         var s = TabStatus()
         s.commandStarted("vim a.txt", at: 0)
         s.output(at: 1)
-        #expect(s.state == .working)
+        #expect(s.state == .idle) // only agents show working
         s.tick(at: 10)
         #expect(s.state == .idle)
         s.commandFinished(exitCode: 0, at: 60)
@@ -166,10 +166,10 @@ import Testing
         s.observe(ForegroundProcess(isShell: true, name: "bash"), at: 0)
         #expect(s.state == .idle)
         s.observe(ForegroundProcess(isShell: false, name: "sleep", arguments: ["sleep", "8"]), at: 1)
-        #expect(s.state == .working)
+        #expect(s.running)
         #expect(s.program == "sleep")
         s.observe(nil, at: 5) // unreadable foreground (a pipeline's leader exited): keep the state
-        #expect(s.state == .working)
+        #expect(s.running)
         s.observe(ForegroundProcess(isShell: true, name: "bash"), at: 9)
         #expect(s.state == .done)
         #expect(s.takeNotice()?.state == .done)
@@ -178,7 +178,7 @@ import Testing
     @Test func fallbackSeesWrapperProcesses() {
         var s = TabStatus()
         s.observe(ForegroundProcess(isShell: false, name: "sudo", arguments: ["sudo", "make", "install"]), at: 0)
-        #expect(s.state == .working)
+        #expect(s.running)
         // A bash script run from bash is a running program, not the idle shell (decided by pid upstream).
         s.observe(ForegroundProcess(isShell: false, name: "bash", arguments: ["/bin/bash", "./deploy.sh"]), at: 1)
         #expect(s.running)
@@ -200,7 +200,7 @@ import Testing
     @Test func functionRunningAnAgentIsFoundByPolling() {
         var s = TabStatus()
         s.commandStarted("claude-auto-danger", at: 0) // a shell function: zsh cannot expand it
-        #expect(s.kind == .command && s.state == .working)
+        #expect(s.kind == .command && s.running)
         s.output(at: 0.5)
         s.observe(ForegroundProcess(isShell: false, name: "claude", arguments: ["claude", "--dangerously-skip-permissions"]), at: 1)
         #expect(s.kind == .agent)
@@ -271,7 +271,7 @@ import Testing
         var s = TabStatus()
         s.commandStarted("make", at: 0)
         s.observe(ForegroundProcess(isShell: true, name: "zsh"), at: 1)
-        #expect(s.state == .working)
+        #expect(s.running)
     }
 }
 

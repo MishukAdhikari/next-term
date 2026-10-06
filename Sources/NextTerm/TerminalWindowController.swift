@@ -221,6 +221,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         refreshVisibility()
         for tab in tabs {
             if tickCount % 2 == 0 { tab.pollForeground() } // every 0.5 s
+            tab.pollAgentScreen()
             tab.status.tick(at: now)
             if let notice = tab.status.takeNotice() {
                 AppDelegate.shared.post(notice, tab: tab, in: self)

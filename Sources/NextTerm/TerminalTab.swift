@@ -269,6 +269,38 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         if changed { delegate?.tabDidChange(self) }
     }
 
+    /// The live end of the terminal, whatever the user has scrolled back to: the last `count` lines of
+    /// the active buffer that end at the last line with text. Agents draw inline where the cursor is,
+    /// so after a screen clear their UI sits at the top with blank rows below it.
+    func screenTail(_ count: Int = AgentScreen.scannedLines) -> [String] {
+        let terminal = view.getTerminal()
+        let top = terminal.buffer.totalLinesTrimmed
+        // The last line that exists, found by bisection (SwiftTerm keeps the line count internal).
+        var low = top, high = top + 1_000_000
+        guard terminal.getScrollInvariantLine(row: low) != nil else { return [] }
+        while low < high {
+            let mid = (low + high + 1) / 2
+            if terminal.getScrollInvariantLine(row: mid) != nil { low = mid } else { high = mid - 1 }
+        }
+        // Skip blank rows at the bottom (at most one screen of them).
+        var last = low
+        while last > top, low - last < terminal.rows,
+              terminal.getScrollInvariantLine(row: last)?.translateToString(trimRight: true).isEmpty ?? true {
+            last -= 1
+        }
+        let first = max(top, last - count + 1)
+        return (first...last).compactMap { terminal.getScrollInvariantLine(row: $0)?.translateToString(trimRight: true) }
+    }
+
+    /// For a running AI agent: read its screen (working, asking a question, or idle) so the tab's
+    /// status follows the agent itself.
+    func pollAgentScreen() {
+        guard !exited, status.running, status.kind == .agent else { return }
+        let before = (status.state, status.question)
+        status.observe(agentScreen: AgentScreen.activity(screenLines: screenTail()), at: Self.now)
+        if before.0 != status.state || before.1 != status.question { delegate?.tabDidChange(self) }
+    }
+
     /// Why closing this tab would lose something, or nil. Running programs, and jobs left in the
     /// background or suspended with Ctrl-Z (a stopped vim with unsaved changes).
     var closeWarning: String? {
@@ -320,7 +352,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         case .working: return "Working"
         case .done: return "Done"
         case .failed: return status.exitCode.map { "Failed (exit \($0))" } ?? "Failed"
-        case .attention: return "Needs attention"
+        case .attention: return status.question.map { "Needs your decision: \($0)" } ?? "Needs attention"
         }
     }
 
