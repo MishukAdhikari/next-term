@@ -37,6 +37,13 @@ VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "met
 NO_TYPO = {"code", "pre", "kbd", "script", "style", "svg", "template", "textarea", "samp"}
 # Hosts that pages may link to (navigation only; nothing is loaded from them).
 LINK_HOSTS = {"github.com", "opensource.org"}
+# The official sites the comparison pages (/compare/) cite as their sources.
+LINK_HOSTS |= {
+    "code.visualstudio.com", "docs.github.com", "code.claude.com",
+    "www.jetbrains.com", "blog.jetbrains.com", "junie.jetbrains.com",
+    "cursor.com", "devin.ai", "docs.devin.ai", "zed.dev",
+    "www.warp.dev", "docs.warp.dev", "iterm2.com", "ghostty.org",
+}
 
 errors: list[str] = []
 warnings: list[str] = []
