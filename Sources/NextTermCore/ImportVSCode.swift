@@ -4,7 +4,8 @@ import SQLite3
 // "Coming from VS Code?": what VS Code, VS Code Insiders, VSCodium, Cursor and Devin Desktop (once Windsurf)
 // would bring over. Design: claudedocs/research_next-term-migration (§3.1 settings, §4 recents, §5 detection,
 // §6 safety). Everything here only reads, and only these: settings.json (a value is converted only for an
-// allowlisted key), globalStorage/storage.json (the number of profiles), the app's product.json (one key),
+// allowlisted key), keybindings.json (each rule's key, command and when: ImportVSCodeKeys.swift),
+// globalStorage/storage.json (the number of profiles), the app's product.json (one key),
 // one key of a state.vscdb opened in place read-only, and the folders list of a workspace file a recent entry
 // names. Nothing is written, copied or sent anywhere.
 
@@ -55,7 +56,8 @@ public enum ImportVSCode {
 
     // MARK: plan
 
-    /// What `app` would bring over: its settings (§3.1), recent folders (§4) and what was left out, with why.
+    /// What `app` would bring over: its settings (§3.1), the user's own shortcuts (§2.4), recent folders (§4)
+    /// and what was left out, with why.
     /// `usKeyboard`: the current input source is U.S.-style, so Option isn't needed to type symbols.
     public static func plan(for app: DetectedApp, home: String = NSHomeDirectory(), usKeyboard: Bool = true) -> ImportPlan {
         plan(for: app, home: home, usKeyboard: usKeyboard,
@@ -68,7 +70,9 @@ public enum ImportVSCode {
         guard family.contains(app.kind) else { return plan }
         let settings = settingsPlan(user: app.configPath, appName: app.name, usKeyboard: usKeyboard)
         plan.settings = settings.settings
-        plan.skipped = settings.skipped + neverImportedFiles(user: app.configPath)
+        let keys = keybindingsPlan(user: app.configPath, usKeyboard: usKeyboard)
+        plan.shortcuts = keys.shortcuts
+        plan.skipped = settings.skipped + keys.skipped + neverImportedFiles(user: app.configPath)
         let profiles = otherProfiles(user: app.configPath)
         if profiles > 0 {
             plan.skipped.append(SkippedItem(counted(profiles, "other profile"), "only the default profile is read; other profiles: choose in a later version"))

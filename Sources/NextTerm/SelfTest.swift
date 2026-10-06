@@ -732,18 +732,31 @@ enum SelfTest {
         check(item("replaceInFiles:")?.keyEquivalent == "r" && item("goToFile:")?.keyEquivalentModifierMask == .command,
               "back to Next Term's keys")
 
+        // Every command an imported shortcut can land on is a real menu command.
+        let ids = Set(shortcuts.commands.map(\.id))
+        let missing = ImportShortcuts.titles.keys.filter { !ids.contains($0) }.sorted()
+        check(missing.isEmpty, "imported shortcuts only land on commands the menus have", missing.joined(separator: ", "))
+
         // An import: preview, apply, and undo exactly.
         let app = AppDelegate.shared!
         let fullList = app.recentProjects
         app.setRecentProjects(Array(fullList.prefix(3))) // room for an imported one (an import never pushes yours out)
         let before = (app.fontSize, app.softWrap, app.recentProjects, shortcuts.preset)
+        let bindingsBefore = shortcuts.bindings // holds the Go to Line change made above
         let extra = proj.appendingPathComponent("imported-project")
         try? FileManager.default.createDirectory(at: extra, withIntermediateDirectories: true)
+        // One of the user's own shortcuts (⌥⌘P for Go to File), and a Control key that is never taken.
+        let mine = KeyChord(key: "p", command: true, option: true)
         let plan = ImportPlan(preset: .vsCode,
                               settings: [PlannedSetting(.fontSize(clamping: before.0 + 2), source: "editor.fontSize \(Int(before.0) + 2)"),
                                          PlannedSetting(.softWrap(!before.1), source: "editor.wordWrap"),
                                          PlannedSetting(.optionAsMeta(true), source: "terminal.integrated.macOptionIsMeta", ticked: false,
                                                         note: "Option types @ [ ] { } on your keyboard layout")],
+                              shortcuts: [PlannedShortcut(command: "goToFile:", title: "Go to File…", chord: mine,
+                                                          source: "keybindings.json: cmd+alt+p → workbench.action.quickOpen"),
+                                          PlannedShortcut(command: "goToLine:", title: "Go to Line…", chord: KeyChord(key: "g", control: true),
+                                                          source: "keybindings.json: ctrl+g → workbench.action.gotoLine", allowed: false,
+                                                          note: "Control keys without ⌘ stay with your shell and agents")],
                               recentProjects: [canonicalPath(extra.path)],
                               skipped: [SkippedItem("editor.fontFamily", "font choice is coming"),
                                         SkippedItem("terminal.integrated.env.osx", "never imported: can hold secrets")])
@@ -751,16 +764,24 @@ enum SelfTest {
         window.showPreview(for: DetectedApp(kind: .vsCode, name: "VS Code", configPath: "/tmp", lastUsed: Date()), plan: plan)
         await pause(0.4)
         if let previewWindow = window.window { await screenshot(previewWindow, suffix: "import") }
-        check(window.applyTitle == "Apply \(KeymapPreset.vsCode.overrides.count + 3) Changes", "the preview counts what is ticked", window.applyTitle)
+        check(window.applyTitle == "Apply \(KeymapPreset.vsCode.overrides.count + 4) Changes", "the preview counts what is ticked", window.applyTitle)
         window.applyForTest()
         check(app.fontSize == before.0 + 2 && app.softWrap != before.1 && !Preferences.optionAsMeta
               && shortcuts.preset == .vsCode && app.recentProjects.contains(canonicalPath(extra.path)),
               "Apply sets the ticked changes and leaves the unticked one",
               "font \(app.fontSize) wrap \(app.softWrap) meta \(Preferences.optionAsMeta) preset \(shortcuts.preset) recents \(app.recentProjects)")
+        check(item("goToFile:")?.keyEquivalent == "p" && item("goToFile:")?.keyEquivalentModifierMask == [.command, .option]
+              && shortcuts.chord(for: "goToLine:") == KeyChord(key: "l", command: true, control: true),
+              "your own shortcut comes over on top of the preset, and the Control key doesn't",
+              "\(shortcuts.chord(for: "goToFile:")?.display ?? "none") \(shortcuts.chord(for: "goToLine:")?.display ?? "none")")
         check(ImportCoordinator.shared.last?.source == "VS Code", "the import is remembered for Undo")
         ImportCoordinator.shared.undo()
         check(app.fontSize == before.0 && app.softWrap == before.1 && shortcuts.preset == before.3 && app.recentProjects == before.2,
               "Undo Import puts everything back exactly", "\(app.fontSize) \(app.softWrap) \(shortcuts.preset) \(app.recentProjects.count)")
+        check(shortcuts.bindings == bindingsBefore && item("goToFile:")?.keyEquivalent == "p"
+              && item("goToFile:")?.keyEquivalentModifierMask == .command,
+              "Undo Import gives Go to File its old shortcut back, and your other changes stay",
+              shortcuts.chord(for: "goToFile:")?.display ?? "none")
         shortcuts.bindings = savedBindings
         shortcuts.preset = savedPreset
         app.setRecentProjects(fullList)

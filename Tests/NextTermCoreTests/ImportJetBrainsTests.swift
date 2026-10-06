@@ -158,16 +158,17 @@ import Testing
 
     // MARK: Keymaps
 
-    /// The preset `detect` gives a PhpStorm whose keymap files are `files`, and the keymap notes a plan adds.
-    func keymapResult(_ files: [String: String]) throws -> (preset: KeymapPreset?, notes: [SkippedItem]) {
+    /// The preset `detect` gives a PhpStorm whose keymap files are `files`, the keymap notes a plan adds, and
+    /// the user's own shortcuts it found.
+    func keymapResult(_ files: [String: String]) throws -> (preset: KeymapPreset?, notes: [SkippedItem], shortcuts: [PlannedShortcut]) {
         let home = try home()
         defer { try? fm.removeItem(atPath: home) }
         let config = try ide(home, "PhpStorm2026.1")
         for (path, text) in files { try write(text, to: config + "/" + path) }
         let preset = ImportJetBrains.detect(home: home).first?.preset
-        let notes = ImportJetBrains.plan(for: app(config), home: home).skipped
-            .filter { $0.item.contains("Keymap") || $0.item.contains("Classic") || $0.item.contains("you changed") }
-        return (preset, notes)
+        let plan = ImportJetBrains.plan(for: app(config), home: home)
+        let notes = plan.skipped.filter { $0.item.contains("Keymap") || $0.item.contains("Classic") }
+        return (preset, notes, plan.shortcuts)
     }
 
     @Test func keymapsChooseThePreset() throws {
@@ -189,30 +190,149 @@ import Testing
     }
 
     @Test func customKeymapsFollowTheirParents() throws {
-        // The user's own keymap (as on this Mac): the JetBrains preset, and its changes listed.
+        // The user's own keymap (as on this Mac): the JetBrains preset, and its changes as rows.
         var result = try keymapResult([
             "options/mac/keymap.xml": keymapChoice("macOS - Mishuk"),
             "keymaps/macOS - Mishuk.xml": customKeymap("macOS - Mishuk", parent: "Mac OS X 10.5+", actions: ["GotoFile", "EditorDuplicate", "SaveAll"]),
         ])
-        #expect(result.preset == .jetBrains)
-        #expect(result.notes == [SkippedItem("3 shortcuts you changed in “macOS - Mishuk”", "your own JetBrains shortcuts come in a later version")])
+        #expect(result.preset == .jetBrains && result.notes.isEmpty)
+        #expect(result.shortcuts.map(\.command) == ["goToFile:", "saveAllDocuments:"])
 
         // A custom keymap on VS Code's, found by the name inside the file (the file name was made safe).
         result = try keymapResult([
             "options/mac/keymap.xml": keymapChoice("Work / VS Code"),
             "keymaps/Work _ VS Code.xml": customKeymap("Work / VS Code", parent: "VSCode OSX", actions: ["GotoFile"]),
         ])
-        #expect(result.preset == .vsCode)
-        #expect(result.notes.map(\.item) == ["1 shortcut you changed in “Work / VS Code”"])
+        #expect(result.preset == .vsCode && result.notes.isEmpty)
+        #expect(result.shortcuts.map(\.source) == ["“Work / VS Code”: GotoFile meta shift D"])
 
-        // Two levels down to IntelliJ IDEA Classic: changes counted once across both.
+        // Two levels down to IntelliJ IDEA Classic: an action both set comes from the nearer keymap.
         result = try keymapResult([
             "options/mac/keymap.xml": keymapChoice("Mine 2"),
             "keymaps/Mine 2.xml": customKeymap("Mine 2", parent: "Mine", actions: ["GotoFile", "SaveAll"]),
             "keymaps/Mine.xml": customKeymap("Mine", parent: "Mac OS X", actions: ["GotoFile", "Find"]),
         ])
         #expect(result.preset == .jetBrains)
-        #expect(result.notes.map(\.item) == ["IntelliJ IDEA Classic keys", "3 shortcuts you changed in “Mine 2”"])
+        #expect(result.notes.map(\.item) == ["IntelliJ IDEA Classic keys"])
+        #expect(result.shortcuts.map(\.command) == ["goToFile:", "saveAllDocuments:", "performFindPanelAction:#1"])
+        #expect(result.shortcuts.first?.source == "“Mine 2”: GotoFile meta shift D")
+
+        // A custom keymap that isn't the active one isn't read.
+        result = try keymapResult([
+            "options/mac/keymap.xml": keymapChoice("Mac OS X 10.5+"),
+            "keymaps/Old.xml": customKeymap("Old", parent: "Mac OS X 10.5+", actions: ["GotoFile"]),
+        ])
+        #expect(result.shortcuts.isEmpty)
+    }
+
+    /// Shaped like the custom keymap on a real Mac: the IDE writes every shortcut an action has, and an empty
+    /// element for an action left with none.
+    static let ownKeymap = """
+        <keymap version="1" name="macOS - Mishuk" parent="Mac OS X 10.5+">
+          <action id="ActivateTerminalToolWindow">
+            <keyboard-shortcut first-keystroke="meta T" />
+          </action>
+          <action id="CloseContent" />
+          <action id="EditorDuplicate">
+            <keyboard-shortcut first-keystroke="meta shift D" />
+          </action>
+          <action id="FindInPath">
+            <keyboard-shortcut first-keystroke="meta shift F" />
+            <mouse-shortcut keystroke="meta button2" />
+          </action>
+          <action id="GotoFile">
+            <keyboard-shortcut first-keystroke="meta P" />
+          </action>
+          <action id="GotoLine">
+            <keyboard-shortcut first-keystroke="control G" />
+          </action>
+          <action id="NextTab">
+            <keyboard-shortcut first-keystroke="control RIGHT" />
+            <keyboard-shortcut first-keystroke="meta shift CLOSE_BRACKET" />
+          </action>
+          <action id="ParameterInfo" />
+          <action id="SaveAll">
+            <keyboard-shortcut first-keystroke="meta K" second-keystroke="meta S" />
+          </action>
+          <action id="SelectNextOccurrence">
+            <keyboard-shortcut first-keystroke="meta D" />
+          </action>
+          <action id="SplitVertically">
+            <keyboard-shortcut first-keystroke="meta BACK_SLASH" />
+          </action>
+          <action id="GotoAction">
+            <keyboard-gesture-shortcut keystroke="shift" modifier="dblClick" />
+          </action>
+          <action id="EditorToggleUseSoftWraps">
+            <keyboard-shortcut first-keystroke="alt Z" />
+          </action>
+          <action id="ShowSettings">
+            <keyboard-shortcut first-keystroke="meta NUMPAD5" />
+          </action>
+        </keymap>
+        """
+
+    @Test func ownShortcutsFromAKeymap() throws {
+        let home = try home()
+        defer { try? fm.removeItem(atPath: home) }
+        let config = try ide(home, "PhpStorm2026.1")
+        // Older IDEs keep the active keymap in options/keymap.xml.
+        try write(keymapChoice("macOS - Mishuk"), to: config + "/options/keymap.xml")
+        try write(Self.ownKeymap, to: config + "/keymaps/macOS - Mishuk.xml")
+        let plan = ImportJetBrains.plan(for: app(config), home: home)
+        #expect(plan.shortcuts.map(\.command) == ["toggleEditorFocus:", "closeTab:", "findInFiles:", "goToFile:", "goToLine:",
+                                                  "showNextTab:", "splitRight:"])
+        func row(_ id: String) -> PlannedShortcut? { plan.shortcuts.first { $0.command == id } }
+        #expect(row("toggleEditorFocus:")?.chord == KeyChord(key: "t", command: true) && row("toggleEditorFocus:")?.ticked == true)
+        #expect(row("toggleEditorFocus:")?.source == "“macOS - Mishuk”: ActivateTerminalToolWindow meta T")
+        // Every key taken away: offered, unticked.
+        #expect(row("closeTab:")?.chord == nil && row("closeTab:")?.removed == [] && row("closeTab:")?.ticked == false)
+        #expect(row("goToFile:")?.chord == KeyChord(key: "p", command: true))
+        #expect(row("goToLine:")?.allowed == false)
+        // ⌃→ stays with the shell (and macOS's Spaces); ⇧⌘] comes over.
+        #expect(row("showNextTab:")?.chord == KeyChord(key: "]", command: true, shift: true))
+        #expect(row("splitRight:")?.chord == KeyChord(key: "\\", command: true))
+
+        let skipped = Dictionary(plan.skipped.map { ($0.item, $0.reason) }, uniquingKeysWith: { first, _ in first })
+        #expect(skipped["EditorDuplicate meta shift D"] == "no matching Next Term command")
+        #expect(skipped["SelectNextOccurrence meta D"] == "no matching Next Term command")
+        #expect(skipped["GotoAction"] == "no matching Next Term command")
+        #expect(skipped["FindInPath meta button2"] == "mouse shortcuts aren't brought over")
+        #expect(skipped["SaveAll meta K, meta S"] == "two-step keys aren't supported yet")
+        #expect(skipped["NextTab control RIGHT"] == "one shortcut per command here; ⇧⌘] comes over")
+        #expect(skipped["EditorToggleUseSoftWraps alt Z"] == "a menu shortcut needs ⌘ or ⌃ (Option alone types a character)")
+        #expect(skipped["ShowSettings meta NUMPAD5"] == "numpad keys aren't supported")
+        #expect(skipped["1 action left without shortcuts in your keymap"] == "they have no matching Next Term command, so nothing changes here")
+
+        // Settled under the JetBrains keys: ⌘T is New Tab's; Find in Files, Show Next Tab and Split Right
+        // already have these keys; ⌘P is free there, since Go to File is on ⇧⌘O.
+        let settled = plan.settlingShortcuts(current: ImportShortcutsTests.current(.jetBrains))
+        #expect(settled.shortcuts.map(\.command) == ["toggleEditorFocus:", "closeTab:", "goToFile:", "goToLine:"])
+        #expect(settled.shortcuts.map(\.ticked) == [false, false, true, false])
+        #expect(settled.shortcuts[0].note?.hasPrefix("⌘T is New Tab’s here") == true)
+    }
+
+    @Test func keyStrokes() {
+        func key(_ text: String) -> KeyChord? {
+            if case .chord(let chord) = ImportJetBrains.keyStroke(text) { return chord }
+            return nil
+        }
+        func reason(_ text: String) -> String? {
+            if case .notSupported(let reason) = ImportJetBrains.keyStroke(text) { return reason }
+            return nil
+        }
+        #expect(key("meta shift O") == KeyChord(key: "o", command: true, shift: true))
+        #expect(key("shift meta O") == KeyChord(key: "o", command: true, shift: true))
+        #expect(key("control alt OPEN_BRACKET")?.display == "⌃⌥[")
+        #expect(key("shift F6")?.display == "⇧F6")
+        #expect(key("meta BACK_SLASH") == KeyChord(key: "\\", command: true) && key("meta EQUALS") == KeyChord(key: "=", command: true))
+        #expect(key("meta 1") == KeyChord(key: "1", command: true))
+        #expect(key("alt ENTER")?.display == "⌥↩" && key("meta DELETE")?.display == "⌘⌦" && key("meta BACK_SPACE")?.display == "⌘⌫")
+        #expect(key("meta pressed P") == KeyChord(key: "p", command: true))
+        #expect(key("control shift BACK_QUOTE") == KeyChord(key: "`", shift: true, control: true))
+        #expect(reason("meta NUMPAD1") == "numpad keys aren't supported" && reason("meta ADD") == "numpad keys aren't supported")
+        #expect(reason("meta F13") == "keys above F12 aren't supported")
+        #expect(reason("meta") == "key not recognised" && reason("meta A B") == "key not recognised" && reason("meta INSERT") == "key not recognised")
     }
 
     @Test func classicAndOtherKeymaps() throws {

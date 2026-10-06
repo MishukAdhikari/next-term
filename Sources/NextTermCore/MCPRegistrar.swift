@@ -501,6 +501,28 @@ struct JSONC {
         return Object(open: open, close: i, members: members)
     }
 
+    /// The elements of an array in this document, by position like members (nothing is converted).
+    func elements(of array: Value) -> [Value]? {
+        guard case .array(let range) = array else { return nil }
+        var cursor = self
+        cursor.i = text.index(after: range.lowerBound)
+        var values: [Value] = []
+        cursor.skipSpace()
+        while cursor.i < range.upperBound, text[cursor.i] != "]" {
+            guard let value = cursor.parseValue() else { return nil }
+            values.append(value)
+            cursor.skipSpace()
+            guard cursor.i < range.upperBound else { return nil }
+            if text[cursor.i] == "," {
+                cursor.i = text.index(after: cursor.i)
+                cursor.skipSpace()
+            } else if text[cursor.i] != "]" {
+                return nil
+            }
+        }
+        return values
+    }
+
     /// The whitespace that starts the line holding `index`.
     func indent(of index: String.Index) -> String {
         var start = index

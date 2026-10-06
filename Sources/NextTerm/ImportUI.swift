@@ -44,6 +44,7 @@ enum ImportSources {
 struct ImportChoice {
     var usePreset: Bool
     var settings: [PlannedSetting]
+    var shortcuts: [PlannedShortcut] = []
     var recentProjects: [String]
 }
 
@@ -61,6 +62,8 @@ final class ImportCoordinator {
 
         enum Value: Codable, Equatable {
             case double(Double), bool(Bool), string(String), strings([String])
+            /// The saved shortcuts, byte for byte (`keyBindings`).
+            case data(Data)
         }
     }
 
@@ -82,7 +85,7 @@ final class ImportCoordinator {
     /// How many things an import would change.
     static func count(_ choice: ImportChoice, plan: ImportPlan) -> Int {
         (choice.usePreset && plan.preset != KeyboardShortcuts.shared.preset ? plan.preset.overrides.count : 0)
-            + choice.settings.count + (choice.recentProjects.isEmpty ? 0 : 1)
+            + choice.settings.count + choice.shortcuts.count + (choice.recentProjects.isEmpty ? 0 : 1)
     }
 
     func apply(_ choice: ImportChoice, plan: ImportPlan, from source: String) {
@@ -90,11 +93,13 @@ final class ImportCoordinator {
         var keys: [String] = []
         if choice.usePreset { keys.append("keymapPreset") }
         keys += choice.settings.map(\.setting.key)
+        if !choice.shortcuts.isEmpty { keys.append("keyBindings") }
         if !choice.recentProjects.isEmpty { keys.append("recentProjects") }
         var before: [String: Snapshot.Value] = [:]
         for key in Set(keys) {
             switch defaults.object(forKey: key) {
             case let value as Bool where key == "softWrap" || key == "optionAsMeta": before[key] = .bool(value)
+            case let value as Data: before[key] = .data(value)
             case let value as Double: before[key] = .double(value)
             case let value as String: before[key] = .string(value)
             case let value as [String]: before[key] = .strings(value)
@@ -103,10 +108,13 @@ final class ImportCoordinator {
         }
         let app = AppDelegate.shared!
         if choice.usePreset { KeyboardShortcuts.shared.preset = plan.preset }
+        // The user's own shortcuts go on top of the preset, as their own changes.
+        if !choice.shortcuts.isEmpty { KeyboardShortcuts.shared.setImported(choice.shortcuts) }
         for planned in choice.settings { app.applyImported(planned.setting) }
         let added = choice.recentProjects.isEmpty ? [] : app.importRecentProjects(choice.recentProjects)
         var parts: [String] = []
         if choice.usePreset { parts.append("\(plan.preset.name) shortcuts") }
+        if !choice.shortcuts.isEmpty { parts.append("\(choice.shortcuts.count) of your shortcut\(choice.shortcuts.count == 1 ? "" : "s")") }
         if !choice.settings.isEmpty { parts.append("\(choice.settings.count) setting\(choice.settings.count == 1 ? "" : "s")") }
         if !added.isEmpty { parts.append("\(added.count) project\(added.count == 1 ? "" : "s")") }
         last = Snapshot(date: Date(), source: source, summary: parts.joined(separator: ", "), before: before, touched: Array(Set(keys)))
@@ -122,6 +130,11 @@ final class ImportCoordinator {
             case "keymapPreset":
                 if case .string(let raw)? = value, let preset = KeymapPreset(rawValue: raw) { KeyboardShortcuts.shared.preset = preset }
                 else { UserDefaults.standard.removeObject(forKey: key); KeyboardShortcuts.shared.apply() }
+            case "keyBindings":
+                // The user's shortcuts exactly as they were, including none at all.
+                if case .data(let data)? = value { UserDefaults.standard.set(data, forKey: key) }
+                else { UserDefaults.standard.removeObject(forKey: key) }
+                KeyboardShortcuts.shared.apply()
             case "recentProjects":
                 if case .strings(let paths)? = value { app.setRecentProjects(paths) } else { app.setRecentProjects([]) }
             default:
@@ -184,10 +197,16 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
 
     private var apps: [DetectedApp] = []
     private var completion: ((_ imported: ImportPlan?) -> Void)?
+    /// The plan as the importer made it, and as shown (its shortcut rows settled against Next Term's).
+    private var source: ImportPlan?
     private var plan: ImportPlan?
     private var app: DetectedApp?
     private var presetBox: NSButton?
     private var settingBoxes: [(NSButton, PlannedSetting)] = []
+    private var shortcutBoxes: [(NSButton, PlannedShortcut)] = []
+    /// With many shortcuts: the line beside the disclosure, and the list it opens.
+    private var shortcutSummary: NSTextField?
+    private var shortcutList: NSView?
     private var recentsBox: NSButton?
     private var applyButton: NSButton?
     private var radios: [NSButton] = []
@@ -261,25 +280,75 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
     /// The preview: every change with where it came from, each one a checkbox.
     func showPreview(for found: DetectedApp, plan given: ImportPlan? = nil) {
         app = found
-        let plan = given ?? ImportSources.plan(for: found)
+        source = given ?? ImportSources.plan(for: found)
+        buildPreview(usePreset: true)
+        showWindow(nil)
+        window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// The user's own shortcuts are checked against Next Term's as they will be: under the plan's preset
+    /// while it is ticked, else the one in use. Ticking or unticking it lays the preview out again.
+    private func buildPreview(usePreset: Bool) {
+        guard let found = app, let source else { return }
+        let current = KeyboardShortcuts.shared.preset
+        let under = usePreset ? source.preset : current
+        let plan = Self.settle(source, under: under)
         self.plan = plan
         settingBoxes = []
         var rows: [NSView] = [Self.label("Bring over from \(found.name)", size: 20, weight: .semibold)]
 
         // Shortcuts.
-        let current = KeyboardShortcuts.shared.preset
         if plan.preset != .nextTerm || current != .nextTerm {
             rows.append(Self.heading("Shortcuts"))
             let box = NSButton(checkboxWithTitle: plan.preset == current ? "Already using \(plan.preset.name) shortcuts"
                                : "Use \(plan.preset.name) shortcuts (\(plan.preset.overrides.count) differ from Next Term’s)",
-                               target: self, action: #selector(recount))
-            box.state = plan.preset != current ? .on : .off
+                               target: self, action: #selector(presetToggled))
+            box.state = plan.preset != current && usePreset ? .on : .off
             box.isEnabled = plan.preset != current
             presetBox = box
             rows.append(box)
             for line in Self.presetLines(plan.preset) { rows.append(Self.wrapping(line, secondary: true, size: 11, indent: true)) }
         } else {
             presetBox = nil
+        }
+
+        // The user's own shortcuts, each moved over as their own change. A long list starts folded.
+        shortcutBoxes = []
+        shortcutSummary = nil
+        shortcutList = nil
+        if !plan.shortcuts.isEmpty {
+            rows.append(Self.heading("Your shortcuts (\(plan.shortcuts.count))"))
+            let chords = KeyboardShortcuts.shared.chords(under: under)
+            var list: [NSView] = []
+            for planned in plan.shortcuts {
+                let box = NSButton(checkboxWithTitle: Self.describe(planned, from: chords[planned.command] ?? nil),
+                                   target: self, action: #selector(recount))
+                box.state = planned.ticked ? .on : .off
+                box.isEnabled = planned.allowed
+                shortcutBoxes.append((box, planned))
+                list.append(box)
+                list.append(Self.wrapping(planned.source + (planned.note.map { " — " + $0 } ?? ""), secondary: true, size: 11, indent: true))
+            }
+            if plan.shortcuts.count > Self.shortcutsShownOpen {
+                let disclosure = NSButton(title: "", target: self, action: #selector(toggleShortcutList(_:)))
+                disclosure.bezelStyle = .disclosure
+                disclosure.setButtonType(.pushOnPushOff)
+                disclosure.state = .off
+                disclosure.setAccessibilityLabel("Show your shortcuts")
+                let summary = NSTextField(labelWithString: "")
+                shortcutSummary = summary
+                let header = NSStackView(views: [disclosure, summary])
+                header.spacing = 4
+                let folded = NSStackView(views: list)
+                folded.orientation = .vertical
+                folded.alignment = .leading
+                folded.spacing = 8
+                folded.isHidden = true
+                shortcutList = folded
+                rows += [header, folded]
+            } else {
+                rows += list
+            }
         }
 
         // Settings.
@@ -322,7 +391,7 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
             copy.controlSize = .small
             rows.append(copy)
         }
-        if plan.settings.isEmpty && projects.isEmpty && presetBox?.isEnabled != true {
+        if plan.settings.isEmpty && plan.shortcuts.isEmpty && projects.isEmpty && presetBox?.isEnabled != true {
             rows.append(Self.wrapping("Already up to date: nothing here differs from Next Term now.", secondary: true))
         }
 
@@ -333,22 +402,53 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         applyButton = apply
         layout(rows, buttons: [cancel, apply], scrolls: true)
         recount()
-        showWindow(nil)
-        window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// More of the user's own shortcuts than this start folded under a disclosure.
+    static let shortcutsShownOpen = 8
+
+    /// The importer's shortcut rows settled against Next Term's shortcuts under `preset`, the user's own on top.
+    static func settle(_ plan: ImportPlan, under preset: KeymapPreset) -> ImportPlan {
+        let shortcuts = KeyboardShortcuts.shared
+        let titles = Dictionary(shortcuts.commands.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
+        return plan.settlingShortcuts(current: shortcuts.chords(under: preset), aliases: shortcuts.aliases, titles: titles)
+    }
+
+    /// The preset ticked or not changes which keys are free, so the shortcut rows are settled again; the
+    /// settings and recent projects keep what the user ticked.
+    @objc private func presetToggled() {
+        let settings = settingBoxes.map { $0.0.state }
+        let recents = recentsBox?.state
+        let open = shortcutList?.isHidden == false
+        buildPreview(usePreset: presetBox?.state == .on)
+        for (box, state) in zip(settingBoxes.map(\.0), settings) { box.state = state }
+        if let recents { recentsBox?.state = recents }
+        if open {
+            shortcutList?.isHidden = false
+            (shortcutSummary?.superview as? NSStackView)?.arrangedSubviews.compactMap { $0 as? NSButton }.first?.state = .on
+        }
+        recount()
+    }
+
+    @objc private func toggleShortcutList(_ sender: NSButton) {
+        shortcutList?.isHidden = sender.state != .on
     }
 
     private var choice: ImportChoice {
         let projects = plan?.recentProjects.filter { !AppDelegate.shared.recentProjects.contains($0) } ?? []
         return ImportChoice(usePreset: presetBox?.isEnabled == true && presetBox?.state == .on,
                             settings: settingBoxes.filter { $0.0.state == .on }.map(\.1),
+                            shortcuts: shortcutBoxes.filter { $0.0.state == .on && $0.1.allowed }.map(\.1),
                             recentProjects: recentsBox?.state == .on ? projects : [])
     }
 
     @objc private func recount() {
         guard let plan else { return }
+        let choice = self.choice
         let count = ImportCoordinator.count(choice, plan: plan)
         applyButton?.title = count == 0 ? "Apply" : "Apply \(count) Change\(count == 1 ? "" : "s")"
         applyButton?.isEnabled = count > 0
+        shortcutSummary?.stringValue = "\(choice.shortcuts.count) of \(plan.shortcuts.count) ticked"
     }
 
     @objc private func applyChosen() {
@@ -498,6 +598,11 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         if preset.clearsOnlyInTerminal { lines.append("⌘K clears only while a terminal has the keyboard") }
         lines.append("Your own shortcut changes stay as they are")
         return lines
+    }
+
+    /// "Go to File…   ⌘P → ⇧⌘O": the command, its key now (with the preset) and the one it would get.
+    static func describe(_ shortcut: PlannedShortcut, from now: KeyChord?) -> String {
+        "\(shortcut.title)   \(now?.display ?? "no key") → \(shortcut.chord?.display ?? "no key")"
     }
 
     static func describe(_ setting: ImportedSetting) -> String {

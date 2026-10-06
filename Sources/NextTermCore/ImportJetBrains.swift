@@ -123,7 +123,7 @@ public enum ImportJetBrains {
 
     static func plan(for app: DetectedApp, home: String, usKeyboard: Bool, now: Date) -> ImportPlan {
         var plan = ImportPlan(preset: app.preset)
-        addKeymapNotes(config: app.configPath, to: &plan)
+        addKeymap(config: app.configPath, to: &plan)
         addSettings(config: app.configPath, usKeyboard: usKeyboard, to: &plan)
         var configs = products(home: home, now: now).map(\.path)
         if !configs.contains(app.configPath) { configs.insert(app.configPath, at: 0) }
@@ -152,8 +152,9 @@ public enum ImportJetBrains {
         /// The built-in keymap the active one rests on, after following custom keymaps' parents.
         var baseName: String
         var base: KeymapBase
-        /// Actions the user's own keymaps change (counted only for a plan).
-        var changedActions: Int
+        /// The user's own keymaps, the active one first and then each one's parent, by name and file
+        /// (built-in keymaps have no file here).
+        var customs: [(name: String, file: String)] = []
 
         var preset: KeymapPreset { base == .vsCode ? .vsCode : .jetBrains }
     }
@@ -161,27 +162,19 @@ public enum ImportJetBrains {
     /// The active keymap from `options/mac/keymap.xml` (then `options/keymap.xml`), followed through
     /// `keymaps/*.xml` parent links to a built-in. Custom keymap files are found by the `name` in each
     /// file, never by building a path from a name, which could hold "../".
-    static func keymap(config: String, countChanges: Bool = false) -> Keymap {
+    static func keymap(config: String) -> Keymap {
         let active = ["options/mac/keymap.xml", "options/keymap.xml"].lazy.compactMap { file -> String? in
             component(read(config, file), "KeymapManager")?.children.first { $0.name == "active_keymap" }?["name"]
         }.first
         let customs = customKeymaps(config: config)
         var name = active ?? macOSDefaultKeymap
-        var chain: [String] = []
-        while let custom = customs[name], !chain.contains(name), chain.count < 16 {
-            chain.append(name)
+        var chain: [(name: String, file: String)] = []
+        while let custom = customs[name], !chain.contains(where: { $0.name == name }), chain.count < 16 {
+            chain.append((name, custom.file))
             guard let parent = custom.parent else { break }
             name = parent
         }
-        var changed = Set<String>()
-        if countChanges {
-            for custom in chain.compactMap({ customs[$0] }) {
-                for action in read(config, custom.file)?.children ?? [] where action.name == "action" {
-                    if let id = action["id"] { changed.insert(id) }
-                }
-            }
-        }
-        return Keymap(active: active, baseName: name, base: base(of: name), changedActions: changed.count)
+        return Keymap(active: active, baseName: name, base: base(of: name), customs: chain)
     }
 
     /// Custom keymaps by name: the file and its parent keymap. Only each file's root element is read.
@@ -207,8 +200,9 @@ public enum ImportJetBrains {
         return .other
     }
 
-    static func addKeymapNotes(config: String, to plan: inout ImportPlan) {
-        let keymap = keymap(config: config, countChanges: true)
+    /// The keymap's notes, then the user's own shortcuts from it (ImportJetBrainsKeys.swift).
+    static func addKeymap(config: String, to plan: inout ImportPlan) {
+        let keymap = keymap(config: config)
         switch keymap.base {
         case .classic:
             plan.skipped.append(SkippedItem("IntelliJ IDEA Classic keys",
@@ -221,10 +215,7 @@ public enum ImportJetBrains {
         case .macOS, .vsCode:
             break
         }
-        if keymap.changedActions > 0, let active = keymap.active {
-            let count = plural(keymap.changedActions, "shortcut", "shortcuts") + " you changed in"
-            plan.skipped.append(named(count, active, reason: "your own JetBrains shortcuts come in a later version"))
-        }
+        addKeymapShortcuts(keymap, config: config, to: &plan)
     }
 
     // MARK: Settings

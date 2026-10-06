@@ -682,6 +682,226 @@ import Testing
         #expect(ImportVSCode.readItem(home + "/nothing.vscdb", key: ImportVSCode.recentsKey) == .failed)
     }
 
+    // MARK: keybindings.json
+
+    /// Shaped like a real one: VS Code's opening comment, comments between rules, a trailing comma, removals,
+    /// a two-step key, a Control key, focus clauses, an `args` holding text a terminal would be sent.
+    static let keybindings = #"""
+        // Place your key bindings in this file to override the defaults
+        [
+            // Go to File where another editor had it
+            {
+                "key": "cmd+t",
+                "command": "workbench.action.quickOpen"
+            },
+            {
+                "key": "cmd+p",
+                "command": "-workbench.action.quickOpen"
+            },
+            /* Save All in two steps */
+            { "key": "cmd+k cmd+s", "command": "workbench.action.files.saveAll" },
+            { "key": "ctrl+g", "command": "workbench.action.gotoLine" },
+            { "key": "cmd+shift+d", "command": "workbench.action.terminal.split", "when": "terminalFocus" },
+            { "key": "shift+cmd+[BracketRight]", "command": "workbench.action.nextEditor" },
+            { "key": "cmd+d", "command": "editor.action.copyLinesDownAction", "when": "editorTextFocus && !editorReadonly" },
+            { "key": "cmd+d", "command": "-editor.action.addSelectionToNextFindMatch", "when": "editorFocus" },
+            { "key": "cmd+w", "command": "-workbench.action.closeActiveEditor" },
+            { "key": "cmd+/", "command": "editor.action.commentLine", "when": "editorTextFocus && editorHasSelection" },
+            { "key": "cmd+e", "command": "workbench.action.terminal.sendSequence", "args": { "text": "export TOKEN=sk-abcdefghijklmnopqrstuvwx\n" } },
+            { "key": "alt+z", "command": "editor.action.toggleWordWrap" },
+            { "key": "cmd+numpad1", "command": "workbench.action.openEditorAtIndex1" },
+            { "key": "cmd+space", "command": "workbench.action.togglePanel" },
+            { "key": "cmd+shift+b", "command": "workbench.action.toggleSidebarVisibility" },
+            { "key": "cmd+alt+b", "command": "workbench.action.toggleSidebarVisibility" },
+            { "key": "cmd+k", "command": "" },
+            { "key": "cmd+i", "command": "aichat.newchataction" },
+            { "key": "cmd+shift+p", "command": "workbench.action.quickOpen", "args": ">" },
+            { "key": "cmd+shift+l", "command": "editor.action.commentLine", "when": "editorTextFocus" },
+        ]
+        """#
+
+    func keybindings(_ text: String = keybindings, usKeyboard: Bool = true) throws -> (shortcuts: [PlannedShortcut], skipped: [SkippedItem]) {
+        let rules = try #require(ImportVSCode.rules(text))
+        return ImportVSCode.shortcuts(rules, usKeyboard: usKeyboard)
+    }
+
+    @Test func keybindingsRulesFromJSONC() throws {
+        let rules = try #require(ImportVSCode.rules(Self.keybindings))
+        #expect(rules.count == 20)
+        #expect(rules[0] == ImportVSCode.Rule(key: "cmd+t", command: "workbench.action.quickOpen"))
+        #expect(rules[4] == ImportVSCode.Rule(key: "cmd+shift+d", command: "workbench.action.terminal.split", when: "terminalFocus"))
+        #expect(rules[10].hasArgs && rules[10].command == "workbench.action.terminal.sendSequence")
+        // Only key, command and when are read: nothing in the rules holds what args held.
+        #expect(!"\(rules)".contains("TOKEN") && !"\(rules)".contains("sk-"))
+        #expect(ImportVSCode.rules("{\"key\": \"cmd+t\"}") == nil) // not an array
+        #expect(ImportVSCode.rules("[1, \"two\", {\"key\": \"cmd+t\"}]") == [ImportVSCode.Rule(key: "cmd+t", command: nil)])
+    }
+
+    @Test func keybindingsAsRows() throws {
+        let result = try keybindings()
+        let rows = result.shortcuts
+        #expect(rows.map(\.command) == ["goToFile:", "goToLine:", "splitRight:", "showNextTab:", "closeTab:",
+                                        "toggleTerminalCollapsed:", "toggleProjectSidebar:", "toggleComment:"])
+        func row(_ id: String) -> PlannedShortcut? { rows.first { $0.command == id } }
+
+        // ⌘T for Go to File; the removal of its ⌘P doesn't make a row of its own.
+        #expect(row("goToFile:")?.chord == KeyChord(key: "t", command: true) && row("goToFile:")?.ticked == true)
+        #expect(row("goToFile:")?.source == "keybindings.json: cmd+t → workbench.action.quickOpen")
+        // A Control key without ⌘ is shown but can't be ticked.
+        #expect(row("goToLine:")?.allowed == false && row("goToLine:")?.chord == KeyChord(key: "g", control: true))
+        // A terminal command kept to VS Code's terminal comes over; so does an editor-focused one.
+        #expect(row("splitRight:")?.chord == KeyChord(key: "d", command: true, shift: true) && row("splitRight:")?.note == "kept to the terminal in VS Code")
+        #expect(row("toggleComment:")?.chord == KeyChord(key: "l", command: true, shift: true) && row("toggleComment:")?.note == "kept to the editor in VS Code")
+        // A scan code, read as on a U.S. keyboard.
+        #expect(row("showNextTab:")?.chord == KeyChord(key: "]", command: true, shift: true))
+        // Only a removal: Close Tab loses ⌘W when Next Term uses ⌘W for it (decided when settled).
+        #expect(row("closeTab:")?.chord == nil && row("closeTab:")?.removed == [KeyChord(key: "w", command: true)] && row("closeTab:")?.ticked == true)
+        // A key macOS keeps is offered unticked.
+        #expect(row("toggleTerminalCollapsed:")?.ticked == false && row("toggleTerminalCollapsed:")?.note?.contains("Spotlight") == true)
+        // Two keys for one command: the last one VS Code's menus would show.
+        #expect(row("toggleProjectSidebar:")?.chord == KeyChord(key: "b", command: true, option: true))
+
+        let skipped = Dictionary(result.skipped.map { ($0.item, $0.reason) }, uniquingKeysWith: { first, _ in first })
+        #expect(skipped["cmd+k cmd+s → workbench.action.files.saveAll"] == "two-step keys aren't supported yet")
+        #expect(skipped["cmd+d → editor.action.copyLinesDownAction"] == "no matching Next Term command")
+        #expect(skipped["cmd+/ → editor.action.commentLine"]?.hasPrefix("works only when “editorTextFocus && editorHasSelection”") == true)
+        #expect(skipped["cmd+e → workbench.action.terminal.sendSequence"] == "no matching Next Term command")
+        #expect(skipped["alt+z → editor.action.toggleWordWrap"] == "a menu shortcut needs ⌘ or ⌃ (Option alone types a character)")
+        #expect(skipped["cmd+numpad1 → workbench.action.openEditorAtIndex1"] == "numpad keys aren't supported")
+        #expect(skipped["cmd+shift+b → workbench.action.toggleSidebarVisibility"] == "one shortcut per command here; ⌥⌘B comes over")
+        #expect(skipped["cmd+k → \"\""] == "turning a key off isn't brought over")
+        #expect(skipped["cmd+i → aichat.newchataction"] == "no matching Next Term command")
+        #expect(skipped["cmd+shift+p → workbench.action.quickOpen"] == "passes arguments in VS Code, which don't come over")
+        #expect(skipped["1 shortcut removed in keybindings.json"] == "they belong to commands Next Term doesn't have, so nothing changes here")
+        #expect(result.skipped.count == 11)
+        #expect(!"\(result)".contains("TOKEN") && !"\(result)".contains("sk-"))
+    }
+
+    @Test func keybindingsSettledUnderTheVSCodeKeys() throws {
+        let plan = ImportPlan(preset: .vsCode, shortcuts: try keybindings().shortcuts)
+            .settlingShortcuts(current: ImportShortcutsTests.current(.vsCode))
+        func row(_ id: String) -> PlannedShortcut? { plan.shortcuts.first { $0.command == id } }
+        // ⌘T is New Tab's, ⇧⌘D Split Down's: both left for the user to choose.
+        #expect(row("goToFile:")?.ticked == false && row("goToFile:")?.note?.hasPrefix("⌘T is New Tab’s here") == true)
+        #expect(row("splitRight:")?.ticked == false && row("splitRight:")?.note?.hasPrefix("⇧⌘D is Split Down’s here") == true)
+        // Show Next Tab is ⇧⌘] already, so there is nothing to bring over.
+        #expect(row("showNextTab:") == nil)
+        #expect(row("closeTab:")?.ticked == true && row("toggleProjectSidebar:")?.ticked == true && row("toggleComment:")?.ticked == true)
+        #expect(row("goToLine:")?.ticked == false && row("toggleTerminalCollapsed:")?.ticked == false)
+    }
+
+    @Test func onOneKeyTheRuleFurtherDownWins() throws {
+        let result = try keybindings(#"""
+            [
+                { "key": "cmd+y", "command": "workbench.action.quickOpen" },
+                { "key": "cmd+y", "command": "workbench.action.terminal.new" },
+            ]
+            """#)
+        #expect(result.shortcuts.map(\.command) == ["goToFile:", "newTab:"])
+        #expect(result.shortcuts.map(\.ticked) == [false, true])
+        #expect(result.shortcuts[0].note == "a rule further down gives ⌘Y to New Tab")
+    }
+
+    @Test func removalsFollowVSCode() throws {
+        // A removal never takes away a key the user added; with no key, it removes every one.
+        var result = try keybindings(#"""
+            [
+                { "key": "cmd+t", "command": "workbench.action.terminal.new" },
+                { "key": "cmd+t", "command": "-workbench.action.terminal.new" },
+                { "command": "-workbench.action.closeActiveEditor" },
+                { "key": "ctrl+g", "command": "-workbench.action.gotoLine" },
+                { "key": "cmd+k cmd+f", "command": "-workbench.action.closeFolder" },
+            ]
+            """#)
+        #expect(result.shortcuts.map(\.command) == ["newTab:", "closeTab:", "goToLine:"])
+        #expect(result.shortcuts[0].chord == KeyChord(key: "t", command: true))
+        #expect(result.shortcuts[1].chord == nil && result.shortcuts[1].removed.isEmpty && !result.shortcuts[1].ticked)
+        #expect(result.shortcuts[2].removed == [KeyChord(key: "g", control: true)])
+        // Settled: Close Tab's "every key" stays a choice; ⌃G was never Go to Line's here.
+        let plan = ImportPlan(preset: .vsCode, shortcuts: result.shortcuts).settlingShortcuts(current: ImportShortcutsTests.current(.vsCode))
+        #expect(plan.shortcuts.map(\.command) == ["closeTab:"])
+        #expect(plan.skipped.map(\.reason) == ["Go to Line… is on ⌘L here, so it keeps it"])
+
+        // A key the user moved to two steps keeps Next Term's: the removal alone would leave it with none.
+        result = try keybindings(#"""
+            [
+                { "key": "cmd+w", "command": "-workbench.action.closeActiveEditor" },
+                { "key": "cmd+k cmd+w", "command": "workbench.action.closeActiveEditor" },
+            ]
+            """#)
+        #expect(result.shortcuts.isEmpty && result.skipped.map(\.reason) == ["two-step keys aren't supported yet"])
+    }
+
+    @Test func keyStrings() {
+        func key(_ text: String, us: Bool = true) -> KeyChord? {
+            if case .chord(let chord) = ImportVSCode.parseKey(text, usKeyboard: us) { return chord }
+            return nil
+        }
+        func reason(_ text: String, us: Bool = true) -> String? {
+            if case .notSupported(let reason) = ImportVSCode.parseKey(text, usKeyboard: us) { return reason }
+            return nil
+        }
+        #expect(key("cmd+shift+p") == KeyChord(key: "p", command: true, shift: true))
+        #expect(key("CMD+SHIFT+P") == KeyChord(key: "p", command: true, shift: true))
+        #expect(key("shift+cmd+p") == KeyChord(key: "p", command: true, shift: true))
+        #expect(key("meta+f")?.display == "⌘F" && key("win+f")?.display == "⌘F")
+        #expect(key("ctrl+`") == KeyChord(key: "`", control: true))
+        #expect(key("ctrl+shift+-") == KeyChord(key: "-", shift: true, control: true))
+        #expect(key("cmd+-") == KeyChord(key: "-", command: true) && key("cmd+=") == KeyChord(key: "=", command: true))
+        #expect(key("cmd+\\") == KeyChord(key: "\\", command: true))
+        #expect(key("alt+cmd+left")?.display == "⌥⌘←" && key("cmd+enter")?.display == "⌘↩" && key("ctrl+space")?.display == "⌃Space")
+        #expect(key("f5")?.display == "F5" && key("shift+f12")?.display == "⇧F12")
+        #expect(key("alt+[ArrowUp]")?.display == "⌥↑" && key("cmd+[F2]")?.display == "⌘F2")
+        #expect(key("cmd+[KeyA]") == KeyChord(key: "a", command: true) && key("cmd+[Digit7]") == KeyChord(key: "7", command: true))
+        #expect(key("cmd+[BracketLeft]") == KeyChord(key: "[", command: true))
+        // A character key by its place types something else on other layouts.
+        #expect(reason("cmd+[KeyA]", us: false)?.contains("layout") == true)
+        #expect(key("cmd+[Enter]", us: false)?.display == "⌘↩")
+        #expect(reason("cmd+k cmd+s") == "two-step keys aren't supported yet")
+        #expect(reason("cmd+numpad1") == "numpad keys aren't supported" && reason("cmd+[Numpad1]") == "numpad keys aren't supported")
+        #expect(reason("cmd+f13") == "keys above F12 aren't supported")
+        #expect(reason("cmd+oem_8") == "key not recognised" && reason("") == "key not recognised" && reason("cmd+") == "key not recognised")
+    }
+
+    @Test func whenClauses() {
+        #expect(ImportVSCode.scope(of: nil) == .everywhere && ImportVSCode.scope(of: " ") == .everywhere)
+        #expect(ImportVSCode.scope(of: "editorTextFocus") == .editor)
+        #expect(ImportVSCode.scope(of: "editorTextFocus && !editorReadonly") == .editor)
+        #expect(ImportVSCode.scope(of: "!terminalFocus") == .editor)
+        #expect(ImportVSCode.scope(of: "terminalFocus && terminal.active") == .terminal)
+        #expect(ImportVSCode.scope(of: "terminalFocus && editorTextFocus") == .limited)
+        #expect(ImportVSCode.scope(of: "editorTextFocus || terminalFocus") == .limited)
+        #expect(ImportVSCode.scope(of: "editorHasSelection") == .limited)
+        #expect(ImportVSCode.scope(of: "resourceExtname == .md") == .limited)
+        // Kept to the terminal: only commands that act on the terminal.
+        let result = try? keybindings(#"""
+            [
+                { "key": "cmd+shift+k", "command": "workbench.action.terminal.clear", "when": "terminalFocus" },
+                { "key": "cmd+shift+o", "command": "workbench.action.quickOpen", "when": "terminalFocus" },
+            ]
+            """#)
+        #expect(result?.shortcuts.map(\.command) == ["clearBuffer:"])
+        #expect(result?.skipped.first?.reason == "works only when “terminalFocus” in VS Code; keys for one context come later")
+    }
+
+    @Test func keybindingsFileInThePlan() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let user = try user(home)
+        try write(Self.keybindings, to: user + "/keybindings.json")
+        let found = plan(app(user), home: home)
+        #expect(found.preset == .vsCode && found.shortcuts.count == 8)
+        #expect(found.skipped.contains(SkippedItem("cmd+k cmd+s → workbench.action.files.saveAll", "two-step keys aren't supported yet")))
+        // New files hold a comment and [] only; a broken one is said, and the settings still come.
+        try write("// Place your key bindings in this file to override the defaults\n[\n]", to: user + "/keybindings.json")
+        #expect(self.plan(app(user), home: home).shortcuts.isEmpty && self.plan(app(user), home: home).skipped.isEmpty)
+        try write("[ { \"key\": ", to: user + "/keybindings.json")
+        try write(#"{"editor.fontSize": 13}"#, to: user + "/settings.json")
+        let broken = self.plan(app(user), home: home)
+        #expect(broken.skipped == [SkippedItem("keybindings.json", "couldn't be read as JSON; your shortcuts were skipped")])
+        #expect(broken.settings.count == 1)
+    }
+
     // MARK: safety and the public entry points
 
     @Test func noNetworkingInTheImporter() throws {

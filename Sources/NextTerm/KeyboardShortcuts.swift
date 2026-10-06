@@ -46,9 +46,14 @@ final class KeyboardShortcuts {
         preset.chord(for: id, default: commands.first { $0.id == id }?.defaultChord ?? nil)
     }
 
+    /// Keys hidden menu items answer to (⌘= for Bigger), with the command each belongs to: no other
+    /// command can take them.
+    private(set) var aliases: [KeyChord: String] = [:]
+
     /// Records the menus' commands and their default shortcuts, then applies the user's.
     func capture(_ menu: NSMenu) {
         commands = []
+        aliases = [:]
         walk(menu, path: [])
         apply()
     }
@@ -58,6 +63,9 @@ final class KeyboardShortcuts {
             if let submenu = item.submenu {
                 walk(submenu, path: path + [item.title])
                 continue
+            }
+            if item.isHidden, item.allowsKeyEquivalentWhenHidden, let id = Self.id(of: item), let chord = Self.chord(of: item) {
+                aliases[chord] = id
             }
             // Hidden aliases (⌘= for Bigger) follow their visible item; dynamic menus (Open Recent) have none.
             guard !item.isSeparatorItem, !item.isHidden, let id = Self.id(of: item),
@@ -139,6 +147,39 @@ final class KeyboardShortcuts {
     func set(_ chord: KeyChord?, for id: String) {
         var bindings = self.bindings
         bindings.set(chord, for: id, default: baseChord(for: id))
+        self.bindings = bindings
+        apply()
+    }
+
+    /// Every command's shortcut as it would be under `preset`, the user's own changes on top (a saved one
+    /// that can't be typed counts as the preset's, as in `apply`).
+    func chords(under preset: KeymapPreset) -> [String: KeyChord?] {
+        let bindings = self.bindings
+        var chords: [String: KeyChord?] = [:]
+        for command in commands where chords[command.id] == nil {
+            let base = preset.chord(for: command.id, default: command.defaultChord)
+            var chord = bindings.chord(for: command.id, default: base)
+            if let saved = chord, !saved.isUsable { chord = base }
+            chords[command.id] = .some(chord)
+        }
+        return chords
+    }
+
+    /// An import's shortcuts, saved as the user's own changes on top of the preset. A key another command
+    /// has moves, leaving that command without one (as when it is typed in Settings); a Control key without
+    /// ⌘ is never taken.
+    func setImported(_ shortcuts: [PlannedShortcut]) {
+        var bindings = self.bindings
+        let defaults = self.defaults
+        for shortcut in shortcuts where shortcut.allowed && defaults[shortcut.command] != nil {
+            if let chord = shortcut.chord {
+                guard chord.isUsable, !ImportShortcuts.isShellKey(chord) else { continue }
+                if let owner = bindings.owner(of: chord, defaults: defaults, except: shortcut.command) {
+                    bindings.set(nil, for: owner, default: defaults[owner] ?? nil)
+                }
+            }
+            bindings.set(shortcut.chord, for: shortcut.command, default: defaults[shortcut.command] ?? nil)
+        }
         self.bindings = bindings
         apply()
     }

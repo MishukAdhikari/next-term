@@ -131,6 +131,38 @@ public struct PlannedSetting: Equatable, Sendable {
     }
 }
 
+/// One of the user's own shortcuts from the other app, as a row of the preview's "Your shortcuts" (§2.4).
+/// Applied as the user's own change, on top of the preset.
+public struct PlannedShortcut: Equatable, Sendable {
+    /// The Next Term command, as `KeyboardShortcuts` names menu items ("goToFile:", "selectTabByNumber:#3").
+    public let command: String
+    public let title: String
+    /// The shortcut it gets; nil takes its shortcut away (the user removed it in the other app).
+    public let chord: KeyChord?
+    /// Where it came from: "keybindings.json: cmd+t → workbench.action.quickOpen".
+    public let source: String
+    /// For a row that takes a shortcut away: the keys the other app removed (empty: every key it had). It
+    /// changes Next Term only when Next Term uses one of them for the command.
+    public let removed: [KeyChord]
+    /// Ticked in the preview unless there is a reason not to (said in `note`).
+    public var ticked: Bool
+    /// False for a key no import takes (a Control key without ⌘): shown, but it can't be ticked.
+    public var allowed: Bool
+    public var note: String?
+
+    public init(command: String, title: String, chord: KeyChord?, source: String, removed: [KeyChord] = [],
+                ticked: Bool = true, allowed: Bool = true, note: String? = nil) {
+        self.command = command
+        self.title = title
+        self.chord = chord
+        self.source = source
+        self.removed = removed
+        self.ticked = ticked && allowed
+        self.allowed = allowed
+        self.note = note
+    }
+}
+
 /// Something the import saw and did not bring over, with the reason (shown, and copyable for an agent).
 public struct SkippedItem: Equatable, Sendable, Codable {
     public let item: String
@@ -145,13 +177,18 @@ public struct SkippedItem: Equatable, Sendable, Codable {
 public struct ImportPlan: Equatable, Sendable {
     public var preset: KeymapPreset
     public var settings: [PlannedSetting]
+    /// The user's own shortcuts, in the order the other app lists them. Settled against Next Term's own
+    /// shortcuts (`settlingShortcuts`) before the preview shows them.
+    public var shortcuts: [PlannedShortcut]
     /// Folders, newest first, already checked to exist.
     public var recentProjects: [String]
     public var skipped: [SkippedItem]
 
-    public init(preset: KeymapPreset, settings: [PlannedSetting] = [], recentProjects: [String] = [], skipped: [SkippedItem] = []) {
+    public init(preset: KeymapPreset, settings: [PlannedSetting] = [], shortcuts: [PlannedShortcut] = [],
+                recentProjects: [String] = [], skipped: [SkippedItem] = []) {
         self.preset = preset
         self.settings = settings
+        self.shortcuts = shortcuts
         self.recentProjects = recentProjects
         self.skipped = skipped
     }
