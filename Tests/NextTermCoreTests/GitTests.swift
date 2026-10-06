@@ -1,0 +1,126 @@
+import Foundation
+import Testing
+@testable import NextTermCore
+
+@Suite struct GitParsingTests {
+    func z(_ records: [String]) -> Data { Data(records.joined(separator: "\0").utf8 + [0]) }
+
+    @Test func statusAndNumstat() {
+        let status = z([
+            "# branch.oid 1234567890abcdef1234567890abcdef12345678",
+            "# branch.head feature/login",
+            "# branch.upstream origin/feature/login",
+            "# branch.ab +2 -1",
+            "1 .M N... 100644 100644 100644 aaa bbb app/Http/Kernel.php",
+            "1 A. N... 000000 100644 100644 000 ccc app/New File.php",
+            "1 .D N... 100644 100644 000000 ddd ddd docs/old.md",
+            "2 R. N... 100644 100644 100644 eee eee R100 src/renamed.swift", "src/original.swift",
+            "u UU N... 100644 100644 100644 100644 f1 f2 f3 config/app.php",
+            "? notes.txt",
+            "? scratch/",
+            "! node_modules/",
+            "! .env",
+        ])
+        let numstat = z([
+            "10\t2\tapp/Http/Kernel.php",
+            "30\t0\tapp/New File.php",
+            "0\t7\tdocs/old.md",
+            "1\t1\t", "src/original.swift", "src/renamed.swift",
+            "-\t-\tpublic/logo.png",
+        ])
+        let s = GitSnapshot.parse(root: "/r", status: status, numstat: numstat)
+        #expect(s.branch == "feature/login" && s.upstream == "origin/feature/login")
+        #expect(s.ahead == 2 && s.behind == 1 && s.head == "12345678")
+        #expect(s.files["app/Http/Kernel.php"] == .modified)
+        #expect(s.files["app/New File.php"] == .added)
+        #expect(s.files["docs/old.md"] == .deleted)
+        #expect(s.files["src/renamed.swift"] == .renamed)
+        #expect(s.files["src/original.swift"] == nil)
+        #expect(s.files["config/app.php"] == .conflicted)
+        #expect(s.files["notes.txt"] == .untracked)
+        #expect(s.wholeFolders["scratch"] == .untracked && s.wholeFolders["node_modules"] == .ignored)
+        #expect(s.fileStats["src/renamed.swift"] == LineStats(added: 1, removed: 1, files: 1))
+        #expect(s.fileStats["public/logo.png"] == LineStats(added: 0, removed: 0, files: 1))
+
+        // Folders take their strongest change and the sum of their lines.
+        #expect(s.change(at: "app", isDirectory: true) == .modified)
+        #expect(s.change(at: "app/Http", isDirectory: true) == .modified)
+        #expect(s.stats(at: "app", isDirectory: true) == LineStats(added: 40, removed: 2, files: 2))
+        #expect(s.change(at: "config", isDirectory: true) == .conflicted)
+        #expect(s.change(at: "docs", isDirectory: true) == .deleted)
+        #expect(s.change(at: "", isDirectory: true) == .conflicted)
+        #expect(s.totals.added == 41 && s.totals.removed == 10)
+        // Inside whole untracked/ignored folders.
+        #expect(s.change(at: "scratch/a/b.txt", isDirectory: false) == .untracked)
+        #expect(s.change(at: "node_modules/x", isDirectory: true) == .ignored)
+        // Ignored entries never colour their parents.
+        #expect(s.change(at: "lib", isDirectory: true) == nil)
+        #expect(s.count(of: .untracked) == 2)
+    }
+
+    @Test func detachedAndUnborn() {
+        let detached = GitSnapshot.parse(root: "/r", status: z(["# branch.oid abcdef0123456789", "# branch.head (detached)"]), numstat: Data())
+        #expect(detached.branch == nil && detached.head == "abcdef01")
+        let unborn = GitSnapshot.parse(root: "/r", status: z(["# branch.oid (initial)", "# branch.head main"]), numstat: Data())
+        #expect(unborn.branch == "main" && unborn.head == nil)
+    }
+}
+
+@Suite struct GitRunnerTests {
+    /// A real repository: a clone with an upstream, local commits ahead, and every kind of change.
+    @Test func snapshotOfARealRepository() throws {
+        guard let git = GitRunner.locateGit() else { return } // no git on this machine
+        let base = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path))
+            .appendingPathComponent("nt-git-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let origin = base.appendingPathComponent("origin.git").path
+        let work = base.appendingPathComponent("work").path
+        func sh(_ args: [String], in dir: String) throws {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: git)
+            p.arguments = ["-C", dir, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"] + args
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            try p.run()
+            p.waitUntilExit()
+            #expect(p.terminationStatus == 0, "git \(args.joined(separator: " "))")
+        }
+        func write(_ path: String, _ text: String) throws {
+            let url = URL(fileURLWithPath: work).appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try text.write(to: url, atomically: true, encoding: .utf8)
+        }
+        try FileManager.default.createDirectory(atPath: base.path, withIntermediateDirectories: true)
+        try sh(["init", "--bare", origin], in: base.path)
+        try sh(["clone", origin, work], in: base.path)
+        try write("app/main.php", "<?php\necho 1;\necho 2;\n")
+        try write("old.txt", "x\n")
+        try write(".gitignore", "vendor/\n")
+        try sh(["add", "-A"], in: work)
+        try sh(["commit", "-m", "one"], in: work)
+        try sh(["push", "-u", "origin", "main"], in: work)
+        try write("app/main.php", "<?php\necho 1;\necho 3;\necho 4;\n") // +2 -1
+        try sh(["commit", "-am", "two"], in: work)                       // ahead 1
+        try write("app/main.php", "<?php\necho 1;\necho 3;\necho 4;\necho 5;\n") // +1 more, unstaged
+        try write("app/new.php", "a\nb\nc\n")
+        try sh(["add", "app/new.php"], in: work)                          // staged new file
+        try sh(["mv", "old.txt", "renamed.txt"], in: work)
+        try write("notes.md", "1\n2\n")                                   // untracked
+        try write("vendor/lib.php", "x\n")                                 // ignored
+
+        let s = try #require(GitRunner.snapshot(for: work + "/app", git: git))
+        #expect(s.root == work)
+        #expect(s.branch == "main" && s.upstream == "origin/main")
+        #expect(s.ahead == 1 && s.behind == 0)
+        #expect(s.files["app/main.php"] == .modified)
+        #expect(s.fileStats["app/main.php"] == LineStats(added: 1, removed: 0, files: 1)) // vs HEAD ("two")
+        #expect(s.files["app/new.php"] == .added)
+        #expect(s.fileStats["app/new.php"]?.added == 3)
+        #expect(s.files["renamed.txt"] == .renamed)
+        #expect(s.files["notes.md"] == .untracked && s.fileStats["notes.md"]?.added == 2)
+        #expect(s.wholeFolders["vendor"] == .ignored)
+        #expect(s.change(at: "app", isDirectory: true) == .modified)
+        #expect(s.stats(at: "app", isDirectory: true)?.files == 2)
+        #expect(GitRunner.snapshot(for: base.path, git: git) == nil) // not a repository
+    }
+}

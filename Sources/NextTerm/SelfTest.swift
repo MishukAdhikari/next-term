@@ -290,29 +290,89 @@ enum SelfTest {
         exiting.view.send(txt: "exit\r")
         check(await wait(5) { c.tabs.count == count - 1 }, "`exit` closes the tab")
 
-        // Project sidebar: follows the active tab's git root, live-updates, toggles.
+        // Project sidebar: follows the active tab's git root, loads in the background, live-updates, toggles.
         let proj = URL(fileURLWithPath: canonicalPath(dir.path)).appendingPathComponent("proj")
-        try? FileManager.default.createDirectory(at: proj.appendingPathComponent(".git"), withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: proj.appendingPathComponent("src/deep"), withIntermediateDirectories: true)
-        try? Data().write(to: proj.appendingPathComponent("README.md"))
+        try? "# readme\n".write(to: proj.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
+        try? "one\ntwo\n".write(to: proj.appendingPathComponent("src/app.txt"), atomically: true, encoding: .utf8)
+        let gitPath = GitRunner.locateGit()
+        func git(_ args: String...) {
+            guard let gitPath else { return }
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: gitPath)
+            p.arguments = ["-C", proj.path, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "init.defaultBranch=main",
+                           "-c", "commit.gpgsign=false"] + args
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            try? p.run()
+            p.waitUntilExit()
+        }
+        git("init")
+        git("add", "-A")
+        git("commit", "-m", "start")
         if !c.isSidebarVisible { c.toggleProjectSidebar(nil) }
         let inProject = c.addTab(directory: proj.appendingPathComponent("src/deep").path)
         _ = await wait(20) { inProject.status.integrated }
         c.refresh()
         check(c.sidebar.root?.path == proj.path, "sidebar shows the tab's git project", c.sidebar.root?.path ?? "nil")
-        check(c.sidebar.root?.children?.map(\.name) == ["src", "README.md"], "sidebar lists folders first, hides .git",
-              "\(c.sidebar.root?.children?.map(\.name) ?? [])")
-        check(c.sidebar.outline.numberOfRows == 3, "project root is expanded", "\(c.sidebar.outline.numberOfRows) rows")
+        check(await wait(4) { c.sidebar.root?.children?.map(\.name) == ["src", "README.md"] },
+              "sidebar lists folders first and hides .git (read in the background)", "\(c.sidebar.root?.children?.map(\.name) ?? [])")
+        check(await wait(4) { c.sidebar.outline.numberOfRows == 3 }, "project root is expanded", "\(c.sidebar.outline.numberOfRows) rows")
         try? Data().write(to: proj.appendingPathComponent("AGENTS.md"))
         check(await wait(4) { c.sidebar.root?.children?.contains { $0.name == "AGENTS.md" } == true && c.sidebar.outline.numberOfRows == 4 },
               "a new file appears in the sidebar by itself")
+
+        // Git: branch in the header, colours and +/− counts on changed files and their folders.
+        if gitPath != nil {
+            try? "one\n2\nthree\nfour\n".write(to: proj.appendingPathComponent("src/app.txt"), atomically: true, encoding: .utf8)
+            check(await wait(6) { c.sidebar.git.snapshot?.files["src/app.txt"] == .modified }, "git sees the modified file")
+            let snap = c.sidebar.git.snapshot
+            check(snap?.branch == "main", "the header knows the branch", snap?.branch ?? "nil")
+            check(snap?.stats(at: "src", isDirectory: true) == LineStats(added: 3, removed: 1, files: 1),
+                  "its folder rolls up +3 −1", "\(String(describing: snap?.stats(at: "src", isDirectory: true)))")
+            check(snap?.change(at: "AGENTS.md", isDirectory: false) == .untracked, "a new file is untracked")
+            check(SidebarHeaderView.describe(snap!).contains("Branch main"), "the header tooltip describes it", SidebarHeaderView.describe(snap!))
+            if let src = c.sidebar.root?.children?.first(where: { $0.name == "src" }) {
+                let row = c.sidebar.outline.row(forItem: src)
+                let cell = c.sidebar.outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? FileCellView
+                c.sidebar.outline.layoutSubtreeIfNeeded()
+                check(cell?.statsText == "+3 −1", "the folder row shows +3 −1", cell?.statsText ?? "no cell")
+            }
+        } else {
+            note("no git on this machine: git checks skipped")
+        }
+
+        // File operations, each undone with ⌘Z.
+        let undo = window.undoManager
+        let notes = proj.appendingPathComponent("notes.md")
+        try? "n\n".write(to: notes, atomically: true, encoding: .utf8)
+        c.sidebar.transfer([notes], into: proj.appendingPathComponent("src"), copy: false)
+        let movedNotes = proj.appendingPathComponent("src/notes.md")
+        check(FileManager.default.fileExists(atPath: movedNotes.path) && !FileManager.default.fileExists(atPath: notes.path), "move into a folder")
+        undo?.undo()
+        check(FileManager.default.fileExists(atPath: notes.path), "⌘Z puts it back")
+        c.sidebar.rename(notes, to: "NOTES.md")
+        check((try? FileManager.default.contentsOfDirectory(atPath: proj.path))?.contains("NOTES.md") == true, "rename (case only)")
+        undo?.undo()
+        check((try? FileManager.default.contentsOfDirectory(atPath: proj.path))?.contains("notes.md") == true, "⌘Z renames it back")
+        c.sidebar.trash([notes], confirm: false)
+        check(!FileManager.default.fileExists(atPath: notes.path), "move to the Trash")
+        undo?.undo()
+        check(FileManager.default.fileExists(atPath: notes.path), "⌘Z restores it from the Trash")
+        try? FileManager.default.removeItem(at: notes)
+
+        // The tree remembers what was expanded when you switch to a tab in another folder and back.
+        if let src = c.sidebar.root?.children?.first(where: { $0.name == "src" }) {
+            c.sidebar.outline.expandItem(src)
+            _ = await wait(3) { c.sidebar.outline.isItemExpanded(src) }
+        }
         inProject.view.send(txt: "cd /tmp\r")
         check(await wait(5) { c.sidebar.root?.path == "/private/tmp" }, "sidebar follows `cd` out of the project", c.sidebar.root?.path ?? "nil")
-        c.select(c.tabs.firstIndex { $0 !== inProject } ?? 0)
-        check(c.sidebar.root?.path != "/private/tmp" || c.activeTab?.directory == "/tmp", "sidebar follows the active tab")
-        c.select(c.tabs.firstIndex { $0 === inProject } ?? 0)
         inProject.view.send(txt: "cd \(proj.path)\r")
         _ = await wait(5) { c.sidebar.root?.path == proj.path }
+        let srcAgain = c.sidebar.root?.children?.first(where: { $0.name == "src" })
+        check(srcAgain.map { c.sidebar.outline.isItemExpanded($0) } == true, "and back: the expanded folder is still expanded")
+
         let lightsInset = c.tabBar.leadingInset
         c.toggleProjectSidebar(nil)
         check(!c.isSidebarVisible && c.tabBar.leadingInset == 78, "⌘B hides the sidebar and the tabs move clear of the traffic lights")
@@ -320,6 +380,69 @@ enum SelfTest {
         check(c.isSidebarVisible && c.tabBar.leadingInset == lightsInset, "⌘B shows it again")
         await screenshot(c, suffix: "-sidebar")
         c.requestClose(inProject)
+
+        // Projects. The user's own settings are put back afterwards.
+        let app = AppDelegate.shared!
+        let savedTarget = app.projectTarget
+        let savedRecents = UserDefaults.standard.stringArray(forKey: "recentProjects")
+        app.projectTarget = .newWindow
+        let windowsBefore = app.controllers.count
+        app.openProject(at: proj, from: c)
+        let projectWindow = app.controllers.last
+        check(app.controllers.count == windowsBefore + 1 && projectWindow?.project == proj.path, "Open Project opens a project window")
+        if let pw = projectWindow, let first = pw.tabs.first {
+            _ = await wait(20) { first.status.integrated }
+            check(first.currentDirectory() == proj.path, "its first tab starts in the project", first.currentDirectory())
+            check(await wait(4) { pw.sidebar.root?.path == proj.path }, "its sidebar shows the project")
+            first.view.send(txt: "cd /tmp\r")
+            _ = await wait(4) { first.directory == "/tmp" }
+            check(pw.sidebar.root?.path == proj.path, "the sidebar stays on the project after `cd`")
+            pw.newTab(nil)
+            let second = pw.tabs[pw.activeIndex]
+            _ = await wait(20) { second.status.integrated }
+            check(second.currentDirectory() == proj.path, "⌘T in a project window opens in the project", second.currentDirectory())
+            app.openProject(at: proj, from: c)
+            check(app.controllers.count == windowsBefore + 1, "opening the same project again reuses its window")
+            check(app.recentProjects.first == proj.path, "it is first in Open Recent")
+            pw.closeProject(nil)
+            check(await wait(3) { !app.controllers.contains { $0 === pw } }, "Close Project closes its window")
+        }
+        // An untouched window becomes the project window instead of opening another.
+        let fresh = app.openWindow(directory: nil)
+        _ = await wait(20) { fresh.tabs.first?.status.integrated == true }
+        check(fresh.isPristine, "a new window is untouched")
+        let windowsNow = app.controllers.count
+        app.openProject(at: proj, from: fresh)
+        check(app.controllers.count == windowsNow && fresh.project == proj.path && fresh.tabs.count == 1, "an untouched window is reused for the project")
+        fresh.closeProject(nil)
+        _ = await wait(3) { !app.controllers.contains { $0 === fresh } }
+        app.showWelcome(nil)
+        check(NSApp.windows.contains { $0.title == "Welcome to Next Term" && $0.isVisible }, "the Welcome window lists recent projects")
+        NSApp.windows.first { $0.title == "Welcome to Next Term" }?.close()
+        app.projectTarget = savedTarget
+        UserDefaults.standard.set(savedRecents, forKey: "recentProjects")
+        c.window?.makeKeyAndOrderFront(nil)
+
+        // Many tabs in a narrow window: the extras go behind », the selected tab always stays in view.
+        let savedFrame = window.frame
+        window.setContentSize(NSSize(width: 760, height: savedFrame.height))
+        var extra: [TerminalTab] = []
+        for _ in 0..<14 { extra.append(c.addTab(directory: nil)) }
+        c.tabBar.layoutSubtreeIfNeeded()
+        check(c.tabBar.isOverflowing, "tabs that do not fit overflow", "\(c.tabs.count) tabs")
+        check(c.tabBar.visibleRange.contains(c.activeIndex), "the selected tab is visible")
+        c.select(0)
+        c.tabBar.layoutSubtreeIfNeeded()
+        check(c.tabBar.visibleRange.contains(0), "selecting a hidden tab brings it into view", "\(c.tabBar.visibleRange)")
+        c.select(c.tabs.count - 1)
+        c.tabBar.layoutSubtreeIfNeeded()
+        check(c.tabBar.visibleRange.contains(c.tabs.count - 1), "… at either end", "\(c.tabBar.visibleRange)")
+        for tab in extra { c.requestClose(tab) }
+        window.setFrame(savedFrame, display: true)
+        c.tabBar.layoutSubtreeIfNeeded()
+        check(!c.tabBar.isOverflowing, "and stops overflowing when they fit again")
+        let glyphs = [TabState.done, .failed, .attention].compactMap { StatusGlyph.symbolName(for: $0) }
+        check(Set(glyphs).count == 3, "done, failed and attention have different shapes, not just colours")
 
         // Rename, then clear back to the automatic title.
         c.tabBar(c.tabBar, didRename: 0, to: "API server")

@@ -1,4 +1,5 @@
 import AppKit
+import NextTermCore
 import SwiftTerm
 
 /// JetBrains New UI dark palette.
@@ -15,6 +16,27 @@ enum Theme {
     static let done = NSColor(hex: 0x5FB865)
     static let failed = NSColor(hex: 0xE55765)
     static let attention = NSColor(hex: 0xF2C55C)
+
+    // Git status in the project tree.
+    static let gitModified = NSColor(hex: 0x6EA4F7)
+    static let gitAdded = NSColor(hex: 0x73C27A)
+    static let gitUntracked = NSColor(hex: 0xD9876C)
+    static let gitConflicted = NSColor(hex: 0xF0706E)
+    static let gitIgnored = NSColor(hex: 0x86876A)
+    static let linesAdded = NSColor(hex: 0x73C27A)
+    static let linesRemoved = NSColor(hex: 0xE5736F)
+
+    static func color(for change: GitChange?) -> NSColor {
+        switch change {
+        case .modified?, .renamed?: return gitModified
+        case .added?: return gitAdded
+        case .untracked?: return gitUntracked
+        case .conflicted?: return gitConflicted
+        case .ignored?: return gitIgnored
+        case .deleted?: return gitModified // a folder that lost a file has changed
+        case nil: return text
+        }
+    }
 
     static let terminalForeground = NSColor(hex: 0xBCBEC4)
     static let caret = NSColor(hex: 0xCED0D6)

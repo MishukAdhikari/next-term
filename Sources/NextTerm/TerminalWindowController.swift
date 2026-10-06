@@ -21,7 +21,7 @@ final class ThemedSplitView: NSSplitView {
     override var dividerThickness: CGFloat { 1 }
 }
 
-final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSplitViewDelegate,
+final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSplitViewDelegate, NSMenuItemValidation,
                                       TabBarViewDelegate, TerminalTabDelegate, ProjectSidebarDelegate {
     private(set) var tabs: [TerminalTab] = []
     private(set) var activeIndex = 0
@@ -31,15 +31,23 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private let mainPane = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
     private let container = NSView()
     private var isFullScreen = false
+    /// Last state announced to VoiceOver per tab, so each change is announced once.
+    private var announcedStates: [UUID: TabState] = [:]
     private var projectKey: String?
     private var ticker: Timer?
     private var tickCount = 0
     private var closeConfirmed = false
-    var onClose: ((TerminalWindowController) -> Void)?
+    /// Called when the window closes; the flag says it was a Close Project.
+    var onClose: ((TerminalWindowController, _ closedProject: Bool) -> Void)?
+    /// The project this window is for: the sidebar stays on it and new tabs open in it by default
+    /// (you can still `cd` anywhere). nil: a plain terminal window whose sidebar follows the active tab.
+    private(set) var project: String?
+    private var closingProject = false
 
     var activeTab: TerminalTab? { tabs[safe: activeIndex] }
 
-    init(directory: String?) {
+    init(directory: String?, project: String? = nil) {
+        self.project = project.map(canonicalPath)
         let window = TerminalWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -91,7 +99,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         RunLoop.main.add(ticker, forMode: .common)
         self.ticker = ticker
 
-        addTab(directory: directory)
+        addTab(directory: self.project ?? directory)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -214,22 +222,80 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                        accessibilityStatus: tab.stateDescription)
         }
         tabBar.update(items: items, selectedIndex: activeIndex)
-        window?.title = activeTab.map { "\($0.title) — Next Term" } ?? "Next Term"
+        announceBackgroundChanges()
+        let name = project.map { ($0 as NSString).lastPathComponent }
+        window?.title = [activeTab?.title, name, "Next Term"].compactMap { $0 }.joined(separator: " — ")
         AppDelegate.shared.updateBadge()
         updateProjectRoot()
+    }
+
+    /// Tells VoiceOver users when a background tab finishes, fails or asks for attention: the dots are
+    /// visual, so without this they would never know.
+    private func announceBackgroundChanges() {
+        for (i, tab) in tabs.enumerated() {
+            let state = tab.status.state
+            defer { announcedStates[tab.id] = state }
+            guard i != activeIndex, announcedStates[tab.id] != state, [.done, .failed, .attention].contains(state) else { continue }
+            NSAccessibility.post(element: window as Any, notification: .announcementRequested, userInfo: [
+                .announcement: "\(tab.title): \(tab.stateDescription)",
+                .priority: NSAccessibilityPriorityLevel.high.rawValue,
+            ])
+        }
+        let live = Set(tabs.map(\.id))
+        announcedStates = announcedStates.filter { live.contains($0.key) }
     }
 
     // MARK: project sidebar
 
     var isSidebarVisible: Bool { !sidebar.isHidden }
 
-    /// The tree follows the active tab: its git work tree, or its folder when outside one.
+    /// A project window's tree stays on its project. Otherwise it follows the active tab: its git work
+    /// tree, or its folder when outside one.
     private func updateProjectRoot() {
-        guard isSidebarVisible, let tab = activeTab else { return }
+        guard isSidebarVisible else { return }
+        if let project {
+            guard projectKey != project else { return }
+            projectKey = project
+            sidebar.setRoot(project)
+            return
+        }
+        guard let tab = activeTab else { return }
         let key = tab.id.uuidString + "\u{0}" + tab.directory
         guard key != projectKey else { return }
         projectKey = key
         sidebar.setRoot(ProjectRoot.find(from: tab.directory))
+    }
+
+    // MARK: projects
+
+    /// A window nobody has used yet: no project, one tab, nothing run in it.
+    var isPristine: Bool {
+        guard project == nil, tabs.count == 1, let tab = tabs.first else { return false }
+        return tab.status.command.isEmpty && !tab.status.running && tab.closeWarning == nil
+    }
+
+    /// Turns this window into `path`'s project: a fresh tab in the project, the old tabs closed.
+    /// Callers confirm first if the old tabs are busy.
+    func adoptProject(_ path: String) {
+        let old = tabs
+        project = canonicalPath(path)
+        projectKey = nil
+        addTab(directory: project)
+        for tab in old { remove(tab) }
+        refresh()
+    }
+
+    /// Close Project: closes the window (asking first if something is running in it).
+    @objc func closeProject(_ sender: Any?) {
+        guard project != nil, let window else { return NSSound.beep() }
+        closingProject = true
+        window.performClose(nil)
+        if window.isVisible && window.attachedSheet == nil { closingProject = false } // close was refused
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(closeProject(_:)) { return project != nil }
+        return true
     }
 
     func setSidebarVisible(_ visible: Bool) {
@@ -277,6 +343,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         window?.makeFirstResponder(tab.view)
     }
 
+    func sidebar(_ sidebar: ProjectSidebarView, openProject directory: String) {
+        AppDelegate.shared.openProject(at: URL(fileURLWithPath: directory), from: self)
+    }
+
+    func sidebar(_ sidebar: ProjectSidebarView, openFile url: URL) {
+        SafeOpen.open(url, from: window)
+    }
+
     func sidebar(_ sidebar: ProjectSidebarView, openTabIn directory: String) {
         addTab(directory: directory)
     }
@@ -287,8 +361,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     // MARK: menu actions (reached through the responder chain)
 
+    /// In a project window, new tabs start in the project; otherwise in the current tab's folder.
     @objc func newTab(_ sender: Any?) {
-        addTab(directory: activeTab?.currentDirectory())
+        addTab(directory: project ?? activeTab?.currentDirectory())
     }
 
     @objc func closeTab(_ sender: Any?) {
@@ -329,7 +404,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         alert.addButton(withTitle: "Close Window")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: sender) { [weak self] response in
-            guard response == .alertFirstButtonReturn, let self else { return }
+            guard let self else { return }
+            guard response == .alertFirstButtonReturn else {
+                self.closingProject = false
+                return
+            }
             self.closeConfirmed = true
             sender.close()
         }
@@ -341,7 +420,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         ticker = nil
         for tab in tabs { tab.terminate() }
         tabs.removeAll()
-        onClose?(self)
+        onClose?(self, closingProject)
     }
 
     func windowDidBecomeKey(_ notification: Notification) {

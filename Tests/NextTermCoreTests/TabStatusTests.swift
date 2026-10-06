@@ -418,3 +418,101 @@ import Testing
         #expect(node.node(at: "/elsewhere") == nil)
     }
 }
+
+@Suite struct FileOpsTests {
+    func tempFolder() throws -> URL {
+        let url = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path)).appendingPathComponent("nt-ops-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    @Test func names() {
+        #expect(FileOps.problem(withName: "ok.txt") == nil)
+        #expect(FileOps.problem(withName: "") != nil)
+        #expect(FileOps.problem(withName: "  ") != nil)
+        #expect(FileOps.problem(withName: "a/b") != nil)
+        #expect(FileOps.problem(withName: "..") != nil)
+        #expect(FileOps.problem(withName: "bad\rname") != nil)
+        #expect(FileOps.problem(withName: String(repeating: "x", count: 300)) != nil)
+    }
+
+    @Test func keepBothNaming() throws {
+        let dir = try tempFolder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        for name in ["a.txt", "a 2.txt", "Makefile", ".env"] { try Data().write(to: dir.appendingPathComponent(name)) }
+        #expect(FileOps.availableName("b.txt", in: dir) == "b.txt")
+        #expect(FileOps.availableName("a.txt", in: dir) == "a 3.txt")
+        #expect(FileOps.availableName("Makefile", in: dir) == "Makefile 2")
+        #expect(FileOps.availableName(".env", in: dir) == ".env 2")
+    }
+
+    @Test func moveRules() throws {
+        let dir = try tempFolder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let src = dir.appendingPathComponent("src"), deep = src.appendingPathComponent("deep"), other = dir.appendingPathComponent("other")
+        try FileManager.default.createDirectory(at: deep, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        #expect(!FileOps.canMove(src, into: src))
+        #expect(!FileOps.canMove(src, into: deep))  // into its own descendant
+        #expect(!FileOps.canMove(deep, into: src))  // already there
+        #expect(FileOps.canMove(deep, into: other))
+        let file = src.appendingPathComponent("x.swift")
+        try Data("1".utf8).write(to: file)
+        try Data("2".utf8).write(to: other.appendingPathComponent("x.swift"))
+        let moved = try FileOps.transfer([file], into: other, copy: false)
+        #expect(moved.first?.to.lastPathComponent == "x 2.swift")
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        let copied = try FileOps.transfer([other.appendingPathComponent("x.swift")], into: src, copy: true)
+        #expect(copied.first?.to.lastPathComponent == "x.swift")
+    }
+
+    @Test func renaming() throws {
+        let dir = try tempFolder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let a = dir.appendingPathComponent("readme.md"), b = dir.appendingPathComponent("b.md")
+        try Data().write(to: a)
+        try Data().write(to: b)
+        let upper = try FileOps.rename(a, to: "README.md") // case only
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).contains("README.md"))
+        #expect(throws: (any Error).self) { try FileOps.rename(upper, to: "b.md") } // taken
+        #expect(throws: (any Error).self) { try FileOps.rename(upper, to: "x/y") }
+    }
+
+    @Test func listingCapAndMerge() throws {
+        let dir = try tempFolder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("keep"), withIntermediateDirectories: true)
+        let node = FileNode(url: dir)
+        node.loadChildren()
+        let keep = node.children!.first!
+        try Data().write(to: dir.appendingPathComponent("new.txt"))
+        let listing = FileNode.readChildren(of: dir) // e.g. on a background queue
+        #expect(node.install(listing) == true)
+        #expect(node.children!.first === keep)
+        #expect(node.children!.last?.parent === node)
+        #expect(node.install(FileNode.readChildren(of: dir)) == false)
+        #expect(node.children!.last?.relativePath(to: dir.path) == "new.txt")
+    }
+}
+
+@Suite struct RecentProjectsTests {
+    @Test func ordering() {
+        var r = RecentProjects(["/a", "/b", "/a"])
+        #expect(r.paths == ["/a", "/b"])
+        r.add("/b")
+        #expect(r.paths == ["/b", "/a"])
+        for i in 0..<20 { r.add("/p\(i)") }
+        #expect(r.paths.count == RecentProjects.limit && r.paths.first == "/p19")
+        r.remove("/p19")
+        #expect(r.paths.first == "/p18")
+        r.clear()
+        #expect(r.paths.isEmpty)
+    }
+
+    @Test func existingAndAbbreviation() {
+        let r = RecentProjects(["/tmp", "/no/such/folder"])
+        #expect(r.existing() == ["/tmp"])
+        #expect(RecentProjects.abbreviate("/Users/me/Code/x", home: "/Users/me") == "~/Code/x")
+        #expect(RecentProjects.abbreviate("/Users/meow", home: "/Users/me") == "/Users/meow")
+    }
+}

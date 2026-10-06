@@ -22,9 +22,11 @@ protocol TabBarViewDelegate: AnyObject {
 /// The tab strip along the top of the window, drawn in the title bar area.
 final class TabBarView: NSView {
     static let height: CGFloat = 38
-    static let minTabWidth: CGFloat = 72
+    /// Narrower than this and titles stop being readable: extra tabs go behind the » button instead.
+    static let minTabWidth: CGFloat = 104
     static let maxTabWidth: CGFloat = 220
     static let newTabButtonWidth: CGFloat = 36
+    static let overflowButtonWidth: CGFloat = 46
 
     weak var delegate: TabBarViewDelegate?
     /// Space reserved on the left for the traffic-light buttons.
@@ -34,6 +36,10 @@ final class TabBarView: NSView {
     private(set) var selectedIndex = 0
     private var tabViews: [TabItemView] = []
     private let newTabButton = NSButton()
+    /// "» 3": the tabs that do not fit, with the most urgent status among them.
+    private let overflowButton = OverflowButton()
+    /// First tab shown when not all fit; moves so the selected tab is always visible.
+    private var firstVisible = 0
     private var dragging: (view: TabItemView, offset: CGFloat)?
     /// Updates that arrive mid-drag, applied on drop (views are in drag order, not model order, until then).
     private var pendingUpdate: (items: [TabBarItem], selected: Int)?
@@ -54,6 +60,11 @@ final class TabBarView: NSView {
         newTabButton.target = self
         newTabButton.action = #selector(newTabClicked)
         addSubview(newTabButton)
+
+        overflowButton.target = self
+        overflowButton.action = #selector(showOverflowMenu)
+        overflowButton.isHidden = true
+        addSubview(overflowButton)
 
         setAccessibilityRole(.tabGroup)
         setAccessibilityLabel("Terminal tabs")
@@ -82,35 +93,104 @@ final class TabBarView: NSView {
         for (i, item) in newItems.enumerated() {
             tabViews[i].configure(item: item, selected: i == newSelected)
         }
+        let selectionChanged = newSelected != selectedIndex
         items = newItems
         selectedIndex = newSelected
-        if countChanged { needsLayout = true }
+        if countChanged || selectionChanged { needsLayout = true }
+        updateOverflowButton()
     }
 
     func beginRename(at index: Int) {
+        if !visibleRange.contains(index) {
+            needsLayout = true
+            layoutSubtreeIfNeeded() // bring the selected tab into view first
+        }
         tabViews[safe: index]?.beginRename()
     }
 
     // MARK: layout
 
+    /// Width for tabs, keeping a strip on the right for dragging the window.
+    private var availableWidth: CGFloat {
+        max(0, bounds.width - leadingInset - Self.newTabButtonWidth - 24)
+    }
+
+    /// How many tabs fit at a readable width.
+    private var capacity: Int {
+        let all = Int(availableWidth / Self.minTabWidth)
+        if tabViews.count <= all { return tabViews.count }
+        return max(1, Int((availableWidth - Self.overflowButtonWidth) / Self.minTabWidth))
+    }
+
+    var isOverflowing: Bool { capacity < tabViews.count }
+
+    /// Indices of the tabs on screen.
+    var visibleRange: Range<Int> {
+        let shown = capacity
+        if shown >= tabViews.count { return 0..<tabViews.count }
+        var first = min(max(firstVisible, 0), tabViews.count - shown)
+        if selectedIndex < first { first = selectedIndex }
+        if selectedIndex >= first + shown { first = selectedIndex - shown + 1 }
+        return first..<(first + shown)
+    }
+
     private var tabWidth: CGFloat {
-        guard !tabViews.isEmpty else { return Self.maxTabWidth }
-        let available = bounds.width - leadingInset - Self.newTabButtonWidth - 40 // keep a strip for dragging the window
-        return min(Self.maxTabWidth, max(Self.minTabWidth, (available / CGFloat(tabViews.count)).rounded(.down)))
+        let shown = max(1, capacity)
+        let room = availableWidth - (isOverflowing ? Self.overflowButtonWidth : 0)
+        return min(Self.maxTabWidth, max(Self.minTabWidth, (room / CGFloat(shown)).rounded(.down)))
     }
 
     private func frameForTab(at index: Int) -> NSRect {
-        NSRect(x: leadingInset + CGFloat(index) * tabWidth, y: 0, width: tabWidth, height: bounds.height - 1)
+        let slot = CGFloat(index - visibleRange.lowerBound)
+        return NSRect(x: leadingInset + slot * tabWidth, y: 0, width: tabWidth, height: bounds.height - 1)
     }
 
     override func layout() {
         super.layout()
+        let range = visibleRange
+        firstVisible = range.lowerBound
         for (i, view) in tabViews.enumerated() where view !== dragging?.view {
-            view.frame = frameForTab(at: i)
+            view.isHidden = !range.contains(i)
+            if !view.isHidden { view.frame = frameForTab(at: i) }
         }
-        let end = leadingInset + CGFloat(tabViews.count) * tabWidth
-        newTabButton.frame = NSRect(x: min(end, bounds.width - Self.newTabButtonWidth), y: 0,
+        var x = leadingInset + CGFloat(range.count) * tabWidth
+        overflowButton.isHidden = !isOverflowing
+        if isOverflowing {
+            overflowButton.frame = NSRect(x: x, y: 0, width: Self.overflowButtonWidth, height: bounds.height - 1)
+            x += Self.overflowButtonWidth
+        }
+        newTabButton.frame = NSRect(x: min(x, bounds.width - Self.newTabButtonWidth), y: 0,
                                     width: Self.newTabButtonWidth, height: bounds.height - 1)
+        updateOverflowButton()
+    }
+
+    /// The hidden tabs' count and their most urgent status (attention > failed > done > working).
+    private func updateOverflowButton() {
+        guard isOverflowing else { return }
+        let range = visibleRange
+        let hidden = items.indices.filter { !range.contains($0) }.map { items[$0].state }
+        let urgency: [TabState] = [.attention, .failed, .done, .working]
+        overflowButton.configure(hiddenCount: hidden.count, state: urgency.first(where: hidden.contains) ?? .idle)
+    }
+
+    @objc private func showOverflowMenu() {
+        let menu = NSMenu()
+        let range = visibleRange
+        for (i, item) in items.enumerated() {
+            let entry = NSMenuItem(title: item.title, action: #selector(overflowMenuSelected(_:)), keyEquivalent: "")
+            entry.target = self
+            entry.tag = i
+            entry.image = StatusGlyph.image(for: item.state)
+            entry.state = i == selectedIndex ? .on : .off
+            entry.toolTip = item.tooltip
+            if range.contains(i) { entry.attributedTitle = NSAttributedString(string: item.title, attributes: [.foregroundColor: NSColor.secondaryLabelColor]) }
+            menu.addItem(entry)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: overflowButton.frame.minX, y: overflowButton.frame.maxY), in: self)
+    }
+
+    @objc private func overflowMenuSelected(_ sender: NSMenuItem) {
+        delegate?.tabBar(self, didSelect: sender.tag)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -187,12 +267,13 @@ final class TabBarView: NSView {
                 self.dragging = (view, grabOffset)
                 view.isDragging = true
             }
+            let range = self.visibleRange
             let minX = self.leadingInset
-            let maxX = self.leadingInset + CGFloat(self.tabViews.count - 1) * self.tabWidth
+            let maxX = self.leadingInset + CGFloat(range.count - 1) * self.tabWidth
             view.frame.origin.x = min(max(x - grabOffset, minX), maxX)
-            // Reorder the array live as the dragged tab's centre crosses its neighbours.
+            // Reorder the array live as the dragged tab's centre crosses its neighbours (within the visible tabs).
             let centre = view.frame.midX - self.leadingInset
-            let target = min(max(Int(centre / self.tabWidth), 0), self.tabViews.count - 1)
+            let target = min(max(Int(centre / self.tabWidth) + range.lowerBound, range.lowerBound), range.upperBound - 1)
             if let current = self.index(of: view), current != target {
                 self.tabViews.remove(at: current)
                 self.tabViews.insert(view, at: target)
@@ -394,11 +475,45 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     }
 }
 
-// MARK: - status dot
+// MARK: - status glyphs
+
+/// Status as shape and colour, so it reads for colour-blind users too: a spinner for working,
+/// a check for done, a cross for failed, an exclamation mark for attention.
+enum StatusGlyph {
+    static func symbolName(for state: TabState) -> String? {
+        switch state {
+        case .done: return "checkmark.circle.fill"
+        case .failed: return "xmark.circle.fill"
+        case .attention: return "exclamationmark.circle.fill"
+        case .working: return "circle.dotted"
+        case .idle: return nil
+        }
+    }
+
+    static func color(for state: TabState) -> NSColor {
+        switch state {
+        case .done: return Theme.done
+        case .failed: return Theme.failed
+        case .attention: return Theme.attention
+        case .working, .idle: return Theme.working
+        }
+    }
+
+    /// A tinted image, for menus.
+    static func image(for state: TabState, size: CGFloat = 12) -> NSImage? {
+        guard let name = symbolName(for: state) else { return nil }
+        // Palette mode paints each layer: the mark (✓ ✕ !) white, the circle in the state's colour.
+        // With a single colour the mark would vanish into the circle.
+        let colors: [NSColor] = state == .working ? [color(for: state)] : [.white, color(for: state)]
+        let config = NSImage.SymbolConfiguration(pointSize: size, weight: .bold)
+            .applying(.init(paletteColors: colors))
+        return NSImage(systemSymbolName: name, accessibilityDescription: state.rawValue)?.withSymbolConfiguration(config)
+    }
+}
 
 private final class StatusDotView: NSView {
     private let ring = CAShapeLayer()
-    private let fill = CALayer()
+    private let glyph = NSImageView()
 
     var state: TabState = .idle {
         didSet { if state != oldValue { apply() } }
@@ -410,8 +525,10 @@ private final class StatusDotView: NSView {
         ring.fillColor = nil
         ring.lineWidth = 2
         ring.lineCap = .round
-        layer?.addSublayer(fill)
         layer?.addSublayer(ring)
+        glyph.imageScaling = .scaleProportionallyUpOrDown
+        glyph.wantsLayer = true
+        addSubview(glyph)
         apply()
     }
 
@@ -419,8 +536,7 @@ private final class StatusDotView: NSView {
 
     override func layout() {
         super.layout()
-        fill.frame = bounds
-        fill.cornerRadius = bounds.width / 2
+        glyph.frame = bounds.insetBy(dx: -1, dy: -1)
         ring.frame = bounds
         ring.path = CGPath(ellipseIn: bounds.insetBy(dx: 1, dy: 1), transform: nil)
     }
@@ -429,9 +545,9 @@ private final class StatusDotView: NSView {
 
     private func apply() {
         ring.removeAllAnimations()
-        fill.removeAllAnimations()
+        glyph.layer?.removeAllAnimations()
         ring.isHidden = state != .working
-        fill.isHidden = state == .working || state == .idle
+        glyph.isHidden = state == .working || state == .idle
         switch state {
         case .working:
             ring.strokeColor = Theme.working.cgColor
@@ -445,24 +561,52 @@ private final class StatusDotView: NSView {
                 spin.repeatCount = .infinity
                 ring.add(spin, forKey: "spin")
             }
-        case .done:
-            fill.backgroundColor = Theme.done.cgColor
-        case .failed:
-            fill.backgroundColor = Theme.failed.cgColor
-        case .attention:
-            fill.backgroundColor = Theme.attention.cgColor
-            if !reduceMotion {
+        case .done, .failed, .attention:
+            glyph.image = StatusGlyph.image(for: state, size: 11)
+            if state == .attention, !reduceMotion {
                 let pulse = CABasicAnimation(keyPath: "opacity")
                 pulse.fromValue = 1
                 pulse.toValue = 0.35
                 pulse.duration = 0.6
                 pulse.autoreverses = true
                 pulse.repeatCount = .infinity
-                fill.add(pulse, forKey: "pulse")
+                glyph.layer?.add(pulse, forKey: "pulse")
             }
         case .idle:
             break
         }
+    }
+}
+
+// MARK: - overflow button
+
+private final class OverflowButton: NSButton {
+    private let dot = StatusDotView()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        bezelStyle = .regularSquare
+        isBordered = false
+        font = .systemFont(ofSize: 12, weight: .medium)
+        contentTintColor = Theme.textDim
+        addSubview(dot)
+        setAccessibilityLabel("More tabs")
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func configure(hiddenCount: Int, state: TabState) {
+        attributedTitle = NSAttributedString(string: "» \(hiddenCount)   ", attributes: [
+            .foregroundColor: Theme.textDim, .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+        ])
+        dot.state = state
+        toolTip = "\(hiddenCount) more tab\(hiddenCount == 1 ? "" : "s")"
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        dot.frame = NSRect(x: bounds.width - 15, y: (bounds.height - 10) / 2, width: 10, height: 10)
     }
 }
 
