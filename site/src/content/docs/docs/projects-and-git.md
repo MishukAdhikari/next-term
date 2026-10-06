@@ -54,8 +54,11 @@ Toggle it with <kbd>⌘B</kbd> (**View › Hide Project Sidebar**). Put it on th
 | Red | Conflicted |
 | Olive | Ignored |
 | Dimmed | Unchanged files and folders whose names start with a dot |
+| Red, struck through | Deleted, not yet committed |
 
 **Line counts** sit at the right of each row, like a pull request: `+12 −3` for the lines added and removed in a file, or in everything below a folder.
+
+**Deleted files keep their rows** until the deletion is committed: struck through, where they were, with the lines they had (`−10`). A folder’s count always adds up to the rows inside it, and a folder deleted whole opens to show what was in it. Double-click a deleted file (or press <kbd>⌥⌘G</kbd>) to see what was removed.
 
 **The header** shows the branch, the total lines added and removed, and how far you are ahead of or behind the upstream: `main +41 −10 ↑2 ↓1`. Hover it for the full story, such as “Branch main, tracking origin/main: 2 ahead, 1 behind. 3 modified, 1 added, 2 untracked.”
 

@@ -65,6 +65,29 @@ public struct GitSnapshot: Sendable {
         return stats
     }
 
+    /// What git still has in a folder that the disk no longer does (deleted, not yet committed): its own
+    /// deleted files, and the folders deleted whole, by name, folders first. `relative` is the folder's
+    /// path from the work-tree root ("" for the root); `existing` holds the names on disk there.
+    public func deletedEntries(in relative: String, existing: Set<String>) -> [(name: String, isDirectory: Bool)] {
+        let prefix = relative.isEmpty ? "" : relative + "/"
+        var files: [String] = []
+        var folders = Set<String>()
+        for (path, change) in self.files where change == .deleted && path.hasPrefix(prefix) {
+            let rest = path.dropFirst(prefix.count)
+            if let slash = rest.firstIndex(of: "/") {
+                let folder = String(rest[..<slash])
+                if !existing.contains(folder) { folders.insert(folder) }
+            } else if !rest.isEmpty, !existing.contains(String(rest)) {
+                files.append(String(rest))
+            }
+        }
+        let finder = { (a: String, b: String) in a.localizedStandardCompare(b) == .orderedAscending }
+        return folders.sorted(by: finder).map { ($0, true) } + files.sorted(by: finder).map { ($0, false) }
+    }
+
+    /// Every deleted path, for noticing when the set changes.
+    public var deletedPaths: Set<String> { Set(files.compactMap { $0.value == .deleted ? $0.key : nil }) }
+
     /// Inside an untracked or ignored folder, everything is untracked or ignored.
     private func inherited(_ path: String) -> GitChange? {
         var current = path
@@ -271,8 +294,10 @@ public enum GitRunner {
     }
 
     /// Whether git tracks the file (an untracked file's diff is all additions).
+    /// A deletion that is already staged is in HEAD only, and still tracked.
     public static func isTracked(_ relativePath: String, in root: String, git: String) -> Bool {
         run(git, ["-C", root, "ls-files", "--error-unmatch", "--", relativePath], timeout: 10) != nil
+            || run(git, ["-C", root, "--no-optional-locks", "cat-file", "-e", "HEAD:" + relativePath], timeout: 10) != nil
     }
 
     /// What a diff compares.

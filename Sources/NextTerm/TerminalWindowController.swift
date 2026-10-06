@@ -553,7 +553,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil }
         if item.action == #selector(saveAllDocuments(_:)) { return !editorArea.dirtyDocuments.isEmpty }
         if item.action == #selector(goToLine(_:)) { return editorArea.activeEditor != nil }
-        if item.action == #selector(showChanges(_:)) { return editorArea.activeEditor != nil || sidebar.selection.contains { !$0.isFolder } }
+        if item.action == #selector(showChanges(_:)) {
+            return editorArea.activeEditor != nil || sidebar.selection.contains { !$0.isFolder } || sidebar.selectedDeleted.contains { !$0.isDirectory }
+        }
         if item.action == #selector(sendToAgent(_:)) { return agentTab != nil && (editorArea.activeEditor != nil || !sidebar.selection.isEmpty) }
         if item.action == #selector(toggleEditorFocus(_:)) {
             item.title = isEditorFocused ? "Focus Terminal" : "Focus Editor"
@@ -1121,6 +1123,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if let file = sidebar.selection.first(where: { !$0.isFolder }) { return showChanges(of: file.url) }
         NSSound.beep()
     }
+        if let gone = sidebar.selectedDeleted.first(where: { !$0.isDirectory }) { return showChanges(of: gone.url) }
 
     func sidebar(_ sidebar: ProjectSidebarView, showChanges url: URL) { showChanges(of: url) }
 

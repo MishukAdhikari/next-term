@@ -152,6 +152,26 @@ final class HiddenEntries {
     init(count: Int) { self.count = count }
 }
 
+/// A file or folder git still has but the disk no longer does (deleted, not yet committed). Shown struck
+/// through where it was, so a folder's −N always has a row that explains it.
+final class DeletedEntry {
+    let url: URL
+    let name: String
+    let isDirectory: Bool
+    /// From the work tree's root.
+    let relative: String
+    /// The nearest folder above it that is still on disk.
+    weak var realFolder: FileNode?
+
+    init(url: URL, relative: String, isDirectory: Bool, realFolder: FileNode?) {
+        self.url = url
+        self.relative = relative
+        self.isDirectory = isDirectory
+        self.realFolder = realFolder
+        name = url.lastPathComponent
+    }
+}
+
 final class FileCellView: NSTableCellView {
     private let icon = NSImageView()
     private let name = NSTextField(labelWithString: "")
@@ -219,20 +239,7 @@ final class FileCellView: NSTableCellView {
                 .paragraphStyle: Typography.paragraph(.byTruncatingMiddle),
             ])
         }
-        // "+12 −3", like a pull request: lines added and removed in this file or below this folder.
-        let text = NSMutableAttributedString()
-        if let lines, !isRoot {
-            if lines.added > 0 { text.append(NSAttributedString(string: "+\(lines.added)", attributes: [.foregroundColor: Theme.linesAdded])) }
-            if lines.removed > 0 {
-                if text.length > 0 { text.append(NSAttributedString(string: " ")) }
-                text.append(NSAttributedString(string: "−\(lines.removed)", attributes: [.foregroundColor: Theme.linesRemoved]))
-            }
-            if text.length == 0, node.isDirectory, lines.files > 0 {
-                text.append(NSAttributedString(string: "\(lines.files) file\(lines.files == 1 ? "" : "s")", attributes: [.foregroundColor: Theme.textDim]))
-            }
-        }
-        text.addAttribute(.font, value: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), range: NSRange(location: 0, length: text.length))
-        stats.attributedStringValue = Typography.truncating(text, .byClipping, alignment: .right)
+        showStats(isRoot ? nil : lines, isDirectory: node.isDirectory)
         var tip = node.path
         if let change {
             let word = Self.word(for: change)
@@ -244,6 +251,51 @@ final class FileCellView: NSTableCellView {
         tipText = tip // shown by the sidebar, for visible rows only (see ProjectSidebarView.updateToolTips)
         setAccessibilityLabel([node.name, change.map(Self.word(for:)), stats.stringValue.isEmpty ? nil : stats.stringValue]
             .compactMap { $0 }.joined(separator: ", "))
+    }
+
+    /// "+12 −3", like a pull request: lines added and removed in this file or below this folder.
+    private func showStats(_ lines: LineStats?, isDirectory: Bool) {
+        let text = NSMutableAttributedString()
+        if let lines {
+            if lines.added > 0 { text.append(NSAttributedString(string: "+\(lines.added)", attributes: [.foregroundColor: Theme.linesAdded])) }
+            if lines.removed > 0 {
+                if text.length > 0 { text.append(NSAttributedString(string: " ")) }
+                text.append(NSAttributedString(string: "−\(lines.removed)", attributes: [.foregroundColor: Theme.linesRemoved]))
+            }
+            if text.length == 0, isDirectory, lines.files > 0 {
+                text.append(NSAttributedString(string: "\(lines.files) file\(lines.files == 1 ? "" : "s")", attributes: [.foregroundColor: Theme.textDim]))
+            }
+        }
+        text.addAttribute(.font, value: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), range: NSRange(location: 0, length: text.length))
+        stats.attributedStringValue = Typography.truncating(text, .byClipping, alignment: .right)
+    }
+
+    /// A deleted file or folder: its name struck through in red, its removed lines, a quiet icon.
+    func configureDeleted(_ entry: DeletedEntry, expanded: Bool, lines: LineStats?) {
+        node = nil
+        guard !isRenaming else { return }
+        icon.image = FileIcons.image(forDeleted: entry.name, parent: entry.url.deletingLastPathComponent().lastPathComponent,
+                                     isDirectory: entry.isDirectory, expanded: expanded)
+        icon.alphaValue = 0.45
+        name.attributedStringValue = NSAttributedString(string: entry.name, attributes: [
+            .font: NSFont.systemFont(ofSize: 12.5), .foregroundColor: Theme.linesRemoved,
+            .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+            .paragraphStyle: Typography.paragraph(.byTruncatingMiddle),
+        ])
+        showStats(lines, isDirectory: entry.isDirectory)
+        var tip = entry.url.path + "\nDeleted, not yet committed"
+        if let lines, lines.removed > 0 {
+            tip += "\n−\(lines.removed) lines" + (entry.isDirectory ? " in \(lines.files) file\(lines.files == 1 ? "" : "s")" : "")
+        }
+        if !entry.isDirectory { tip += "\nDouble-click to see what was removed." }
+        tipText = tip
+        setAccessibilityLabel([entry.name, "deleted", stats.stringValue.isEmpty ? nil : stats.stringValue].compactMap { $0 }.joined(separator: ", "))
+    }
+
+    /// Whether the row shows a deleted file, for the self-test.
+    var isDeletedRow: Bool {
+        let text = name.attributedStringValue
+        return text.length > 0 && text.attribute(.strikethroughStyle, at: 0, effectiveRange: nil) != nil
     }
 
     func setIcon(_ image: NSImage) { icon.image = image }

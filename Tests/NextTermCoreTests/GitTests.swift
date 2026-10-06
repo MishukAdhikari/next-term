@@ -96,6 +96,9 @@ import Testing
         try write("app/main.php", "<?php\necho 1;\necho 2;\n")
         try write("old.txt", "x\n")
         try write(".gitignore", "vendor/\n")
+        try write("gone.txt", "1\n2\n")
+        try write("lib/a.txt", "a\n")
+        try write("lib/sub/b.txt", "b\n")
         try sh(["add", "-A"], in: work)
         try sh(["commit", "-m", "one"], in: work)
         try sh(["push", "-u", "origin", "main"], in: work)
@@ -107,6 +110,8 @@ import Testing
         try sh(["mv", "old.txt", "renamed.txt"], in: work)
         try write("notes.md", "1\n2\n")                                   // untracked
         try write("vendor/lib.php", "x\n")                                 // ignored
+        try sh(["rm", "-q", "gone.txt"], in: work)                         // deleted, staged
+        try FileManager.default.removeItem(atPath: work + "/lib")          // a folder deleted on disk only
 
         let s = try #require(GitRunner.snapshot(for: work + "/app", git: git))
         #expect(s.root == work)
@@ -122,5 +127,17 @@ import Testing
         #expect(s.change(at: "app", isDirectory: true) == .modified)
         #expect(s.stats(at: "app", isDirectory: true)?.files == 2)
         #expect(GitRunner.snapshot(for: base.path, git: git) == nil) // not a repository
+
+        // Deleted files: listed where they were, so a folder's −N has rows that explain it.
+        #expect(s.files["gone.txt"] == .deleted && s.fileStats["gone.txt"]?.removed == 2)
+        let onDisk = Set(try FileManager.default.contentsOfDirectory(atPath: work))
+        #expect(s.deletedEntries(in: "", existing: onDisk).map { "\($0.name)\($0.isDirectory ? "/" : "")" } == ["lib/", "gone.txt"])
+        #expect(s.deletedEntries(in: "lib", existing: []).map { "\($0.name)\($0.isDirectory ? "/" : "")" } == ["sub/", "a.txt"])
+        #expect(s.deletedEntries(in: "app", existing: ["main.php", "new.php"]).isEmpty)
+        #expect(s.deletedPaths == ["gone.txt", "lib/a.txt", "lib/sub/b.txt"])
+        // A staged deletion is in HEAD only: still tracked, and its diff is the removed lines.
+        #expect(GitRunner.isTracked("gone.txt", in: work, git: git) && !GitRunner.isTracked("notes.md", in: work, git: git))
+        let removed = try #require(GitRunner.diff(of: "gone.txt", in: work, git: git, base: .head))
+        #expect(removed.hunks.flatMap(\.lines).filter { $0.kind == .removed }.count == 2)
     }
 }

@@ -58,6 +58,16 @@ enum FileIcons {
         return systemIcon(for: node.url, isDirectory: node.isDirectory)
     }
 
+    /// A deleted file or folder's icon, by its name alone (there is nothing on disk to look at).
+    static func image(forDeleted name: String, parent: String?, isDirectory: Bool, expanded: Bool) -> NSImage {
+        if let theme {
+            let icon = isDirectory ? theme.icon(forFolder: name, parent: parent, expanded: expanded)
+                : theme.icon(forFile: name, parent: parent)
+            if let image = image(named: icon) { return image }
+        }
+        return systemIcon(for: URL(fileURLWithPath: "/" + name), isDirectory: isDirectory)
+    }
+
     /// A file's icon by its name and folder (editor tabs, search results).
     static func icon(for url: URL, size: CGFloat = 16) -> NSImage {
         if let theme {

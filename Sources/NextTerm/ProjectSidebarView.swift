@@ -55,6 +55,13 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     let git = GitMonitor()
     private var hiddenRows: [ObjectIdentifier: HiddenEntries] = [:]
     private var loading: Set<ObjectIdentifier> = []
+    /// Each folder's rows (its entries on disk, the deleted ones in their place, "… N more"), built once
+    /// per change. The folder is kept with them, so its identifier cannot be reused while cached.
+    private var rowCache: [ObjectIdentifier: (owner: AnyObject, rows: [AnyObject])] = [:]
+    /// Deleted entries by path from the work tree's root: the same object each time, so the outline keeps
+    /// a deleted folder open across refreshes.
+    private var deletedCache: [String: DeletedEntry] = [:]
+    private var lastDeleted: Set<String> = []
 
     /// Trees of recently shown roots, so switching between tabs in different projects keeps
     /// what was expanded and where you had scrolled.
@@ -147,6 +154,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         let canonical = canonicalPath(path)
         guard canonical != root?.path else { return }
         saveCurrentTree()
+        rowCache.removeAll()
         if let saved = savedTrees[canonical] {
             root = saved.node
             outline.reloadData()
@@ -222,6 +230,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
                 self.loading.remove(id)
                 node.install(listing)
                 self.syncHiddenRow(for: node)
+                self.rowCache[id] = nil
                 guard self.isShowing(node) else { return }
                 self.outline.reloadItem(node, reloadChildren: true)
                 completion?()
@@ -238,6 +247,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             DispatchQueue.main.async { [weak self] in
                 guard let self, node.install(listing) else { return }
                 self.syncHiddenRow(for: node)
+                self.rowCache[ObjectIdentifier(node)] = nil
                 if self.isShowing(node) { self.outline.reloadItem(node, reloadChildren: true) }
             }
         }
@@ -291,8 +301,82 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         } else {
             gitDirWatcher = nil
         }
+        let deleted = snapshot?.deletedPaths ?? []
+        if deleted != lastDeleted {
+            reloadFolders(around: deleted.symmetricDifference(lastDeleted), gitRoot: snapshot.map { canonicalPath($0.root) })
+            lastDeleted = deleted
+            deletedCache = deletedCache.filter { path, _ in deleted.contains { $0 == path || $0.hasPrefix(path + "/") } }
+        }
         let rows = IndexSet(integersIn: 0..<outline.numberOfRows)
         outline.reloadData(forRowIndexes: rows, columnIndexes: [0])
+    }
+
+    /// Files were deleted or came back: rebuild the rows of the nearest folder on screen above each.
+    private func reloadFolders(around paths: Set<String>, gitRoot: String?) {
+        rowCache.removeAll()
+        guard let root else { return }
+        var folders: [FileNode] = []
+        for path in paths {
+            var folder = (path as NSString).deletingLastPathComponent
+            while true {
+                let absolute = gitRoot.map { folder.isEmpty ? $0 : $0 + "/" + folder }
+                if let absolute, let node = root.node(at: absolute), node.isLoaded {
+                    if !folders.contains(where: { $0 === node }) { folders.append(node) }
+                    break
+                }
+                if folder.isEmpty { break }
+                folder = (folder as NSString).deletingLastPathComponent
+            }
+        }
+        // Outer folders first: reloading one reloads everything below it.
+        for node in folders.sorted(by: { $0.path.count < $1.path.count }) where isShowing(node) {
+            if folders.contains(where: { $0 !== node && node.path.hasPrefix($0.path + "/") }) { continue }
+            outline.reloadItem(node, reloadChildren: true)
+        }
+    }
+
+    /// A folder's rows: its entries on disk with the deleted ones in their place (folders first, in
+    /// Finder order), then "… N more" if it is too big to list in full.
+    private func rows(of item: AnyObject) -> [AnyObject] {
+        let id = ObjectIdentifier(item)
+        if let cached = rowCache[id], cached.owner === item { return cached.rows }
+        var rows: [AnyObject] = []
+        if let node = item as? FileNode {
+            let children = node.children ?? []
+            let gone = node.isLoaded ? deleted(in: node) : []
+            if gone.isEmpty {
+                rows = children
+            } else {
+                let all: [(name: String, folder: Bool, item: AnyObject)] = children.map { ($0.name, $0.isDirectory, $0) } + gone.map { ($0.name, $0.isDirectory, $0) }
+                rows = all.sorted { a, b in
+                    a.folder != b.folder ? a.folder : a.name.localizedStandardCompare(b.name) == .orderedAscending
+                }.map(\.item)
+            }
+            if let hidden = hiddenRows[id] { rows.append(hidden) }
+        } else if let entry = item as? DeletedEntry, entry.isDirectory, let snapshot = git.snapshot {
+            rows = snapshot.deletedEntries(in: entry.relative, existing: []).map {
+                deletedEntry(in: entry.relative, $0.name, isDirectory: $0.isDirectory, gitRoot: snapshot.root, realFolder: entry.realFolder)
+            }
+        }
+        rowCache[id] = (item, rows)
+        return rows
+    }
+
+    private func deleted(in node: FileNode) -> [DeletedEntry] {
+        guard let snapshot = git.snapshot, !snapshot.files.isEmpty, let relative = node.relativePath(to: canonicalPath(snapshot.root)) else { return [] }
+        let existing = Set((node.children ?? []).map(\.name))
+        return snapshot.deletedEntries(in: relative, existing: existing).map {
+            deletedEntry(in: relative, $0.name, isDirectory: $0.isDirectory, gitRoot: snapshot.root, realFolder: node)
+        }
+    }
+
+    private func deletedEntry(in folder: String, _ name: String, isDirectory: Bool, gitRoot: String, realFolder: FileNode?) -> DeletedEntry {
+        let relative = folder.isEmpty ? name : folder + "/" + name
+        if let cached = deletedCache[relative], cached.isDirectory == isDirectory { return cached }
+        let entry = DeletedEntry(url: URL(fileURLWithPath: canonicalPath(gitRoot)).appendingPathComponent(relative), relative: relative,
+                                 isDirectory: isDirectory, realFolder: realFolder)
+        deletedCache[relative] = entry
+        return entry
     }
 
     private func gitState(for node: FileNode) -> (GitChange?, LineStats?) {
@@ -303,22 +387,21 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     // MARK: data source
 
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
-        guard let node = item as? FileNode else { return root == nil ? 0 : 1 }
-        return (node.children?.count ?? 0) + (hiddenRows[ObjectIdentifier(node)] == nil ? 0 : 1)
+        guard let item else { return root == nil ? 0 : 1 }
+        return rows(of: item as AnyObject).count
     }
 
     func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
-        guard let node = item as? FileNode else { return root! }
-        let children = node.children ?? []
-        if index < children.count { return children[index] }
-        return hiddenRows[ObjectIdentifier(node)]!
+        guard let item else { return root! }
+        return rows(of: item as AnyObject)[index]
     }
 
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
-        (item as? FileNode)?.isDirectory ?? false
+        (item as? FileNode)?.isDirectory ?? (item as? DeletedEntry)?.isDirectory ?? false
     }
 
     func outlineView(_ outlineView: NSOutlineView, shouldExpandItem item: Any) -> Bool {
+        if item is DeletedEntry { return true }
         guard let node = item as? FileNode else { return false }
         if node.isLoaded { return true }
         load(node) { [weak self] in self?.outline.expandItem(node) }
@@ -332,10 +415,14 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     func outlineViewItemDidCollapse(_ notification: Notification) { refreshIcon(of: notification) }
 
     private func refreshIcon(of notification: Notification) {
-        guard let node = notification.userInfo?["NSObject"] as? FileNode else { return }
-        let row = outline.row(forItem: node)
+        guard let item = notification.userInfo?["NSObject"] else { return }
+        let row = outline.row(forItem: item)
         guard row >= 0, let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? FileCellView else { return }
-        cell.setIcon(FileIcons.image(for: node, expanded: outline.isItemExpanded(node)))
+        if let node = item as? FileNode {
+            cell.setIcon(FileIcons.image(for: node, expanded: outline.isItemExpanded(node)))
+        } else if let entry = item as? DeletedEntry {
+            cell.configureDeleted(entry, expanded: outline.isItemExpanded(entry), lines: git.snapshot?.stats(at: entry.relative, isDirectory: true))
+        }
     }
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
@@ -344,6 +431,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         cell.identifier = id
         if let hidden = item as? HiddenEntries {
             cell.configureHidden(hidden)
+        } else if let entry = item as? DeletedEntry {
+            cell.configureDeleted(entry, expanded: outlineView.isItemExpanded(entry),
+                                  lines: git.snapshot?.stats(at: entry.relative, isDirectory: entry.isDirectory))
         } else if let node = item as? FileNode {
             let (change, lines) = gitState(for: node)
             cell.configure(node: node, isRoot: node === root, expanded: outlineView.isItemExpanded(node), change: change, lines: lines)
@@ -353,9 +443,10 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat { 24 }
 
-    func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool { item is FileNode }
+    func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool { item is FileNode || item is DeletedEntry }
 
     @objc private func doubleClicked() {
+        if let entry = outline.item(atRow: outline.clickedRow) as? DeletedEntry { return openDeleted(entry) }
         guard let node = outline.item(atRow: outline.clickedRow) as? FileNode else { return }
         if node.isDirectory {
             outline.isItemExpanded(node) ? outline.collapseItem(node) : outline.expandItem(node)
@@ -366,6 +457,21 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     private func openSelected() {
         for node in selectedNodes where !node.isDirectory { delegate?.sidebar(self, openFile: node.url) }
+        for entry in selectedDeleted where !entry.isDirectory { openDeleted(entry) }
+    }
+
+    /// A deleted file opens as what was removed; a deleted folder opens and closes.
+    func openDeleted(_ entry: DeletedEntry) {
+        if entry.isDirectory {
+            outline.isItemExpanded(entry) ? outline.collapseItem(entry) : outline.expandItem(entry)
+        } else {
+            delegate?.sidebar(self, showChanges: entry.url)
+        }
+    }
+
+    /// Selected deleted files and folders (Show Changes, Return).
+    var selectedDeleted: [DeletedEntry] {
+        outline.selectedRowIndexes.compactMap { outline.item(atRow: $0) as? DeletedEntry }
     }
 
     // MARK: selection helpers
@@ -393,6 +499,13 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        if let entry = outline.item(atRow: outline.clickedRow) as? DeletedEntry {
+            // Not on disk: nothing to open, rename or move; what it was is still in git.
+            if !entry.isDirectory { add(menu, "Show What Was Deleted", #selector(showDeletedFromMenu)).representedObject = entry }
+            add(menu, "Copy Path", #selector(copyDeletedPath(_:))).representedObject = entry
+            add(menu, "Copy Relative Path", #selector(copyDeletedPath(_:))).representedObject = entry
+            return
+        }
         let nodes = menuNodes
         guard let node = nodes.first else { return }
         let single = nodes.count == 1
@@ -425,6 +538,16 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
         item.target = self
         return item
+    }
+
+    @objc private func showDeletedFromMenu(_ sender: NSMenuItem) {
+        if let entry = sender.representedObject as? DeletedEntry { openDeleted(entry) }
+    }
+
+    @objc private func copyDeletedPath(_ sender: NSMenuItem) {
+        guard let entry = sender.representedObject as? DeletedEntry else { return }
+        let relative = root.flatMap { root in entry.url.path.hasPrefix(root.path + "/") ? String(entry.url.path.dropFirst(root.path.count + 1)) : nil }
+        copy(sender.title == "Copy Path" ? entry.url.path : relative ?? entry.url.path)
     }
 
     @objc private func showChangesFromMenu() {
@@ -627,7 +750,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo, proposedItem item: Any?, proposedChildIndex index: Int) -> NSDragOperation {
-        guard let target = item as? FileNode ?? root, let root else { return [] }
+        guard let target = item as? FileNode ?? (item as? DeletedEntry)?.realFolder ?? root, let root else { return [] }
         // Dropping on or between files means their folder.
         let folder = target.isDirectory ? target : (target.parent ?? root)
         if folder !== target || index != NSOutlineViewDropOnItemIndex {
@@ -640,7 +763,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     func outlineView(_ outlineView: NSOutlineView, acceptDrop info: NSDraggingInfo, item: Any?, childIndex index: Int) -> Bool {
-        guard let folder = (item as? FileNode) ?? root, folder.isDirectory else { return false }
+        guard let folder = (item as? FileNode) ?? (item as? DeletedEntry)?.realFolder ?? root, folder.isDirectory else { return false }
         return transfer(droppedURLs(info), into: folder.url, copy: isCopy(info))
     }
 

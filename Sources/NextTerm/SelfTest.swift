@@ -476,6 +476,7 @@ enum SelfTest {
         await editorChecks(c, proj: proj, tab: inProject)
         await goToFileChecks(c, proj: proj)
         await gutterAndCollapseChecks(c, proj: proj)
+        await deletedFileChecks(c, proj: proj)
         await updateChecks(c)
         await importChecks(c, proj: proj)
 
@@ -754,6 +755,75 @@ enum SelfTest {
         shortcuts.preset = savedPreset
         app.setRecentProjects(fullList)
         try? FileManager.default.removeItem(at: extra)
+    }
+
+    /// A deleted file keeps a row where it was (struck through, with its −N), so a folder's count always
+    /// has a row that explains it; it opens as what was removed. A folder deleted whole has one too.
+    private static func deletedFileChecks(_ c: TerminalWindowController, proj: URL) async {
+        guard let git = GitRunner.locateGit(), let root = c.sidebar.root else { return }
+        func run(_ args: String...) {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: git)
+            p.arguments = ["-C", proj.path, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"] + args
+            p.standardInput = FileHandle.nullDevice
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            try? p.run()
+            p.waitUntilExit()
+        }
+        let fm = FileManager.default
+        let gone = proj.appendingPathComponent("src/gone.txt")
+        let folder = proj.appendingPathComponent("src/olddir")
+        try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? "1\n2\n3\n".write(to: gone, atomically: true, encoding: .utf8)
+        try? "x\n".write(to: folder.appendingPathComponent("x.txt"), atomically: true, encoding: .utf8)
+        run("add", "src/gone.txt", "src/olddir")
+        run("commit", "-qm", "to delete", "--", "src/gone.txt", "src/olddir")
+        let outline = c.sidebar.outline
+        guard let src = root.children?.first(where: { $0.name == "src" }) else { return check(false, "the test project has src") }
+        outline.expandItem(src)
+        _ = await wait(3) { outline.isItemExpanded(src) }
+        try? fm.removeItem(at: gone)
+        run("rm", "-q", "-r", "--cached", "src/olddir") // one staged deletion, one on disk only
+        try? fm.removeItem(at: folder)
+
+        func row(_ name: String) -> Int? {
+            (0..<outline.numberOfRows).first { row in
+                let item = outline.item(atRow: row)
+                return (item as? DeletedEntry)?.name == name || (item as? FileNode)?.name == name && outline.parent(forItem: item) as? FileNode === src
+            }
+        }
+        check(await wait(8) { row("gone.txt").map { outline.item(atRow: $0) is DeletedEntry } == true && row("olddir") != nil },
+              "a deleted file and a deleted folder keep rows where they were")
+        if let at = row("gone.txt"), let cell = outline.view(atColumn: 0, row: at, makeIfNecessary: true) as? FileCellView {
+            check(cell.isDeletedRow && cell.statsText == "−3", "struck through, with the lines it had", cell.statsText)
+        }
+        if let diffRow = row("diff.txt"), let goneRow = row("gone.txt"), let mainRow = row("main.php") {
+            check(diffRow < goneRow && goneRow < mainRow, "in name order among the files that are still there", "\(diffRow) \(goneRow) \(mainRow)")
+        }
+        if let at = row("olddir"), let entry = outline.item(atRow: at) as? DeletedEntry {
+            outline.expandItem(entry)
+            check(await wait(3) { row("x.txt").map { outline.item(atRow: $0) is DeletedEntry } == true }, "a deleted folder opens to show what was in it")
+        }
+        await screenshot(c, suffix: "deleted")
+
+        if let at = row("gone.txt"), let entry = outline.item(atRow: at) as? DeletedEntry {
+            c.sidebar.openDeleted(entry)
+            let diff = c.editorArea.activeDiff
+            check(diff?.matches(root: canonicalPath(proj.path), path: "src/gone.txt") == true, "it opens as a diff of what was removed")
+            check(await wait(5) { diff?.sideTexts.0.contains("2\n") == true && diff?.sideTexts.1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true },
+                  "with the old lines on the left and nothing on the right", "\(diff?.sideTexts.0.count ?? -1) | \(diff?.sideTexts.1.count ?? -1)")
+            if let diff { c.editorArea.close(diff) }
+        }
+
+        // Back as committed: the rows go, and the file's own row returns.
+        run("reset", "-q", "--", "src/olddir")
+        run("checkout", "-q", "--", "src/gone.txt", "src/olddir")
+        check(await wait(8) { row("gone.txt").map { outline.item(atRow: $0) is FileNode } == true && row("olddir").map { outline.item(atRow: $0) is FileNode } == true },
+              "restored, they are ordinary rows again")
+        run("rm", "-q", "-r", "src/gone.txt", "src/olddir")
+        run("commit", "-qm", "deleted test done")
+        _ = await wait(8) { row("gone.txt") == nil && row("olddir") == nil }
     }
 
     /// A new version: the update window over the front window (the keyboard stays in the terminal), the
