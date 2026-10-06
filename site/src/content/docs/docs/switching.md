@@ -14,11 +14,12 @@ On first launch, if Next Term finds VS Code, Cursor, Devin Desktop, a JetBrains 
 Choose an app and the preview lists what it would bring, each item a checkbox with where it came from:
 
 - **Shortcuts:** the matching set of keys (below).
+- **Your shortcuts:** the keys you changed yourself, from VS Code’s `keybindings.json` (and Cursor’s, Devin Desktop’s) or your JetBrains keymap. A key another command already has, or a Control key without <kbd>⌘</kbd>, comes in unticked with the reason.
 - **Settings:** font size, line height, soft wrap, Option as Meta, where the terminal sits and the sidebar’s side, from the values you set in that app.
 - **Recent projects:** your recent folders, added to **Open Recent** and the Welcome window after Next Term’s own.
 - **Not brought over:** everything else, each with the reason (“font choice is coming”, “never imported: can hold secrets”). **Copy List for Your Agent** puts it on the clipboard, so Claude Code or Codex can help with the rest.
 
-**Apply** saves what it is about to change first. **Settings › Import › Undo Import** puts every one of those values back.
+**Apply** saves what it is about to change first. **Settings › Import › Undo Import** puts every one of those values back, your shortcuts included.
 
 ## Keep the keys you know
 
@@ -46,4 +47,4 @@ Two rules keep the terminal working the way your shell and agents expect: a set 
 
 ## Coming next
 
-<span class="nt-soon">Coming next</span> Your own key changes from VS Code and JetBrains keymaps, font choice and terminal colours, and more terminals (Ghostty, Warp, Terminal.app).
+<span class="nt-soon">Coming next</span> Font choice and terminal colours, Zed’s own key changes, and more terminals (Ghostty, Warp, Terminal.app).
