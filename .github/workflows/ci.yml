@@ -21,12 +21,18 @@ jobs:
         run: swift --version
 
       - name: Unit tests
-        run: scripts/test.sh
+        timeout-minutes: 15
+        run: |
+          # If the run stalls, show what is still running (test output is buffered until the end).
+          ( sleep 420; echo "::group::Still running after 7 minutes"; ps -axo pid,ppid,stat,etime,command | grep -E "git|swiftpm|xctest|NextTerm" | grep -v grep; echo "::endgroup::" ) &
+          scripts/test.sh
 
       - name: zsh integration test
+        timeout-minutes: 5
         run: python3 scripts/zsh-integration-test.py
 
       - name: Build DMG
+        timeout-minutes: 20
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           [[ "$GITHUB_REF_TYPE" == "tag" ]] || VERSION="0.0.0-dev"
