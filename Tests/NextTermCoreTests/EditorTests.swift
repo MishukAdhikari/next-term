@@ -124,6 +124,25 @@ import Testing
         #expect(EditorLanguage.id(forFileName: "Gemfile.lock") == nil) // its own format: plain, not mis-coloured as JSON
     }
 
+    @Test func ragProjectFiles() {
+        let files = ["eval.tsv": "tsv", "scores.tab": "tsv", "index.rst": "rst", "graph.mmd": "mermaid", "flow.mermaid": "mermaid",
+                     "vector_search.cypher": "cypher", "match.cyp": "cypher", "people.rq": "sparql", "query.sparql": "sparql",
+                     "graph.ttl": "turtle"]
+        for (name, language) in files { #expect(EditorLanguage.id(forFileName: name) == language, "\(name)") }
+        #expect(EditorLanguage.id(forFileName: "queries.cql") == nil) // Neo4j's or Cassandra's: no guess
+    }
+
+    @Test func commentStylesOfRagProjectLanguages() {
+        let prefixes = ["cypher": "//", "sparql": "#", "turtle": "#", "mermaid": "%%", "rst": ".."]
+        for (language, prefix) in prefixes {
+            let style = EditorLanguage.commentStyle(for: language)
+            #expect(style?.prefix == prefix && style?.suffix == "", "\(language)")
+        }
+        let mermaid = EditorLanguage.commentStyle(for: "mermaid")!
+        #expect(EditorLanguage.toggleComment(["  A --> B"], style: mermaid) == ["  %% A --> B"])
+        #expect(EditorLanguage.toggleComment(["  %% A --> B"], style: mermaid) == ["  A --> B"])
+    }
+
     @Test func findsTheLanguagesOfCodeFences() {
         let text = """
         # Notes

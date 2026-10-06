@@ -6,6 +6,7 @@
   "cjs": "javascript",
   "clj": "clojure",
   "coffeescript": "coffee",
+  "cql": "cypher",
   "cs": "csharp",
   "cts": "typescript",
   "dockerfile": "docker",
@@ -24,6 +25,7 @@
   "makefile": "make",
   "md": "markdown",
   "mjs": "javascript",
+  "mmd": "mermaid",
   "mts": "typescript",
   "objc": "objective-c",
   "properties": "ini",
@@ -89,7 +91,9 @@
    ],
    "embeddedLangsLazy": [],
    "id": "angular-inline-style",
-   "injectTo": [],
+   "injectTo": [
+    "source.ts.ng"
+   ],
    "kind": "injection",
    "resource": "grammars/angular-inline-style.json",
    "scopeName": "inline-styles.ng"
@@ -105,7 +109,9 @@
    ],
    "embeddedLangsLazy": [],
    "id": "angular-inline-template",
-   "injectTo": [],
+   "injectTo": [
+    "source.ts.ng"
+   ],
    "kind": "injection",
    "resource": "grammars/angular-inline-template.json",
    "scopeName": "inline-template.ng"
@@ -121,7 +127,11 @@
    ],
    "embeddedLangsLazy": [],
    "id": "angular-let-declaration",
-   "injectTo": [],
+   "injectTo": [
+    "text.html.derivative",
+    "text.html.derivative.ng",
+    "source.ts.ng"
+   ],
    "kind": "injection",
    "resource": "grammars/angular-let-declaration.json",
    "scopeName": "template.let.ng"
@@ -137,7 +147,11 @@
    ],
    "embeddedLangsLazy": [],
    "id": "angular-template",
-   "injectTo": [],
+   "injectTo": [
+    "text.html.derivative",
+    "text.html.derivative.ng",
+    "source.ts.ng"
+   ],
    "kind": "injection",
    "resource": "grammars/angular-template.json",
    "scopeName": "template.ng"
@@ -154,7 +168,11 @@
    ],
    "embeddedLangsLazy": [],
    "id": "angular-template-blocks",
-   "injectTo": [],
+   "injectTo": [
+    "text.html.derivative",
+    "text.html.derivative.ng",
+    "source.ts.ng"
+   ],
    "kind": "injection",
    "resource": "grammars/angular-template-blocks.json",
    "scopeName": "template.blocks.ng"
@@ -347,6 +365,20 @@
    "kind": "grammar",
    "resource": "grammars/csv.json",
    "scopeName": "text.csv"
+  },
+  {
+   "aliases": [
+    "cql"
+   ],
+   "displayName": "Cypher",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "cypher",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/cypher.json",
+   "scopeName": "source.cypher"
   },
   {
    "aliases": [],
@@ -955,7 +987,8 @@
    "displayName": "Markdown",
    "embeddedIn": [],
    "embeddedLangs": [
-    "yaml"
+    "yaml",
+    "mermaid"
    ],
    "embeddedLangsLazy": [
     "css",
@@ -1004,6 +1037,7 @@
     "log",
     "erlang",
     "elixir",
+    "rst",
     "html-derivative"
    ],
    "id": "markdown",
@@ -1020,7 +1054,9 @@
    "embeddedLangs": [],
    "embeddedLangsLazy": [],
    "id": "markdown-nix",
-   "injectTo": [],
+   "injectTo": [
+    "text.html.markdown"
+   ],
    "kind": "injection",
    "resource": "grammars/markdown-nix.json",
    "scopeName": "markdown.nix.codeblock"
@@ -1033,7 +1069,9 @@
    "embeddedLangs": [],
    "embeddedLangsLazy": [],
    "id": "markdown-vue",
-   "injectTo": [],
+   "injectTo": [
+    "text.html.markdown"
+   ],
    "kind": "injection",
    "resource": "grammars/markdown-vue.json",
    "scopeName": "markdown.vue.codeblock"
@@ -1108,6 +1146,22 @@
    "kind": "grammar",
    "resource": "grammars/mdx.json",
    "scopeName": "source.mdx"
+  },
+  {
+   "aliases": [
+    "mmd"
+   ],
+   "displayName": "Mermaid",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "mermaid",
+   "injectTo": [
+    "text.html.markdown"
+   ],
+   "kind": "grammar",
+   "resource": "grammars/mermaid.json",
+   "scopeName": "markdown.mermaid.codeblock"
   },
   {
    "aliases": [],
@@ -1319,6 +1373,27 @@
    "scopeName": "source.regexp.python"
   },
   {
+   "aliases": [],
+   "displayName": "reStructuredText",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "html-derivative",
+    "cpp",
+    "python",
+    "javascript",
+    "shellscript",
+    "yaml",
+    "cmake",
+    "ruby"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "rst",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/rst.json",
+   "scopeName": "source.rst"
+  },
+  {
    "aliases": [
     "rb"
    ],
@@ -1413,6 +1488,20 @@
    "kind": "grammar",
    "resource": "grammars/shellscript.json",
    "scopeName": "source.shell"
+  },
+  {
+   "aliases": [],
+   "displayName": "SPARQL",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "turtle"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "sparql",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/sparql.json",
+   "scopeName": "source.sparql"
   },
   {
    "aliases": [],
@@ -1522,6 +1611,18 @@
   },
   {
    "aliases": [],
+   "displayName": "TSV",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "tsv",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/tsv.json",
+   "scopeName": "text.tsv"
+  },
+  {
+   "aliases": [],
    "displayName": "TSX",
    "embeddedIn": [],
    "embeddedLangs": [],
@@ -1531,6 +1632,18 @@
    "kind": "grammar",
    "resource": "grammars/tsx.json",
    "scopeName": "source.tsx"
+  },
+  {
+   "aliases": [],
+   "displayName": "Turtle",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "turtle",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/turtle.json",
+   "scopeName": "source.turtle"
   },
   {
    "aliases": [],
@@ -1628,7 +1741,11 @@
    "embeddedLangs": [],
    "embeddedLangsLazy": [],
    "id": "vue-directives",
-   "injectTo": [],
+   "injectTo": [
+    "text.html.markdown",
+    "text.html.derivative",
+    "text.pug"
+   ],
    "kind": "injection",
    "resource": "grammars/vue-directives.json",
    "scopeName": "vue.directives"
@@ -1641,7 +1758,11 @@
    "embeddedLangs": [],
    "embeddedLangsLazy": [],
    "id": "vue-interpolations",
-   "injectTo": [],
+   "injectTo": [
+    "text.html.markdown",
+    "text.html.derivative",
+    "text.pug"
+   ],
    "kind": "injection",
    "resource": "grammars/vue-interpolations.json",
    "scopeName": "vue.interpolations"

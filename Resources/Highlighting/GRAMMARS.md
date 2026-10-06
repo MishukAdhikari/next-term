@@ -24,6 +24,7 @@ upstream licence:
 | csharp | MIT | https://github.com/microsoft/vscode/blob/84f7ab5aa01c31d5352c7db89051e8c391fd9ae1/extensions/csharp/syntaxes/csharp.tmLanguage.json |
 | css | MIT | https://github.com/microsoft/vscode/blob/091ef378baaa141c8bc4bbe9775d4cb3bd655a80/extensions/css/syntaxes/css.tmLanguage.json |
 | csv | MIT | https://github.com/mechatroner/vscode_rainbow_csv/blob/3bdafafa12940a75166089b64bdd80b1d3b071db/syntaxes/csv.tmLanguage.json |
+| cypher | MIT | https://github.com/adam-cowley/neo4j-vscode/blob/ad90d275ac76c740018e78f78722343f730270e0/cypher/cypher.tmLanguage |
 | dart | MIT | https://github.com/microsoft/vscode/blob/091ef378baaa141c8bc4bbe9775d4cb3bd655a80/extensions/dart/syntaxes/dart.tmLanguage.json |
 | diff | MIT | https://github.com/microsoft/vscode/blob/4549bd26c7b799284e0ebd8dc1e0310e6a8707a1/extensions/diff/syntaxes/diff.tmLanguage.json |
 | docker | MIT | https://github.com/microsoft/vscode/blob/8270a86019db7551da42b71d15c6080a414d8c81/extensions/docker/syntaxes/docker.tmLanguage.json |
@@ -70,6 +71,7 @@ upstream licence:
 | markdown-vue | MIT | https://github.com/vuejs/language-tools/blob/784dd56026e07f1dadb9ef2498418eccbb3dee29/extensions/vscode/syntaxes/markdown-vue.json |
 | marko | MIT | https://github.com/marko-js/language-server/blob/1a79f9b6b7d28bc1942ac6e4b5dd674615380f06/packages/vscode/syntaxes/marko.tmLanguage.json |
 | mdx | MIT | https://github.com/wooorm/markdown-tm-language/blob/c78b1e5df644d24fa76716bbe26f4b48a6fc1610/source.mdx.tmLanguage |
+| mermaid | MIT | https://github.com/bpruitt-goddard/vscode-mermaid-syntax-highlight/blob/8b62f487cb7a89afcd152febfbf47f5d4787657f/syntaxes/mermaid.tmLanguage.yaml |
 | nix | MIT | https://github.com/nix-community/vscode-nix-ide/blob/effbf3494a43250a537834805b305793994b9ca8/dist/nix.tmLanguage.json |
 | objective-c | MIT | https://github.com/microsoft/vscode/blob/bd1abe08c38bb5deccf65610f8f3c03d2338d20d/extensions/objective-c/syntaxes/objective-c.tmLanguage.json |
 | ocaml | Apache-2.0 | https://github.com/reasonml-editor/vscode-reasonml/blob/14af625ec50ed9968b957b4d6336c5338d81af45/syntaxes/ocaml.json |
@@ -84,12 +86,14 @@ upstream licence:
 | r | MIT | https://github.com/posit-dev/positron/blob/c4d6bab60dd914427a2d47a4b64e75e025d94059/extensions/positron-r/syntaxes/r.tmGrammar.gen.json |
 | razor | MIT | https://github.com/dotnet/razor/blob/743f32a68c61809b22fd84e8748c3686ef1bb8b8/src/Razor/src/Microsoft.VisualStudio.RazorExtension/EmbeddedGrammars/aspnetcorerazor.tmLanguage.json |
 | regexp | MIT | https://github.com/MagicStack/MagicPython/blob/c9b3409deb69acec31bbf7913830e93a046b30cc/grammars/MagicRegExp.tmLanguage |
+| rst | MIT | https://github.com/microsoft/vscode/blob/48e93f756b764991ede33ad09781a863aca6907a/extensions/restructuredtext/syntaxes/rst.tmLanguage.json |
 | ruby | MIT | https://github.com/microsoft/vscode/blob/091ef378baaa141c8bc4bbe9775d4cb3bd655a80/extensions/ruby/syntaxes/ruby.tmLanguage.json |
 | rust | MIT | https://github.com/microsoft/vscode/blob/9a2c94d213696a4453b6d9988b003d98e7646e75/extensions/rust/syntaxes/rust.tmLanguage.json |
 | sass | MIT (LICENSE: Robin Bentley, Leonard Grosoli; atom/language-sass) | https://github.com/TheRealSyler/vscode-sass-indented/blob/f0e50cfaca4b64a1d49f8d938f188d6fd0bcfb6f/syntaxes/sass.tmLanguage.json |
 | scala | MIT | https://github.com/scala/vscode-scala-syntax/blob/672fa16c64e12b2cc8b98da011411463968de727/syntaxes/Scala.tmLanguage.json |
 | scss | MIT | https://github.com/microsoft/vscode/blob/cf8d61ebd2f022f4ce8280171f0360d1fe0a206d/extensions/scss/syntaxes/scss.tmLanguage.json |
 | shellscript | MIT | https://github.com/microsoft/vscode/blob/9473445f7d3dcb5c579f42ece8b6c18c43c63ed3/extensions/shellscript/syntaxes/shell-unix-bash.tmLanguage.json |
+| sparql | Apache-2.0 (stardog-vsc/stardog-rdf-grammars/LICENSE); text in licenses/stardog-rdf-grammars-LICENSE.txt | https://github.com/stardog-union/stardog-vsc/blob/a1963c610cde0eab23c44fc01ab36652565524de/stardog-rdf-grammars/syntaxes/sparql.tmLanguage.json |
 | sql | MIT | https://github.com/microsoft/vscode/blob/84f7ab5aa01c31d5352c7db89051e8c391fd9ae1/extensions/sql/syntaxes/sql.tmLanguage.json |
 | stylus | MIT | https://github.com/d4rkr00t/language-stylus/blob/198a851f385aee857332f3ce5dd981ff67720ead/syntaxes/stylus.json |
 | svelte | MIT | https://github.com/sveltejs/language-tools/blob/32bd44e5af1eea464198cc6e841281b045e0f04d/packages/svelte-vscode/syntaxes/svelte.tmLanguage.src.yaml |
@@ -97,7 +101,9 @@ upstream licence:
 | templ | MIT | https://github.com/templ-go/templ-vscode/blob/d0af70c97ed384e93892c46b93d622ffaba5d93c/syntaxes/templ.tmLanguage.json |
 | terraform | MPL-2.0 | https://github.com/hashicorp/syntax/blob/cc2b4d4fe389f14b8a13937f4e0d7b2811b57588/syntaxes/terraform.tmGrammar.json |
 | toml | TextMate bundle licence (permission to copy, use, modify, sell and distribute) | https://github.com/textmate/toml.tmbundle/blob/e82b64c1e86396220786846201e9aa3f0a2d9ca2/Syntaxes/TOML.tmLanguage |
+| tsv | MIT | https://github.com/mechatroner/vscode_rainbow_csv/blob/00d4c947f1bbe6a4a73599bd97fb31bdfbe262f3/syntaxes/tsv.tmLanguage.json |
 | tsx | MIT | https://github.com/microsoft/vscode/blob/210541906e5a96ab39f9c753f921b1bd35f4138b/extensions/typescript-basics/syntaxes/TypeScriptReact.tmLanguage.json |
+| turtle | Apache-2.0 (stardog-vsc/stardog-rdf-grammars/LICENSE); text in licenses/stardog-rdf-grammars-LICENSE.txt | https://github.com/stardog-union/stardog-vsc/blob/3f1364b08bdbf4b4d77f123682db7d2b708b2f6e/stardog-rdf-grammars/syntaxes/turtle.tmLanguage.json |
 | twig | MIT | https://github.com/mblode/vscode-twig-language-2/blob/b4f2809d6f75850ee7350b03f8b1d439d741ebf5/src/syntaxes/twig.tmLanguage |
 | typescript | MIT | https://github.com/microsoft/vscode/blob/210541906e5a96ab39f9c753f921b1bd35f4138b/extensions/typescript-basics/syntaxes/TypeScript.tmLanguage.json |
 | viml | MIT | https://github.com/dunstontc/viml/blob/8762570fc7d6f1009a3c93efd2a337330d88b88e/syntaxes/viml.tmLanguage.json |

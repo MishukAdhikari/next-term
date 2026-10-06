@@ -882,6 +882,18 @@ enum SelfTest {
              [("chain =", "BCBEC4", "a name in a README's Python fence (not string green)"), ("def run", "CF8E6D", "and its keywords")]),
             ("SKILL.md", "---\nname: pdf-tools\ndescription: Fill and merge PDFs.\n---\n\n# PDF tools\n\n``` lua\nlocal pages = 2\n```\n",
              [("name:", "C77DBB", "a SKILL.md front-matter key"), ("local pages", "CF8E6D", "a keyword in a \"``` lua\" fence (space after the backticks)")]),
+            // After SKILL.md: rst loads Ruby, and Ruby loads Lua.
+            ("DIAGRAM.md", "# Flow\n\n```mermaid\ngraph TD\n  A[Ask] --> B[Retrieve]\n```\n",
+             [("graph TD", "CF8E6D", "a Mermaid fence in Markdown"), ("--> B", "CF8E6D", "and its arrows")]),
+            ("graph.mmd", "graph LR\n  Q[Question] --> R[Retriever]\n",
+             [("graph LR", "CF8E6D", "a Mermaid file"), ("Retriever", "6AAB73", "and its node labels")]),
+            ("eval.tsv", "question\tanswer\tscore\n", [("answer", "CF8E6D", "a TSV column")]),
+            ("search.cypher", "// nearest chunks\nMATCH (c:Chunk) RETURN c LIMIT 5\n",
+             [("MATCH", "CF8E6D", "a Cypher keyword"), ("// nearest", "7A7E85", "and comment")]),
+            ("people.rq", "SELECT ?name WHERE { ?p a ?t }\n", [("SELECT", "CF8E6D", "a SPARQL keyword")]),
+            ("graph.ttl", "@prefix foaf: <http://xmlns.com/foaf/0.1/> .\n<#me> a foaf:Person .\n",
+             [("foaf:Person", "CF8E6D", "a Turtle prefixed name")]),
+            ("index.rst", "Retrieval\n=========\n\n.. note:: Chunks are cached.\n", [(".. note::", "CF8E6D", "an rst directive")]),
         ]
         if luaWasLoaded { note("Lua was loaded before SKILL.md opened: its fence check does not prove the preload") }
         for file in files {

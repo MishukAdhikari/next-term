@@ -270,6 +270,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+The SPARQL and Turtle grammars come from https://github.com/stardog-union/stardog-vsc (`stardog-rdf-grammars`,
+Copyright 2017 Stardog Union), under the Apache License 2.0. The tm-grammars notice file has no section for them,
+so their licence text ships as `Resources/Highlighting/licenses/stardog-rdf-grammars-LICENSE.txt`.
+
 ## Material Icon Theme (file icons)
 
 https://github.com/material-extensions/vscode-material-icon-theme 5.39.0, MIT. Its icons draw on Material Design

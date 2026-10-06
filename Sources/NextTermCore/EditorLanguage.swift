@@ -43,6 +43,9 @@ public enum EditorLanguage {
         "edge": "edge", "templ": "templ", "marko": "marko", "gjs": "glimmer-js", "gts": "glimmer-ts",
         "styl": "stylus", "stylus": "stylus", "sass": "sass", "pcss": "postcss", "postcss": "postcss",
         "coffee": "coffee", "just": "just", "ex": "elixir", "exs": "elixir", "svx": "markdown",
+        // Data, docs, diagrams and graph queries in RAG projects. `.cql` stays plain: Neo4j and Cassandra both use it.
+        "tsv": "tsv", "tab": "tsv", "rst": "rst", "mmd": "mermaid", "mermaid": "mermaid", "cypher": "cypher",
+        "cyp": "cypher", "rq": "sparql", "sparql": "sparql", "ttl": "turtle",
         // No grammar of their own yet: HTML colours the markup around the template tags.
         "latte": "html", "tpl": "html", "gohtml": "html", "gotmpl": "html", "tmpl": "html", "ejs": "html", "eta": "html",
         "heex": "html", "eex": "html", "leex": "html",
@@ -104,12 +107,14 @@ public enum EditorLanguage {
         switch language {
         case "php", "javascript", "typescript", "tsx", "jsx", "go", "rust", "swift", "java", "kotlin", "c", "cpp",
              "csharp", "objective-c", "scss", "less", "dart", "scala", "groovy", "proto", "prisma", "jsonc", "json5",
-             "zig", "stylus", "sass", "templ", "angular-ts", "glimmer-js", "glimmer-ts":
+             "zig", "stylus", "sass", "templ", "angular-ts", "glimmer-js", "glimmer-ts", "cypher":
             return CommentStyle(prefix: "//", suffix: "")
         case "python", "ruby", "shellscript", "fish", "powershell", "yaml", "toml", "perl", "r", "make", "docker",
              "dotenv", "cmake", "nix", "hcl", "terraform", "julia", "graphql", "git-commit", "git-rebase", "ini",
-             "coffee", "just", "elixir":
+             "coffee", "just", "elixir", "sparql", "turtle":
             return CommentStyle(prefix: "#", suffix: "")
+        case "mermaid": return CommentStyle(prefix: "%%", suffix: "")
+        case "rst": return CommentStyle(prefix: "..", suffix: "")
         case "sql", "lua", "haskell": return CommentStyle(prefix: "--", suffix: "")
         case "clojure": return CommentStyle(prefix: ";;", suffix: "")
         case "erlang": return CommentStyle(prefix: "%", suffix: "")
