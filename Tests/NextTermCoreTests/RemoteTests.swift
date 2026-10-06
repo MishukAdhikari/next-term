@@ -6,7 +6,9 @@ import Testing
     @Test func destinationsThatSshCouldReadAsOptionsOrCommandsAreRefused() {
         #expect(RemoteHost.destinationProblem("deploy@203.0.113.5") == nil)
         #expect(RemoteHost.destinationProblem("web-1") == nil)
-        #expect(RemoteHost.destinationProblem("root@[2001:db8::1]") == nil)
+        #expect(RemoteHost.destinationProblem("root@2001:db8::1") == nil)
+        // OpenSSH takes no brackets in a destination, and a port belongs in its own field.
+        #expect(RemoteHost.destinationProblem("root@[2001:db8::1]") != nil)
         #expect(RemoteHost.destinationProblem("-oProxyCommand=touch%20x") != nil)
         #expect(RemoteHost.destinationProblem("host;rm -rf ~") != nil)
         #expect(RemoteHost.destinationProblem("host other") != nil)
@@ -57,8 +59,10 @@ import Testing
         let args = SSHArguments.exec(host, controlPath: "/x/abc", command: "true")
         #expect(args.contains("BatchMode=yes"))
         #expect(args.contains("-T"))
-        // Host keys stay as the user's config says (ask): under BatchMode an unknown key is refused.
-        #expect(!args.contains { $0.lowercased().contains("stricthostkeychecking") })
+        // An unknown or changed host key is refused even if the user's config says accept-new or no.
+        #expect(args.contains("StrictHostKeyChecking=yes"))
+        // Tabs leave host keys to the user's config: ssh asks there, in front of the user.
+        #expect(!SSHArguments.tab(host, controlPath: "/x/abc", command: "true").contains { $0.contains("StrictHostKeyChecking") })
     }
 
     @Test func controlNamesAreShortStableAndPerDestination() {
@@ -126,6 +130,25 @@ import Testing
         #expect(RemoteShell.safeName(name) == name)
     }
 
+    @Test func aMissingFolderIsSaidAndMarkedAndTheTabOpensInHome() throws {
+        let home = try temporaryHome()
+        let script = RemoteShell.tabScript(keep: .off, directory: "~/nope", session: "s", tabID: "tab2")
+            .replacingOccurrences(of: "exec \"${SHELL:-/bin/sh}\" -l", with: "pwd")
+        let output = try run(RemoteShell.command(script), home: home)
+        #expect(output.contains("is not a folder on this host"))
+        #expect(output.hasSuffix(home + "\n"))
+        #expect(FileManager.default.fileExists(atPath: home + "/.cache/next-term/tabs/tab2.nodir"))
+    }
+
+    @Test func aTmuxTabWithoutTmuxMarksItselfPlain() throws {
+        let home = try temporaryHome()
+        let script = RemoteShell.tabScript(keep: .tmux, directory: "~", session: "s", tabID: "tab3")
+            .replacingOccurrences(of: "exec \"${SHELL:-/bin/sh}\" -l", with: "exit 0")
+        let output = try run(RemoteShell.command(script), home: home)
+        #expect(output.contains("tmux is not installed"))
+        #expect(FileManager.default.fileExists(atPath: home + "/.cache/next-term/tabs/tab3.plain"))
+    }
+
     @Test func anOffTabRecordsItsShellPidAndStartsALoginShell() throws {
         let home = try temporaryHome()
         let script = RemoteShell.tabScript(keep: .off, directory: "~", session: "s", tabID: "tab1")
@@ -172,6 +195,9 @@ import Testing
             c3\tfg\tnode\tnode /home/me/.npm/@anthropic-ai/claude-code/cli.js
             d4\t?
             e5\tfg\t-bash\t-bash
+            f6\tplain
+            f6\tnodir
+            f6\tshell
             """
         let poll = try #require(RemotePoll.parse(output))
         #expect(poll.tabs["a1"]?.foreground?.isShell == true)
@@ -183,6 +209,8 @@ import Testing
         #expect(CommandClassifier.kind(of: npm) == .agent)
         #expect(poll.tabs["d4"]?.foreground == nil)
         #expect(poll.tabs["e5"]?.foreground?.name == "bash")
+        #expect(poll.tabs["d4"]?.started == false && poll.tabs["b2"]?.started == true)
+        #expect(poll.tabs["f6"]?.plain == true && poll.tabs["f6"]?.folderMissing == true && poll.tabs["f6"]?.started == true)
         #expect(RemotePoll.parse("no marker at all") == nil)
     }
 

@@ -44,7 +44,7 @@ public struct RemoteHost: Codable, Equatable, Sendable {
     public var id: String
     /// What the user calls it ("web-1").
     public var name: String
-    /// What ssh connects to: an alias from ~/.ssh/config, `host`, `user@host` or `user@[v6]`.
+    /// What ssh connects to: an alias from ~/.ssh/config, `host`, `user@host` or `user@2001:db8::1`.
     public var destination: String
     public var port: Int?
     /// Folder new tabs open in, on the host: absolute, `~` or `~/…`.
@@ -77,15 +77,15 @@ public struct RemoteHost: Codable, Equatable, Sendable {
         return nil
     }
 
-    /// ssh destinations: letters, digits and `. _ - @ : % + [ ]`. Nothing ssh or a shell could read as
-    /// an option, a command or a second argument.
+    /// ssh destinations: letters, digits and `. _ - @ : % +` (IPv6 as `user@2001:db8::1`; OpenSSH takes no
+    /// brackets there). Nothing ssh or a shell could read as an option, a command or a second argument.
     public static func destinationProblem(_ destination: String) -> String? {
         if destination.isEmpty { return "Give the ssh destination: user@host, or an alias from ~/.ssh/config." }
         if destination.count > 255 { return "The destination is too long." }
         if destination.hasPrefix("-") { return "The destination cannot start with “-”." }
-        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-@:%+[]")
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-@:%+")
         guard destination.unicodeScalars.allSatisfy(allowed.contains) else {
-            return "The destination may only hold letters, digits and . _ - @ : % + [ ] (no spaces)."
+            return "The destination may only hold letters, digits and . _ - @ : % + (no spaces; the port goes in its own field)."
         }
         return nil
     }
@@ -160,9 +160,12 @@ public enum SSHArguments {
     }
 
     /// A background command (status checks, git). Never prompts: with no master and no usable key it
-    /// fails, and an unknown or changed host key is refused, never accepted.
+    /// fails. An unknown or changed host key is refused, never accepted, whatever the user's config says
+    /// (accept-new or no would otherwise add a key with nobody looking). Over an open master the key was
+    /// checked when the tab connected, in front of the user.
     public static func exec(_ host: RemoteHost, controlPath: String, command: String) -> [String] {
-        common(controlPath: controlPath, port: host.port) + ["-T", "-o", "BatchMode=yes", "--", host.destination, command]
+        common(controlPath: controlPath, port: host.port)
+            + ["-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "--", host.destination, command]
     }
 
     /// Asks the master to exit (at quit).
@@ -232,6 +235,17 @@ public enum RemoteShell {
         fi
         """
 
+    /// Finds tmux: on PATH, or where Homebrew, Linuxbrew and user installs put it (a non-login shell's
+    /// PATH often lacks them). Sets T.
+    static let findTmux = """
+        T=$(command -v tmux 2>/dev/null)
+        if [ -z "$T" ]; then
+          for p in "$HOME/.local/bin/tmux" /home/linuxbrew/.linuxbrew/bin/tmux /opt/homebrew/bin/tmux /usr/local/bin/tmux; do
+            if [ -x "$p" ]; then T=$p; break; fi
+          done
+        fi
+        """
+
     /// Settings for Next Term's own tmux server (`-L nextterm`), never the user's default server.
     /// Next Term's tab bar replaces tmux's status line; the mouse wheel scrolls tmux's history; titles
     /// (Claude Code names its task) reach the tab; Escape is not delayed (agents use it to interrupt).
@@ -258,18 +272,27 @@ public enum RemoteShell {
     /// What a tab runs on the host. Every mode records the tab's shell pid, so status checks can find
     /// what runs in front of it.
     public static func tabScript(keep: KeepMode, directory: String, session: String, tabID: String) -> String {
+        // K: this tab's files on the host. K.plain: tmux or herdr was missing, so this is a plain shell.
+        // K.nodir: the folder was not there.
         var lines = [
-            "cd \(folder(directory)) 2>/dev/null || cd",
             "C=\(cacheDir)",
-            "mkdir -p \"$C/tabs\" 2>/dev/null && printf '%s\\n' \"$$\" > \"$C/tabs/\(safeName(tabID))\" 2>/dev/null",
+            "K=\"$C/tabs/\(safeName(tabID))\"",
+            "mkdir -p \"$C/tabs\" 2>/dev/null; rm -f \"$K.plain\" \"$K.nodir\"",
+            "if ! cd \(folder(directory)) 2>/dev/null; then",
+            "  : > \"$K.nodir\" 2>/dev/null",
+            "  printf 'Next Term: %s is not a folder on this host; this tab opened in your home folder.\\r\\n' \(quote(directory))",
+            "  cd",
+            "fi",
+            "printf '%s\\n' \"$$\" > \"$K\" 2>/dev/null",
         ]
         switch keep {
         case .off:
             lines.append(plainShell(nil))
         case .tmux:
             lines += [
-                "T=$(command -v tmux 2>/dev/null)",
+                findTmux,
                 "if [ -z \"$T\" ]; then",
+                "  : > \"$K.plain\" 2>/dev/null",
                 plainShell("tmux is not installed on this host: this is a plain shell, and what runs in it stops if the connection drops."),
                 "fi",
                 "printf '%s\\n' \(quote(tmuxConfig)) > \"$C/tmux.conf\" 2>/dev/null",
@@ -279,6 +302,7 @@ public enum RemoteShell {
             lines += [
                 findHerdr,
                 "if [ -z \"$H\" ]; then",
+                "  : > \"$K.plain\" 2>/dev/null",
                 plainShell("herdr is not installed on this host (see herdr.dev). Next Term uses your own herdr and never installs it: this is a plain shell."),
                 "fi",
                 "exec \"$H\"",
@@ -292,16 +316,19 @@ public enum RemoteShell {
     public static func pollScript(tabs: [(id: String, keep: KeepMode, session: String)]) -> String {
         var lines = [
             "C=\(cacheDir)",
-            "T=$(command -v tmux 2>/dev/null)",
-            // $1: the pid of a tab's shell. Prints "shell", "fg<TAB>comm<TAB>args", or "?".
+            findTmux,
+            // $1: the pid of a tab's shell. Prints "shell", "fg<TAB>comm<TAB>args", or "?". procps and BSD
+            // ps, or /proc where ps is BusyBox's (no -p, no tpgid).
             "nt_fg() {",
             "  p=$1",
             "  if [ -z \"$p\" ]; then echo '?'; return; fi",
             "  g=$(ps -o tpgid= -p \"$p\" 2>/dev/null | tr -d ' ')",
-            "  if [ -z \"$g\" ] || [ \"$g\" = -1 ]; then echo '?'; return; fi",
+            "  if [ -z \"$g\" ] && [ -r \"/proc/$p/stat\" ]; then g=$(sed 's/.*) //' \"/proc/$p/stat\" | cut -d' ' -f6); fi",
+            "  if [ -z \"$g\" ] || [ \"$g\" = -1 ] || [ \"$g\" = 0 ]; then echo '?'; return; fi",
             "  if [ \"$g\" = \"$p\" ]; then echo shell; return; fi",
             "  c=$(ps -o comm= -p \"$g\" 2>/dev/null)",
             "  a=$(ps -o args= -p \"$g\" 2>/dev/null | tr '\\t' ' ')",
+            "  if [ -z \"$c\" ] && [ -r \"/proc/$g/comm\" ]; then c=$(cat \"/proc/$g/comm\"); a=$(tr '\\000\\t' '  ' < \"/proc/$g/cmdline\" 2>/dev/null); fi",
             "  if [ -z \"$c\" ]; then echo '?'; else printf 'fg\\t%s\\t%s\\n' \"$c\" \"$a\"; fi",
             "}",
             "printf '%s\\n' \(quote(marker))",
@@ -310,7 +337,8 @@ public enum RemoteShell {
             let id = safeName(tab.id)
             switch tab.keep {
             case .herdr:
-                continue // herdr reports its agents itself
+                // herdr reports its agents itself; the pid only shows the tab got past ssh's login.
+                lines.append("p=$(cat \"$C/tabs/\(id)\" 2>/dev/null); d=")
             case .tmux:
                 lines += [
                     "p= ; d=",
@@ -329,6 +357,8 @@ public enum RemoteShell {
             lines += [
                 "printf '%s\\t' \(quote(id)); nt_fg \"$p\"",
                 "[ -n \"$d\" ] && printf '%s\\tdir\\t%s\\n' \(quote(id)) \"$d\"",
+                "[ -e \"$C/tabs/\(id).plain\" ] && printf '%s\\tplain\\n' \(quote(id))",
+                "[ -e \"$C/tabs/\(id).nodir\" ] && printf '%s\\tnodir\\n' \(quote(id))",
             ]
         }
         if tabs.contains(where: { $0.keep == .herdr }) {
@@ -343,20 +373,22 @@ public enum RemoteShell {
         printf 'os\\t%s\\n' "$(uname -sm 2>/dev/null)"
         printf 'shell\\t%s\\n' "${SHELL:-}"
         printf 'home\\t%s\\n' "$HOME"
-        T=$(command -v tmux 2>/dev/null) && printf 'tmux\\t%s\\n' "$("$T" -V 2>/dev/null)"
+        \(findTmux)
+        [ -n "$T" ] && printf 'tmux\\t%s\\n' "$("$T" -V 2>/dev/null)"
         \(findHerdr)
         [ -n "$H" ] && printf 'herdr\\t%s\\n' "$("$H" --version 2>/dev/null | head -n 1)"
         command -v git >/dev/null 2>&1 && printf 'git\\t%s\\n' "$(git --version 2>/dev/null)"
         for a in claude codex gemini; do command -v "$a" >/dev/null 2>&1 && printf 'agent\\t%s\\n' "$a"; done
         command -v loginctl >/dev/null 2>&1 && printf 'linger\\t%s\\n' "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null)"
-        T=$(command -v tmux 2>/dev/null) && "$T" -L nextterm list-sessions -F 'session\t#{session_name}\t#{session_attached}\t#{pane_current_path}\t#{pane_current_command}' 2>/dev/null
+        [ -n "$T" ] && "$T" -L nextterm list-sessions -F 'session\t#{session_name}\t#{session_attached}\t#{pane_current_path}\t#{pane_current_command}' 2>/dev/null
         true
         """
 
     /// The kept sessions on a host: Next Term's tmux sessions, and herdr's agents.
     public static let sessionsScript = """
         printf '%s\\n' \(quote(marker))
-        T=$(command -v tmux 2>/dev/null) && "$T" -L nextterm list-sessions -F 'session\t#{session_name}\t#{session_attached}\t#{pane_current_path}\t#{pane_current_command}' 2>/dev/null
+        \(findTmux)
+        [ -n "$T" ] && "$T" -L nextterm list-sessions -F 'session\t#{session_name}\t#{session_attached}\t#{pane_current_path}\t#{pane_current_command}' 2>/dev/null
         \(findHerdr)
         if [ -n "$H" ]; then printf '%s\\n' \(quote(herdrMarker)); "$H" agent list 2>/dev/null | tr -d '\\n'; echo; fi
         true
@@ -409,6 +441,12 @@ public struct RemoteTabReport: Equatable, Sendable {
     /// nil: unknown (the tab's shell is gone or not found yet); keep the current state.
     public var foreground: ForegroundProcess?
     public var directory: String?
+    /// The tab's script ran on the host (it got past ssh's login).
+    public var started = false
+    /// tmux or herdr was missing: the tab is a plain shell, kept by nothing.
+    public var plain = false
+    /// The folder asked for was not there; the tab opened in the home folder.
+    public var folderMissing = false
 }
 
 public struct RemotePoll: Equatable, Sendable {
@@ -434,9 +472,15 @@ public struct RemotePoll: Equatable, Sendable {
             guard fields.count >= 2, !fields[0].isEmpty else { continue }
             var report = poll.tabs[fields[0]] ?? RemoteTabReport()
             switch fields[1] {
+            case "plain":
+                report.plain = true
+            case "nodir":
+                report.folderMissing = true
             case "shell":
+                report.started = true
                 report.foreground = ForegroundProcess(isShell: true, name: "")
             case "fg" where fields.count >= 3:
+                report.started = true
                 let args = fields.count > 3 ? fields[3].split(separator: " ").map(String.init) : []
                 // Login shells show as "-bash"; comm is cut to 15 characters on Linux, args are not.
                 var name = (fields[2] as NSString).lastPathComponent

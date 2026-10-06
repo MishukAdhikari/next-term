@@ -104,6 +104,8 @@ public struct TabStatus {
         integrated = false
         running = false
         busy = false
+        question = nil // whatever asked it is gone with the shell
+        screenSynced = false
         jobs = 0
         jobSummary = ""
         polledName = ""

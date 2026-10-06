@@ -446,6 +446,11 @@ enum MCPControl {
         guard let tab = findTab(arguments["tab_id"]) else { return .failure(MCPError("No tab with that id; list_tabs shows them.")) }
         if tab === caller { return .failure(MCPError("That is your own tab; type into another one.")) }
         if tab.disconnected { return .failure(MCPError("That tab lost its connection to its host; it reconnects by itself (tmux, herdr) or when someone presses Return in it.")) }
+        // Until the host runs the tab's script, what is on screen is ssh asking the user (a password, a
+        // host key): never answer that for them.
+        if tab.remote != nil && !tab.remoteConnected {
+            return .failure(MCPError("That remote tab is still connecting: ssh may be asking the user for a password or to confirm the host key. Wait, and try again once read_tab shows the host's prompt."))
+        }
         if tab.exited || !tab.view.acceptsInput { return .failure(MCPError("That tab's shell has ended.")) }
         return .success(tab)
     }

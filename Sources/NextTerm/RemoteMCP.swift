@@ -91,8 +91,10 @@ enum RemoteMCP {
             info["git"] = probe.git ?? NSNull()
             if let linger = probe.linger { info["linger"] = linger }
             var notes: [String] = []
-            if found.keep == .tmux && !probe.tmuxUsable {
-                notes.append("keep is tmux but tmux 3.2 or later is not on this host: tabs fall back to a plain shell. The user can install tmux, or use keep herdr or off.")
+            if found.keep == .tmux && probe.tmux == nil {
+                notes.append("keep is tmux but tmux is not on this host: tabs open a plain shell that nothing keeps. The user can install tmux, or use keep herdr or off.")
+            } else if found.keep == .tmux && !probe.tmuxUsable {
+                notes.append("tmux on this host is older than 3.2: tabs use it, but Next Term is tested with 3.2 and later.")
             }
             if found.keep == .herdr && probe.herdr == nil {
                 notes.append("keep is herdr but herdr is not on this host (herdr.dev). Next Term never installs it.")
@@ -137,7 +139,13 @@ enum RemoteMCP {
         let app: AppDelegate = AppDelegate.shared
         let controller = caller.flatMap(MCPControl.controller(of:)) ?? (NSApp.keyWindow?.windowController as? TerminalWindowController)
             ?? app.controllers.first ?? app.openWindow(directory: nil)
-        let tab = controller.addRemoteTab(RemoteTab(host: found, directory: directory, session: session, keep: mode), select: false)
+        // With no open connection, ssh may ask the user for a password or a host key: show them the tab.
+        let mustLogIn = !RemoteConnection.masterExists(found)
+        let tab = controller.addRemoteTab(RemoteTab(host: found, directory: directory, session: session, keep: mode), select: mustLogIn)
+        if mustLogIn {
+            controller.window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
         if let title = arguments["title"] as? String, !title.isEmpty { tab.userTitle = String(title.prefix(100)) }
         controller.refresh()
         let answer: [String: Any] = ["id": tab.id.uuidString.lowercased(), "host": found.name, "directory": directory,
@@ -148,8 +156,19 @@ enum RemoteMCP {
             guard ready else {
                 var info = answer
                 info["command_typed"] = false
+                if tab.disconnected || tab.exited {
+                    info["note"] = "ssh could not connect, so the command was not typed. The tab shows why."
+                    info["screen"] = tab.screenTail(8).joined(separator: "\n")
+                    return reply(MCPServer.CallResult(text: MCPServer.json(info), isError: true))
+                }
                 info["note"] = "The tab is open but its shell was not at a prompt within 45 s (ssh may be asking the user for a password or a host key). The command was not typed: send it with send_to_tab once read_tab shows a prompt."
                 return reply(ok(info))
+            }
+            if tab.remoteFolderMissing {
+                var info = answer
+                info["command_typed"] = false
+                info["note"] = "\(directory) is not a folder on \(found.name); the tab opened in the home folder, so the command was not typed there."
+                return reply(MCPServer.CallResult(text: MCPServer.json(info), isError: true))
             }
             MCPControl.type(command, into: tab, submit: true)
             var info = answer
@@ -159,7 +178,7 @@ enum RemoteMCP {
     }
 
     private static func waitForPrompt(_ tab: TerminalTab, until deadline: TimeInterval, _ body: @escaping (Bool) -> Void) {
-        if tab.exited { return body(false) }
+        if tab.exited || tab.disconnected { return body(false) }
         if tab.remoteReady && !tab.disconnected { return body(true) }
         if TerminalTab.now >= deadline { return body(false) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { waitForPrompt(tab, until: deadline, body) }

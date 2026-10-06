@@ -483,7 +483,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             sidebar.setRoot(project)
             return
         }
-        guard let tab = activeTab else { return }
+        // A remote tab's folder is on its host, not this Mac: the tree stays where it was.
+        guard let tab = activeTab, tab.remote == nil else { return }
         let key = tab.id.uuidString + "\u{0}" + tab.directory
         guard key != projectKey else { return }
         projectKey = key
@@ -495,7 +496,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// The folder searches cover: the project, else what the sidebar shows, else the tab's git root.
     var searchRoot: String {
-        project ?? sidebar.root?.path ?? activeTab.map { ProjectRoot.find(from: $0.directory) } ?? NSHomeDirectory()
+        project ?? sidebar.root?.path ?? activeTab.flatMap { $0.remote == nil ? ProjectRoot.find(from: $0.directory) : nil } ?? NSHomeDirectory()
     }
 
     @objc func findInFiles(_ sender: Any?) {
@@ -1039,9 +1040,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// The tab whose agent gets what you send: the front tab if an agent runs there, else the agent tab
     /// used most recently.
+    /// Only agents on this Mac: what is sent is paths of this Mac's files, which mean nothing on a server.
     var agentTab: TerminalTab? {
-        if let tab = activeTab, tab.status.running, tab.status.kind == .agent { return tab }
-        return tabs.filter { $0.status.running && $0.status.kind == .agent }.max { $0.lastSelected < $1.lastSelected }
+        if let tab = activeTab, tab.remote == nil, tab.status.running, tab.status.kind == .agent { return tab }
+        return tabs.filter { $0.remote == nil && $0.status.running && $0.status.kind == .agent }.max { $0.lastSelected < $1.lastSelected }
     }
 
     /// ⌥⌘K: the editor's selection (or its file), or the files and folders selected in the sidebar.
@@ -1208,7 +1210,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     @objc func newTab(_ sender: Any?) {
-        addTab(directory: project ?? activeTab?.currentDirectory())
+        addTab(directory: project ?? activeTab.flatMap { $0.remote == nil ? $0.currentDirectory() : nil })
     }
 
     /// ⌘W closes what has the keyboard: the file being edited, or the terminal tab.

@@ -7,6 +7,15 @@ import NextTermCore
 /// and the MCP tools. tmux checks run when a tmux binary is found (PATH or NEXTTERM_TEST_TMUX).
 extension SelfTest {
     static func remoteChecks(_ c: TerminalWindowController) async {
+        #if DEBUG
+        await remoteChecksWithStandInSSH(c)
+        #else
+        note("remote: checks need a debug build (the stand-in ssh is debug-only)")
+        #endif
+    }
+
+    #if DEBUG
+    private static func remoteChecksWithStandInSSH(_ c: TerminalWindowController) async {
         let base = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nt-remote-\(getpid())")
         let home = base.appendingPathComponent("home")
         let bin = base.appendingPathComponent("bin")
@@ -71,7 +80,9 @@ extension SelfTest {
 
         // A plain remote shell: ssh in the tab's pty, the host's prompt, status from the host.
         let plain = c.addRemoteTab(RemoteTab(host: host))
+        check(!plain.remoteConnected, "remote: a new tab counts as connecting until the host runs its script")
         check(plain.remote != nil && plain.title.hasPrefix("selftest: "), "remote: a tab on a host is named after it", plain.title)
+        check(await wait(20) { plain.remoteConnected }, "remote: the host reports the tab's script running (past ssh's login)")
         check(await wait(20) { plain.remoteReady }, "remote: the host reports the tab's shell at its prompt",
               plain.screenTail(6).joined(separator: " | "))
         plain.view.send(txt: "sleep 4\r")
@@ -121,6 +132,9 @@ extension SelfTest {
             let changes = await tool("host_changes", ["host": "selftest"])
             check(!changes.isError && (changes.json?["files"] as? [String])?.contains("?? done.txt") == true, "remote MCP: host_changes shows what changed there", changes.text)
 
+            let nowhere = await tool("new_remote_tab", ["host": "selftest", "directory": project.path + "/missing", "command": "echo never"], timeout: 60)
+            check(nowhere.isError && nowhere.json?["command_typed"] as? Bool == false, "remote MCP: a missing folder is reported, and the command is not run in home", nowhere.text)
+            if let id = nowhere.json?["id"] as? String, let tab = c.tabs.first(where: { $0.id.uuidString.lowercased() == id }) { c.remove(tab) }
             let worker = await tool("new_remote_tab", ["host": "selftest", "command": "printf 'worker-%s\\n' up", "title": "remote worker"], timeout: 60)
             let workerID = worker.json?["id"] as? String ?? ""
             check(!worker.isError && worker.json?["command_typed"] as? Bool == true, "remote MCP: new_remote_tab opens a tab and runs the command at the host's prompt", worker.text)
@@ -162,4 +176,5 @@ extension SelfTest {
         check(await wait(5) { sh("tmux -L nextterm list-sessions -F '#{session_name}'").contains(session) }, "remote tmux: closing the tab only detaches")
         _ = sh("tmux -L nextterm kill-server")
     }
+    #endif
 }
