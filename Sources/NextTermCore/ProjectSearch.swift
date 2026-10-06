@@ -106,8 +106,10 @@ public struct FileMatches: Sendable {
 public enum ProjectSearch {
     public static let maxFileSize = 5_000_000
     public static let maxMatches = 20_000
-    /// Folders never worth searching when git cannot tell us what is ignored.
-    static let skippedFolders: Set<String> = [".git", "node_modules", "vendor", ".build", "build", "dist", "DerivedData", ".next", ".venv", "__pycache__"]
+    /// Folders never worth searching when git cannot tell us what is ignored. Also the state that ML and
+    /// agent tools write next to a project: LangGraph's dev server, MLflow's runs, Jupyter, Weights & Biases.
+    static let skippedFolders: Set<String> = [".git", "node_modules", "vendor", ".build", "build", "dist", "DerivedData", ".next", ".venv", "__pycache__",
+                                              ".langgraph_api", "mlruns", "mlartifacts", ".ipynb_checkpoints", "wandb"]
 
     /// Files to search: git's tracked and untracked-but-not-ignored files when `root` is in a repository,
     /// else a walk that skips the usual dependency and build folders. Paths relative to `root`.
@@ -116,17 +118,17 @@ public enum ProjectSearch {
             let paths = data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }
             if !paths.isEmpty { return Array(Set(paths)).sorted() }
         }
+        // Paths relative to the root as the walk itself gives them: comparing a root reached through a
+        // symlink (/var is /private/var) with the real paths it reports would lose the folders.
         var result: [String] = []
-        let base = URL(fileURLWithPath: root)
-        guard let walker = FileManager.default.enumerator(at: base, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey]) else { return [] }
-        for case let url as URL in walker {
-            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
-            if values?.isDirectory == true {
-                if skippedFolders.contains(url.lastPathComponent) { walker.skipDescendants() }
+        guard let walker = FileManager.default.enumerator(atPath: root) else { return [] }
+        while let path = walker.nextObject() as? String {
+            let type = walker.fileAttributes?[.type] as? FileAttributeType
+            if type == .typeDirectory {
+                if skippedFolders.contains((path as NSString).lastPathComponent) { walker.skipDescendants() }
                 continue
             }
-            guard values?.isRegularFile == true else { continue }
-            let path = url.path.hasPrefix(base.path + "/") ? String(url.path.dropFirst(base.path.count + 1)) : url.lastPathComponent
+            guard type == .typeRegular else { continue }
             result.append(path)
         }
         return result.sorted()

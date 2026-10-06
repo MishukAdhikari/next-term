@@ -99,4 +99,19 @@ import Testing
         #expect(Set(walk.paths) == ["src/a.swift", ".env", "docs/b.md"] && walk.complete)
         #expect(FileWalker.files(in: root, limit: 1).complete == false)
     }
+
+    @Test func walkerAndSearchSkipTheStateMLAndAgentToolsWrite() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nt-ml-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let kept = ["src/agent/graph.py", "notebooks/eval.ipynb"]
+        let generated = [".langgraph_api/store.pckl", "mlruns/0/meta.yaml", "mlartifacts/1/model.pkl",
+                         "notebooks/.ipynb_checkpoints/eval-checkpoint.ipynb", "wandb/run-1/files/config.yaml"]
+        for path in kept + generated {
+            let full = (root as NSString).appendingPathComponent(path)
+            try FileManager.default.createDirectory(atPath: (full as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+            try "x".write(toFile: full, atomically: true, encoding: .utf8)
+        }
+        #expect(Set(FileWalker.files(in: root).paths) == Set(kept))
+        #expect(Set(ProjectSearch.files(in: root, git: nil)) == Set(kept))
+    }
 }

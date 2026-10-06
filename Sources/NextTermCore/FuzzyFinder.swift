@@ -265,7 +265,9 @@ public final class FuzzyIndex: @unchecked Sendable {
 /// folders and the usual dependency and build folders, and stops at a limit.
 public enum FileWalker {
     static let skipped: Set<String> = ["node_modules", "vendor", ".build", "build", "dist", "DerivedData", ".next", ".venv",
-                                       "__pycache__", "Pods", "target", ".gradle", "Library"]
+                                       "__pycache__", "Pods", "target", ".gradle", "Library",
+                                       // State that ML and agent tools write next to a project.
+                                       ".langgraph_api", "mlruns", "mlartifacts", ".ipynb_checkpoints", "wandb"]
 
     /// Paths relative to `root`, and whether the walk saw everything.
     public static func files(in root: String, limit: Int = 200_000, seconds: TimeInterval = 5) -> (paths: [String], complete: Bool) {
