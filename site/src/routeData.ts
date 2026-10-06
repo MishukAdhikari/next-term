@@ -8,6 +8,16 @@ export const onRequest = defineRouteMiddleware((context) => {
 	if (!site) return;
 	const id = route.id;
 
+	// The not-found page is served at every missing address, so it has no address of its own: drop the
+	// canonical link and og:url Starlight gives it (they would point at /404/, which is itself a 404).
+	if (id === '404') {
+		route.head = route.head.filter(
+			({ tag, attrs }) =>
+				!(tag === 'link' && attrs?.rel === 'canonical') && !(tag === 'meta' && attrs?.property === 'og:url')
+		);
+		return;
+	}
+
 	// Every documentation page: where it sits.
 	if (id === 'docs' || id.startsWith('docs/')) {
 		const trail = [

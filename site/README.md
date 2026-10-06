@@ -13,6 +13,7 @@ Run these in `site/`. Node 22.12 or later.
 | `npm run build` | Build the site into `site/dist/` |
 | `npm run preview` | Serve `dist/` locally, search included |
 | `npm run check` | Check `dist/`: links and #fragments, HTML structure, JSON-LD, sitemap, third-party requests, title and description lengths, one `<h1>`, alt text, typography (needs Python 3) |
+| `npm run indexnow` | After a deploy: tell Bing and the other IndexNow engines which pages changed (see [Deploying](#deploying)) |
 
 The build must finish without warnings and `npm run check` must pass before a deploy. CI (`.github/workflows/site.yml`) runs both on every change to `site/`.
 
@@ -27,12 +28,14 @@ The build must finish without warnings and `npm run check` must pass before a de
 | `src/routeData.ts` | Adds `BreadcrumbList` JSON-LD to every docs page and `FAQPage` to the FAQ, read from the page itself |
 | `src/pages/llms.txt.ts`, `llms-full.txt.ts` | `/llms.txt` and `/llms-full.txt`, generated from the docs at build time |
 | `src/pages/robots.txt.ts` | `/robots.txt`: everything allowed, AI crawlers named, the sitemap |
+| `src/pages/[indexnow].txt.ts` | `/<key>.txt`: the IndexNow key file, from `INDEXNOW_KEY` in `src/config.ts` |
 | `src/pages/404.astro` | The not-found page (`dist/404.html`) |
 | `src/styles/custom.css` | The app’s colours (dark and light), fonts, measure, tables, keys |
 | `src/assets/screenshots/` | Screenshots, and a README saying which to retake |
 | `public/` | Favicon, touch icon, `og.jpg` social card |
 | `scripts/check-dist.py` | The checks behind `npm run check` |
 | `scripts/make-og-image.swift` | Rebuilds `public/og.jpg` |
+| `scripts/indexnow.mjs` | Pings IndexNow with changed pages; run by hand after a deploy |
 | `SEO.md` | Search Console, Bing and AI-search steps (not published) |
 
 ### Changing the address
@@ -91,3 +94,17 @@ server {
 ```
 
 Pagefind (the search) loads `.wasm` and `.pf_*` files from `/pagefind/`; nginx’s standard `mime.types` covers them. Behind Cloudflare, see the crawler notes in `SEO.md`: Cloudflare’s AI-bot blocking would override `robots.txt`.
+
+### After a deploy: IndexNow
+
+[IndexNow](https://www.indexnow.org/documentation) tells Bing, Yandex, Seznam, Naver, Yep and the other participating engines that pages changed, so they recrawl them within minutes. Bing’s index also feeds ChatGPT search, Copilot and DuckDuckGo. Google does not take part; the sitemap covers Google.
+
+The build publishes the key file at `/<key>.txt` (the key is `INDEXNOW_KEY` in `src/config.ts`). Once the new build is live, ping the pages that changed:
+
+```sh
+npm run indexnow -- / /docs/agents/       # only these pages (best for small updates)
+npm run indexnow                          # every page in the live sitemap (after a big change)
+npm run indexnow -- --dry-run             # show what would be sent; send nothing
+```
+
+The script reads the live sitemap, checks that the key file answers with the key (and stops if it does not: deploy first), then POSTs the URLs to `api.indexnow.org`, which shares them with every participating engine. `200` or `202` means received. Nothing runs it automatically, not the build and not CI. Send a page again only when it really changed; the engines throttle sites that repeat themselves.

@@ -16,6 +16,13 @@ export const DOWNLOAD_SHA256 = `${REPO}/releases/latest/download/NextTerm.dmg.sh
 export const RELEASE_NOTES = `${REPO}/releases/tag/v${VERSION}`;
 export const LICENSE_URL = `${REPO}/blob/main/LICENSE`;
 
+/**
+ * The IndexNow key. The build publishes it as /<key>.txt, and scripts/indexnow.mjs sends it with each
+ * ping so Bing and the other IndexNow engines can check the ping came from this site. It is public by
+ * design (anyone can read the file); to change it, put any 8–128 letters, digits or dashes here.
+ */
+export const INDEXNOW_KEY = '851176fab7f883cc1789f08a5ef768c0';
+
 /** One-sentence description used for the home page, JSON-LD and llms.txt. */
 export const SUMMARY =
 	'Next Term is a free, open-source (MIT) native macOS terminal and code editor for running AI coding agents such as Claude Code, Codex and Gemini CLI side by side, with a status mark on every tab that shows which agent is working, done, or waiting on you.';

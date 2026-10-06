@@ -8,6 +8,7 @@ It fails (exit 1) on:
 - HTML that is not well formed (unbalanced or misnested tags);
 - JSON-LD that does not parse, or a page missing the structured data it should have;
 - a page missing from the sitemap, or a sitemap entry with no page;
+- a missing IndexNow key file, or a canonical link on the not-found page;
 - any resource loaded from another origin (scripts, styles, fonts, images, frames);
 - a <title> over 60 characters, a meta description over 155, no or several <h1>, a missing lang,
   an image without alt text;
@@ -316,6 +317,22 @@ def main() -> int:
             parsed = urlparse(url)
             if parsed.netloc == SITE_HOST and target_for(parsed.path or "/") is None:
                 error(name, f"link {url} does not resolve")
+
+    # The IndexNow key file: /<key>.txt holding exactly the key from src/config.ts.
+    key = re.search(r"export const INDEXNOW_KEY = '([^']+)'", (ROOT / "src" / "config.ts").read_text(encoding="utf-8"))
+    if not key:
+        error("src/config.ts", "no INDEXNOW_KEY")
+    else:
+        key_file = DIST / f"{key.group(1)}.txt"
+        if not key_file.is_file():
+            error(key_file.name, "IndexNow key file missing")
+        elif key_file.read_text(encoding="utf-8").strip() != key.group(1):
+            error(key_file.name, "does not contain exactly the IndexNow key")
+
+    # The not-found page is served at every missing address: it must not claim an address of its own.
+    not_found = pages.get("/404.html")
+    if not_found and any(tag == "link:canonical" for tag, _, _ in not_found.links):
+        error("/404.html", "has a canonical link")
 
     # Typography in visible text ------------------------------------------------------------------
     rules = [
