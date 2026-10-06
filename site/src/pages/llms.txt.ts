@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro';
-import { MIN_MACOS, RELEASES_LATEST, REPO, SUMMARY, TAGLINE, VERSION } from '../config';
+import { DOWNLOAD_DMG, MIN_MACOS, RELEASES_LATEST, REPO, SUMMARY, TAGLINE, VERSION } from '../config';
 import { docsInOrder, pageUrl } from '../lib/docs';
 
 // /llms.txt in the llmstxt.org format: a summary, then the pages worth reading, with what each covers.
@@ -34,7 +34,8 @@ export const GET: APIRoute = async ({ site }) => {
 		'- Built in: split panes (⌘D, ⇧⌘D), Go to File (⌘P, fuzzy), a code editor for 103 languages, side-by-side git diffs with hunk staging (⌥⌘G), a project sidebar with git status and +/− line counts, Find and Replace in Files, the `nxtrm` command, configurable layouts and shortcuts, and checksum-verified self-updates.',
 		'- Not released yet: agent sessions per project (coming next) and remote access to the MCP server for agents outside the Mac (coming later).',
 		'',
-		`Download: ${RELEASES_LATEST}`,
+		`Download (the latest disk image): ${DOWNLOAD_DMG}`,
+		`Release notes: ${RELEASES_LATEST}`,
 		`Source code: ${REPO}`,
 		'',
 		...groups.flatMap(([title, ids]) => [`## ${title}`, '', ...ids.map(line).filter(Boolean), '']),

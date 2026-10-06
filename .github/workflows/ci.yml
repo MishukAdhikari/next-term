@@ -56,6 +56,11 @@ jobs:
         with:
           name: NextTerm-dmg
           path: dist
+      - name: Add version-less copies (the website downloads releases/latest/download/NextTerm.dmg)
+        run: |
+          cd dist
+          cp NextTerm-*.dmg NextTerm.dmg
+          sha256sum NextTerm.dmg > NextTerm.dmg.sha256
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}

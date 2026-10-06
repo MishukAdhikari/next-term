@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro';
-import { RELEASES_LATEST, REPO, SUMMARY, VERSION } from '../config';
+import { DOWNLOAD_DMG, REPO, SUMMARY, VERSION } from '../config';
 import { docsInOrder, markdownForLlms, pageUrl } from '../lib/docs';
 
 // /llms-full.txt: every documentation page as Markdown in one file, generated from the same content
@@ -12,7 +12,7 @@ export const GET: APIRoute = async ({ site }) => {
 		'',
 		`> ${SUMMARY}`,
 		'',
-		`Version ${VERSION}. Download: ${RELEASES_LATEST}. Source: ${REPO}. Licence: MIT.`,
+		`Version ${VERSION}. Download: ${DOWNLOAD_DMG}. Source: ${REPO}. Licence: MIT.`,
 		`This file contains every page of ${new URL('/docs/', site).href} in reading order.`,
 		'',
 	];

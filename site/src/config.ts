@@ -10,6 +10,9 @@ export const AUTHOR_URL = 'https://github.com/MishukAdhikari';
 export const REPO = 'https://github.com/MishukAdhikari/next-term';
 /** Always the newest release page; the DMG is attached there as NextTerm-x.y.z.dmg. */
 export const RELEASES_LATEST = `${REPO}/releases/latest`;
+/** The newest release's disk image itself: every release also carries NextTerm.dmg under that fixed name. */
+export const DOWNLOAD_DMG = `${REPO}/releases/latest/download/NextTerm.dmg`;
+export const DOWNLOAD_SHA256 = `${REPO}/releases/latest/download/NextTerm.dmg.sha256`;
 export const RELEASE_NOTES = `${REPO}/releases/tag/v${VERSION}`;
 export const LICENSE_URL = `${REPO}/blob/main/LICENSE`;
 

@@ -14,7 +14,7 @@ Next Term is one app: a terminal with tabs, a code editor above it, and a projec
 
 ## Download and install
 
-1. Open the [latest release on GitHub](https://github.com/MishukAdhikari/next-term/releases/latest) and download `NextTerm-0.3.0.dmg`.
+1. [Download NextTerm.dmg](https://github.com/MishukAdhikari/next-term/releases/latest/download/NextTerm.dmg): always the latest version, straight from its [release on GitHub](https://github.com/MishukAdhikari/next-term/releases/latest).
 2. Open the disk image and drag **Next Term** to **Applications**.
 3. Eject the disk image and open Next Term from Applications.
 
@@ -31,13 +31,13 @@ macOS remembers the choice; later launches open normally. Notarized releases are
 
 ### Check the download (optional)
 
-Each release includes a checksum file, `NextTerm-0.3.0.dmg.sha256`. Download it next to the disk image and run this in that folder before you allow the app:
+Each release includes a checksum file, [`NextTerm.dmg.sha256`](https://github.com/MishukAdhikari/next-term/releases/latest/download/NextTerm.dmg.sha256). Download it next to the disk image and run this in that folder before you allow the app:
 
 ```sh
-shasum -a 256 -c NextTerm-0.3.0.dmg.sha256
+shasum -a 256 -c NextTerm.dmg.sha256
 ```
 
-`NextTerm-0.3.0.dmg: OK` means your file matches the checksum published with the release, byte for byte. Releases are built by GitHub Actions from the public source.
+`NextTerm.dmg: OK` means your file matches the checksum published with the release, byte for byte. Releases are built by GitHub Actions from the public source.
 
 ## First launch: choose a folder
 
