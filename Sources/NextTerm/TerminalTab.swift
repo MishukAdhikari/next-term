@@ -452,7 +452,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private(set) var claudePort: String?
 
     private func environment(shellName: String) -> [String] {
-        var env = ProcessInfo.processInfo.environment
+        // A fresh terminal, not a child of whatever launched Next Term (see TerminalEnvironment).
+        var env = TerminalEnvironment.clean(ProcessInfo.processInfo.environment)
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["TERM_PROGRAM"] = "NextTerm"
@@ -467,10 +468,6 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         }
         // Apps opened from Finder get no LANG; without it zsh and most CLIs mangle UTF-8.
         if env["LANG"]?.isEmpty ?? true { env["LANG"] = "en_US.UTF-8" }
-        // Never leak the launching terminal's identity into ours.
-        for key in ["TERM_SESSION_ID", "ITERM_SESSION_ID", "ITERM_PROFILE", "WINDOWID", "__CFBundleIdentifier"] {
-            env.removeValue(forKey: key)
-        }
         if shellName == "zsh", let zdotdir = AppSupport.zshIntegrationDirectory {
             env["NEXTTERM_USER_ZDOTDIR"] = env["ZDOTDIR"] ?? ""
             env["ZDOTDIR"] = zdotdir.path

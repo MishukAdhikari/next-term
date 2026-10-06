@@ -1138,6 +1138,7 @@ enum SelfTest {
         }
 
         await geminiLinkChecks(c)
+        if ProcessInfo.processInfo.environment["NEXTTERM_REAL_CLAUDE"] == "1" { await realClaudeCheck(c, proj: proj) }
 
         // Claude's proposed edits: shown as a diff to accept or reject; the file is never written by Next Term.
         let target = proj.appendingPathComponent("src/main.php")
@@ -1185,6 +1186,30 @@ enum SelfTest {
         }
         try? FileManager.default.removeItem(at: env)
         claude.close()
+    }
+
+    /// Opt-in (NEXTTERM_REAL_CLAUDE=1): the real `claude` CLI connects and shows the editor's selection.
+    /// Started in ~/Code (a folder the user trusts) and quit with Ctrl-C before any message is sent.
+    private static func realClaudeCheck(_ c: TerminalWindowController, proj: URL) async {
+        let home = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Code").path
+        let tab = c.addTab(directory: home)
+        _ = await wait(20) { tab.status.integrated }
+        let before = Set(ClaudeIDEServer.shared.clients.map(\.id))
+        tab.view.send(txt: "\u{15}claude\r")
+        let connected = await wait(40) { ClaudeIDEServer.shared.clients.contains { !before.contains($0.id) && $0.ready } }
+        check(connected, "the real claude CLI connects to Next Term", tab.screenTail(6).joined(separator: " | "))
+        if connected, let editor = c.editorArea.activeEditor {
+            c.window?.makeFirstResponder(editor.textView)
+            let lines = editor.document.lines
+            editor.textView.setSelectedRange(NSRange(location: 0, length: lines.starts[min(2, lines.count - 1)]))
+            let pill = await wait(10) { tab.screenTail(12).joined(separator: "\n").range(of: #"⧉ ?\d+ lines? selected|In \w"#, options: .regularExpression) != nil }
+            check(pill, "and its prompt shows the editor's selection (⧉)", tab.screenTail(8).joined(separator: " | "))
+            check(!tab.screenTail(12).joined().contains("CHILD_SESSION"), "and it runs as a session of its own (no inherited sub-agent marker)")
+            await screenshot(c, suffix: "-real-claude")
+        }
+        for _ in 0..<3 { tab.view.send(txt: "\u{03}"); await pause(0.6) }
+        _ = await wait(8) { !tab.status.running }
+        c.requestClose(tab)
     }
 
     // MARK: Gemini CLI / Qwen Code link

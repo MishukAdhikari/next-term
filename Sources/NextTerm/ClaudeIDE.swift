@@ -163,14 +163,8 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
 
     // MARK: environment for tabs
 
-    /// Variables other IDEs' integrations leave behind, which would point `claude` at them.
-    static let inheritedVariables = ["CLAUDE_CODE_SSE_PORT", "ENABLE_IDE_INTEGRATION", "CLAUDE_CODE_AUTO_CONNECT_IDE",
-                                     "GEMINI_CLI_IDE_SERVER_PORT", "GEMINI_CLI_IDE_WORKSPACE_PATH", "QWEN_CODE_IDE_SERVER_PORT",
-                                     "QWEN_CODE_IDE_WORKSPACE_PATH"]
-
-    /// Sets a tab's environment up for the link (or only cleans it when the link is off).
+    /// Sets a tab's environment up for the link (other editors' leftovers are already gone: TerminalEnvironment).
     func prepare(_ env: inout [String: String]) {
-        for key in Self.inheritedVariables { env.removeValue(forKey: key) }
         guard let port else { return }
         env["CLAUDE_CODE_SSE_PORT"] = String(port)
         env["ENABLE_IDE_INTEGRATION"] = "true"
