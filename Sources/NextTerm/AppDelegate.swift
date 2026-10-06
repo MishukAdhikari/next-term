@@ -105,6 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return
         }
         CommandLineTool.registerQuietly()
+        MainActor.assumeIsolated { Updater.shared.start() }
         // `nxtrm` started us: open what it asked for, not the last session.
         let arguments = CommandLine.arguments
         if let flag = arguments.firstIndex(of: "--open-request"), flag + 1 < arguments.count,
@@ -175,6 +176,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         welcome?.close()
         target.window?.makeKeyAndOrderFront(nil)
         target.openFile(URL(fileURLWithPath: path), line: line, column: column)
+    }
+
+    @objc func checkForUpdates(_ sender: Any?) {
+        MainActor.assumeIsolated { Updater.shared.check(userInitiated: true) }
+    }
+
+    @objc func toggleAutomaticUpdates(_ sender: Any?) {
+        MainActor.assumeIsolated { Updater.shared.automaticChecks.toggle() }
     }
 
     @objc func installCommandLineTool(_ sender: Any?) {
@@ -273,6 +282,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated { Updater.shared.installStagedUpdateOnQuit() }
         if !SelfTest.isRequested { sessionProjects = controllers.compactMap(\.project) }
         for controller in controllers { for tab in controller.tabs { tab.terminate() } }
     }
@@ -517,6 +527,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         if item.action == #selector(toggleSidebarSide(_:)) { item.state = sidebarSide == .right ? .on : .off }
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = softWrap ? .on : .off }
+        if item.action == #selector(toggleAutomaticUpdates(_:)) {
+            item.state = MainActor.assumeIsolated { Updater.shared.automaticChecks } ? .on : .off
+        }
         return true
     }
 
@@ -609,6 +622,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let app = submenu(main, "Next Term")
         app.addItem(withTitle: "About Next Term", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         app.addItem(.separator())
+        item(app, "Check for Updates…", #selector(checkForUpdates(_:)), "", target: self)
+        item(app, "Check for Updates Automatically", #selector(toggleAutomaticUpdates(_:)), "", target: self)
         item(app, "Install Command Line Tool (nxtrm)…", #selector(installCommandLineTool(_:)), "", target: self)
         app.addItem(.separator())
         let services = NSMenu()

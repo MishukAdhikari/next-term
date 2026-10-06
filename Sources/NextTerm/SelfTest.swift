@@ -82,7 +82,8 @@ enum SelfTest {
 
         // New tab opens in the current tab's directory.
         first.view.send(txt: "cd /tmp\r")
-        check(await wait(12) { first.directory == "/tmp" }, "cwd is tracked", first.directory)
+        check(await wait(12) { first.directory == "/tmp" }, "cwd is tracked",
+              first.directory + " — screen: " + first.screenTail(6).joined(separator: " | "))
         let sentThroughMenu = NSApp.keyWindow === window
         if sentThroughMenu {
             NSApp.sendAction(#selector(TerminalWindowController.newTab(_:)), to: nil, from: nil)
@@ -709,6 +710,8 @@ enum SelfTest {
 
         // nxtrm: a file at a line, in the window whose project holds it; a folder opens as a project.
         let delegate = AppDelegate.shared!
+        let recentsBefore = UserDefaults.standard.stringArray(forKey: "recentProjects")
+        defer { UserDefaults.standard.set(recentsBefore, forKey: "recentProjects") }
         let cliFile = proj.appendingPathComponent("src/cli.txt")
         try? (1...10).map { "line \($0)" }.joined(separator: "\n").write(to: cliFile, atomically: true, encoding: .utf8)
         delegate.handle(OpenCommand(items: [OpenRequest(path: cliFile.path, line: 7, column: 3)]))
@@ -726,8 +729,8 @@ enum SelfTest {
         } else {
             let opened = delegate.controllers.first { $0.project == canonicalPath(proj.path) }
             check(opened != nil, "nxtrm on a folder opens it as a project")
-            opened?.window?.performClose(nil)
-            _ = await wait(3) { delegate.controllers.count == windows }
+            opened?.window?.close()
+            check(await wait(8) { delegate.controllers.count == windows }, "and its window closes again")
         }
         if let script = CommandLineTool.script {
             let bin = script.deletingLastPathComponent().path
@@ -774,6 +777,23 @@ enum SelfTest {
         let typing = Date().timeIntervalSince(typed)
         check(typing < 0.1, "typing that recolours the whole file stays responsive", String(format: "%.0f ms", typing * 1000))
         longEditor.document.undoManager.undo()
+        // Scrolled to mid-line: the gutter's numbers must stay under the tab bar, not draw over it.
+        let clip = longEditor.scrollView.contentView
+        longEditor.textView.scroll(NSPoint(x: 0, y: 9.5))
+        check(longEditor.scrollView.verticalRulerView?.clipsToBounds == true, "the line-number gutter is clipped to itself")
+        if let ruler = longEditor.scrollView.verticalRulerView {
+            let tv = longEditor.textView
+            let rulerRight = ruler.convert(ruler.bounds, to: longEditor).maxX
+            let codeLeft = tv.convert(NSPoint(x: tv.textContainerOrigin.x, y: 0), to: longEditor).x
+            let codeTop = tv.convert(NSPoint(x: 0, y: tv.textContainerOrigin.y), to: clip).y
+            check(codeLeft >= rulerRight - 0.5, "the code starts right of the gutter, not under it",
+                  "ruler right \(rulerRight), code left \(codeLeft), clip x \(clip.bounds.minX)")
+            tv.go(toLine: 1)
+            _ = codeTop
+            check(tv.convert(NSPoint(x: 0, y: tv.textContainerOrigin.y), to: clip).y >= clip.bounds.minY - 0.5,
+                  "going to line 1 shows its top, not cut off under the tab bar", "\(tv.convert(NSPoint(x: 0, y: tv.textContainerOrigin.y), to: clip).y) vs \(clip.bounds.minY)")
+            tv.scroll(NSPoint(x: 0, y: 9.5))
+        }
         await screenshot(c, suffix: "-editor")
 
         // The terminal can sit on any side of the editor, and the sidebar on either side of the window.

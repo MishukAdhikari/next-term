@@ -160,10 +160,11 @@ final class CodeTextView: NSTextView {
         let glyphs = layoutManager.glyphRange(forCharacterRange: NSRange(location: range.location, length: 0), actualCharacterRange: nil)
         var rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
         if rect.height == 0 { rect.size.height = font?.boundingRectForFont.height ?? 16 }
+        // A rect as tall as the view, centred on the line: scrolling it into view centres the line, and
+        // the scroll view keeps the gutter and the edges right (never a raw scroll(to:), which ignores them).
         let visible = scroll.contentView.bounds.height
-        let y = max(0, rect.midY + textContainerOrigin.y - visible / 2)
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: min(y, max(0, frame.height - visible))))
-        scroll.reflectScrolledClipView(scroll.contentView)
+        let centred = NSRect(x: 0, y: rect.midY + textContainerOrigin.y - visible / 2, width: 1, height: visible).intersection(bounds)
+        scrollToVisible(centred.isEmpty ? rect : centred)
     }
 }
 
@@ -176,6 +177,9 @@ final class LineNumberRuler: NSRulerView {
         super.init(scrollView: textView.enclosingScrollView, orientation: .verticalRuler)
         clientView = textView
         ruleThickness = 44
+        // Since macOS 14 views draw outside their bounds unless told not to: numbers scrolled past the
+        // top would land on the tab bar.
+        clipsToBounds = true
     }
 
     required init(coder: NSCoder) { fatalError("not used") }
@@ -217,6 +221,7 @@ final class LineNumberRuler: NSRulerView {
             let size = label.size(withAttributes: attributes)
             // Baseline-aligned with the code: same line fragment, vertically centred.
             let y = fragment.minY + view.textContainerOrigin.y + offset + (fragment.height - size.height) / 2
+            guard y + size.height > bounds.minY, y < bounds.maxY else { return }
             label.draw(at: NSPoint(x: ruleThickness - size.width - 12, y: y), withAttributes: attributes)
         }
 
@@ -262,6 +267,9 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         scrollView.drawsBackground = true
         scrollView.backgroundColor = Theme.background
         scrollView.scrollerStyle = .overlay
+        // The gutter and the code side by side; no automatic insets sliding the code under the gutter.
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsets()
         scrollView.documentView = textView
         ruler = LineNumberRuler(textView: textView)
         super.init(frame: .zero)
