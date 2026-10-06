@@ -13,10 +13,11 @@ import NextTermCore
 @MainActor
 final class Updater {
     static let shared = Updater()
-    static let repository = "MishukAdhikari/next-term"
-    static let feed = URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!
+    // Constants, read from URLSession's callbacks too: not tied to the main actor.
+    nonisolated static let repository = "MishukAdhikari/next-term"
+    nonisolated static let feed = URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!
     /// Redirects to the newest release's page; used when the API is rate-limited.
-    static let latestPage = URL(string: "https://github.com/\(repository)/releases/latest")!
+    nonisolated static let latestPage = URL(string: "https://github.com/\(repository)/releases/latest")!
     static let interval: TimeInterval = 24 * 60 * 60
     /// Remind Me Later: how long before the automatic check opens the window for that version again.
     static let snooze: TimeInterval = 24 * 60 * 60
