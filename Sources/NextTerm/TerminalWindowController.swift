@@ -22,14 +22,21 @@ final class ThemedSplitView: NSSplitView {
 }
 
 final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSplitViewDelegate, NSMenuItemValidation,
-                                      TabBarViewDelegate, TerminalTabDelegate, ProjectSidebarDelegate, FindInFilesDelegate {
+                                      TabBarViewDelegate, TerminalTabDelegate, ProjectSidebarDelegate, FindInFilesDelegate,
+                                      EditorAreaDelegate {
     private(set) var tabs: [TerminalTab] = []
     private(set) var activeIndex = 0
     let tabBar = TabBarView(frame: .zero)
     let sidebar = ProjectSidebarView(frame: NSRect(x: 0, y: 0, width: ProjectSidebarView.defaultWidth, height: 600))
     private let splitView = ThemedSplitView()
     private let mainPane = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+    /// [ open files ] over [ terminal tabs ], like an IDE. The editor part is hidden while no file is open.
+    private let workSplit = ThemedSplitView()
+    let editorArea = EditorArea(frame: NSRect(x: 0, y: 0, width: 800, height: 360))
+    private let terminalPane = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 240))
     private let container = NSView()
+    /// Unsaved files were dealt with (saved or discarded) for this close.
+    private var editorsConfirmed = false
     private var isFullScreen = false
     /// Last state announced to VoiceOver per tab, so each change is announced once.
     private var announcedStates: [UUID: TabState] = [:]
@@ -86,18 +93,35 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         tabBar.delegate = self
         tabBar.translatesAutoresizingMaskIntoConstraints = false
         container.translatesAutoresizingMaskIntoConstraints = false
-        mainPane.addSubview(container)
-        mainPane.addSubview(tabBar)
+        terminalPane.addSubview(container)
+        terminalPane.addSubview(tabBar)
         NSLayoutConstraint.activate([
-            tabBar.topAnchor.constraint(equalTo: mainPane.topAnchor),
-            tabBar.leadingAnchor.constraint(equalTo: mainPane.leadingAnchor),
-            tabBar.trailingAnchor.constraint(equalTo: mainPane.trailingAnchor),
+            tabBar.topAnchor.constraint(equalTo: terminalPane.topAnchor),
+            tabBar.leadingAnchor.constraint(equalTo: terminalPane.leadingAnchor),
+            tabBar.trailingAnchor.constraint(equalTo: terminalPane.trailingAnchor),
             tabBar.heightAnchor.constraint(equalToConstant: TabBarView.height),
             container.topAnchor.constraint(equalTo: tabBar.bottomAnchor),
-            container.leadingAnchor.constraint(equalTo: mainPane.leadingAnchor),
-            container.trailingAnchor.constraint(equalTo: mainPane.trailingAnchor),
-            container.bottomAnchor.constraint(equalTo: mainPane.bottomAnchor),
+            container.leadingAnchor.constraint(equalTo: terminalPane.leadingAnchor),
+            container.trailingAnchor.constraint(equalTo: terminalPane.trailingAnchor),
+            container.bottomAnchor.constraint(equalTo: terminalPane.bottomAnchor),
         ])
+        workSplit.isVertical = false
+        workSplit.dividerStyle = .thin
+        workSplit.delegate = self
+        workSplit.addArrangedSubview(editorArea)
+        workSplit.addArrangedSubview(terminalPane)
+        workSplit.setHoldingPriority(.init(250), forSubviewAt: 0)
+        workSplit.setHoldingPriority(.init(260), forSubviewAt: 1)
+        workSplit.translatesAutoresizingMaskIntoConstraints = false
+        mainPane.addSubview(workSplit)
+        NSLayoutConstraint.activate([
+            workSplit.topAnchor.constraint(equalTo: mainPane.topAnchor),
+            workSplit.leadingAnchor.constraint(equalTo: mainPane.leadingAnchor),
+            workSplit.trailingAnchor.constraint(equalTo: mainPane.trailingAnchor),
+            workSplit.bottomAnchor.constraint(equalTo: mainPane.bottomAnchor),
+        ])
+        editorArea.delegate = self
+        editorArea.isHidden = true
         setSidebarVisible(AppDelegate.shared.sidebarVisible)
 
         let ticker = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
@@ -115,6 +139,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     func addTab(directory: String?) -> TerminalTab {
         let tab = TerminalTab(directory: directory, fontSize: AppDelegate.shared.fontSize)
         tab.delegate = self
+        // ⌘-click on "src/a.ts:42" in the output opens the editor there.
+        tab.view.openFile = { [weak self] url, line, column in self?.openFile(url, line: line, column: column) }
         let view = tab.view
         view.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(view)
@@ -227,6 +253,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                 AppDelegate.shared.post(notice, tab: tab, in: self)
             }
         }
+        if tickCount % 4 == 0 { editorArea.checkDisk() } // agents edit the files you have open
         refresh()
     }
 
@@ -237,10 +264,16 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         tabBar.update(items: items, selectedIndex: activeIndex)
         announceBackgroundChanges()
-        let name = project.map { ($0 as NSString).lastPathComponent }
-        window?.title = [activeTab?.title, name, "Next Term"].compactMap { $0 }.joined(separator: " — ")
+        updateTitle()
         AppDelegate.shared.updateBadge()
         updateProjectRoot()
+    }
+
+    /// "Alertable.php — xCloud" while editing, "zsh — xCloud" in the terminal.
+    func updateTitle() {
+        let name = project.map { ($0 as NSString).lastPathComponent }
+        let focus = isEditorFocused ? editorArea.activeEditor?.document.name : activeTab?.title
+        window?.title = [focus, name, "Next Term"].compactMap { $0 }.joined(separator: " — ")
     }
 
     /// Tells VoiceOver users when a background tab finishes, fails or asks for attention: the dots are
@@ -296,7 +329,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func findInFiles(_ controller: FindInFilesController, open url: URL, line: Int) {
-        sidebar(sidebar, openFile: url)
+        openFile(url, line: line)
     }
 
     // MARK: projects
@@ -328,6 +361,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(closeProject(_:)) { return project != nil }
+        if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil }
+        if item.action == #selector(saveAllDocuments(_:)) { return !editorArea.dirtyDocuments.isEmpty }
+        if item.action == #selector(goToLine(_:)) { return editorArea.activeEditor != nil }
+        if item.action == #selector(toggleEditorFocus(_:)) {
+            item.title = isEditorFocused ? "Focus Terminal" : "Focus Editor"
+            return editorArea.activeEditor != nil
+        }
         if item.action == #selector(toggleProjectSidebar(_:)) {
             item.title = isSidebarVisible ? "Hide Project Sidebar" : "Show Project Sidebar"
         }
@@ -358,18 +398,29 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private func updateInsets() {
         let lights: CGFloat = isFullScreen ? 8 : 78
         sidebar.headerInset = isFullScreen ? 8 : 70
-        tabBar.leadingInset = isSidebarVisible ? 8 : lights
+        // Whichever tab bar is at the top of the window sits beside the traffic lights.
+        let top = isSidebarVisible ? 8 : lights
+        editorArea.tabBar.leadingInset = top
+        tabBar.leadingInset = editorArea.isHidden ? top : 8
+        tabBar.dragsWindow = editorArea.isHidden
     }
 
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {
-        160
+        splitView === workSplit ? TabBarView.height + 60 : 160
     }
 
     func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {
-        min(640, splitView.bounds.width - 320)
+        splitView === workSplit ? splitView.bounds.height - TabBarView.height - 60 : min(640, splitView.bounds.width - 320)
     }
 
     func splitViewDidResizeSubviews(_ notification: Notification) {
+        if (notification.object as? NSSplitView) === workSplit {
+            // Remember the split the user dragged to (not the one a window resize produces).
+            if !editorArea.isHidden, workSplit.bounds.height > 200, NSApp.currentEvent?.type == .leftMouseDragged {
+                AppDelegate.shared.editorFraction = editorArea.frame.height / workSplit.bounds.height
+            }
+            return
+        }
         if isSidebarVisible, sidebar.frame.width >= 160 { AppDelegate.shared.sidebarWidth = sidebar.frame.width }
     }
 
@@ -384,7 +435,81 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func sidebar(_ sidebar: ProjectSidebarView, openFile url: URL) {
-        SafeOpen.open(url, from: window)
+        openFile(url)
+    }
+
+    func sidebar(_ sidebar: ProjectSidebarView, didMove from: String, to: String) {
+        editorArea.itemMoved(from: from, to: to)
+    }
+
+    // MARK: editor
+
+    /// Opens a file in the editor, at a line if given. What the editor cannot show (images, binaries,
+    /// huge files) opens in its app instead, safely.
+    func openFile(_ url: URL, line: Int? = nil, column: Int = 1) {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+            return SafeOpen.open(url, from: window)
+        }
+        if editorArea.open(url, line: line, column: column) != .opened { SafeOpen.open(url, from: window) }
+    }
+
+    var isEditorFocused: Bool {
+        guard !editorArea.isHidden, let view = window?.firstResponder as? NSView else { return false }
+        return view.isDescendant(of: editorArea)
+    }
+
+    func editorAreaDidChangeDocuments(_ area: EditorArea) {
+        setEditorVisible(!area.isEmpty)
+    }
+
+    private func setEditorVisible(_ visible: Bool) {
+        guard editorArea.isHidden == visible else { return }
+        editorArea.isHidden = !visible
+        workSplit.adjustSubviews()
+        if visible {
+            let fraction = AppDelegate.shared.editorFraction
+            workSplit.setPosition(round(workSplit.bounds.height * fraction), ofDividerAt: 0)
+        } else if let view = activeTab?.view {
+            window?.makeFirstResponder(view)
+        }
+        updateInsets()
+        updateTitle()
+    }
+
+    @objc func saveDocument(_ sender: Any?) { editorArea.saveActive() }
+    @objc func saveAllDocuments(_ sender: Any?) { editorArea.saveAll() }
+
+    /// ⌃`: between the editor and the terminal, as in VS Code.
+    @objc func toggleEditorFocus(_ sender: Any?) {
+        if isEditorFocused {
+            if let view = activeTab?.view { window?.makeFirstResponder(view) }
+        } else if let editor = editorArea.activeEditor {
+            window?.makeFirstResponder(editor.textView)
+        } else {
+            NSSound.beep()
+        }
+        updateTitle()
+    }
+
+    @objc func goToLine(_ sender: Any?) {
+        guard let editor = editorArea.activeEditor, let window else { return NSSound.beep() }
+        let alert = NSAlert()
+        alert.messageText = "Go to Line"
+        alert.informativeText = "Line, or line:column, in “\(editor.document.name)” (1–\(editor.document.lines.count))."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
+        field.placeholderString = "42 or 42:7"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Go")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            let parts = field.stringValue.split(separator: ":").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+            guard let line = parts.first else { return NSSound.beep() }
+            window.makeFirstResponder(editor.textView)
+            editor.textView.go(toLine: line, column: parts.count > 1 ? parts[1] : 1)
+        }
     }
 
     func sidebar(_ sidebar: ProjectSidebarView, openTabIn directory: String) {
@@ -393,6 +518,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func applyFontSize(_ size: CGFloat) {
         for tab in tabs { tab.view.font = Theme.terminalFont(size: size) }
+        editorArea.applyFont()
     }
 
     // MARK: menu actions (reached through the responder chain)
@@ -402,7 +528,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         addTab(directory: project ?? activeTab?.currentDirectory())
     }
 
+    /// ⌘W closes what has the keyboard: the file being edited, or the terminal tab.
     @objc func closeTab(_ sender: Any?) {
+        if isEditorFocused { return editorArea.closeActive() }
         if let tab = activeTab { requestClose(tab) }
     }
 
@@ -416,8 +544,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     // Not selectNextTab:/selectPreviousTab:: NSWindow implements those (system tabs) and would swallow them.
-    @objc func showNextTab(_ sender: Any?) { cycleTab(by: 1) }
-    @objc func showPreviousTab(_ sender: Any?) { cycleTab(by: -1) }
+    @objc func showNextTab(_ sender: Any?) { isEditorFocused ? editorArea.cycle(by: 1) : cycleTab(by: 1) }
+    @objc func showPreviousTab(_ sender: Any?) { isEditorFocused ? editorArea.cycle(by: -1) : cycleTab(by: -1) }
 
     @objc func clearBuffer(_ sender: Any?) {
         guard let tab = activeTab else { return }
@@ -430,6 +558,33 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if closeConfirmed || AppDelegate.shared.isTerminating { return true }
+        let dirty = editorArea.dirtyDocuments
+        if !dirty.isEmpty && !editorsConfirmed {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = dirty.count == 1 ? "Save changes to “\(dirty[0].name)” before closing?"
+                : "Save changes to \(dirty.count) files before closing?"
+            alert.informativeText = "Your changes are lost if you don’t save them."
+            alert.addButton(withTitle: dirty.count == 1 ? "Save" : "Save All")
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Don’t Save").keyEquivalent = "d"
+            alert.beginSheetModal(for: sender) { [weak self] response in
+                guard let self else { return }
+                switch response {
+                case .alertFirstButtonReturn:
+                    guard self.editorArea.saveAll() else { return self.closingProject = false }
+                case .alertThirdButtonReturn:
+                    break
+                default:
+                    self.closingProject = false
+                    return
+                }
+                self.editorsConfirmed = true
+                DispatchQueue.main.async { sender.performClose(nil) }
+            }
+            return false
+        }
+        editorsConfirmed = false
         let busy = busyTabs
         guard !busy.isEmpty else { return true }
         let alert = NSAlert()
@@ -455,6 +610,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         ticker = nil
         for tab in tabs { tab.terminate() }
         tabs.removeAll()
+        editorArea.closeAll()
         finder.close()
         onClose?(self, closingProject)
     }

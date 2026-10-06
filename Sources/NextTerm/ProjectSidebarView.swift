@@ -11,6 +11,8 @@ protocol ProjectSidebarDelegate: AnyObject {
     func sidebar(_ sidebar: ProjectSidebarView, openProject directory: String)
     /// Open a file (double-click, ⌘↓).
     func sidebar(_ sidebar: ProjectSidebarView, openFile url: URL)
+    /// A file or folder was renamed or moved (open editors follow it).
+    func sidebar(_ sidebar: ProjectSidebarView, didMove from: String, to: String)
 }
 
 /// Outline view with the keys a file tree needs: Return renames (as in Finder), ⌘⌫ moves to the Trash,
@@ -473,6 +475,8 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             let renamed = try FileOps.rename(url, to: newName)
             registerUndo("Rename") { [weak self] in self?.rename(renamed, to: url.lastPathComponent) }
             refreshParent(of: url)
+            delegate?.sidebar(self, didMove: canonicalPath(url.deletingLastPathComponent().path) + "/" + url.lastPathComponent,
+                              to: canonicalPath(renamed.path))
         } catch {
             report(error)
         }
@@ -574,6 +578,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
                     for item in done.reversed() {
                         try? FileManager.default.moveItem(at: item.to, to: item.from)
                         self?.refreshParent(of: item.from)
+                        if let self { self.delegate?.sidebar(self, didMove: canonicalPath(item.to.path), to: canonicalPath(item.from.path)) }
                     }
                 }
                 done.forEach { self?.refreshParent(of: $0.to) }
@@ -581,6 +586,10 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             for item in done {
                 refreshParent(of: item.from)
                 refreshParent(of: item.to)
+                if !copy {
+                    delegate?.sidebar(self, didMove: canonicalPath(item.from.deletingLastPathComponent().path) + "/" + item.from.lastPathComponent,
+                                      to: canonicalPath(item.to.path))
+                }
             }
             return true
         } catch {

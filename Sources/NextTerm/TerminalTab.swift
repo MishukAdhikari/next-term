@@ -91,13 +91,16 @@ final class NextTermView: LocalProcessTerminalView {
 
     /// Folder that relative paths in the output are relative to.
     var linkBaseDirectory: (() -> String)?
+    /// Opens a file in the editor, at a line and column when the link has them (`src/a.ts:42:7`).
+    var openFile: ((URL, _ line: Int?, _ column: Int) -> Void)?
 
     override func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
         if let url = URL(string: link), let scheme = url.scheme?.lowercased(), scheme.count > 1 {
             switch scheme {
             case "http", "https", "mailto": NSWorkspace.shared.open(url)
             // ls/fd/rg hyperlinks name this Mac: file://my-mac.local/path
-            case "file" where LocalHost.contains(url.host): SafeOpen.open(url, from: window)
+            case "file" where LocalHost.contains(url.host):
+                if let openFile { openFile(url, nil, 1) } else { SafeOpen.open(url, from: window) }
             default: NSSound.beep() // custom app schemes can trigger actions in other apps
             }
             return
@@ -105,12 +108,16 @@ final class NextTermView: LocalProcessTerminalView {
         // A plain path such as "src/main.swift:12:4", relative to the tab's folder.
         var path = (link as NSString).expandingTildeInPath
         if !path.hasPrefix("/"), let base = linkBaseDirectory?() { path = (base as NSString).appendingPathComponent(path) }
+        var line: Int?, column = 1
         if !FileManager.default.fileExists(atPath: path),
-           let range = path.range(of: #":[0-9]+(:[0-9]+)?$"#, options: .regularExpression) {
+           let range = path.range(of: #":[0-9]+(:[0-9]+)?:?$"#, options: .regularExpression) {
+            let numbers = path[range].split(separator: ":").compactMap { Int($0) }
+            line = numbers.first
+            column = numbers.count > 1 ? numbers[1] : 1
             path = String(path[..<range.lowerBound])
         }
         guard FileManager.default.fileExists(atPath: path) else { return NSSound.beep() }
-        SafeOpen.open(URL(fileURLWithPath: path), from: window)
+        if let openFile { openFile(URL(fileURLWithPath: path), line, column) } else { SafeOpen.open(URL(fileURLWithPath: path), from: window) }
     }
 }
 
@@ -245,7 +252,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     /// The folder relative paths mean right now: the integration reports it; otherwise ask the kernel.
-    private var liveDirectory: String { status.integrated ? directory : currentDirectory() }
+    var liveDirectory: String { status.integrated ? directory : currentDirectory() }
 
     /// Twice a second. For shells without integration this is how the tab knows what runs and where it
     /// is; with integration it only looks behind commands that look plain, for agents run by functions.

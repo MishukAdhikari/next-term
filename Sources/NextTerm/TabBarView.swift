@@ -8,6 +8,10 @@ struct TabBarItem: Equatable {
     var state: TabState
     var tooltip: String
     var accessibilityStatus: String
+    /// Editor tabs: the file's icon in place of the status mark.
+    var icon: NSImage? = nil
+    /// Editor tabs: unsaved changes, shown as a dot in place of the close button (as in VS Code).
+    var modified = false
 }
 
 protocol TabBarViewDelegate: AnyObject {
@@ -33,6 +37,13 @@ final class TabBarView: NSView {
     weak var delegate: TabBarViewDelegate?
     /// Space reserved on the left for the traffic-light buttons.
     var leadingInset: CGFloat = 78 { didSet { needsLayout = true } }
+    /// Terminal tabs: a + button, and double-click renames. Editor tabs have neither.
+    var allowsNewTab = true { didSet { newTabButton.isHidden = !allowsNewTab; needsLayout = true } }
+    var allowsRename = true
+    /// At the top of the window, the empty part of the bar drags the window like a title bar.
+    var dragsWindow = true
+    /// The title for the accessibility tab group and the close button's tooltip.
+    var kind = "tab" { didSet { setAccessibilityLabel(kind == "tab" ? "Terminal tabs" : "Editor tabs") } }
 
     private(set) var items: [TabBarItem] = []
     private(set) var selectedIndex = 0
@@ -114,7 +125,7 @@ final class TabBarView: NSView {
 
     /// Width for tabs, keeping a strip on the right for dragging the window.
     private var availableWidth: CGFloat {
-        max(0, bounds.width - leadingInset - Self.newTabButtonWidth - 24)
+        max(0, bounds.width - leadingInset - (allowsNewTab ? Self.newTabButtonWidth : 0) - 24)
     }
 
     /// How many tabs fit at a readable width.
@@ -209,6 +220,7 @@ final class TabBarView: NSView {
     // MARK: mouse on the empty part of the bar drags the window
 
     override func mouseDown(with event: NSEvent) {
+        guard dragsWindow else { return }
         if event.clickCount == 2 {
             // Same as double-clicking any title bar: System Settings > Desktop & Dock decides.
             switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
@@ -234,7 +246,7 @@ final class TabBarView: NSView {
     fileprivate func itemMouseDown(_ view: TabItemView, event: NSEvent) {
         guard let index = index(of: view) else { return }
         if event.clickCount == 2 {
-            view.beginRename()
+            if allowsRename { view.beginRename() }
             return
         }
         delegate?.tabBar(self, didSelect: index)
@@ -326,6 +338,7 @@ final class TabBarView: NSView {
 private final class TabItemView: NSView, NSTextFieldDelegate {
     weak var bar: TabBarView?
     private let dot = StatusDotView()
+    private let iconView = NSImageView()
     private let label = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
     private var renameField: NSTextField?
@@ -341,6 +354,9 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         Typography.singleLine(label, truncation: .byTruncatingMiddle)
         addSubview(label)
         addSubview(dot)
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        iconView.isHidden = true
+        addSubview(iconView)
 
         closeButton.bezelStyle = .regularSquare
         closeButton.isBordered = false
@@ -370,6 +386,9 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         if label.lineBreakMode != newItem.truncation { label.lineBreakMode = newItem.truncation }
         if toolTip != newItem.tooltip { toolTip = newItem.tooltip }
         dot.state = newItem.state
+        if iconView.image !== newItem.icon { iconView.image = newItem.icon }
+        iconView.isHidden = newItem.icon == nil
+        dot.isHidden = newItem.icon != nil
         item = newItem
         selected = isSelected
         setAccessibilityLabel("\(newItem.title), \(newItem.accessibilityStatus)")
@@ -380,7 +399,14 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     private func refresh() {
         layer?.backgroundColor = (selected ? Theme.background : hovering ? Theme.tabHover : .clear).cgColor
         label.textColor = selected || hovering ? Theme.text : Theme.textDim
-        closeButton.isHidden = !(selected || hovering)
+        // Unsaved: a dot that turns into the close button under the pointer.
+        let modified = item?.modified == true
+        closeButton.isHidden = !(selected || hovering || modified)
+        let symbol = modified && !hovering ? "circle.fill" : "xmark"
+        if closeButton.image?.accessibilityDescription != (symbol == "xmark" ? "Close Tab" : "Unsaved changes") {
+            closeButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: symbol == "xmark" ? "Close Tab" : "Unsaved changes")?
+                .withSymbolConfiguration(.init(pointSize: symbol == "xmark" ? 9 : 7, weight: .semibold))
+        }
         needsDisplay = true
     }
 
@@ -388,6 +414,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         super.layout()
         let h = bounds.height
         dot.frame = NSRect(x: 12, y: (h - 10) / 2, width: 10, height: 10)
+        iconView.frame = NSRect(x: 10, y: (h - 16) / 2, width: 16, height: 16)
         closeButton.frame = NSRect(x: bounds.width - 24, y: (h - 18) / 2, width: 18, height: 18)
         let labelX: CGFloat = 29
         let labelHeight = label.intrinsicContentSize.height

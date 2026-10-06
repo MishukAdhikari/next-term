@@ -29,11 +29,14 @@ lipo -create .build/arm64-apple-macosx/release/NextTerm .build/x86_64-apple-maco
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # SwiftTerm's optional Metal shaders; it looks for them in Contents/Resources.
 cp -R .build/arm64-apple-macosx/release/SwiftTerm_SwiftTerm.bundle "$APP/Contents/Resources/"
+# The editor's grammars (licence-checked; see scripts/update-highlighting.py). shiki-swift's own bundle,
+# which includes GPL grammars, is deliberately not copied.
+cp -R Resources/Highlighting "$APP/Contents/Resources/Highlighting"
 # License notices travel with the app; Credits.html is what About Next Term shows.
 cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
 {
   echo '<html><body style="font: 11px -apple-system; color: #888">'
-  echo "<p>Next Term is free software under the MIT License. It includes SwiftTerm (MIT), code from libsixel (MIT) and Unicode data (Unicode License v3).</p>"
+  echo "<p>Next Term is free software under the MIT License. It includes SwiftTerm (MIT), code from libsixel (MIT), Unicode data (Unicode License v3), shiki-swift (MIT) with Oniguruma (BSD-2-Clause), and TextMate grammars under their own permissive licences.</p>"
   echo "<pre style=\"font: 10px ui-monospace, Menlo; white-space: pre-wrap\">"
   sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' LICENSE THIRD_PARTY_NOTICES.md
   echo "</pre></body></html>"

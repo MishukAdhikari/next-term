@@ -1,6 +1,15 @@
 {
-  "originHash" : "aae288be00e6301ae7161c7ff603ac9c609accd78aa2ebab3e9b7294d6a188c9",
+  "originHash" : "90701d12a96a5ae3fa872b129117a3697717798ab9375e4a35b6f406c2ddbff3",
   "pins" : [
+    {
+      "identity" : "shiki-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/fayazara/shiki-swift.git",
+      "state" : {
+        "revision" : "05563c884a83611bfb838a1c90550a1e8e576600",
+        "version" : "0.1.2"
+      }
+    },
     {
       "identity" : "swift-argument-parser",
       "kind" : "remoteSourceControl",

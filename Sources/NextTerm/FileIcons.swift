@@ -17,4 +17,14 @@ enum FileIcons {
         cache[key] = image
         return image
     }
+
+    /// A file's icon by its extension (editor tabs).
+    static func icon(for url: URL, size: CGFloat = 16) -> NSImage {
+        let key = url.pathExtension.lowercased()
+        if let cached = cache[key] { return cached }
+        let image = NSWorkspace.shared.icon(for: UTType(filenameExtension: key) ?? .data)
+        image.size = NSSize(width: size, height: size)
+        cache[key] = image
+        return image
+    }
 }

@@ -1,0 +1,354 @@
+import AppKit
+import NextTermCore
+
+/// The code text view: TextKit 1 (fast on long files with wrapping off), plain text, no smart quotes,
+/// IDE keys: auto-indent, Tab and Shift-Tab on lines, ⌘/ to comment, and the current line highlighted.
+final class CodeTextView: NSTextView {
+    weak var document: EditorDocument?
+    static let currentLine = NSColor(hex: 0x26282E)
+
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        guard let layoutManager, let textContainer, selectedRange().length == 0, window?.firstResponder === self else { return }
+        let caret = min(selectedRange().location, (string as NSString).length)
+        var line = NSRect.zero
+        if caret == (string as NSString).length, layoutManager.extraLineFragmentTextContainer != nil {
+            line = layoutManager.extraLineFragmentRect
+        } else if layoutManager.numberOfGlyphs > 0 {
+            let glyph = layoutManager.glyphIndexForCharacter(at: min(caret, max(0, (string as NSString).length - 1)))
+            line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        } else {
+            return
+        }
+        _ = textContainer
+        line.origin.x = 0
+        line.size.width = bounds.width
+        line = line.offsetBy(dx: 0, dy: textContainerOrigin.y)
+        guard line.intersects(rect) else { return }
+        Self.currentLine.setFill()
+        line.fill()
+    }
+
+    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        needsDisplay = true // the current-line band moves
+        enclosingScrollView?.verticalRulerView?.needsDisplay = true
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        defer { needsDisplay = true }
+        return super.becomeFirstResponder()
+    }
+
+    override func resignFirstResponder() -> Bool {
+        defer { needsDisplay = true }
+        return super.resignFirstResponder()
+    }
+
+    private var indentUnit: String { document?.indentUnit ?? "    " }
+
+    // MARK: typing
+
+    /// Return keeps the indent; after an opening bracket it indents one more, and between a pair of
+    /// brackets it puts the closing one on its own line.
+    override func insertNewline(_ sender: Any?) {
+        let text = string as NSString
+        let caret = selectedRange()
+        let lineRange = text.lineRange(for: NSRange(location: caret.location, length: 0))
+        let beforeCaret = text.substring(with: NSRange(location: lineRange.location, length: caret.location - lineRange.location))
+        let indent = String(beforeCaret.prefix { $0 == " " || $0 == "\t" })
+        let opener = beforeCaret.trimmingCharacters(in: .whitespaces).last
+        let after = caret.location + caret.length < text.length ? Character(UnicodeScalar(text.character(at: caret.location + caret.length)) ?? " ") : nil
+        let pairs: [Character: Character] = ["{": "}", "[": "]", "(": ")"]
+        if let opener, let closer = pairs[opener] {
+            if after == closer {
+                insertText("\n" + indent + indentUnit + "\n" + indent, replacementRange: caret)
+                setSelectedRange(NSRange(location: caret.location + 1 + (indent + indentUnit as NSString).length, length: 0))
+            } else {
+                insertText("\n" + indent + indentUnit, replacementRange: caret)
+            }
+            return
+        }
+        if opener == ":", document?.language == "python" || document?.language == "yaml" {
+            insertText("\n" + indent + indentUnit, replacementRange: caret)
+            return
+        }
+        insertText("\n" + indent, replacementRange: caret)
+    }
+
+    /// Tab indents the selected lines when the selection spans lines; otherwise it inserts an indent.
+    override func insertTab(_ sender: Any?) {
+        let range = selectedRange()
+        if range.length > 0, (string as NSString).substring(with: range).contains("\n") {
+            shiftLines(by: 1)
+            return
+        }
+        if indentUnit == "\t" { return super.insertTab(sender) }
+        // Spaces to the next indent stop.
+        let text = string as NSString
+        let lineStart = text.lineRange(for: NSRange(location: range.location, length: 0)).location
+        let column = range.location - lineStart
+        let width = (indentUnit as NSString).length
+        insertText(String(repeating: " ", count: width - column % width), replacementRange: range)
+    }
+
+    override func insertBacktab(_ sender: Any?) { shiftLines(by: -1) }
+
+    @objc func indentSelection(_ sender: Any?) { shiftLines(by: 1) }
+    @objc func outdentSelection(_ sender: Any?) { shiftLines(by: -1) }
+
+    /// The whole lines the selection touches (a selection ending at a line's start leaves that line out).
+    private func selectedLineRange() -> NSRange {
+        let text = string as NSString
+        var range = selectedRange()
+        if range.length > 0, range.location + range.length <= text.length,
+           range.location + range.length > 0, text.character(at: range.location + range.length - 1) == 0x0A {
+            range.length -= 1
+        }
+        return text.lineRange(for: range)
+    }
+
+    /// Replaces whole lines as one undoable edit and selects the result.
+    private func replaceLines(in lineRange: NSRange, transform: ([String]) -> [String]) {
+        let text = string as NSString
+        var body = text.substring(with: lineRange)
+        let endsWithNewline = body.hasSuffix("\n")
+        if endsWithNewline { body.removeLast() }
+        let changed = transform(body.components(separatedBy: "\n")).joined(separator: "\n") + (endsWithNewline ? "\n" : "")
+        guard changed != text.substring(with: lineRange), shouldChangeText(in: lineRange, replacementString: changed) else { return }
+        replaceCharacters(in: lineRange, with: changed)
+        didChangeText()
+        let length = (changed as NSString).length - (endsWithNewline ? 1 : 0)
+        setSelectedRange(NSRange(location: lineRange.location, length: max(0, length)))
+    }
+
+    private func shiftLines(by step: Int) {
+        let unit = indentUnit
+        replaceLines(in: selectedLineRange()) { lines in
+            lines.map { line in
+                if step > 0 { return line.isEmpty ? line : unit + line }
+                if line.hasPrefix(unit) { return String(line.dropFirst(unit.count)) }
+                if line.hasPrefix("\t") { return String(line.dropFirst()) }
+                return String(line.dropFirst(min(line.prefix { $0 == " " }.count, unit.count)))
+            }
+        }
+    }
+
+    /// ⌘/: comment or uncomment the selected lines in the file's language.
+    @objc func toggleComment(_ sender: Any?) {
+        guard let style = EditorLanguage.commentStyle(for: document?.language) else { return NSSound.beep() }
+        replaceLines(in: selectedLineRange()) { EditorLanguage.toggleComment($0, style: style) }
+    }
+
+    override func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(toggleComment(_:)) { return EditorLanguage.commentStyle(for: document?.language) != nil && isEditable }
+        return super.validateMenuItem(item)
+    }
+
+    /// Selects a line (1-based) and scrolls it to the middle of the view.
+    func go(toLine line: Int, column: Int = 1) {
+        guard let document else { return }
+        let index = document.lines
+        let target = max(0, min(line - 1, index.count - 1))
+        let range = index.range(ofLine: target)
+        let content = max(0, range.length - ((string as NSString).length > range.location + range.length - 1 && range.length > 0
+                                             && (string as NSString).character(at: range.location + range.length - 1) == 0x0A ? 1 : 0))
+        let caret = range.location + min(max(0, column - 1), content)
+        setSelectedRange(NSRange(location: caret, length: 0))
+        guard let layoutManager, let textContainer, let scroll = enclosingScrollView else { return }
+        layoutManager.ensureLayout(forCharacterRange: NSRange(location: range.location, length: 0))
+        let glyphs = layoutManager.glyphRange(forCharacterRange: NSRange(location: range.location, length: 0), actualCharacterRange: nil)
+        var rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+        if rect.height == 0 { rect.size.height = font?.boundingRectForFont.height ?? 16 }
+        let visible = scroll.contentView.bounds.height
+        let y = max(0, rect.midY + textContainerOrigin.y - visible / 2)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: min(y, max(0, frame.height - visible))))
+        scroll.reflectScrolledClipView(scroll.contentView)
+    }
+}
+
+/// Line numbers down the left, the current line's brighter.
+final class LineNumberRuler: NSRulerView {
+    private weak var codeView: CodeTextView?
+
+    init(textView: CodeTextView) {
+        codeView = textView
+        super.init(scrollView: textView.enclosingScrollView, orientation: .verticalRuler)
+        clientView = textView
+        ruleThickness = 44
+    }
+
+    required init(coder: NSCoder) { fatalError("not used") }
+
+    override var isOpaque: Bool { true }
+
+    private var numberFont: NSFont {
+        let size = max(9, (codeView?.font?.pointSize ?? 13) - 1.5)
+        return .monospacedDigitSystemFont(ofSize: size, weight: .regular)
+    }
+
+    /// Wide enough for the largest line number, with room either side.
+    func updateThickness() {
+        guard let document = codeView?.document else { return }
+        let digits = max(3, String(document.lines.count).count)
+        let width = ceil(("8" as NSString).size(withAttributes: [.font: numberFont]).width * CGFloat(digits)) + 22
+        if abs(width - ruleThickness) > 0.5 { ruleThickness = width }
+    }
+
+    override func drawHashMarksAndLabels(in rect: NSRect) {
+        Theme.background.setFill()
+        bounds.fill()
+        guard let view = codeView, let document = view.document, let layoutManager = view.layoutManager,
+              let container = view.textContainer, let scroll = view.enclosingScrollView else { return }
+        let index = document.lines
+        let text = view.string as NSString
+        let visible = scroll.contentView.bounds
+        let glyphs = layoutManager.glyphRange(forBoundingRect: visible.offsetBy(dx: 0, dy: -view.textContainerOrigin.y), in: container)
+        let characters = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        let caretLine = index.line(at: min(view.selectedRange().location, text.length))
+        let font = numberFont
+        let dim: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor(hex: 0x4B5059)]
+        let bright: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor(hex: 0xA1A3AB)]
+        let offset = convert(NSPoint.zero, from: view).y
+
+        func draw(_ line: Int, fragment: NSRect) {
+            let label = "\(line + 1)" as NSString
+            let attributes = line == caretLine ? bright : dim
+            let size = label.size(withAttributes: attributes)
+            // Baseline-aligned with the code: same line fragment, vertically centred.
+            let y = fragment.minY + view.textContainerOrigin.y + offset + (fragment.height - size.height) / 2
+            label.draw(at: NSPoint(x: ruleThickness - size.width - 12, y: y), withAttributes: attributes)
+        }
+
+        var line = index.line(at: characters.location)
+        while line < index.count {
+            let start = index.starts[line]
+            if start > characters.location + characters.length { break }
+            if start >= text.length {
+                // The empty last line after a final newline.
+                if layoutManager.extraLineFragmentTextContainer != nil { draw(line, fragment: layoutManager.extraLineFragmentRect) }
+                break
+            }
+            let glyph = layoutManager.glyphIndexForCharacter(at: start)
+            let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil, withoutAdditionalLayout: true)
+            draw(line, fragment: fragment)
+            line += 1
+        }
+    }
+}
+
+/// A document's editor: the text view in a scroll view with the line-number gutter.
+final class CodeEditorView: NSView, NSTextViewDelegate {
+    let document: EditorDocument
+    let scrollView = NSScrollView()
+    let textView: CodeTextView
+    private let ruler: LineNumberRuler
+
+    init(document: EditorDocument) {
+        self.document = document
+        let layoutManager = NSLayoutManager()
+        layoutManager.allowsNonContiguousLayout = true
+        document.storage.addLayoutManager(layoutManager)
+        let container = NSTextContainer(size: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = false
+        container.lineFragmentPadding = 6
+        layoutManager.addTextContainer(container)
+        textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 400), textContainer: container)
+        textView.document = document
+
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = Theme.background
+        scrollView.scrollerStyle = .overlay
+        scrollView.documentView = textView
+        ruler = LineNumberRuler(textView: textView)
+        super.init(frame: .zero)
+
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = true
+        textView.autoresizingMask = [.width]
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.allowsUndo = true
+        textView.usesFindBar = true
+        textView.isIncrementalSearchingEnabled = true
+        textView.usesFontPanel = false
+        textView.allowsDocumentBackgroundColorChange = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isContinuousSpellCheckingEnabled = false
+        textView.isGrammarCheckingEnabled = false
+        textView.isAutomaticLinkDetectionEnabled = false
+        textView.isAutomaticDataDetectionEnabled = false
+        textView.smartInsertDeleteEnabled = false
+        textView.backgroundColor = Theme.background
+        textView.drawsBackground = true
+        textView.insertionPointColor = Theme.caret
+        textView.selectedTextAttributes = [.backgroundColor: Theme.selection]
+        textView.textContainerInset = NSSize(width: 4, height: 6)
+        textView.delegate = self
+        textView.setAccessibilityLabel(document.name)
+        applyFont()
+
+        scrollView.verticalRulerView = ruler
+        scrollView.hasVerticalRuler = true
+        scrollView.rulersVisible = true
+        ruler.updateThickness()
+
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(scrollView)
+        NSLayoutConstraint.activate([
+            scrollView.topAnchor.constraint(equalTo: topAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+
+        if document.highlighter == nil, let engine = SyntaxEngine.shared, let language = document.language,
+           document.storage.length <= DocumentHighlighter.maxLength {
+            document.highlighter = DocumentHighlighter(engine: engine, language: language, storage: document.storage,
+                                                       layoutManager: layoutManager) { [weak document] in document?.lines ?? LineIndex() }
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func applyFont() {
+        let font = EditorDocument.font
+        textView.font = font
+        textView.typingAttributes = EditorDocument.attributes
+        // Tab stops every indent width, in this font.
+        let space = (" " as NSString).size(withAttributes: [.font: font]).width
+        let style = NSMutableParagraphStyle()
+        style.tabStops = []
+        style.defaultTabInterval = space * 4
+        textView.defaultParagraphStyle = style
+        textView.typingAttributes[.paragraphStyle] = style
+        document.storage.beginEditing()
+        document.storage.addAttributes([.font: font, .paragraphStyle: style], range: NSRange(location: 0, length: document.storage.length))
+        document.storage.endEditing()
+        ruler.updateThickness()
+        ruler.needsDisplay = true
+    }
+
+    // MARK: NSTextViewDelegate
+
+    func undoManager(for view: NSTextView) -> UndoManager? { document.undoManager }
+
+    func textDidChange(_ notification: Notification) {
+        // Colour the edited line now, before it is drawn; longer runs continue on later turns.
+        document.highlighter?.run()
+        ruler.updateThickness()
+        ruler.needsDisplay = true
+    }
+
+    func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString text: String?) -> Bool {
+        textView.isEditable
+    }
+}

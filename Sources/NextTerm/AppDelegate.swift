@@ -33,6 +33,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set { UserDefaults.standard.set(Double(newValue), forKey: "sidebarWidth") }
     }
 
+    /// How much of the window's height open files get, above the terminal.
+    var editorFraction: CGFloat {
+        get {
+            let saved = UserDefaults.standard.double(forKey: "editorFraction")
+            return saved >= 0.15 && saved <= 0.9 ? CGFloat(saved) : 0.62
+        }
+        set { UserDefaults.standard.set(Double(min(0.9, max(0.15, newValue))), forKey: "editorFraction") }
+    }
+
     /// Notifications need a real bundle (`swift run` has none).
     private var notificationCenter: UNUserNotificationCenter? {
         Bundle.main.bundleIdentifier == nil ? nil : UNUserNotificationCenter.current()
@@ -45,9 +54,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         setUpNotifications()
         // Write the shell integration before the first shell starts. Without it tabs fall back to process polling.
         if AppSupport.zshIntegrationDirectory == nil { NSLog("Next Term: could not install zsh integration") }
-        newWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
-        if SelfTest.isRequested { SelfTest.run() }
+        if SelfTest.isRequested {
+            newWindow(nil)
+            SelfTest.run()
+            return
+        }
+        // A folder dropped on the app or `open -a "Next Term" dir` arrives before this and opens itself.
+        guard controllers.isEmpty else { return }
+        if !reopenLastProjects() { chooseStartingFolder() }
+    }
+
+    /// The project windows open when Next Term last quit, so it starts where you left off.
+    private var sessionProjects: [String] {
+        get { UserDefaults.standard.stringArray(forKey: "sessionProjects") ?? [] }
+        set { UserDefaults.standard.set(newValue, forKey: "sessionProjects") }
+    }
+
+    /// Reopens the projects from last time, or the most recent one. False when there is none to reopen.
+    @discardableResult
+    private func reopenLastProjects() -> Bool {
+        let last = sessionProjects.isEmpty ? Array(recent.paths.prefix(1)) : sessionProjects
+        let existing = last.filter(isFolder)
+        for path in existing { openWindow(directory: path, project: path) }
+        return !existing.isEmpty
+    }
+
+    private func isFolder(_ path: String) -> Bool {
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
+    }
+
+    /// The first launch (or when the last folder is gone): ask where to start. That folder opens as the
+    /// project, and next time Next Term opens there by itself.
+    private func chooseStartingFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Open"
+        panel.message = "Choose the folder to work in. Next Term opens it as a project, and reopens it next time."
+        let code = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Code")
+        panel.directoryURL = isFolder(code.path) ? code : URL(fileURLWithPath: NSHomeDirectory())
+        if panel.runModal() == .OK, let url = panel.url, isFolder(url.path) {
+            let path = canonicalPath(url.path)
+            recent.add(path)
+            openWindow(directory: path, project: path)
+        } else {
+            newWindow(nil) // a terminal in the home folder; ⌘O opens a project any time
+        }
     }
 
     private func setUpNotifications() {
@@ -57,13 +113,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { newWindow(nil) }
+        // Clicking the Dock icon with no windows open: back to the last project, else a terminal.
+        if !flag, welcome?.window?.isVisible != true {
+            if let path = recent.existing().first { openWindow(directory: path, project: path) } else { newWindow(nil) }
+        }
         return true
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let dirty = controllers.flatMap(\.editorArea.dirtyDocuments)
+        if !dirty.isEmpty && !SelfTest.isRequested {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = dirty.count == 1 ? "Save changes to “\(dirty[0].name)” before quitting?"
+                : "Save changes to \(dirty.count) files before quitting?"
+            alert.informativeText = "Your changes are lost if you don’t save them."
+            alert.addButton(withTitle: dirty.count == 1 ? "Save" : "Save All")
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Don’t Save").keyEquivalent = "d"
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                guard controllers.allSatisfy({ $0.editorArea.saveAll() }) else { return .terminateCancel }
+            case .alertThirdButtonReturn:
+                break
+            default:
+                return .terminateCancel
+            }
+        }
         let busy = controllers.flatMap(\.busyTabs)
         if !busy.isEmpty && !SelfTest.isRequested {
             let alert = NSAlert()
@@ -79,6 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if !SelfTest.isRequested { sessionProjects = controllers.compactMap(\.project) }
         for controller in controllers { for tab in controller.tabs { tab.terminate() } }
     }
 
@@ -429,6 +508,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         shell.addItem(withTitle: "Open Projects In", action: nil, keyEquivalent: "").submenu = targetMenu
         item(shell, "Close Project", #selector(TerminalWindowController.closeProject(_:)), "")
         shell.addItem(.separator())
+        item(shell, "Save", #selector(TerminalWindowController.saveDocument(_:)), "s")
+        item(shell, "Save All", #selector(TerminalWindowController.saveAllDocuments(_:)), "s", [.command, .option])
+        shell.addItem(.separator())
         item(shell, "Rename Tab…", #selector(TerminalWindowController.renameTab(_:)), "r", [.command, .option])
         item(shell, "Use Option as Meta Key", #selector(toggleOptionAsMeta(_:)), "", target: self)
         shell.addItem(.separator())
@@ -454,10 +536,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(find, "Find in Files…", #selector(TerminalWindowController.findInFiles(_:)), "f", [.command, .shift])
         item(find, "Replace in Files…", #selector(TerminalWindowController.replaceInFiles(_:)), "r", [.command, .shift])
         edit.addItem(.separator())
+        item(edit, "Go to Line…", #selector(TerminalWindowController.goToLine(_:)), "l")
+        item(edit, "Comment Line", #selector(CodeTextView.toggleComment(_:)), "/")
+        item(edit, "Indent", #selector(CodeTextView.indentSelection(_:)), "]")
+        item(edit, "Outdent", #selector(CodeTextView.outdentSelection(_:)), "[")
+        edit.addItem(.separator())
         item(edit, "Clear Buffer", #selector(TerminalWindowController.clearBuffer(_:)), "k")
 
         let view = submenu(main, "View")
         item(view, "Hide Project Sidebar", #selector(TerminalWindowController.toggleProjectSidebar(_:)), "b") // title follows the state
+        item(view, "Focus Editor", #selector(TerminalWindowController.toggleEditorFocus(_:)), "`", [.control]) // title follows the focus
         view.addItem(.separator())
         item(view, "Bigger", #selector(increaseFontSize(_:)), "+", target: self)
         let biggerAlt = item(view, "Bigger", #selector(increaseFontSize(_:)), "=", target: self)

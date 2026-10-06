@@ -1,0 +1,11 @@
+{
+ "schemaVersion": 1,
+ "themes": [
+  {
+   "id": "next-dark",
+   "displayName": "Next Dark",
+   "type": "dark",
+   "resource": "themes/next-dark.json"
+  }
+ ]
+}

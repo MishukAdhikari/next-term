@@ -422,6 +422,8 @@ enum SelfTest {
         check(FileManager.default.fileExists(atPath: notes.path), "⌘Z restores it from the Trash")
         try? FileManager.default.removeItem(at: notes)
 
+        await editorChecks(c, proj: proj, tab: inProject)
+
         // The tree remembers what was expanded when you switch to a tab in another folder and back.
         if let src = c.sidebar.root?.children?.first(where: { $0.name == "src" }) {
             c.sidebar.outline.expandItem(src)
@@ -577,6 +579,128 @@ enum SelfTest {
         }
         _ = await wait(3) { made.allSatisfy { !$0.status.running } }
         for tab in made { c.requestClose(tab) }
+    }
+
+    // MARK: editor
+
+    private static func editorChecks(_ c: TerminalWindowController, proj: URL, tab: TerminalTab) async {
+        guard let window = c.window else { return }
+        let php = proj.appendingPathComponent("src/app.php")
+        let source = "<?php\r\n\r\nfunction greet(string $name): string {\r\n    return \"Hello, \" . $name; // hi\r\n}\r\n"
+        try? Data(source.utf8).write(to: php)
+        let topInset = c.tabBar.leadingInset
+        c.openFile(php)
+        let area = c.editorArea
+        guard let editor = area.activeEditor else { return check(false, "a file opens in the editor") }
+        let doc = editor.document
+        check(!area.isHidden && doc.name == "app.php" && doc.language == "php", "a file opens in the editor, as PHP", doc.language ?? "plain")
+        check(c.tabBar.leadingInset == 8 && area.tabBar.leadingInset == topInset, "the editor's tabs take the top; the terminal's move below")
+        check(window.firstResponder === editor.textView && c.isEditorFocused, "the editor has the keyboard")
+        check(doc.format.lineEnding == .crlf && !doc.text.contains("\r"), "Windows line endings are edited as plain newlines")
+        check(SyntaxEngine.shared != nil, "syntax highlighting loads its grammars", SyntaxEngine.resourceFolder?.path ?? "no Highlighting folder")
+        note("grammars from \(SyntaxEngine.resourceFolder?.path ?? "nowhere")")
+        if Bundle.main.bundlePath.hasSuffix(".app") {
+            check(SyntaxEngine.resourceFolder?.path.hasPrefix(Bundle.main.bundlePath) == true, "the app uses its own copy of the grammars")
+        }
+
+        // Colours: keyword, string and comment in the theme's colours.
+        let text = doc.text as NSString
+        func color(of word: String) -> String? {
+            let r = text.range(of: word)
+            guard r.location != NSNotFound, let layout = editor.textView.layoutManager,
+                  let color = layout.temporaryAttribute(.foregroundColor, atCharacterIndex: r.location, effectiveRange: nil) as? NSColor,
+                  let rgb = color.usingColorSpace(.sRGB) else { return nil }
+            return String(format: "%02X%02X%02X", Int(round(rgb.redComponent * 255)), Int(round(rgb.greenComponent * 255)), Int(round(rgb.blueComponent * 255)))
+        }
+        _ = await wait(5) { doc.highlighter?.pendingLines == 0 }
+        check(color(of: "function") == "CF8E6D", "keywords are coloured", color(of: "function") ?? "none")
+        check(color(of: "\"Hello") == "6AAB73", "strings are coloured", color(of: "\"Hello") ?? "none")
+        check(color(of: "// hi") == "7A7E85", "comments are coloured", color(of: "// hi") ?? "none")
+        check(color(of: "greet") == "56A8F5", "function names are coloured", color(of: "greet") ?? "none")
+
+        // Typing, auto-indent, undo back to clean.
+        let view = editor.textView
+        let braceLine = text.range(of: "string {")
+        view.setSelectedRange(NSRange(location: braceLine.location + braceLine.length, length: 0))
+        view.insertNewline(nil)
+        let afterReturn = (doc.text as NSString).substring(with: (doc.text as NSString).lineRange(for: view.selectedRange()))
+        check(afterReturn == "    \n", "Return after { indents one more level", afterReturn.debugDescription)
+        check(doc.isDirty && area.tabBar.items.first?.modified == true, "an edit marks the tab as unsaved")
+        doc.undoManager.undo()
+        check(!doc.isDirty && doc.text == text as String, "undo back to the saved text is clean again")
+
+        // ⌘/ comments the line in the file's language; again uncomments.
+        view.go(toLine: 4)
+        check(doc.lines.line(at: view.selectedRange().location) == 3, "go to line", "\(view.selectedRange())")
+        view.toggleComment(nil)
+        check((doc.text as NSString).substring(with: doc.lines.range(ofLine: 3)).hasPrefix("    // return"), "⌘/ comments the line out",
+              (doc.text as NSString).substring(with: doc.lines.range(ofLine: 3)))
+        view.toggleComment(nil)
+        check(doc.text == text as String, "and back in")
+
+        // Save keeps the file's CRLF line endings.
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        view.insertText("// saved\n", replacementRange: NSRange(location: 0, length: 0))
+        c.saveDocument(nil)
+        let saved = (try? Data(contentsOf: php)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        check(!doc.isDirty && saved.hasPrefix("// saved\r\n<?php\r\n") && !saved.contains("\r\r"), "⌘S saves, keeping CRLF", saved.prefix(30).debugDescription)
+
+        // An agent changes the file: a clean editor follows; one with edits asks.
+        try? Data((saved + "// agent\r\n").utf8).write(to: php)
+        check(await wait(4) { doc.text.hasSuffix("// agent\n") }, "a change on disk shows up in a clean editor")
+        view.insertText("mine ", replacementRange: NSRange(location: 0, length: 0))
+        try? Data((saved + "// agent again\r\n").utf8).write(to: php)
+        check(await wait(4) { doc.conflict == .changedOnDisk }, "with unsaved edits, a change on disk asks instead")
+        check(doc.text.hasPrefix("mine "), "and keeps the edits meanwhile")
+        doc.reload()
+        check(doc.text.hasSuffix("// agent again\n") && !doc.isDirty && doc.conflict == nil, "Reload from Disk takes the new version")
+
+        // ⌘-click on "…/app.php:4:10" in the terminal opens it there ("function greet": line 4 after the save).
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        tab.view.requestOpenLink(source: tab.view, link: php.path + ":4:10", params: [:])
+        let caret = view.selectedRange().location
+        let caretLine = doc.lines.line(at: caret)
+        check(caretLine == 3 && caret - doc.lines.starts[3] == 9, "file:line:column links open the editor there",
+              "line \(caretLine + 1), column \(caret - doc.lines.starts[caretLine] + 1), base \(tab.liveDirectory)")
+
+        // Renaming the file in the sidebar keeps the editor on it.
+        c.sidebar.rename(php, to: "main.php")
+        check(doc.name == "main.php", "a file renamed in the sidebar stays open under its new name", doc.name)
+        await pause(1.2)
+        check(doc.conflict == nil, "and is not reported as deleted")
+
+        // What the editor cannot show does not open in it.
+        let png = proj.appendingPathComponent("logo.png")
+        try? Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0]).write(to: png)
+        check(area.open(png) == .notText && area.editors.count == 1, "binary files are not opened as text")
+        try? FileManager.default.removeItem(at: png)
+
+        // A long file colours in the background without blocking typing.
+        let long = proj.appendingPathComponent("long.ts")
+        let body = (1...6000).map { "export function f\($0)(x: number): string { return `v${x}` + \"\($0)\"; } // \($0)" }.joined(separator: "\n")
+        try? body.write(to: long, atomically: true, encoding: .utf8)
+        let started = Date()
+        c.openFile(long)
+        let opened = Date().timeIntervalSince(started)
+        guard let longEditor = area.activeEditor, longEditor.document.name == "long.ts" else { return check(false, "a long file opens") }
+        check(opened < 1.5, "a 6,000-line file opens quickly", String(format: "%.2f s", opened))
+        let coloured = await wait(15) { longEditor.document.highlighter?.pendingLines == 0 }
+        check(coloured, "and is fully coloured in the background", String(format: "%.1f s", Date().timeIntervalSince(started)))
+        let typed = Date()
+        longEditor.textView.setSelectedRange(NSRange(location: 0, length: 0))
+        longEditor.textView.insertText("/* ", replacementRange: NSRange(location: 0, length: 0)) // recolours everything after
+        let typing = Date().timeIntervalSince(typed)
+        check(typing < 0.1, "typing that recolours the whole file stays responsive", String(format: "%.0f ms", typing * 1000))
+        longEditor.document.undoManager.undo()
+        await screenshot(c, suffix: "-editor")
+
+        // Closing the last file gives the terminal its space back.
+        area.closeActive()
+        area.closeActive()
+        check(await wait(2) { area.isEmpty && area.isHidden }, "closing the last file hides the editor")
+        check(c.tabBar.leadingInset == topInset, "and the terminal's tabs return to the top")
+        try? FileManager.default.removeItem(at: long)
+        try? FileManager.default.removeItem(at: proj.appendingPathComponent("src/main.php"))
     }
 
     /// Captures the window exactly as it is on screen (an app may always capture its own windows).

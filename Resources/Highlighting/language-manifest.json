@@ -1,0 +1,1218 @@
+{
+ "aliases": {
+  "bash": "shellscript",
+  "c#": "csharp",
+  "c++": "cpp",
+  "cjs": "javascript",
+  "clj": "clojure",
+  "cs": "csharp",
+  "cts": "typescript",
+  "dockerfile": "docker",
+  "erl": "erlang",
+  "gql": "graphql",
+  "hs": "haskell",
+  "jl": "julia",
+  "js": "javascript",
+  "kt": "kotlin",
+  "kts": "kotlin",
+  "makefile": "make",
+  "md": "markdown",
+  "mjs": "javascript",
+  "mts": "typescript",
+  "objc": "objective-c",
+  "properties": "ini",
+  "protobuf": "proto",
+  "ps": "powershell",
+  "ps1": "powershell",
+  "pwsh": "powershell",
+  "py": "python",
+  "rb": "ruby",
+  "regex": "regexp",
+  "rs": "rust",
+  "sh": "shellscript",
+  "shell": "shellscript",
+  "tf": "terraform",
+  "tfvars": "terraform",
+  "ts": "typescript",
+  "vim": "viml",
+  "vimscript": "viml",
+  "yml": "yaml",
+  "zsh": "shellscript"
+ },
+ "languages": [
+  {
+   "aliases": [],
+   "displayName": "Astro",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "json",
+    "javascript",
+    "typescript",
+    "css",
+    "postcss",
+    "tsx"
+   ],
+   "embeddedLangsLazy": [
+    "scss",
+    "less"
+   ],
+   "id": "astro",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/astro.json",
+   "scopeName": "source.astro"
+  },
+  {
+   "aliases": [],
+   "displayName": "Blade",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "html-derivative",
+    "html",
+    "xml",
+    "sql",
+    "javascript",
+    "json",
+    "css"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "blade",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/blade.json",
+   "scopeName": "text.html.php.blade"
+  },
+  {
+   "aliases": [],
+   "displayName": "C",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "c",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/c.json",
+   "scopeName": "source.c"
+  },
+  {
+   "aliases": [
+    "clj"
+   ],
+   "displayName": "Clojure",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "clojure",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/clojure.json",
+   "scopeName": "source.clojure"
+  },
+  {
+   "aliases": [],
+   "displayName": "CMake",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "cmake",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/cmake.json",
+   "scopeName": "source.cmake"
+  },
+  {
+   "aliases": [
+    "c++"
+   ],
+   "displayName": "C++",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "cpp-macro",
+    "regexp"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "cpp",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/cpp.json",
+   "scopeName": "source.cpp"
+  },
+  {
+   "aliases": [],
+   "displayName": "C++",
+   "embeddedIn": [
+    "cpp"
+   ],
+   "embeddedLangs": [
+    "regexp"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "cpp-macro",
+   "injectTo": [],
+   "kind": "injection",
+   "resource": "grammars/cpp-macro.json",
+   "scopeName": "source.cpp.embedded.macro"
+  },
+  {
+   "aliases": [
+    "c#",
+    "cs"
+   ],
+   "displayName": "C#",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "csharp",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/csharp.json",
+   "scopeName": "source.cs"
+  },
+  {
+   "aliases": [],
+   "displayName": "CSS",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "css",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/css.json",
+   "scopeName": "source.css"
+  },
+  {
+   "aliases": [],
+   "displayName": "CSV",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "csv",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/csv.json",
+   "scopeName": "text.csv"
+  },
+  {
+   "aliases": [],
+   "displayName": "Dart",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "dart",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/dart.json",
+   "scopeName": "source.dart"
+  },
+  {
+   "aliases": [],
+   "displayName": "Diff",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "diff",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/diff.json",
+   "scopeName": "source.diff"
+  },
+  {
+   "aliases": [
+    "dockerfile"
+   ],
+   "displayName": "Dockerfile",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "docker",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/docker.json",
+   "scopeName": "source.dockerfile"
+  },
+  {
+   "aliases": [],
+   "displayName": "dotEnv",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "dotenv",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/dotenv.json",
+   "scopeName": "source.dotenv"
+  },
+  {
+   "aliases": [
+    "erl"
+   ],
+   "displayName": "Erlang",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "markdown"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "erlang",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/erlang.json",
+   "scopeName": "source.erlang"
+  },
+  {
+   "aliases": [],
+   "displayName": "Fish",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "fish",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/fish.json",
+   "scopeName": "source.fish"
+  },
+  {
+   "aliases": [],
+   "displayName": "Git Commit Message",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "diff"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "git-commit",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/git-commit.json",
+   "scopeName": "text.git-commit"
+  },
+  {
+   "aliases": [],
+   "displayName": "Git Rebase Message",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "shellscript"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "git-rebase",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/git-rebase.json",
+   "scopeName": "text.git-rebase"
+  },
+  {
+   "aliases": [],
+   "displayName": "Go",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "go",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/go.json",
+   "scopeName": "source.go"
+  },
+  {
+   "aliases": [
+    "gql"
+   ],
+   "displayName": "GraphQL",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "javascript",
+    "typescript",
+    "jsx",
+    "tsx"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "graphql",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/graphql.json",
+   "scopeName": "source.graphql"
+  },
+  {
+   "aliases": [],
+   "displayName": "Groovy",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "groovy",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/groovy.json",
+   "scopeName": "source.groovy"
+  },
+  {
+   "aliases": [],
+   "displayName": "Ruby Haml",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "javascript",
+    "css"
+   ],
+   "embeddedLangsLazy": [
+    "ruby",
+    "markdown"
+   ],
+   "id": "haml",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/haml.json",
+   "scopeName": "text.haml"
+  },
+  {
+   "aliases": [
+    "hs"
+   ],
+   "displayName": "Haskell",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "haskell",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/haskell.json",
+   "scopeName": "source.haskell"
+  },
+  {
+   "aliases": [],
+   "displayName": "HashiCorp HCL",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "hcl",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/hcl.json",
+   "scopeName": "source.hcl"
+  },
+  {
+   "aliases": [],
+   "displayName": "HTML",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "javascript",
+    "css"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "html",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/html.json",
+   "scopeName": "text.html.basic"
+  },
+  {
+   "aliases": [],
+   "displayName": "HTML (Derivative)",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "html"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "html-derivative",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/html-derivative.json",
+   "scopeName": "text.html.derivative"
+  },
+  {
+   "aliases": [],
+   "displayName": "HTTP",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "shellscript",
+    "json",
+    "xml",
+    "graphql"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "http",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/http.json",
+   "scopeName": "source.http"
+  },
+  {
+   "aliases": [
+    "properties"
+   ],
+   "displayName": "INI",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "ini",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/ini.json",
+   "scopeName": "source.ini"
+  },
+  {
+   "aliases": [],
+   "displayName": "Java",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "java",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/java.json",
+   "scopeName": "source.java"
+  },
+  {
+   "aliases": [
+    "js",
+    "cjs",
+    "mjs"
+   ],
+   "displayName": "JavaScript",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "javascript",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/javascript.json",
+   "scopeName": "source.js"
+  },
+  {
+   "aliases": [],
+   "displayName": "JSON",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "json",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/json.json",
+   "scopeName": "source.json"
+  },
+  {
+   "aliases": [],
+   "displayName": "JSON5",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "json5",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/json5.json",
+   "scopeName": "source.json5"
+  },
+  {
+   "aliases": [],
+   "displayName": "JSON with Comments",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "jsonc",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/jsonc.json",
+   "scopeName": "source.json.comments"
+  },
+  {
+   "aliases": [],
+   "displayName": "JSON Lines",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "jsonl",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/jsonl.json",
+   "scopeName": "source.json.lines"
+  },
+  {
+   "aliases": [],
+   "displayName": "JSX",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "jsx",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/jsx.json",
+   "scopeName": "source.js.jsx"
+  },
+  {
+   "aliases": [
+    "jl"
+   ],
+   "displayName": "Julia",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "cpp",
+    "python",
+    "javascript",
+    "r",
+    "sql"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "julia",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/julia.json",
+   "scopeName": "source.julia"
+  },
+  {
+   "aliases": [
+    "kt",
+    "kts"
+   ],
+   "displayName": "Kotlin",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "kotlin",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/kotlin.json",
+   "scopeName": "source.kotlin"
+  },
+  {
+   "aliases": [],
+   "displayName": "Less",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "less",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/less.json",
+   "scopeName": "source.css.less"
+  },
+  {
+   "aliases": [],
+   "displayName": "Log file",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "log",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/log.json",
+   "scopeName": "text.log"
+  },
+  {
+   "aliases": [],
+   "displayName": "Lua",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "c"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "lua",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/lua.json",
+   "scopeName": "source.lua"
+  },
+  {
+   "aliases": [
+    "makefile"
+   ],
+   "displayName": "Makefile",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "make",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/make.json",
+   "scopeName": "source.makefile"
+  },
+  {
+   "aliases": [
+    "md"
+   ],
+   "displayName": "Markdown",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [
+    "css",
+    "html",
+    "ini",
+    "java",
+    "lua",
+    "make",
+    "perl",
+    "r",
+    "ruby",
+    "php",
+    "sql",
+    "xml",
+    "yaml",
+    "clojure",
+    "c",
+    "cpp",
+    "diff",
+    "docker",
+    "git-commit",
+    "git-rebase",
+    "go",
+    "groovy",
+    "javascript",
+    "json",
+    "jsonc",
+    "jsonl",
+    "less",
+    "objective-c",
+    "swift",
+    "scss",
+    "powershell",
+    "python",
+    "julia",
+    "regexp",
+    "rust",
+    "scala",
+    "shellscript",
+    "typescript",
+    "tsx",
+    "csharp",
+    "dart",
+    "log",
+    "erlang",
+    "html-derivative"
+   ],
+   "id": "markdown",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/markdown.json",
+   "scopeName": "text.html.markdown"
+  },
+  {
+   "aliases": [],
+   "embeddedIn": [
+    "nix"
+   ],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "markdown-nix",
+   "injectTo": [],
+   "kind": "injection",
+   "resource": "grammars/markdown-nix.json",
+   "scopeName": "markdown.nix.codeblock"
+  },
+  {
+   "aliases": [],
+   "embeddedIn": [
+    "vue"
+   ],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "markdown-vue",
+   "injectTo": [],
+   "kind": "injection",
+   "resource": "grammars/markdown-vue.json",
+   "scopeName": "markdown.vue.codeblock"
+  },
+  {
+   "aliases": [],
+   "displayName": "Nix",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "markdown-nix"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "nix",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/nix.json",
+   "scopeName": "source.nix"
+  },
+  {
+   "aliases": [
+    "objc"
+   ],
+   "displayName": "Objective-C",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "objective-c",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/objective-c.json",
+   "scopeName": "source.objc"
+  },
+  {
+   "aliases": [],
+   "displayName": "OCaml",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "ocaml",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/ocaml.json",
+   "scopeName": "source.ocaml"
+  },
+  {
+   "aliases": [],
+   "displayName": "Perl",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "html",
+    "xml",
+    "css",
+    "javascript",
+    "sql"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "perl",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/perl.json",
+   "scopeName": "source.perl"
+  },
+  {
+   "aliases": [],
+   "displayName": "PHP",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "html",
+    "xml",
+    "sql",
+    "javascript",
+    "json",
+    "css"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "php",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/php.json",
+   "scopeName": "source.php"
+  },
+  {
+   "aliases": [],
+   "displayName": "PostCSS",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "postcss",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/postcss.json",
+   "scopeName": "source.css.postcss"
+  },
+  {
+   "aliases": [
+    "ps",
+    "ps1",
+    "pwsh"
+   ],
+   "displayName": "PowerShell",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "powershell",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/powershell.json",
+   "scopeName": "source.powershell"
+  },
+  {
+   "aliases": [],
+   "displayName": "Prisma",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "prisma",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/prisma.json",
+   "scopeName": "source.prisma"
+  },
+  {
+   "aliases": [
+    "protobuf"
+   ],
+   "displayName": "Protocol Buffer 3",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "proto",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/proto.json",
+   "scopeName": "source.proto"
+  },
+  {
+   "aliases": [
+    "py"
+   ],
+   "displayName": "Python",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "python",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/python.json",
+   "scopeName": "source.python"
+  },
+  {
+   "aliases": [],
+   "displayName": "R",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "r",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/r.json",
+   "scopeName": "source.r"
+  },
+  {
+   "aliases": [
+    "regex"
+   ],
+   "displayName": "RegExp",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "regexp",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/regexp.json",
+   "scopeName": "source.regexp.python"
+  },
+  {
+   "aliases": [
+    "rb"
+   ],
+   "displayName": "Ruby",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "html",
+    "haml",
+    "xml",
+    "sql",
+    "graphql",
+    "css",
+    "cpp",
+    "c",
+    "javascript",
+    "shellscript",
+    "lua",
+    "yaml"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "ruby",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/ruby.json",
+   "scopeName": "source.ruby"
+  },
+  {
+   "aliases": [
+    "rs"
+   ],
+   "displayName": "Rust",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "rust",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/rust.json",
+   "scopeName": "source.rust"
+  },
+  {
+   "aliases": [],
+   "displayName": "Scala",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "scala",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/scala.json",
+   "scopeName": "source.scala"
+  },
+  {
+   "aliases": [],
+   "displayName": "SCSS",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "css"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "scss",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/scss.json",
+   "scopeName": "source.css.scss"
+  },
+  {
+   "aliases": [
+    "bash",
+    "sh",
+    "shell",
+    "zsh"
+   ],
+   "displayName": "Shell",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "shellscript",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/shellscript.json",
+   "scopeName": "source.shell"
+  },
+  {
+   "aliases": [],
+   "displayName": "SQL",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "sql",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/sql.json",
+   "scopeName": "source.sql"
+  },
+  {
+   "aliases": [],
+   "displayName": "Svelte",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "javascript",
+    "typescript",
+    "css",
+    "postcss"
+   ],
+   "embeddedLangsLazy": [
+    "scss",
+    "less",
+    "markdown"
+   ],
+   "id": "svelte",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/svelte.json",
+   "scopeName": "source.svelte"
+  },
+  {
+   "aliases": [],
+   "displayName": "Swift",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "swift",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/swift.json",
+   "scopeName": "source.swift"
+  },
+  {
+   "aliases": [
+    "tf",
+    "tfvars"
+   ],
+   "displayName": "Terraform",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "terraform",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/terraform.json",
+   "scopeName": "source.hcl.terraform"
+  },
+  {
+   "aliases": [],
+   "displayName": "TOML",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "toml",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/toml.json",
+   "scopeName": "source.toml"
+  },
+  {
+   "aliases": [],
+   "displayName": "TSX",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "tsx",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/tsx.json",
+   "scopeName": "source.tsx"
+  },
+  {
+   "aliases": [],
+   "displayName": "Twig",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "css",
+    "javascript",
+    "scss",
+    "php",
+    "python",
+    "ruby"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "twig",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/twig.json",
+   "scopeName": "text.html.twig"
+  },
+  {
+   "aliases": [
+    "ts",
+    "cts",
+    "mts"
+   ],
+   "displayName": "TypeScript",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "typescript",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/typescript.json",
+   "scopeName": "source.ts"
+  },
+  {
+   "aliases": [
+    "vim",
+    "vimscript"
+   ],
+   "displayName": "Vim Script",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "viml",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/viml.json",
+   "scopeName": "source.viml"
+  },
+  {
+   "aliases": [],
+   "displayName": "Vue",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "css",
+    "javascript",
+    "typescript",
+    "json",
+    "html",
+    "html-derivative",
+    "markdown-vue",
+    "vue-directives",
+    "vue-interpolations",
+    "vue-sfc-style-variable-injection"
+   ],
+   "embeddedLangsLazy": [
+    "markdown",
+    "scss",
+    "less",
+    "jsx",
+    "tsx",
+    "jsonc",
+    "json5",
+    "yaml",
+    "toml",
+    "graphql"
+   ],
+   "id": "vue",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/vue.json",
+   "scopeName": "text.html.vue"
+  },
+  {
+   "aliases": [],
+   "embeddedIn": [
+    "vue"
+   ],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "vue-directives",
+   "injectTo": [],
+   "kind": "injection",
+   "resource": "grammars/vue-directives.json",
+   "scopeName": "vue.directives"
+  },
+  {
+   "aliases": [],
+   "embeddedIn": [
+    "vue"
+   ],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "vue-interpolations",
+   "injectTo": [],
+   "kind": "injection",
+   "resource": "grammars/vue-interpolations.json",
+   "scopeName": "vue.interpolations"
+  },
+  {
+   "aliases": [],
+   "embeddedIn": [
+    "vue"
+   ],
+   "embeddedLangs": [
+    "javascript"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "vue-sfc-style-variable-injection",
+   "injectTo": [],
+   "kind": "injection",
+   "resource": "grammars/vue-sfc-style-variable-injection.json",
+   "scopeName": "vue.sfc.style.variable.injection"
+  },
+  {
+   "aliases": [],
+   "displayName": "XML",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "java"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "xml",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/xml.json",
+   "scopeName": "text.xml"
+  },
+  {
+   "aliases": [
+    "yml"
+   ],
+   "displayName": "YAML",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "yaml",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/yaml.json",
+   "scopeName": "source.yaml"
+  },
+  {
+   "aliases": [],
+   "displayName": "Zig",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "zig",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/zig.json",
+   "scopeName": "source.zig"
+  }
+ ],
+ "package": {
+  "name": "tm-grammars",
+  "version": "1.32.3"
+ },
+ "schemaVersion": 1
+}
