@@ -1,44 +1,50 @@
 # Next Term — plan
 
-A native macOS terminal and editor, built for running AI agents side by side:
-every tab shows whether its job is working, finished, failed, or waiting on you.
+A native macOS terminal and editor, built for running AI agents side by side: the missing IDE for the
+terminal. This file is the map of what is built and what comes next; the README describes it for users.
 
 ## Decisions
 
-| Decision | Choice | Why |
-|---|---|---|
-| Language / UI | Swift + AppKit | Native on macOS; Swift also runs on iOS, so the core can move to iPhone/iPad later |
-| Terminal emulation | SwiftTerm (MIT) | Mature native VT emulator for AppKit and UIKit; writing one is a project in itself |
-| Build | SwiftPM + Command Line Tools | No Xcode required; CI and contributors need only `swift` |
-| Distribution | Universal `.app` in a drag-to-install DMG | Apple Silicon + Intel in one download |
-| Platforms | macOS first | Linux would need a non-AppKit UI; `NextTermCore` is portable Foundation code |
-| License | MIT, open source on GitHub | Same as SwiftTerm |
+- **Native:** Swift + AppKit, SwiftPM with only the Command Line Tools, macOS 13+, universal. Terminal
+  emulation by SwiftTerm; logic that needs no UI lives in `NextTermCore` and is unit-tested.
+- **Open, licence-clean dependencies only:** SwiftTerm (MIT), shiki-swift (MIT) with curated TextMate
+  grammars (`scripts/update-highlighting.py` ships only MIT/Apache/BSD/MPL/TextMate-permissive ones),
+  Material Icon Theme (MIT) drawn with SwiftDraw (zlib). No GPL, nothing without a licence.
+- **Agents first:** status follows the agent's own screen; the editor talks to agents through their own
+  protocols where they have one, and through Send to Agent everywhere else.
+- **Safe by default:** every local server binds 127.0.0.1 with a fresh token per launch and refuses
+  browsers; files are written atomically keeping permissions; nothing reads named pipes; git never takes
+  the index lock.
+- **Its own thing:** not modelled on any one IDE; we pick what works best.
 
-## Features (v0.1)
+## Built
 
-- Tabs: ⌘T (opens in the current tab's folder), ⌘W with confirmation when busy, ⌘1–9, ⌘⇧[ ], Ctrl-Tab,
-  rename (double-click or ⌘⇧R), drag to reorder, middle-click to close, ⌘N windows.
-- Tab status dots: working, done, failed, attention; cleared when viewed. Dock badge, notifications when
-  the app is in the background.
-- Project sidebar (⌘B): the active tab's git project as a live file tree (FSEvents), Finder icons,
-  double-click to open, drag to the terminal to type the path, context menu.
-- Find (⌘F), clear (⌘K), font size (⌘+/-/0), a dark palette.
+| Area | What |
+|---|---|
+| Terminal | Tabs (⌘T) with agent status in step with each agent's screen; decisions as notifications; dock badge; close and quit warnings; zsh integration; security (OSC 52, DECRQCRA, paste, links) |
+| Projects | Open/close/recent, last projects reopened at launch, first-run folder choice; sidebar with git status and +/− per file and folder; file operations with undo; open-source icons with framework icons |
+| Editor | 103 languages, incremental highlighting, line numbers, line height, soft wrap with hanging indent, auto-indent, ⌘/, ⌘L, find, encodings and line endings kept, files changed by agents reloaded |
+| Search | Find/Replace in Files (regex, masks, preview, undo), seeded from the selection, same type first |
+| Agents | Send to Agent (⌥⌘K) in each agent's syntax; Claude Code IDE link (live selection, @-mentions); Gemini CLI and Qwen Code IDE link (open files, selection), IDE mode on by default |
+| App | `nxtrm` CLI, layouts (terminal on any side, sidebar left/right, ⋯ menus), Settings (editor, every shortcut), self-update from GitHub Releases (checksum-verified) |
 
-## Status detection
+## Next
 
-1. zsh integration via `ZDOTDIR` + `.zshenv` that restores the user's own `ZDOTDIR`, then reports
-   preexec/precmd over a private OSC 6973 (command text, exit code, cwd).
-2. Agents (`claude`, `codex`, …) stay in the foreground: output in the last 2.5 s = working, silence =
-   waiting for you. Keystroke echo and resize redraws are ignored.
-3. bash/fish fallback: the pty's foreground process from the kernel (`tcgetpgrp` + `proc_name`), polled.
+1. **MCP tools for every agent** (Codex, Junie, Command Code, Cursor, opencode, Copilot, Amp…): a `next-term`
+   MCP server with the editor's selection and open files, registered in each installed agent by default.
+2. **Diff view:** side-by-side with word highlights; stage, unstage and revert hunks (HunkOps is built and
+   tested); Claude's and Gemini's proposed edits shown there to accept or reject.
+3. **Copilot CLI IDE link** (its protocol is published).
+4. Split panes, session restore, notarized releases.
 
 ## Verification
 
-- `scripts/test.sh`: unit tests for the status machine, classifier, OSC parser, quoting, file tree.
-- `scripts/zsh-integration-test.py`: the shipped zsh script in a real pty with the user's real config.
-- `NextTerm --self-test`: drives the real app end to end and takes real window screenshots.
-- Independent code and security reviews before release.
+Every change runs three layers before it is committed:
 
-## Not in v0.1
+- `scripts/test.sh`: unit tests (swift-testing) for everything in NextTermCore.
+- `python3 scripts/zsh-integration-test.py`: the shipped zsh hooks in a real pty.
+- `scripts/selftest.sh`: drives the real app end to end (tabs, shells, agents, editor, search, sidebar,
+  layouts, shortcuts, the agent links with test clients), with screenshots. Keys typed on the Mac while
+  it runs can land in its window; rerun before blaming the code.
 
-Split panes, session restore, settings UI, bash/fish integration, notarization, Linux, iOS.
+CI (macos-15) runs the unit and zsh tests and builds the DMG; a `v*` tag publishes a GitHub Release.
