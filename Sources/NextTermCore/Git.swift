@@ -253,8 +253,53 @@ public enum GitRunner {
         return counts
     }
 
+    /// What a diff compares.
+    public enum DiffBase: Sendable {
+        /// Working tree against HEAD: staged and unstaged changes together.
+        case head
+        /// Staged changes: index against HEAD.
+        case staged
+        /// Unstaged changes: working tree against the index.
+        case unstaged
+    }
+
+    /// The diff of one file, or nil if it has none. Untracked files diff against nothing.
+    /// `context` lines around each change (a large number gives the whole file).
+    public static func diff(of relativePath: String, in root: String, git: String, base: DiffBase = .head,
+                            context: Int = 3, untracked: Bool = false) -> FileDiff? {
+        let common = ["-C", root, "--no-optional-locks", "-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff",
+                      "--no-textconv", "-M", "-U\(context)"]
+        let args: [String]
+        if untracked {
+            args = common + ["--no-index", "--", "/dev/null", relativePath]
+        } else {
+            switch base {
+            case .head: args = common + ["HEAD", "--", relativePath]
+            case .staged: args = common + ["--cached", "--", relativePath]
+            case .unstaged: args = common + ["--", relativePath]
+            }
+        }
+        // `diff --no-index` exits 1 when the files differ, which is the expected case here.
+        guard let data = run(git, args, timeout: 15, acceptedStatus: untracked ? [0, 1] : [0]),
+              let text = String(data: data, encoding: .utf8) else { return nil }
+        return UnifiedDiff.parse(text).first
+    }
+
+    /// Applies a patch: to the index (`cached`, i.e. stage it) or to the working tree, forwards or
+    /// reversed (revert). Checks first, so a patch that no longer fits changes nothing.
+    @discardableResult
+    public static func apply(_ patch: String, in root: String, git: String, cached: Bool, reverse: Bool) -> Bool {
+        var args = ["-C", root, "apply", "--whitespace=nowarn"]
+        if cached { args.append("--cached") }
+        if reverse { args.append("-R") }
+        let input = Data(patch.utf8)
+        guard run(git, args + ["--check", "-"], timeout: 15, input: input) != nil else { return false }
+        return run(git, args + ["-"], timeout: 15, input: input) != nil
+    }
+
     /// Runs a command and returns its standard output, or nil on failure or timeout.
-    static func run(_ executable: String, _ arguments: [String], timeout: TimeInterval) -> Data? {
+    static func run(_ executable: String, _ arguments: [String], timeout: TimeInterval,
+                    input: Data? = nil, acceptedStatus: Set<Int32> = [0]) -> Data? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -266,13 +311,20 @@ public enum GitRunner {
         let out = Pipe()
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
+        let stdin = input.map { _ in Pipe() }
+        process.standardInput = stdin ?? FileHandle.nullDevice
         do { try process.run() } catch { return nil }
+        if let stdin, let input {
+            DispatchQueue.global().async {
+                stdin.fileHandleForWriting.write(input)
+                try? stdin.fileHandleForWriting.close()
+            }
+        }
         let timer = DispatchWorkItem { if process.isRunning { process.terminate() } }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timer)
         let data = out.fileHandleForReading.readDataToEndOfFile() // read before waiting: large output would fill the pipe
         process.waitUntilExit()
         timer.cancel()
-        return process.terminationStatus == 0 ? data : nil
+        return acceptedStatus.contains(process.terminationStatus) ? data : nil
     }
 }
