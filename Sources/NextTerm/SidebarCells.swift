@@ -10,7 +10,15 @@ final class SidebarHeaderView: NSView {
     private let summary = NSTextField(labelWithString: "")
     /// ⋯: which side the sidebar is on, and hiding it.
     let moreButton = MoreButton(toolTip: "Project sidebar layout", menu: LayoutMenu.sidebar)
+    /// Hides the sidebar (⌘B); the top bar then shows a button to bring it back.
+    let hideButton = HoverButton()
     var inset: CGFloat = 70 { didSet { needsLayout = true } }
+    var onRight = false {
+        didSet {
+            hideButton.image = NSImage(systemSymbolName: onRight ? "sidebar.right" : "sidebar.left", accessibilityDescription: "Hide Project Sidebar")?
+                .withSymbolConfiguration(.init(pointSize: 13, weight: .regular))
+        }
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -24,7 +32,14 @@ final class SidebarHeaderView: NSView {
         summary.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .medium)
         summary.alignment = .right
         Typography.singleLine(summary, truncation: .byTruncatingTail)
-        [branchIcon, title, summary, moreButton].forEach(addSubview)
+        hideButton.bezelStyle = .regularSquare
+        hideButton.isBordered = false
+        hideButton.contentTintColor = Theme.textDim
+        hideButton.action = #selector(TerminalWindowController.toggleProjectSidebar(_:)) // up the responder chain
+        hideButton.toolTip = "Hide the project sidebar (⌘B)"
+        hideButton.setAccessibilityLabel("Hide Project Sidebar")
+        onRight = false
+        [branchIcon, title, summary, hideButton, moreButton].forEach(addSubview)
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
         setAccessibilityLabel("Project")
@@ -43,7 +58,9 @@ final class SidebarHeaderView: NSView {
     // The whole header is a drag handle for the window, except its ⋯ button.
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard frame.contains(point) else { return nil }
-        if moreButton.frame.contains(convert(point, from: superview)) { return moreButton }
+        let local = convert(point, from: superview)
+        if moreButton.frame.contains(local) { return moreButton }
+        if hideButton.frame.contains(local) { return hideButton }
         return self
     }
     override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }
@@ -111,7 +128,8 @@ final class SidebarHeaderView: NSView {
         // The text cell needs about 4 pt of its own margin beyond the text, or it truncates.
         let summaryWidth = min(ceil(summary.intrinsicContentSize.width) + 6, bounds.width * 0.5)
         moreButton.frame = NSRect(x: bounds.width - 30, y: (h - 24) / 2, width: 26, height: 24)
-        summary.frame = NSRect(x: bounds.width - summaryWidth - 34, y: summaryY, width: summaryWidth, height: summaryHeight)
+        hideButton.frame = NSRect(x: bounds.width - 56, y: (h - 24) / 2, width: 26, height: 24)
+        summary.frame = NSRect(x: bounds.width - summaryWidth - 60, y: summaryY, width: summaryWidth, height: summaryHeight)
         var x = inset + 4
         if !branchIcon.isHidden {
             branchIcon.frame = NSRect(x: x, y: (h - 14) / 2, width: 14, height: 14)

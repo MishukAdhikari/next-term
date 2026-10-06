@@ -11,6 +11,8 @@ protocol EditorAreaDelegate: AnyObject {
 /// Open files above the terminal, one tab each, like an IDE's editor area.
 final class EditorArea: NSView, TabBarViewDelegate {
     weak var delegate: EditorAreaDelegate?
+    /// A change mark in an editor's gutter was clicked: show that file's changes.
+    var onShowChanges: ((URL) -> Void)?
     let tabBar = TabBarView(frame: .zero)
     private let container = NSView()
     private let banner = EditorBanner()
@@ -95,10 +97,15 @@ final class EditorArea: NSView, TabBarViewDelegate {
             guard let self else { return }
             self.delegate?.editorAreaSelectionChanged(self)
         }
+        editor.onChangeMarkClick = { [weak self, weak document] _ in
+            guard let self, let document else { return }
+            self.onShowChanges?(document.url)
+        }
         insert(editor)
         select(activeIndex, focus: focus)
         container.layoutSubtreeIfNeeded()
         editor.textView.go(toLine: line ?? 1, column: line == nil ? 1 : column)
+        editor.refreshBaseline()
         return .opened
     }
 
@@ -232,6 +239,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
     func save(_ document: EditorDocument) -> Bool {
         do {
             try document.save()
+            editors.first { $0.document === document }?.refreshBaseline()
             return true
         } catch {
             let alert = NSAlert()
@@ -259,7 +267,12 @@ final class EditorArea: NSView, TabBarViewDelegate {
     func checkDisk() {
         for editor in editors { editor.document.checkDisk() }
         for diff in diffs { diff.refreshIfChanged() }
+        // The file being edited against the last commit: a commit (yours or an agent's) moves the marks.
+        checks += 1
+        if checks % 5 == 0 { activeEditor?.refreshBaseline() }
     }
+
+    private var checks = 0
 
     private func resolveConflict(keepMine: Bool) {
         guard let document = activeEditor?.document else { return }

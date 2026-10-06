@@ -185,6 +185,15 @@ final class CodeTextView: NSTextView {
 /// Line numbers down the left, the current line's brighter.
 final class LineNumberRuler: NSRulerView {
     private weak var codeView: CodeTextView?
+    /// Lines that differ from the last commit, drawn as a bar beside the numbers.
+    var marks = LineChanges.Marks() {
+        didSet { if marks != oldValue { needsDisplay = true } }
+    }
+    /// A change mark was clicked.
+    var onMarkClick: ((_ line: Int) -> Void)?
+    static let added = NSColor(hex: 0x549159)
+    static let modified = NSColor(hex: 0x375FAD)
+    static let deleted = NSColor(hex: 0xC75450)
 
     init(textView: CodeTextView) {
         codeView = textView
@@ -199,6 +208,21 @@ final class LineNumberRuler: NSRulerView {
     required init(coder: NSCoder) { fatalError("not used") }
 
     override var isOpaque: Bool { true }
+
+    /// A click on a change bar opens the file's changes side by side.
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard point.x >= ruleThickness - 10, let view = codeView, let document = view.document, let layoutManager = view.layoutManager,
+              let container = view.textContainer else { return super.mouseDown(with: event) }
+        let inText = view.convert(event.locationInWindow, from: nil)
+        let glyph = layoutManager.glyphIndex(for: NSPoint(x: 0, y: inText.y - view.textContainerOrigin.y), in: container)
+        let line = document.lines.line(at: layoutManager.characterIndexForGlyph(at: glyph))
+        if marks.lines[line] != nil || marks.deletedBefore.contains(line) || marks.deletedBefore.contains(line + 1) {
+            onMarkClick?(line)
+        } else {
+            super.mouseDown(with: event)
+        }
+    }
 
     private var numberFont: NSFont {
         let size = max(9, (codeView?.font?.pointSize ?? 13) - 1.5)
@@ -229,14 +253,33 @@ final class LineNumberRuler: NSRulerView {
         let bright: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor(hex: 0xA1A3AB)]
         let offset = convert(NSPoint.zero, from: view).y
 
+        let marks = self.marks
         func draw(_ line: Int, fragment: NSRect) {
             let label = "\(line + 1)" as NSString
             let attributes = line == caretLine ? bright : dim
             let size = label.size(withAttributes: attributes)
             // Baseline-aligned with the code: same line fragment, vertically centred.
-            let y = fragment.minY + view.textContainerOrigin.y + offset + (fragment.height - size.height) / 2
-            guard y + size.height > bounds.minY, y < bounds.maxY else { return }
+            let top = fragment.minY + view.textContainerOrigin.y + offset
+            let y = top + (fragment.height - size.height) / 2
+            guard top + fragment.height > bounds.minY, top < bounds.maxY else { return }
             label.draw(at: NSPoint(x: ruleThickness - size.width - 12, y: y), withAttributes: attributes)
+            // The change bar, between the numbers and the code (a wrapped line's rows all get it).
+            if let mark = marks.lines[line] {
+                (mark == .added ? Self.added : Self.modified).setFill()
+                NSRect(x: ruleThickness - 6, y: top, width: 3, height: fragment.height).fill()
+            }
+            if marks.deletedBefore.contains(line) { drawDeletion(at: top) }
+        }
+
+        /// Removed lines: a small red wedge on the line where they were.
+        func drawDeletion(at y: CGFloat) {
+            Self.deleted.setFill()
+            let wedge = NSBezierPath()
+            wedge.move(to: NSPoint(x: ruleThickness - 7, y: y - 3))
+            wedge.line(to: NSPoint(x: ruleThickness - 1, y: y))
+            wedge.line(to: NSPoint(x: ruleThickness - 7, y: y + 3))
+            wedge.close()
+            wedge.fill()
         }
 
         var line = index.line(at: characters.location)
@@ -247,6 +290,12 @@ final class LineNumberRuler: NSRulerView {
                 // The empty last line after a final newline.
                 if layoutManager.extraLineFragmentTextContainer != nil { draw(line, fragment: layoutManager.extraLineFragmentRect) }
                 break
+            }
+            if line == index.count - 1, marks.deletedBefore.contains(index.count) {
+                // Lines removed from the very end: the wedge goes under the last line.
+                let glyph = layoutManager.glyphIndexForCharacter(at: start)
+                let last = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil, withoutAdditionalLayout: true)
+                drawDeletion(at: last.maxY + view.textContainerOrigin.y + offset)
             }
             let glyph = layoutManager.glyphIndexForCharacter(at: start)
             let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil, withoutAdditionalLayout: true)
@@ -341,7 +390,10 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         textView.delegate = self
         textView.setAccessibilityLabel(document.name)
         applyFont()
-        document.onTextReplaced = { [weak self] in self?.restyleReplacedLines() }
+        document.onTextReplaced = { [weak self] in
+            self?.restyleReplacedLines()
+            self?.scheduleChangeMarks(after: 0)
+        }
 
         scrollView.verticalRulerView = ruler
         scrollView.hasVerticalRuler = true
@@ -482,6 +534,61 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         document.highlighter?.run()
         ruler.updateThickness()
         ruler.needsDisplay = true
+        scheduleChangeMarks()
+    }
+
+    // MARK: change marks
+
+    /// The file as of the last commit (nil: not committed, or not in a repository).
+    private var baseline: String?
+    private var baselineLoaded = false
+    private var marksWork: DispatchWorkItem?
+    private static let marksQueue = DispatchQueue(label: "nextterm.change-marks", qos: .utility)
+    private static let git = GitRunner.locateGit()
+    /// For the self-test.
+    var changeMarks: LineChanges.Marks { ruler.marks }
+    /// A change mark was clicked (the window shows the file's changes).
+    var onChangeMarkClick: ((_ line: Int) -> Void)? {
+        get { ruler.onMarkClick }
+        set { ruler.onMarkClick = newValue }
+    }
+
+    /// Reads the committed version again (after a save, a commit, or coming back to the window), then
+    /// redraws the marks.
+    func refreshBaseline() {
+        guard let git = Self.git, document.storage.length <= 2_000_000 else { return }
+        let path = document.path
+        Self.marksQueue.async { [weak self] in
+            let text = GitRunner.headText(of: path, git: git)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let changed = !self.baselineLoaded || text != self.baseline
+                self.baseline = text
+                self.baselineLoaded = true
+                if changed { self.scheduleChangeMarks(after: 0) }
+            }
+        }
+    }
+
+    /// Recomputes the marks a moment after typing stops (git diff on the text as it is, unsaved edits too).
+    func scheduleChangeMarks(after delay: TimeInterval = 0.35) {
+        guard baselineLoaded, let git = Self.git else { return }
+        marksWork?.cancel()
+        guard let baseline else {
+            ruler.marks = LineChanges.Marks() // new or untracked: nothing to compare with
+            return
+        }
+        let current = document.text
+        let work = DispatchWorkItem { [weak self] in
+            let marks = baseline == current ? LineChanges.Marks()
+                : GitRunner.diff(old: baseline, new: current, git: git, context: 0).map(LineChanges.marks(from:)) ?? LineChanges.Marks()
+            DispatchQueue.main.async {
+                guard let self, self.document.text == current else { return } // typed on since: a newer run follows
+                self.ruler.marks = marks
+            }
+        }
+        marksWork = work
+        Self.marksQueue.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString text: String?) -> Bool {

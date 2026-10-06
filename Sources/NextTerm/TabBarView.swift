@@ -54,6 +54,40 @@ final class TabBarView: NSView {
     private var moreButton: MoreButton?
     static let moreButtonWidth: CGFloat = 34
 
+    /// With the project sidebar hidden, the bar at the window's top-left corner gets a button to show it
+    /// again, just after the traffic lights.
+    var showsSidebarButton = false {
+        didSet {
+            sidebarButton.isHidden = !showsSidebarButton
+            needsLayout = true
+        }
+    }
+    func setSidebarButton(onRight: Bool) {
+        sidebarButton.image = NSImage(systemSymbolName: onRight ? "sidebar.right" : "sidebar.left", accessibilityDescription: "Show Project Sidebar")?
+            .withSymbolConfiguration(.init(pointSize: 13, weight: .regular))
+    }
+    private let sidebarButton = HoverButton()
+    static let sidebarButtonWidth: CGFloat = 30
+    private var tabsStart: CGFloat { leadingInset + (sidebarButton.isHidden ? 0 : Self.sidebarButtonWidth) }
+
+    /// A collapse/expand button before the ⋯ (the terminal, when the editor shares the window).
+    var onToggleCollapse: (() -> Void)? {
+        didSet {
+            collapseButton.isHidden = onToggleCollapse == nil
+            needsLayout = true
+        }
+    }
+    /// The arrow points the way a click moves the bar: toward the window's edge to collapse, back to expand.
+    func setCollapseButton(symbol: String, toolTip: String) {
+        collapseButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: toolTip)?
+            .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
+        collapseButton.toolTip = toolTip
+        collapseButton.setAccessibilityLabel(toolTip)
+    }
+    private let collapseButton = HoverButton()
+    static let collapseButtonWidth: CGFloat = 28
+    private var collapseWidth: CGFloat { collapseButton.isHidden ? 0 : Self.collapseButtonWidth }
+
     /// The title for the accessibility tab group and the close button's tooltip.
     var kind = "tab" { didSet { setAccessibilityLabel(kind == "tab" ? "Terminal tabs" : "Editor tabs") } }
 
@@ -85,6 +119,22 @@ final class TabBarView: NSView {
         newTabButton.target = self
         newTabButton.action = #selector(newTabClicked)
         addSubview(newTabButton)
+        collapseButton.bezelStyle = .regularSquare
+        collapseButton.isBordered = false
+        collapseButton.contentTintColor = Theme.textDim
+        collapseButton.target = self
+        collapseButton.action = #selector(collapseClicked)
+        collapseButton.isHidden = true
+        addSubview(collapseButton)
+        sidebarButton.bezelStyle = .regularSquare
+        sidebarButton.isBordered = false
+        sidebarButton.contentTintColor = Theme.textDim
+        sidebarButton.action = #selector(TerminalWindowController.toggleProjectSidebar(_:)) // up the responder chain
+        sidebarButton.toolTip = "Show the project sidebar (⌘B)"
+        sidebarButton.setAccessibilityLabel("Show Project Sidebar")
+        sidebarButton.isHidden = true
+        setSidebarButton(onRight: false)
+        addSubview(sidebarButton)
 
         overflowButton.target = self
         overflowButton.action = #selector(showOverflowMenu)
@@ -137,7 +187,8 @@ final class TabBarView: NSView {
 
     /// Width for tabs, keeping a strip on the right for dragging the window.
     private var availableWidth: CGFloat {
-        max(0, bounds.width - leadingInset - (allowsNewTab ? Self.newTabButtonWidth : 0) - (moreButton == nil ? 0 : Self.moreButtonWidth) - 24)
+        max(0, bounds.width - tabsStart - (allowsNewTab ? Self.newTabButtonWidth : 0) - (moreButton == nil ? 0 : Self.moreButtonWidth)
+            - collapseWidth - 24)
     }
 
     /// How many tabs fit at a readable width.
@@ -167,7 +218,7 @@ final class TabBarView: NSView {
 
     private func frameForTab(at index: Int) -> NSRect {
         let slot = CGFloat(index - visibleRange.lowerBound)
-        return NSRect(x: leadingInset + slot * tabWidth, y: 0, width: tabWidth, height: bounds.height - 1)
+        return NSRect(x: tabsStart + slot * tabWidth, y: 0, width: tabWidth, height: bounds.height - 1)
     }
 
     override func layout() {
@@ -178,16 +229,19 @@ final class TabBarView: NSView {
             view.isHidden = !range.contains(i)
             if !view.isHidden { view.frame = frameForTab(at: i) }
         }
-        var x = leadingInset + CGFloat(range.count) * tabWidth
+        var x = tabsStart + CGFloat(range.count) * tabWidth
+        sidebarButton.frame = NSRect(x: leadingInset, y: 0, width: Self.sidebarButtonWidth, height: bounds.height - 1)
         overflowButton.isHidden = !isOverflowing
         if isOverflowing {
             overflowButton.frame = NSRect(x: x, y: 0, width: Self.overflowButtonWidth, height: bounds.height - 1)
             x += Self.overflowButtonWidth
         }
         let more: CGFloat = moreButton == nil ? 0 : Self.moreButtonWidth
-        newTabButton.frame = NSRect(x: min(x, bounds.width - Self.newTabButtonWidth - more), y: 0,
+        newTabButton.frame = NSRect(x: min(x, bounds.width - Self.newTabButtonWidth - more - collapseWidth), y: 0,
                                     width: Self.newTabButtonWidth, height: bounds.height - 1)
         moreButton?.frame = NSRect(x: bounds.width - Self.moreButtonWidth - 4, y: 0, width: Self.moreButtonWidth, height: bounds.height - 1)
+        collapseButton.frame = NSRect(x: bounds.width - more - 4 - Self.collapseButtonWidth, y: 0,
+                                      width: Self.collapseButtonWidth, height: bounds.height - 1)
         updateOverflowButton()
     }
 
@@ -199,6 +253,8 @@ final class TabBarView: NSView {
         let urgency: [TabState] = [.attention, .failed, .done, .working]
         overflowButton.configure(hiddenCount: hidden.count, state: urgency.first(where: hidden.contains) ?? .idle)
     }
+
+    @objc private func collapseClicked() { onToggleCollapse?() }
 
     @objc private func showOverflowMenu() {
         let menu = NSMenu()
@@ -302,11 +358,11 @@ final class TabBarView: NSView {
                 view.isDragging = true
             }
             let range = self.visibleRange
-            let minX = self.leadingInset
-            let maxX = self.leadingInset + CGFloat(range.count - 1) * self.tabWidth
+            let minX = self.tabsStart
+            let maxX = self.tabsStart + CGFloat(range.count - 1) * self.tabWidth
             view.frame.origin.x = min(max(x - grabOffset, minX), maxX)
             // Reorder the array live as the dragged tab's centre crosses its neighbours (within the visible tabs).
-            let centre = view.frame.midX - self.leadingInset
+            let centre = view.frame.midX - self.tabsStart
             let target = min(max(Int(centre / self.tabWidth) + range.lowerBound, range.lowerBound), range.upperBound - 1)
             if let current = self.index(of: view), current != target {
                 self.tabViews.remove(at: current)
@@ -668,4 +724,9 @@ extension Array {
     subscript(safe index: Int) -> Element? {
         indices.contains(index) ? self[index] : nil
     }
+}
+
+/// A borderless icon button that does not drag the window (it sits in the title-bar strip).
+final class HoverButton: NSButton {
+    override var mouseDownCanMoveWindow: Bool { false }
 }

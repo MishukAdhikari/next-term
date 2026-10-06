@@ -475,6 +475,7 @@ enum SelfTest {
 
         await editorChecks(c, proj: proj, tab: inProject)
         await goToFileChecks(c, proj: proj)
+        await gutterAndCollapseChecks(c, proj: proj)
 
         // The tree remembers what was expanded when you switch to a tab in another folder and back.
         if let src = c.sidebar.root?.children?.first(where: { $0.name == "src" }) {
@@ -491,8 +492,13 @@ enum SelfTest {
         let lightsInset = c.tabBar.leadingInset
         c.toggleProjectSidebar(nil)
         check(!c.isSidebarVisible && c.tabBar.leadingInset == 78, "⌘B hides the sidebar and the tabs move clear of the traffic lights")
+        check(c.tabBar.showsSidebarButton != c.editorArea.tabBar.showsSidebarButton, "the bar at the top-left offers a button to show it again")
+        await screenshot(c, suffix: "-sidebar-hidden")
         c.toggleProjectSidebar(nil)
         check(c.isSidebarVisible && c.tabBar.leadingInset == lightsInset, "⌘B shows it again")
+        check(!c.tabBar.showsSidebarButton && !c.editorArea.tabBar.showsSidebarButton
+              && c.sidebar.header.hideButton.action == #selector(TerminalWindowController.toggleProjectSidebar(_:)),
+              "with the sidebar shown, its own header has the hide button")
         await screenshot(c, suffix: "-sidebar")
         c.requestClose(inProject)
 
@@ -680,6 +686,51 @@ enum SelfTest {
             holder.remove(forked)
         }
         if let tab { app.controllers.first { $0.tabs.contains { $0 === tab } }?.remove(tab) }
+        _ = window
+    }
+
+    /// The editor gutter marks lines changed since the last commit; the terminal folds to its tab bar and back.
+    private static func gutterAndCollapseChecks(_ c: TerminalWindowController, proj: URL) async {
+        guard let window = c.window, let git = GitRunner.locateGit() else { return }
+        let file = proj.appendingPathComponent("gutter.txt")
+        try? "a\nb\nc\n".write(to: file, atomically: true, encoding: .utf8)
+        for args in [["add", "gutter.txt"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "gutter", "--", "gutter.txt"]] {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: git)
+            process.arguments = ["-C", proj.path] + args
+            try? process.run()
+            process.waitUntilExit()
+        }
+        c.openFile(file)
+        guard let editor = c.editorArea.activeEditor, editor.document.path.hasSuffix("gutter.txt") else { return check(false, "gutter.txt opens") }
+        await pause(1)
+        check(editor.changeMarks.isEmpty, "a committed file opens with no change marks")
+        editor.textView.insertText("B", replacementRange: NSRange(location: 2, length: 1))
+        editor.textView.insertText("d\n", replacementRange: NSRange(location: 6, length: 0))
+        check(await wait(5) { editor.changeMarks.lines == [1: .modified, 3: .added] }, "the gutter marks a changed line and an added one, before saving",
+              "\(editor.changeMarks.lines)")
+        // Only a deletion: "b" gone from the committed "a b c".
+        editor.textView.insertText("a\nc\n", replacementRange: NSRange(location: 0, length: (editor.textView.string as NSString).length))
+        check(await wait(5) { editor.changeMarks.lines.isEmpty && editor.changeMarks.deletedBefore == [1] }, "and where lines were deleted",
+              "\(editor.changeMarks)")
+        await screenshot(c, suffix: "gutter")
+
+        // Collapse the terminal to its tab bar, and back.
+        let pane = c.tabBar.superview
+        let before = pane?.frame.height ?? 0
+        c.toggleTerminalCollapsed(nil)
+        check(c.terminalCollapsed && abs((pane?.frame.height ?? 0) - TabBarView.height) < 2, "⌘J folds the terminal down to its tab bar",
+              "\(pane?.frame.height ?? -1)")
+        await screenshot(c, suffix: "collapsed")
+        c.toggleTerminalCollapsed(nil)
+        check(!c.terminalCollapsed && abs((pane?.frame.height ?? 0) - before) < 2, "and again brings it back to its size",
+              "\(before) → \(pane?.frame.height ?? -1)")
+
+        // Put the file back as committed.
+        editor.textView.insertText("a\nb\nc\n", replacementRange: NSRange(location: 0, length: (editor.textView.string as NSString).length))
+        c.editorArea.save(editor.document)
+        check(await wait(5) { editor.changeMarks.isEmpty }, "the marks go once the file matches the commit again")
+        c.editorArea.close(editor)
         _ = window
     }
 

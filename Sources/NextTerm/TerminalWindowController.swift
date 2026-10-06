@@ -145,6 +145,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             workSplit.bottomAnchor.constraint(equalTo: mainPane.bottomAnchor),
         ])
         editorArea.delegate = self
+        editorArea.onShowChanges = { [weak self] url in self?.showChanges(of: url) }
         editorArea.isHidden = true
         applyLayout()
         setSidebarVisible(AppDelegate.shared.sidebarVisible)
@@ -568,6 +569,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             return activeGroup?.isSplit == true
         }
         if item.action == #selector(splitRight(_:)) || item.action == #selector(splitDown(_:)) { return activeTab != nil }
+        if item.action == #selector(toggleTerminalCollapsed(_:)) {
+            item.title = terminalCollapsed ? "Expand Terminal" : "Collapse Terminal"
+            return !editorArea.isHidden
+        }
         if item.action == #selector(toggleProjectSidebar(_:)) {
             item.title = isSidebarVisible ? "Hide Project Sidebar" : "Show Project Sidebar"
         }
@@ -605,7 +610,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         splitView.adjustSubviews()
         workSplit.adjustSubviews()
         if isSidebarVisible { placeSidebarDivider(width: sidebarWidth) }
+        terminalCollapsed = false // a new layout starts unfolded
         placeWorkDivider()
+        updateCollapseButton()
         updateInsets()
     }
 
@@ -660,20 +667,78 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         tabBar.dragsWindow = terminalAtTop
         editorArea.tabBar.leadingInset = terminalAtCorner ? 8 : corner
         editorArea.tabBar.dragsWindow = editorAtTop
+        // The sidebar hidden: the bar at the top-left corner offers it back.
+        tabBar.showsSidebarButton = !isSidebarVisible && terminalAtCorner
+        editorArea.tabBar.showsSidebarButton = !isSidebarVisible && !terminalAtCorner
+        tabBar.setSidebarButton(onRight: sidebarOnRight)
+        editorArea.tabBar.setSidebarButton(onRight: sidebarOnRight)
+        sidebar.header.onRight = sidebarOnRight
     }
 
     /// The smallest a pane may get along the work split: room for its tabs and a few lines.
     private var workMinimum: CGFloat { workSplit.isVertical ? 240 : TabBarView.height + 60 }
 
+    // MARK: collapsing the terminal
+
+    /// The terminal folded down to its tab bar (beside the editor: a narrow strip), from the button
+    /// before its ⋯ or ⌘J. Dragging the divider works as always and unfolds it.
+    private(set) var terminalCollapsed = false
+    private var collapsedLength: CGFloat { workSplit.isVertical ? 120 : TabBarView.height }
+    private var terminalLength: CGFloat { workSplit.isVertical ? terminalPane.frame.width : terminalPane.frame.height }
+    /// The smallest the terminal may get: its tab bar while collapsed, else the usual minimum.
+    private var terminalMinimum: CGFloat { terminalCollapsed ? collapsedLength : workMinimum }
+
+    @objc func toggleTerminalCollapsed(_ sender: Any?) {
+        guard !editorArea.isHidden else { return NSSound.beep() } // the terminal is the whole area
+        terminalCollapsed ? expandTerminal() : collapseTerminal()
+    }
+
+    func collapseTerminal() {
+        guard !editorArea.isHidden, !terminalCollapsed else { return }
+        terminalCollapsed = true
+        workSplit.layoutSubtreeIfNeeded()
+        let length = workSplit.isVertical ? workSplit.bounds.width : workSplit.bounds.height
+        workSplit.setPosition(terminalFirst ? collapsedLength : length - collapsedLength - workSplit.dividerThickness, ofDividerAt: 0)
+        if isTerminalFocused, let editor = editorArea.activeEditor { window?.makeFirstResponder(editor.textView) }
+        updateCollapseButton()
+    }
+
+    func expandTerminal() {
+        guard terminalCollapsed else { return }
+        terminalCollapsed = false
+        placeWorkDivider() // back to the size it had (the editor's remembered share)
+        updateCollapseButton()
+    }
+
+    private var isTerminalFocused: Bool {
+        guard let view = window?.firstResponder as? NSView else { return false }
+        return view.isDescendant(of: terminalPane)
+    }
+
+    /// The arrow points where a click moves the tab bar: to the window's edge to collapse, back to expand.
+    private func updateCollapseButton() {
+        tabBar.onToggleCollapse = editorArea.isHidden ? nil : { [weak self] in self?.toggleTerminalCollapsed(nil) }
+        let toward: String
+        switch terminalPosition {
+        case .bottom: toward = "down"
+        case .top: toward = "up"
+        case .left: toward = "left"
+        case .right: toward = "right"
+        }
+        let away = ["down": "up", "up": "down", "left": "right", "right": "left"][toward]!
+        tabBar.setCollapseButton(symbol: "chevron.\(terminalCollapsed ? away : toward)",
+                                 toolTip: terminalCollapsed ? "Expand the terminal (⌘J)" : "Collapse the terminal (⌘J)")
+    }
+
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {
-        if splitView === workSplit { return workMinimum }
+        if splitView === workSplit { return terminalFirst ? terminalMinimum : workMinimum }
         // The sidebar is 160–640 wide, on either side.
         return sidebarOnRight ? max(320, splitView.bounds.width - 640) : 160
     }
 
     func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {
         if splitView === workSplit {
-            return (workSplit.isVertical ? splitView.bounds.width : splitView.bounds.height) - workMinimum
+            return (workSplit.isVertical ? splitView.bounds.width : splitView.bounds.height) - (terminalFirst ? workMinimum : terminalMinimum)
         }
         return sidebarOnRight ? splitView.bounds.width - 160 : min(640, splitView.bounds.width - 320)
     }
@@ -689,8 +754,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             // Remember the split the user dragged to (not the one a window resize produces).
             let length = workSplit.isVertical ? workSplit.bounds.width : workSplit.bounds.height
             if !editorArea.isHidden, length > 200, NSApp.currentEvent?.type == .leftMouseDragged {
-                let editor = workSplit.isVertical ? editorArea.frame.width : editorArea.frame.height
-                AppDelegate.shared.editorFraction = editor / length
+                // Dragging a collapsed terminal open unfolds it; the size it is dragged to is remembered as usual.
+                if terminalCollapsed, terminalLength > collapsedLength + 8 {
+                    terminalCollapsed = false
+                    updateCollapseButton()
+                }
+                if !terminalCollapsed {
+                    let editor = workSplit.isVertical ? editorArea.frame.width : editorArea.frame.height
+                    AppDelegate.shared.editorFraction = editor / length
+                }
             }
             return
         }
@@ -871,6 +943,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private func setEditorVisible(_ visible: Bool) {
         guard editorArea.isHidden == visible else { return }
         editorArea.isHidden = !visible
+        if !visible { terminalCollapsed = false } // nothing to collapse beside
+        updateCollapseButton()
         workSplit.adjustSubviews()
         if visible {
             placeWorkDivider()

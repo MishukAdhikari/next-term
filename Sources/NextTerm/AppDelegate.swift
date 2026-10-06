@@ -883,6 +883,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let view = submenu(main, "View")
         item(view, "Hide Project Sidebar", #selector(TerminalWindowController.toggleProjectSidebar(_:)), "b") // title follows the state
         item(view, "Focus Editor", #selector(TerminalWindowController.toggleEditorFocus(_:)), "`", [.control]) // title follows the focus
+        item(view, "Collapse Terminal", #selector(TerminalWindowController.toggleTerminalCollapsed(_:)), "j") // title follows the state
         view.addItem(.separator())
         let positions = NSMenu(title: "Terminal Position")
         for position in TerminalPosition.allCases {
