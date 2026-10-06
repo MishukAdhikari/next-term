@@ -16,6 +16,18 @@ public struct RecentProjects: Equatable, Sendable {
         if paths.count > Self.limit { paths.removeLast(paths.count - Self.limit) }
     }
 
+    /// Projects brought over from another app: after this list's own, never pushing them out. Returns
+    /// the ones added.
+    @discardableResult
+    public mutating func appendImported(_ imported: [String]) -> [String] {
+        var added: [String] = []
+        for path in imported where paths.count < Self.limit && !paths.contains(path) {
+            paths.append(path)
+            added.append(path)
+        }
+        return added
+    }
+
     public mutating func remove(_ path: String) {
         paths.removeAll { $0 == path }
     }

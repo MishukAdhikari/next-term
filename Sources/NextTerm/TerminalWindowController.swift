@@ -569,6 +569,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             return activeGroup?.isSplit == true
         }
         if item.action == #selector(splitRight(_:)) || item.action == #selector(splitDown(_:)) { return activeTab != nil }
+        // With VS Code's or JetBrains' keys, ⌘K clears only the terminal: in their editors ⌘K means other things.
+        if item.action == #selector(clearBuffer(_:)) {
+            return !(KeyboardShortcuts.shared.preset.clearsOnlyInTerminal && isEditorFocused)
+        }
         if item.action == #selector(toggleTerminalCollapsed(_:)) {
             item.title = terminalCollapsed ? "Expand Terminal" : "Collapse Terminal"
             return !editorArea.isHidden
@@ -1144,6 +1148,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     @objc func showPreviousTab(_ sender: Any?) { isEditorFocused ? editorArea.cycle(by: -1) : cycleTab(by: -1) }
 
     @objc func clearBuffer(_ sender: Any?) {
+        if KeyboardShortcuts.shared.preset.clearsOnlyInTerminal && isEditorFocused { return }
         guard let tab = activeTab else { return }
         // Wipe screen and scrollback locally; at a prompt, ask the shell to redraw it.
         tab.view.feed(text: "\u{1b}[H\u{1b}[2J\u{1b}[3J")

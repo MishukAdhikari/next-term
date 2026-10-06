@@ -476,6 +476,7 @@ enum SelfTest {
         await editorChecks(c, proj: proj, tab: inProject)
         await goToFileChecks(c, proj: proj)
         await gutterAndCollapseChecks(c, proj: proj)
+        await importChecks(c, proj: proj)
 
         // The tree remembers what was expanded when you switch to a tab in another folder and back.
         if let src = c.sidebar.root?.children?.first(where: { $0.name == "src" }) {
@@ -687,6 +688,71 @@ enum SelfTest {
         }
         if let tab { app.controllers.first { $0.tabs.contains { $0 === tab } }?.remove(tab) }
         _ = window
+    }
+
+    /// Shortcut presets (VS Code, JetBrains) over the menus, the user's own changes kept on top, and an
+    /// import's preview, apply and exact undo.
+    private static func importChecks(_ c: TerminalWindowController, proj: URL) async {
+        let shortcuts = KeyboardShortcuts.shared
+        func item(_ id: String) -> NSMenuItem? { shortcuts.commands.first { $0.id == id }?.item }
+        check(shortcuts.commands.contains { $0.id == "setLineHeight:1.35" } && shortcuts.commands.contains { $0.id == "setLineHeight:2.0" },
+              "each Line Height item has its own shortcut id")
+        let savedPreset = shortcuts.preset
+        let savedBindings = shortcuts.bindings
+        shortcuts.set(KeyChord(key: "l", command: true, control: true), for: "goToLine:") // the user's own change
+        shortcuts.preset = .vsCode
+        check(item("replaceInFiles:")?.keyEquivalent == "h" && item("replaceInFiles:")?.keyEquivalentModifierMask == [.command, .shift]
+              && item("splitRight:")?.keyEquivalent == "\\" && item("newWindow:")?.keyEquivalentModifierMask == [.command, .shift],
+              "VS Code keys: Replace in Files ⇧⌘H, Split Right ⌘\\, New Window ⇧⌘N")
+        shortcuts.preset = .jetBrains
+        check(item("goToFile:")?.keyEquivalent == "o" && item("goToFile:")?.keyEquivalentModifierMask == [.command, .shift]
+              && item("saveAllDocuments:")?.keyEquivalentModifierMask == .command && item("indentSelection:")?.keyEquivalent == "",
+              "JetBrains keys: Go to File ⇧⌘O, Save All ⌘S, Indent has no key")
+        check(item("goToLine:")?.keyEquivalentModifierMask == [.command, .control], "your own shortcut changes stay on top of a preset")
+        // ⌘K leaves the editor alone under a preset.
+        c.openFile(proj.appendingPathComponent("gutter.txt"))
+        if let editor = c.editorArea.activeEditor, let clear = item("clearBuffer:") {
+            c.window?.makeFirstResponder(editor.textView)
+            check(!c.validateMenuItem(clear), "with VS Code or JetBrains keys, ⌘K does not clear the terminal from the editor")
+            c.editorArea.close(editor)
+        }
+        shortcuts.preset = .nextTerm
+        check(item("replaceInFiles:")?.keyEquivalent == "r" && item("goToFile:")?.keyEquivalentModifierMask == .command,
+              "back to Next Term's keys")
+
+        // An import: preview, apply, and undo exactly.
+        let app = AppDelegate.shared!
+        let fullList = app.recentProjects
+        app.setRecentProjects(Array(fullList.prefix(3))) // room for an imported one (an import never pushes yours out)
+        let before = (app.fontSize, app.softWrap, app.recentProjects, shortcuts.preset)
+        let extra = proj.appendingPathComponent("imported-project")
+        try? FileManager.default.createDirectory(at: extra, withIntermediateDirectories: true)
+        let plan = ImportPlan(preset: .vsCode,
+                              settings: [PlannedSetting(.fontSize(clamping: before.0 + 2), source: "editor.fontSize \(Int(before.0) + 2)"),
+                                         PlannedSetting(.softWrap(!before.1), source: "editor.wordWrap"),
+                                         PlannedSetting(.optionAsMeta(true), source: "terminal.integrated.macOptionIsMeta", ticked: false,
+                                                        note: "Option types @ [ ] { } on your keyboard layout")],
+                              recentProjects: [canonicalPath(extra.path)],
+                              skipped: [SkippedItem("editor.fontFamily", "font choice is coming"),
+                                        SkippedItem("terminal.integrated.env.osx", "never imported: can hold secrets")])
+        let window = ImportWindowController.shared
+        window.showPreview(for: DetectedApp(kind: .vsCode, name: "VS Code", configPath: "/tmp", lastUsed: Date()), plan: plan)
+        await pause(0.4)
+        if let previewWindow = window.window { await screenshot(previewWindow, suffix: "import") }
+        check(window.applyTitle == "Apply \(KeymapPreset.vsCode.overrides.count + 3) Changes", "the preview counts what is ticked", window.applyTitle)
+        window.applyForTest()
+        check(app.fontSize == before.0 + 2 && app.softWrap != before.1 && !Preferences.optionAsMeta
+              && shortcuts.preset == .vsCode && app.recentProjects.contains(canonicalPath(extra.path)),
+              "Apply sets the ticked changes and leaves the unticked one",
+              "font \(app.fontSize) wrap \(app.softWrap) meta \(Preferences.optionAsMeta) preset \(shortcuts.preset) recents \(app.recentProjects)")
+        check(ImportCoordinator.shared.last?.source == "VS Code", "the import is remembered for Undo")
+        ImportCoordinator.shared.undo()
+        check(app.fontSize == before.0 && app.softWrap == before.1 && shortcuts.preset == before.3 && app.recentProjects == before.2,
+              "Undo Import puts everything back exactly", "\(app.fontSize) \(app.softWrap) \(shortcuts.preset) \(app.recentProjects.count)")
+        shortcuts.bindings = savedBindings
+        shortcuts.preset = savedPreset
+        app.setRecentProjects(fullList)
+        try? FileManager.default.removeItem(at: extra)
     }
 
     /// The editor gutter marks lines changed since the last commit; the terminal folds to its tab bar and back.

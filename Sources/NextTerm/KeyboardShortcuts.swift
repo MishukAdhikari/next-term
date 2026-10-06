@@ -23,8 +23,27 @@ final class KeyboardShortcuts {
         set { UserDefaults.standard.set(newValue.encoded(), forKey: Self.defaultsKey) }
     }
 
+    /// Every command's shortcut before the user's own changes: the preset's, else the menu's.
     var defaults: [String: KeyChord?] {
-        Dictionary(commands.map { ($0.id, $0.defaultChord) }, uniquingKeysWith: { first, _ in first })
+        let preset = self.preset
+        return Dictionary(commands.map { ($0.id, preset.chord(for: $0.id, default: $0.defaultChord)) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    private static let presetKey = "keymapPreset"
+
+    /// Shortcuts from VS Code or JetBrains (macOS), laid between the menus' defaults and the user's own
+    /// changes, which a preset never touches.
+    var preset: KeymapPreset {
+        get { KeymapPreset(rawValue: UserDefaults.standard.string(forKey: Self.presetKey) ?? "") ?? .nextTerm }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: Self.presetKey)
+            apply()
+        }
+    }
+
+    /// A command's shortcut before the user's own change.
+    func baseChord(for id: String) -> KeyChord? {
+        preset.chord(for: id, default: commands.first { $0.id == id }?.defaultChord ?? nil)
     }
 
     /// Records the menus' commands and their default shortcuts, then applies the user's.
@@ -52,7 +71,13 @@ final class KeyboardShortcuts {
     static func id(of item: NSMenuItem) -> String? {
         guard let action = item.action else { return nil }
         var id = NSStringFromSelector(action)
-        if let value = item.representedObject as? String { id += value } else if item.tag != 0 { id += "#\(item.tag)" }
+        if let value = item.representedObject as? String {
+            id += value
+        } else if let value = item.representedObject as? Double {
+            id += String(value) // Line Height › 1.35: one id per item, not one for all seven
+        } else if item.tag != 0 {
+            id += "#\(item.tag)"
+        }
         return id
     }
 
@@ -90,25 +115,30 @@ final class KeyboardShortcuts {
     }
 
     func chord(for id: String) -> KeyChord? {
-        bindings.chord(for: id, default: commands.first { $0.id == id }?.defaultChord ?? nil)
+        bindings.chord(for: id, default: baseChord(for: id))
     }
 
     func title(of id: String) -> String {
         commands.first { $0.id == id }?.title ?? id
     }
 
-    /// Lays the user's shortcuts over the menus.
+    /// Lays the preset and the user's shortcuts over the menus. A saved shortcut that could not be typed
+    /// (no ⌘ or ⌃, or hand-edited preferences) is ignored rather than taking keys from typing.
     func apply() {
         let bindings = self.bindings
+        let preset = self.preset
         for command in commands {
             guard let item = command.item else { continue }
-            Self.set(bindings.chord(for: command.id, default: command.defaultChord), on: item)
+            let base = preset.chord(for: command.id, default: command.defaultChord)
+            var chord = bindings.chord(for: command.id, default: base)
+            if let saved = chord, !saved.isUsable { chord = base }
+            Self.set(chord, on: item)
         }
     }
 
     func set(_ chord: KeyChord?, for id: String) {
         var bindings = self.bindings
-        bindings.set(chord, for: id, default: commands.first { $0.id == id }?.defaultChord ?? nil)
+        bindings.set(chord, for: id, default: baseChord(for: id))
         self.bindings = bindings
         apply()
     }
@@ -152,8 +182,14 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         let keysTab = NSTabViewItem(identifier: "keys")
         keysTab.label = "Keyboard Shortcuts"
         keysTab.view = NSView()
+        let importTab = NSTabViewItem(identifier: "import")
+        importTab.label = "Import"
+        importTab.view = ImportSettingsView()
         tabs.addTabViewItem(editorTab)
         tabs.addTabViewItem(keysTab)
+        tabs.addTabViewItem(importTab)
+        // A preset switched (here or by an import) changes the shortcuts listed.
+        NotificationCenter.default.addObserver(self, selector: #selector(presetChanged), name: ImportCoordinator.changed, object: nil)
         window.contentView = tabs
         shortcutsContent = keysTab.view
         build()
@@ -162,6 +198,8 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     }
 
     private var shortcutsContent: NSView?
+
+    @objc private func presetChanged() { reload() }
 
     func showTab(_ identifier: String) {
         (window?.contentView as? NSTabView)?.selectTabViewItem(withIdentifier: identifier)
@@ -259,7 +297,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
             button.bezelStyle = .rounded
             button.controlSize = .small
             button.identifier = .init(command.id)
-            button.toolTip = "Back to " + (command.defaultChord?.display ?? "no shortcut")
+            button.toolTip = "Back to " + (KeyboardShortcuts.shared.baseChord(for: command.id)?.display ?? "no shortcut")
             return button
         }
     }

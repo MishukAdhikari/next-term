@@ -282,7 +282,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         // A folder dropped on the app or `open -a "Next Term" dir` arrives before this and opens itself.
         guard controllers.isEmpty else { return }
-        if !reopenLastProjects() { chooseStartingFolder() }
+        if !reopenLastProjects() { offerImportThenChooseFolder() }
     }
 
     // MARK: nxtrm
@@ -391,6 +391,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// The first launch (or when the last folder is gone): ask where to start. That folder opens as the
     /// project, and next time Next Term opens there by itself.
+    /// First launch: "Coming from another app?" (only when one is found, and only once), then the folder.
+    private func offerImportThenChooseFolder() {
+        let offered = UserDefaults.standard.bool(forKey: "importOffered")
+        guard !offered, recentProjects.isEmpty, !ImportSources.detect().isEmpty else { return chooseStartingFolder() }
+        UserDefaults.standard.set(true, forKey: "importOffered")
+        ImportWindowController.shared.showChooser(firstRun: true) { [weak self] plan in
+            guard let self, self.controllers.isEmpty else { return }
+            // Projects came over: the Welcome window lists them (and their agents' sessions).
+            if let plan, !plan.recentProjects.isEmpty, !self.recentProjects.isEmpty { self.showWelcome(nil) } else { self.chooseStartingFolder() }
+        }
+    }
+
     private func chooseStartingFolder() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -525,6 +537,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     var recentProjects: [String] { recent.existing() }
+
+    /// Projects brought over by an import: after Next Term's own, never pushing them out.
+    func importRecentProjects(_ paths: [String]) -> [String] {
+        var list = recent
+        let added = list.appendImported(paths)
+        recent = list
+        return added
+    }
+
+    /// Undo of an import: the list exactly as it was.
+    func setRecentProjects(_ paths: [String]) {
+        recent = RecentProjects(paths)
+    }
 
     /// Where Open Project goes when the current window is in use: ask, this window, or a new one.
     enum ProjectTarget: String { case ask, thisWindow, newWindow }
@@ -815,6 +840,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(app, "Check for Updates…", #selector(checkForUpdates(_:)), "", target: self)
         item(app, "Check for Updates Automatically", #selector(toggleAutomaticUpdates(_:)), "", target: self)
         item(app, "Install Command Line Tool (nxtrm)…", #selector(installCommandLineTool(_:)), "", target: self)
+        item(app, "Import Settings and Shortcuts…", #selector(showImport(_:)), "", target: self)
         app.addItem(.separator())
         let services = NSMenu()
         app.addItem(withTitle: "Services", action: nil, keyEquivalent: "").submenu = services
