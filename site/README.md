@@ -76,6 +76,9 @@ server {
 
     location / {
         try_files $uri $uri/ =404;      # /docs/agents → 301 to /docs/agents/ → index.html
+        # no-transform: Cloudflare then leaves the HTML alone. Without it, its Web Analytics injects a
+        # beacon script into every page, and the footer's "no trackers, no third-party requests" is false.
+        add_header Cache-Control "public, max-age=300, must-revalidate, no-transform" always;
     }
     location /_astro/ {
         add_header Cache-Control "public, max-age=31536000, immutable";
