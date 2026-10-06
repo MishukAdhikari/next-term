@@ -9,8 +9,7 @@ enum SafeOpen {
             NSWorkspace.shared.open(url)
             return
         }
-        // Judge the real target: a symlink named readme.md can point at a .command file.
-        let target = URL(fileURLWithPath: url.path).resolvingSymlinksInPath()
+        guard let target = target(of: url) else { return NSSound.beep() }
         guard let reason = runsCode(target) else {
             NSWorkspace.shared.open(target)
             return
@@ -30,6 +29,17 @@ enum SafeOpen {
             }
         }
         if let window { alert.beginSheetModal(for: window, completionHandler: handle) } else { handle(alert.runModal()) }
+    }
+
+    /// What opening `url` really opens: a symlink or a Finder alias named readme.md can point at a
+    /// .command file or an app. nil for an alias that no longer resolves.
+    static func target(of url: URL) -> URL? {
+        var target = URL(fileURLWithPath: url.path).resolvingSymlinksInPath()
+        if (try? target.resourceValues(forKeys: [.isAliasFileKey]))?.isAliasFile == true {
+            guard let resolved = try? URL(resolvingAliasFileAt: target) else { return nil }
+            target = resolved.resolvingSymlinksInPath()
+        }
+        return target
     }
 
     /// Handlers that execute whatever they open.

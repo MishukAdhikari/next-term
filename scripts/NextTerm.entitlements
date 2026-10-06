@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Under the hardened runtime, macOS treats Next Term as responsible for the programs run in its tabs.
+     Without these, a CLI that records audio, uses the camera, or drives an app with AppleScript fails
+     silently instead of asking you. Each one still triggers the usual macOS permission prompt. -->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.automation.apple-events</key><true/>
+  <key>com.apple.security.device.audio-input</key><true/>
+  <key>com.apple.security.device.camera</key><true/>
+  <key>com.apple.security.personal-information.addressbook</key><true/>
+  <key>com.apple.security.personal-information.calendars</key><true/>
+  <key>com.apple.security.personal-information.location</key><true/>
+  <key>com.apple.security.personal-information.photos-library</key><true/>
+</dict>
+</plist>

@@ -195,7 +195,13 @@ enum SelfTest {
         let doc = dir.appendingPathComponent("notes.md")
         try? "# notes".write(to: doc, atomically: true, encoding: .utf8)
         check(SafeOpen.runsCode(script) != nil, "a .command script is recognised as code")
-        check(SafeOpen.runsCode(disguise.resolvingSymlinksInPath()) != nil, "a symlink disguised as readme.md is too")
+        check(SafeOpen.target(of: disguise).flatMap(SafeOpen.runsCode) != nil, "a symlink disguised as readme.md is too")
+        let alias = dir.appendingPathComponent("guide.md")
+        if let bookmark = try? script.bookmarkData(options: .suitableForBookmarkFile, includingResourceValuesForKeys: nil, relativeTo: nil) {
+            try? URL.writeBookmarkData(bookmark, to: alias)
+            check(SafeOpen.target(of: alias)?.lastPathComponent == "x.command" && SafeOpen.target(of: alias).flatMap(SafeOpen.runsCode) != nil,
+                  "so is a Finder alias disguised as guide.md")
+        }
         check(SafeOpen.runsCode(doc) == nil, "a plain document opens without a prompt", SafeOpen.runsCode(doc) ?? "")
         let py = dir.appendingPathComponent("tool.py")
         try? "print(1)".write(to: py, atomically: true, encoding: .utf8)

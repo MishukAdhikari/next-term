@@ -2,9 +2,9 @@
 # Builds "Next Term.app" (universal: Apple Silicon + Intel) and a drag-to-install DMG in dist/.
 # Needs only the Xcode Command Line Tools.
 #
-#   scripts/build-dmg.sh                 ad-hoc signed (runs on this Mac; others must right-click > Open)
-#   SIGN_ID="Developer ID Application: …" scripts/build-dmg.sh
-#                                         signed for distribution; then notarize (see README)
+#   scripts/build-dmg.sh                 ad-hoc signed (runs here; elsewhere needs Open Anyway, see README)
+#   SIGN_ID="Developer ID Application: …" NOTARY_PROFILE=<notarytool keychain profile> scripts/build-dmg.sh
+#                                         signed, notarized and stapled for distribution
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -29,6 +29,15 @@ lipo -create .build/arm64-apple-macosx/release/NextTerm .build/x86_64-apple-maco
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # SwiftTerm's optional Metal shaders; it looks for them in Contents/Resources.
 cp -R .build/arm64-apple-macosx/release/SwiftTerm_SwiftTerm.bundle "$APP/Contents/Resources/"
+# License notices travel with the app; Credits.html is what About Next Term shows.
+cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
+{
+  echo '<html><body style="font: 11px -apple-system; color: #888">'
+  echo "<p>Next Term is free software under the MIT License. It includes SwiftTerm (MIT), code from libsixel (MIT) and Unicode data (Unicode License v3).</p>"
+  echo "<pre style=\"font: 10px ui-monospace, Menlo; white-space: pre-wrap\">"
+  sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' LICENSE THIRD_PARTY_NOTICES.md
+  echo "</pre></body></html>"
+} > "$APP/Contents/Resources/Credits.html"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -58,6 +67,22 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSDownloadsFolderUsageDescription</key><string>A command you ran in Next Term wants to access your Downloads.</string>
   <key>NSRemovableVolumesUsageDescription</key><string>A command you ran in Next Term wants to access a removable volume.</string>
   <key>NSNetworkVolumesUsageDescription</key><string>A command you ran in Next Term wants to access a network volume.</string>
+  <key>NSMicrophoneUsageDescription</key><string>A command you ran in Next Term wants to use the microphone.</string>
+  <key>NSCameraUsageDescription</key><string>A command you ran in Next Term wants to use the camera.</string>
+  <key>NSContactsUsageDescription</key><string>A command you ran in Next Term wants to access your contacts.</string>
+  <key>NSCalendarsUsageDescription</key><string>A command you ran in Next Term wants to access your calendars.</string>
+  <key>NSLocationUsageDescription</key><string>A command you ran in Next Term wants to use your location.</string>
+  <key>NSPhotoLibraryUsageDescription</key><string>A command you ran in Next Term wants to access your photos.</string>
+  <!-- Folders can be dropped on the Dock icon (or opened with "Open With") to open them as projects. -->
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>Folder</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key><array><string>public.folder</string></array>
+    </dict>
+  </array>
   <key>NSAppleEventsUsageDescription</key><string>A command you ran in Next Term wants to control another app.</string>
 </dict>
 </plist>
@@ -66,10 +91,11 @@ plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
 echo "==> Signing ($([[ "$SIGN_ID" == "-" ]] && echo ad-hoc || echo "$SIGN_ID"))"
 # One signature seals the whole bundle, the resource bundle included (it has no code of its own).
+ENTITLEMENTS=scripts/NextTerm.entitlements
 if [[ "$SIGN_ID" == "-" ]]; then
-  codesign --force --sign - --options runtime "$APP"
+  codesign --force --sign - --options runtime --entitlements "$ENTITLEMENTS" "$APP"
 else
-  codesign --force --sign "$SIGN_ID" --options runtime --timestamp "$APP"
+  codesign --force --sign "$SIGN_ID" --options runtime --timestamp --entitlements "$ENTITLEMENTS" "$APP"
 fi
 codesign --verify --strict --verbose=1 "$APP"
 
@@ -82,6 +108,12 @@ rm -f "$DMG"
 hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$DMG" >/dev/null
 [[ "$SIGN_ID" != "-" ]] && codesign --force --sign "$SIGN_ID" --timestamp "$DMG"
 hdiutil verify "$DMG" >/dev/null
+# Notarize and staple before the checksum: stapling changes the DMG's bytes.
+if [[ -n "${NOTARY_PROFILE:-}" && "$SIGN_ID" != "-" ]]; then
+  echo "==> Notarizing"
+  xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+  xcrun stapler staple "$DMG"
+fi
 (cd "$DIST" && shasum -a 256 "$(basename "$DMG")" > "$(basename "$DMG").sha256")
 
 echo "==> Done"

@@ -22,7 +22,7 @@ every tab shows whether its job is working, finished, failed, or waiting on you.
   the app is in the background.
 - Project sidebar (⌘B): the active tab's git project as a live file tree (FSEvents), Finder icons,
   double-click to open, drag to the terminal to type the path, context menu.
-- Find (⌘F), clear (⌘K), font size (⌘+/-/0), JetBrains New UI dark palette.
+- Find (⌘F), clear (⌘K), font size (⌘+/-/0), a dark palette.
 
 ## Status detection
 

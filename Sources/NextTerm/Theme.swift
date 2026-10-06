@@ -2,7 +2,7 @@ import AppKit
 import NextTermCore
 import SwiftTerm
 
-/// JetBrains New UI dark palette.
+/// Dark palette.
 enum Theme {
     static let background = NSColor(hex: 0x1E1F22)
     static let bar = NSColor(hex: 0x2B2D30)
@@ -42,7 +42,7 @@ enum Theme {
     static let caret = NSColor(hex: 0xCED0D6)
     static let selection = NSColor(hex: 0x214283)
 
-    /// Darcula console colours, normal then bright.
+    /// ANSI colours, normal then bright.
     static let ansi: [UInt32] = [
         0x000000, 0xF0524F, 0x5C962C, 0xA68A0D, 0x3993D4, 0xA771BF, 0x00A3A3, 0x808080,
         0x595959, 0xFF4050, 0x4FC414, 0xE5BF00, 0x1FB0FF, 0xED7EED, 0x00E5E5, 0xFFFFFF,
