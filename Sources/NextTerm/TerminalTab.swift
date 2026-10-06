@@ -377,6 +377,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         case .commandStarted(let line, let expanded):
             programTitle = nil
             status.commandStarted(line, expanded: expanded, at: Self.now)
+            // Gemini or Qwen starting (or installed since launch): their IDE switch on, for the next start too.
+            if ["gemini", "gemini-cli", "qwen", "qwen-code"].contains(status.program) { AppDelegate.shared.enableAgentIDEModes() }
         case .commandFinished(let code):
             programTitle = nil
             status.commandFinished(exitCode: code, at: Self.now)
@@ -457,6 +459,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         env["TERM_PROGRAM_VERSION"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         // Claude Code connects to Next Term as its IDE (and never to another editor's leftover port).
         ClaudeIDEServer.shared.prepare(&env)
+        GeminiIDEServer.shared.prepare(&env, workspace: canonicalPath(ProjectRoot.find(from: directory)))
         // `nxtrm` works in every tab from the first launch, with no install step.
         if let bin = CommandLineTool.script?.deletingLastPathComponent().path {
             let path = env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"

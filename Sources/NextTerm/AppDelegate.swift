@@ -82,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         get { UserDefaults.standard.object(forKey: "shareWithClaude") as? Bool ?? true }
         set {
             UserDefaults.standard.set(newValue, forKey: "shareWithClaude")
-            if newValue { startClaudeLink() } else { ClaudeIDEServer.shared.stop() }
+            if newValue { startClaudeLink() } else { ClaudeIDEServer.shared.stop(); GeminiIDEServer.shared.stop() }
         }
     }
 
@@ -101,6 +101,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         server.onClientGone = { [weak self] client in self?.claudeTabs.removeValue(forKey: client) }
         server.start(workspaces: controllers.compactMap(\.project))
+        GeminiIDEServer.shared.start(workspaces: agentWorkspaces)
+        enableAgentIDEModes()
+    }
+
+    /// Gemini CLI and Qwen Code read their IDE switch when they start: keep it on while Next Term's is.
+    func enableAgentIDEModes() {
+        guard shareWithClaude, !SelfTest.isRequested else { return } // the self-test never edits your settings
+        DispatchQueue.global(qos: .utility).async {
+            for file in AgentIDESettings.settingsFiles() { AgentIDESettings.ensureEnabled(file, overridingOff: true) }
+        }
+    }
+
+    /// Every folder a tab works in (projects, the sidebar's roots, each tab's own root): Gemini CLI and
+    /// Qwen Code connect only from inside one of these.
+    var agentWorkspaces: [String] {
+        var roots: [String] = []
+        for controller in controllers {
+            if let project = controller.project { roots.append(project) }
+            if let root = controller.sidebar.root?.path { roots.append(root) }
+            roots += controller.tabs.map { ProjectRoot.find(from: $0.directory) }
+        }
+        var seen = Set<String>()
+        return roots.map(canonicalPath).filter { seen.insert($0).inserted }
     }
 
     /// The `claude` clients whose tab is in `controller` (and, for the key window, ones whose tab is unknown).
@@ -123,6 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// The open projects, so a `claude` started in another terminal inside one finds Next Term too.
     func projectsChanged() {
         ClaudeIDEServer.shared.updateWorkspaces(controllers.compactMap(\.project))
+        GeminiIDEServer.shared.updateWorkspaces(agentWorkspaces)
     }
 
     /// Brand icons on configuration folders (.github, .claude, .idea); off: they stay plain and quiet.
@@ -372,6 +396,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationWillTerminate(_ notification: Notification) {
         ClaudeIDEServer.shared.stop() // removes the lock file
+        GeminiIDEServer.shared.stop()
         MainActor.assumeIsolated { Updater.shared.installStagedUpdateOnQuit() }
         if !SelfTest.isRequested { sessionProjects = controllers.compactMap(\.project) }
         for controller in controllers { for tab in controller.tabs { tab.terminate() } }

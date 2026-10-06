@@ -109,6 +109,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
     func select(_ index: Int, focus: Bool = true) {
         guard editors.indices.contains(index) else { return }
         activeIndex = index
+        editors[index].document.lastFocused = Date()
         for (i, editor) in editors.enumerated() { editor.isHidden = i != index }
         if focus { window?.makeFirstResponder(editors[index].textView) }
         refresh()

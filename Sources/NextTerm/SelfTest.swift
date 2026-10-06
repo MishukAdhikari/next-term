@@ -1074,6 +1074,8 @@ enum SelfTest {
             check(agentTab.screenTail(3).joined() == screenBefore, "and types nothing into the terminal")
         }
 
+        await geminiLinkChecks(c)
+
         // .env files are never shared.
         let env = proj.appendingPathComponent(".env")
         try? "SECRET=1\n".write(to: env, atomically: true, encoding: .utf8)
@@ -1087,6 +1089,46 @@ enum SelfTest {
         }
         try? FileManager.default.removeItem(at: env)
         claude.close()
+    }
+
+    // MARK: Gemini CLI / Qwen Code link
+
+    private static func geminiLinkChecks(_ c: TerminalWindowController) async {
+        let server = GeminiIDEServer.shared
+        guard let port = server.port else { return check(false, "the Gemini/Qwen link is listening") }
+        let discovery = GeminiIDEServer.geminiFolder.appendingPathComponent("gemini-ide-server-\(getpid())-\(port).json")
+        let json = (try? Data(contentsOf: discovery)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let mode = (try? FileManager.default.attributesOfItem(atPath: discovery.path))?[.posixPermissions] as? Int
+        check(mode == 0o600 && (json?["ideInfo"] as? [String: Any])?["displayName"] as? String == "Next Term"
+              && json?["authToken"] as? String == server.token, "Gemini CLI finds Next Term (discovery file, private)")
+
+        let initialize = #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#
+        for (label, extra, token, code) in [("no token", "", nil as String?, "401"), ("a web page", "Origin: https://evil.example\r\n", server.token, "403")] {
+            let client = RawHTTPClient(port: port)
+            client.send(RawHTTPClient.post(initialize, port: port, token: token, extra: extra))
+            _ = await wait(2) { client.text.hasPrefix("HTTP/1.1") }
+            check(client.text.hasPrefix("HTTP/1.1 \(code)"), "Gemini link: \(label) is refused (\(code))", String(client.text.prefix(30)))
+            client.close()
+        }
+        let rpc = RawHTTPClient(port: port)
+        rpc.send(RawHTTPClient.post(initialize, port: port, token: server.token))
+        _ = await wait(2) { rpc.text.contains("protocolVersion") }
+        check(rpc.text.hasPrefix("HTTP/1.1 200") && rpc.text.contains("Mcp-Session-Id:") && rpc.text.contains("2025-06-18"),
+              "Gemini link: the handshake is answered, with a session")
+        rpc.close()
+
+        // The event stream: the editor's state now, and again when the selection changes.
+        let stream = RawHTTPClient(port: port)
+        stream.send("GET /mcp HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nAuthorization: Bearer \(server.token)\r\nAccept: text/event-stream\r\n\r\n")
+        check(await wait(2) { stream.text.contains("ide/contextUpdate") }, "Gemini link: the event stream opens with the editor's state")
+        if let editor = c.editorArea.activeEditor {
+            c.window?.makeFirstResponder(editor.textView)
+            editor.textView.setSelectedRange(NSRange(location: 0, length: min(5, (editor.textView.string as NSString).length)))
+            let selected = (editor.textView.string as NSString).substring(to: min(5, (editor.textView.string as NSString).length))
+            check(await wait(3) { stream.text.contains("\"selectedText\":\"\(selected)") && stream.text.contains("\"isActive\":true") },
+                  "Gemini link: a selection goes out to Gemini and Qwen (active file, caret, text)")
+        }
+        stream.close()
     }
 
     /// Captures the window exactly as it is on screen (an app may always capture its own windows).
@@ -1173,4 +1215,40 @@ final class ClaudeTestClient: @unchecked Sendable {
     }
 
     func close() { connection.cancel() }
+}
+
+/// A plain HTTP client for the self-test: sends raw requests and keeps everything that comes back.
+final class RawHTTPClient: @unchecked Sendable {
+    private let connection: NWConnection
+    private let queue = DispatchQueue(label: "selftest.http-client")
+    private var buffer = Data()
+
+    init(port: UInt16) {
+        connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        connection.start(queue: queue)
+        receive()
+    }
+
+    private func receive() {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { [weak self] data, _, done, error in
+            guard let self else { return }
+            if let data { self.buffer.append(data) }
+            if done || error != nil { return }
+            self.receive()
+        }
+    }
+
+    func send(_ text: String) {
+        connection.send(content: Data(text.utf8), completion: .contentProcessed { _ in })
+    }
+
+    var text: String { queue.sync { String(decoding: buffer, as: UTF8.self) } }
+    func close() { connection.cancel() }
+
+    static func post(_ body: String, port: UInt16, token: String?, extra: String = "") -> String {
+        var request = "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nContent-Type: application/json\r\n"
+        if let token { request += "Authorization: Bearer \(token)\r\n" }
+        request += extra + "Content-Length: \(Data(body.utf8).count)\r\n\r\n" + body
+        return request
+    }
 }

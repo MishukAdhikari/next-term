@@ -364,7 +364,7 @@ final class EditorSettingsView: NSView {
     private let lineHeightValue = NSTextField(labelWithString: "")
     private let wrap = NSButton(checkboxWithTitle: "Wrap long lines at the edge", target: nil, action: nil)
     private let dotIcons = NSButton(checkboxWithTitle: "Icons on configuration folders (.github, .claude, .idea…)", target: nil, action: nil)
-    private let claude = NSButton(checkboxWithTitle: "Claude Code in a tab sees the editor's selection", target: nil, action: nil)
+    private let claude = NSButton(checkboxWithTitle: "Agents in a tab see the editor (Claude Code, Gemini CLI, Qwen Code)", target: nil, action: nil)
     private let fontSize = NSStepper()
     private let fontSizeValue = NSTextField(labelWithString: "")
 
@@ -397,7 +397,7 @@ final class EditorSettingsView: NSView {
             stack.spacing = 10
             return stack
         }
-        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own line height; 1.35 reads well for code. The font size is shared with the terminal (⌘+ and ⌘-). Claude Code started in a new tab connects to Next Term as its IDE: the selected lines go with each prompt (never from .env files), and ⌥⌘K adds an @-mention to its prompt.")
+        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own line height; 1.35 reads well for code. The font size is shared with the terminal (⌘+ and ⌘-). Claude Code, Gemini CLI and Qwen Code started in a new tab connect to Next Term as their IDE: the open files and the selected lines go with each prompt (never from .env files). They connect by themselves (Next Term turns Gemini's and Qwen's IDE mode on); turn this off to stop sharing. ⌥⌘K adds an @-mention to Claude's prompt.")
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 11)
         note.preferredMaxLayoutWidth = 420

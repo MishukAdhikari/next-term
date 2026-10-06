@@ -160,6 +160,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         tabs.insert(tab, at: insertAt)
         container.layoutSubtreeIfNeeded() // real size before the shell starts, so it draws once
         tab.start()
+        AppDelegate.shared.projectsChanged()
         select(insertAt)
         return tab
     }
@@ -318,6 +319,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         guard key != projectKey else { return }
         projectKey = key
         sidebar.setRoot(ProjectRoot.find(from: tab.directory))
+        AppDelegate.shared.projectsChanged()
     }
 
     // MARK: find and replace in files
@@ -574,7 +576,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private var selectionShare: DispatchWorkItem?
 
     func editorAreaSelectionChanged(_ area: EditorArea) {
-        guard ClaudeIDEServer.shared.isRunning else { return }
+        guard ClaudeIDEServer.shared.isRunning || GeminiIDEServer.shared.isRunning else { return }
         selectionShare?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.shareSelectionWithClaude() }
         selectionShare = work
@@ -584,9 +586,32 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// Tells the `claude` sessions in this window's tabs what the editor shows: the selected lines, or the
     /// file the caret is in, or nothing (no file open).
     func shareSelectionWithClaude(only clients: Set<ClaudeIDEServer.ClientID>? = nil) {
+        if clients == nil, GeminiIDEServer.shared.isRunning { GeminiIDEServer.shared.setContext(openFiles: openFilesForGemini()) }
         let recipients = clients ?? AppDelegate.shared.claudeClients(in: self)
         guard !recipients.isEmpty else { return }
         ClaudeIDEServer.shared.notify("selection_changed", currentSelectionForClaude(), to: recipients)
+    }
+
+    /// Gemini CLI and Qwen Code: up to 10 files by recency, the active one first with its caret and
+    /// selection, 1-based. Secret-holding files (.env) are left out.
+    func openFilesForGemini() -> [[String: Any]] {
+        let active = editorArea.activeEditor
+        let documents = editorArea.documents.filter { !ClaudeIDEServer.isSensitive($0.path) }
+            .sorted { ($0 === active?.document ? 1 : 0, $0.lastFocused) > ($1 === active?.document ? 1 : 0, $1.lastFocused) }
+        return documents.prefix(10).map { document in
+            var file: [String: Any] = ["path": document.path, "timestamp": Int(document.lastFocused.timeIntervalSince1970 * 1000)]
+            if let active, active.document === document {
+                file["isActive"] = true
+                let text = active.textView.string as NSString
+                let range = active.textView.selectedRange()
+                let line = document.lines.line(at: min(range.location, text.length))
+                file["cursor"] = ["line": line + 1, "character": min(range.location, text.length) - document.lines.starts[line] + 1]
+                if range.length > 0, NSMaxRange(range) <= text.length {
+                    file["selectedText"] = String(text.substring(with: range).prefix(16_384))
+                }
+            }
+            return file
+        }
     }
 
     func currentSelectionForClaude() -> [String: Any] {

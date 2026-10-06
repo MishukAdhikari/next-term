@@ -31,6 +31,9 @@ final class EditorDocument: NSObject, NSTextStorageDelegate {
 
     enum Conflict: Equatable { case changedOnDisk, deletedOnDisk }
 
+    /// When this file was last brought to the front (agents get the most recent first).
+    var lastFocused = Date()
+
     var name: String { url.lastPathComponent }
     var path: String { url.path }
 
