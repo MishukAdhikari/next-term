@@ -731,6 +731,41 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if recentFiles.count > 50 { recentFiles.removeLast() }
     }
 
+    // MARK: agent sessions
+
+    private(set) lazy var sessionsPanel: SessionsPanelController = {
+        let panel = SessionsPanelController()
+        panel.onResume = { [weak self] session, fork in
+            guard let self else { return }
+            AppDelegate.shared.resume(session, fork: fork, project: self.project ?? self.searchRoot)
+        }
+        return panel
+    }()
+
+    /// ⌥⌘O: the project's agent sessions (Claude Code, Codex, Command Code), to pick one up again.
+    @objc func resumeSession(_ sender: Any?) {
+        guard let window else { return }
+        sessionsPanel.show(project: project ?? searchRoot, over: window)
+    }
+
+    /// A tab in `directory` running `command` once its shell is at the prompt. An untouched first tab in
+    /// the same folder is used rather than a second one.
+    @discardableResult
+    func runInNewTab(directory: String, command: String, title: String?) -> TerminalTab {
+        let folder = canonicalPath(directory)
+        let tab: TerminalTab
+        if groups.count == 1, tabs.count == 1, let only = tabs.first, only.status.command.isEmpty, !only.status.running,
+           canonicalPath(only.directory) == folder {
+            tab = only
+        } else {
+            tab = addTab(directory: folder)
+        }
+        if let title { tab.userTitle = title }
+        show(tab)
+        tab.runWhenReady(command)
+        return tab
+    }
+
     // MARK: go to file
 
     /// Files opened in this window, newest first: what ⌘P lists before you type.

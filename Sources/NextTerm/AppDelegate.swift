@@ -535,6 +535,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private var welcome: WelcomeWindowController?
+    /// For the self-test.
+    var welcomeController: WelcomeWindowController? { welcome }
 
     /// ⌘O: choose a folder to open as a project.
     @objc func openProjectPanel(_ sender: Any?) {
@@ -830,6 +832,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         shell.addItem(.separator())
         item(shell, "Open Project…", #selector(openProjectPanel(_:)), "o", target: self)
         item(shell, "Go to File…", #selector(TerminalWindowController.goToFile(_:)), "p")
+        item(shell, "Resume Agent Session…", #selector(TerminalWindowController.resumeSession(_:)), "o", [.command, .option])
         let recentMenu = NSMenu(title: "Open Recent")
         recentMenu.delegate = self
         shell.addItem(withTitle: "Open Recent", action: nil, keyEquivalent: "").submenu = recentMenu

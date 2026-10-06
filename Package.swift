@@ -17,7 +17,7 @@ let package = Package(
     ],
     targets: [
         // Platform-neutral logic (tab status, command classification). No AppKit, so an iOS app can reuse it.
-        .target(name: "NextTermCore"),
+        .target(name: "NextTermCore", linkerSettings: [.linkedLibrary("sqlite3")]),
         .executableTarget(
             name: "NextTerm",
             dependencies: [

@@ -262,6 +262,21 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// The folder relative paths mean right now: the integration reports it; otherwise ask the kernel.
     var liveDirectory: String { status.integrated ? directory : currentDirectory() }
 
+    /// Types a command at the prompt and runs it, once the shell is at its first prompt (its integration
+    /// reports in) or after 3 seconds.
+    func runWhenReady(_ command: String, waited: TimeInterval = 0) {
+        guard !exited else { return }
+        if !status.integrated && waited < 3 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.runWhenReady(command, waited: waited + 0.1) }
+            return
+        }
+        view.typeText(command)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self, !self.exited else { return }
+            self.view.send(txt: "\r")
+        }
+    }
+
     /// Twice a second. For shells without integration this is how the tab knows what runs and where it
     /// is; with integration it only looks behind commands that look plain, for agents run by functions.
     func pollForeground() {

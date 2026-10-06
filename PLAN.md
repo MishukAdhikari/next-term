@@ -22,6 +22,7 @@ terminal. This file is the map of what is built and what comes next; the README 
 | Area | What |
 |---|---|
 | Terminal | Tabs (⌘T) and split panes (⌘D, ⌘⇧D, ⌥⌘arrows, ⌘⇧↩) with agent status in step with each agent's screen; decisions as notifications; dock badge; close and quit warnings; zsh integration; security (OSC 52, DECRQCRA, paste, links) |
+| Sessions | Claude Code, Codex and Command Code conversations per project (subfolders included) on the Welcome window and ⌥⌘O; resume or fork in a tab in their folder; metadata only, titles scrubbed of secrets |
 | Projects | Open/close/recent, last projects reopened at launch, first-run folder choice; sidebar with git status and +/− per file and folder; file operations with undo; open-source icons with framework icons |
 | Editor | 103 languages, incremental highlighting, line numbers, line height, soft wrap with hanging indent, auto-indent, ⌘/, ⌘L, find, encodings and line endings kept, files changed by agents reloaded |
 | Search | Go to File (⌘P, fuzzy, recent files first, `name:line`); Find/Replace in Files (regex, masks, preview, undo), seeded from the selection, same type first |
@@ -32,8 +33,9 @@ terminal. This file is the map of what is built and what comes next; the README 
 
 ## Next
 
-1. **Agent sessions per project** on the Welcome screen and in the sidebar (Claude, Codex, Command Code
-   first): resume or fork in one click (research: claudedocs/research_next-term-agent-sessions).
+1. **More agents' sessions:** Gemini CLI, opencode, Copilot CLI, Cursor (formats in
+   claudedocs/research_next-term-agent-sessions), a running badge for Codex, "go to tab" for a session
+   already open in Next Term.
 2. **Remote development** over the system ssh (one shared connection per host, SFTP for files, remote
    tabs with the shell integration), then Dev Containers (research: claudedocs/research_next-term-remote-dev).
 3. **Remote MCP link** for agents outside this Mac (ChatGPT, Claude), with an explicit security model.

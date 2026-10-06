@@ -38,6 +38,11 @@ agents are working, which are done, and which are waiting on your decision.
   files, opening a file at a line). Next Term adds itself to the agents it finds, with nothing to run;
   Settings turns it off and removes it again. The tools are marked honestly, so agents ask you before
   they type into a tab. Local only: a private socket, no network port.
+- **Pick up any agent's conversation.** The Welcome window lists your projects; choose one and every
+  conversation Claude Code, Codex and Command Code kept for it is there, newest first, with its title,
+  branch and model, including the ones started in its subfolders. Resume runs it again in a new tab, in
+  the folder it was started in; Fork continues a copy. In a project window, ⌥⌘O does the same. Only titles
+  and dates are read (never whole transcripts), secrets are scrubbed from titles, and nothing is written.
 - **`nxtrm`, like `code`.** `nxtrm .` opens the folder as a project, `nxtrm app/User.php:42` a
   file at a line. It works in every Next Term tab from the first launch; Next Term > Install Command Line
   Tool adds it to other terminals.
@@ -123,6 +128,7 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | New window | ⌘N |
 | Open project / Close project | ⌘O / Shell menu |
 | Go to File (`name` or `name:line`) | ⌘P |
+| Resume an agent session (↩ resume, ⌘↩ fork) | ⌥⌘O |
 | Close tab (or the focused pane in a split tab) | ⌘W |
 | Split right / split down | ⌘D / ⌘⇧D |
 | Move between panes | ⌥⌘← ⌥⌘→ ⌥⌘↑ ⌥⌘↓, or ⌥⌘] / ⌥⌘[ in turn |
@@ -214,8 +220,7 @@ front end can reuse it.
 
 ## Roadmap
 
-Next: every agent's saved sessions for
-a project on the Welcome screen (resume one in a click), remote development over SSH and Dev Containers,
+Next: remote development over SSH and Dev Containers,
 and a secure link so agents outside this Mac (ChatGPT, Claude) can use the MCP server. Later: notarized
 releases. A Linux build would need a different UI layer (AppKit is
 macOS-only); the core logic would carry over.

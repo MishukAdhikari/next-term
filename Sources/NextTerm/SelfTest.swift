@@ -595,6 +595,8 @@ enum SelfTest {
 
         await paneChecks(c)
 
+        await sessionChecks(proj: proj)
+
         // Font size.
         let size = AppDelegate.shared.fontSize
         AppDelegate.shared.increaseFontSize(nil)
@@ -603,6 +605,82 @@ enum SelfTest {
         AppDelegate.shared.fontSize = size
 
         try? FileManager.default.removeItem(at: dir)
+    }
+
+    /// Agent sessions: listed per project on the Welcome window and in ⌥⌘O, resumed in a tab in their folder.
+    private static func sessionChecks(proj: URL) async {
+        let app = AppDelegate.shared!
+        let home = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nt-sessions-\(getpid())")
+        let project = canonicalPath(proj.path)
+        let claudeDir = home.appendingPathComponent(".claude/projects/" + AgentSessions.claudeFolderName(project))
+        try? FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        func line(_ object: [String: Any]) -> String { String(decoding: (try? JSONSerialization.data(withJSONObject: object)) ?? Data(), as: UTF8.self) }
+        let now = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3600))
+        let earlier = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-86400 * 3))
+        try? [line(["type": "user", "cwd": project, "timestamp": now, "gitBranch": "main", "message": ["content": "Fix the login redirect"]]),
+              line(["type": "assistant", "cwd": project, "timestamp": now, "message": ["model": "claude-opus-5-5"]]),
+              line(["type": "ai-title", "aiTitle": "Fix the login redirect loop"])].joined(separator: "\n")
+            .write(to: claudeDir.appendingPathComponent("s1.jsonl"), atomically: true, encoding: .utf8)
+        try? [line(["type": "user", "cwd": project + "/src", "timestamp": earlier, "message": ["content": "Add rate limiting"]]),
+              line(["type": "custom-title", "customTitle": "Rate limits"])].joined(separator: "\n")
+            .write(to: home.appendingPathComponent(".claude/projects/" + AgentSessions.claudeFolderName(project + "/src") + ".jsonl"), atomically: true, encoding: .utf8)
+        let srcDir = home.appendingPathComponent(".claude/projects/" + AgentSessions.claudeFolderName(project + "/src"))
+        try? FileManager.default.createDirectory(at: srcDir, withIntermediateDirectories: true)
+        try? FileManager.default.moveItem(at: home.appendingPathComponent(".claude/projects/" + AgentSessions.claudeFolderName(project + "/src") + ".jsonl"),
+                                          to: srcDir.appendingPathComponent("s2.jsonl"))
+        let ccDir = home.appendingPathComponent(".commandcode/projects/p")
+        try? FileManager.default.createDirectory(at: ccDir, withIntermediateDirectories: true)
+        try? line(["type": "session", "version": 3, "id": "c1", "timestamp": earlier, "cwd": project])
+            .write(to: ccDir.appendingPathComponent("c1.jsonl"), atomically: true, encoding: .utf8)
+        try? #"{"title": "Tidy the billing tests", "model": "claude-opus-5-5"}"#.write(to: ccDir.appendingPathComponent("c1.meta.json"), atomically: true, encoding: .utf8)
+        // Command Code's last activity is its transcript's date.
+        try? FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-86400 * 2)], ofItemAtPath: ccDir.appendingPathComponent("c1.jsonl").path)
+        SessionStore.home = home.path
+        SessionStore.commandPrefix = "echo "
+        defer {
+            SessionStore.home = NSHomeDirectory()
+            SessionStore.commandPrefix = ""
+            try? FileManager.default.removeItem(at: home)
+        }
+
+        app.openFolder(project, newWindow: false) // a project you have opened is in the list
+        app.showWelcome(nil)
+        guard let welcome = app.welcomeController, let welcomeWindow = welcome.window else { return check(false, "the Welcome window opens") }
+        welcome.select(project: project)
+        let direct = AgentSessions.list(project: project, home: home.path)
+        check(await wait(10) { welcome.shownSessionTitles.count == 3 }, "Welcome lists the project's agent sessions (subfolders too)",
+              welcome.shownSessionTitles.joined(separator: " | ") + " — listed \(welcome.shownProjects.contains(project)), selected \(welcome.selectedProject ?? "none"), direct \(direct.sessions.map(\.title)) \(direct.problems), home \(SessionStore.home)")
+        check(welcome.shownSessionTitles.first == "Fix the login redirect loop", "newest first, with the agent's own title")
+        await pause(0.3)
+        await screenshot(welcomeWindow, suffix: "welcome")
+        welcome.resumeSelected()
+        // In a new tab, or in the project window's untouched first tab when it is in that folder already.
+        let resumed = await wait(10) { app.controllers.flatMap(\.tabs).contains { $0.screenTail(10).contains("claude --resume s1") } }
+        let tab = app.controllers.flatMap(\.tabs).first { $0.screenTail(10).contains("claude --resume s1") }
+        check(resumed && tab.map { canonicalPath($0.directory) == project } == true,
+              "Resume runs `claude --resume <id>` in a new tab in the session's folder", tab?.screenTail(4).joined(separator: " | ") ?? "no tab")
+        welcome.close()
+
+        guard let holder = app.controllers.first(where: { $0.project == project }) ?? app.controllers.first(where: { $0.tabs.contains { $0 === tab } }),
+              let window = holder.window else { return check(false, "a window for the project") }
+        holder.resumeSession(nil)
+        let panel = holder.sessionsPanel
+        check(await wait(10) { panel.shownTitles.count == 3 }, "⌥⌘O lists them in the project window", panel.shownTitles.joined(separator: " | "))
+        await pause(0.3)
+        await screenshot(panel.panelWindow, suffix: "sessions")
+        panel.query = "rate"
+        check(panel.shownTitles == ["Rate limits"], "typing filters them", panel.shownTitles.joined(separator: " | "))
+        let before2 = Set(holder.tabs.map(\.id))
+        panel.resumeSelected(fork: true)
+        check(await wait(10) { holder.tabs.contains { !before2.contains($0.id) && $0.screenTail(10).contains("claude --resume s2 --fork-session") } },
+              "⌘↩ forks it instead, in the subfolder it was started in")
+        if let forked = holder.tabs.first(where: { !before2.contains($0.id) }) {
+            check(canonicalPath(forked.directory) == project + "/src" || canonicalPath(forked.currentDirectory()) == project + "/src" || !FileManager.default.fileExists(atPath: project + "/src"),
+                  "in the folder the session was started in", forked.directory)
+            holder.remove(forked)
+        }
+        if let tab { app.controllers.first { $0.tabs.contains { $0 === tab } }?.remove(tab) }
+        _ = window
     }
 
     /// ⌘P: the project's files by a few letters; `name:line`; recently opened files first.
