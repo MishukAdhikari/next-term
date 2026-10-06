@@ -89,6 +89,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         sidebar.delegate = self
 
         tabBar.delegate = self
+        tabBar.moreMenu = LayoutMenu.terminal
         tabBar.translatesAutoresizingMaskIntoConstraints = false
         container.translatesAutoresizingMaskIntoConstraints = false
         terminalPane.addSubview(container)

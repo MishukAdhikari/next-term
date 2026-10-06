@@ -8,6 +8,8 @@ final class SidebarHeaderView: NSView {
     private let branchIcon = NSImageView()
     private let title = NSTextField(labelWithString: "Project")
     private let summary = NSTextField(labelWithString: "")
+    /// ⋯: which side the sidebar is on, and hiding it.
+    let moreButton = MoreButton(toolTip: "Project sidebar layout", menu: LayoutMenu.sidebar)
     var inset: CGFloat = 70 { didSet { needsLayout = true } }
 
     override init(frame: NSRect) {
@@ -22,7 +24,7 @@ final class SidebarHeaderView: NSView {
         summary.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .medium)
         summary.alignment = .right
         Typography.singleLine(summary, truncation: .byTruncatingTail)
-        [branchIcon, title, summary].forEach(addSubview)
+        [branchIcon, title, summary, moreButton].forEach(addSubview)
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
         setAccessibilityLabel("Project")
@@ -38,8 +40,12 @@ final class SidebarHeaderView: NSView {
         return summary.cell?.expansionFrame(withFrame: summary.bounds, in: summary) != .zero
     }
 
-    // The whole header is a drag handle for the window.
-    override func hitTest(_ point: NSPoint) -> NSView? { frame.contains(point) ? self : nil }
+    // The whole header is a drag handle for the window, except its ⋯ button.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard frame.contains(point) else { return nil }
+        if moreButton.frame.contains(convert(point, from: superview)) { return moreButton }
+        return self
+    }
     override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }
 
     func show(_ snapshot: GitSnapshot?) {
@@ -104,7 +110,8 @@ final class SidebarHeaderView: NSView {
         let summaryY = titleY + title.firstBaselineOffsetFromTop - summary.firstBaselineOffsetFromTop
         // The text cell needs about 4 pt of its own margin beyond the text, or it truncates.
         let summaryWidth = min(ceil(summary.intrinsicContentSize.width) + 6, bounds.width * 0.5)
-        summary.frame = NSRect(x: bounds.width - summaryWidth - 10, y: summaryY, width: summaryWidth, height: summaryHeight)
+        moreButton.frame = NSRect(x: bounds.width - 30, y: (h - 24) / 2, width: 26, height: 24)
+        summary.frame = NSRect(x: bounds.width - summaryWidth - 34, y: summaryY, width: summaryWidth, height: summaryHeight)
         var x = inset + 4
         if !branchIcon.isHidden {
             branchIcon.frame = NSRect(x: x, y: (h - 14) / 2, width: 14, height: 14)

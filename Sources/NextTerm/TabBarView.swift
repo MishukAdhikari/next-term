@@ -42,6 +42,18 @@ final class TabBarView: NSView {
     var allowsRename = true
     /// At the top of the window, the empty part of the bar drags the window like a title bar.
     var dragsWindow = true
+    /// A ⋯ button at the right end with this menu (the terminal's layout choices).
+    var moreMenu: (() -> NSMenu)? {
+        didSet {
+            moreButton?.removeFromSuperview()
+            moreButton = moreMenu.map { MoreButton(toolTip: "Terminal layout", menu: $0) }
+            moreButton.map(addSubview)
+            needsLayout = true
+        }
+    }
+    private var moreButton: MoreButton?
+    static let moreButtonWidth: CGFloat = 34
+
     /// The title for the accessibility tab group and the close button's tooltip.
     var kind = "tab" { didSet { setAccessibilityLabel(kind == "tab" ? "Terminal tabs" : "Editor tabs") } }
 
@@ -125,7 +137,7 @@ final class TabBarView: NSView {
 
     /// Width for tabs, keeping a strip on the right for dragging the window.
     private var availableWidth: CGFloat {
-        max(0, bounds.width - leadingInset - (allowsNewTab ? Self.newTabButtonWidth : 0) - 24)
+        max(0, bounds.width - leadingInset - (allowsNewTab ? Self.newTabButtonWidth : 0) - (moreButton == nil ? 0 : Self.moreButtonWidth) - 24)
     }
 
     /// How many tabs fit at a readable width.
@@ -172,8 +184,10 @@ final class TabBarView: NSView {
             overflowButton.frame = NSRect(x: x, y: 0, width: Self.overflowButtonWidth, height: bounds.height - 1)
             x += Self.overflowButtonWidth
         }
-        newTabButton.frame = NSRect(x: min(x, bounds.width - Self.newTabButtonWidth), y: 0,
+        let more: CGFloat = moreButton == nil ? 0 : Self.moreButtonWidth
+        newTabButton.frame = NSRect(x: min(x, bounds.width - Self.newTabButtonWidth - more), y: 0,
                                     width: Self.newTabButtonWidth, height: bounds.height - 1)
+        moreButton?.frame = NSRect(x: bounds.width - Self.moreButtonWidth - 4, y: 0, width: Self.moreButtonWidth, height: bounds.height - 1)
         updateOverflowButton()
     }
 

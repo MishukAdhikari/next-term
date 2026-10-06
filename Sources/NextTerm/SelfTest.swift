@@ -820,6 +820,22 @@ enum SelfTest {
                   "\(position.rawValue): only bars along the top drag the window")
             if position == .right { await screenshot(c, suffix: "-terminal-right") }
         }
+        // The ⋯ menus offer the same choices where they apply.
+        let terminalMenu = LayoutMenu.terminal()
+        let titles = terminalMenu.items.map(\.title)
+        check(["Bottom", "Right", "Left", "Top"].allSatisfy(titles.contains) && titles.contains { $0.hasPrefix("Move Project Sidebar") },
+              "the terminal's ⋯ menu moves the terminal and the sidebar", titles.joined(separator: ", "))
+        if let right = terminalMenu.items.first(where: { $0.title == "Right" }) {
+            terminalMenu.performActionForItem(at: terminalMenu.index(of: right))
+            check(app.terminalPosition == .right, "choosing Right there moves the terminal right")
+        }
+        let header = c.sidebar.header
+        header.layoutSubtreeIfNeeded()
+        let dotsCentre = NSPoint(x: header.moreButton.frame.midX, y: header.moreButton.frame.midY)
+        check(header.hitTest(header.convert(dotsCentre, to: header.superview)) === header.moreButton,
+              "the sidebar header's ⋯ button takes clicks (the rest of the header drags the window)")
+        check(LayoutMenu.sidebar().items.contains { $0.title.hasPrefix("Move Project Sidebar") }, "the sidebar's ⋯ menu moves it")
+        await screenshot(c, suffix: "-more")
         app.terminalPosition = .bottom
         app.sidebarSide = .right
         c.applyLayout()
