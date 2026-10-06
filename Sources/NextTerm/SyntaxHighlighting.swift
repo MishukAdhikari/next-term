@@ -56,6 +56,20 @@ final class SyntaxEngine {
         return (result.tokens.first ?? [], result.grammarState as? ShikiGrammarState)
     }
 
+    private var preloaded: Set<String> = []
+
+    /// Loads these grammars now (ids or aliases; names with no shipped grammar are skipped), so the lines
+    /// coloured next can use them whatever was opened earlier in the session.
+    func preload(_ ids: Set<String>) {
+        for id in ids {
+            guard let language = language(id), preloaded.insert(language).inserted else { continue }
+            _ = try? highlighter.codeToTokens("", language: language, theme: Self.theme, options: options)
+        }
+    }
+
+    /// Whether a grammar is loaded yet (the self-test tells preloading from an earlier file's grammar).
+    func isLoaded(_ id: String) -> Bool { highlighter.loadedLanguageNames.contains(id) }
+
     func color(_ hex: String?) -> NSColor? {
         guard let hex else { return nil }
         if let cached = colors[hex] { return cached }
@@ -93,6 +107,8 @@ final class DocumentHighlighter {
     private var mustRedoThrough = -1
     private var scheduled = false
     private let lines: () -> LineIndex
+    /// Markdown and MDX: the grammars of the code fences load before the lines that need them.
+    private let loadsFenceLanguages: Bool
 
     init(engine: SyntaxEngine, language: String, storage: NSTextStorage, layoutManager: NSLayoutManager, lines: @escaping () -> LineIndex) {
         self.engine = engine
@@ -100,13 +116,16 @@ final class DocumentHighlighter {
         self.storage = storage
         self.layoutManager = layoutManager
         self.lines = lines
+        loadsFenceLanguages = language == "markdown" || language == "mdx"
         states = Array(repeating: nil, count: lines().count)
         mustRedoThrough = states.count - 1
+        if loadsFenceLanguages { engine.preload(EditorLanguage.fenceLanguages(in: storage.string)) }
         schedule()
     }
 
     /// Call from the text storage's didProcessEditing, with the index already updated.
     func textEdited(oldLineRange: ClosedRange<Int>, newLineCount lineCount: Int, firstLine: Int, lastLineNow: Int) {
+        if loadsFenceLanguages { preloadFences(from: firstLine, through: lastLineNow) }
         // Lines oldLineRange were replaced by firstLine...lastLineNow.
         let removed = oldLineRange.count
         let added = lastLineNow - firstLine + 1
@@ -124,6 +143,15 @@ final class DocumentHighlighter {
         }
         mustRedoThrough = max(mustRedoThrough, lastLineNow)
         validUpTo = min(validUpTo, firstLine)
+    }
+
+    /// A fence typed or pasted in: its language loads before the line is coloured again.
+    private func preloadFences(from firstLine: Int, through lastLine: Int) {
+        let index = lines()
+        guard firstLine <= lastLine, lastLine < index.count else { return }
+        let start = index.range(ofLine: firstLine).location
+        let edited = NSRange(location: start, length: NSMaxRange(index.range(ofLine: lastLine)) - start)
+        engine.preload(EditorLanguage.fenceLanguages(in: (storage.string as NSString).substring(with: edited)))
     }
 
     /// Lines still to colour (0 when the whole file is done).

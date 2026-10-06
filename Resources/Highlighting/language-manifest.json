@@ -954,7 +954,9 @@
    ],
    "displayName": "Markdown",
    "embeddedIn": [],
-   "embeddedLangs": [],
+   "embeddedLangs": [
+    "yaml"
+   ],
    "embeddedLangsLazy": [
     "css",
     "html",
@@ -968,7 +970,6 @@
     "php",
     "sql",
     "xml",
-    "yaml",
     "clojure",
     "coffee",
     "c",
@@ -1058,11 +1059,12 @@
    "aliases": [],
    "displayName": "MDX",
    "embeddedIn": [],
-   "embeddedLangs": [],
+   "embeddedLangs": [
+    "yaml"
+   ],
    "embeddedLangsLazy": [
     "tsx",
     "toml",
-    "yaml",
     "c",
     "clojure",
     "coffee",

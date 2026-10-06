@@ -861,10 +861,15 @@ enum SelfTest {
 
     /// What a RAG project is made of reads at a glance: prompt placeholders in Python strings and Jinja
     /// files, keys in pyproject.toml and .env, docstrings, decorators, and code inside README fences.
+    /// A skill's front matter and its fences colour whatever was opened before.
     private static func ragColorChecks(_ c: TerminalWindowController, proj: URL) async {
         let folder = proj.appendingPathComponent("rag")
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
+        check(SyntaxEngine.shared?.assets.languageInfo(named: "markdown")?.embeddedLangs.contains("yaml") == true,
+              "Markdown loads YAML with it, so front matter colours even if no YAML file was opened first")
+        // Nothing else in the self-test opens Lua: its fence colours only because the editor loads it up front.
+        let luaWasLoaded = SyntaxEngine.shared?.isLoaded("lua") == true
         let files: [(name: String, text: String, checks: [(word: String, hex: String, what: String)])] = [
             ("prompts.py", "PROMPT = \"\"\"Answer from {context} only.\"\"\"\n\n@tool\ndef search(q):\n    \"\"\"Search the docs.\"\"\"\n    return q\n",
              [("{context}", "C77DBB", "a {placeholder} in a Python prompt string"), ("Search the docs", "5F826B", "a docstring"),
@@ -875,7 +880,10 @@ enum SelfTest {
             (".env", "OPENAI_API_KEY=sk-test\n", [("OPENAI_API_KEY", "C77DBB", "a .env key")]),
             ("README.md", "# RAG\n\n```python\nchain = prompt | llm\ndef run(): pass\n```\n",
              [("chain =", "BCBEC4", "a name in a README's Python fence (not string green)"), ("def run", "CF8E6D", "and its keywords")]),
+            ("SKILL.md", "---\nname: pdf-tools\ndescription: Fill and merge PDFs.\n---\n\n# PDF tools\n\n``` lua\nlocal pages = 2\n```\n",
+             [("name:", "C77DBB", "a SKILL.md front-matter key"), ("local pages", "CF8E6D", "a keyword in a \"``` lua\" fence (space after the backticks)")]),
         ]
+        if luaWasLoaded { note("Lua was loaded before SKILL.md opened: its fence check does not prove the preload") }
         for file in files {
             let url = folder.appendingPathComponent(file.name)
             try? file.text.write(to: url, atomically: true, encoding: .utf8)

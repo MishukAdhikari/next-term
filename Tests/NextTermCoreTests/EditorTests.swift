@@ -124,6 +124,28 @@ import Testing
         #expect(EditorLanguage.id(forFileName: "Gemfile.lock") == nil) // its own format: plain, not mis-coloured as JSON
     }
 
+    @Test func findsTheLanguagesOfCodeFences() {
+        let text = """
+        # Notes
+
+        ``` python
+        print(1)
+        ```
+        ~~~yaml
+        a: 1
+        ~~~
+        ```py {title="x"}
+        x = 1
+        ```
+          ```TypeScript
+        Inline ```ruby is not a fence, and a closing ``` names nothing.
+        ```bash
+        echo "never closed"
+        """
+        #expect(EditorLanguage.fenceLanguages(in: text) == ["python", "yaml", "py", "typescript", "bash"])
+        #expect(EditorLanguage.fenceLanguages(in: "no fences\n```\n") == [])
+    }
+
     @Test func togglesLineComments() {
         let php = EditorLanguage.commentStyle(for: "php")!
         let lines = ["    if ($a) {", "", "        run();", "    }"]

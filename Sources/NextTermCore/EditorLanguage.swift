@@ -80,6 +80,19 @@ public enum EditorLanguage {
         }
     }
 
+    /// The languages named on a Markdown file's code fences ("```python", "``` py", "~~~yaml"), lowercased.
+    /// The grammar colours a fence only once that language is loaded, and the engine loads it only when it
+    /// sees the name on the line being coloured with no space after the backticks: so the editor loads these
+    /// before the first line instead.
+    public static func fenceLanguages(in text: String) -> Set<String> {
+        let source = text as NSString
+        return Set(fence.matches(in: text, range: NSRange(location: 0, length: source.length)).map {
+            source.substring(with: $0.range(at: 1)).lowercased()
+        })
+    }
+
+    static let fence = try! NSRegularExpression(pattern: #"^[ \t]*(?:`{3,}|~{3,})[ \t]*([A-Za-z0-9_+#.-]+)"#, options: [.anchorsMatchLines])
+
     /// How a language comments out a line: a prefix, or for markup a prefix and suffix around it.
     public struct CommentStyle: Equatable, Sendable {
         public let prefix: String

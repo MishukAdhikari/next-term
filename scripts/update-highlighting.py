@@ -36,6 +36,10 @@ CHECKED = {
     "sass": "MIT (LICENSE: Robin Bentley, Leonard Grosoli; atom/language-sass)",
     "elixir": "Apache-2.0 (LICENSE: Copyright 2012 Plataformatec)",
 }
+# Grammars a language always loads with it, on top of the ones shiki-swift lists. Next Term tokenizes a
+# line at a time, and shiki-swift guesses lazy embeds from that one line, so front matter (which needs
+# both `---` lines in one string) would only colour if YAML happened to be loaded already.
+EAGER = {"markdown": ["yaml"], "mdx": ["yaml"]}
 
 
 def main(checkout: str) -> None:
@@ -70,7 +74,7 @@ def main(checkout: str) -> None:
             refused[lang] = f"licence {assets[lang]['license'].get('spdx')!r} (wanted by {wanted_by})"
             return False
         chosen[lang] = why
-        for dependency in languages[lang]["embeddedLangs"]:
+        for dependency in languages[lang]["embeddedLangs"] + EAGER.get(lang, []):
             take(dependency, lang)  # a missing embedded grammar only leaves that part plain
         return True
 
@@ -86,8 +90,9 @@ def main(checkout: str) -> None:
     for lang in sorted(chosen):
         entry = dict(languages[lang])
         # Only point at grammars that ship; lazy ones load on demand (Markdown code fences).
-        entry["embeddedLangs"] = [x for x in entry["embeddedLangs"] if x in chosen]
-        entry["embeddedLangsLazy"] = [x for x in entry["embeddedLangsLazy"] if x in chosen]
+        eager = entry["embeddedLangs"] + [x for x in EAGER.get(lang, []) if x not in entry["embeddedLangs"]]
+        entry["embeddedLangs"] = [x for x in eager if x in chosen]
+        entry["embeddedLangsLazy"] = [x for x in entry["embeddedLangsLazy"] if x in chosen and x not in eager]
         entry["embeddedIn"] = [x for x in entry.get("embeddedIn", []) if x in chosen]
         entry["injectTo"] = [x for x in entry.get("injectTo", []) if x in chosen]
         entries.append(entry)
