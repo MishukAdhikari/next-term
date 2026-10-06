@@ -293,17 +293,22 @@ public enum GitRunner {
     /// reversed (revert). Checks first, so a patch that no longer fits changes nothing.
     @discardableResult
     public static func apply(_ patch: String, in root: String, git: String, cached: Bool, reverse: Bool) -> Bool {
+        // The patch goes in a file, not through stdin: a pipe's write end inherited by another process
+        // starting at the same moment would keep git waiting for the end of input forever.
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("next-term-\(UUID().uuidString).patch")
+        guard (try? Data(patch.utf8).write(to: file)) != nil else { return false }
+        defer { try? FileManager.default.removeItem(at: file) }
         var args = ["-C", root, "apply", "--whitespace=nowarn"]
         if cached { args.append("--cached") }
         if reverse { args.append("-R") }
-        let input = Data(patch.utf8)
-        guard run(git, args + ["--check", "-"], timeout: 15, input: input) != nil else { return false }
-        return run(git, args + ["-"], timeout: 15, input: input) != nil
+        guard run(git, args + ["--check", file.path], timeout: 15) != nil else { return false }
+        return run(git, args + [file.path], timeout: 15) != nil
     }
 
-    /// Runs a command and returns its standard output, or nil on failure or timeout.
+    /// Runs a command and returns its standard output, or nil on failure or timeout. Never waits longer
+    /// than `timeout` (plus a few seconds to stop the process): a stuck git must not hang the caller.
     static func run(_ executable: String, _ arguments: [String], timeout: TimeInterval,
-                    input: Data? = nil, acceptedStatus: Set<Int32> = [0]) -> Data? {
+                    acceptedStatus: Set<Int32> = [0]) -> Data? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -321,20 +326,33 @@ public enum GitRunner {
         let out = Pipe()
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice
-        let stdin = input.map { _ in Pipe() }
-        process.standardInput = stdin ?? FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         do { try process.run() } catch { return nil }
-        if let stdin, let input {
-            DispatchQueue.global().async {
-                stdin.fileHandleForWriting.write(input)
-                try? stdin.fileHandleForWriting.close()
-            }
+
+        // Read on the side (large output would otherwise fill the pipe and stall git), and wait for the
+        // exit with a deadline instead of for the end of the pipe, which another process could hold open.
+        let output = OutputBox()
+        let readDone = DispatchSemaphore(value: 0)
+        let reader = out.fileHandleForReading
+        DispatchQueue.global().async {
+            output.data = reader.readDataToEndOfFile()
+            readDone.signal()
         }
-        let timer = DispatchWorkItem { if process.isRunning { process.terminate() } }
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timer)
-        let data = out.fileHandleForReading.readDataToEndOfFile() // read before waiting: large output would fill the pipe
-        process.waitUntilExit()
-        timer.cancel()
-        return acceptedStatus.contains(process.terminationStatus) ? data : nil
+        if exited.wait(timeout: .now() + timeout) == .timedOut {
+            process.terminate()
+            if exited.wait(timeout: .now() + 2) == .timedOut {
+                kill(process.processIdentifier, SIGKILL)
+                _ = exited.wait(timeout: .now() + 2)
+            }
+            return nil
+        }
+        guard readDone.wait(timeout: .now() + 5) == .success else { return nil }
+        return acceptedStatus.contains(process.terminationStatus) ? output.data : nil
+    }
+
+    private final class OutputBox: @unchecked Sendable {
+        var data = Data()
     }
 }

@@ -248,3 +248,53 @@ import Testing
         #expect(HunkOps.perform(.stage, hunk: diff.hunks[0], in: diff, root: root.path, git: git) == .done)
     }
 }
+
+@Suite struct GitRunnerSafetyTests {
+    /// A stuck command is stopped at the deadline instead of hanging the caller (CI once hung for hours).
+    @Test func aStuckCommandTimesOut() {
+        let start = Date()
+        #expect(GitRunner.run("/bin/sleep", ["30"], timeout: 1) == nil)
+        #expect(Date().timeIntervalSince(start) < 6)
+    }
+
+    /// Commands never wait on our stdin.
+    @Test func stdinIsEmpty() {
+        #expect(GitRunner.run("/bin/cat", [], timeout: 5) == Data())
+    }
+
+    /// Many patches applied at the same moment, in separate repositories, all finish.
+    @Test func concurrentAppliesFinish() throws {
+        guard let git = GitRunner.locateGit() else { return }
+        let base = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path)).appendingPathComponent("nt-par-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let count = 8
+        var patches: [(String, String)] = []
+        for i in 0..<count {
+            let root = base.appendingPathComponent("r\(i)")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            func sh(_ args: [String]) {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: git)
+                p.arguments = ["-C", root.path, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"] + args
+                p.standardInput = FileHandle.nullDevice
+                p.standardOutput = FileHandle.nullDevice
+                p.standardError = FileHandle.nullDevice
+                try? p.run()
+                p.waitUntilExit()
+            }
+            try "a\nb\nc\n".write(to: root.appendingPathComponent("f.txt"), atomically: true, encoding: .utf8)
+            sh(["init", "-q"]); sh(["add", "-A"]); sh(["commit", "-qm", "one"])
+            try "a\nB\nc\n".write(to: root.appendingPathComponent("f.txt"), atomically: true, encoding: .utf8)
+            let diff = try #require(GitRunner.diff(of: "f.txt", in: root.path, git: git, base: .unstaged))
+            patches.append((root.path, UnifiedDiff.patch(for: diff.hunks[0], in: diff)))
+        }
+        let results = UnsafeMutableBufferPointer<Bool>.allocate(capacity: count)
+        defer { results.deallocate() }
+        let start = Date()
+        DispatchQueue.concurrentPerform(iterations: count) { i in
+            results[i] = GitRunner.apply(patches[i].1, in: patches[i].0, git: git, cached: true, reverse: false)
+        }
+        #expect(results.allSatisfy { $0 })
+        #expect(Date().timeIntervalSince(start) < 20)
+    }
+}
