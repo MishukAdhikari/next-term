@@ -1,7 +1,7 @@
 import AppKit
 import NextTermCore
 
-/// ⌘-click on Python-shaped references.
+/// ⌘-click on Python-shaped references, and the "serving" state of a tab running a dev server.
 extension SelfTest {
     static func linkChecks(_ c: TerminalWindowController) async {
         let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nt-links-\(getpid())")
@@ -78,6 +78,20 @@ extension SelfTest {
         let symbol = await click("./src/agent/graph.py:graph", onRowWith: nil)
         check(symbol?.file == "graph.py" && symbol?.line == 10, "a graph reference (graph.py:graph) opens at the name's definition", "\(String(describing: symbol))")
 
+        // A dev server: its local address after the title while it runs, and only what it printed.
+        tab.view.send(txt: "echo http://localhost:4111 >/dev/null; sleep 3\r")
+        _ = await wait(5) { tab.status.running }
+        await pause(1.5)
+        check(tab.servedURL == nil, "a URL in the command line itself is not a served address", tab.servedURL?.absoluteString ?? "")
+        _ = await wait(6) { !tab.status.running }
+        tab.view.send(txt: "printf '  Local:   http://localhost:%s/\\n' 5173; sleep 4\r")
+        check(await wait(5) { tab.servedURL?.absoluteString == "http://localhost:5173/" }, "a running server's local address is seen",
+              tab.servedURL?.absoluteString ?? "none")
+        check(tab.title.hasSuffix(" · :5173"), "the tab's title shows its port", tab.title)
+        tab.userTitle = "dev"
+        check(tab.title == "dev · :5173", "also after a name you gave the tab", tab.title)
+        check(tab.tooltip.contains("Serving http://localhost:5173/"), "and the tooltip says what it serves")
+        check(await wait(8) { tab.servedURL == nil && !tab.title.contains(":5173") }, "it goes when the server stops", tab.title)
         c.remove(tab)
     }
 }

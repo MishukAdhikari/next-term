@@ -444,7 +444,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let now = TerminalTab.now
         refreshVisibility()
         for tab in tabs {
-            if tickCount % 2 == 0 { tab.pollForeground() } // every 0.5 s
+            if tickCount % 2 == 0 { tab.pollForeground(); tab.pollServing() } // every 0.5 s
             tab.pollAgentScreen()
             tab.status.tick(at: now)
             if let notice = tab.status.takeNotice() {
@@ -603,6 +603,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(closeProject(_:)) { return project != nil }
+        if item.action == #selector(openServedURL(_:)) { return activeTab?.servedURL != nil }
         if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil }
         if item.action == #selector(saveAllDocuments(_:)) { return !editorArea.dirtyDocuments.isEmpty }
         if item.action == #selector(goToLine(_:)) { return editorArea.activeEditor != nil }
@@ -1245,6 +1246,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     @objc func newRemoteTab(_ sender: Any?) {
         guard let window else { return }
         RemoteTabSheet.show(over: window) { [weak self] remote in self?.addRemoteTab(remote) }
+    }
+
+    /// Opens the address the active tab's server printed (" · :5173" in its title), in the browser.
+    @objc func openServedURL(_ sender: Any?) {
+        guard let url = activeTab?.servedURL else { return NSSound.beep() }
+        NSWorkspace.shared.open(url)
     }
 
     @objc func newTab(_ sender: Any?) {

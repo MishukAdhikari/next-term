@@ -267,6 +267,7 @@ enum MCPControl {
         if let question = tab.status.question { info["question"] = question }
         if let code = tab.status.exitCode, tab.status.state == .failed { info["exit_code"] = Int(code) }
         if tab === caller { info["you"] = true }
+        if let url = tab.servedURL { info["served_url"] = url.absoluteString } // a dev server's local address
         if let remote = tab.remote {
             if tab.loginPrompt { info["login_prompt"] = true } // ssh asks the user something in that tab
             if let refusal = RemoteConnection.refusal(remote.host) { info["host_problem"] = refusal }

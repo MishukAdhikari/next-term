@@ -436,10 +436,18 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// so after a screen clear their UI sits at the top with blank rows below it.
     func screenTail(_ count: Int = AgentScreen.scannedLines) -> [String] {
         let terminal = view.getTerminal()
+        guard let last = lastTextRow() else { return [] }
+        let first = max(terminal.buffer.totalLinesTrimmed, last - count + 1)
+        return (first...last).compactMap { terminal.getScrollInvariantLine(row: $0)?.translateToString(trimRight: true) }
+    }
+
+    /// The last line with text, in scroll-invariant rows (as getScrollInvariantLine counts them).
+    func lastTextRow() -> Int? {
+        let terminal = view.getTerminal()
         let top = terminal.buffer.totalLinesTrimmed
         // The last line that exists, found by bisection (SwiftTerm keeps the line count internal).
         var low = top, high = top + 1_000_000
-        guard terminal.getScrollInvariantLine(row: low) != nil else { return [] }
+        guard terminal.getScrollInvariantLine(row: low) != nil else { return nil }
         while low < high {
             let mid = (low + high + 1) / 2
             if terminal.getScrollInvariantLine(row: mid) != nil { low = mid } else { high = mid - 1 }
@@ -450,8 +458,55 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
               terminal.getScrollInvariantLine(row: last)?.translateToString(trimRight: true).isEmpty ?? true {
             last -= 1
         }
-        let first = max(top, last - count + 1)
-        return (first...last).compactMap { terminal.getScrollInvariantLine(row: $0)?.translateToString(trimRight: true) }
+        return last
+    }
+
+    // MARK: serving
+
+    /// The local address a running server printed (`npm run dev`, `langgraph dev`, `uvicorn`): shown as
+    /// " · :5173" after the title, opened by Shell › Open Served URL, given to agents in list_tabs.
+    private(set) var servedURL: URL?
+    /// The first row of the running command's output; set when the shell integration reports the start.
+    private var pendingServingStart: Int?
+    private var servingStart: Int?
+    private var servingScanned: Int?
+    private var servingCommand = -1
+
+    /// Twice a second: look at what the running command printed since it started for a loopback URL.
+    /// Not for agents, editors or ssh (an address there is the agent's business, or the other host's).
+    func pollServing() {
+        guard remote == nil, !exited, status.running, status.kind == .command else {
+            servingCommand = -1
+            if servedURL != nil {
+                servedURL = nil
+                delegate?.tabDidChange(self)
+            }
+            return
+        }
+        if status.commandsStarted != servingCommand {
+            servingCommand = status.commandsStarted
+            servedURL = nil
+            servingScanned = nil
+            // Without the integration the start is seen late: look back a little (the command line
+            // itself is skipped below).
+            servingStart = pendingServingStart ?? max(0, (lastTextRow() ?? 0) - 50)
+            pendingServingStart = nil
+        }
+        guard servedURL == nil, let start = servingStart, let last = lastTextRow() else { return }
+        let first = max(start, (servingScanned ?? start - 1) + 1, last - 400)
+        guard first <= last else { return }
+        let terminal = view.getTerminal()
+        let command = status.command.trimmingCharacters(in: .whitespaces)
+        for row in first...last {
+            guard let text = terminal.getScrollInvariantLine(row: row)?.translateToString(trimRight: true), !text.isEmpty else { continue }
+            if command.count >= 6 && text.contains(command) { continue } // a URL typed in the command line is not served
+            if let url = ServedURL.find(in: text) {
+                servedURL = url
+                delegate?.tabDidChange(self)
+                return
+            }
+        }
+        servingScanned = last - 1 // the last line may still be being written
     }
 
     /// For a running AI agent: read its screen (working, asking a question, or idle) so the tab's
@@ -522,7 +577,12 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         return .byTruncatingMiddle
     }
 
+    /// The tab's name, and " · :5173" while it serves (state, so also after a name the user gave it).
     var title: String {
+        baseTitle + (servedURL.map(ServedURL.suffix) ?? "")
+    }
+
+    private var baseTitle: String {
         if let userTitle, !userTitle.isEmpty { return userTitle }
         // While a program runs, its own title (Claude Code names the task) or its name.
         // At the prompt, the folder: shell themes set titles like "user@host: ~/dir" there, which say less.
@@ -558,6 +618,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         var lines = [title, stateDescription]
         if status.running && !status.command.isEmpty { lines.append(String(status.command.prefix(300))) }
         lines.append(directory)
+        if let servedURL { lines.append("Serving \(servedURL.absoluteString)") }
         if let remote { lines.append("On \(remote.host.name) (\(remote.host.destination)), sessions kept: \(remote.keep.label)") }
         return lines.joined(separator: "\n")
     }
@@ -568,6 +629,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         switch event {
         case .commandStarted(let line, let expanded):
             programTitle = nil
+            // Its output starts below the line the command was typed on.
+            pendingServingStart = (lastTextRow() ?? 0) + 1
             status.commandStarted(line, expanded: expanded, at: Self.now)
             // Gemini or Qwen starting (or installed since launch): their IDE switch on, for the next start too.
             if ["gemini", "gemini-cli", "qwen", "qwen-code"].contains(status.program) { AppDelegate.shared.enableAgentIDEModes() }
