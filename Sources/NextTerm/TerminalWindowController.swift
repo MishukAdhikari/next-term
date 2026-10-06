@@ -133,18 +133,18 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         select((activeIndex + delta + tabs.count) % tabs.count)
     }
 
-    /// Closes a tab, asking first if a program is still running in it.
+    /// Closes a tab, asking first if closing it would stop something: a running program, or a job
+    /// left suspended (Ctrl-Z) or in the background.
     func requestClose(_ tab: TerminalTab) {
         guard tabs.contains(where: { $0 === tab }) else { return }
-        guard tab.status.running, let window else {
+        guard let warning = tab.closeWarning, let window else {
             remove(tab)
             return
         }
-        let program = tab.status.program
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Close this tab?"
-        alert.informativeText = "\(program.isEmpty ? "A process" : "“\(program)”") is still running in “\(tab.title)”. Closing the tab stops it."
+        alert.messageText = "Close “\(tab.title)”?"
+        alert.informativeText = "Closing the tab stops \(warning)."
         alert.addButton(withTitle: "Close Tab")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in
@@ -173,7 +173,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
     }
 
-    var runningTabCount: Int { tabs.filter { $0.status.running }.count }
+    /// Tabs whose closing would stop a program or a job.
+    var busyTabs: [TerminalTab] { tabs.filter { $0.closeWarning != nil } }
     var unseenTabCount: Int { tabs.filter { $0.status.unseen != nil }.count }
 
     // MARK: status
@@ -318,14 +319,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if closeConfirmed || AppDelegate.shared.isTerminating { return true }
-        let running = runningTabCount
-        guard running > 0 else { return true }
+        let busy = busyTabs
+        guard !busy.isEmpty else { return true }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Close this window?"
-        alert.informativeText = running == 1
-            ? "A tab is still running a process. Closing the window stops it."
-            : "\(running) tabs are still running processes. Closing the window stops them."
+        alert.informativeText = "Closing it stops " + busy.prefix(4).compactMap(\.closeWarning).joined(separator: "; ")
+            + (busy.count > 4 ? ", and more in \(busy.count - 4) other tabs." : ".")
         alert.addButton(withTitle: "Close Window")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: sender) { [weak self] response in
@@ -380,7 +380,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func tabBarDidEndEditing(_ bar: TabBarView) {
-        if let view = activeTab?.view { window?.makeFirstResponder(view) }
+        // After the field editor has fully let go (ending the edit may itself be inside a
+        // makeFirstResponder call), give the keyboard back to the terminal.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let view = self.activeTab?.view, !self.tabBar.isEditing else { return }
+            self.window?.makeFirstResponder(view)
+        }
     }
 
     func tabBarDidRequestNewTab(_ bar: TabBarView) { newTab(nil) }

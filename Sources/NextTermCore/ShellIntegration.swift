@@ -5,9 +5,12 @@ import Foundation
 /// Next Term starts zsh with `ZDOTDIR` pointing at a directory holding `zshenvScript` as `.zshenv`.
 /// That script restores the user's own `ZDOTDIR`, sources their `.zshenv`, and adds two hooks:
 ///
-///     ESC ] 6973 ; <nonce> ; cmd ; <base64 command line> BEL    preexec, a command starts
-///     ESC ] 6973 ; <nonce> ; end ; <exit status> BEL            precmd, the command finished
-///     ESC ] 6973 ; <nonce> ; cwd ; <base64 directory> BEL       precmd, the working directory
+///     ESC ] 6973 ; <nonce> ; cmd ; <base64 typed> ; <base64 expanded> BEL   preexec, a command starts
+///     ESC ] 6973 ; <nonce> ; end ; <exit status> BEL                         precmd, the command finished
+///     ESC ] 6973 ; <nonce> ; cwd ; <base64 directory> BEL                    precmd, the working directory
+///     ESC ] 6973 ; <nonce> ; jobs ; <count> ; <base64 job list> BEL          precmd, suspended/background jobs
+///
+/// "expanded" is the line with aliases expanded, so `claude-auto` (an alias for `claude …`) is seen as an agent.
 ///
 /// Anything printed to the terminal can contain these bytes (a `cat` of a log, a remote host over ssh),
 /// so each tab gets a random nonce. The shell receives it as `NEXTTERM_NONCE`, keeps it in an unexported
@@ -25,9 +28,10 @@ public enum ShellIntegration {
     }
 
     public enum Event: Equatable, Sendable {
-        case commandStarted(String)
+        case commandStarted(String, expanded: String?)
         case commandFinished(Int32)
         case directory(String)
+        case jobs(Int, summary: String)
     }
 
     /// Parses an OSC 6973 payload (everything after `6973;`). Returns nil unless it carries `nonce`.
@@ -38,7 +42,15 @@ public enum ShellIntegration {
         let value = String(parts[2])
         switch parts[1] {
         case "cmd":
-            return decode(value).map { Event.commandStarted(String($0.prefix(maxCommandLength))) }
+            let fields = value.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+            guard let typed = decode(fields[0]) else { return nil }
+            let expanded = fields.count > 1 ? decode(fields[1]).map { String($0.prefix(maxCommandLength)) } : nil
+            return .commandStarted(String(typed.prefix(maxCommandLength)), expanded: expanded == typed ? nil : expanded)
+        case "jobs":
+            let fields = value.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+            guard let count = Int(fields[0]), count >= 0 else { return nil }
+            let summary = fields.count > 1 ? (decode(fields[1]) ?? "") : ""
+            return .jobs(count, summary: String(summary.prefix(1000)))
         case "end":
             return Int32(value).map(Event.commandFinished)
         case "cwd":
@@ -71,6 +83,11 @@ public enum ShellIntegration {
 # Next Term shell integration.
 # Next Term starts zsh with ZDOTDIR pointing here. Put the user's ZDOTDIR back first, so their own
 # .zshenv, .zprofile, .zshrc and .zlogin load from where they always do.
+# Take the tab's nonce out of the environment first, so not even the user's .zshenv (or anything it
+# starts) can see it.
+typeset -g __nextterm_nonce="${NEXTTERM_NONCE-}"
+unset NEXTTERM_NONCE
+
 if [[ -n "$NEXTTERM_USER_ZDOTDIR" ]]; then
   ZDOTDIR="$NEXTTERM_USER_ZDOTDIR"
 else
@@ -83,8 +100,8 @@ unset NEXTTERM_USER_ZDOTDIR
 # Report command start (with its text), command end (with exit code) and the working directory over a
 # private OSC 6973, tagged with this tab's nonce. The nonce lives in an unexported variable: programs
 # started from this shell never see it, so nothing they print can pass for these marks.
-if [[ -o interactive && -n "${NEXTTERM_NONCE-}" && -z "${__nextterm_hooked-}" ]]; then
-  typeset -g __nextterm_hooked=1 __nextterm_nonce="$NEXTTERM_NONCE"
+if [[ -o interactive && -n "${__nextterm_nonce-}" && -z "${__nextterm_hooked-}" ]]; then
+  typeset -g __nextterm_hooked=1
   zmodload zsh/parameter 2>/dev/null
 
   __nextterm_b64() { emulate -L zsh; builtin printf '%s' "$1" | command base64 | command tr -d '\n'; }
@@ -108,10 +125,10 @@ if [[ -o interactive && -n "${NEXTTERM_NONCE-}" && -z "${__nextterm_hooked-}" ]]
 
   __nextterm_preexec() {
     emulate -L zsh
-    local line=$1
+    local line=$1 expanded=${3-$1}
     __nextterm_jobtext "$line"
-    [[ -n $REPLY ]] && line=$REPLY
-    builtin printf '\033]6973;%s;cmd;%s\007' "$__nextterm_nonce" "$(__nextterm_b64 "$line")"
+    [[ -n $REPLY ]] && line=$REPLY expanded=$REPLY
+    builtin printf '\033]6973;%s;cmd;%s;%s\007' "$__nextterm_nonce" "$(__nextterm_b64 "$line")" "$(__nextterm_b64 "$expanded")"
   }
 
   __nextterm_precmd() {
@@ -119,6 +136,11 @@ if [[ -o interactive && -n "${NEXTTERM_NONCE-}" && -z "${__nextterm_hooked-}" ]]
     emulate -L zsh
     builtin printf '\033]6973;%s;end;%s\007' "$__nextterm_nonce" "$ret"
     builtin printf '\033]6973;%s;cwd;%s\007' "$__nextterm_nonce" "$(__nextterm_b64 "$PWD")"
+    # Jobs left behind (Ctrl-Z, `&`), so closing the tab can warn before they are killed.
+    local -a js
+    local k
+    for k in ${(k)jobstates}; do js+=("${jobtexts[$k]-} (${jobstates[$k]%%:*})"); done
+    builtin printf '\033]6973;%s;jobs;%s;%s\007' "$__nextterm_nonce" "${#js}" "$(__nextterm_b64 "${(pj:\n:)js}")"
   }
 
   # Register in a function: the user's .zshenv may already have set options such as nounset or
@@ -132,7 +154,8 @@ if [[ -o interactive && -n "${NEXTTERM_NONCE-}" && -z "${__nextterm_hooked-}" ]]
   }
   __nextterm_install
   unfunction __nextterm_install
+else
+  unset __nextterm_nonce
 fi
-unset NEXTTERM_NONCE
 """#
 }

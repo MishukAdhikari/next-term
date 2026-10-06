@@ -1,15 +1,59 @@
 import Darwin
+import NextTermCore
 
 /// Reads live process facts straight from the kernel: no `ps`, no `lsof`.
 enum ProcessInspector {
-    /// Name of the process group in the foreground of the pty (what the user is running).
-    static func foregroundProcessName(ptyFileDescriptor fd: Int32) -> String? {
-        guard fd >= 0 else { return nil }
+    /// What is in the foreground of the pty. nil when it cannot be read.
+    ///
+    /// "The shell is in front" is decided by process ID, not name: a `#!/bin/bash` script run from bash
+    /// is also called "bash". When the shell's own process exec'd something (`exec ssh host`), the
+    /// group is still the shell's but the name is not, and that counts as a running program.
+    static func foreground(ptyFileDescriptor fd: Int32, shellPid: pid_t, shellName: String) -> ForegroundProcess? {
+        guard fd >= 0, shellPid > 0 else { return nil }
         let pgid = tcgetpgrp(fd)
         guard pgid > 0 else { return nil }
+        guard let name = processName(pgid) else {
+            // The group leader is gone (e.g. `curl … | sh` after curl exits): unknown, not idle.
+            return pgid == shellPid ? ForegroundProcess(isShell: true, name: shellName) : nil
+        }
+        // The tab's shell process may have exec'd another shell (`exec bash`): still a shell at a prompt.
+        // If it exec'd anything else (`exec ssh host`), that program is what runs.
+        if pgid == shellPid && (name == shellName || shells.contains(name)) { return ForegroundProcess(isShell: true, name: name) }
+        let (path, args) = commandLine(of: pgid) ?? ("", [])
+        return ForegroundProcess(isShell: false, name: name, arguments: args, executablePath: path)
+    }
+
+    static let shells: Set<String> = ["zsh", "bash", "fish", "sh", "dash", "ksh", "mksh", "tcsh", "csh", "nu", "xonsh", "elvish", "pwsh"]
+
+    static func processName(_ pid: pid_t) -> String? {
         var name = [CChar](repeating: 0, count: 2 * Int(MAXCOMLEN) + 1)
-        guard proc_name(pgid, &name, UInt32(name.count)) > 0 else { return nil }
+        guard proc_name(pid, &name, UInt32(name.count)) > 0 else { return nil }
         return String(cString: name)
+    }
+
+    /// Executable path and argv (first 16 arguments) of a process owned by this user.
+    static func commandLine(of pid: pid_t) -> (path: String, arguments: [String])? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        let argc = buffer.withUnsafeBytes { Int($0.load(as: Int32.self)) }
+        var i = MemoryLayout<Int32>.size
+        func nextString() -> String {
+            let start = i
+            while i < size, buffer[i] != 0 { i += 1 }
+            let text = String(decoding: buffer[start..<i], as: UTF8.self)
+            return text
+        }
+        let path = nextString()
+        while i < size, buffer[i] == 0 { i += 1 } // padding after the executable path
+        var args: [String] = []
+        while args.count < min(argc, 16), i < size {
+            args.append(nextString())
+            i += 1
+        }
+        return (path, args)
     }
 
     /// Current working directory of a process.
@@ -22,5 +66,23 @@ enum ProcessInspector {
             String(decoding: raw.prefix(while: { $0 != 0 }), as: UTF8.self)
         }
         return path.isEmpty ? nil : path
+    }
+
+    /// Helper daemons that prompt frameworks keep as children of the shell; not the user's jobs.
+    private static let shellHelpers = ["gitstatusd", "zsh", "bash", "fish", "sh"]
+
+    /// Names of the shell's direct child processes, minus prompt helpers (used for shells without
+    /// integration, where the shell cannot tell us about its jobs).
+    static func childProcessNames(of pid: pid_t) -> [String] {
+        guard pid > 0 else { return [] }
+        let count = proc_listchildpids(pid, nil, 0)
+        guard count > 0 else { return [] }
+        var pids = [pid_t](repeating: 0, count: Int(count) + 8)
+        let filled = proc_listchildpids(pid, &pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+        guard filled > 0 else { return [] }
+        return pids.prefix(Int(filled)).compactMap { child in
+            guard child > 0, let name = processName(child) else { return nil }
+            return shellHelpers.contains(where: { name.hasPrefix($0) }) ? nil : name
+        }
     }
 }

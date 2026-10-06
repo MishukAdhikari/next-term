@@ -9,6 +9,10 @@ public enum TabState: String, Sendable {
 public struct TabNotice: Equatable, Sendable {
     public let state: TabState
     public let command: String
+    public let program: String
+    public let kind: CommandKind
+    /// The program is still running (an agent waiting for input), as opposed to finished.
+    public let stillRunning: Bool
 }
 
 /// The per-tab status state machine. Pure logic, driven by events with explicit timestamps
@@ -23,9 +27,10 @@ public struct TabStatus {
 
     /// The user is looking at this tab (active tab of the key window).
     public private(set) var visible = false
-    /// Shell integration reported in; process polling is then ignored.
+    /// Shell integration reported in; process polling then only refines what it says.
     public private(set) var integrated = false
     public private(set) var running = false
+    /// The command line as typed.
     public private(set) var command = ""
     /// Program name of `command`, worked out once when it starts.
     public private(set) var program = ""
@@ -33,12 +38,17 @@ public struct TabStatus {
     public private(set) var exitCode: Int32?
     /// done / failed / attention the user has not seen yet.
     public private(set) var unseen: TabState?
+    /// Jobs the shell holds (suspended or in the background), reported by the zsh integration.
+    public private(set) var jobs = 0
+    public private(set) var jobSummary = ""
 
     private var startedAt: TimeInterval = 0
     private var lastInputAt: TimeInterval = -.infinity
     private var lastOutputAt: TimeInterval = -.infinity
     private var busy = false
     private var busySince: TimeInterval = 0
+    /// Kernel name of the polled foreground process, to notice when it changes.
+    private var polledName = ""
     private var pendingNotice: TabNotice?
 
     public init() {}
@@ -49,17 +59,22 @@ public struct TabStatus {
         return unseen ?? .idle
     }
 
-    // MARK: events
+    // MARK: events from the shell integration
 
-    public mutating func commandStarted(_ commandLine: String, at now: TimeInterval) {
-        if commandLine.split(separator: " ").first == "exec" {
+    /// `typed` is the line as entered; `expanded` has aliases expanded (zsh's preexec $3), which is how
+    /// `claude-auto` (an alias for `claude …`) is recognised as an agent.
+    public mutating func commandStarted(_ typed: String, expanded: String? = nil, at now: TimeInterval) {
+        if typed.trimmingCharacters(in: .whitespaces).hasPrefix("exec ") {
             // `exec zsh`, `exec ssh …`: this shell, and its integration, is being replaced.
-            // Hand over to process polling, which follows whatever runs next.
-            integrated = false
+            // Process polling follows whatever runs next. (Execs hidden in functions or aliases,
+            // like `omz reload`, are caught by the kernel instead: see shellReplaced().)
+            shellReplaced()
             return
         }
         integrated = true
-        start(commandLine, at: now)
+        start(typed, kind: max(CommandClassifier.kind(of: typed), expanded.map(CommandClassifier.kind(of:)) ?? .command), at: now)
+        let typedProgram = CommandClassifier.programName(typed)
+        if typedProgram.isEmpty, let expanded { program = CommandClassifier.programName(expanded) }
     }
 
     public mutating func commandFinished(exitCode code: Int32?, at now: TimeInterval) {
@@ -68,22 +83,62 @@ public struct TabStatus {
         finish(exitCode: code, at: now)
     }
 
-    /// Fallback for shells without integration: the pty's foreground process name, polled.
-    public mutating func foregroundProcess(_ name: String, shell: String, at now: TimeInterval) {
-        guard !integrated else { return }
-        // Compare raw process names: "sudo" is a wrapper word to the classifier but a real process here.
-        let process = Self.baseName(name)
-        let isShell = process.isEmpty || process == Self.baseName(shell)
-        if !isShell && !running {
-            start(name, at: now)
-        } else if !isShell && process != Self.baseName(command) {
-            command = name
-            program = CommandClassifier.programName(name)
-            kind = CommandClassifier.kind(of: name)
-        } else if isShell && running {
-            finish(exitCode: nil, at: now)
-        }
+    public mutating func jobsChanged(count: Int, summary: String) {
+        jobs = max(0, count)
+        jobSummary = summary
     }
+
+    /// The kernel saw the shell process exec something else: its integration is gone.
+    public mutating func shellReplaced() {
+        integrated = false
+        running = false
+        busy = false
+        jobs = 0
+        jobSummary = ""
+        polledName = ""
+    }
+
+    /// The shell itself ended with a non-zero status; the tab stays open to show why.
+    public mutating func shellExited(code: Int32?) {
+        running = false
+        busy = false
+        exitCode = code
+        mark(.failed, duration: 0)
+    }
+
+    // MARK: events from polling the pty's foreground process (twice a second)
+
+    /// `process` nil means the foreground could not be read (for example, a pipeline's first
+    /// process already exited): keep the current state rather than guess "idle".
+    public mutating func observe(_ process: ForegroundProcess?, at now: TimeInterval) {
+        guard let process else { return }
+        if integrated {
+            // The integration knows when commands start and end. Polling only sees through what the
+            // command line hides: a shell function such as `claude-auto-danger` that runs an agent.
+            if running, kind == .command, !process.isShell, CommandClassifier.kind(of: process) == .agent {
+                kind = .agent
+                program = CommandClassifier.programName(of: process)
+                busy = now - lastOutputAt < Self.quietAfter
+                busySince = now
+            }
+            return
+        }
+        if process.isShell {
+            if running { finish(exitCode: nil, at: now) }
+            polledName = ""
+            return
+        }
+        if !running || process.name != polledName {
+            let wasRunning = running
+            let started = startedAt
+            start(process.commandLine, kind: CommandClassifier.kind(of: process), at: now)
+            program = CommandClassifier.programName(of: process)
+            if wasRunning { startedAt = started } // same job, different process in front
+        }
+        polledName = process.name
+    }
+
+    // MARK: activity
 
     public mutating func input(at now: TimeInterval) { lastInputAt = now }
     public mutating func resized(at now: TimeInterval) { lastInputAt = now }
@@ -122,17 +177,11 @@ public struct TabStatus {
 
     // MARK: internals
 
-    /// "/bin/zsh" -> "zsh", "-zsh" (a login shell's argv[0]) -> "zsh".
-    private static func baseName(_ path: String) -> String {
-        let last = path.split(separator: "/").last.map(String.init) ?? path
-        return last.hasPrefix("-") ? String(last.dropFirst()) : last
-    }
-
-    private mutating func start(_ commandLine: String, at now: TimeInterval) {
+    private mutating func start(_ commandLine: String, kind newKind: CommandKind, at now: TimeInterval) {
         running = true
         command = commandLine
         program = CommandClassifier.programName(commandLine)
-        kind = CommandClassifier.kind(of: commandLine)
+        kind = newKind
         startedAt = now
         busy = false
         exitCode = nil
@@ -156,6 +205,8 @@ public struct TabStatus {
         if !wasAttention || newState == .attention { unseen = newState }
         // Attention notifies once until seen: a program ringing the bell in a loop is one notice, not 500.
         let notify = newState == .attention ? !wasAttention : duration >= Self.notifyAfter
-        if notify { pendingNotice = TabNotice(state: newState, command: command) }
+        if notify {
+            pendingNotice = TabNotice(state: newState, command: command, program: program, kind: kind, stillRunning: running)
+        }
     }
 }

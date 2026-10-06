@@ -97,7 +97,8 @@ enum SelfTest {
 
         // Foreground process lookup through the kernel.
         second.view.send(txt: "sleep 1.5\r")
-        check(await wait(3) { ProcessInspector.foregroundProcessName(ptyFileDescriptor: second.view.process.childfd) == "sleep" },
+        check(await wait(3) { ProcessInspector.foreground(ptyFileDescriptor: second.view.process.childfd,
+                                                          shellPid: second.view.process.shellPid, shellName: "zsh")?.name == "sleep" },
               "foreground process is read from the pty")
         check(second.status.state == .working, "running command shows working", second.status.state.rawValue)
         check(await wait(5) { !second.status.running }, "command end is detected")
@@ -201,6 +202,58 @@ enum SelfTest {
         if let app = NSWorkspace.shared.urlForApplication(toOpen: py), Bundle(url: app)?.bundleIdentifier == "org.python.PythonLauncher" {
             check(SafeOpen.runsCode(py) != nil, "a .py that would run in Python Launcher asks first")
         }
+
+        // A job suspended with Ctrl-Z makes closing ask, and says which job.
+        c.select(1)
+        second.status.setVisible(true)
+        second.view.send(txt: "sleep 30\r")
+        _ = await wait(3) { second.status.running }
+        second.view.send(txt: "\u{1a}")
+        check(await wait(4) { second.status.jobs == 1 }, "a suspended job is reported", "jobs=\(second.status.jobs)")
+        check(second.closeWarning?.contains("sleep 30") == true, "closing warns about the suspended job", second.closeWarning ?? "nil")
+        second.view.send(txt: "kill %1\r")
+        check(await wait(4) { second.status.jobs == 0 && second.closeWarning == nil }, "and stops warning once it is gone")
+
+        // The screen cannot be read back through DECRQCRA: every checksum is 0000.
+        let checksum = dir.appendingPathComponent("decrqcra")
+        second.view.send(txt: "printf 'XYZ\\e[1;1;1;1;1;3*y'; read -s -t 2 -d '\\\\' x; print -rn -- \"${x-}\" > \(checksum.path)\r")
+        _ = await wait(4) { FileManager.default.fileExists(atPath: checksum.path) && !second.status.running }
+        let checksumReply = (try? String(contentsOf: checksum, encoding: .isoLatin1)) ?? ""
+        check(checksumReply.contains("!~0000"), "screen checksum requests are answered with 0000", checksumReply.debugDescription)
+
+        // ⌘V drops escape characters (the user's clipboard is put back afterwards).
+        let savedClipboard = NSPasteboard.general.string(forType: .string)
+        let pasted = dir.appendingPathComponent("pasted")
+        second.view.send(txt: "cat > \(pasted.path)\r")
+        _ = await wait(3) { second.status.running }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("a\u{1b}[201~b\n", forType: .string)
+        second.view.paste(self)
+        second.view.send(txt: "\u{04}")
+        _ = await wait(4) { !second.status.running }
+        NSPasteboard.general.clearContents()
+        if let savedClipboard { NSPasteboard.general.setString(savedClipboard, forType: .string) }
+        let pastedText = (try? String(contentsOf: pasted, encoding: .utf8)) ?? "missing"
+        check(pastedText == "a[201~b\n", "pasted text loses its escape characters", pastedText.debugDescription)
+
+        // `exec bash`: the kernel reports the exec, and polling takes over: commands, cd, exit status.
+        let fallback = c.addTab(directory: nil)
+        _ = await wait(20) { fallback.status.integrated }
+        fallback.view.send(txt: "exec /bin/bash --norc --noprofile\r")
+        check(await wait(5) { !fallback.status.integrated }, "an exec'd shell drops back to process polling")
+        fallback.view.send(txt: "cd /tmp\r")
+        check(await wait(5) { fallback.directory == "/private/tmp" }, "polling follows cd", fallback.directory)
+        fallback.view.send(txt: "sleep 1.5\r")
+        check(await wait(3) { fallback.status.running && fallback.status.program == "sleep" }, "polling sees a command start", fallback.status.program)
+        check(await wait(5) { !fallback.status.running }, "and finish")
+        let tabsBefore = c.tabs.count
+        fallback.view.send(txt: "exit 3\r")
+        check(await wait(5) { fallback.exited }, "the shell's exit is noticed")
+        check(c.tabs.contains { $0 === fallback } && c.tabs.count == tabsBefore, "a shell that fails keeps its tab open")
+        check(fallback.status.exitCode == 3 && fallback.closeWarning == nil, "with its exit code, and closes without asking",
+              "\(String(describing: fallback.status.exitCode))")
+        c.requestClose(fallback)
+        check(!c.tabs.contains { $0 === fallback }, "⌘W closes it")
 
         // Snapshot with every state on screen, for a visual check.
         await screenshotAllStates(c, dir: dir)

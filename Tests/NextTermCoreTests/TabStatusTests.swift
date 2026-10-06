@@ -28,6 +28,41 @@ import Testing
     }
 }
 
+@Suite struct AgentDetectionTests {
+    @Test func compoundLines() {
+        #expect(CommandClassifier.segments("cd x && \"a b\" | less; make & y") == ["cd x", "\"a b\"", "less", "make", "y"])
+        #expect(CommandClassifier.segments("git commit -m 'a && b'") == ["git commit -m 'a && b'"])
+        #expect(CommandClassifier.kind(of: "cd ~/proj && claude") == .agent)
+        #expect(CommandClassifier.kind(of: "nvm use 22 && codex --yolo") == .agent)
+        #expect(CommandClassifier.programName("cd ~/proj && claude") == "claude")
+        #expect(CommandClassifier.programName("cd ~/proj && make test") == "make")
+        #expect(CommandClassifier.kind(of: "caffeinate -i claude") == .agent)
+        #expect(CommandClassifier.kind(of: "npx @google/gemini-cli") == .agent)
+        #expect(CommandClassifier.kind(of: "git commit -m 'claude && codex'") == .command)
+        #expect(CommandClassifier.kind(of: "cat log | less") == .interactive)
+    }
+
+    @Test func processesSeeThroughFunctionsAndInstallers() {
+        // Claude Code's native installer: ~/.local/bin/claude -> ~/.local/share/claude/versions/2.1.280
+        let native = ForegroundProcess(isShell: false, name: "2.1.280", arguments: ["claude", "--resume"],
+                                       executablePath: "/Users/me/.local/share/claude/versions/2.1.280")
+        #expect(CommandClassifier.kind(of: native) == .agent)
+        #expect(CommandClassifier.programName(of: native) == "claude")
+        let npmNative = ForegroundProcess(isShell: false, name: "claude.exe", arguments: ["claude"])
+        #expect(CommandClassifier.kind(of: npmNative) == .agent)
+        let npmNode = ForegroundProcess(isShell: false, name: "node",
+                                        arguments: ["node", "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js"])
+        #expect(CommandClassifier.kind(of: npmNode) == .agent)
+        #expect(CommandClassifier.programName(of: npmNode) == "claude")
+        let codex = ForegroundProcess(isShell: false, name: "codex", arguments: ["codex", "--yolo"])
+        #expect(CommandClassifier.kind(of: codex) == .agent)
+        let build = ForegroundProcess(isShell: false, name: "node", arguments: ["node", "build.js"])
+        #expect(CommandClassifier.kind(of: build) == .command)
+        let repl = ForegroundProcess(isShell: false, name: "node", arguments: ["node"])
+        #expect(CommandClassifier.kind(of: repl) == .interactive)
+    }
+}
+
 @Suite struct TabStatusTests {
     @Test func commandInBackgroundTabFinishesDone() {
         var s = TabStatus()
@@ -35,7 +70,7 @@ import Testing
         #expect(s.state == .working)
         s.commandFinished(exitCode: 0, at: 10)
         #expect(s.state == .done)
-        #expect(s.takeNotice() == TabNotice(state: .done, command: "make"))
+        #expect(s.takeNotice() == TabNotice(state: .done, command: "make", program: "make", kind: .command, stillRunning: false))
         #expect(s.takeNotice() == nil)
         s.setVisible(true)
         #expect(s.state == .idle)
@@ -86,7 +121,7 @@ import Testing
         #expect(s.state == .working)
         s.tick(at: 8 + TabStatus.quietAfter)
         #expect(s.state == .done)
-        #expect(s.takeNotice() == TabNotice(state: .done, command: "claude"))
+        #expect(s.takeNotice() == TabNotice(state: .done, command: "claude", program: "claude", kind: .agent, stillRunning: true))
         // Agent resumes: the stale done clears.
         s.output(at: 20)
         #expect(s.state == .working)
@@ -128,21 +163,80 @@ import Testing
 
     @Test func fallbackPollingWithoutIntegration() {
         var s = TabStatus()
-        s.foregroundProcess("bash", shell: "/bin/bash", at: 0)
+        s.observe(ForegroundProcess(isShell: true, name: "bash"), at: 0)
         #expect(s.state == .idle)
-        s.foregroundProcess("sleep", shell: "/bin/bash", at: 1)
+        s.observe(ForegroundProcess(isShell: false, name: "sleep", arguments: ["sleep", "8"]), at: 1)
         #expect(s.state == .working)
-        s.foregroundProcess("bash", shell: "/bin/bash", at: 9)
+        #expect(s.program == "sleep")
+        s.observe(nil, at: 5) // unreadable foreground (a pipeline's leader exited): keep the state
+        #expect(s.state == .working)
+        s.observe(ForegroundProcess(isShell: true, name: "bash"), at: 9)
         #expect(s.state == .done)
         #expect(s.takeNotice()?.state == .done)
     }
 
     @Test func fallbackSeesWrapperProcesses() {
         var s = TabStatus()
-        s.foregroundProcess("sudo", shell: "/bin/bash", at: 0)
+        s.observe(ForegroundProcess(isShell: false, name: "sudo", arguments: ["sudo", "make", "install"]), at: 0)
         #expect(s.state == .working)
-        s.foregroundProcess("-bash", shell: "/bin/bash", at: 1)
+        // A bash script run from bash is a running program, not the idle shell (decided by pid upstream).
+        s.observe(ForegroundProcess(isShell: false, name: "bash", arguments: ["/bin/bash", "./deploy.sh"]), at: 1)
+        #expect(s.running)
+        s.observe(ForegroundProcess(isShell: true, name: "bash"), at: 2)
         #expect(!s.running)
+    }
+
+    @Test func aliasExpandingToAnAgentIsAnAgent() {
+        var s = TabStatus()
+        s.commandStarted("claude-auto", expanded: "claude --permission-mode auto --enable-auto-mode", at: 0)
+        #expect(s.kind == .agent)
+        #expect(s.program == "claude-auto") // the tab shows what you typed
+        s.output(at: 1)
+        s.tick(at: 1 + TabStatus.quietAfter)
+        #expect(s.state == .done)
+        #expect(s.takeNotice() == nil) // quick, so no notification, but the dot says "waiting for you"
+    }
+
+    @Test func functionRunningAnAgentIsFoundByPolling() {
+        var s = TabStatus()
+        s.commandStarted("claude-auto-danger", at: 0) // a shell function: zsh cannot expand it
+        #expect(s.kind == .command && s.state == .working)
+        s.output(at: 0.5)
+        s.observe(ForegroundProcess(isShell: false, name: "claude", arguments: ["claude", "--dangerously-skip-permissions"]), at: 1)
+        #expect(s.kind == .agent)
+        #expect(s.state == .working)
+        s.output(at: 4)
+        s.output(at: 7) // six seconds of work since it was recognised
+        s.tick(at: 7 + TabStatus.quietAfter)
+        #expect(s.state == .done)
+        let notice = s.takeNotice()
+        #expect(notice?.stillRunning == true && notice?.kind == .agent)
+    }
+
+    @Test func kernelSeenExecEndsIntegration() {
+        var s = TabStatus()
+        s.commandStarted("omz reload", at: 0)
+        #expect(s.running)
+        s.shellReplaced()
+        #expect(!s.running && !s.integrated)
+        s.observe(ForegroundProcess(isShell: true, name: "zsh"), at: 2)
+        #expect(s.state == .idle)
+    }
+
+    @Test func oneShotAgentNoticeSaysFinished() {
+        var s = TabStatus()
+        s.commandStarted("claude -p 'summarize'", at: 0)
+        s.commandFinished(exitCode: 0, at: 30)
+        let notice = s.takeNotice()
+        #expect(notice?.state == .done && notice?.stillRunning == false)
+    }
+
+    @Test func jobsAndShellExit() {
+        var s = TabStatus()
+        s.jobsChanged(count: 1, summary: "vim notes.md (suspended)")
+        #expect(s.jobs == 1 && s.jobSummary.contains("vim"))
+        s.shellExited(code: 1)
+        #expect(s.state == .failed && s.exitCode == 1)
     }
 
     @Test func execHandsOverToPolling() {
@@ -151,7 +245,7 @@ import Testing
         s.commandFinished(exitCode: 0, at: 1)
         s.commandStarted("exec zsh", at: 2)
         #expect(!s.integrated && !s.running)
-        s.foregroundProcess("ssh", shell: "/bin/zsh", at: 3)
+        s.observe(ForegroundProcess(isShell: false, name: "ssh", arguments: ["ssh", "prod"]), at: 3)
         #expect(s.running)
     }
 
@@ -176,7 +270,7 @@ import Testing
     @Test func pollingIgnoredOnceIntegrated() {
         var s = TabStatus()
         s.commandStarted("make", at: 0)
-        s.foregroundProcess("zsh", shell: "/bin/zsh", at: 1)
+        s.observe(ForegroundProcess(isShell: true, name: "zsh"), at: 1)
         #expect(s.state == .working)
     }
 }
@@ -187,7 +281,15 @@ import Testing
 
     @Test func parsesEvents() {
         let cmd = Data("git commit -m \"é; x\"".utf8).base64EncodedString()
-        #expect(parse("\(n);cmd;\(cmd)") == .commandStarted("git commit -m \"é; x\""))
+        #expect(parse("\(n);cmd;\(cmd)") == .commandStarted("git commit -m \"é; x\"", expanded: nil))
+        let alias = Data("claude-auto".utf8).base64EncodedString()
+        let full = Data("claude --permission-mode auto".utf8).base64EncodedString()
+        #expect(parse("\(n);cmd;\(alias);\(full)") == .commandStarted("claude-auto", expanded: "claude --permission-mode auto"))
+        #expect(parse("\(n);cmd;\(alias);\(alias)") == .commandStarted("claude-auto", expanded: nil))
+        let jobs = Data("vim notes.md (suspended)".utf8).base64EncodedString()
+        #expect(parse("\(n);jobs;1;\(jobs)") == .jobs(1, summary: "vim notes.md (suspended)"))
+        #expect(parse("\(n);jobs;0;") == .jobs(0, summary: ""))
+        #expect(parse("\(n);jobs;-1;") == nil)
         #expect(parse("\(n);end;127") == .commandFinished(127))
         #expect(parse("\(n);cwd;\(Data("/tmp/a b".utf8).base64EncodedString())") == .directory("/tmp/a b"))
         #expect(parse("\(n);end;x") == nil)
@@ -206,7 +308,7 @@ import Testing
     @Test func capsSizes() {
         let long = String(repeating: "x", count: 10_000)
         let event = parse("\(n);cmd;\(Data(long.utf8).base64EncodedString())")
-        #expect(event == .commandStarted(String(repeating: "x", count: ShellIntegration.maxCommandLength)))
+        #expect(event == .commandStarted(String(repeating: "x", count: ShellIntegration.maxCommandLength), expanded: nil))
         let huge = String(repeating: "A", count: 100_000)
         #expect(parse("\(n);cmd;\(huge)") == nil)
     }

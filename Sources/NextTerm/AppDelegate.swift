@@ -64,14 +64,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        let running = controllers.reduce(0) { $0 + $1.runningTabCount }
-        if running > 0 && !SelfTest.isRequested {
+        let busy = controllers.flatMap(\.busyTabs)
+        if !busy.isEmpty && !SelfTest.isRequested {
             let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = "Quit Next Term?"
-            alert.informativeText = running == 1
-                ? "A tab is still running a process. Quitting stops it."
-                : "\(running) tabs are still running processes. Quitting stops them."
+            alert.informativeText = "Quitting stops " + busy.prefix(4).compactMap(\.closeWarning).joined(separator: "; ")
+                + (busy.count > 4 ? ", and more in \(busy.count - 4) other tabs." : ".")
             alert.addButton(withTitle: "Quit")
             alert.addButton(withTitle: "Cancel")
             if alert.runModal() != .alertFirstButtonReturn { return .terminateCancel }
@@ -104,8 +103,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 self?.updateBadge()
             }
         }
-        if let previous = NSApp.keyWindow ?? controllers.last?.window, let window = controller.window {
-            window.setFrame(previous.frame, display: false)
+        // Cascade from the terminal window in front (not the About panel or a sheet), at its size unless it
+        // is in full screen, and never below the minimum.
+        let front = (NSApp.keyWindow?.windowController as? TerminalWindowController)?.window ?? controllers.last?.window
+        if let previous = front, previous.isVisible, let window = controller.window {
+            var frame = previous.styleMask.contains(.fullScreen) ? window.frame : previous.frame
+            frame.size.width = max(frame.width, window.minSize.width)
+            frame.size.height = max(frame.height, window.minSize.height)
+            window.setFrame(frame, display: false)
             window.setFrameTopLeftPoint(window.cascadeTopLeft(from: NSPoint(x: previous.frame.minX, y: previous.frame.maxY)))
         } else {
             controller.window?.center()
@@ -123,6 +128,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// ⌘T with no window open (every window closed, app still running).
     @objc func newTab(_ sender: Any?) {
         newWindow(sender)
+    }
+
+    // MARK: Option as Meta
+
+    @objc func toggleOptionAsMeta(_ sender: Any?) {
+        Preferences.optionAsMeta.toggle()
+        for controller in controllers { for tab in controller.tabs { tab.view.optionAsMetaKey = Preferences.optionAsMeta } }
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(toggleOptionAsMeta(_:)) { item.state = Preferences.optionAsMeta ? .on : .off }
+        return true
     }
 
     // MARK: font size
@@ -155,10 +172,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         lastNotified[tab.id] = Date()
         let content = UNMutableNotificationContent()
         content.title = String(tab.title.prefix(80))
-        let program = String(CommandClassifier.programName(notice.command).prefix(60))
+        let program = String(notice.program.prefix(60))
         switch notice.state {
         case .done:
-            content.body = tab.status.kind == .agent ? "\(program) is waiting for you" : "\(program.isEmpty ? "Command" : program) finished"
+            // Only an agent that is still running is waiting; one that exited (`claude -p …`) finished.
+            content.body = notice.kind == .agent && notice.stillRunning
+                ? "\(program) is waiting for you" : "\(program.isEmpty ? "Command" : program) finished"
         case .failed:
             content.body = "\(program.isEmpty ? "Command" : program) failed" + (tab.status.exitCode.map { " (exit \($0))" } ?? "")
         case .attention:
@@ -210,11 +229,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(shell, "New Window", #selector(newWindow(_:)), "n", target: self)
         shell.addItem(.separator())
         item(shell, "Rename Tab…", #selector(TerminalWindowController.renameTab(_:)), "r", [.command, .shift])
+        item(shell, "Use Option as Meta Key", #selector(toggleOptionAsMeta(_:)), "", target: self)
         shell.addItem(.separator())
         item(shell, "Close Tab", #selector(TerminalWindowController.closeTab(_:)), "w")
         item(shell, "Close Window", #selector(NSWindow.performClose(_:)), "w", [.command, .shift])
 
         let edit = submenu(main, "Edit")
+        item(edit, "Undo", Selector(("undo:")), "z")
+        item(edit, "Redo", Selector(("redo:")), "z", [.command, .shift])
+        edit.addItem(.separator())
+        item(edit, "Cut", #selector(NSText.cut(_:)), "x")
         item(edit, "Copy", #selector(NSText.copy(_:)), "c")
         item(edit, "Paste", #selector(NSText.paste(_:)), "v")
         item(edit, "Select All", #selector(NSText.selectAll(_:)), "a")

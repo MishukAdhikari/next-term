@@ -4,11 +4,15 @@ import SwiftTerm
 
 /// SwiftTerm's local-process view, with hooks for the activity the status machine needs.
 final class NextTermView: LocalProcessTerminalView {
+    static let scrollbackLines = 10_000
+
     var onOutput: (() -> Void)?
     var onInput: (() -> Void)?
     var onBell: (() -> Void)?
     /// Only beep for the tab the user is looking at; background tabs show a dot instead.
     var beepAllowed = true
+    /// False once the shell has ended: there is nothing left to send keystrokes to.
+    var acceptsInput = true
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
         super.dataReceived(slice: slice) // parse first: OSC marks in this chunk update the status
@@ -16,8 +20,32 @@ final class NextTermView: LocalProcessTerminalView {
     }
 
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
+        guard acceptsInput else { return }
         onInput?()
-        super.send(source: source, data: data)
+        super.send(source: source, data: Self.withoutScreenChecksum(data))
+    }
+
+    /// DECRQCRA asks the terminal for a checksum of a screen rectangle; for one cell, the checksum is the
+    /// character itself, so anything that can print to the terminal (a remote host over ssh) could read
+    /// the whole screen back cell by cell. SwiftTerm always answers, so answer "0000" for every request.
+    static func withoutScreenChecksum(_ data: ArraySlice<UInt8>) -> ArraySlice<UInt8> {
+        // DCS Pid ! ~ xxxx ST, with DCS as ESC P (or 8-bit 0x90) and ST as ESC \ (or 0x9C).
+        guard data.count >= 8, data.count <= 32,
+              data.first == 0x90 || (data.first == 0x1B && data.dropFirst().first == UInt8(ascii: "P")),
+              let text = String(bytes: data, encoding: .isoLatin1),
+              let range = text.range(of: #"!~[0-9A-Fa-f]+"#, options: .regularExpression) else { return data }
+        let neutral = text.replacingCharacters(in: range, with: "!~0000")
+        return ArraySlice(neutral.data(using: .isoLatin1) ?? Data(data))
+    }
+
+    /// ⌘V. Pasted text loses every control character except tab and newline: an escape sequence on the
+    /// clipboard (from OSC 52, a web page or a file name) could otherwise end bracketed paste early and
+    /// run the rest as typed input.
+    override func paste(_ sender: Any) {
+        guard acceptsInput, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
+        let kept = String(text.unicodeScalars.filter { $0 == "\t" || $0 == "\n" || $0 == "\r" || !ShellQuote.isControl($0) })
+        let lines = kept.replacingOccurrences(of: "\r\n", with: "\r").replacingOccurrences(of: "\n", with: "\r")
+        send(txt: getTerminal().bracketedPasteMode ? "\u{1b}[200~" + lines + "\u{1b}[201~" : lines)
     }
 
     override func bell(source: Terminal) {
@@ -28,7 +56,7 @@ final class NextTermView: LocalProcessTerminalView {
     // MARK: drop files (from Finder or the project tree) to type their paths, like Terminal.app
 
     override init(frame: CGRect) {
-        super.init(frame: frame)
+        super.init(frame: frame, font: nil, options: TerminalOptions(scrollback: Self.scrollbackLines))
         registerForDraggedTypes([.fileURL])
     }
 
@@ -68,7 +96,8 @@ final class NextTermView: LocalProcessTerminalView {
         if let url = URL(string: link), let scheme = url.scheme?.lowercased(), scheme.count > 1 {
             switch scheme {
             case "http", "https", "mailto": NSWorkspace.shared.open(url)
-            case "file" where url.host == nil || url.host == "" || url.host == "localhost": SafeOpen.open(url, from: window)
+            // ls/fd/rg hyperlinks name this Mac: file://my-mac.local/path
+            case "file" where LocalHost.contains(url.host): SafeOpen.open(url, from: window)
             default: NSSound.beep() // custom app schemes can trigger actions in other apps
             }
             return
@@ -105,6 +134,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private(set) var directory: String
     private(set) var exited = false
     weak var delegate: TerminalTabDelegate?
+    /// Fires when the shell process execs something else (`exec zsh`, `omz reload`).
+    private var execWatcher: DispatchSourceProcess?
+    private var shellName: String { (shellPath as NSString).lastPathComponent }
 
     init(directory: String?, fontSize: CGFloat) {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -115,12 +147,13 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
         Theme.apply(to: view, fontSize: fontSize)
         view.processDelegate = self
-        view.optionAsMetaKey = true
+        // Off by default: on most non-US layouts Option types # @ | [ ] { } ~ \. Toggle in the Shell menu.
+        view.optionAsMetaKey = Preferences.optionAsMeta
 
         view.onOutput = { [weak self] in self?.status.output(at: Self.now) }
         view.onInput = { [weak self] in self?.status.input(at: Self.now) }
         view.onBell = { [weak self] in self?.attention() }
-        view.linkBaseDirectory = { [weak self] in self?.directory ?? NSHomeDirectory() }
+        view.linkBaseDirectory = { [weak self] in self?.liveDirectory ?? NSHomeDirectory() }
 
         let terminal = view.getTerminal()
         terminal.registerOscHandler(code: ShellIntegration.oscCode) { [weak self] payload in
@@ -136,8 +169,10 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             guard !data.elementsEqual([UInt8(ascii: "?")]), self.status.visible, data.count <= 1_400_000,
                   let decoded = Data(base64Encoded: Data(data), options: .ignoreUnknownCharacters),
                   let text = String(data: decoded, encoding: .utf8) else { return }
+            // No escape sequences onto the clipboard: copied text is for pasting, not for steering.
+            let clean = String(text.unicodeScalars.filter { $0 == "\t" || $0 == "\n" || !ShellQuote.isControl($0) })
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
+            NSPasteboard.general.setString(clean, forType: .string)
         }
         // OSC 9 (iTerm2 / ConEmu) and OSC 777 (rxvt) desktop notifications mean "look at me".
         // OSC 9;4 is a progress report, not a notification.
@@ -153,7 +188,6 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     static var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
     func start() {
-        let shellName = (shellPath as NSString).lastPathComponent
         view.startProcess(
             executable: shellPath,
             args: [],
@@ -161,10 +195,25 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             execName: "-" + shellName, // leading dash: a login shell, like Terminal.app
             currentDirectory: directory
         )
+        // The kernel tells us when the shell process becomes something else. Text cannot: `omz reload`
+        // and `alias reload='exec zsh'` hide the exec, and the new shell has no integration.
+        let pid = view.process.shellPid
+        guard pid > 0 else { return }
+        let watcher = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exec, queue: .main)
+        watcher.setEventHandler { [weak self] in
+            guard let self, !self.exited else { return }
+            self.programTitle = nil
+            self.status.shellReplaced()
+            self.delegate?.tabDidChange(self)
+        }
+        watcher.resume()
+        execWatcher = watcher
     }
 
     /// Ends the shell and everything it started.
     func terminate() {
+        execWatcher?.cancel()
+        execWatcher = nil
         guard !exited else { return }
         exited = true
         let pid = view.process.shellPid
@@ -195,10 +244,46 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         ProcessInspector.currentDirectory(of: view.process.shellPid) ?? directory
     }
 
+    /// The folder relative paths mean right now: the integration reports it; otherwise ask the kernel.
+    private var liveDirectory: String { status.integrated ? directory : currentDirectory() }
+
+    /// Twice a second. For shells without integration this is how the tab knows what runs and where it
+    /// is; with integration it only looks behind commands that look plain, for agents run by functions.
     func pollForeground() {
-        guard !status.integrated, !exited else { return }
-        let name = ProcessInspector.foregroundProcessName(ptyFileDescriptor: view.process.childfd) ?? ""
-        status.foregroundProcess(name, shell: shellPath, at: Self.now)
+        guard !exited else { return }
+        if status.integrated && !(status.running && status.kind == .command) { return }
+        let before = (status.running, status.command)
+        let foreground = ProcessInspector.foreground(ptyFileDescriptor: view.process.childfd,
+                                                     shellPid: view.process.shellPid, shellName: shellName)
+        status.observe(foreground, at: Self.now)
+        var changed = (status.running, status.command) != before
+        if !status.integrated {
+            // A prompt title ("user@host: ~/dir") is stale once a command runs, and vice versa.
+            if changed { programTitle = nil }
+            // Follow `cd` without integration: the shell's own working directory, read at the prompt.
+            if foreground?.isShell == true, let dir = ProcessInspector.currentDirectory(of: view.process.shellPid), dir != directory {
+                directory = dir
+                changed = true
+            }
+        }
+        if changed { delegate?.tabDidChange(self) }
+    }
+
+    /// Why closing this tab would lose something, or nil. Running programs, and jobs left in the
+    /// background or suspended with Ctrl-Z (a stopped vim with unsaved changes).
+    var closeWarning: String? {
+        guard !exited else { return nil }
+        var items: [String] = []
+        if status.running { items.append(status.program.isEmpty ? "a running process" : "“\(status.program)”, running") }
+        if status.integrated {
+            if status.jobs > 0 {
+                items += status.jobSummary.split(separator: "\n").map { "“\($0)”" }
+                if items.isEmpty { items.append("\(status.jobs) background job\(status.jobs == 1 ? "" : "s")") }
+            }
+        } else if !status.running {
+            items += ProcessInspector.childProcessNames(of: view.process.shellPid).map { "“\($0)”" }
+        }
+        return items.isEmpty ? nil : items.joined(separator: ", ")
     }
 
     var title: String {
@@ -236,14 +321,16 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     private func handle(_ event: ShellIntegration.Event) {
         switch event {
-        case .commandStarted(let line):
+        case .commandStarted(let line, let expanded):
             programTitle = nil
-            status.commandStarted(line, at: Self.now)
+            status.commandStarted(line, expanded: expanded, at: Self.now)
         case .commandFinished(let code):
             programTitle = nil
             status.commandFinished(exitCode: code, at: Self.now)
         case .directory(let dir):
             if !dir.isEmpty { directory = dir }
+        case .jobs(let count, let summary):
+            status.jobsChanged(count: count, summary: summary)
         }
         delegate?.tabDidChange(self)
     }
@@ -270,7 +357,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         // (over ssh) reports its own host's paths: those are not folders on this Mac.
         guard let directory, !directory.isEmpty else { return }
         if let url = URL(string: directory), url.isFileURL {
-            guard Self.isLocalHost(url.host) else { return }
+            guard LocalHost.contains(url.host) else { return }
             self.directory = url.path
         } else if directory.hasPrefix("/") {
             self.directory = directory
@@ -278,10 +365,25 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         delegate?.tabDidChange(self)
     }
 
-    func processTerminated(source: TerminalView, exitCode: Int32?) {
+    /// `waitStatus` is the raw status from waitpid, as SwiftTerm passes it on.
+    func processTerminated(source: TerminalView, exitCode waitStatus: Int32?) {
         guard !exited else { return }
         exited = true
-        delegate?.tabDidExit(self)
+        execWatcher?.cancel()
+        execWatcher = nil
+        guard let waitStatus, waitStatus != 0 else {
+            delegate?.tabDidExit(self) // `exit`, Ctrl-D: the tab goes away, like any terminal
+            return
+        }
+        // Anything else stays on screen, so the reason is not lost (a failing `exec tmux` in .zshrc
+        // would otherwise close the only window at launch).
+        let signal = waitStatus & 0x7F
+        let code = (waitStatus >> 8) & 0xFF
+        let reason = signal == 0 ? "exited with code \(code)" : "was ended by signal \(signal)"
+        view.acceptsInput = false
+        status.shellExited(code: signal == 0 ? code : 128 + signal)
+        view.feed(text: "\r\n\u{1b}[2m[The shell \(reason). ⌘W closes this tab.]\u{1b}[0m\r\n")
+        delegate?.tabDidChange(self)
     }
 
     // MARK: environment
@@ -306,15 +408,6 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         return env.map { "\($0.key)=\($0.value)" }
     }
 
-    private static func isLocalHost(_ host: String?) -> Bool {
-        guard let host = host?.lowercased(), !host.isEmpty, host != "localhost" else { return true }
-        var name = [CChar](repeating: 0, count: 256)
-        gethostname(&name, name.count)
-        let local = String(cString: name).lowercased()
-        let short = local.split(separator: ".").first.map(String.init) ?? local
-        return host == local || host == short || host == short + ".local"
-    }
-
     private static func loginShell() -> String {
         if let pw = getpwuid(getuid()), let shell = pw.pointee.pw_shell {
             let path = String(cString: shell)
@@ -330,6 +423,26 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         guard let path else { return false }
         var isDir: ObjCBool = false
         return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
+    }
+}
+
+/// Whether a URL host names this Mac (file:// URLs from ls, fd, rg and OSC 7 include it).
+enum LocalHost {
+    static func contains(_ host: String?) -> Bool {
+        guard let host = host?.lowercased(), !host.isEmpty, host != "localhost" else { return true }
+        var name = [CChar](repeating: 0, count: 256)
+        gethostname(&name, name.count)
+        let local = String(cString: name).lowercased()
+        let short = local.split(separator: ".").first.map(String.init) ?? local
+        return host == local || host == short || host == short + ".local"
+    }
+}
+
+/// User preferences that are not per window.
+enum Preferences {
+    static var optionAsMeta: Bool {
+        get { UserDefaults.standard.bool(forKey: "optionAsMeta") }
+        set { UserDefaults.standard.set(newValue, forKey: "optionAsMeta") }
     }
 }
 
