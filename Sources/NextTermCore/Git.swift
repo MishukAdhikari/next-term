@@ -307,6 +307,10 @@ public enum GitRunner {
 
     /// Runs a command and returns its standard output, or nil on failure or timeout. Never waits longer
     /// than `timeout` (plus a few seconds to stop the process): a stuck git must not hang the caller.
+    ///
+    /// Output goes to a temporary file, not a pipe. A pipe's end is inherited by any process started at
+    /// the same moment (another git, or a new tab's shell, which can live for days), and the end of the
+    /// output would never arrive while it is open. A file has no end to wait for: the exit is enough.
     static func run(_ executable: String, _ arguments: [String], timeout: TimeInterval,
                     acceptedStatus: Set<Int32> = [0]) -> Data? {
         let process = Process()
@@ -323,23 +327,23 @@ public enum GitRunner {
         env["GIT_CONFIG_KEY_0"] = "core.fsmonitor"
         env["GIT_CONFIG_VALUE_0"] = "false"
         process.environment = env
-        let out = Pipe()
-        process.standardOutput = out
+
+        let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("next-term-out-\(UUID().uuidString)")
+        guard FileManager.default.createFile(atPath: outputURL.path, contents: nil, attributes: [.posixPermissions: 0o600]),
+              let output = try? FileHandle(forWritingTo: outputURL) else { return nil }
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+        process.standardOutput = output
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
         let exited = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in exited.signal() }
-        do { try process.run() } catch { return nil }
-
-        // Read on the side (large output would otherwise fill the pipe and stall git), and wait for the
-        // exit with a deadline instead of for the end of the pipe, which another process could hold open.
-        let output = OutputBox()
-        let readDone = DispatchSemaphore(value: 0)
-        let reader = out.fileHandleForReading
-        DispatchQueue.global().async {
-            output.data = reader.readDataToEndOfFile()
-            readDone.signal()
+        do {
+            try process.run()
+        } catch {
+            try? output.close()
+            return nil
         }
+        try? output.close() // the child has its own copy
         if exited.wait(timeout: .now() + timeout) == .timedOut {
             process.terminate()
             if exited.wait(timeout: .now() + 2) == .timedOut {
@@ -348,11 +352,7 @@ public enum GitRunner {
             }
             return nil
         }
-        guard readDone.wait(timeout: .now() + 5) == .success else { return nil }
-        return acceptedStatus.contains(process.terminationStatus) ? output.data : nil
-    }
-
-    private final class OutputBox: @unchecked Sendable {
-        var data = Data()
+        guard acceptedStatus.contains(process.terminationStatus) else { return nil }
+        return try? Data(contentsOf: outputURL)
     }
 }
