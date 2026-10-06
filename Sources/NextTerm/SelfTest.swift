@@ -720,6 +720,17 @@ enum SelfTest {
         check(await wait(5) { finder.shownPaths.first == "src/main.php" }, "with nothing typed, recently opened files come first",
               finder.shownPaths.prefix(3).joined(separator: ", "))
         finder.close()
+        // Selected text starts the search, as for Find.
+        c.openFile(proj.appendingPathComponent("docs/user-guide.md"))
+        if let editor = c.editorArea.activeEditor, editor.document.path.hasSuffix("user-guide.md") {
+            window.makeFirstResponder(editor.textView)
+            editor.textView.setSelectedRange(NSRange(location: 2, length: 5)) // "Users" in "# Users"
+            c.goToFile(nil)
+            check(finder.isVisible && finder.query == "Users", "⌘P with text selected starts from it", finder.query)
+            finder.close()
+            c.editorArea.close(editor)
+        }
+        finder.close()
         check(!finder.isVisible && window.childWindows?.isEmpty != false, "Esc closes it")
         if let editor = c.editorArea.activeEditor { c.editorArea.close(editor) }
     }

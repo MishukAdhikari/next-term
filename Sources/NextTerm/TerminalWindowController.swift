@@ -777,10 +777,27 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return finder
     }()
 
-    /// ⌘P: any file in the project, by a few letters of its name or path.
+    /// ⌘P: any file in the project, by a few letters of its name or path. Selected text (in the editor or
+    /// the terminal) starts the search, as it does for Find; `app/User.php:42` in a log opens at line 42.
     @objc func goToFile(_ sender: Any?) {
         guard let window else { return }
-        fileFinder.show(root: searchRoot, recent: recentFiles, over: window)
+        fileFinder.show(root: searchRoot, recent: recentFiles, query: selectionSeed, over: window)
+    }
+
+    /// The selected text, if it is one short line: in the editor when it has the keyboard, else the terminal's.
+    var selectionSeed: String? {
+        var text: String?
+        if isEditorFocused, let view = editorArea.activeEditor?.textView {
+            let range = view.selectedRange()
+            if range.length > 0, NSMaxRange(range) <= (view.string as NSString).length {
+                text = (view.string as NSString).substring(with: range)
+            }
+        } else {
+            text = activeTab?.view.getSelection()
+        }
+        guard let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty,
+              !trimmed.contains("\n"), trimmed.count <= 200 else { return nil }
+        return trimmed
     }
 
     var isEditorFocused: Bool {

@@ -48,16 +48,18 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     // MARK: showing
 
-    func show(root: String, recent: [String], over parent: NSWindow) {
+    /// `query`: text to start with (the selection); it is selected, so typing replaces it.
+    func show(root: String, recent: [String], query: String? = nil, over parent: NSWindow) {
         self.root = canonicalPath(root)
         self.recent = recent
-        field.stringValue = ""
+        field.stringValue = query ?? ""
         last = nil
         catalog = Self.catalogs[self.root]
         position(over: parent)
         if panel.parent == nil { parent.addChildWindow(panel, ordered: .above) }
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(field)
+        field.currentEditor()?.selectAll(nil)
         refreshRows()
         reloadCatalog()
     }
