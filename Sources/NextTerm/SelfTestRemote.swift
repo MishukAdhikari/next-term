@@ -70,16 +70,18 @@ extension SelfTest {
         if let tmux { try? FileManager.default.createSymbolicLink(atPath: bin.appendingPathComponent("tmux").path, withDestinationPath: tmux) }
 
         // Flags in the test folder: "deny" makes ssh refuse the login (a wrong password), "unreachable"
-        // fails the network, "drop" ends the connection (255) once the remote command ends.
+        // fails the network, "drop" ends a tab's connection (255) once its remote command ends. Only a
+        // tab's ssh (-t) takes "drop": a status check (-T) running at that moment must not use it up.
         let fakeSSH = bin.appendingPathComponent("ssh")
         let script = """
             #!/bin/bash
             # Stand-in for ssh: runs the remote command here, through a login shell's -c, like sshd.
-            op=""; cmd=""
+            op=""; cmd=""; tty=""
             while [ $# -gt 0 ]; do
               case "$1" in
                 -o|-p|-F) shift 2;;
                 -O) op=$2; shift 2;;
+                -t) tty=1; shift;;
                 --) cmd=$3; shift $#;;
                 *) shift;;
               esac
@@ -93,7 +95,7 @@ extension SelfTest {
             cd "$HOME"
             /bin/zsh -f -c "$cmd"
             status=$?
-            if [ -e "$B/drop" ]; then rm -f "$B/drop"; exit 255; fi
+            if [ -n "$tty" ] && [ -e "$B/drop" ]; then rm -f "$B/drop"; exit 255; fi
             exit $status
             """
         try? script.write(to: fakeSSH, atomically: true, encoding: .utf8)
@@ -277,11 +279,17 @@ extension SelfTest {
         check(await wait(8) { kept.screenTail(20).contains { $0.contains("kept-\(getpid())") } }, "remote tmux: typed commands run in the session")
         check(sh("tmux -L nextterm list-sessions -F '#{session_name}'").contains(session), "remote tmux: the session is on the host's private tmux server")
         await pause(10.5) // a connection that worked for a while reconnects by itself when it drops
-        let client = sh("tmux -L nextterm list-clients -t \(RemoteShell.quote(session)) -F '#{client_pid}'").trimmingCharacters(in: .whitespacesAndNewlines)
+        var clientPID: Int32?
+        _ = await wait(10) {
+            let listed = sh("tmux -L nextterm list-clients -t \(RemoteShell.quote(session)) -F '#{client_pid}'")
+            clientPID = Int32(listed.split(separator: "\n").first?.trimmingCharacters(in: .whitespaces) ?? "")
+            return clientPID != nil
+        }
+        check(clientPID != nil, "remote tmux: the tab is a client of its tmux session", "tmux list-clients found none for \(session)")
         master.stop()
         flag("drop", true)
-        if let clientPID = Int32(client.split(separator: "\n").first ?? "") { kill(clientPID, SIGKILL) }
-        check(await wait(10) { kept.disconnected }, "remote tmux: the dropped connection is seen")
+        if let clientPID { kill(clientPID, SIGKILL) }
+        check(await wait(10) { kept.disconnected }, "remote tmux: the dropped connection is seen", kept.screenTail(4).joined(separator: " | "))
         check(sh("tmux -L nextterm list-sessions -F '#{session_name}'").contains(session), "remote tmux: the session keeps running without a client")
         master.start()
         check(await wait(20) { !kept.disconnected && kept.remoteReady }, "remote tmux: the tab reconnects by itself")
