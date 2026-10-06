@@ -170,12 +170,16 @@ public enum MCPRegistrar {
               let existing = servers.member(serverName) else { return .removed }
         guard isOurs(command: command(of: existing.value.object(in: text))) else { return .nameTaken }
         if strict && document.hasComments { return .skipped("comments in a file that must be plain JSON") }
-        let updated = document.removing(existing, from: servers)
-        guard let check = JSONC(updated), case .object(let newRoot)? = check.root,
-              let newContainer = newRoot.member(target.container), case .object(let newServers) = newContainer.value,
-              newServers.member(serverName) == nil, newServers.members.count == servers.members.count - 1,
-              newRoot.members.count == root.members.count else {
-            return .skipped("check failed")
+        // Ours alone in its container (which registering added): the container goes too.
+        let alone = servers.members.count == 1 && JSONC(String(document.text[servers.open..<servers.close]))?.hasComments == false
+        let updated = alone ? document.removing(container, from: root) : document.removing(existing, from: servers)
+        guard let check = JSONC(updated), case .object(let newRoot)? = check.root else { return .skipped("check failed") }
+        if alone {
+            guard newRoot.member(target.container) == nil, newRoot.members.count == root.members.count - 1 else { return .skipped("check failed") }
+        } else {
+            guard let newContainer = newRoot.member(target.container), case .object(let newServers) = newContainer.value,
+                  newServers.member(serverName) == nil, newServers.members.count == servers.members.count - 1,
+                  newRoot.members.count == root.members.count else { return .skipped("check failed") }
         }
         return writeRaw(updated, to: target.file) ? .removed : .skipped("write")
     }

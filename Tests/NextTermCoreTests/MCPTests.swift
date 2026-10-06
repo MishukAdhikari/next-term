@@ -154,7 +154,7 @@ import Testing
             #expect(entry.map { NSDictionary(dictionary: $0).isEqual(to: target.entry(command)) } == true, "\(target.id)")
             #expect(MCPRegistrar.register(target, command: command, programInstalled: true) == .alreadyRegistered, "\(target.id)")
             #expect(MCPRegistrar.unregister(target) == .removed, "\(target.id)")
-            #expect(((json(target.file)?[target.container] as? [String: Any]) ?? [:]).isEmpty, "\(target.id)")
+            #expect(json(target.file)?[target.container] == nil, "\(target.id)")
         }
         // opencode's command is one array; Qwen's file is versioned.
         let opencode = try target("opencode", home: home)
@@ -197,8 +197,7 @@ import Testing
         #expect(after.hasSuffix("\"theme\": \"GitHub\",\n  \"ide\": {\"enabled\": true}\n}\n"))
         #expect(json(gemini.file)?["theme"] as? String == "GitHub")
         #expect(MCPRegistrar.unregister(gemini) == .removed)
-        #expect(((json(gemini.file)?["mcpServers"] as? [String: Any]) ?? ["x": 1]).isEmpty)
-        #expect(json(gemini.file)?["theme"] as? String == "GitHub")
+        #expect(try read(gemini.file) == original) // the container it added goes too
         // An empty file object.
         try write("{}", gemini.file)
         #expect(MCPRegistrar.register(gemini, command: command, programInstalled: true) == .registered)
