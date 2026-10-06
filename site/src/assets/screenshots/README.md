@@ -7,7 +7,7 @@ Because they come from the self-test, they show **test data**: a throwaway proje
 | File | Used on | Source and crop | Retake? |
 |---|---|---|---|
 | `proposal-window.webp` | Home (hero), Agents | `st-proposal.png`, top 975 px (stops above a long temporary `PATH=` command line) | **Yes.** The sidebar shows the temporary path `/private/var/folders/…`; the code is a three-line test file. Retake with a real project and a realistic Claude edit. |
-| `claude-selection.webp` | Home, Agents | `st-real-claude.png`, right of the sidebar (the sidebar listed private folders in `~/Code`) | **Yes.** The terminal shows Claude Code’s banner with the account’s model and plan (“Opus 5.5 … Claude Max”) and `~/Code`. Retake in a demo project. |
+| `claude-selection.webp` | Home, Agents | `st-real-claude.png`, right of the sidebar (the sidebar listed private folders in `~/Code`) | **Yes.** The account’s model and plan line and the folder in Claude Code’s banner are painted over with the terminal background; retake in a demo project. |
 | `diff.webp` | Home, Diffs | `st-diff.png`, diff area only | **Yes.** The file is `line 1` … `line 14` test text. Retake with a real change in real code. |
 | `editor.webp` | Editor | `st-editor.png`, editor area only | **Yes.** A generated `long.ts` with repeated lines. Retake with code that shows the highlighting. |
 | `find-in-files.webp` | Find and Replace in Files | `st-find.png`, whole window | Optional. Clean, but the project is the test `proj`. |
