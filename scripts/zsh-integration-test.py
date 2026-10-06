@@ -20,7 +20,9 @@ def check(cond, msg):
 def run_session(label, user_zdotdir, steps):
     zdot = tempfile.mkdtemp()
     open(os.path.join(zdot, ".zshenv"), "w").write(script)
-    env = dict(os.environ, TERM="xterm-256color", ZDOTDIR=zdot, NEXTTERM_NONCE=NONCE,
+    # The same variables Next Term sets for every shell (TerminalTab.environment).
+    env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor", TERM_PROGRAM="NextTerm",
+               LANG=os.environ.get("LANG") or "en_US.UTF-8", ZDOTDIR=zdot, NEXTTERM_NONCE=NONCE,
                NEXTTERM_USER_ZDOTDIR=user_zdotdir)
     pid, fd = pty.fork()
     if pid == 0:
@@ -52,10 +54,15 @@ def run_session(label, user_zdotdir, steps):
             val = base64.b64decode(val).decode()
         events.append((nonce, kind, val))
     print(f"[{label}] events:", [(k, v) for _, k, v in events])
-    return events, text, zdot
+    # Error lines that point at our script or our functions (not at /etc/zshrc and friends).
+    ours = [l for l in re.sub(r"\x1b\][^\x07]*\x07", "", text).splitlines()
+            if (zdot in l or "__nextterm" in l) and ("not set" in l or "error" in l.lower() or "not found" in l)]
+    for l in ours:
+        print("  hook error:", l.strip()[:200])
+    return events, text, zdot, ours
 
 # 1. The user's own config.
-events, text, zdot = run_session("user config", os.environ.get("ZDOTDIR", ""), [
+events, text, zdot, errors = run_session("user config", os.environ.get("ZDOTDIR", ""), [
     ("sleep 0.3; false\r", 1.5),
     ("cd /tmp\r", 1),
     ('echo "ZD=${ZDOTDIR:-unset} HOOK=$__nextterm_hooked NONCE_ENV=$(env | grep -c NEXTTERM_NONCE)"\r', 1.5),
@@ -70,7 +77,8 @@ i = ev.index(("cmd", "sleep 0.3; false")) if ("cmd", "sleep 0.3; false") in ev e
 check(i >= 0 and ("end", "1") in ev[i:], "precmd reports exit status 1 after it")
 check(("cwd", "/tmp") in ev, "precmd reports the new directory")
 check("HOOK=1" in text and "NONCE_ENV=0" in text, "hooks active, nonce not in the environment of child processes")
-check("ZD=" in text and zdot not in text, "user ZDOTDIR restored (ours never leaks into the session)")
+check("ZD=" in text and zdot not in text.replace(f"{zdot}/.zshenv:", ""), "user ZDOTDIR restored (ours never leaks into the session)")
+check(not errors, "no errors from the hooks with the user's config")
 check(ev.count(("cmd", "cd /tmp")) == 1, "each command reported once")
 check(ev.count(("cmd", "sleep 3")) == 2 and ("cmd", "fg") not in ev, "`fg` reports the resumed job, not \"fg\"")
 
@@ -78,14 +86,14 @@ check(ev.count(("cmd", "sleep 3")) == 2 and ("cmd", "fg") not in ev, "`fg` repor
 hostile = tempfile.mkdtemp()
 open(os.path.join(hostile, ".zshenv"), "w").write("setopt nounset ksh_arrays\n")
 open(os.path.join(hostile, ".zshrc"), "w").write("setopt nounset ksh_arrays err_return\nPS1='$ '\n")
-events, text, _ = run_session("nounset + ksh_arrays", hostile, [
+events, text, _, errors = run_session("nounset + ksh_arrays", hostile, [
     ("false\r", 1),
     ("sleep 2\r", 0.6),
     ("\x1a", 0.8),
     ("%1\r", 2.5),
 ])
 ev = [(k, v) for _, k, v in events]
-check("parameter not set" not in text and "__nextterm" not in text.replace("\x1b", ""), "no errors from the hooks")
+check(not errors, "no errors from the hooks under nounset + ksh_arrays")
 check(("cmd", "false") in ev and ("end", "1") in ev, "marks still work under nounset + ksh_arrays")
 check(ev.count(("cmd", "sleep 2")) == 2, "`%1` reports the resumed job under ksh_arrays")
 
