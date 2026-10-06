@@ -664,6 +664,8 @@ enum SelfTest {
         check(doc.text.hasPrefix("mine "), "and keeps the edits meanwhile")
         doc.reload()
         check(doc.text.hasSuffix("// agent again\n") && !doc.isDirty && doc.conflict == nil, "Reload from Disk takes the new version")
+        let reloadedStyle = doc.storage.attribute(.paragraphStyle, at: max(0, doc.storage.length - 3), effectiveRange: nil) as? NSParagraphStyle
+        check((reloadedStyle?.minimumLineHeight ?? 0) > 0, "reloaded lines keep the editor's line height and indent styling")
 
         // ⌘-click on "…/app.php:4:10" in the terminal opens it there ("function greet": line 4 after the save).
         view.setSelectedRange(NSRange(location: 0, length: 0))
@@ -765,6 +767,14 @@ enum SelfTest {
             let wrapped = rows()
             check(wrapped > 1 && wideEditor.textView.frame.width <= wideEditor.scrollView.contentSize.width + 1,
                   "soft wrap: a long line wraps at the edge", "\(wrapped) rows")
+            if let layout = wideEditor.textView.layoutManager, layout.numberOfGlyphs > 0 {
+                let firstRow = layout.lineFragmentUsedRect(forGlyphAt: 0, effectiveRange: nil)
+                var range = NSRange()
+                layout.lineFragmentRect(forGlyphAt: 0, effectiveRange: &range)
+                let secondRow = layout.lineFragmentUsedRect(forGlyphAt: NSMaxRange(range), effectiveRange: nil)
+                check(secondRow.minX > firstRow.minX + 4, "a wrapped line continues indented, not at the margin",
+                      "first \(firstRow.minX), second \(secondRow.minX)")
+            }
             app.softWrap = false
             area.applyWrap()
             check(rows() == 1 && wideEditor.textView.frame.width > wideEditor.scrollView.contentSize.width,

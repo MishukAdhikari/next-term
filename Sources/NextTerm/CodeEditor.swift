@@ -341,6 +341,7 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         textView.delegate = self
         textView.setAccessibilityLabel(document.name)
         applyFont()
+        document.onTextReplaced = { [weak self] in self?.restyleReplacedLines() }
 
         scrollView.verticalRulerView = ruler
         scrollView.hasVerticalRuler = true
@@ -408,8 +409,12 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         style.maximumLineHeight = spacing.lineHeight
         textView.defaultParagraphStyle = style
         textView.typingAttributes[.paragraphStyle] = style
+        baseStyle = style
+        indentStyles = [:]
+        spaceWidth = space
         document.storage.beginEditing()
         document.storage.addAttributes([.font: font, .paragraphStyle: style], range: NSRange(location: 0, length: document.storage.length))
+        if document.lines.count > 0 { applyWrapIndents(0...(document.lines.count - 1)) }
         document.storage.endEditing()
         textView.layoutManager?.invalidateLayout(forCharacterRange: NSRange(location: 0, length: document.storage.length), actualCharacterRange: nil)
         ruler.updateThickness()
@@ -417,11 +422,55 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         textView.needsDisplay = true
     }
 
+    // MARK: wrap indent
+
+    private var baseStyle = NSParagraphStyle()
+    private var spaceWidth: CGFloat = 7
+    private var indentStyles: [Int: NSParagraphStyle] = [:]
+
+    /// A wrapped line continues under its own indentation plus two columns, so a long line still reads
+    /// as one statement at its level instead of spilling back to the margin.
+    private func applyWrapIndents(_ lineRange: ClosedRange<Int>) {
+        let text = document.storage.string as NSString
+        let index = document.lines
+        let tabColumns = 4
+        for line in lineRange where line < index.count {
+            let range = index.range(ofLine: line)
+            guard range.length > 0 else { continue }
+            var columns = 0, i = range.location
+            while i < NSMaxRange(range) {
+                let c = text.character(at: i)
+                if c == 0x20 { columns += 1 } else if c == 0x09 { columns += tabColumns - columns % tabColumns } else { break }
+                i += 1
+            }
+            let hang = min(columns + 2, 40) // never so deep that a wrapped row has no room
+            let style = indentStyles[hang] ?? {
+                let made = (baseStyle.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+                made.headIndent = CGFloat(hang) * spaceWidth
+                indentStyles[hang] = made
+                return made
+            }()
+            document.storage.addAttribute(.paragraphStyle, value: style, range: range)
+        }
+    }
+
+    private func restyleReplacedLines() {
+        guard let lines = document.takePendingIndentLines() else { return }
+        document.storage.beginEditing()
+        applyWrapIndents(lines)
+        document.storage.endEditing()
+    }
+
     // MARK: NSTextViewDelegate
 
     func undoManager(for view: NSTextView) -> UndoManager? { document.undoManager }
 
     func textDidChange(_ notification: Notification) {
+        if let lines = document.takePendingIndentLines() {
+            document.storage.beginEditing()
+            applyWrapIndents(lines)
+            document.storage.endEditing()
+        }
         // Colour the edited line now, before it is drawn; longer runs continue on later turns.
         document.highlighter?.run()
         ruler.updateThickness()

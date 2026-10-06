@@ -26,6 +26,8 @@ final class EditorDocument: NSObject, NSTextStorageDelegate {
     /// The file on disk changed (or went away) while there were unsaved edits: the user decides.
     var conflict: Conflict?
     var onChange: ((EditorDocument) -> Void)?
+    /// Text was replaced from disk (not typed): the editor restyles those lines.
+    var onTextReplaced: (() -> Void)?
 
     enum Conflict: Equatable { case changedOnDisk, deletedOnDisk }
 
@@ -114,10 +116,23 @@ final class EditorDocument: NSObject, NSTextStorageDelegate {
         lines.replace(oldRange, with: (textStorage.string as NSString).substring(with: editedRange))
         let newLast = lines.line(at: editedRange.location + editedRange.length)
         highlighter?.textEdited(oldLineRange: oldFirst...oldLast, newLineCount: lines.count, firstLine: oldFirst, lastLineNow: newLast)
+        let edited = oldFirst...max(oldFirst, newLast)
+        indentPending = indentPending.map { min($0.lowerBound, edited.lowerBound)...max($0.upperBound, edited.upperBound) } ?? edited
         if !isDirty, !isLoading {
             isDirty = true
             onChange?(self)
         }
+    }
+
+    /// Lines whose wrap indent needs setting again (they were edited).
+    private var indentPending: ClosedRange<Int>?
+
+    func takePendingIndentLines() -> ClosedRange<Int>? {
+        defer { indentPending = nil }
+        guard let pending = indentPending else { return nil }
+        let last = lines.count - 1
+        guard pending.lowerBound <= last else { return nil }
+        return pending.lowerBound...min(pending.upperBound, last)
     }
 
     /// Text being replaced from disk, which is not an edit.
@@ -152,6 +167,7 @@ final class EditorDocument: NSObject, NSTextStorageDelegate {
         defer { isLoading = false }
         self.format = format
         replaceChanged(with: text)
+        onTextReplaced?()
         undoManager.removeAllActions()
         stamp = FileStamp(path: url.path)
         savedHash = text.hashValue
