@@ -18,9 +18,18 @@ enum ImportSources {
         planner(app, usesUSKeyboard) ?? ImportPlan(preset: app.preset)
     }
 
-    /// Filled in by the importers (see registerImporters()).
-    nonisolated(unsafe) static var detectors: [() -> [DetectedApp]] = []
-    nonisolated(unsafe) static var planner: (DetectedApp, Bool) -> ImportPlan? = { _, _ in nil }
+    /// Each family's reader (NextTermCore/Import*.swift). The self-test can swap these for its own.
+    nonisolated(unsafe) static var detectors: [() -> [DetectedApp]] = [
+        { ImportVSCode.detect() }, { ImportJetBrains.detect() }, { ImportZed.detect() }, { ImportITerm2.detect() },
+    ]
+    nonisolated(unsafe) static var planner: (DetectedApp, Bool) -> ImportPlan? = { app, usKeyboard in
+        switch app.kind {
+        case .vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop: return ImportVSCode.plan(for: app, usKeyboard: usKeyboard)
+        case .jetBrains: return ImportJetBrains.plan(for: app, usKeyboard: usKeyboard)
+        case .zed: return ImportZed.plan(for: app, usKeyboard: usKeyboard)
+        case .iTerm2: return ImportITerm2.plan(for: app, usKeyboard: usKeyboard)
+        }
+    }
 
     /// Option as Meta is offered ticked only on U.S.-style layouts: elsewhere Option types @ [ ] { }.
     static var usesUSKeyboard: Bool {
