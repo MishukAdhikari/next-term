@@ -28,7 +28,9 @@ public struct ContextItem: Equatable, Sendable {
 public enum AgentDialect: String, Sendable {
     /// Claude Code: `@src/a.ts#L42-58 ` (and opencode). Contents are attached by the agent.
     case atHash
-    /// `@src/a.ts` with the lines in prose (Copilot CLI: line syntax unknown).
+    /// `@src/a.ts` with the lines in prose: Copilot CLI (line syntax unknown), and Gemini / Qwen Code,
+    /// which read the whole file for `@path` and drop any line suffix before the model sees it.
+    /// Folders stay plain paths: `@folder` reads everything in it, recursively.
     case atProse
     /// Everyone else, and unknown agents: `src/a.ts:42-58`. Every model reads it; no agent turns it into
     /// a mode switch or an inlined file.
@@ -37,7 +39,7 @@ public enum AgentDialect: String, Sendable {
     public static func forProgram(_ name: String) -> AgentDialect {
         switch name {
         case "claude", "claude-code", "claude.exe", "opencode": return .atHash
-        case "copilot": return .atProse
+        case "copilot", "gemini", "gemini-cli", "qwen", "qwen-code": return .atProse
         default: return .plain
         }
     }
@@ -68,8 +70,12 @@ public enum AgentPrompt {
                     : (lines.count == 1 ? "#L\(lines.lowerBound)" : "#L\(lines.lowerBound)-\(lines.upperBound)")
             }
         case .atProse:
-            ref = "@" + quoted
-            if let lines = item.lines { ref += " (lines \(lines.lowerBound)-\(lines.upperBound))" }
+            if item.isFolder {
+                ref = item.path + (item.path.hasSuffix("/") ? "" : "/") + " (folder)"
+            } else {
+                ref = "@" + quoted
+                if let lines = item.lines { ref += lines.count == 1 ? " (line \(lines.lowerBound))" : " (lines \(lines.lowerBound)-\(lines.upperBound))" }
+            }
         case .plain:
             ref = item.path + (item.isFolder && !item.path.hasSuffix("/") ? "/" : "")
             if let lines = item.lines { ref += lines.count == 1 ? ":\(lines.lowerBound)" : ":\(lines.lowerBound)-\(lines.upperBound)" }
@@ -132,8 +138,9 @@ public enum AgentPrompt {
 
     /// Removes everything that could act instead of being read: C0 controls except tab and newline, ESC,
     /// DEL, C1 controls (so a payload can never end the bracketed paste and type commands), bidi
-    /// overrides, tag characters and zero-width spaces (invisible text, and Claude drops an Enter after
-    /// them). CRLF becomes LF. Zero-width joiners stay (emoji).
+    /// overrides, tag characters, zero-width spaces and every other format, private-use or unassigned
+    /// character (invisible text, and Claude drops an Enter after them). CRLF becomes LF. Zero-width
+    /// joiners stay (emoji).
     public static func sanitize(_ text: String) -> String {
         let normalized = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
         return String(String.UnicodeScalarView(normalized.unicodeScalars.filter { scalar in
@@ -143,7 +150,13 @@ public enum AgentPrompt {
             if (0x202A...0x202E).contains(v) || (0x2066...0x2069).contains(v) || v == 0x200E || v == 0x200F { return false }
             if (0xE0000...0xE007F).contains(v) { return false }
             if v == 0x200B || v == 0xFEFF || v == 0x2060 { return false }
-            return true
+            // Every other invisible formatting character, private-use and unassigned code point; the
+            // zero-width joiner stays, because emoji are built with it.
+            switch scalar.properties.generalCategory {
+            case .format: return v == 0x200D
+            case .privateUse, .unassigned: return false
+            default: return true
+            }
         }))
     }
 }

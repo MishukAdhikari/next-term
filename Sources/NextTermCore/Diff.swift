@@ -31,6 +31,9 @@ public struct FileDiff: Equatable, Sendable {
     public var newPath: String?
     public var isBinary = false
     public var hunks: [DiffHunk] = []
+    /// Full blob ids from the "index <old>..<new>" header line (with --full-index); all zeros for "none".
+    public var oldBlob: String?
+    public var newBlob: String?
     /// The header lines ("diff --git …", "index …", "--- a/…", "+++ b/…"), kept to rebuild patches.
     public var header: [String] = []
 
@@ -97,6 +100,10 @@ public enum UnifiedDiff {
                 else if line.hasPrefix("rename from ") { current?.oldPath = String(line.dropFirst("rename from ".count)) }
                 else if line.hasPrefix("rename to ") { current?.newPath = String(line.dropFirst("rename to ".count)) }
                 else if line.hasPrefix("Binary files ") || line == "GIT binary patch" { current?.isBinary = true }
+                else if line.hasPrefix("index "), let ids = line.dropFirst(6).split(separator: " ").first {
+                    let pair = ids.components(separatedBy: "..")
+                    if pair.count == 2 { current?.oldBlob = pair[0]; current?.newBlob = pair[1] }
+                }
                 if !line.isEmpty { current?.header.append(line) }
                 continue
             }

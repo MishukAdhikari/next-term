@@ -184,3 +184,67 @@ import Testing
         #expect(UnifiedDiff.patch(for: file.hunks[0], in: file).contains("-echo two\r\n+echo 2\r\n"))
     }
 }
+
+@Suite struct HunkOpsTests {
+    func repo() throws -> (URL, String)? {
+        guard let git = GitRunner.locateGit() else { return nil }
+        let root = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path)).appendingPathComponent("nt-hunk-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        for args in [["init", "-q"]] { run(git, root, args) }
+        try (1...20).map { "line \($0)" }.joined(separator: "\n").appending("\n").write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        run(git, root, ["add", "-A"])
+        run(git, root, ["-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", "one"])
+        return (root, git)
+    }
+    func run(_ git: String, _ root: URL, _ args: [String]) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: git)
+        p.arguments = ["-C", root.path] + args
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        try? p.run()
+        p.waitUntilExit()
+    }
+    func edit(_ root: URL, line: Int, to text: String) throws {
+        let url = root.appendingPathComponent("a.txt")
+        var lines = try String(contentsOf: url, encoding: .utf8).components(separatedBy: "\n")
+        lines[line - 1] = text
+        try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    @Test func stageUnstageRevertWithChecks() throws {
+        guard let (root, git) = try repo() else { return }
+        defer { try? FileManager.default.removeItem(at: root) }
+        try edit(root, line: 2, to: "two")
+        try edit(root, line: 18, to: "eighteen")
+        let unstaged = try #require(GitRunner.diff(of: "a.txt", in: root.path, git: git, base: .unstaged))
+        #expect(unstaged.oldBlob?.count == 40 && unstaged.newBlob?.count == 40)
+        #expect(HunkOps.perform(.stage, hunk: unstaged.hunks[0], in: unstaged, root: root.path, git: git) == .done)
+        // The same diff is now stale for staging: the index moved on.
+        #expect(HunkOps.perform(.stage, hunk: unstaged.hunks[1], in: unstaged, root: root.path, git: git) == .changedSinceDiff)
+        let staged = try #require(GitRunner.diff(of: "a.txt", in: root.path, git: git, base: .staged))
+        #expect(staged.hunks.count == 1)
+        #expect(HunkOps.perform(.unstage, hunk: staged.hunks[0], in: staged, root: root.path, git: git) == .done)
+        #expect(GitRunner.diff(of: "a.txt", in: root.path, git: git, base: .staged)?.hunks.isEmpty ?? true)
+        // Revert one hunk in the working tree; a later edit makes the old diff stale.
+        let fresh = try #require(GitRunner.diff(of: "a.txt", in: root.path, git: git, base: .unstaged))
+        try edit(root, line: 10, to: "ten (an agent edited this meanwhile)")
+        #expect(HunkOps.perform(.revert, hunk: fresh.hunks[0], in: fresh, root: root.path, git: git) == .changedSinceDiff)
+        let current = try #require(GitRunner.diff(of: "a.txt", in: root.path, git: git, base: .unstaged))
+        #expect(HunkOps.perform(.revert, hunk: current.hunks[0], in: current, root: root.path, git: git) == .done)
+        let text = try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8)
+        #expect(text.contains("line 2\n") && text.contains("ten (an agent") && text.contains("eighteen"))
+    }
+
+    @Test func busyIndexIsReported() throws {
+        guard let (root, git) = try repo() else { return }
+        defer { try? FileManager.default.removeItem(at: root) }
+        try edit(root, line: 5, to: "five")
+        let diff = try #require(GitRunner.diff(of: "a.txt", in: root.path, git: git, base: .unstaged))
+        let lock = root.appendingPathComponent(".git/index.lock")
+        try Data().write(to: lock)
+        #expect(HunkOps.perform(.stage, hunk: diff.hunks[0], in: diff, root: root.path, git: git) == .gitBusy)
+        try FileManager.default.removeItem(at: lock)
+        #expect(HunkOps.perform(.stage, hunk: diff.hunks[0], in: diff, root: root.path, git: git) == .done)
+    }
+}

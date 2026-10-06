@@ -270,11 +270,12 @@ public enum GitRunner {
     public static func diff(of relativePath: String, in root: String, git: String, base: DiffBase = .head,
                             context: Int = 3, untracked: Bool = false) -> FileDiff? {
         // Plumbing (diff-index, diff-files) so reading a diff never rewrites .git/index; see snapshot().
-        let options = ["--no-color", "--no-ext-diff", "--no-textconv", "-M", "--histogram", "-p", "-U\(context)"]
+        let options = ["--no-color", "--no-ext-diff", "--no-textconv", "-M", "--histogram", "-p", "--full-index", "-U\(context)"]
         let prefix = ["-C", root, "--no-optional-locks", "-c", "core.quotepath=off", "-c", "diff.autoRefreshIndex=false"]
         let args: [String]
         if untracked {
-            args = prefix + ["diff", "--no-index"] + options + ["--", "/dev/null", relativePath]
+            // Porcelain here, so pin the a/ b/ prefixes: a user's diff.noprefix would otherwise change them.
+            args = prefix + ["diff", "--no-index", "--src-prefix=a/", "--dst-prefix=b/"] + options + ["--", "/dev/null", relativePath]
         } else {
             switch base {
             case .head: args = prefix + ["diff-index"] + options + ["HEAD", "--", relativePath]

@@ -8,6 +8,8 @@ import Testing
         #expect(AgentPrompt.reference(item, dialect: .atHash) == "@src/auth/login.ts#L42-58")
         #expect(AgentPrompt.reference(item, dialect: .plain) == "src/auth/login.ts:42-58")
         #expect(AgentPrompt.reference(item, dialect: .atProse) == "@src/auth/login.ts (lines 42-58)")
+        #expect(AgentPrompt.reference(ContextItem(path: "src/db", isFolder: true), dialect: .atProse) == "src/db/ (folder)")
+        #expect(AgentDialect.forProgram("gemini") == .atProse && AgentDialect.forProgram("qwen") == .atProse)
         #expect(AgentPrompt.reference(ContextItem(path: "a.ts", lines: 7...7), dialect: .atHash) == "@a.ts#L7")
         #expect(AgentPrompt.reference(ContextItem(path: "src/db", isFolder: true), dialect: .atHash) == "@src/db/")
         #expect(AgentPrompt.reference(ContextItem(path: "my dir/a.ts", lines: 1...2), dialect: .atHash) == "@\"my dir/a.ts\" (lines 1-2)")
@@ -50,7 +52,7 @@ import Testing
     }
 
     @Test func sanitizeRemovesEverythingThatCouldAct() {
-        let hostile = "ok\u{1b}[201~\u{15}touch SMUGGLED\r\nnext\u{202E}rev\u{200B}zw\u{E0041}tag\u{9B}c1 👨‍👩‍👧"
+        let hostile = "ok\u{1b}[201~\u{15}touch SMUGGLED\r\nnext\u{202E}rev\u{200B}zw\u{E0041}tag\u{9B}c1\u{00AD}\u{E000}\u{0378} 👨‍👩‍👧"
         let clean = AgentPrompt.sanitize(hostile)
         #expect(!clean.unicodeScalars.contains { $0.value == 0x1B || $0.value == 0x15 || $0.value == 0x0D })
         #expect(clean == "ok[201~touch SMUGGLED\nnextrevzwtagc1 👨‍👩‍👧") // ZWJ emoji kept
