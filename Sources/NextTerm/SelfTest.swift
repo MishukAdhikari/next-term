@@ -696,6 +696,33 @@ enum SelfTest {
         try? FileManager.default.removeItem(at: proj.appendingPathComponent("a-greet.md"))
         try? FileManager.default.removeItem(at: proj.appendingPathComponent("src/z.php"))
 
+        // Send to Agent: an "agent" (cat under the name claude, so the tty echoes what it is given) in a tab.
+        let fakeBin = proj.deletingLastPathComponent().appendingPathComponent("fake-agent-bin")
+        try? FileManager.default.createDirectory(at: fakeBin, withIntermediateDirectories: true)
+        try? FileManager.default.createSymbolicLink(at: fakeBin.appendingPathComponent("claude"), withDestinationURL: URL(fileURLWithPath: "/bin/cat"))
+        let agentTab = c.addTab(directory: proj.path)
+        _ = await wait(20) { agentTab.status.integrated }
+        agentTab.view.send(txt: "\u{15}PATH=\(fakeBin.path):$PATH claude\r")
+        _ = await wait(5) { agentTab.status.running && agentTab.status.kind == .agent }
+        check(c.agentTab === agentTab, "the agent tab is found", agentTab.status.program)
+        c.openFile(proj.appendingPathComponent("src/main.php"))
+        if let sendEditor = area.activeEditor {
+            let lines = sendEditor.document.lines
+            sendEditor.textView.setSelectedRange(NSRange(location: lines.starts[2], length: lines.starts[4] - lines.starts[2]))
+            c.sendEditorSelection()
+            check(await wait(4) { agentTab.screenTail(4).joined().contains("@src/main.php#L3-4") }, "Send to Agent types the selection's lines in Claude's syntax",
+                  agentTab.screenTail(3).joined(separator: " | "))
+            check(c.activeTab === agentTab && window.firstResponder === agentTab.view, "and the agent's tab takes the keyboard for the instruction")
+        }
+        c.sidebar(c.sidebar, sendToAgent: [(proj.appendingPathComponent("src"), true)])
+        check(await wait(4) { agentTab.screenTail(4).joined().contains("@src/") }, "a folder from the sidebar goes in as @src/")
+        check(c.agentText([ContextItem(path: "app/User.php", lines: 10...12)], for: "codex") == "app/User.php:10-12",
+              "Codex and other agents get path:lines")
+        agentTab.view.send(txt: "\u{03}")
+        _ = await wait(4) { !agentTab.status.running }
+        c.requestClose(agentTab)
+        try? FileManager.default.removeItem(at: fakeBin)
+
         // Soft wrap: a long line wraps at the edge (the default) or scrolls sideways when it is off.
         let wide = proj.appendingPathComponent("wide.md")
         try? (String(repeating: "lorem ipsum dolor sit amet ", count: 40) + "\nshort\n").write(to: wide, atomically: true, encoding: .utf8)

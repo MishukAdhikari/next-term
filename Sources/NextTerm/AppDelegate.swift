@@ -688,6 +688,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(find, "Find in Files…", #selector(TerminalWindowController.findInFiles(_:)), "f", [.command, .shift])
         item(find, "Replace in Files…", #selector(TerminalWindowController.replaceInFiles(_:)), "r", [.command, .shift])
         edit.addItem(.separator())
+        item(edit, "Send to Agent", #selector(TerminalWindowController.sendToAgent(_:)), "k", [.command, .option])
         item(edit, "Go to Line…", #selector(TerminalWindowController.goToLine(_:)), "l")
         item(edit, "Comment Line", #selector(CodeTextView.toggleComment(_:)), "/")
         item(edit, "Indent", #selector(CodeTextView.indentSelection(_:)), "]")

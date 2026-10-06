@@ -145,6 +145,20 @@ final class CodeTextView: NSTextView {
         return super.validateMenuItem(item)
     }
 
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        let send = NSMenuItem(title: selectedRange().length > 0 ? "Send Selection to Agent" : "Send File to Agent",
+                              action: #selector(sendSelectionToAgent(_:)), keyEquivalent: "")
+        send.target = self
+        menu.insertItem(send, at: 0)
+        menu.insertItem(.separator(), at: 1)
+        return menu
+    }
+
+    @objc func sendSelectionToAgent(_ sender: Any?) {
+        (window?.windowController as? TerminalWindowController)?.sendEditorSelection()
+    }
+
     /// Selects a line (1-based) and scrolls it to the middle of the view.
     func go(toLine line: Int, column: Int = 1) {
         guard let document else { return }

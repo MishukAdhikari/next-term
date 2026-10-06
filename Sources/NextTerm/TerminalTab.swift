@@ -441,6 +441,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     // MARK: environment
 
+    /// When this tab was last brought to the front (to find the agent you used most recently).
+    var lastSelected = Date.distantPast
+
     /// PATH as given to the shell (for the self-test).
     private(set) var environmentPath = ""
 

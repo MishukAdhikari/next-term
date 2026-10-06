@@ -13,6 +13,8 @@ protocol ProjectSidebarDelegate: AnyObject {
     func sidebar(_ sidebar: ProjectSidebarView, openFile url: URL)
     /// A file or folder was renamed or moved (open editors follow it).
     func sidebar(_ sidebar: ProjectSidebarView, didMove from: String, to: String)
+    /// Hand these files or folders to the agent in a tab.
+    func sidebar(_ sidebar: ProjectSidebarView, sendToAgent urls: [(url: URL, isFolder: Bool)])
 }
 
 /// Outline view with the keys a file tree needs: Return renames (as in Finder), ⌘⌫ moves to the Trash,
@@ -372,6 +374,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         if single && node !== root { add(menu, "Rename…", #selector(renameFromMenu)) }
         if !nodes.contains(where: { $0 === root }) { add(menu, "Move to Trash", #selector(trashFromMenu)) }
         menu.addItem(.separator())
+        add(menu, nodes.count == 1 ? "Send to Agent" : "Send \(nodes.count) Items to Agent", #selector(sendToAgentFromMenu))
         add(menu, "Insert Path in Terminal", #selector(insertPath))
         add(menu, "Copy Path", #selector(copyPath))
         add(menu, "Copy Relative Path", #selector(copyRelativePath))
@@ -385,6 +388,13 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         item.target = self
         return item
     }
+
+    @objc private func sendToAgentFromMenu() {
+        delegate?.sidebar(self, sendToAgent: menuNodes.map { ($0.url, $0.isDirectory) })
+    }
+
+    /// The selected files and folders (⌥⌘K with the sidebar focused).
+    var selection: [(url: URL, isFolder: Bool)] { selectedNodes.map { ($0.url, $0.isDirectory) } }
 
     @objc private func openNode() {
         if let node = menuNodes.first { delegate?.sidebar(self, openFile: node.url) }

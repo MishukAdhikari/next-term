@@ -159,6 +159,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     func select(_ index: Int) {
         guard tabs.indices.contains(index) else { return }
         activeIndex = index
+        tabs[index].lastSelected = Date()
         for (i, tab) in tabs.enumerated() { tab.view.isHidden = i != index }
         window?.makeFirstResponder(tabs[index].view)
         refreshVisibility()
@@ -387,6 +388,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil }
         if item.action == #selector(saveAllDocuments(_:)) { return !editorArea.dirtyDocuments.isEmpty }
         if item.action == #selector(goToLine(_:)) { return editorArea.activeEditor != nil }
+        if item.action == #selector(sendToAgent(_:)) { return agentTab != nil && (editorArea.activeEditor != nil || !sidebar.selection.isEmpty) }
         if item.action == #selector(toggleEditorFocus(_:)) {
             item.title = isEditorFocused ? "Focus Terminal" : "Focus Editor"
             return editorArea.activeEditor != nil
@@ -564,6 +566,86 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         updateInsets()
         updateTitle()
+    }
+
+    // MARK: send to agent
+
+    /// The tab whose agent gets what you send: the front tab if an agent runs there, else the agent tab
+    /// used most recently.
+    var agentTab: TerminalTab? {
+        if let tab = activeTab, tab.status.running, tab.status.kind == .agent { return tab }
+        return tabs.filter { $0.status.running && $0.status.kind == .agent }.max { $0.lastSelected < $1.lastSelected }
+    }
+
+    /// ⌥⌘K: the editor's selection (or its file), or the files and folders selected in the sidebar.
+    @objc func sendToAgent(_ sender: Any?) {
+        if isEditorFocused {
+            sendEditorSelection()
+        } else if let window, window.firstResponder === sidebar.outline, !sidebar.selection.isEmpty {
+            send(sidebar.selection.map { ContextItem(path: $0.url.path, isFolder: $0.isFolder) })
+        } else {
+            NSSound.beep()
+        }
+    }
+
+    /// The editor's selection as lines of its file (or the whole file when nothing is selected).
+    func sendEditorSelection() {
+        if let editor = editorArea.activeEditor {
+            let document = editor.document
+            let range = editor.textView.selectedRange()
+            var lines: ClosedRange<Int>?
+            if range.length > 0 {
+                let first = document.lines.line(at: range.location)
+                // A selection ending at the start of a line does not include that line.
+                let endOffset = max(range.location, NSMaxRange(range) - 1)
+                lines = (first + 1)...(document.lines.line(at: endOffset) + 1)
+            }
+            var item = ContextItem(path: document.path, lines: lines)
+            if document.isDirty {
+                item.note = "unsaved changes in the editor"
+                if range.length > 0 {
+                    let code = (document.text as NSString).substring(with: range)
+                    if !AgentPrompt.isTooLargeToInline(code) {
+                        item.code = code
+                        item.language = document.language ?? "text"
+                    }
+                }
+            }
+            send([item])
+        }
+    }
+
+    func sidebar(_ sidebar: ProjectSidebarView, sendToAgent urls: [(url: URL, isFolder: Bool)]) {
+        send(urls.map { ContextItem(path: $0.url.path, isFolder: $0.isFolder) })
+    }
+
+    /// Types references to `items` into the agent's prompt, in its own syntax, relative to its folder.
+    /// Never presses Enter: you add the instruction.
+    func send(_ items: [ContextItem]) {
+        guard let tab = agentTab, let window else {
+            let alert = NSAlert()
+            alert.messageText = "No agent is running in this window"
+            alert.informativeText = "Start one in a tab (claude, codex, gemini, junie…), then send again."
+            if let window { alert.beginSheetModal(for: window) } else { alert.runModal() }
+            return
+        }
+        let base = canonicalPath(tab.directory)
+        let relative = items.map { item -> ContextItem in
+            var item = item
+            let path = canonicalPath(item.path)
+            if path == base { item.path = "." } else if path.hasPrefix(base + "/") { item.path = String(path.dropFirst(base.count + 1)) }
+            return item
+        }
+        let dialect = AgentDialect.forProgram(tab.status.program)
+        let segments = AgentPrompt.segments(instruction: "", items: relative, dialect: dialect)
+        if let index = tabs.firstIndex(where: { $0 === tab }) { select(index) }
+        for segment in segments { tab.view.typeIn(segment) }
+        window.makeFirstResponder(tab.view)
+    }
+
+    /// For the self-test: what `send` would type into `tab`.
+    func agentText(_ items: [ContextItem], for program: String) -> String {
+        AgentPrompt.segments(instruction: "", items: items, dialect: AgentDialect.forProgram(program)).joined(separator: "\n")
     }
 
     @objc func saveDocument(_ sender: Any?) { editorArea.saveActive() }

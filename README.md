@@ -20,6 +20,10 @@ agents are working, which are done, and which are waiting on your decision.
   Go and templ, Rust, Elixir, YAML, SQL and more. Line numbers, soft wrap, auto-indent, ⌘/ to comment, ⌘L to go to a line, find, undo. Files keep
   their encoding, line endings and permissions. When an agent changes a file you have open, the editor
   follows; if you have unsaved edits it asks first.
+- **Send to Agent (⌥⌘K).** Select code in the editor, or files and folders in the sidebar, and send them to
+  the agent in your tab: Next Term types the reference in that agent's own syntax (`@app/User.php#L10-20` for
+  Claude, `app/User.php:10-20` for Codex and others) and hands you the prompt to add your instruction. It
+  never presses Enter for you.
 - **`nxtrm`, like `subl` or `code`.** `nxtrm .` opens the folder as a project, `nxtrm app/User.php:42` a
   file at a line. It works in every Next Term tab from the first launch; Next Term > Install Command Line
   Tool adds it to other terminals.
