@@ -829,6 +829,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(shell, "New Window", #selector(newWindow(_:)), "n", target: self)
         shell.addItem(.separator())
         item(shell, "Open Project…", #selector(openProjectPanel(_:)), "o", target: self)
+        item(shell, "Go to File…", #selector(TerminalWindowController.goToFile(_:)), "p")
         let recentMenu = NSMenu(title: "Open Recent")
         recentMenu.delegate = self
         shell.addItem(withTitle: "Open Recent", action: nil, keyEquivalent: "").submenu = recentMenu

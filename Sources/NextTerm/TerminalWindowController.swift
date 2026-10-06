@@ -724,7 +724,28 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
             return SafeOpen.open(url, from: window)
         }
-        if editorArea.open(url, line: line, column: column) != .opened { SafeOpen.open(url, from: window) }
+        if editorArea.open(url, line: line, column: column) != .opened { return SafeOpen.open(url, from: window) }
+        let path = canonicalPath(url.path)
+        recentFiles.removeAll { $0 == path }
+        recentFiles.insert(path, at: 0)
+        if recentFiles.count > 50 { recentFiles.removeLast() }
+    }
+
+    // MARK: go to file
+
+    /// Files opened in this window, newest first: what ⌘P lists before you type.
+    private(set) var recentFiles: [String] = []
+
+    private(set) lazy var fileFinder: GoToFileController = {
+        let finder = GoToFileController()
+        finder.onOpen = { [weak self] path, line, column in self?.openFile(URL(fileURLWithPath: path), line: line, column: column) }
+        return finder
+    }()
+
+    /// ⌘P: any file in the project, by a few letters of its name or path.
+    @objc func goToFile(_ sender: Any?) {
+        guard let window else { return }
+        fileFinder.show(root: searchRoot, recent: recentFiles, over: window)
     }
 
     var isEditorFocused: Bool {

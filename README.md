@@ -59,6 +59,10 @@ agents are working, which are done, and which are waiting on your decision.
   file is still what the diff showed, so a change an agent made meanwhile is never overwritten.
 - **File operations.** Rename (Return), drag to move (Option to copy), New File / New Folder, Move to Trash,
   all undoable with ⌘Z. Drag a file onto a terminal to type its path.
+- **Go to File (⌘P).** Type a few letters of a file's name or path and the list follows every keystroke:
+  `usrctl` finds `UserController.php`; a whole file name, the start of a word and runs of letters rank
+  first, and files you opened lately come first. `name:42` opens it at line 42. Instant on large
+  projects (git's file list, searched off the main thread).
 - **Find and Replace in Files** (⌘⇧F / ⌘⇧R) across the project, with regular expressions, file masks and
   a preview of every replacement; a file an agent changed since the search is never overwritten.
 - **Dock badge and notifications** for agents that finished while you were in another app.
@@ -118,6 +122,7 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | New tab (in the project, or the current tab's folder) | ⌘T |
 | New window | ⌘N |
 | Open project / Close project | ⌘O / Shell menu |
+| Go to File (`name` or `name:line`) | ⌘P |
 | Close tab (or the focused pane in a split tab) | ⌘W |
 | Split right / split down | ⌘D / ⌘⇧D |
 | Move between panes | ⌥⌘← ⌥⌘→ ⌥⌘↑ ⌥⌘↓, or ⌥⌘] / ⌥⌘[ in turn |
@@ -209,7 +214,7 @@ front end can reuse it.
 
 ## Roadmap
 
-Next: ⌘P to open any file by name, every agent's saved sessions for
+Next: every agent's saved sessions for
 a project on the Welcome screen (resume one in a click), remote development over SSH and Dev Containers,
 and a secure link so agents outside this Mac (ChatGPT, Claude) can use the MCP server. Later: notarized
 releases. A Linux build would need a different UI layer (AppKit is

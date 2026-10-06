@@ -24,7 +24,7 @@ terminal. This file is the map of what is built and what comes next; the README 
 | Terminal | Tabs (⌘T) and split panes (⌘D, ⌘⇧D, ⌥⌘arrows, ⌘⇧↩) with agent status in step with each agent's screen; decisions as notifications; dock badge; close and quit warnings; zsh integration; security (OSC 52, DECRQCRA, paste, links) |
 | Projects | Open/close/recent, last projects reopened at launch, first-run folder choice; sidebar with git status and +/− per file and folder; file operations with undo; open-source icons with framework icons |
 | Editor | 103 languages, incremental highlighting, line numbers, line height, soft wrap with hanging indent, auto-indent, ⌘/, ⌘L, find, encodings and line endings kept, files changed by agents reloaded |
-| Search | Find/Replace in Files (regex, masks, preview, undo), seeded from the selection, same type first |
+| Search | Go to File (⌘P, fuzzy, recent files first, `name:line`); Find/Replace in Files (regex, masks, preview, undo), seeded from the selection, same type first |
 | Diffs | Side by side (⌥⌘G), word highlights, all/unstaged/staged, stage/unstage/revert per hunk with blob checks, live refresh |
 | Agents | Send to Agent (⌥⌘K) in each agent's syntax; Claude Code IDE link (live selection, @-mentions, proposed edits as diffs to accept or reject); Gemini CLI and Qwen Code IDE link (open files, selection), IDE mode on by default |
 | MCP | `nxtrm mcp` for any agent: projects and tabs with agent state, new tabs and agents, prompts, keys, waiting, reading screens, the editor; registered in Claude Code, Codex, Gemini, Qwen, Cursor, opencode, Copilot, Amp, Junie and Command Code by default |
@@ -32,13 +32,12 @@ terminal. This file is the map of what is built and what comes next; the README 
 
 ## Next
 
-1. **Go to File (⌘P):** fuzzy file search across the project, instant on large repos.
-2. **Agent sessions per project** on the Welcome screen and in the sidebar (Claude, Codex, Command Code
+1. **Agent sessions per project** on the Welcome screen and in the sidebar (Claude, Codex, Command Code
    first): resume or fork in one click (research: claudedocs/research_next-term-agent-sessions).
-3. **Remote development** over the system ssh (one shared connection per host, SFTP for files, remote
+2. **Remote development** over the system ssh (one shared connection per host, SFTP for files, remote
    tabs with the shell integration), then Dev Containers (research: claudedocs/research_next-term-remote-dev).
-4. **Remote MCP link** for agents outside this Mac (ChatGPT, Claude), with an explicit security model.
-5. **More of the diff view:** fold long unchanged runs, stage selected lines, edit the proposed side
+3. **Remote MCP link** for agents outside this Mac (ChatGPT, Claude), with an explicit security model.
+4. **More of the diff view:** fold long unchanged runs, stage selected lines, edit the proposed side
    before accepting. Copilot CLI IDE link. Session restore, notarized releases.
 
 ## Verification

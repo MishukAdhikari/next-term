@@ -474,6 +474,7 @@ enum SelfTest {
         try? FileManager.default.removeItem(at: notes)
 
         await editorChecks(c, proj: proj, tab: inProject)
+        await goToFileChecks(c, proj: proj)
 
         // The tree remembers what was expanded when you switch to a tab in another folder and back.
         if let src = c.sidebar.root?.children?.first(where: { $0.name == "src" }) {
@@ -602,6 +603,47 @@ enum SelfTest {
         AppDelegate.shared.fontSize = size
 
         try? FileManager.default.removeItem(at: dir)
+    }
+
+    /// ⌘P: the project's files by a few letters; `name:line`; recently opened files first.
+    private static func goToFileChecks(_ c: TerminalWindowController, proj: URL) async {
+        guard let window = c.window else { return }
+        let items = (NSApp.mainMenu?.items ?? []).flatMap { $0.submenu?.items ?? [] }
+        let menu = items.first { $0.action == #selector(TerminalWindowController.goToFile(_:)) }
+        check(menu?.keyEquivalent == "p" && menu?.keyEquivalentModifierMask == .command, "Shell ▸ Go to File is ⌘P")
+        for (path, text) in [("src/Http/Controllers/UserController.php", "<?php\n"), ("src/Models/User.php", "<?php\n"),
+                             ("docs/user-guide.md", "# Users\n"), ("src/main.php", "<?php\necho 1;\necho 2;\necho 3;\n")] {
+            let url = proj.appendingPathComponent(path)
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if !FileManager.default.fileExists(atPath: url.path) { try? text.write(to: url, atomically: true, encoding: .utf8) }
+        }
+        let finder = c.fileFinder
+        finder.show(root: proj.path, recent: c.recentFiles, over: window)
+        check(finder.isVisible && window.childWindows?.isEmpty == false, "⌘P opens over the window")
+        check(await wait(10) { finder.footerText.contains("files") }, "it lists the project's files", finder.footerText)
+        finder.query = "usrctl"
+        check(await wait(5) { finder.shownPaths.first == "src/Http/Controllers/UserController.php" }, "“usrctl” finds UserController.php",
+              finder.shownPaths.prefix(3).joined(separator: ", "))
+        finder.query = "user"
+        check(await wait(5) { finder.shownPaths.first == "src/Models/User.php" }, "a whole file name beats a longer one",
+              finder.shownPaths.prefix(3).joined(separator: ", "))
+        await pause(0.3)
+        await screenshot(finder.panelWindow, suffix: "goto")
+        finder.query = "main.php:3"
+        check(await wait(5) { finder.shownPaths.first == "src/main.php" }, "“name:line” searches for the name")
+        finder.openFirst()
+        let opened = await wait(3) { c.editorArea.activeEditor?.document.path == canonicalPath(proj.appendingPathComponent("src/main.php").path) }
+        var caretLine = -1
+        if let editor = c.editorArea.activeEditor {
+            caretLine = editor.document.lines.line(at: editor.textView.selectedRange().location) + 1
+        }
+        check(opened && caretLine == 3 && !finder.isVisible, "and opens the file at that line", "line \(caretLine)")
+        finder.show(root: proj.path, recent: c.recentFiles, over: window)
+        check(await wait(5) { finder.shownPaths.first == "src/main.php" }, "with nothing typed, recently opened files come first",
+              finder.shownPaths.prefix(3).joined(separator: ", "))
+        finder.close()
+        check(!finder.isVisible && window.childWindows?.isEmpty != false, "Esc closes it")
+        if let editor = c.editorArea.activeEditor { c.editorArea.close(editor) }
     }
 
     /// Split panes: ⌘D and ⌘⇧D, moving between panes, zoom, closing one.
