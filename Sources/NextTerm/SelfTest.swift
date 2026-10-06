@@ -487,6 +487,7 @@ enum SelfTest {
         await deletedFileChecks(c, proj: proj)
         await updateChecks(c)
         await platformLinkChecks(c)
+        await ragColorChecks(c, proj: proj)
         await importChecks(c, proj: proj)
 
         // The tree remembers what was expanded when you switch to a tab in another folder and back.
@@ -833,6 +834,47 @@ enum SelfTest {
         run("rm", "-q", "-r", "src/gone.txt", "src/olddir")
         run("commit", "-qm", "deleted test done")
         _ = await wait(8) { row("gone.txt") == nil && row("olddir") == nil }
+    }
+
+    /// What a RAG project is made of reads at a glance: prompt placeholders in Python strings and Jinja
+    /// files, keys in pyproject.toml and .env, docstrings, decorators, and code inside README fences.
+    private static func ragColorChecks(_ c: TerminalWindowController, proj: URL) async {
+        let folder = proj.appendingPathComponent("rag")
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let files: [(name: String, text: String, checks: [(word: String, hex: String, what: String)])] = [
+            ("prompts.py", "PROMPT = \"\"\"Answer from {context} only.\"\"\"\n\n@tool\ndef search(q):\n    \"\"\"Search the docs.\"\"\"\n    return q\n",
+             [("{context}", "C77DBB", "a {placeholder} in a Python prompt string"), ("Search the docs", "5F826B", "a docstring"),
+              ("@tool", "B3AE60", "a decorator")]),
+            ("qa.j2", "Question: {{ question }}\n{% for d in docs %}{{ d }}{% endfor %}\n",
+             [("question }}", "C77DBB", "a Jinja prompt's variable"), ("{{ question", "CF8E6D", "and its {{ }}")]),
+            ("pyproject.toml", "[project]\nname = \"rag\"\n", [("name =", "C77DBB", "a pyproject.toml key")]),
+            (".env", "OPENAI_API_KEY=sk-test\n", [("OPENAI_API_KEY", "C77DBB", "a .env key")]),
+            ("README.md", "# RAG\n\n```python\nchain = prompt | llm\ndef run(): pass\n```\n",
+             [("chain =", "BCBEC4", "a name in a README's Python fence (not string green)"), ("def run", "CF8E6D", "and its keywords")]),
+        ]
+        for file in files {
+            let url = folder.appendingPathComponent(file.name)
+            try? file.text.write(to: url, atomically: true, encoding: .utf8)
+            c.openFile(url)
+            guard let editor = c.editorArea.activeEditor, editor.document.url.lastPathComponent == file.name else {
+                check(false, "\(file.name) opens"); continue
+            }
+            _ = await wait(5) { editor.document.highlighter?.pendingLines == 0 }
+            let text = editor.document.text as NSString
+            for (word, hex, what) in file.checks {
+                let r = text.range(of: word)
+                var found = "none"
+                if r.location != NSNotFound, let color = editor.textView.layoutManager?.temporaryAttribute(.foregroundColor, atCharacterIndex: r.location,
+                                                                                                           effectiveRange: nil) as? NSColor,
+                   let rgb = color.usingColorSpace(.sRGB) {
+                    found = String(format: "%02X%02X%02X", Int(round(rgb.redComponent * 255)), Int(round(rgb.greenComponent * 255)),
+                                   Int(round(rgb.blueComponent * 255)))
+                }
+                check(found == hex, "RAG files: \(what) has its own colour", "\(file.name): \(word) is \(found)")
+            }
+            c.editorArea.close(editor)
+        }
     }
 
     /// The links agent platforms print (LangGraph's dev server, LangSmith, Weave, MLflow) are found whole:
