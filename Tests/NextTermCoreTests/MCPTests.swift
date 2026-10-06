@@ -34,7 +34,14 @@ import Testing
         #expect(hints("new_tab")["destructiveHint"] as? Bool == true)
         #expect(hints("close_tab")["destructiveHint"] as? Bool == true)
         #expect(hints("open_in_editor")["destructiveHint"] as? Bool == false)
-        #expect(tools.allSatisfy { ($0["annotations"] as? [String: Any])?["openWorldHint"] as? Bool == false })
+        // Only the tools that reach a server over ssh go beyond this Mac; everything else stays local.
+        let remote: Set<String> = ["check_host", "new_remote_tab", "host_sessions", "host_changes"]
+        #expect(tools.allSatisfy { (($0["annotations"] as? [String: Any])?["openWorldHint"] as? Bool) == remote.contains($0["name"] as? String ?? "") })
+        // Saving hosts, opening remote tabs and running anything on a host: clients ask first.
+        for name in ["add_host", "remove_host", "check_host", "new_remote_tab", "host_sessions", "host_changes"] {
+            #expect(hints(name)["destructiveHint"] as? Bool == true)
+        }
+        #expect(hints("list_hosts")["readOnlyHint"] as? Bool == true)
         // Every schema is a JSON object schema (the raw strings parse).
         #expect(tools.allSatisfy { ($0["inputSchema"] as? [String: Any])?["type"] as? String == "object" })
         #expect(tools.allSatisfy { (($0["_meta"] as? [String: Any])?["anthropic/alwaysLoad"] as? Bool) == true })

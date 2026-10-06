@@ -21,15 +21,15 @@ enum SelfTest {
         }
     }
 
-    private static func check(_ ok: Bool, _ name: String, _ detail: @autoclosure () -> String = "") {
+    static func check(_ ok: Bool, _ name: String, _ detail: @autoclosure () -> String = "") {
         if !ok { failures += 1 }
         let d = detail()
         lines.append("\(ok ? "PASS" : "FAIL") \(name)\(ok || d.isEmpty ? "" : " — \(d)")")
     }
 
-    private static func note(_ text: String) { lines.append("NOTE \(text)") }
+    static func note(_ text: String) { lines.append("NOTE \(text)") }
 
-    private static func wait(_ seconds: Double = 10, _ condition: () -> Bool) async -> Bool {
+    static func wait(_ seconds: Double = 10, _ condition: () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {
             if condition() { return true }
@@ -38,7 +38,7 @@ enum SelfTest {
         return condition()
     }
 
-    private static func pause(_ seconds: Double) async {
+    static func pause(_ seconds: Double) async {
         try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
     }
 
@@ -1695,6 +1695,7 @@ enum SelfTest {
 
         await geminiLinkChecks(c)
         await mcpChecks(c, proj: proj)
+        await remoteChecks(c)
         if ProcessInfo.processInfo.environment["NEXTTERM_REAL_CLAUDE"] == "1" { await realClaudeCheck(c, proj: proj) }
 
         // Claude's proposed edits: shown as a diff to accept or reject; the file is never written by Next Term.

@@ -192,8 +192,8 @@ enum MCPControl {
     private static var app: AppDelegate { AppDelegate.shared }
     private static var allTabs: [TerminalTab] { app.controllers.flatMap(\.tabs) }
 
-    private static func fail(_ text: String) -> MCPServer.CallResult { MCPServer.CallResult(text: text, isError: true) }
-    private static func ok(_ value: Any) -> MCPServer.CallResult { MCPServer.CallResult(text: MCPServer.json(value)) }
+    static func fail(_ text: String) -> MCPServer.CallResult { MCPServer.CallResult(text: text, isError: true) }
+    static func ok(_ value: Any) -> MCPServer.CallResult { MCPServer.CallResult(text: MCPServer.json(value)) }
 
     static func call(_ tool: String, _ arguments: [String: Any], caller pid: pid_t?, reply: @escaping Reply) {
         let caller = pid.flatMap { ClaudeIDEServer.tab(for: $0, among: allTabs) }
@@ -214,6 +214,8 @@ enum MCPControl {
         case "show_tab": reply(withTab(arguments) { tab in showTab(tab) })
         case "close_tab": reply(closeTab(arguments, caller: caller))
         case "open_in_editor": reply(openInEditor(arguments))
+        case "list_hosts", "add_host", "remove_host", "check_host", "new_remote_tab", "host_sessions", "host_changes":
+            RemoteMCP.call(tool, arguments, caller: caller, reply: reply)
         default: reply(fail("Unknown tool \(tool)"))
         }
     }
@@ -225,7 +227,7 @@ enum MCPControl {
         return allTabs.first { $0.id.uuidString.lowercased() == id }
     }
 
-    private static func controller(of tab: TerminalTab) -> TerminalWindowController? {
+    static func controller(of tab: TerminalTab) -> TerminalWindowController? {
         app.controllers.first { $0.tabs.contains { $0 === tab } }
     }
 
@@ -237,12 +239,13 @@ enum MCPControl {
     /// What the tab is doing, in one word: the dot's state, or "running" for a plain command.
     private static func state(_ tab: TerminalTab) -> String {
         if tab.exited { return "exited" }
+        if tab.disconnected { return "disconnected" }
         let state = tab.status.state
         if state == .idle && tab.status.running && tab.status.kind != .agent { return "running" }
         return state.rawValue
     }
 
-    private static func describe(_ tab: TerminalTab, in controller: TerminalWindowController, caller: TerminalTab?) -> [String: Any] {
+    static func describe(_ tab: TerminalTab, in controller: TerminalWindowController, caller: TerminalTab?) -> [String: Any] {
         var info: [String: Any] = [
             "id": tab.id.uuidString.lowercased(),
             "title": tab.title,
@@ -263,6 +266,15 @@ enum MCPControl {
         if let question = tab.status.question { info["question"] = question }
         if let code = tab.status.exitCode, tab.status.state == .failed { info["exit_code"] = Int(code) }
         if tab === caller { info["you"] = true }
+        if let remote = tab.remote {
+            info["host"] = remote.host.name
+            info["host_id"] = remote.host.id
+            info["keep"] = remote.keep.rawValue
+            if remote.keep == .tmux { info["session"] = remote.session }
+            if remote.keep == .herdr, !tab.herdrAgents.isEmpty {
+                info["herdr_agents"] = tab.herdrAgents.map { ["pane": $0.paneID, "agent": $0.name, "state": $0.status.rawValue] }
+            }
+        }
         return info
     }
 
@@ -413,14 +425,14 @@ enum MCPControl {
         }
     }
 
-    private static func whenReady(_ tab: TerminalTab, until deadline: TimeInterval, _ body: @escaping () -> Void) {
-        if tab.status.integrated || TerminalTab.now >= deadline || tab.exited { return body() }
+    static func whenReady(_ tab: TerminalTab, until deadline: TimeInterval, _ body: @escaping () -> Void) {
+        if tab.status.integrated || tab.remoteReady || TerminalTab.now >= deadline || tab.exited { return body() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { whenReady(tab, until: deadline, body) }
     }
 
     /// Types text as a paste (literal, never run early), then presses Return after a moment: agents
     /// take a paste in as a block and only treat a separate Return as "send".
-    private static func type(_ text: String, into tab: TerminalTab, submit: Bool) {
+    static func type(_ text: String, into tab: TerminalTab, submit: Bool) {
         tab.view.typeText(text)
         guard submit else { return }
         sent(to: tab)
@@ -433,6 +445,7 @@ enum MCPControl {
     private static func target(_ arguments: [String: Any], caller: TerminalTab?) -> Result<TerminalTab, MCPError> {
         guard let tab = findTab(arguments["tab_id"]) else { return .failure(MCPError("No tab with that id; list_tabs shows them.")) }
         if tab === caller { return .failure(MCPError("That is your own tab; type into another one.")) }
+        if tab.disconnected { return .failure(MCPError("That tab lost its connection to its host; it reconnects by itself (tmux, herdr) or when someone presses Return in it.")) }
         if tab.exited || !tab.view.acceptsInput { return .failure(MCPError("That tab's shell has ended.")) }
         return .success(tab)
     }

@@ -13,6 +13,8 @@ final class NextTermView: LocalProcessTerminalView {
     var beepAllowed = true
     /// False once the shell has ended: there is nothing left to send keystrokes to.
     var acceptsInput = true
+    /// Takes keystrokes before the program would (a remote tab waiting to reconnect); true: handled.
+    var interceptInput: ((ArraySlice<UInt8>) -> Bool)?
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
         super.dataReceived(slice: slice) // parse first: OSC marks in this chunk update the status
@@ -20,6 +22,7 @@ final class NextTermView: LocalProcessTerminalView {
     }
 
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
+        if let interceptInput, interceptInput(data) { return }
         guard acceptsInput else { return }
         onInput?()
         super.send(source: source, data: Self.withoutScreenChecksum(data))
@@ -134,9 +137,23 @@ protocol TerminalTabDelegate: AnyObject {
     func tabDidExit(_ tab: TerminalTab)
 }
 
-/// One tab: a shell in a pty, its terminal view and its status.
+/// One tab: a shell in a pty, its terminal view and its status. A remote tab runs ssh in the pty instead,
+/// to a shell, a tmux session or herdr on a server (see RemoteConnection).
 final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     let id = UUID()
+    /// Set for a tab on a server.
+    let remote: RemoteTab?
+    /// The connection to the host dropped; the tab waits to reconnect.
+    private(set) var disconnected = false
+    /// The host reported this tab's shell at its prompt at least once: commands can be typed into it.
+    private(set) var remoteReady = false
+    /// herdr's agents, last reported (a herdr tab).
+    private(set) var herdrAgents: [HerdrAgent] = []
+    private var connectedAt: TimeInterval = 0
+    private var reconnectAttempts = 0
+    private var reconnectWork: DispatchWorkItem?
+    /// This tab's name in the files Next Term keeps on the host.
+    var remoteKey: String { RemoteShell.safeName(id.uuidString.lowercased()) }
     /// Shared secret with this tab's shell; see ShellIntegration.
     private let nonce = ShellIntegration.makeNonce()
     let view: NextTermView
@@ -153,10 +170,11 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private var execWatcher: DispatchSourceProcess?
     private var shellName: String { (shellPath as NSString).lastPathComponent }
 
-    init(directory: String?, fontSize: CGFloat) {
+    init(directory: String?, fontSize: CGFloat, remote: RemoteTab? = nil) {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        self.directory = Self.isDirectory(directory) ? directory! : home
-        self.shellPath = Self.loginShell()
+        self.remote = remote
+        self.directory = remote?.directory ?? (Self.isDirectory(directory) ? directory! : home)
+        self.shellPath = remote == nil ? Self.loginShell() : RemoteConnection.sshPath
         self.view = NextTermView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
         super.init()
 
@@ -203,6 +221,15 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     static var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
     func start() {
+        if let remote {
+            connectedAt = Self.now
+            disconnected = false
+            view.interceptInput = nil
+            view.acceptsInput = true
+            view.startProcess(executable: shellPath, args: RemoteConnection.tabArguments(remote, tabKey: remoteKey),
+                              environment: RemoteConnection.environment(), execName: nil, currentDirectory: NSHomeDirectory())
+            return
+        }
         view.startProcess(
             executable: shellPath,
             args: [],
@@ -229,6 +256,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     func terminate() {
         execWatcher?.cancel()
         execWatcher = nil
+        reconnectWork?.cancel()
+        reconnectWork = nil
         guard !exited else { return }
         exited = true
         let pid = view.process.shellPid
@@ -256,11 +285,12 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     /// Live working directory of the shell, for opening a new tab in the same place.
     func currentDirectory() -> String {
-        ProcessInspector.currentDirectory(of: view.process.shellPid) ?? directory
+        if remote != nil { return directory } // a folder on the host, as the host reports it
+        return ProcessInspector.currentDirectory(of: view.process.shellPid) ?? directory
     }
 
     /// The folder relative paths mean right now: the integration reports it; otherwise ask the kernel.
-    var liveDirectory: String { status.integrated ? directory : currentDirectory() }
+    var liveDirectory: String { status.integrated || remote != nil ? directory : currentDirectory() }
 
     /// Types a command at the prompt and runs it, once the shell is at its first prompt (its integration
     /// reports in) or after 3 seconds.
@@ -280,7 +310,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// Twice a second. For shells without integration this is how the tab knows what runs and where it
     /// is; with integration it only looks behind commands that look plain, for agents run by functions.
     func pollForeground() {
-        guard !exited else { return }
+        guard !exited, remote == nil else { return } // a remote tab's foreground comes from its host (applyRemote)
         if status.integrated && !(status.running && status.kind == .command) { return }
         let before = (status.running, status.command)
         let foreground = ProcessInspector.foreground(ptyFileDescriptor: view.process.childfd,
@@ -325,7 +355,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// For a running AI agent: read its screen (working, asking a question, or idle) so the tab's
     /// status follows the agent itself.
     func pollAgentScreen() {
-        guard !exited, status.running, status.kind == .agent else { return }
+        guard !exited, status.running, status.kind == .agent, remote?.keep != .herdr else { return } // herdr reports its own
         let before = (status.state, status.question)
         status.observe(agentScreen: AgentScreen.activity(screenLines: screenTail()), at: Self.now)
         if before.0 != status.state || before.1 != status.question { delegate?.tabDidChange(self) }
@@ -335,6 +365,11 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// background or suspended with Ctrl-Z (a stopped vim with unsaved changes).
     var closeWarning: String? {
         guard !exited else { return nil }
+        if let remote {
+            // tmux and herdr keep the session on the host: closing the tab only detaches.
+            guard !disconnected, remote.keep == .off, status.running else { return nil }
+            return "“\(status.program.isEmpty ? "a running process" : status.program)” on \(remote.host.name)"
+        }
         var items: [String] = []
         if status.running { items.append(status.program.isEmpty ? "a running process" : "“\(status.program)” (running)") }
         if status.integrated {
@@ -370,6 +405,10 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             if let programTitle, !programTitle.trimmingCharacters(in: .whitespaces).isEmpty { return String(programTitle.prefix(200)) }
             if !status.program.isEmpty { return status.program }
         }
+        if let remote {
+            let last = (directory as NSString).lastPathComponent
+            return remote.host.name + ": " + (directory == "~" || last.isEmpty ? directory : last)
+        }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         if directory == home { return "~" }
         let last = (directory as NSString).lastPathComponent
@@ -377,6 +416,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     var stateDescription: String {
+        if disconnected { return "Disconnected" }
         switch status.state {
         case .idle: return status.running ? "Running \(status.program)" : "Idle"
         case .working: return "Working"
@@ -390,6 +430,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         var lines = [title, stateDescription]
         if status.running && !status.command.isEmpty { lines.append(String(status.command.prefix(300))) }
         lines.append(directory)
+        if let remote { lines.append("On \(remote.host.name) (\(remote.host.destination)), sessions kept: \(remote.keep.label)") }
         return lines.joined(separator: "\n")
     }
 
@@ -434,6 +475,13 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         // OSC 7 from the user's own shell config: a file:// URL or a bare path. A remote shell
         // (over ssh) reports its own host's paths: those are not folders on this Mac.
         guard let directory, !directory.isEmpty else { return }
+        if remote != nil {
+            // A remote tab's folder is on its host: take the path whatever host the URL names.
+            if let url = URL(string: directory), url.isFileURL, !url.path.isEmpty { self.directory = url.path }
+            else if directory.hasPrefix("/") { self.directory = directory }
+            delegate?.tabDidChange(self)
+            return
+        }
         if let url = URL(string: directory), url.isFileURL {
             guard LocalHost.contains(url.host) else { return }
             self.directory = url.path
@@ -446,6 +494,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// `waitStatus` is the raw status from waitpid, as SwiftTerm passes it on.
     func processTerminated(source: TerminalView, exitCode waitStatus: Int32?) {
         guard !exited else { return }
+        if let remote, connectionLost(remote, waitStatus: waitStatus) { return }
         exited = true
         execWatcher?.cancel()
         execWatcher = nil
@@ -462,6 +511,78 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         status.shellExited(code: signal == 0 ? code : 128 + signal)
         view.feed(text: "\r\n\u{1b}[2m[The shell \(reason). ⌘W closes this tab.]\u{1b}[0m\r\n")
         delegate?.tabDidChange(self)
+    }
+
+    // MARK: remote
+
+    /// ssh ended with its own failure (255): the connection dropped or could not be made. The tab stays.
+    /// Kept sessions (tmux, herdr) reconnect by themselves once a connection that worked drops; anything
+    /// else waits for Return, so a wrong password or a refused host key is never retried in a loop.
+    private func connectionLost(_ remote: RemoteTab, waitStatus: Int32?) -> Bool {
+        let raw = waitStatus ?? 0
+        guard raw & 0x7F == 0, (raw >> 8) & 0xFF == 255 else { return false }
+        let wasUp = Self.now - connectedAt >= 10
+        if wasUp { reconnectAttempts = 0 }
+        disconnected = true
+        remoteReady = false
+        status.shellReplaced()
+        // tmux or an agent left the terminal in their modes (alternate screen, mouse): back to plain.
+        view.feed(text: "\u{1b}[?1049l\u{1b}[?1000l\u{1b}[?1002l\u{1b}[?1003l\u{1b}[?1006l\u{1b}[?2004l\u{1b}[?25h\u{1b}[0m")
+        let name = remote.host.name
+        let note: String
+        if remote.keep != .off && (wasUp || reconnectAttempts > 0) {
+            let delay = [2, 5, 10, 20, 30, 60][min(reconnectAttempts, 5)]
+            reconnectAttempts += 1
+            note = "Connection to \(name) lost. Reconnecting in \(delay) s (Return: now). The session keeps running on the host; ⌘W closes this tab."
+            let work = DispatchWorkItem { [weak self] in self?.reconnect() }
+            reconnectWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(delay), execute: work)
+        } else if remote.keep != .off {
+            note = "Could not connect to \(name). Return tries again; ⌘W closes this tab."
+        } else {
+            note = "Connection to \(name) lost: what ran in this shell has stopped. Return opens a new shell there; ⌘W closes this tab."
+        }
+        view.feed(text: "\r\n\u{1b}[2m[\(note)]\u{1b}[0m\r\n")
+        view.acceptsInput = false
+        view.interceptInput = { [weak self] data in
+            if data.contains(13) { self?.reconnect() }
+            return true
+        }
+        delegate?.tabDidChange(self)
+        return true
+    }
+
+    /// Connects again: to the same tmux session or herdr (they kept running), or a new shell.
+    func reconnect() {
+        guard remote != nil, disconnected, !exited else { return }
+        reconnectWork?.cancel()
+        reconnectWork = nil
+        view.feed(text: "\r\n")
+        start()
+        delegate?.tabDidChange(self)
+    }
+
+    /// What the host says runs in front of this tab's shell, and where it is.
+    func applyRemote(_ report: RemoteTabReport) {
+        guard remote != nil, !exited, !disconnected else { return }
+        let before = (status.running, status.command, directory)
+        if let foreground = report.foreground {
+            if foreground.isShell { remoteReady = true }
+            status.observe(foreground, at: Self.now)
+        }
+        if let folder = report.directory, folder.hasPrefix("/") { directory = folder }
+        if (status.running, status.command, directory) != before { delegate?.tabDidChange(self) }
+    }
+
+    /// herdr's agents on the host: the tab shows the one that most needs you.
+    func applyHerdr(_ agents: [HerdrAgent]) {
+        guard remote?.keep == .herdr, !exited, !disconnected else { return }
+        remoteReady = true
+        herdrAgents = agents
+        let before = (status.state, status.question)
+        status.observeAgentHost("herdr", at: Self.now)
+        status.observe(agentScreen: HerdrAgent.activity(agents), at: Self.now)
+        if before != (status.state, status.question) { delegate?.tabDidChange(self) }
     }
 
     // MARK: environment

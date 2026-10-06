@@ -149,6 +149,17 @@ public struct TabStatus {
         polledName = process.name
     }
 
+    // MARK: a remote tab whose agents a host reports (herdr)
+
+    /// The tab shows a program that hosts agents and reports their state itself (herdr on a server):
+    /// treat it as one agent, so `observe(agentScreen:)` takes the states the host reports.
+    public mutating func observeAgentHost(_ name: String, at now: TimeInterval) {
+        if running && kind == .agent && program == name { return }
+        start(name, kind: .agent, at: now)
+        program = name
+        screenSynced = true // the host's report is the truth; its UI redrawing is not work
+    }
+
     // MARK: what an agent's screen shows
 
     /// Call a few times a second for a running agent with what its screen shows.

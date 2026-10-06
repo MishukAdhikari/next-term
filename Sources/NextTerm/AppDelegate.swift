@@ -252,6 +252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     // MARK: lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        RemotePoller.shared.start() // status of remote tabs, from their hosts
         // Claude Code's IDE link, before the first tab so every tab can use it.
         if shareWithClaude { startClaudeLink() }
         // The MCP socket too: tabs are told where it is.
@@ -283,6 +284,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // A folder dropped on the app or `open -a "Next Term" dir` arrives before this and opens itself.
         guard controllers.isEmpty else { return }
         if !reopenLastProjects() { offerImportThenChooseFolder() }
+        if !SelfTest.isRequested { RemoteConnection.restoreTabs() } // reattach kept sessions (tmux, herdr)
     }
 
     // MARK: nxtrm
@@ -477,8 +479,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         ClaudeIDEServer.shared.stop() // removes the lock file
         GeminiIDEServer.shared.stop()
         MainActor.assumeIsolated { Updater.shared.installStagedUpdateOnQuit() }
-        if !SelfTest.isRequested { sessionProjects = controllers.compactMap(\.project) }
+        if !SelfTest.isRequested {
+            sessionProjects = controllers.compactMap(\.project)
+            RemoteConnection.saveTabs(controllers)
+        }
         for controller in controllers { for tab in controller.tabs { tab.terminate() } }
+        RemoteConnection.shutdown() // the master connections; sessions kept by tmux or herdr stay on their hosts
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -855,6 +861,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let shell = submenu(main, "Shell")
         item(shell, "New Tab", #selector(TerminalWindowController.newTab(_:)), "t")
         item(shell, "New Window", #selector(newWindow(_:)), "n", target: self)
+        item(shell, "New Remote Tab…", #selector(TerminalWindowController.newRemoteTab(_:)), "t", [.command, .option])
         shell.addItem(.separator())
         item(shell, "Open Project…", #selector(openProjectPanel(_:)), "o", target: self)
         item(shell, "Go to File…", #selector(TerminalWindowController.goToFile(_:)), "p")

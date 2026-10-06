@@ -165,7 +165,16 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// `select` false: the tab opens behind the current one (an agent opening tabs leaves you where you are).
     @discardableResult
     func addTab(directory: String?, select selectIt: Bool = true) -> TerminalTab {
-        let tab = makeTab(directory: directory)
+        insert(makeTab(directory: directory), select: selectIt)
+    }
+
+    /// A tab on a server: ssh in its pty, to a shell, tmux session or herdr there.
+    @discardableResult
+    func addRemoteTab(_ remote: RemoteTab, select selectIt: Bool = true) -> TerminalTab {
+        insert(makeTab(directory: nil, remote: remote), select: selectIt)
+    }
+
+    private func insert(_ tab: TerminalTab, select selectIt: Bool) -> TerminalTab {
         let group = PaneGroup(tab)
         let view = group.view
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -192,8 +201,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return tab
     }
 
-    private func makeTab(directory: String?) -> TerminalTab {
-        let tab = TerminalTab(directory: directory, fontSize: AppDelegate.shared.fontSize)
+    private func makeTab(directory: String?, remote: RemoteTab? = nil) -> TerminalTab {
+        let tab = TerminalTab(directory: directory, fontSize: AppDelegate.shared.fontSize, remote: remote)
         tab.delegate = self
         // ⌘-click on "src/a.ts:42" in the output opens the editor there.
         tab.view.openFile = { [weak self] url, line, column in self?.openFile(url, line: line, column: column) }
@@ -232,7 +241,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     @discardableResult
     func split(vertical: Bool, from: TerminalTab? = nil, directory: String? = nil, focus: Bool = true) -> TerminalTab? {
         guard let from = from ?? activeTab, let group = group(of: from) else { return nil }
-        let new = makeTab(directory: directory ?? from.currentDirectory())
+        // Beside a remote tab, another one on its host, in its folder (unless a folder here was asked for).
+        let new = directory == nil && from.remote != nil
+            ? makeTab(directory: nil, remote: from.remote!.sibling(directory: from.directory))
+            : makeTab(directory: directory ?? from.currentDirectory())
         group.split(from, with: new, vertical: vertical)
         if !focus { group.focused = from }
         group.layout()
@@ -1189,6 +1201,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     // MARK: menu actions (reached through the responder chain)
 
     /// In a project window, new tabs start in the project; otherwise in the current tab's folder.
+    /// ⌥⌘T: a tab on a server (a saved host, or a new one).
+    @objc func newRemoteTab(_ sender: Any?) {
+        guard let window else { return }
+        RemoteTabSheet.show(over: window) { [weak self] remote in self?.addRemoteTab(remote) }
+    }
+
     @objc func newTab(_ sender: Any?) {
         addTab(directory: project ?? activeTab?.currentDirectory())
     }

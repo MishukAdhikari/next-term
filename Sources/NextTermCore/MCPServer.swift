@@ -25,7 +25,9 @@ public enum MCPServer {
         "claude" or "codex"), give it a task with send_to_tab, then wait_for_tab until it stops and \
         read_tab to see what it said. An agent that needs a decision shows state "attention" and the \
         question; answer with send_to_tab or press_keys. Never type into your own tab ("you": true). \
-        get_editor_selection returns what the user has selected in the editor.
+        get_editor_selection returns what the user has selected in the editor. Servers (VPSes) the user \
+        connected are in list_hosts: new_remote_tab opens a tab on one (then use it like any tab), \
+        host_sessions lists the sessions kept there, host_changes shows what changed in a git work tree there.
         """
 
     // MARK: tools
@@ -42,9 +44,13 @@ public enum MCPServer {
         public let idempotent: Bool
         /// Longest a call can take, for the bridge's wait (wait_for_tab sets its own).
         public let timeout: TimeInterval
+        /// Reaches another machine (a server over ssh), not only this Mac.
+        public var openWorld = false
     }
 
     private static let tabID = #""tab_id": {"type": "string", "description": "A tab's id from list_tabs."}"#
+    private static let hostRef = #""host": {"type": "string", "description": "A host's id or name from list_hosts."}"#
+    private static let keepSchema = #""keep": {"type": "string", "enum": ["off", "tmux", "herdr"], "description": "How agents are kept running on the host: off (a plain ssh shell; what runs stops when the connection drops), tmux (sessions keep running on the host while this Mac is away; needs tmux there), herdr (the user's own herdr on the host). Next Term installs neither."}"#
 
     public static let tools: [Tool] = [
         Tool(name: "list_tabs", title: "List projects and tabs",
@@ -95,6 +101,34 @@ public enum MCPServer {
              description: "Closes a tab. A tab with something running is refused unless force is true, which stops it.",
              inputSchema: #"{"type": "object", "properties": {\#(tabID), "force": {"type": "boolean"}}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: false, timeout: 15),
+        Tool(name: "list_hosts", title: "List remote hosts",
+             description: "Servers the user connects to from Next Term (Connect VPS): id, name, ssh destination, port, default folder, and how agents are kept there (keep: off, tmux or herdr). Remote tabs are in list_tabs with their host.",
+             inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
+             readOnly: true, destructive: false, idempotent: true, timeout: 15),
+        Tool(name: "add_host", title: "Add or update a remote host",
+             description: "Saves a server to connect to with the system ssh, which uses the user's keys, ssh agent and ~/.ssh/config; Next Term stores no password. destination is user@host or a Host alias from ~/.ssh/config. A host with the same name is updated. Nothing is installed or run on the host.",
+             inputSchema: #"{"type": "object", "properties": {"name": {"type": "string", "description": "Short name, such as web-1."}, "destination": {"type": "string", "description": "user@host, host, or an alias from ~/.ssh/config."}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}, "directory": {"type": "string", "description": "Default folder on the host: absolute, or starting with ~. Default ~."}, \#(keepSchema)}, "required": ["name", "destination"], "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: true, timeout: 15),
+        Tool(name: "remove_host", title: "Remove a remote host",
+             description: "Forgets a saved host. Sessions kept on it (tmux, herdr) keep running there.",
+             inputSchema: #"{"type": "object", "properties": {\#(hostRef)}, "required": ["host"], "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: true, timeout: 15),
+        Tool(name: "check_host", title: "Check a remote host",
+             description: "Connects without prompting (over a remote tab's open connection, or a key in the ssh agent) and reports what the host has: OS, login shell, tmux and herdr versions, git, the agents on PATH (claude, codex, gemini), and Next Term's kept tmux sessions. Fails, rather than asks, if ssh would need a password or a host key confirmation: open a remote tab for the user then.",
+             inputSchema: #"{"type": "object", "properties": {\#(hostRef)}, "required": ["host"], "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: true, timeout: 30, openWorld: true),
+        Tool(name: "new_remote_tab", title: "New tab on a remote host",
+             description: "Opens a terminal tab on a host, in a folder there (default: the host's folder), kept the host's way unless keep is given, and optionally runs a command in it such as an agent (\"claude\", \"codex\"). session attaches to one of Next Term's tmux sessions on the host (from host_sessions), such as one started on another Mac. If ssh needs a password or a host key confirmation, the tab shows ssh's own prompt to the user and the command waits. Returns the tab's id: use send_to_tab, read_tab and wait_for_tab with it like any tab.",
+             inputSchema: #"{"type": "object", "properties": {\#(hostRef), "directory": {"type": "string", "description": "Folder on the host: absolute, or starting with ~."}, "command": {"type": "string", "description": "Typed at the prompt and run once the tab's shell is ready."}, "title": {"type": "string"}, \#(keepSchema), "session": {"type": "string", "description": "A tmux session name from host_sessions, to attach to it."}}, "required": ["host"], "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: false, timeout: 60, openWorld: true),
+        Tool(name: "host_sessions", title: "Sessions kept on a host",
+             description: "What keeps running on a host while no Mac is connected: Next Term's tmux sessions (name, folder, program in front, how many clients are attached) and, if the user runs herdr there, herdr's agents with their state (idle, working, blocked, done). Connects like check_host.",
+             inputSchema: #"{"type": "object", "properties": {\#(hostRef)}, "required": ["host"], "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: true, timeout: 30, openWorld: true),
+        Tool(name: "host_changes", title: "Changes in a work tree on a host",
+             description: "What changed in a git work tree on a host (what its agents did): the branch, the changed files (git status; untracked files are listed), a diffstat, and the diff against HEAD, cut at max_bytes. It never takes git's index lock. Connects like check_host.",
+             inputSchema: #"{"type": "object", "properties": {\#(hostRef), "directory": {"type": "string", "description": "Folder on the host. Default: the host's folder."}, "diff": {"type": "boolean", "description": "Include the diff. Default true."}, "max_bytes": {"type": "integer", "minimum": 1000, "maximum": 2000000, "description": "Longest diff to return. Default 200000."}}, "required": ["host"], "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: true, timeout: 60, openWorld: true),
         Tool(name: "open_in_editor", title: "Open in the editor",
              description: "Opens a file in Next Term's editor, at a line and column if given (1-based).",
              inputSchema: #"{"type": "object", "properties": {"path": {"type": "string", "description": "Absolute file path."}, "line": {"type": "integer", "minimum": 1}, "column": {"type": "integer", "minimum": 1}}, "required": ["path"], "additionalProperties": false}"#,
@@ -115,7 +149,7 @@ public enum MCPServer {
                     "readOnlyHint": tool.readOnly,
                     "destructiveHint": tool.destructive,
                     "idempotentHint": tool.idempotent,
-                    "openWorldHint": false,
+                    "openWorldHint": tool.openWorld,
                 ],
                 // Claude Code defers MCP tools behind its tool search; these are few and worth having at hand.
                 "_meta": ["anthropic/alwaysLoad": true],
