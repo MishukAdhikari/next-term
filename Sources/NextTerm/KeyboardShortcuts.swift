@@ -140,19 +140,37 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     init() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 560), styleMask: [.titled, .closable, .resizable],
                               backing: .buffered, defer: false)
-        window.title = "Keyboard Shortcuts"
+        window.title = "Settings"
         window.minSize = NSSize(width: 480, height: 320)
         window.isReleasedWhenClosed = false
         super.init(window: window)
+        // Two tabs: the editor's settings, and every shortcut.
+        let tabs = NSTabView()
+        let editorTab = NSTabViewItem(identifier: "editor")
+        editorTab.label = "Editor"
+        editorTab.view = EditorSettingsView()
+        let keysTab = NSTabViewItem(identifier: "keys")
+        keysTab.label = "Keyboard Shortcuts"
+        keysTab.view = NSView()
+        tabs.addTabViewItem(editorTab)
+        tabs.addTabViewItem(keysTab)
+        window.contentView = tabs
+        shortcutsContent = keysTab.view
         build()
         reload()
         window.center()
     }
 
+    private var shortcutsContent: NSView?
+
+    func showTab(_ identifier: String) {
+        (window?.contentView as? NSTabView)?.selectTabViewItem(withIdentifier: identifier)
+    }
+
     required init?(coder: NSCoder) { fatalError("not used") }
 
     private func build() {
-        guard let content = window?.contentView else { return }
+        guard let content = shortcutsContent else { return }
         search.placeholderString = "Search commands or shortcuts"
         search.delegate = self
         search.sendsSearchStringImmediately = true
@@ -337,5 +355,94 @@ final class ShortcutRecorder: NSButton {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window == nil { stopRecording() }
+    }
+}
+
+/// Settings › Editor: line height, soft wrap and font size, applied as they change.
+final class EditorSettingsView: NSView {
+    private let lineHeight = NSSlider(value: 1.35, minValue: 1.0, maxValue: 2.0, target: nil, action: nil)
+    private let lineHeightValue = NSTextField(labelWithString: "")
+    private let wrap = NSButton(checkboxWithTitle: "Wrap long lines at the edge", target: nil, action: nil)
+    private let fontSize = NSStepper()
+    private let fontSizeValue = NSTextField(labelWithString: "")
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        lineHeight.target = self
+        lineHeight.action = #selector(lineHeightChanged)
+        lineHeight.isContinuous = true
+        lineHeight.numberOfTickMarks = 21 // steps of 0.05
+        lineHeight.allowsTickMarkValuesOnly = true
+        lineHeightValue.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        wrap.target = self
+        wrap.action = #selector(wrapChanged)
+        fontSize.minValue = Double(Theme.fontSizeRange.lowerBound)
+        fontSize.maxValue = Double(Theme.fontSizeRange.upperBound)
+        fontSize.increment = 1
+        fontSize.target = self
+        fontSize.action = #selector(fontSizeChanged)
+        fontSizeValue.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+
+        func row(_ title: String, _ views: [NSView]) -> NSStackView {
+            let label = NSTextField(labelWithString: title)
+            label.alignment = .right
+            label.widthAnchor.constraint(equalToConstant: 110).isActive = true
+            let stack = NSStackView(views: [label] + views)
+            stack.spacing = 10
+            return stack
+        }
+        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own line height; 1.35 reads well for code. The font size is shared with the terminal (⌘+ and ⌘-).")
+        note.textColor = .secondaryLabelColor
+        note.font = .systemFont(ofSize: 11)
+        note.preferredMaxLayoutWidth = 420
+        lineHeight.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        let stack = NSStackView(views: [
+            row("Line height:", [lineHeight, lineHeightValue]),
+            row("Font size:", [fontSize, fontSizeValue]),
+            row("", [wrap]),
+            note,
+        ])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 14
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 24),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -24),
+        ])
+        refresh()
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        refresh()
+    }
+
+    private func refresh() {
+        guard let app = AppDelegate.shared else { return }
+        lineHeight.doubleValue = Double(app.editorLineHeight)
+        lineHeightValue.stringValue = String(format: "%.2f×", app.editorLineHeight)
+        wrap.state = app.softWrap ? .on : .off
+        fontSize.doubleValue = Double(app.fontSize)
+        fontSizeValue.stringValue = "\(Int(app.fontSize)) pt"
+    }
+
+    @objc private func lineHeightChanged() {
+        AppDelegate.shared.editorLineHeight = CGFloat((lineHeight.doubleValue * 20).rounded() / 20)
+        refresh()
+    }
+
+    @objc private func wrapChanged() {
+        if (wrap.state == .on) != AppDelegate.shared.softWrap { AppDelegate.shared.toggleSoftWrap(nil) }
+        refresh()
+    }
+
+    @objc private func fontSizeChanged() {
+        AppDelegate.shared.setFontSize(CGFloat(fontSize.doubleValue))
+        refresh()
     }
 }

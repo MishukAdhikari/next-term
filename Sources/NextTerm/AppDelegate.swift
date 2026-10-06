@@ -57,6 +57,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         controllers.forEach { $0.applyLayout() }
     }
 
+    /// The editor's line height, as a multiple of the font's natural line height (1.35: readable code).
+    static let lineHeights: [CGFloat] = [1.0, 1.15, 1.25, 1.35, 1.5, 1.75, 2.0]
+
+    var editorLineHeight: CGFloat {
+        get {
+            let saved = UserDefaults.standard.double(forKey: "editorLineHeight")
+            return saved >= 1 && saved <= 2.5 ? CGFloat(saved) : 1.35
+        }
+        set {
+            UserDefaults.standard.set(Double(min(2.5, max(1, newValue))), forKey: "editorLineHeight")
+            controllers.forEach { $0.editorArea.applyFont() }
+        }
+    }
+
+    @objc func setLineHeight(_ sender: NSMenuItem) {
+        if let value = sender.representedObject as? Double { editorLineHeight = CGFloat(value) }
+    }
+
     /// Long lines in the editor wrap at the edge (on unless turned off).
     var softWrap: Bool {
         get { UserDefaults.standard.object(forKey: "softWrap") as? Bool ?? true }
@@ -537,6 +555,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         if item.action == #selector(toggleSidebarSide(_:)) { item.state = sidebarSide == .right ? .on : .off }
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = softWrap ? .on : .off }
+        if item.action == #selector(setLineHeight(_:)), let value = item.representedObject as? Double {
+            item.state = abs(CGFloat(value) - editorLineHeight) < 0.001 ? .on : .off
+        }
         if item.action == #selector(toggleAutomaticUpdates(_:)) {
             item.state = MainActor.assumeIsolated { Updater.shared.automaticChecks } ? .on : .off
         }
@@ -549,7 +570,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     @objc func decreaseFontSize(_ sender: Any?) { setFontSize(fontSize - 1) }
     @objc func resetFontSize(_ sender: Any?) { setFontSize(Theme.defaultFontSize) }
 
-    private func setFontSize(_ size: CGFloat) {
+    func setFontSize(_ size: CGFloat) {
         let clamped = min(max(size, Theme.fontSizeRange.lowerBound), Theme.fontSizeRange.upperBound)
         fontSize = clamped
         controllers.forEach { $0.applyFontSize(clamped) }
@@ -632,7 +653,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let app = submenu(main, "Next Term")
         app.addItem(withTitle: "About Next Term", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         app.addItem(.separator())
-        item(app, "Keyboard Shortcuts…", #selector(showSettings(_:)), ",", target: self)
+        item(app, "Settings…", #selector(showSettings(_:)), ",", target: self)
         item(app, "Check for Updates…", #selector(checkForUpdates(_:)), "", target: self)
         item(app, "Check for Updates Automatically", #selector(toggleAutomaticUpdates(_:)), "", target: self)
         item(app, "Install Command Line Tool (nxtrm)…", #selector(installCommandLineTool(_:)), "", target: self)
@@ -707,6 +728,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         view.addItem(withTitle: "Terminal Position", action: nil, keyEquivalent: "").submenu = positions
         item(view, "Soft Wrap", #selector(toggleSoftWrap(_:)), "", target: self)
+        let heights = NSMenu(title: "Line Height")
+        for value in Self.lineHeights {
+            let title = ["1.0", "1.15", "1.25", "1.35 (default)", "1.5", "1.75", "2.0"][Self.lineHeights.firstIndex(of: value) ?? 0]
+            let entry = item(heights, title, #selector(setLineHeight(_:)), "", target: self)
+            entry.representedObject = Double(value)
+        }
+        view.addItem(withTitle: "Line Height", action: nil, keyEquivalent: "").submenu = heights
         item(view, "Project Sidebar on the Right", #selector(toggleSidebarSide(_:)), "", target: self)
         view.addItem(.separator())
         item(view, "Bigger", #selector(increaseFontSize(_:)), "+", target: self)

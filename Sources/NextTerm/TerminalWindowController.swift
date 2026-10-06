@@ -21,6 +21,14 @@ final class ThemedSplitView: NSSplitView {
     override var dividerThickness: CGFloat { 1 }
 }
 
+/// Between the editor and the terminal: both have the same background, so the line between them must
+/// show (a hairline a few shades lighter), and it is easy to grab (see effectiveRect).
+final class WorkSplitView: NSSplitView {
+    static let line = NSColor(hex: 0x393B40)
+    override var dividerColor: NSColor { Self.line }
+    override var dividerThickness: CGFloat { 1 }
+}
+
 final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSplitViewDelegate, NSMenuItemValidation,
                                       TabBarViewDelegate, TerminalTabDelegate, ProjectSidebarDelegate, FindInFilesDelegate,
                                       EditorAreaDelegate {
@@ -31,7 +39,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private let splitView = ThemedSplitView()
     private let mainPane = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
     /// [ open files ] over [ terminal tabs ], like an IDE. The editor part is hidden while no file is open.
-    private let workSplit = ThemedSplitView()
+    private let workSplit = WorkSplitView()
     let editorArea = EditorArea(frame: NSRect(x: 0, y: 0, width: 800, height: 360))
     private let terminalPane = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 240))
     private let container = NSView()
@@ -501,6 +509,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             return (workSplit.isVertical ? splitView.bounds.width : splitView.bounds.height) - workMinimum
         }
         return sidebarOnRight ? splitView.bounds.width - 160 : min(640, splitView.bounds.width - 320)
+    }
+
+    /// A one-pixel divider is hard to hit: grab it anywhere within 3 points either side.
+    func splitView(_ splitView: NSSplitView, effectiveRect proposedEffectiveRect: NSRect, forDrawnRect drawnRect: NSRect,
+                   ofDividerAt dividerIndex: Int) -> NSRect {
+        splitView.isVertical ? drawnRect.insetBy(dx: -3, dy: 0) : drawnRect.insetBy(dx: 0, dy: -3)
     }
 
     func splitViewDidResizeSubviews(_ notification: Notification) {

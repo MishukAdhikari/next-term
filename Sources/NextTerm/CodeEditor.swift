@@ -256,17 +256,41 @@ final class LineNumberRuler: NSRulerView {
     }
 }
 
+/// Line height for code: every line the same height (the font's natural height times the user's
+/// factor), with the text centred in it rather than sitting on the bottom as a paragraph style would
+/// put it. The gutter and the current-line band follow the same line fragments.
+final class LineSpacing: NSObject, NSLayoutManagerDelegate {
+    var factor: CGFloat = 1.35
+    var font: NSFont = Theme.monoFont(size: 13)
+
+    private var natural: CGFloat { ceil(font.ascender - font.descender + font.leading) }
+    var lineHeight: CGFloat { max(natural, round(natural * factor)) }
+
+    func layoutManager(_ layoutManager: NSLayoutManager, shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<NSRect>,
+                       lineFragmentUsedRect: UnsafeMutablePointer<NSRect>, baselineOffset: UnsafeMutablePointer<CGFloat>,
+                       in textContainer: NSTextContainer, forGlyphRange glyphRange: NSRange) -> Bool {
+        let height = lineHeight
+        let extra = height - natural
+        lineFragmentRect.pointee.size.height = height
+        lineFragmentUsedRect.pointee.size.height = height
+        baselineOffset.pointee = ceil(font.ascender) + floor(extra / 2)
+        return true
+    }
+}
+
 /// A document's editor: the text view in a scroll view with the line-number gutter.
 final class CodeEditorView: NSView, NSTextViewDelegate {
     let document: EditorDocument
     let scrollView = NSScrollView()
     let textView: CodeTextView
     private let ruler: LineNumberRuler
+    let spacing = LineSpacing()
 
     init(document: EditorDocument) {
         self.document = document
         let layoutManager = NSLayoutManager()
         layoutManager.allowsNonContiguousLayout = true
+        layoutManager.delegate = spacing
         document.storage.addLayoutManager(layoutManager)
         let container = NSTextContainer(size: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
         container.widthTracksTextView = false
@@ -370,6 +394,8 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
 
     func applyFont() {
         let font = EditorDocument.font
+        spacing.font = font
+        spacing.factor = AppDelegate.shared?.editorLineHeight ?? 1.35
         textView.font = font
         textView.typingAttributes = EditorDocument.attributes
         // Tab stops every indent width, in this font.
@@ -377,13 +403,18 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         let style = NSMutableParagraphStyle()
         style.tabStops = []
         style.defaultTabInterval = space * 4
+        // The same height for the empty line after the last newline (laid out without the delegate).
+        style.minimumLineHeight = spacing.lineHeight
+        style.maximumLineHeight = spacing.lineHeight
         textView.defaultParagraphStyle = style
         textView.typingAttributes[.paragraphStyle] = style
         document.storage.beginEditing()
         document.storage.addAttributes([.font: font, .paragraphStyle: style], range: NSRange(location: 0, length: document.storage.length))
         document.storage.endEditing()
+        textView.layoutManager?.invalidateLayout(forCharacterRange: NSRange(location: 0, length: document.storage.length), actualCharacterRange: nil)
         ruler.updateThickness()
         ruler.needsDisplay = true
+        textView.needsDisplay = true
     }
 
     // MARK: NSTextViewDelegate

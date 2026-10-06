@@ -17,7 +17,7 @@ agents are working, which are done, and which are waiting on your decision.
   output: the file opens above the terminal at that line, coloured by VS Code's TextMate grammars (the
   family Sublime Text uses) for 103 languages: PHP and Blade (Laravel, WordPress), Ruby and ERB (Rails),
   Python and Jinja (Django, Flask), JS/TS/TSX (React, Next.js), Vue, Svelte, Astro, Angular, Liquid, Twig,
-  Go and templ, Rust, Elixir, YAML, SQL and more. Line numbers, soft wrap, auto-indent, ⌘/ to comment, ⌘L to go to a line, find, undo. Files keep
+  Go and templ, Rust, Elixir, YAML, SQL and more. Line numbers, adjustable line height, soft wrap, auto-indent, ⌘/ to comment, ⌘L to go to a line, find, undo. Files keep
   their encoding, line endings and permissions. When an agent changes a file you have open, the editor
   follows; if you have unsaved edits it asks first.
 - **Send to Agent (⌥⌘K).** Select code in the editor, or files and folders in the sidebar, and send them to
@@ -40,7 +40,7 @@ agents are working, which are done, and which are waiting on your decision.
 - **Find and Replace in Files** (⌘⇧F / ⌘⇧R) across the project, with regular expressions, file masks and
   a preview of every replacement; a file an agent changed since the search is never overwritten.
 - **Dock badge and notifications** for agents that finished while you were in another app.
-- **Every shortcut is yours.** Next Term > Keyboard Shortcuts (⌘,) lists every command; click one and press
+- **Every shortcut is yours.** Next Term > Settings (⌘,) > Keyboard Shortcuts lists every command; click one and press
   new keys. The shortcuts below are the defaults.
 - **Updates in one click.** Next Term checks GitHub Releases once a day (or Check for Updates). A new
   version downloads, is verified against its published SHA-256, and replaces the app when you relaunch.

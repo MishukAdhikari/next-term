@@ -723,6 +723,22 @@ enum SelfTest {
         c.requestClose(agentTab)
         try? FileManager.default.removeItem(at: fakeBin)
 
+        // Line height: every line the chosen multiple of the font's height, text centred in it.
+        if let layout = view.layoutManager, layout.numberOfGlyphs > 0 {
+            let delegate = AppDelegate.shared!
+            let savedHeight = delegate.editorLineHeight
+            for factor: CGFloat in [1.0, 1.5] {
+                delegate.editorLineHeight = factor
+                layout.ensureLayout(for: view.textContainer!)
+                let fragment = layout.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil)
+                let font = EditorDocument.font
+                let natural = ceil(font.ascender - font.descender + font.leading)
+                check(abs(fragment.height - max(natural, round(natural * factor))) < 0.5, "line height \(factor)× sets each line's height",
+                      "\(fragment.height) for natural \(natural)")
+            }
+            delegate.editorLineHeight = savedHeight
+        }
+
         // Soft wrap: a long line wraps at the edge (the default) or scrolls sideways when it is off.
         let wide = proj.appendingPathComponent("wide.md")
         try? (String(repeating: "lorem ipsum dolor sit amet ", count: 40) + "\nshort\n").write(to: wide, atomically: true, encoding: .utf8)
@@ -872,8 +888,8 @@ enum SelfTest {
         shortcuts.set(nil, for: "clearBuffer:")
         check(shortcuts.commands.first { $0.id == "clearBuffer:" }?.item?.keyEquivalent == "", "a shortcut can be removed")
         AppDelegate.shared.showSettings(nil)
-        check(NSApp.windows.contains { $0.title == "Keyboard Shortcuts" && $0.isVisible }, "Keyboard Shortcuts opens with ⌘,")
-        NSApp.windows.first { $0.title == "Keyboard Shortcuts" }?.close()
+        check(NSApp.windows.contains { $0.title == "Settings" && $0.isVisible }, "Settings opens with ⌘, (Editor and Keyboard Shortcuts)")
+        NSApp.windows.first { $0.title == "Settings" }?.close()
         shortcuts.resetAll()
         check(newTabItem?.keyEquivalentModifierMask == .command && shortcuts.chord(for: "clearBuffer:")?.display == "⌘K", "Restore All Defaults")
         UserDefaults.standard.set(savedBindings, forKey: "keyBindings")
@@ -894,6 +910,10 @@ enum SelfTest {
             case .top: placed = t.minY >= e.maxY - 1
             case .right: placed = t.minX >= e.maxX - 1
             case .left: placed = t.maxX <= e.minX + 1
+            }
+            if let split = area.superview as? NSSplitView {
+                check(split.dividerColor != Theme.background && split.dividerThickness >= 1,
+                      "\(position.rawValue): a visible line between editor and terminal")
             }
             check(placed && e.width > 200 && t.width > 200 && e.height > 90 && t.height > 90, "terminal on the \(position.rawValue)",
                   "editor \(e.integral), terminal \(t.integral)")
