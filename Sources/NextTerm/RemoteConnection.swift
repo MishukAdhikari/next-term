@@ -90,10 +90,28 @@ enum RemoteConnection {
         (controlDirectory as NSString).appendingPathComponent(SSHArguments.controlName(host))
     }
 
-    /// The host's master connection is up (a tab opened it): background checks can ride on it.
-    static func masterExists(_ host: RemoteHost) -> Bool {
-        FileManager.default.fileExists(atPath: controlPath(host))
+    /// The host's master connection is up (a tab opened it): background checks can ride on it. A socket
+    /// file alone is not enough (one left by a crash refuses connections): it must accept one. A dead
+    /// socket in Next Term's own folder is removed.
+    static func masterAlive(_ host: RemoteHost) -> Bool {
+        let path = controlPath(host)
+        var info = stat()
+        guard lstat(path, &info) == 0 else { return false }
+        guard (info.st_mode & S_IFMT) == S_IFSOCK else { return false }
+        if MCPControlServer.answers(path) { return true }
+        if info.st_uid == getuid() { unlink(path) }
+        return false
     }
+
+    /// Next Term's ssh config (see SSHArguments.configText), in the control folder: written once per launch.
+    static let configFile: String? = {
+        let path = (controlDirectory as NSString).appendingPathComponent("ssh_config")
+        let previous = umask(0o077)
+        defer { umask(previous) }
+        guard (try? SSHArguments.configText.write(toFile: path, atomically: true, encoding: .utf8)) != nil else { return nil }
+        chmod(path, 0o600)
+        return path
+    }()
 
     // MARK: one login per host
 
@@ -102,21 +120,26 @@ enum RemoteConnection {
     /// reconnecting after a drop, a split while the first tab is still at ssh's prompt).
     private final class Login {
         weak var tab: TerminalTab?
-        let since: TimeInterval
-        init(_ tab: TerminalTab) { self.tab = tab; since = TerminalTab.now }
+        init(_ tab: TerminalTab) { self.tab = tab }
     }
     private static var logins: [String: Login] = [:]
 
-    /// Whether `tab` may start ssh to `host` now.
+    /// Whether `tab` may start ssh to `host` now. A tab that starts with no master opens it: this copy of
+    /// Next Term then owns that master, and closes it at quit.
     static func mayConnect(_ tab: TerminalTab, to host: RemoteHost) -> Bool {
         let path = controlPath(host)
-        if masterExists(host) { logins[path] = nil; return true }
-        if let login = logins[path], let other = login.tab, other !== tab, !other.exited, !other.disconnected,
-           !other.remoteConnected, TerminalTab.now - login.since < 180 {
-            return false
-        }
+        if masterAlive(host) { logins[path] = nil; return true }
+        if let other = loginTab(for: host), other !== tab { return false }
         logins[path] = Login(tab)
+        owned.insert(path)
+        masters[path] = host
         return true
+    }
+
+    /// The tab logging in to `host` right now (it may be showing ssh's password or host-key prompt).
+    static func loginTab(for host: RemoteHost) -> TerminalTab? {
+        guard let other = logins[controlPath(host)]?.tab, !other.exited, !other.disconnected, !other.remoteConnected else { return nil }
+        return other
     }
 
     /// The tab's ssh ended, or it was closed: it no longer holds up the others.
@@ -124,19 +147,22 @@ enum RemoteConnection {
         logins = logins.filter { $0.value.tab != nil && $0.value.tab !== tab }
     }
 
-    /// ssh's arguments for a tab.
-    static func tabArguments(_ remote: RemoteTab, tabKey: String) -> [String] {
-        masters[controlPath(remote.host)] = remote.host
-        let script = RemoteShell.tabScript(keep: remote.keep, directory: remote.directory, session: remote.session, tabID: tabKey)
-        return SSHArguments.tab(remote.host, controlPath: controlPath(remote.host), command: RemoteShell.command(script))
+    /// ssh's arguments for a tab; `token` is this connection's (see RemoteShell.tabScript).
+    static func tabArguments(_ remote: RemoteTab, tabKey: String, token: String) -> [String] {
+        let script = RemoteShell.tabScript(keep: remote.keep, directory: remote.directory, session: remote.session, tabID: tabKey, token: token)
+        return SSHArguments.tab(remote.host, controlPath: controlPath(remote.host), configFile: configFile, command: RemoteShell.command(script))
     }
 
     /// The environment ssh starts with: a fresh terminal's, without anything that points back at this
-    /// Mac (Next Term's MCP socket, the IDE links). ssh sends none of it unless the user's SendEnv says so.
+    /// Mac (Next Term's MCP socket, the IDE links), with the PATH and ssh agent the user's login shell
+    /// sets (a Finder-launched app has launchd's: ProxyCommand tools and agent-held keys would be
+    /// missing). ssh sends none of it to the host unless the user's SendEnv says so.
     static func environment() -> [String] {
         var env = TerminalEnvironment.clean(ProcessInfo.processInfo.environment)
         env.removeValue(forKey: MCPServer.socketVariable)
         env.removeValue(forKey: ShellIntegration.nonceVariable)
+        env["PATH"] = LoginShell.path.joined(separator: ":")
+        if let socket = LoginShell.sshAuthSock { env["SSH_AUTH_SOCK"] = socket }
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         if env["LANG"]?.isEmpty ?? true { env["LANG"] = "en_US.UTF-8" }
@@ -163,10 +189,16 @@ enum RemoteConnection {
     /// Runs a script on the host (base64 to /bin/sh there) without a terminal. Never prompts (BatchMode):
     /// it rides on a tab's open connection, or on a key the agent holds. `completion` runs on the main thread.
     static func run(_ host: RemoteHost, script: String, timeout: TimeInterval = 20, completion: @escaping (Output) -> Void) {
-        masters[controlPath(host)] = host
+        let path = controlPath(host)
+        guard masterAlive(host) else {
+            return completion(Output(status: -2, output: "", error: "There is no open connection to \(host.name): Next Term's checks never log in on their own. Open a remote tab on it first; checks then use that tab's connection."))
+        }
+        if let since = refused[path], TerminalTab.now - since < 30 {
+            return completion(Output(status: -3, output: "", error: refusedNote(host)))
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: sshPath)
-        process.arguments = SSHArguments.exec(host, controlPath: controlPath(host), command: RemoteShell.command(script))
+        process.arguments = SSHArguments.exec(host, controlPath: path, configFile: configFile, command: RemoteShell.command(script))
         process.environment = Dictionary(environment().compactMap { pair -> (String, String)? in
             guard let eq = pair.firstIndex(of: "=") else { return nil }
             return (String(pair[..<eq]), String(pair[pair.index(after: eq)...]))
@@ -199,9 +231,16 @@ enum RemoteConnection {
             group.wait()
             process.waitUntilExit()
             deadline.cancel()
-            let result = Output(status: process.terminationStatus, output: String(decoding: outputData, as: UTF8.self),
+            var result = Output(status: process.terminationStatus, output: String(decoding: outputData, as: UTF8.self),
                                 error: String(decoding: errorData, as: UTF8.self), timedOut: timedOut)
-            DispatchQueue.main.async { completion(result) }
+            DispatchQueue.main.async {
+                // sshd allows MaxSessions (10 by default) sessions on one connection: every tab is one.
+                if result.error.contains("refused by peer") || result.error.contains("administratively prohibited") {
+                    refused[path] = TerminalTab.now
+                    result.error = refusedNote(host)
+                }
+                completion(result)
+            }
         }
     }
 
@@ -219,16 +258,32 @@ enum RemoteConnection {
         return data
     }
 
+    /// Control paths whose master refused a session lately, and when.
+    private static var refused: [String: TimeInterval] = [:]
+
+    /// A host's master refuses more sessions, if it did in the last 30 s: for list_tabs and the checks.
+    static func refusal(_ host: RemoteHost) -> String? {
+        guard let since = refused[controlPath(host)], TerminalTab.now - since < 30 else { return nil }
+        return refusedNote(host)
+    }
+
+    private static func refusedNote(_ host: RemoteHost) -> String {
+        "\(host.name) refuses more sessions on one connection (sshd's MaxSessions, 10 by default; each remote tab is one, and each check one more). Close some tabs on it, or raise MaxSessions in the host's sshd_config. Checks pause for 30 s."
+    }
+
     // MARK: quitting
 
-    /// Every master this run may have opened, by control path (a host edited while connected has two).
+    /// Masters this copy of Next Term opened, by control path (a host edited while connected has two).
+    /// Only those are closed at quit: another running copy may share a master it opened.
+    private static var owned: Set<String> = []
     private static var masters: [String: RemoteHost] = [:]
 
-    /// Closes the master connections (tabs are gone by now). Sessions kept by tmux or herdr keep running
-    /// on their hosts.
+    /// Closes the master connections this copy opened (tabs are gone by now). Sessions kept by tmux or
+    /// herdr keep running on their hosts.
     static func shutdown() {
         let group = DispatchGroup()
-        for (path, host) in masters where FileManager.default.fileExists(atPath: path) {
+        for path in owned {
+            guard let host = masters[path], FileManager.default.fileExists(atPath: path) else { continue }
             let process = Process()
             process.executableURL = URL(fileURLWithPath: sshPath)
             process.arguments = SSHArguments.exit(host, controlPath: path)
@@ -245,6 +300,12 @@ enum RemoteConnection {
         _ = group.wait(timeout: .now() + 2)
     }
 
+    /// Ends one of Next Term's tmux sessions on a host (End Session, MCP close_tab with force). Over the
+    /// host's open connection, like every check.
+    static func endSession(_ host: RemoteHost, session: String, completion: @escaping (Output) -> Void) {
+        run(host, script: RemoteShell.killSessionScript(session: session), timeout: 15, completion: completion)
+    }
+
     // MARK: tabs kept across launches
 
     private static let recordsKey = "remoteTabs"
@@ -257,9 +318,10 @@ enum RemoteConnection {
     static func saveTabs(_ controllers: [TerminalWindowController]) {
         guard restored, !SelfTest.isRequested else { return }
         let records = controllers.flatMap { controller in
-            controller.tabs.compactMap { tab -> RemoteTabRecord? in
+            controller.groups.flatMap(\.panes).compactMap { tab -> RemoteTabRecord? in
                 guard let remote = tab.remote, !tab.exited, remote.keep != .off, !tab.fellBack else { return nil }
-                return RemoteTabRecord(hostID: remote.host.id, directory: remote.keep == .tmux ? remote.directory : tab.directory,
+                return RemoteTabRecord(hostID: remote.host.id, destination: remote.host.destination, port: remote.host.port,
+                                       directory: remote.keep == .tmux ? remote.directory : tab.directory,
                                        session: remote.session, keep: remote.keep, project: controller.project, title: tab.userTitle)
             }
         }
@@ -267,28 +329,60 @@ enum RemoteConnection {
         UserDefaults.standard.set(data, forKey: recordsKey)
     }
 
-    /// Reattaches the tabs kept last time, in the window of the project they were in. Once per launch.
-    static func restoreTabs() {
+    /// Reattaches the tabs kept last time, in the window of the project they were in, in their order
+    /// (split panes come back as tabs of their own). Once per launch, once the launch has its window: not
+    /// under the first-launch folder chooser. A host re-pointed since (another destination or port) is
+    /// not followed: its tabs are left out, and the user is told.
+    static func restoreTabs(attempt: Int = 0) {
         guard !restored else { return }
+        let app: AppDelegate = AppDelegate.shared
+        if (NSApp.modalWindow != nil || app.controllers.isEmpty) && attempt < 240 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { restoreTabs(attempt: attempt + 1) }
+            return
+        }
         restored = true
         guard !SelfTest.isRequested, let data = UserDefaults.standard.data(forKey: recordsKey),
-              let records = try? JSONDecoder().decode([RemoteTabRecord].self, from: data) else { return }
+              let records = try? JSONDecoder().decode([RemoteTabRecord].self, from: data), !records.isEmpty else { return }
+        // ssh needs the login shell's PATH and agent: read them off the main thread first.
+        DispatchQueue.global(qos: .userInitiated).async {
+            _ = LoginShell.path
+            DispatchQueue.main.async { reopen(records) }
+        }
+    }
+
+    private static func reopen(_ records: [RemoteTabRecord]) {
         let app: AppDelegate = AppDelegate.shared
+        var skipped: [String] = []
         for record in records {
-            guard let host = RemoteHosts.find(record.hostID), RemoteHost.directoryProblem(record.directory) == nil else { continue }
+            guard let host = RemoteHosts.all.first(where: { $0.id == record.hostID }) else {
+                skipped.append("a tab on a host that was removed (\(record.destination ?? "?"))")
+                continue
+            }
+            if let destination = record.destination, destination != host.destination || record.port != host.port {
+                skipped.append("“\(host.name)”, which now points to \(host.destination) instead of \(destination)")
+                continue
+            }
+            guard RemoteHost.directoryProblem(record.directory) == nil else { continue }
             let controller = app.controllers.first { $0.project == record.project && record.project != nil }
                 ?? app.controllers.first ?? app.openWindow(directory: nil)
             let tab = controller.addRemoteTab(RemoteTab(host: host, directory: record.directory, session: record.session, keep: record.keep),
-                                              select: false)
+                                              select: false, atEnd: true)
             if let title = record.title { tab.userTitle = title }
             controller.refresh()
         }
+        guard !skipped.isEmpty, let window = app.controllers.first?.window else { return }
+        let alert = NSAlert()
+        alert.messageText = skipped.count == 1 ? "A kept remote tab was not reopened" : "\(skipped.count) kept remote tabs were not reopened"
+        alert.informativeText = "Next Term does not follow a host that changed since: " + Set(skipped).sorted().joined(separator: "; ")
+            + ". Their sessions keep running there; New Remote Tab lists them once you connect to the host."
+        alert.beginSheetModal(for: window)
     }
 }
 
-/// Every 2 seconds, one check per host for all of its tabs: what runs in front of each tab's shell (so
-/// agents get the same status as local ones), its folder, and herdr's agents. Only over a master
-/// connection a tab already opened: a check never opens a connection or asks for anything.
+/// Every 2 seconds, one check per connection for all of its tabs: whether each tab's own login reached
+/// the host, what runs in front of its shell (so agents get the same status as local ones), its folder
+/// and jobs, and herdr's agents. Only as a session on a master a tab opened: a check never logs in.
+/// When a master is up, kept tabs on it that lost their connection are reconnected.
 final class RemotePoller {
     static let shared = RemotePoller()
     private var timer: Timer?
@@ -296,6 +390,9 @@ final class RemotePoller {
 
     func start() {
         guard timer == nil else { return }
+        // ssh's environment needs the login shell's PATH and agent: read once, off the main thread,
+        // before the first remote tab asks for it.
+        if !SelfTest.isRequested { DispatchQueue.global(qos: .utility).async { _ = LoginShell.path } }
         let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.poll() }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
@@ -304,10 +401,16 @@ final class RemotePoller {
     func poll() {
         let controllers = AppDelegate.shared.controllers
         RemoteConnection.saveTabs(controllers)
-        let tabs = controllers.flatMap(\.tabs).filter { $0.remote != nil && !$0.exited && !$0.disconnected }
+        let remoteTabs = controllers.flatMap(\.tabs).filter { $0.remote != nil && !$0.exited }
+        // A master is up again (another tab reconnected, or the network is back): kept tabs on it that
+        // dropped for a network reason come back at once, without waiting for their timers.
+        for tab in remoteTabs where tab.disconnected && tab.mayReconnectByItself {
+            if let host = tab.remote?.host, RemoteConnection.masterAlive(host) { tab.reconnect() }
+        }
+        let tabs = remoteTabs.filter { !$0.disconnected }
         // By connection (control path), not host id: a host edited while its tabs are open has two.
         for (path, hostTabs) in Dictionary(grouping: tabs, by: { RemoteConnection.controlPath($0.remote!.host) }) where !inFlight.contains(path) {
-            guard let host = hostTabs.first?.remote?.host, RemoteConnection.masterExists(host) else { continue }
+            guard let host = hostTabs.first?.remote?.host, RemoteConnection.masterAlive(host) else { continue }
             inFlight.insert(path)
             let specs = hostTabs.map { (id: $0.remoteKey, keep: $0.remote!.keep, session: $0.remote!.session) }
             RemoteConnection.run(host, script: RemoteShell.pollScript(tabs: specs), timeout: 10) { [weak self] result in

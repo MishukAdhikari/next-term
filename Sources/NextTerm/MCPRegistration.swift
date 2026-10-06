@@ -94,15 +94,26 @@ enum LoginShell {
         return found
     }()
 
+    /// What an interactive login shell (5 s at most) sets that a Finder-launched app lacks: PATH, and the
+    /// ssh agent socket (Secretive, 1Password, gpg-agent for a YubiKey are set up in .zshrc). One probe
+    /// per launch serves the agents' registration and remote tabs' ssh.
+    private static let probed: (path: [String], sshAuthSock: String?) = {
+        let marker = "__NEXTTERM_ENV__"
+        guard let output = capture(shell, ["-l", "-i", "-c", "printf '\(marker)%s\(marker)%s\(marker)' \"$PATH\" \"${SSH_AUTH_SOCK:-}\""], timeout: 5)
+        else { return ([], nil) }
+        let parts = output.components(separatedBy: marker)
+        guard parts.count >= 4 else { return ([], nil) }
+        let socket = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
+        return (parts[1].split(separator: ":").map(String.init), socket.isEmpty ? nil : socket)
+    }()
+
+    /// SSH_AUTH_SOCK as the user's shell sets it (nil: the shell leaves launchd's in place).
+    static var sshAuthSock: String? { probed.sshAuthSock }
+
     /// PATH from an interactive login shell (5 s at most), plus the usual install folders.
     static let path: [String] = {
         let home = NSHomeDirectory()
-        var directories: [String] = []
-        let marker = "__NEXTTERM_PATH__"
-        if let output = capture(shell, ["-l", "-i", "-c", "printf '\(marker)%s\(marker)' \"$PATH\""], timeout: 5),
-           let start = output.range(of: marker), let end = output.range(of: marker, range: start.upperBound..<output.endIndex) {
-            directories = output[start.upperBound..<end.lowerBound].split(separator: ":").map(String.init)
-        }
+        var directories = probed.path
         directories += ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "\(home)/.npm-global/bin",
                         "\(home)/.bun/bin", "\(home)/.volta/bin", "\(home)/.claude/local", "\(home)/.opencode/bin",
                         "\(home)/.amp/bin", "\(home)/.cargo/bin"]

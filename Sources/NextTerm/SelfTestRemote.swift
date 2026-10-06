@@ -1,10 +1,13 @@
 import AppKit
+import Darwin
 import NextTermCore
 
 /// Remote tabs (Connect VPS) end to end, against a stand-in ssh that runs the "remote" side on this Mac
-/// under a fake home (CI has no sshd). The real ssh is never involved; everything else is the real path:
-/// the tab's pty, the base64 scripts, the pid files, the status checks over the "master", reconnecting,
-/// and the MCP tools. tmux checks run when a tmux binary is found (PATH or NEXTTERM_TEST_TMUX).
+/// under a fake home (CI has no sshd), and a stand-in master: a Unix socket at the host's control path
+/// that accepts connections, as ssh's does. The real ssh is never involved; everything else is the real
+/// path: the tab's pty, the base64 scripts, the pid files and connection tokens, the status checks,
+/// reconnecting, and the MCP tools. tmux checks run when a tmux binary is found (PATH or
+/// NEXTTERM_TEST_TMUX), on a tmux socket folder of the test's own: the user's sessions are never touched.
 extension SelfTest {
     static func remoteChecks(_ c: TerminalWindowController) async {
         #if DEBUG
@@ -15,13 +18,49 @@ extension SelfTest {
     }
 
     #if DEBUG
+    /// Accepts connections on a control path, like a live ssh master; stop() is the connection dropping.
+    private final class StandInMaster {
+        let path: String
+        private var source: DispatchSourceRead?
+
+        init(path: String) { self.path = path }
+
+        func start() {
+            guard source == nil else { return }
+            unlink(path)
+            let sock = socket(AF_UNIX, SOCK_STREAM, 0)
+            var address = sockaddr_un()
+            address.sun_family = sa_family_t(AF_UNIX)
+            let bytes = Array(path.utf8)
+            withUnsafeMutableBytes(of: &address.sun_path) { buffer in
+                buffer.copyBytes(from: bytes)
+                buffer[bytes.count] = 0
+            }
+            let bound = withUnsafePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(sock, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+            }
+            guard bound == 0, listen(sock, 16) == 0 else { close(sock); return }
+            let source = DispatchSource.makeReadSource(fileDescriptor: sock, queue: .global())
+            source.setEventHandler { let client = accept(sock, nil, nil); if client >= 0 { close(client) } }
+            source.setCancelHandler { close(sock) }
+            source.resume()
+            self.source = source
+        }
+
+        func stop() {
+            source?.cancel()
+            source = nil
+            unlink(path)
+        }
+    }
+
     private static func remoteChecksWithStandInSSH(_ c: TerminalWindowController) async {
         let base = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nt-remote-\(getpid())")
         let home = base.appendingPathComponent("home")
         let bin = base.appendingPathComponent("bin")
         let project = home.appendingPathComponent("app")
-        try? FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let tmuxDir = base.appendingPathComponent("tmux") // TMUX_TMPDIR: the test's own tmux servers
+        for folder in [project, bin, tmuxDir] { try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true) }
         defer { try? FileManager.default.removeItem(at: base) }
 
         // tmux, if there is one, on the fake host's PATH.
@@ -30,40 +69,47 @@ extension SelfTest {
             .first { FileManager.default.isExecutableFile(atPath: $0) }
         if let tmux { try? FileManager.default.createSymbolicLink(atPath: bin.appendingPathComponent("tmux").path, withDestinationPath: tmux) }
 
+        // Flags in the test folder: "deny" makes ssh refuse the login (a wrong password), "unreachable"
+        // fails the network, "drop" ends the connection (255) once the remote command ends.
         let fakeSSH = bin.appendingPathComponent("ssh")
         let script = """
             #!/bin/bash
             # Stand-in for ssh: runs the remote command here, through a login shell's -c, like sshd.
-            cp=""; op=""; cmd=""
+            op=""; cmd=""
             while [ $# -gt 0 ]; do
               case "$1" in
-                -o) case "$2" in ControlPath=*) cp=${2#ControlPath=}; cp=${cp#\\"}; cp=${cp%\\"};; esac; shift 2;;
-                -p) shift 2;;
+                -o|-p|-F) shift 2;;
                 -O) op=$2; shift 2;;
                 --) cmd=$3; shift $#;;
                 *) shift;;
               esac
             done
-            if [ "$op" = exit ]; then rm -f "$cp"; exit 0; fi
-            [ -n "$cp" ] && : > "$cp"
-            export HOME=\(RemoteShell.quote(home.path)) SHELL=/bin/zsh PATH=\(RemoteShell.quote(bin.path)):/usr/bin:/bin:/usr/sbin:/sbin
+            B=\(RemoteShell.quote(base.path))
+            [ "$op" = exit ] && exit 0
+            if [ -e "$B/deny" ]; then echo 'nt@selftest.invalid: Permission denied (publickey).' >&2; exit 255; fi
+            if [ -e "$B/unreachable" ]; then echo 'ssh: connect to host selftest.invalid port 22: Connection refused' >&2; exit 255; fi
+            export HOME=\(RemoteShell.quote(home.path)) SHELL=/bin/zsh PATH=\(RemoteShell.quote(bin.path)):/usr/bin:/bin:/usr/sbin:/sbin TMUX_TMPDIR="$B/tmux"
             unset ZDOTDIR NEXTTERM_USER_ZDOTDIR
             cd "$HOME"
             /bin/zsh -f -c "$cmd"
             status=$?
-            if [ -e "$HOME/drop" ]; then rm -f "$HOME/drop"; exit 255; fi
+            if [ -e "$B/drop" ]; then rm -f "$B/drop"; exit 255; fi
             exit $status
             """
         try? script.write(to: fakeSSH, atomically: true, encoding: .utf8)
         chmod(fakeSSH.path, 0o755)
         RemoteConnection.testSSHPath = fakeSSH.path
         defer { RemoteConnection.testSSHPath = nil }
+        func flag(_ name: String, _ on: Bool) {
+            let path = base.appendingPathComponent(name).path
+            if on { FileManager.default.createFile(atPath: path, contents: nil) } else { unlink(path) }
+        }
 
         func sh(_ line: String) -> String {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/sh")
             process.arguments = ["-c", line]
-            process.environment = ["HOME": home.path, "PATH": bin.path + ":/usr/bin:/bin"]
+            process.environment = ["HOME": home.path, "PATH": bin.path + ":/usr/bin:/bin", "TMUX_TMPDIR": tmuxDir.path]
             let pipe = Pipe()
             process.standardOutput = pipe
             process.standardError = FileHandle.nullDevice
@@ -77,34 +123,50 @@ extension SelfTest {
         defer { RemoteHosts.all = savedHosts }
         var host = RemoteHost(name: "selftest", destination: "nt@selftest.invalid", directory: project.path, keep: .off)
         RemoteHosts.save(host)
+        let master = StandInMaster(path: RemoteConnection.controlPath(host))
+        master.start()
+        defer { master.stop() }
+        check(RemoteConnection.masterAlive(host), "remote: a master that accepts connections counts as up")
 
         // A plain remote shell: ssh in the tab's pty, the host's prompt, status from the host.
         let plain = c.addRemoteTab(RemoteTab(host: host))
-        check(!plain.remoteConnected, "remote: a new tab counts as connecting until the host runs its script")
-        check(plain.remote != nil && plain.title.hasPrefix("selftest: "), "remote: a tab on a host is named after it", plain.title)
-        check(await wait(20) { plain.remoteConnected }, "remote: the host reports the tab's script running (past ssh's login)")
+        check(!plain.remoteConnected && plain.title.hasPrefix("selftest: "), "remote: a new tab is named after its host and counts as connecting", plain.title)
+        check(await wait(20) { plain.remoteConnected }, "remote: the host proves this tab's own login (its connection token)")
         check(await wait(20) { plain.remoteReady }, "remote: the host reports the tab's shell at its prompt",
               plain.screenTail(6).joined(separator: " | "))
+        check(!plain.view.opensFiles, "remote: ⌘-click does not open this Mac's files from a remote tab")
         plain.view.send(txt: "sleep 4\r")
         check(await wait(8) { plain.status.running && plain.status.program == "sleep" }, "remote: what runs in front on the host is seen",
               "\(plain.status.running) \(plain.status.program)")
         check(await wait(10) { !plain.status.running }, "remote: and when it ends")
-        plain.view.send(txt: "printf 'remote-%s\\n' ok\r")
+        plain.view.send(txt: "sleep 60 &\r")
+        check(await wait(8) { plain.closeWarning?.contains("sleep") == true }, "remote: closing warns about the shell's background jobs on the host",
+              plain.closeWarning ?? "nil")
+        plain.view.send(txt: "kill %1; printf 'remote-%s\\n' ok\r")
         check(await wait(8) { plain.screenTail(10).contains { $0.contains("remote-ok") } }, "remote: typed commands run on the host")
-        check(plain.closeWarning == nil, "remote: an idle plain remote tab closes without asking")
 
         // The connection drops: the tab stays, says so, and Return reconnects (a new shell, for keep off).
         let pidFile = home.appendingPathComponent(".cache/next-term/tabs/\(plain.remoteKey)").path
-        let pid = Int32((try? String(contentsOfFile: pidFile, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
+        let pid = Int32(((try? String(contentsOfFile: pidFile, encoding: .utf8)) ?? "").split(separator: " ").first ?? "") ?? 0
         check(pid > 0, "remote: the tab's shell pid is recorded on the host")
-        FileManager.default.createFile(atPath: home.appendingPathComponent("drop").path, contents: nil)
+        master.stop()
+        flag("drop", true)
         if pid > 0 { kill(pid, SIGKILL) }
         check(await wait(10) { plain.disconnected }, "remote: a dropped connection keeps the tab, marked disconnected")
-        check(plain.screenTail(4).joined().contains("Return opens a new shell"), "remote: and says how to reconnect",
-              plain.screenTail(4).joined(separator: " | "))
-        check(!plain.exited && plain.stateDescription == "Disconnected", "remote: the tab is not gone")
+        check(plain.screenTail(4).joined().contains("Return opens a new shell") && plain.title.contains("(disconnected)"),
+              "remote: and says so, in the tab and its title", plain.title + " / " + plain.screenTail(4).joined(separator: " | "))
+        check(MCPControl.canType(plain) == false, "remote MCP: nothing is typed into a disconnected tab")
+        master.start()
         plain.view.send(txt: "\r")
         check(await wait(20) { !plain.disconnected && plain.remoteReady }, "remote: Return reconnects")
+
+        // A remote shell's own `exit 255` is not a dropped connection: the master is still up.
+        let exiting = c.addRemoteTab(RemoteTab(host: host))
+        _ = await wait(20) { exiting.remoteReady }
+        exiting.view.send(txt: "exit 255\r")
+        check(await wait(10) { exiting.exited }, "remote: a shell that exits 255 ends its tab like any shell (not 'connection lost')",
+              exiting.screenTail(4).joined(separator: " | "))
+        c.remove(exiting)
 
         // MCP: hosts and remote tabs, as an orchestrating agent sees them.
         let server = MCPControlServer.shared
@@ -123,6 +185,9 @@ extension SelfTest {
             check(!hosts.isError && hosts.text.contains("nt@selftest.invalid"), "remote MCP: list_hosts shows the host", hosts.text)
             let bad = await tool("add_host", ["name": "evil", "destination": "-oProxyCommand=touch /tmp/x"])
             check(bad.isError, "remote MCP: a destination ssh would read as an option is refused", bad.text)
+            let repoint = await tool("add_host", ["name": "selftest", "destination": "nt@elsewhere.invalid"])
+            check(repoint.isError && RemoteHosts.all.first { $0.id == host.id }?.destination == host.destination,
+                  "remote MCP: add_host does not re-point a saved host", repoint.text)
             let listed = await tool("list_tabs")
             check(listed.text.contains("\"host\" : \"selftest\""), "remote MCP: list_tabs names a remote tab's host", String(listed.text.prefix(400)))
             let probe = await tool("check_host", ["host": "selftest"])
@@ -142,7 +207,53 @@ extension SelfTest {
             _ = await wait(8) { workerTab?.screenTail(10).contains { $0.contains("worker-up") } ?? false }
             let read = await tool("read_tab", ["tab_id": workerID])
             check((read.json?["screen"] as? String)?.contains("worker-up") == true, "remote MCP: read_tab reads the remote tab", read.text)
-            if let tab = c.tabs.first(where: { $0.id.uuidString.lowercased() == workerID }) { c.remove(tab) }
+            if let workerTab { c.remove(workerTab) }
+
+            // A login ssh refuses is not retried by itself; a network failure is, until it works.
+            host.keep = .tmux
+            RemoteHosts.save(host)
+            master.stop()
+            flag("deny", true)
+            let denied = c.addRemoteTab(RemoteTab(host: host, keep: .tmux))
+            check(await wait(10) { denied.disconnected }, "remote: a refused login leaves the tab disconnected")
+            await pause(3)
+            check(denied.disconnected && denied.screenTail(4).joined().contains("ssh could not log in"), "remote: and is not retried by itself",
+                  denied.screenTail(4).joined(separator: " | "))
+            c.remove(denied)
+            flag("deny", false)
+            flag("unreachable", true)
+            let offline = c.addRemoteTab(RemoteTab(host: host, keep: .off))
+            check(await wait(10) { offline.disconnected }, "remote: an unreachable host leaves a plain tab waiting for Return")
+            c.remove(offline)
+            if tmux != nil {
+                let booting = c.addRemoteTab(RemoteTab(host: host, keep: .tmux))
+                check(await wait(10) { booting.disconnected && booting.screenTail(4).joined().contains("Trying again") },
+                      "remote: a kept tab that cannot reach its host tries again by itself", booting.screenTail(4).joined(separator: " | "))
+                flag("unreachable", false)
+                master.start()
+                check(await wait(20) { !booting.disconnected && booting.remoteConnected }, "remote: and connects once the host answers")
+
+                // Closing a kept tab detaches; the session can be found and reattached, or ended.
+                _ = await wait(10) { booting.remoteReady }
+                booting.view.send(txt: "sleep 300\r")
+                _ = await wait(10) { booting.status.running }
+                let session = booting.remote?.session ?? ""
+                let closed = await tool("close_tab", ["tab_id": booting.id.uuidString.lowercased()])
+                check(closed.json?["detached"] as? Bool == true && closed.json?["still_running"] as? String == "sleep",
+                      "remote MCP: close_tab on a kept tab says it only detached, and what still runs", closed.text)
+                let listedSessions = await tool("host_sessions", ["host": "selftest"])
+                check(listedSessions.text.contains(session), "remote MCP: host_sessions lists the detached session", listedSessions.text)
+                let back = await tool("new_remote_tab", ["host": "selftest", "session": session], timeout: 60)
+                let backTab = c.tabs.first { $0.id.uuidString.lowercased() == (back.json?["id"] as? String ?? "") }
+                check(await wait(20) { backTab?.status.program == "sleep" }, "remote MCP: new_remote_tab with session reattaches to it",
+                      backTab?.screenTail(4).joined(separator: " | ") ?? back.text)
+                let ended = await tool("close_tab", ["tab_id": backTab?.id.uuidString.lowercased() ?? "", "force": true])
+                let gone = await wait(10) { !sh("tmux -L nextterm list-sessions -F '#{session_name}' 2>/dev/null").contains(session) }
+                check(ended.json?["session_ended"] as? String == session && gone, "remote MCP: close_tab force ends the session", ended.text)
+            } else {
+                flag("unreachable", false)
+                master.start()
+            }
         } else {
             check(false, "remote MCP: `nxtrm mcp` starts")
         }
@@ -164,17 +275,19 @@ extension SelfTest {
         check(sh("tmux -L nextterm list-sessions -F '#{session_name}'").contains(session), "remote tmux: the session is on the host's private tmux server")
         await pause(10.5) // a connection that worked for a while reconnects by itself when it drops
         let client = sh("tmux -L nextterm list-clients -t \(RemoteShell.quote(session)) -F '#{client_pid}'").trimmingCharacters(in: .whitespacesAndNewlines)
-        FileManager.default.createFile(atPath: home.appendingPathComponent("drop").path, contents: nil)
+        master.stop()
+        flag("drop", true)
         if let clientPID = Int32(client.split(separator: "\n").first ?? "") { kill(clientPID, SIGKILL) }
         check(await wait(10) { kept.disconnected }, "remote tmux: the dropped connection is seen")
         check(sh("tmux -L nextterm list-sessions -F '#{session_name}'").contains(session), "remote tmux: the session keeps running without a client")
+        master.start()
         check(await wait(20) { !kept.disconnected && kept.remoteReady }, "remote tmux: the tab reconnects by itself")
         kept.view.send(txt: "echo again-$NT_MARK\r")
         check(await wait(8) { kept.screenTail(20).contains { $0.contains("again-kept-\(getpid())") } }, "remote tmux: to the same session (its shell kept its state)",
               kept.screenTail(8).joined(separator: " | "))
         c.remove(kept)
         check(await wait(5) { sh("tmux -L nextterm list-sessions -F '#{session_name}'").contains(session) }, "remote tmux: closing the tab only detaches")
-        _ = sh("tmux -L nextterm kill-server")
+        _ = sh("tmux -L nextterm kill-server") // the test's own server (TMUX_TMPDIR)
     }
     #endif
 }

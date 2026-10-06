@@ -240,6 +240,7 @@ enum MCPControl {
     private static func state(_ tab: TerminalTab) -> String {
         if tab.exited { return "exited" }
         if tab.disconnected { return "disconnected" }
+        if tab.remote != nil && !tab.remoteConnected { return "connecting" }
         let state = tab.status.state
         if state == .idle && tab.status.running && tab.status.kind != .agent { return "running" }
         return state.rawValue
@@ -267,6 +268,8 @@ enum MCPControl {
         if let code = tab.status.exitCode, tab.status.state == .failed { info["exit_code"] = Int(code) }
         if tab === caller { info["you"] = true }
         if let remote = tab.remote {
+            if tab.loginPrompt { info["login_prompt"] = true } // ssh asks the user something in that tab
+            if let refusal = RemoteConnection.refusal(remote.host) { info["host_problem"] = refusal }
             info["host"] = remote.host.name
             info["host_id"] = remote.host.id
             info["keep"] = remote.keep.rawValue
@@ -406,7 +409,7 @@ enum MCPControl {
             tab = owner.addTab(directory: directory, select: false)
         } else {
             controller = app.openFolder(ProjectRoot.find(from: directory), newWindow: false)
-            if controller.tabs.count == 1, let first = controller.tabs.first, first.status.command.isEmpty,
+            if controller.tabs.count == 1, let first = controller.tabs.first, first.remote == nil, first.status.command.isEmpty,
                canonicalPath(first.directory) == directory {
                 tab = first
             } else {
@@ -433,13 +436,21 @@ enum MCPControl {
     /// Types text as a paste (literal, never run early), then presses Return after a moment: agents
     /// take a paste in as a block and only treat a separate Return as "send".
     static func type(_ text: String, into tab: TerminalTab, submit: Bool) {
+        guard canType(tab) else { return }
         tab.view.typeText(text)
         guard submit else { return }
         sent(to: tab)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-            guard !tab.exited else { return }
+            guard canType(tab) else { return } // the connection may have dropped in between
             tab.view.send(txt: "\r")
         }
+    }
+
+    /// Whether MCP may type into the tab right now. Checked before every key: a remote tab whose
+    /// connection drops mid-sequence would otherwise take a Return as "reconnect", and the keys after it
+    /// would go to ssh's new login (a password prompt).
+    static func canType(_ tab: TerminalTab) -> Bool {
+        !tab.exited && !tab.disconnected && tab.view.acceptsInput && (tab.remote == nil || tab.remoteConnected)
     }
 
     private static func target(_ arguments: [String: Any], caller: TerminalTab?) -> Result<TerminalTab, MCPError> {
@@ -494,7 +505,10 @@ enum MCPControl {
             guard index < sequences.count else {
                 return reply(ok(["id": tab.id.uuidString.lowercased(), "pressed": names]))
             }
-            if !tab.exited { tab.view.send(txt: sequences[index]) }
+            guard canType(tab) else {
+                return reply(fail("Stopped after \(index) of \(sequences.count) keys: the tab \(tab.disconnected ? "lost its connection" : "can no longer take input")."))
+            }
+            tab.view.send(txt: sequences[index])
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { press(index + 1) }
         }
         sent(to: tab)
@@ -514,7 +528,25 @@ enum MCPControl {
             return fail("No tab with that id; list_tabs shows them.")
         }
         if tab === caller { return fail("That is your own tab.") }
-        if let warning = tab.closeWarning, !(arguments["force"] as? Bool ?? false) {
+        let force = arguments["force"] as? Bool ?? false
+        // A kept tmux tab: closing only detaches, and what runs there goes on. force ends the session.
+        if let remote = tab.remote, tab.isKept, remote.keep == .tmux, tab.remoteConnected {
+            let program = tab.status.running ? tab.status.program : nil
+            guard force else {
+                controller.remove(tab)
+                lastSent.removeValue(forKey: tab.id)
+                var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "closed": true, "detached": true,
+                                           "host": remote.host.name, "session": remote.session]
+                if let program { info["still_running"] = program }
+                info["note"] = "The tmux session keeps running on the host: reattach with new_remote_tab (session), or end it with close_tab force."
+                return ok(info)
+            }
+            RemoteConnection.endSession(remote.host, session: remote.session) { _ in }
+            controller.remove(tab)
+            lastSent.removeValue(forKey: tab.id)
+            return ok(["id": tab.id.uuidString.lowercased(), "closed": true, "session_ended": remote.session])
+        }
+        if let warning = tab.closeWarning, !force {
             return fail("The tab is running \(warning); pass force: true to stop it and close the tab.")
         }
         controller.remove(tab)

@@ -54,7 +54,7 @@ public enum MCPServer {
 
     public static let tools: [Tool] = [
         Tool(name: "list_tabs", title: "List projects and tabs",
-             description: "Every Next Term window (one per project) and its terminal tabs: id, title, folder, the program running, and its state: idle, working (an agent is busy), done, failed, or attention (an agent waits for a decision; the question is included). The tab you run in has \"you\": true.",
+             description: "Every Next Term window (one per project) and its terminal tabs: id, title, folder, the program running, and its state: idle, working (an agent is busy), done, failed, or attention (an agent waits for a decision; the question is included). Remote tabs also have their host, and can be connecting (ssh is logging in; login_prompt: the user must answer ssh in that tab) or disconnected. The tab you run in has \"you\": true.",
              inputSchema: #"{"type": "object", "properties": {"project": {"type": "string", "description": "Only the window of this project folder."}}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "read_tab", title: "Read a tab's screen",
@@ -98,7 +98,7 @@ public enum MCPServer {
              inputSchema: #"{"type": "object", "properties": {\#(tabID)}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "close_tab", title: "Close a tab",
-             description: "Closes a tab. A tab with something running is refused unless force is true, which stops it.",
+             description: "Closes a tab. A tab with something running is refused unless force is true, which stops it. A remote tab kept by tmux only detaches: what runs there keeps running on the host (the answer says so; new_remote_tab with session reattaches), and force ends that tmux session.",
              inputSchema: #"{"type": "object", "properties": {\#(tabID), "force": {"type": "boolean"}}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: false, timeout: 15),
         Tool(name: "list_hosts", title: "List remote hosts",
@@ -114,7 +114,7 @@ public enum MCPServer {
              inputSchema: #"{"type": "object", "properties": {\#(hostRef)}, "required": ["host"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: true, timeout: 15),
         Tool(name: "check_host", title: "Check a remote host",
-             description: "Connects without prompting (over a remote tab's open connection, or a key in the ssh agent) and reports what the host has: OS, login shell, tmux and herdr versions, git, the agents on PATH (claude, codex, gemini), and Next Term's kept tmux sessions. Fails, rather than asks, if ssh would need a password or a host key confirmation: open a remote tab for the user then.",
+             description: "Reports what a host has: OS, login shell, tmux and herdr versions, git, the agents on PATH (claude, codex, gemini), and Next Term's kept tmux sessions. It runs over the open connection of a remote tab on that host and never logs in by itself: with no tab connected there, open one (new_remote_tab) and let the user answer ssh in it.",
              inputSchema: #"{"type": "object", "properties": {\#(hostRef)}, "required": ["host"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: true, timeout: 30, openWorld: true),
         Tool(name: "new_remote_tab", title: "New tab on a remote host",

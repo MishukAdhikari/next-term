@@ -87,6 +87,9 @@ public struct RemoteHost: Codable, Equatable, Sendable {
         guard destination.unicodeScalars.allSatisfy(allowed.contains) else {
             return "The destination may only hold letters, digits and . _ - @ : % + (no spaces; the port goes in its own field)."
         }
+        // host:2222 is not a destination ssh understands (IPv6 addresses have several colons).
+        let hostPart = destination.split(separator: "@", omittingEmptySubsequences: false).last ?? ""
+        if hostPart.filter({ $0 == ":" }).count == 1 { return "Put the port in the Port field, not after a colon." }
         return nil
     }
 
@@ -113,6 +116,9 @@ public struct RemoteHost: Codable, Equatable, Sendable {
 /// A remote tab as saved at quit, so Next Term reattaches to its session at the next launch.
 public struct RemoteTabRecord: Codable, Equatable, Sendable {
     public var hostID: String
+    /// Where the host pointed when the tab was saved: a host re-pointed since is not followed.
+    public var destination: String?
+    public var port: Int?
     public var directory: String
     public var session: String
     public var keep: KeepMode
@@ -120,8 +126,11 @@ public struct RemoteTabRecord: Codable, Equatable, Sendable {
     public var project: String?
     public var title: String?
 
-    public init(hostID: String, directory: String, session: String, keep: KeepMode, project: String? = nil, title: String? = nil) {
+    public init(hostID: String, destination: String? = nil, port: Int? = nil, directory: String, session: String, keep: KeepMode,
+                project: String? = nil, title: String? = nil) {
         self.hostID = hostID
+        self.destination = destination
+        self.port = port
         self.directory = directory
         self.session = session
         self.keep = keep
@@ -137,9 +146,10 @@ public enum SSHArguments {
     /// every background check (ControlMaster). The master stays 10 minutes after its last use.
     /// ClearAllForwardings: Next Term forwards nothing (not its MCP socket, not its IDE ports), and a
     /// forward in the user's ssh config would clash with their own sessions.
-    public static func common(controlPath: String, port: Int?) -> [String] {
-        var args = [
-            "-o", "ControlMaster=auto",
+    public static func common(controlPath: String, port: Int?, configFile: String? = nil, master: String = "auto") -> [String] {
+        var args: [String] = configFile.map { ["-F", $0] } ?? []
+        args += [
+            "-o", "ControlMaster=\(master)",
             "-o", "ControlPath=\"\(controlPath)\"",
             "-o", "ControlPersist=600",
             "-o", "ServerAliveInterval=15",
@@ -153,20 +163,35 @@ public enum SSHArguments {
         return args
     }
 
-    /// A terminal tab: a pty on the host running `command`. No escape character, so text pasted into an
-    /// agent (or typed by MCP) that starts a line with "~." cannot cut the connection.
-    public static func tab(_ host: RemoteHost, controlPath: String, command: String) -> [String] {
-        common(controlPath: controlPath, port: host.port) + ["-t", "-o", "EscapeChar=none", "--", host.destination, command]
+    /// A terminal tab: a pty on the host running `command`. Host keys: ssh asks, in the tab, about a new
+    /// one and refuses a changed one, whatever the user's config says (accept-new and no would take keys
+    /// with nobody looking). The option reaches ProxyJump hops through `configFile` (see `configText`).
+    /// No escape character, so text pasted into an agent (or typed by MCP) that starts a line with "~."
+    /// cannot cut the connection.
+    public static func tab(_ host: RemoteHost, controlPath: String, configFile: String? = nil, command: String) -> [String] {
+        common(controlPath: controlPath, port: host.port, configFile: configFile)
+            + ["-t", "-o", "StrictHostKeyChecking=ask", "-o", "EscapeChar=none", "--", host.destination, command]
     }
 
-    /// A background command (status checks, git). Never prompts: with no master and no usable key it
-    /// fails. An unknown or changed host key is refused, never accepted, whatever the user's config says
-    /// (accept-new or no would otherwise add a key with nobody looking). Over an open master the key was
-    /// checked when the tab connected, in front of the user.
-    public static func exec(_ host: RemoteHost, controlPath: String, command: String) -> [String] {
-        common(controlPath: controlPath, port: host.port)
-            + ["-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "--", host.destination, command]
+    /// A background command (status checks, git): only ever a session on a master a tab opened, in front
+    /// of the user. It never logs in itself, so it can neither prompt nor meet a host key: with no master
+    /// it fails, and if the master refuses the session (sshd's MaxSessions) the direct connection ssh
+    /// would fall back to goes nowhere (ProxyCommand false).
+    public static func exec(_ host: RemoteHost, controlPath: String, configFile: String? = nil, command: String) -> [String] {
+        common(controlPath: controlPath, port: host.port, configFile: configFile, master: "no")
+            + ["-T", "-o", "BatchMode=yes", "-o", "ProxyCommand=/usr/bin/false", "--", host.destination, command]
     }
+
+    /// Next Term's ssh config, given with -F: the user's own config (system and ~/.ssh/config) as ssh would
+    /// read it, after one rule. ssh passes -F to ProxyJump hops, so they ask about host keys too.
+    public static let configText = """
+        # Written by Next Term for its remote tabs; your own config is included below, unchanged.
+        Host *
+          StrictHostKeyChecking ask
+        Include /etc/ssh/ssh_config
+        Include ~/.ssh/config
+
+        """
 
     /// Asks the master to exit (at quit).
     public static func exit(_ host: RemoteHost, controlPath: String) -> [String] {
@@ -271,7 +296,9 @@ public enum RemoteShell {
 
     /// What a tab runs on the host. Every mode records the tab's shell pid, so status checks can find
     /// what runs in front of it.
-    public static func tabScript(keep: KeepMode, directory: String, session: String, tabID: String) -> String {
+    /// `token` is new for every connection: written beside the pid once the host runs this script (past
+    /// ssh's login), it is how this tab, and only it, learns that its own connection is up.
+    public static func tabScript(keep: KeepMode, directory: String, session: String, tabID: String, token: String = "") -> String {
         // K: this tab's files on the host. K.plain: tmux or herdr was missing, so this is a plain shell.
         // K.nodir: the folder was not there.
         var lines = [
@@ -283,7 +310,7 @@ public enum RemoteShell {
             "  printf 'Next Term: %s is not a folder on this host; this tab opened in your home folder.\\r\\n' \(quote(directory))",
             "  cd",
             "fi",
-            "printf '%s\\n' \"$$\" > \"$K\" 2>/dev/null",
+            "printf '%s %s\\n' \"$$\" \(quote(safeName(token))) > \"$K\" 2>/dev/null",
         ]
         switch keep {
         case .off:
@@ -327,49 +354,56 @@ public enum RemoteShell {
             "  if [ -z \"$g\" ] || [ \"$g\" = -1 ] || [ \"$g\" = 0 ]; then echo '?'; return; fi",
             "  if [ \"$g\" = \"$p\" ]; then echo shell; return; fi",
             "  c=$(ps -o comm= -p \"$g\" 2>/dev/null)",
-            "  a=$(ps -o args= -p \"$g\" 2>/dev/null | tr '\\t' ' ')",
-            "  if [ -z \"$c\" ] && [ -r \"/proc/$g/comm\" ]; then c=$(cat \"/proc/$g/comm\"); a=$(tr '\\000\\t' '  ' < \"/proc/$g/cmdline\" 2>/dev/null); fi",
+            "  a=$(ps -o args= -p \"$g\" 2>/dev/null)",
+            "  if [ -z \"$c\" ] && [ -r \"/proc/$g/comm\" ]; then c=$(cat \"/proc/$g/comm\"); a=$(tr '\\000' ' ' < \"/proc/$g/cmdline\" 2>/dev/null); fi",
+            "  c=$(nt_clean \"$c\" 64); a=$(nt_clean \"$a\" 400)",
             "  if [ -z \"$c\" ]; then echo '?'; else printf 'fg\\t%s\\t%s\\n' \"$c\" \"$a\"; fi",
             "}",
-            "printf '%s\\n' \(quote(marker))",
+            // What a host reports goes on one line of its own: no control characters (a newline in a
+            // folder or command line could otherwise forge another tab's line), and a bounded length.
+            "nt_clean() { printf '%s' \"$1\" | tr -d '\\001-\\037\\177' | cut -c \"1-$2\"; }",
+            // Jobs the tab's shell holds besides the one in front: suspended or in the background.
+            "nt_jobs() {",
+            "  ps -A -o ppid= -o pgid= -o stat= -o comm= 2>/dev/null | awk -v p=\"$1\" -v g=\"$2\" '$1 == p && $2 != g { n++; s = s $4 ($3 ~ /T/ ? \" (suspended)\" : \" (running)\") \";\" } END { if (n) printf \"%d\\t%s\", n, s }' | tr -d '\\001-\\010\\012-\\037\\177'",
+            "}",
+            "printf '\\n%s\\n' \(quote(marker))",
         ]
         for tab in tabs {
             let id = safeName(tab.id)
+            // The pid file: "<shell pid> <this connection's token>".
+            lines.append("set -- $(cat \"$C/tabs/\(id)\" 2>/dev/null); s=$1; t=$(printf '%s' \"$2\" | tr -cd '0-9A-Za-z_-'); p=$s; d=")
             switch tab.keep {
             case .herdr:
-                // herdr reports its agents itself; the pid only shows the tab got past ssh's login.
-                lines.append("p=$(cat \"$C/tabs/\(id)\" 2>/dev/null); d=")
+                break // herdr reports its agents itself; the pid file shows the tab got past ssh's login
             case .tmux:
                 lines += [
-                    "p= ; d=",
                     "if [ -n \"$T\" ]; then",
-                    "  p=$(\"$T\" -L nextterm display-message -p -t \(quote("=" + safeName(tab.session) + ":")) '#{pane_pid}' 2>/dev/null)",
+                    "  q=$(\"$T\" -L nextterm display-message -p -t \(quote("=" + safeName(tab.session) + ":")) '#{pane_pid}' 2>/dev/null)",
+                    "  [ -n \"$q\" ] && p=$q",
                     "  d=$(\"$T\" -L nextterm display-message -p -t \(quote("=" + safeName(tab.session) + ":")) '#{pane_current_path}' 2>/dev/null)",
                     "fi",
-                    "[ -n \"$p\" ] || p=$(cat \"$C/tabs/\(id)\" 2>/dev/null)",
                 ]
             case .off:
-                lines += [
-                    "p=$(cat \"$C/tabs/\(id)\" 2>/dev/null); d=",
-                    "[ -n \"$p\" ] && d=$(readlink \"/proc/$p/cwd\" 2>/dev/null)",
-                ]
+                lines.append("[ -n \"$p\" ] && d=$(readlink \"/proc/$p/cwd\" 2>/dev/null)")
             }
             lines += [
+                "[ -n \"$t\" ] && printf '%s\\tup\\t%s\\n' \(quote(id)) \"$t\"",
                 "printf '%s\\t' \(quote(id)); nt_fg \"$p\"",
-                "[ -n \"$d\" ] && printf '%s\\tdir\\t%s\\n' \(quote(id)) \"$d\"",
+                "d=$(nt_clean \"$d\" 1024); [ -n \"$d\" ] && printf '%s\\tdir\\t%s\\n' \(quote(id)) \"$d\"",
+                "if [ -n \"$p\" ] && [ -n \"$g\" ]; then j=$(nt_jobs \"$p\" \"$g\"); [ -n \"$j\" ] && printf '%s\\tjobs\\t%s\\n' \(quote(id)) \"$j\"; fi",
                 "[ -e \"$C/tabs/\(id).plain\" ] && printf '%s\\tplain\\n' \(quote(id))",
                 "[ -e \"$C/tabs/\(id).nodir\" ] && printf '%s\\tnodir\\n' \(quote(id))",
             ]
         }
         if tabs.contains(where: { $0.keep == .herdr }) {
-            lines += [findHerdr, "if [ -n \"$H\" ]; then printf '%s\\n' \(quote(herdrMarker)); \"$H\" agent list 2>/dev/null | tr -d '\\n'; echo; fi"]
+            lines += [findHerdr, "if [ -n \"$H\" ]; then printf '\\n%s\\n' \(quote(herdrMarker)); \"$H\" agent list 2>/dev/null | tr -d '\\000-\\037' | head -c 1000000; echo; fi"]
         }
         return lines.joined(separator: "\n")
     }
 
     /// What the host has: for check_host and the sheet.
     public static let probeScript = """
-        printf '%s\\n' \(quote(marker))
+        printf '\\n%s\\n' \(quote(marker))
         printf 'os\\t%s\\n' "$(uname -sm 2>/dev/null)"
         printf 'shell\\t%s\\n' "${SHELL:-}"
         printf 'home\\t%s\\n' "$HOME"
@@ -386,13 +420,18 @@ public enum RemoteShell {
 
     /// The kept sessions on a host: Next Term's tmux sessions, and herdr's agents.
     public static let sessionsScript = """
-        printf '%s\\n' \(quote(marker))
+        printf '\\n%s\\n' \(quote(marker))
         \(findTmux)
         [ -n "$T" ] && "$T" -L nextterm list-sessions -F 'session\t#{session_name}\t#{session_attached}\t#{pane_current_path}\t#{pane_current_command}' 2>/dev/null
         \(findHerdr)
-        if [ -n "$H" ]; then printf '%s\\n' \(quote(herdrMarker)); "$H" agent list 2>/dev/null | tr -d '\\n'; echo; fi
+        if [ -n "$H" ]; then printf '\\n%s\\n' \(quote(herdrMarker)); "$H" agent list 2>/dev/null | tr -d '\\000-\\037' | head -c 1000000; echo; fi
         true
         """
+
+    /// Ends one of Next Term's tmux sessions (End Session on close, MCP close_tab with force).
+    public static func killSessionScript(session: String) -> String {
+        "\(findTmux)\n[ -n \"$T\" ] && \"$T\" -L nextterm kill-session -t \(quote("=" + safeName(session))) 2>/dev/null\nprintf '\\n%s\\n' \(quote(marker))"
+    }
 
     /// What changed in a git work tree on the host: status, a diffstat, and the diff (cut at `maxBytes`).
     /// Never takes git's index lock, and no fsmonitor hook runs.
@@ -402,7 +441,7 @@ public enum RemoteShell {
         G='git -c core.fsmonitor=false -c core.pager=cat'
         export GIT_OPTIONAL_LOCKS=0
         $G rev-parse --show-toplevel >/dev/null 2>&1 || { echo 'Not a git work tree.' >&2; exit 4; }
-        printf '%s\\n' \(quote(marker))
+        printf '\\n%s\\n' \(quote(marker))
         $G status --porcelain=v1 -b 2>/dev/null
         printf '%s\\n' \(quote(statMarker))
         B=HEAD; $G rev-parse --verify -q HEAD >/dev/null || B=$($G hash-object -t tree /dev/null)
@@ -427,9 +466,15 @@ public enum RemoteShell {
     }
 
     /// The lines after the marker (nil when the marker never came: the script did not run).
+    /// The marker is printed on a line of its own, after a newline, but rc-file noise before it may lack
+    /// one, and lines may end in CRLF: split on "\n" alone (a Character split keeps "\r\n" whole) and
+    /// take the first line that ends with the marker.
     public static func payload(_ output: String, after mark: String = marker) -> [Substring]? {
-        let lines = output.split(separator: "\n", omittingEmptySubsequences: false).map { $0.hasSuffix("\r") ? $0.dropLast() : $0 }
-        guard let start = lines.firstIndex(where: { $0 == mark }) else { return nil }
+        let lines = output.components(separatedBy: "\n").map { line -> Substring in
+            let cut = line.hasSuffix("\r") ? line.dropLast() : Substring(line)
+            return cut
+        }
+        guard let start = lines.firstIndex(where: { $0.hasSuffix(mark) }) else { return nil }
         return Array(lines[(start + 1)...])
     }
 }
@@ -443,6 +488,11 @@ public struct RemoteTabReport: Equatable, Sendable {
     public var directory: String?
     /// The tab's script ran on the host (it got past ssh's login).
     public var started = false
+    /// The connection token the tab's script wrote: equal to the tab's own only for its current connection.
+    public var token: String?
+    /// Jobs the shell holds besides the one in front (suspended or in the background).
+    public var jobs = 0
+    public var jobSummary = ""
     /// tmux or herdr was missing: the tab is a plain shell, kept by nothing.
     public var plain = false
     /// The folder asked for was not there; the tab opened in the home folder.
@@ -472,6 +522,11 @@ public struct RemotePoll: Equatable, Sendable {
             guard fields.count >= 2, !fields[0].isEmpty else { continue }
             var report = poll.tabs[fields[0]] ?? RemoteTabReport()
             switch fields[1] {
+            case "up" where fields.count >= 3:
+                report.token = fields[2]
+            case "jobs" where fields.count >= 3:
+                report.jobs = Int(fields[2]) ?? 0
+                report.jobSummary = fields.count > 3 ? fields[3].split(separator: ";").map(String.init).joined(separator: "\n") : ""
             case "plain":
                 report.plain = true
             case "nodir":
@@ -522,8 +577,8 @@ public struct HerdrAgent: Equatable, Sendable {
         return list.map { item in
             let label = [item["name"], item["display_agent"], item["agent"]].compactMap { $0 as? String }.first { !$0.isEmpty }
             return HerdrAgent(
-                paneID: item["pane_id"] as? String ?? "",
-                name: label ?? "agent",
+                paneID: String((item["pane_id"] as? String ?? "").prefix(80)),
+                name: String((label ?? "agent").prefix(80)),
                 status: Status(rawValue: item["agent_status"] as? String ?? "") ?? .unknown,
                 title: (item["terminal_title_stripped"] as? String) ?? (item["title"] as? String),
                 directory: (item["foreground_cwd"] as? String) ?? (item["cwd"] as? String)

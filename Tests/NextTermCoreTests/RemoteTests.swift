@@ -14,6 +14,9 @@ import Testing
         #expect(RemoteHost.destinationProblem("host other") != nil)
         #expect(RemoteHost.destinationProblem("$(id)") != nil)
         #expect(RemoteHost.destinationProblem("") != nil)
+        // A port after a colon is not a destination ssh understands.
+        #expect(RemoteHost.destinationProblem("me@web:2222") != nil)
+        #expect(RemoteHost.destinationProblem("web:2222") != nil)
     }
 
     @Test func foldersMustBeAbsoluteOrHomeRelativeWithoutControlCharacters() {
@@ -55,14 +58,25 @@ import Testing
         #expect(!args.contains("-R") && !args.contains("-L") && !args.contains("-A"))
     }
 
-    @Test func backgroundCommandsNeverPrompt() {
-        let args = SSHArguments.exec(host, controlPath: "/x/abc", command: "true")
+    @Test func backgroundCommandsOnlyRideAnOpenMasterAndNeverLogIn() {
+        let args = SSHArguments.exec(host, controlPath: "/x/abc", configFile: "/x/ssh_config", command: "true")
         #expect(args.contains("BatchMode=yes"))
         #expect(args.contains("-T"))
-        // An unknown or changed host key is refused even if the user's config says accept-new or no.
-        #expect(args.contains("StrictHostKeyChecking=yes"))
-        // Tabs leave host keys to the user's config: ssh asks there, in front of the user.
-        #expect(!SSHArguments.tab(host, controlPath: "/x/abc", command: "true").contains { $0.contains("StrictHostKeyChecking") })
+        // No master of their own, and no fallback login if the master refuses the session.
+        #expect(args.contains("ControlMaster=no") && !args.contains("ControlMaster=auto"))
+        #expect(args.contains("ProxyCommand=/usr/bin/false"))
+        #expect(args.prefix(2) == ["-F", "/x/ssh_config"])
+    }
+
+    @Test func tabsAskAboutHostKeysWhateverTheUsersConfigSays() {
+        let args = SSHArguments.tab(host, controlPath: "/x/abc", configFile: "/x/ssh_config", command: "true")
+        #expect(args.contains("StrictHostKeyChecking=ask"))
+        #expect(args.contains("ControlMaster=auto"))
+        // ProxyJump hops get the same rule through the -F config, which then reads the user's own.
+        #expect(SSHArguments.configText.contains("StrictHostKeyChecking ask"))
+        let lines = SSHArguments.configText.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        #expect(lines.firstIndex(of: "StrictHostKeyChecking ask")! < lines.firstIndex(of: "Include ~/.ssh/config")!)
+        #expect(lines.contains("Include /etc/ssh/ssh_config"))
     }
 
     @Test func controlNamesAreShortStableAndPerDestination() {
@@ -151,12 +165,13 @@ import Testing
 
     @Test func anOffTabRecordsItsShellPidAndStartsALoginShell() throws {
         let home = try temporaryHome()
-        let script = RemoteShell.tabScript(keep: .off, directory: "~", session: "s", tabID: "tab1")
+        let script = RemoteShell.tabScript(keep: .off, directory: "~", session: "s", tabID: "tab1", token: "t0k3n")
             .replacingOccurrences(of: "exec \"${SHELL:-/bin/sh}\" -l", with: "echo started")
         let output = try run(RemoteShell.command(script), home: home)
         #expect(output.contains("started"))
-        let pid = try String(contentsOfFile: home + "/.cache/next-term/tabs/tab1", encoding: .utf8)
-        #expect(Int(pid.trimmingCharacters(in: .whitespacesAndNewlines)) != nil)
+        let fields = try String(contentsOfFile: home + "/.cache/next-term/tabs/tab1", encoding: .utf8).split(separator: " ")
+        #expect(Int(fields.first ?? "") != nil)
+        #expect(fields.last?.trimmingCharacters(in: .whitespacesAndNewlines) == "t0k3n")
     }
 
     @Test func tmuxAndHerdrTabsFallBackToAPlainShellWhenNotInstalled() {
@@ -178,9 +193,9 @@ import Testing
         let unknown = try #require(RemotePoll.parse(try run(RemoteShell.command(script), home: home)))
         #expect(unknown.tabs["tab1"]?.foreground == nil)
         // The poll's own process: its pid file names a live process with no terminal (tpgid -1 or 0).
-        try "\(getpid())\n".write(toFile: home + "/.cache/next-term/tabs/tab1", atomically: true, encoding: .utf8)
+        try "\(getpid()) abc123\n".write(toFile: home + "/.cache/next-term/tabs/tab1", atomically: true, encoding: .utf8)
         let poll = try #require(RemotePoll.parse(try run(RemoteShell.command(script), home: home)))
-        #expect(poll.tabs["tab1"] != nil)
+        #expect(poll.tabs["tab1"]?.token == "abc123")
     }
 }
 
@@ -198,6 +213,8 @@ import Testing
             f6\tplain
             f6\tnodir
             f6\tshell
+            f6\tup\t0123abcd
+            f6\tjobs\t2\tsleep (running);vim (suspended);
             """
         let poll = try #require(RemotePoll.parse(output))
         #expect(poll.tabs["a1"]?.foreground?.isShell == true)
@@ -211,7 +228,36 @@ import Testing
         #expect(poll.tabs["e5"]?.foreground?.name == "bash")
         #expect(poll.tabs["d4"]?.started == false && poll.tabs["b2"]?.started == true)
         #expect(poll.tabs["f6"]?.plain == true && poll.tabs["f6"]?.folderMissing == true && poll.tabs["f6"]?.started == true)
+        #expect(poll.tabs["f6"]?.token == "0123abcd")
+        #expect(poll.tabs["f6"]?.jobs == 2 && poll.tabs["f6"]?.jobSummary == "sleep (running)\nvim (suspended)")
         #expect(RemotePoll.parse("no marker at all") == nil)
+    }
+
+    @Test func theMarkerIsFoundAfterNoiseWithoutANewlineAndInCRLFOutput() throws {
+        let noisy = "Last login: today" + RemoteShell.marker + "\r\na1\tshell\r\na1\tup\tabc\r\n"
+        let poll = try #require(RemotePoll.parse(noisy))
+        #expect(poll.tabs["a1"]?.foreground?.isShell == true)
+        #expect(poll.tabs["a1"]?.token == "abc")
+    }
+
+    @Test func aHostCannotForgeLinesThroughAFolderNameWithANewline() throws {
+        // The poll prints what a host reports through nt_clean: run it the way a host would.
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("nt-forge-\(UUID().uuidString)").path
+        let evil = home + "/x\nb2\tfg\tclaude\tclaude"
+        try FileManager.default.createDirectory(atPath: evil, withIntermediateDirectories: true)
+        let script = RemoteShell.pollScript(tabs: []) + "\nd=$(nt_clean \(RemoteShell.quote(evil)) 1024); printf 'a1\\tdir\\t%s\\n' \"$d\""
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", RemoteShell.command(script)]
+        process.environment = ["HOME": home, "PATH": "/usr/bin:/bin"]
+        let out = Pipe()
+        process.standardOutput = out
+        try process.run()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let poll = try #require(RemotePoll.parse(String(decoding: data, as: UTF8.self)))
+        #expect(poll.tabs["b2"] == nil)
+        #expect(poll.tabs["a1"]?.directory?.contains("b2") == true)
     }
 
     @Test func herdrAgentsParseFromEitherShapeAndIgnoreUnknownFields() throws {

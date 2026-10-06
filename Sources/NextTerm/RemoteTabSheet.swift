@@ -25,6 +25,10 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
     private let folderField = NSTextField()
     private let keepControl = NSSegmentedControl(labels: KeepMode.allCases.map(\.label), trackingMode: .selectOne, target: nil, action: nil)
     private let keepNote = NSTextField(wrappingLabelWithString: "")
+    /// Next Term's tmux sessions still running on the host, to reattach one (after a closed tab).
+    private let sessionPopup = NSPopUpButton()
+    private let sessionNote = NSTextField(wrappingLabelWithString: "")
+    private var sessions: [RemoteSession] = []
     private let problemLabel = NSTextField(wrappingLabelWithString: "")
     private var hosts = RemoteHosts.all
 
@@ -63,6 +67,8 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
         }
         keepNote.textColor = .secondaryLabelColor
         keepNote.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        sessionNote.textColor = .secondaryLabelColor
+        sessionNote.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         problemLabel.textColor = .systemRed
         problemLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         problemLabel.isHidden = true
@@ -77,6 +83,8 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
             [label("Folder on host:"), folderField],
             [label("Keep agents running:"), keepControl],
             [NSGridCell.emptyContentView, keepNote],
+            [label("Session:"), sessionPopup],
+            [NSGridCell.emptyContentView, sessionNote],
         ])
         grid.rowSpacing = 8
         grid.columnSpacing = 8
@@ -109,6 +117,7 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
             buttons.widthAnchor.constraint(equalTo: grid.widthAnchor),
             problemLabel.widthAnchor.constraint(equalTo: grid.widthAnchor),
             keepNote.widthAnchor.constraint(lessThanOrEqualToConstant: 340),
+            sessionNote.widthAnchor.constraint(lessThanOrEqualToConstant: 340),
         ])
         panel.contentView = content
         rebuildPopup()
@@ -139,6 +148,7 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
             removeButton.isEnabled = false
         }
         keepChanged(nil)
+        loadSessions()
         problemLabel.isHidden = true
         panel.makeFirstResponder(destinationField.stringValue.isEmpty ? destinationField : folderField)
     }
@@ -156,6 +166,33 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
     @objc private func keepChanged(_ sender: Any?) {
         let keep = KeepMode.allCases[max(0, keepControl.selectedSegment)]
         keepNote.stringValue = keep.summary
+        sessionPopup.isEnabled = keep == .tmux && !sessions.isEmpty
+    }
+
+    /// The saved host's tmux sessions, over a connection a tab already has (the sheet never logs in).
+    private func loadSessions() {
+        sessions = []
+        sessionPopup.removeAllItems()
+        sessionPopup.addItem(withTitle: "New session")
+        sessionPopup.isEnabled = false
+        guard let host = selectedHost else { sessionNote.stringValue = ""; return }
+        guard RemoteConnection.masterAlive(host) else {
+            sessionNote.stringValue = "Sessions kept on this host are listed here while a tab on it is connected."
+            return
+        }
+        sessionNote.stringValue = "Looking for sessions on \(host.name)…"
+        RemoteConnection.run(host, script: RemoteShell.sessionsScript, timeout: 15) { [weak self] output in
+            guard let self, self.selectedHost?.id == host.id else { return }
+            let open = Set(AppDelegate.shared.controllers.flatMap(\.tabs).compactMap { $0.exited ? nil : $0.remote?.session })
+            self.sessions = (RemoteSession.parseList(output.output)?.sessions ?? []).filter { !open.contains($0.name) }
+            for session in self.sessions {
+                let what = session.program.isEmpty ? "" : " — \(session.program)"
+                self.sessionPopup.addItem(withTitle: "Reattach \(session.name)\(what) (\((session.directory as NSString).lastPathComponent))")
+            }
+            self.sessionNote.stringValue = self.sessions.isEmpty ? "No other sessions are running there."
+                : "\(self.sessions.count) session\(self.sessions.count == 1 ? "" : "s") still running there, from tabs that were closed."
+            self.keepChanged(nil)
+        }
     }
 
     /// A new host gets its destination as its name until the user gives one.
@@ -167,10 +204,20 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
 
     @objc private func removeHost(_ sender: Any?) {
         guard let host = selectedHost else { return }
-        RemoteHosts.remove(id: host.id)
-        hosts = RemoteHosts.all
-        rebuildPopup()
-        select(hosts.isEmpty ? nil : 0)
+        let open = AppDelegate.shared.controllers.flatMap(\.tabs).filter { $0.remote?.host.id == host.id && !$0.exited }.count
+        let alert = NSAlert()
+        alert.messageText = "Remove “\(host.name)”?"
+        alert.informativeText = (open > 0 ? "\(open) tab\(open == 1 ? "" : "s") on it stay open until closed, and will not be reopened at the next launch. " : "")
+            + "Sessions kept on the host (tmux, herdr) keep running there."
+        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: panel) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            RemoteHosts.remove(id: host.id)
+            self.hosts = RemoteHosts.all
+            self.rebuildPopup()
+            self.select(self.hosts.isEmpty ? nil : 0)
+        }
     }
 
     @objc private func cancel(_ sender: Any?) {
@@ -195,9 +242,16 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
             NSSound.beep()
             return
         }
+        // Pointed somewhere else: a new host as far as saved tabs go (they do not follow it there).
+        if let saved = selectedHost, saved.destination != host.destination || saved.port != host.port {
+            RemoteHosts.remove(id: saved.id)
+            host.id = RemoteHost.makeID()
+        }
         RemoteHosts.save(host)
         UserDefaults.standard.set(host.id, forKey: "lastRemoteHost")
+        let index = sessionPopup.indexOfSelectedItem - 1
+        let session = host.keep == .tmux && sessions.indices.contains(index) ? sessions[index] : nil
         panel.sheetParent?.endSheet(panel)
-        open(RemoteTab(host: host))
+        open(RemoteTab(host: host, directory: session?.directory.isEmpty == false ? session?.directory : nil, session: session?.name))
     }
 }

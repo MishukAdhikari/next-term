@@ -47,10 +47,17 @@ enum RemoteMCP {
     private static func addHost(_ arguments: [String: Any]) -> MCPServer.CallResult {
         let name = (arguments["name"] as? String ?? "").trimmingCharacters(in: .whitespaces)
         let destination = (arguments["destination"] as? String ?? "").trimmingCharacters(in: .whitespaces)
-        var host = RemoteHosts.all.first { $0.name.caseInsensitiveCompare(name) == .orderedSame } ?? RemoteHost(name: name, destination: destination)
+        let existing = RemoteHosts.all.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+        var host = existing ?? RemoteHost(name: name, destination: destination)
+        let port = arguments["port"] as? Int
+        // A saved host keeps where it points: tabs saved for it, and the user, trust that. Re-pointing it
+        // is remove_host and a fresh add_host (a new id, which saved tabs do not follow).
+        if let existing, existing.destination != destination || (arguments["port"] != nil && existing.port != port) {
+            return fail("“\(existing.name)” points to \(existing.destination)\(existing.port.map { " port \($0)" } ?? ""). To point it elsewhere, remove_host it and add_host it again.")
+        }
         host.name = name
         host.destination = destination
-        if let port = arguments["port"] as? Int { host.port = port }
+        if let port { host.port = port }
         if let directory = arguments["directory"] as? String { host.directory = directory.trimmingCharacters(in: .whitespaces) }
         switch keep(arguments["keep"]) {
         case .failure(let error): return fail(error.text)
@@ -66,13 +73,17 @@ enum RemoteMCP {
         case .failure(let error): return fail(error.text)
         case .success(let host):
             RemoteHosts.remove(id: host.id)
-            return ok(["id": host.id, "removed": true])
+            let open = AppDelegate.shared.controllers.flatMap(\.tabs).filter { $0.remote?.host.id == host.id && !$0.exited }.count
+            var info: [String: Any] = ["id": host.id, "removed": true]
+            if open > 0 {
+                info["note"] = "\(open) tab\(open == 1 ? "" : "s") on it stay open until closed, and will not be reopened at the next launch. Sessions kept there (tmux, herdr) keep running."
+            }
+            return ok(info)
         }
     }
 
     private static func unreachable(_ host: RemoteHost, _ output: RemoteConnection.Output) -> MCPServer.CallResult {
-        fail("Could not run a check on \(host.name) without asking for anything: \(output.problem) "
-             + "If ssh needs a password, a passphrase or a host key confirmation, open a remote tab (new_remote_tab) and let the user answer ssh there; later checks use that tab's connection.")
+        fail("Could not run a check on \(host.name): \(output.problem)")
     }
 
     private static func checkHost(_ arguments: [String: Any], reply: @escaping Reply) {
@@ -139,12 +150,17 @@ enum RemoteMCP {
         let app: AppDelegate = AppDelegate.shared
         let controller = caller.flatMap(MCPControl.controller(of:)) ?? (NSApp.keyWindow?.windowController as? TerminalWindowController)
             ?? app.controllers.first ?? app.openWindow(directory: nil)
-        // With no open connection, ssh may ask the user for a password or a host key: show them the tab.
-        let mustLogIn = !RemoteConnection.masterExists(found)
-        let tab = controller.addRemoteTab(RemoteTab(host: found, directory: directory, session: session, keep: mode), select: mustLogIn)
+        // With no open connection, ssh may ask the user for a password or a host key: show them the tab
+        // that asks (another tab may be logging in to this host already: then that one).
+        let mustLogIn = !RemoteConnection.masterAlive(found)
+        let tab = controller.addRemoteTab(RemoteTab(host: found, directory: directory, session: session, keep: mode), select: false)
         if mustLogIn {
-            controller.window?.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            let asking = RemoteConnection.loginTab(for: found) ?? tab
+            if let owner = MCPControl.controller(of: asking) {
+                owner.show(asking)
+                owner.window?.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            }
         }
         if let title = arguments["title"] as? String, !title.isEmpty { tab.userTitle = String(title.prefix(100)) }
         controller.refresh()

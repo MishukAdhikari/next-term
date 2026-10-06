@@ -169,12 +169,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     /// A tab on a server: ssh in its pty, to a shell, tmux session or herdr there.
+    /// `atEnd`: after the last tab (restoring keeps the saved order), not next to the current one.
     @discardableResult
-    func addRemoteTab(_ remote: RemoteTab, select selectIt: Bool = true) -> TerminalTab {
-        insert(makeTab(directory: nil, remote: remote), select: selectIt)
+    func addRemoteTab(_ remote: RemoteTab, select selectIt: Bool = true, atEnd: Bool = false) -> TerminalTab {
+        insert(makeTab(directory: nil, remote: remote), select: selectIt, atEnd: atEnd)
     }
 
-    private func insert(_ tab: TerminalTab, select selectIt: Bool) -> TerminalTab {
+    private func insert(_ tab: TerminalTab, select selectIt: Bool, atEnd: Bool = false) -> TerminalTab {
         let group = PaneGroup(tab)
         let view = group.view
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -186,7 +187,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
         group.layout()
-        let insertAt = groups.isEmpty ? 0 : activeIndex + 1 // next to the current tab
+        let insertAt = groups.isEmpty ? 0 : atEnd ? groups.count : activeIndex + 1 // next to the current tab
         groups.insert(group, at: insertAt)
         container.layoutSubtreeIfNeeded() // real size before the shell starts, so it draws once
         tab.start()
@@ -320,6 +321,24 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// left suspended (Ctrl-Z) or in the background.
     func requestClose(_ tab: TerminalTab) {
         guard tabs.contains(where: { $0 === tab }) else { return }
+        if let note = tab.keptNote, let window, let remote = tab.remote {
+            // A kept tmux tab: closing detaches, and what runs there goes on. Say so, and offer to end it.
+            let alert = NSAlert()
+            alert.messageText = "Close “\(tab.title)”?"
+            alert.informativeText = note
+            alert.addButton(withTitle: "Close Tab")
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "End Session")
+            alert.beginSheetModal(for: window) { [weak self] response in
+                switch response {
+                case .alertFirstButtonReturn: self?.remove(tab)
+                case .alertThirdButtonReturn:
+                    RemoteConnection.endSession(remote.host, session: remote.session) { _ in self?.remove(tab) }
+                default: break
+                }
+            }
+            return
+        }
         guard let warning = tab.closeWarning, let window else {
             remove(tab)
             return
@@ -540,7 +559,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// A window nobody has used yet: no project, one tab, nothing run in it.
     var isPristine: Bool {
-        guard project == nil, groups.count == 1, tabs.count == 1, let tab = tabs.first else { return false }
+        // A remote tab is never unused: commands there are seen only now and then, and its session matters.
+        guard project == nil, groups.count == 1, tabs.count == 1, let tab = tabs.first, tab.remote == nil else { return false }
         return tab.status.command.isEmpty && !tab.status.running && tab.closeWarning == nil
     }
 
@@ -885,7 +905,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     func runInNewTab(directory: String, command: String, title: String?) -> TerminalTab {
         let folder = canonicalPath(directory)
         let tab: TerminalTab
-        if groups.count == 1, tabs.count == 1, let only = tabs.first, only.status.command.isEmpty, !only.status.running,
+        if groups.count == 1, tabs.count == 1, let only = tabs.first, only.remote == nil, only.status.command.isEmpty, !only.status.running,
            canonicalPath(only.directory) == folder {
             tab = only
         } else {
