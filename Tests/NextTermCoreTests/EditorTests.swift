@@ -125,19 +125,57 @@ import Testing
     }
 
     @Test func ragProjectFiles() {
-        let files = ["eval.tsv": "tsv", "scores.tab": "tsv", "index.rst": "rst", "graph.mmd": "mermaid", "flow.mermaid": "mermaid",
-                     "vector_search.cypher": "cypher", "match.cyp": "cypher", "people.rq": "sparql", "query.sparql": "sparql",
-                     "graph.ttl": "turtle"]
+        let files = [
+            // Data, docs, diagrams and graph queries.
+            "eval.tsv": "tsv", "scores.tab": "tsv", "index.rst": "rst", "graph.mmd": "mermaid", "flow.mermaid": "mermaid",
+            "vector_search.cypher": "cypher", "match.cyp": "cypher", "people.rq": "sparql", "query.sparql": "sparql",
+            "graph.ttl": "turtle", "context.jsonld": "json", "CITATION.cff": "yaml", "startup.ipy": "python", "analysis.ipynb": "json",
+            // Prompts.
+            "summarize.prompt": "handlebars", "chat.prompty": "prompty", "python.mdc": "markdown",
+            // Python tooling.
+            "Pipfile.lock": "json", "pixi.lock": "yaml", ".condarc": "yaml", ".flake8": "ini", ".pylintrc": "ini", ".pypirc": "ini",
+            ".flaskenv": "dotenv", "env.example": "dotenv", "env.sample": "dotenv",
+            "requirements.txt": "pip-requirements", "requirements-dev.txt": "pip-requirements", "dev-requirements.txt": "pip-requirements",
+            "requirements.in": "pip-requirements", "requirements_test.in": "pip-requirements", "constraints.txt": "pip-requirements",
+            "pip-constraints.txt": "pip-requirements", "requirements.lock": "pip-requirements", "requirements-dev.lock": "pip-requirements",
+            // A copy kept as an example takes the language of the name inside.
+            "connections.json.example": "json", "config.yml.example": "yaml", "settings.py.sample": "python", "phpunit.xml.dist": "xml",
+            "docker-compose.yaml.template": "yaml", ".env.template": "dotenv", "requirements.txt.example": "pip-requirements",
+        ]
         for (name, language) in files { #expect(EditorLanguage.id(forFileName: name) == language, "\(name)") }
-        #expect(EditorLanguage.id(forFileName: "queries.cql") == nil) // Neo4j's or Cassandra's: no guess
+        // queries.cql: Neo4j's or Cassandra's, so no guess.
+        for name in ["MANIFEST.in", "notes.txt", "queries.cql", "LICENSE", "config.example"] {
+            #expect(EditorLanguage.id(forFileName: name) == nil, "\(name)")
+        }
+        #expect(EditorLanguage.id(forFileName: "rag", firstLine: "#!/usr/bin/env -S uv run --script") == "python") // PEP 723
+        #expect(EditorLanguage.id(forFileName: "tool", firstLine: "#!/usr/bin/env uv") == nil)
+    }
+
+    /// A mapping cannot ship without its grammar: every language a file can get is in Resources/Highlighting.
+    @Test func everyMappedLanguageShips() throws {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Resources/Highlighting/language-manifest.json")
+        let manifest = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let ids = (manifest["languages"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String }
+        let shipped = Set(ids).union((manifest["aliases"] as? [String: String] ?? [:]).keys)
+        #expect(ids.count > 100)
+        var mapped = Set(EditorLanguage.byName.values).union(EditorLanguage.byExtension.values).union(EditorLanguage.byInterpreter.values)
+        // The rules in id(forFileName:) and shebang(_:), a file each.
+        for name in ["welcome.blade.php", "app.component.html", "app.component.ts", ".env.local", "Dockerfile.prod", "requirements-dev.txt"] {
+            mapped.insert(EditorLanguage.id(forFileName: name) ?? "nothing for \(name)")
+        }
+        mapped.insert(EditorLanguage.shebang("#!/usr/bin/env -S uv run --script") ?? "nothing for uv")
+        let missing = mapped.subtracting(shipped).sorted()
+        #expect(missing.isEmpty, "mapped, but no grammar for them ships: \(missing)")
     }
 
     @Test func commentStylesOfRagProjectLanguages() {
-        let prefixes = ["cypher": "//", "sparql": "#", "turtle": "#", "mermaid": "%%", "rst": ".."]
+        let prefixes = ["cypher": "//", "sparql": "#", "turtle": "#", "mermaid": "%%", "rst": "..", "pip-requirements": "#"]
         for (language, prefix) in prefixes {
             let style = EditorLanguage.commentStyle(for: language)
             #expect(style?.prefix == prefix && style?.suffix == "", "\(language)")
         }
+        #expect(EditorLanguage.commentStyle(for: "prompty") == EditorLanguage.commentStyle(for: "jinja"))
         let mermaid = EditorLanguage.commentStyle(for: "mermaid")!
         #expect(EditorLanguage.toggleComment(["  A --> B"], style: mermaid) == ["  %% A --> B"])
         #expect(EditorLanguage.toggleComment(["  %% A --> B"], style: mermaid) == ["  A --> B"])

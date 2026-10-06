@@ -541,6 +541,22 @@
       "settings": {
         "foreground": "#6897BB"
       }
+    },
+    {
+      "scope": [
+        "source.pip-requirements entity.name.class"
+      ],
+      "settings": {
+        "foreground": "#56A8F5"
+      }
+    },
+    {
+      "scope": [
+        "source.pip-requirements keyword.operator.comparison"
+      ],
+      "settings": {
+        "foreground": "#CF8E6D"
+      }
     }
   ]
 }

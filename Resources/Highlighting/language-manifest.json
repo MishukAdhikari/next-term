@@ -1242,6 +1242,18 @@
   },
   {
    "aliases": [],
+   "displayName": "pip requirements",
+   "embeddedIn": [],
+   "embeddedLangs": [],
+   "embeddedLangsLazy": [],
+   "id": "pip-requirements",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/pip-requirements.json",
+   "scopeName": "source.pip-requirements"
+  },
+  {
+   "aliases": [],
    "displayName": "PostCSS",
    "embeddedIn": [],
    "embeddedLangs": [],
@@ -1279,6 +1291,21 @@
    "kind": "grammar",
    "resource": "grammars/prisma.json",
    "scopeName": "source.prisma"
+  },
+  {
+   "aliases": [],
+   "displayName": "Prompty",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "yaml",
+    "jinja"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "prompty",
+   "injectTo": [],
+   "kind": "grammar",
+   "resource": "grammars/prompty.json",
+   "scopeName": "text.prompty"
   },
   {
    "aliases": [

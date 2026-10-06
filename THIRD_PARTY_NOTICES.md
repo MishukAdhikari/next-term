@@ -240,10 +240,11 @@ SUCH DAMAGE.
 
 ## Highlighting grammars
 
-The TextMate grammars in `Resources/Highlighting` come from shikijs/textmate-grammars-themes
-(tm-grammars 1.32.3, MIT). Each keeps its upstream licence; `Resources/Highlighting/GRAMMARS.md` lists
-every grammar with its licence and source. Only grammars under MIT, Apache-2.0, BSD, MPL-2.0 or
-TextMate's permissive bundle licence are shipped. The Next Dark colour theme is Next Term's own.
+Most of the TextMate grammars in `Resources/Highlighting` come from shikijs/textmate-grammars-themes
+(tm-grammars 1.32.3, MIT); the few that come from elsewhere are listed after its licence. Each keeps its
+upstream licence; `Resources/Highlighting/GRAMMARS.md` lists every grammar with its licence and source. Only
+grammars under MIT, Apache-2.0, BSD, MPL-2.0 or TextMate's permissive bundle licence are shipped. The Next
+Dark colour theme and the Prompty grammar are Next Term's own.
 
 ```
 MIT License
@@ -273,6 +274,34 @@ SOFTWARE.
 The SPARQL and Turtle grammars come from https://github.com/stardog-union/stardog-vsc (`stardog-rdf-grammars`,
 Copyright 2017 Stardog Union), under the Apache License 2.0. The tm-grammars notice file has no section for them,
 so their licence text ships as `Resources/Highlighting/licenses/stardog-rdf-grammars-LICENSE.txt`.
+
+The pip requirements grammar is not in tm-grammars. It comes from https://github.com/microsoft/vscode-python
+(`syntaxes/pip-requirements.tmLanguage.json`, pinned in `scripts/grammars/local.json`), used under the MIT
+License; the text also ships as `Resources/Highlighting/licenses/pip-requirements-LICENSE.txt`:
+
+```
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED *AS IS*, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
 
 ## Material Icon Theme (file icons)
 

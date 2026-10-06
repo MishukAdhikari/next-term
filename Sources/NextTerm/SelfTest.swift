@@ -894,6 +894,12 @@ enum SelfTest {
             ("graph.ttl", "@prefix foaf: <http://xmlns.com/foaf/0.1/> .\n<#me> a foaf:Person .\n",
              [("foaf:Person", "CF8E6D", "a Turtle prefixed name")]),
             ("index.rst", "Retrieval\n=========\n\n.. note:: Chunks are cached.\n", [(".. note::", "CF8E6D", "an rst directive")]),
+            ("requirements.txt", "# app\nlangchain>=0.3.0\n",
+             [("langchain", "56A8F5", "a package in requirements.txt"), (">=", "CF8E6D", "its version operator"), ("0.3.0", "2AACB8", "and its version")]),
+            ("chat.prompty", "---\nname: Support chat\nmodel:\n  configuration:\n    azure_deployment: ${env:AZURE_DEPLOYMENT}\n---\n"
+                + "system:\nAnswer from the documents.\n\nuser:\n{{question}}\n",
+             [("name:", "C77DBB", "a Prompty front-matter key"), ("${env", "C77DBB", "an ${env:…} reference in it"),
+              ("user:", "CF8E6D", "a Prompty role line"), ("question}}", "C77DBB", "a {{variable}} in a Prompty message")]),
         ]
         if luaWasLoaded { note("Lua was loaded before SKILL.md opened: its fence check does not prove the preload") }
         for file in files {

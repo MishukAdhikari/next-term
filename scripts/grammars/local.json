@@ -1,0 +1,29 @@
+{
+  "comment": "Grammars that are not in shiki-swift, read by update-highlighting.py. Paths are relative to this folder. A vendored grammar is kept byte for byte as it is at its pinned source; the script sets its name to its id when it ships it.",
+  "grammars": [
+    {
+      "id": "pip-requirements",
+      "displayName": "pip requirements",
+      "scopeName": "source.pip-requirements",
+      "file": "pip-requirements.tmLanguage.json",
+      "source": "https://github.com/microsoft/vscode-python/blob/4f774d94bf4fbf87bb417b2b2b8e79e334eb3536/syntaxes/pip-requirements.tmLanguage.json",
+      "spdx": "MIT",
+      "licenseFile": "licenses/vscode-python-LICENSE.txt",
+      "embeddedLangs": [],
+      "injectTo": [],
+      "aliases": []
+    },
+    {
+      "id": "prompty",
+      "displayName": "Prompty",
+      "scopeName": "text.prompty",
+      "file": "prompty.tmLanguage.json",
+      "source": "Next Term's own (scripts/grammars/prompty.tmLanguage.json)",
+      "spdx": "MIT",
+      "licenseFile": "../../LICENSE",
+      "embeddedLangs": ["yaml", "jinja"],
+      "injectTo": [],
+      "aliases": []
+    }
+  ]
+}

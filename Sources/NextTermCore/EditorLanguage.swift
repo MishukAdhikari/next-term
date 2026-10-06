@@ -15,6 +15,9 @@ public enum EditorLanguage {
         "justfile": "just", ".justfile": "just", "uv.lock": "toml", "pdm.lock": "toml", "bun.lock": "jsonc",
         "yarn.lock": "yaml", "composer.lock": "json", "flake.lock": "json", "deno.lock": "json",
         "package.resolved": "json",
+        // Python tooling.
+        "pipfile.lock": "json", "pixi.lock": "yaml", ".condarc": "yaml", ".flake8": "ini", ".pylintrc": "ini",
+        ".pypirc": "ini", ".flaskenv": "dotenv", "env.example": "dotenv", "env.sample": "dotenv",
     ]
 
     static let byExtension: [String: String] = [
@@ -45,7 +48,12 @@ public enum EditorLanguage {
         "coffee": "coffee", "just": "just", "ex": "elixir", "exs": "elixir", "svx": "markdown",
         // Data, docs, diagrams and graph queries in RAG projects. `.cql` stays plain: Neo4j and Cassandra both use it.
         "tsv": "tsv", "tab": "tsv", "rst": "rst", "mmd": "mermaid", "mermaid": "mermaid", "cypher": "cypher",
-        "cyp": "cypher", "rq": "sparql", "sparql": "sparql", "ttl": "turtle",
+        "cyp": "cypher", "rq": "sparql", "sparql": "sparql", "ttl": "turtle", "jsonld": "json", "cff": "yaml",
+        "ipy": "python",
+        // Notebooks are JSON until they get a view of their own.
+        "ipynb": "json",
+        // Prompt files: Dotprompt is Handlebars under YAML front matter; Cursor rules are Markdown.
+        "prompt": "handlebars", "prompty": "prompty", "mdc": "markdown",
         // No grammar of their own yet: HTML colours the markup around the template tags.
         "latte": "html", "tpl": "html", "gohtml": "html", "gotmpl": "html", "tmpl": "html", "ejs": "html", "eta": "html",
         "heex": "html", "eex": "html", "leex": "html",
@@ -60,27 +68,33 @@ public enum EditorLanguage {
         if let known = byName[lower] { return known }
         if lower == ".env" || lower.hasPrefix(".env.") { return "dotenv" }
         if lower.hasPrefix("dockerfile.") || lower.hasSuffix(".dockerfile") { return "docker" }
+        // pip's requirement files, by the names VS Code's Python extension gives them.
+        if lower.contains("requirements") && (lower.hasSuffix(".txt") || lower.hasSuffix(".in"))
+            || lower.contains("constraints") && lower.hasSuffix(".txt")
+            || lower.hasPrefix("requirements") && lower.hasSuffix(".lock") { return "pip-requirements" }
+        // A copy kept as an example (connections.json.example, phpunit.xml.dist): the name inside decides.
+        for suffix in [".example", ".sample", ".template", ".dist"] where lower.hasSuffix(suffix) && lower.count > suffix.count {
+            return id(forFileName: String(name.dropLast(suffix.count)), firstLine: firstLine)
+        }
         let ext = (lower as NSString).pathExtension
         if !ext.isEmpty, let known = byExtension[ext] { return known }
         return shebang(firstLine)
     }
+
+    static let byInterpreter: [String: String] = [
+        "sh": "shellscript", "bash": "shellscript", "zsh": "shellscript", "dash": "shellscript", "ksh": "shellscript",
+        "fish": "fish", "python": "python", "pypy": "python", "node": "javascript", "bun": "javascript",
+        "deno": "javascript", "php": "php", "ruby": "ruby", "perl": "perl", "lua": "lua",
+    ]
 
     static func shebang(_ line: String) -> String? {
         guard line.hasPrefix("#!") else { return nil }
         let words = line.dropFirst(2).split(separator: " ").map { ($0 as Substring).split(separator: "/").last.map(String.init) ?? "" }
         let program = words.first == "env" ? words.dropFirst().first { !$0.hasPrefix("-") } ?? "" : words.first ?? ""
         let stem = program.replacingOccurrences(of: #"[0-9.]+$"#, with: "", options: .regularExpression)
-        switch stem {
-        case "sh", "bash", "zsh", "dash", "ksh": return "shellscript"
-        case "fish": return "fish"
-        case "python", "pypy": return "python"
-        case "node", "bun", "deno": return "javascript"
-        case "php": return "php"
-        case "ruby": return "ruby"
-        case "perl": return "perl"
-        case "lua": return "lua"
-        default: return nil
-        }
+        // A PEP 723 script: `#!/usr/bin/env -S uv run --script`.
+        if stem == "uv" { return words.contains("run") ? "python" : nil }
+        return byInterpreter[stem]
     }
 
     /// The languages named on a Markdown file's code fences ("```python", "``` py", "~~~yaml"), lowercased.
@@ -111,7 +125,7 @@ public enum EditorLanguage {
             return CommentStyle(prefix: "//", suffix: "")
         case "python", "ruby", "shellscript", "fish", "powershell", "yaml", "toml", "perl", "r", "make", "docker",
              "dotenv", "cmake", "nix", "hcl", "terraform", "julia", "graphql", "git-commit", "git-rebase", "ini",
-             "coffee", "just", "elixir", "sparql", "turtle":
+             "coffee", "just", "elixir", "sparql", "turtle", "pip-requirements":
             return CommentStyle(prefix: "#", suffix: "")
         case "mermaid": return CommentStyle(prefix: "%%", suffix: "")
         case "rst": return CommentStyle(prefix: "..", suffix: "")
@@ -123,7 +137,7 @@ public enum EditorLanguage {
             return CommentStyle(prefix: "<!--", suffix: "-->")
         case "css": return CommentStyle(prefix: "/*", suffix: "*/")
         case "blade", "edge": return CommentStyle(prefix: "{{--", suffix: "--}}")
-        case "twig", "jinja": return CommentStyle(prefix: "{#", suffix: "#}")
+        case "twig", "jinja", "prompty": return CommentStyle(prefix: "{#", suffix: "#}")
         case "handlebars": return CommentStyle(prefix: "{{!--", suffix: "--}}")
         case "erb": return CommentStyle(prefix: "<%#", suffix: "%>")
         case "razor": return CommentStyle(prefix: "@*", suffix: "*@")

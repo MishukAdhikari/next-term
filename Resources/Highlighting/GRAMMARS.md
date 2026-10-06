@@ -1,7 +1,7 @@
 # Grammars shipped with Next Term
 
-From shikijs/textmate-grammars-themes (tm-grammars, MIT) via shiki-swift. Each grammar keeps its
-upstream licence:
+Most come from shikijs/textmate-grammars-themes (tm-grammars, MIT) via shiki-swift; the rest from
+scripts/grammars (pinned upstream copies, and Next Term's own). Each grammar keeps its upstream licence:
 
 | Grammar | Licence | Source |
 |---|---|---|
@@ -77,9 +77,11 @@ upstream licence:
 | ocaml | Apache-2.0 | https://github.com/reasonml-editor/vscode-reasonml/blob/14af625ec50ed9968b957b4d6336c5338d81af45/syntaxes/ocaml.json |
 | perl | MIT | https://github.com/microsoft/vscode/blob/e637ff1bf7f481134849625e982ec80df9b35bc8/extensions/perl/syntaxes/perl.tmLanguage.json |
 | php | MIT | https://github.com/microsoft/vscode/blob/84f7ab5aa01c31d5352c7db89051e8c391fd9ae1/extensions/php/syntaxes/php.tmLanguage.json |
+| pip-requirements | MIT; text in licenses/pip-requirements-LICENSE.txt | https://github.com/microsoft/vscode-python/blob/4f774d94bf4fbf87bb417b2b2b8e79e334eb3536/syntaxes/pip-requirements.tmLanguage.json |
 | postcss | MIT | https://github.com/vuejs/vetur/blob/8ccae3ba50b65837d4cd4acc71a3b84cd3bee27c/syntaxes/vue-postcss.json |
 | powershell | MIT | https://github.com/microsoft/vscode/blob/9efc116de0ea4998616ebe3b17ee5b92f7dc1161/extensions/powershell/syntaxes/powershell.tmLanguage.json |
 | prisma | Apache-2.0 | https://github.com/prisma/language-tools/blob/eca96bfdfa03bde79465e831e502481d386934be/packages/vscode/syntaxes/prisma.tmLanguage.json |
+| prompty | MIT; text in licenses/prompty-LICENSE.txt | Next Term's own (scripts/grammars/prompty.tmLanguage.json) |
 | proto | MIT | https://github.com/zxh0/vscode-proto3/blob/274be763ecae7055505354b44f4892a2669e1da8/syntaxes/proto3.tmLanguage.json |
 | pug | MIT | https://github.com/microsoft/vscode/blob/6ac83c7c7dda9f27ca1fe9d98675253e010b75d1/extensions/pug/syntaxes/pug.tmLanguage.json |
 | python | MIT | https://github.com/microsoft/vscode/blob/cf4c9e469d521fa5f33353737e8157eb0789ad02/extensions/python/syntaxes/MagicPython.tmLanguage.json |
