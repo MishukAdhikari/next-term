@@ -81,7 +81,7 @@ enum SelfTest {
               swallowed.joined(separator: ", "))
 
         // New tab opens in the current tab's directory.
-        first.view.send(txt: "cd /tmp\r")
+        first.view.send(txt: "\u{15}cd /tmp\r")
         check(await wait(12) { first.directory == "/tmp" }, "cwd is tracked",
               first.directory + " — screen: " + first.screenTail(6).joined(separator: " | "))
         let sentThroughMenu = NSApp.keyWindow === window
@@ -489,7 +489,7 @@ enum SelfTest {
             _ = await wait(20) { first.status.integrated }
             check(first.currentDirectory() == proj.path, "its first tab starts in the project", first.currentDirectory())
             check(await wait(4) { pw.sidebar.root?.path == proj.path }, "its sidebar shows the project")
-            first.view.send(txt: "cd /tmp\r")
+            first.view.send(txt: "\u{15}cd /tmp\r")
             _ = await wait(4) { first.directory == "/tmp" }
             check(pw.sidebar.root?.path == proj.path, "the sidebar stays on the project after `cd`")
             pw.newTab(nil)
@@ -678,6 +678,23 @@ enum SelfTest {
         check(doc.name == "main.php", "a file renamed in the sidebar stays open under its new name", doc.name)
         await pause(1.2)
         check(doc.conflict == nil, "and is not reported as deleted")
+
+        // ⌘⇧F from the editor: the word at the caret is the query; this file, then its type, then the rest.
+        try? "greet\n".write(to: proj.appendingPathComponent("a-greet.md"), atomically: true, encoding: .utf8)
+        try? "<?php greet('x');\n".write(to: proj.appendingPathComponent("src/z.php"), atomically: true, encoding: .utf8)
+        let greetAt = (doc.text as NSString).range(of: "greet")
+        window.makeFirstResponder(view)
+        view.setSelectedRange(NSRange(location: greetAt.location + 2, length: 0))
+        c.findInFiles(nil)
+        check(c.finder.queryText == "greet", "⌘⇧F in the editor searches for the word at the caret", c.finder.queryText)
+        _ = await wait(10) { !c.finder.isSearching && c.finder.fileCount >= 3 }
+        let listed = c.finder.listedFiles
+        check(listed.first == "src/main.php" && listed.firstIndex(of: "src/z.php").map { $0 < (listed.firstIndex(of: "a-greet.md") ?? 0) } == true,
+              "results list this file, then .php files, then the rest", listed.joined(separator: ", "))
+        c.finder.close()
+        window.makeKeyAndOrderFront(nil)
+        try? FileManager.default.removeItem(at: proj.appendingPathComponent("a-greet.md"))
+        try? FileManager.default.removeItem(at: proj.appendingPathComponent("src/z.php"))
 
         // Soft wrap: a long line wraps at the edge (the default) or scrolls sideways when it is off.
         let wide = proj.appendingPathComponent("wide.md")

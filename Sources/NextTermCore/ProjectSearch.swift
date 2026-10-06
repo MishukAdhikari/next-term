@@ -60,6 +60,44 @@ public struct SearchMatch: Hashable, Sendable {
     public var matchedText: String { (lineText as NSString).substring(with: range) }
 }
 
+/// The order results are listed in when searching from a file: that file, then files of its type, then the
+/// rest, each group by path. "Same type" is the full compound extension first (`blade.php`), then the
+/// last one (`php`).
+public struct ResultOrder: Sendable {
+    public let current: String?
+    let compound: String?
+    let plain: String?
+
+    /// `current`: the file being edited, relative to the search root (nil: plain path order).
+    public init(current: String?) {
+        self.current = current
+        guard let current else { compound = nil; plain = nil; return }
+        let name = (current as NSString).lastPathComponent.lowercased()
+        let parts = name.split(separator: ".", omittingEmptySubsequences: false)
+        // "welcome.blade.php" -> "blade.php"; ".env" has no type to group by.
+        compound = parts.count > 2 && !parts[0].isEmpty ? parts.suffix(2).joined(separator: ".") : nil
+        plain = parts.count > 1 && !(parts.count == 2 && parts[0].isEmpty) ? String(parts.last!) : nil
+    }
+
+    public func rank(_ path: String) -> Int {
+        guard current != nil else { return 0 }
+        if path == current { return 0 }
+        let name = (path as NSString).lastPathComponent.lowercased()
+        if let compound, name.hasSuffix("." + compound) { return 1 }
+        if let plain, name.hasSuffix("." + plain) { return 2 }
+        return 3
+    }
+
+    /// Whether `a` is listed before `b`.
+    public func precedes(_ a: String, _ b: String) -> Bool {
+        let ra = rank(a), rb = rank(b)
+        return ra != rb ? ra < rb : a < b
+    }
+
+    /// "php" for the panel's button.
+    public var typeLabel: String? { compound ?? plain }
+}
+
 public struct FileMatches: Sendable {
     public let relativePath: String
     public let matches: [SearchMatch]

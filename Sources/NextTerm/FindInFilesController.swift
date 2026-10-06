@@ -19,6 +19,14 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
     private let caseButton = NSButton()
     private let wordButton = NSButton()
     private let regexButton = NSButton()
+    /// "⇡ .php": files of the type being edited are listed first (on by default, remembered).
+    private let typeFirstButton = NSButton()
+    private var order = ResultOrder(current: nil)
+    private var typeFirst: Bool {
+        get { UserDefaults.standard.object(forKey: "searchSameTypeFirst") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "searchSameTypeFirst") }
+    }
+    private var activeOrder: ResultOrder { typeFirst ? order : ResultOrder(current: nil) }
     private let replaceButton = NSButton(title: "Replace Selected", target: nil, action: nil)
     private let replaceAllButton = NSButton(title: "Replace All", target: nil, action: nil)
     private let status = NSTextField(labelWithString: "")
@@ -61,8 +69,19 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
 
     // MARK: showing
 
-    /// Opens the panel on `root`, optionally with the replace row focused.
-    func show(root: String, replacing: Bool, initialText: String?, over parent: NSWindow?) {
+    /// Opens the panel on `root`, optionally with the replace row focused. `current` is the file being edited
+    /// (relative to `root`): it and files of its type are listed first.
+    func show(root: String, replacing: Bool, initialText: String?, current: String? = nil, over parent: NSWindow?) {
+        order = ResultOrder(current: current)
+        if let type = order.typeLabel {
+            typeFirstButton.title = "⇡ ." + type
+            typeFirstButton.toolTip = "List .\(type) files first (the type you are editing)"
+            typeFirstButton.setAccessibilityLabel(typeFirstButton.toolTip)
+            typeFirstButton.isHidden = false
+        } else {
+            typeFirstButton.isHidden = true
+        }
+        typeFirstButton.state = typeFirst ? .on : .off
         if root != self.root {
             self.root = root
             results = []
@@ -103,6 +122,12 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
             button.action = #selector(optionChanged)
             button.font = .monospacedSystemFont(ofSize: 11, weight: .semibold)
         }
+        typeFirstButton.setButtonType(.pushOnPushOff)
+        typeFirstButton.bezelStyle = .recessed
+        typeFirstButton.font = .monospacedSystemFont(ofSize: 11, weight: .semibold)
+        typeFirstButton.target = self
+        typeFirstButton.action = #selector(typeFirstChanged)
+        typeFirstButton.isHidden = true
         replaceButton.target = self
         replaceButton.action = #selector(replaceSelected)
         replaceAllButton.target = self
@@ -127,7 +152,7 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
 
-        let options = NSStackView(views: [caseButton, wordButton, regexButton])
+        let options = NSStackView(views: [caseButton, wordButton, regexButton, typeFirstButton])
         options.spacing = 4
         let findRow = NSStackView(views: [queryField, options])
         let replaceRow = NSStackView(views: [replaceField, replaceButton, replaceAllButton])
@@ -188,6 +213,21 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
 
     @objc private func optionChanged() { scheduleSearch(after: 0) }
 
+    /// Re-sorts what is already found; no new search.
+    @objc private func typeFirstChanged() {
+        typeFirst = typeFirstButton.state == .on
+        let order = activeOrder
+        results.sort { order.precedes($0.path, $1.path) }
+        outline.reloadData()
+        expandAll()
+    }
+
+    /// For the self-test: what the Find field holds.
+    var queryText: String { queryField.stringValue }
+
+    /// For the self-test: the files in the order they are listed.
+    var listedFiles: [String] { results.map(\.path) }
+
     private func scheduleSearch(after delay: TimeInterval) {
         debounce?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.search() }
@@ -241,7 +281,8 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
 
     private func add(_ found: FileMatches) {
         let entry = FileResult(path: found.relativePath, matches: found.matches)
-        let index = results.firstIndex { $0.path > found.relativePath } ?? results.count // keep files sorted
+        let order = activeOrder
+        let index = results.firstIndex { order.precedes(found.relativePath, $0.path) } ?? results.count // keep the order
         results.insert(entry, at: index)
         outline.insertItems(at: IndexSet(integer: index), inParent: nil, withAnimation: [])
         outline.expandItem(entry)

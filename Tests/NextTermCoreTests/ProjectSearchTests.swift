@@ -110,3 +110,18 @@ import Testing
         #expect(ProjectSearch.preview(m[0], replacement: "$1", query: literal) == "$user->$1;")
     }
 }
+
+@Suite struct ResultOrderTests {
+    @Test func currentFileThenItsTypeThenTheRest() {
+        let order = ResultOrder(current: "resources/views/welcome.blade.php")
+        let paths = ["app/User.php", "README.md", "resources/views/home.blade.php", "resources/views/welcome.blade.php", "routes/web.php", "a.js"]
+        #expect(paths.sorted(by: order.precedes) == [
+            "resources/views/welcome.blade.php", "resources/views/home.blade.php", "app/User.php", "routes/web.php", "README.md", "a.js",
+        ])
+        #expect(order.typeLabel == "blade.php")
+        #expect(ResultOrder(current: "app/Models/User.php").typeLabel == "php")
+        #expect(ResultOrder(current: ".env").typeLabel == nil)
+        // No current file: by path.
+        #expect(paths.sorted(by: ResultOrder(current: nil).precedes) == paths.sorted())
+    }
+}

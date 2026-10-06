@@ -319,11 +319,36 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     @objc func findInFiles(_ sender: Any?) {
-        finder.show(root: searchRoot, replacing: false, initialText: nil, over: window)
+        finder.show(root: searchRoot, replacing: false, initialText: searchSeed, current: currentFileForSearch, over: window)
     }
 
     @objc func replaceInFiles(_ sender: Any?) {
-        finder.show(root: searchRoot, replacing: true, initialText: nil, over: window)
+        finder.show(root: searchRoot, replacing: true, initialText: searchSeed, current: currentFileForSearch, over: window)
+    }
+
+    /// What ⌘⇧F starts with: the selection in the editor (or the word at the caret), or the terminal's.
+    var searchSeed: String? {
+        var seed: String?
+        if isEditorFocused, let view = editorArea.activeEditor?.textView {
+            let text = view.string as NSString
+            var range = view.selectedRange()
+            if range.length == 0, text.length > 0 {
+                range = view.selectionRange(forProposedRange: NSRange(location: min(range.location, text.length), length: 0), granularity: .selectByWord)
+            }
+            if range.length > 0, NSMaxRange(range) <= text.length { seed = text.substring(with: range) }
+        } else if let selection = activeTab?.view.getSelection() {
+            seed = selection
+        }
+        guard let trimmed = seed?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty, !trimmed.contains("\n"),
+              trimmed.count <= 200, trimmed.rangeOfCharacter(from: .alphanumerics) != nil else { return nil }
+        return trimmed
+    }
+
+    /// The edited file, relative to the search root, so its type is listed first.
+    private var currentFileForSearch: String? {
+        guard let path = editorArea.activeEditor?.document.path else { return nil }
+        let root = canonicalPath(searchRoot)
+        return path.hasPrefix(root + "/") ? String(path.dropFirst(root.count + 1)) : nil
     }
 
     func findInFiles(_ controller: FindInFilesController, open url: URL, line: Int) {
