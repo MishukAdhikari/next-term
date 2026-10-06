@@ -88,7 +88,7 @@ export default defineConfig({
 				},
 				{
 					label: 'Projects & git',
-					items: [{ slug: 'docs/projects-and-git' }, { slug: 'docs/command-line' }],
+					items: [{ slug: 'docs/projects-and-git' }, { slug: 'docs/remote' }, { slug: 'docs/command-line' }],
 				},
 				{
 					label: 'Reference',

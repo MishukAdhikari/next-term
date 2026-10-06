@@ -46,6 +46,10 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
   branch and model, including the ones started in its subfolders. Resume runs it again in a new tab, in
   the folder it was started in; Fork continues a copy. In a project window, ⌥⌘O does the same. Only titles
   and dates are read (never whole transcripts), secrets are scrubbed from titles, and nothing is written.
+- **Remote tabs on your servers.** Shell › New Remote Tab… (⌥⌘T) opens a tab on your VPS over your own ssh
+  and `~/.ssh/config`. With tmux or herdr on the server, agents keep working while the Mac sleeps or is off,
+  and the tab reattaches when it reconnects. Host keys are never accepted silently, nothing is installed on
+  the server, and no password is stored. Agents get seven MCP tools to open tabs there and read the changes.
 - **`nxtrm`, like `code`.** `nxtrm .` opens the folder as a project, `nxtrm app/User.php:42` a
   file at a line. It works in every Next Term tab from the first launch; Next Term > Install Command Line
   Tool adds it to other terminals.

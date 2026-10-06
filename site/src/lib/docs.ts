@@ -12,6 +12,7 @@ export const DOCS_ORDER = [
 	'docs/search',
 	'docs/layouts',
 	'docs/projects-and-git',
+	'docs/remote',
 	'docs/command-line',
 	'docs/keyboard-shortcuts',
 	'docs/settings',
