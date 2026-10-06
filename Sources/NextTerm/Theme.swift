@@ -76,3 +76,33 @@ extension NSColor {
                   blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
     }
 }
+
+/// Single-line labels that truncate instead of wrapping.
+///
+/// Attributed text without a paragraph style falls back to word wrapping and ignores the label's own
+/// line-break mode, so every attributed label gets an explicit style from here.
+enum Typography {
+    static func paragraph(_ mode: NSLineBreakMode, alignment: NSTextAlignment = .natural) -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = mode
+        style.alignment = alignment
+        return style
+    }
+
+    /// One line, never wrapping; overflow is truncated with `mode` (Finder truncates names in the middle).
+    static func singleLine(_ field: NSTextField, truncation mode: NSLineBreakMode) {
+        field.maximumNumberOfLines = 1
+        field.usesSingleLineMode = true
+        field.cell?.wraps = false
+        field.cell?.isScrollable = false
+        field.cell?.truncatesLastVisibleLine = true
+        field.lineBreakMode = mode
+    }
+
+    /// Applies a truncation style to a whole attributed string.
+    static func truncating(_ text: NSAttributedString, _ mode: NSLineBreakMode, alignment: NSTextAlignment = .natural) -> NSAttributedString {
+        let copy = NSMutableAttributedString(attributedString: text)
+        copy.addAttribute(.paragraphStyle, value: paragraph(mode, alignment: alignment), range: NSRange(location: 0, length: copy.length))
+        return copy
+    }
+}

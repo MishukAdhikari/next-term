@@ -348,6 +348,20 @@ enum SelfTest {
             note("no git on this machine: git checks skipped")
         }
 
+        // A long name stays on one line, truncated in the middle as in Finder, never wrapped.
+        let longName = proj.appendingPathComponent("claude-mcp-browser-bridge-mishuk-with-a-very-long-name")
+        try? FileManager.default.createDirectory(at: longName, withIntermediateDirectories: true)
+        if await wait(4, { c.sidebar.root?.children?.contains { $0.name == longName.lastPathComponent } == true }),
+           let node = c.sidebar.root?.children?.first(where: { $0.name == longName.lastPathComponent }) {
+            c.sidebar.outline.layoutSubtreeIfNeeded()
+            let row = c.sidebar.outline.row(forItem: node)
+            let cell = c.sidebar.outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? FileCellView
+            check(cell?.nameLines(atWidth: 120) == 1, "a long folder name stays on one line", "\(cell?.nameLines(atWidth: 120) ?? -1) lines")
+        } else {
+            check(false, "a long folder name stays on one line", "folder not listed")
+        }
+        try? FileManager.default.removeItem(at: longName)
+
         // File operations, each undone with ⌘Z.
         let undo = window.undoManager
         let notes = proj.appendingPathComponent("notes.md")
@@ -386,6 +400,28 @@ enum SelfTest {
         check(c.isSidebarVisible && c.tabBar.leadingInset == lightsInset, "⌘B shows it again")
         await screenshot(c, suffix: "-sidebar")
         c.requestClose(inProject)
+
+        // Find and Replace in Files, undoable.
+        let calc = proj.appendingPathComponent("src/calc.swift")
+        try? "let total = price * qty\nlet price = 3\n".write(to: calc, atomically: true, encoding: .utf8)
+        c.finder.show(root: proj.path, replacing: true, initialText: nil, over: window)
+        c.finder.setQuery("price")
+        check(await wait(6) { !c.finder.isSearching && c.finder.matchCount == 2 && c.finder.fileCount == 1 }, "Find in Files finds both matches",
+              "\(c.finder.matchCount) in \(c.finder.fileCount)")
+        c.finder.setQuery("price", masks: "*.md")
+        check(await wait(6) { !c.finder.isSearching && c.finder.matchCount == 0 }, "file masks narrow the search")
+        let pattern = #"price \* (\w+)"#
+        c.finder.setQuery(pattern, replacement: "$1 * price", regex: true)
+        check(await wait(6) { !c.finder.isSearching && c.finder.matchCount == 1 }, "regular expressions search too")
+        let found = ProjectSearch.matches(in: (try? String(contentsOf: calc, encoding: .utf8)) ?? "", relativePath: "src/calc.swift",
+                                          expression: try! SearchQuery(text: pattern, isRegex: true).expression())
+        c.finder.replace(found, confirm: false)
+        check((try? String(contentsOf: calc, encoding: .utf8)) == "let total = qty * price\nlet price = 3\n", "Replace in Files with a regex group",
+              (try? String(contentsOf: calc, encoding: .utf8)) ?? "")
+        c.finder.window?.undoManager?.undo()
+        check((try? String(contentsOf: calc, encoding: .utf8)) == "let total = price * qty\nlet price = 3\n", "⌘Z undoes the replacement")
+        c.finder.close()
+        c.window?.makeKeyAndOrderFront(nil)
 
         // Projects. The user's own settings are put back afterwards.
         let app = AppDelegate.shared!

@@ -22,7 +22,7 @@ final class ThemedSplitView: NSSplitView {
 }
 
 final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSplitViewDelegate, NSMenuItemValidation,
-                                      TabBarViewDelegate, TerminalTabDelegate, ProjectSidebarDelegate {
+                                      TabBarViewDelegate, TerminalTabDelegate, ProjectSidebarDelegate, FindInFilesDelegate {
     private(set) var tabs: [TerminalTab] = []
     private(set) var activeIndex = 0
     let tabBar = TabBarView(frame: .zero)
@@ -43,6 +43,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// (you can still `cd` anywhere). nil: a plain terminal window whose sidebar follows the active tab.
     private(set) var project: String?
     private var closingProject = false
+    private(set) lazy var finder: FindInFilesController = {
+        let controller = FindInFilesController()
+        controller.delegate = self
+        return controller
+    }()
 
     var activeTab: TerminalTab? { tabs[safe: activeIndex] }
 
@@ -266,6 +271,25 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         sidebar.setRoot(ProjectRoot.find(from: tab.directory))
     }
 
+    // MARK: find and replace in files
+
+    /// The folder searches cover: the project, else what the sidebar shows, else the tab's git root.
+    var searchRoot: String {
+        project ?? sidebar.root?.path ?? activeTab.map { ProjectRoot.find(from: $0.directory) } ?? NSHomeDirectory()
+    }
+
+    @objc func findInFiles(_ sender: Any?) {
+        finder.show(root: searchRoot, replacing: false, initialText: nil, over: window)
+    }
+
+    @objc func replaceInFiles(_ sender: Any?) {
+        finder.show(root: searchRoot, replacing: true, initialText: nil, over: window)
+    }
+
+    func findInFiles(_ controller: FindInFilesController, open url: URL, line: Int) {
+        sidebar(sidebar, openFile: url)
+    }
+
     // MARK: projects
 
     /// A window nobody has used yet: no project, one tab, nothing run in it.
@@ -420,6 +444,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         ticker = nil
         for tab in tabs { tab.terminate() }
         tabs.removeAll()
+        finder.close()
         onClose?(self, closingProject)
     }
 

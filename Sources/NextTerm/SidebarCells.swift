@@ -18,9 +18,10 @@ final class SidebarHeaderView: NSView {
         branchIcon.isHidden = true
         title.font = .systemFont(ofSize: 13, weight: .semibold)
         title.textColor = Theme.text
-        title.lineBreakMode = .byTruncatingMiddle
+        Typography.singleLine(title, truncation: .byTruncatingMiddle) // long branch names keep both ends
         summary.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .medium)
         summary.alignment = .right
+        Typography.singleLine(summary, truncation: .byClipping)
         [branchIcon, title, summary].forEach(addSubview)
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
@@ -55,7 +56,7 @@ final class SidebarHeaderView: NSView {
         if totals.removed > 0 { add("−\(totals.removed) ", Theme.linesRemoved) }
         if snapshot.ahead > 0 { add("↑\(snapshot.ahead) ", Theme.textDim) }
         if snapshot.behind > 0 { add("↓\(snapshot.behind) ", Theme.textDim) }
-        summary.attributedStringValue = text
+        summary.attributedStringValue = Typography.truncating(text, .byClipping, alignment: .right)
         toolTip = Self.describe(snapshot)
         setAccessibilityLabel(Self.describe(snapshot))
         needsLayout = true
@@ -121,11 +122,11 @@ final class FileCellView: NSTableCellView {
     init() {
         super.init(frame: .zero)
         icon.imageScaling = .scaleProportionallyUpOrDown
-        name.lineBreakMode = .byTruncatingMiddle
         name.font = .systemFont(ofSize: 12.5)
-        name.cell?.isScrollable = false
+        Typography.singleLine(name, truncation: .byTruncatingMiddle)
         stats.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         stats.alignment = .right
+        Typography.singleLine(stats, truncation: .byClipping)
         [icon, name, stats].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
             addSubview($0)
@@ -167,10 +168,12 @@ final class FileCellView: NSTableCellView {
             text.append(NSAttributedString(string: "  \(shown)", attributes: [
                 .font: NSFont.systemFont(ofSize: 12), .foregroundColor: Theme.textDim,
             ]))
-            name.attributedStringValue = text
+            // The project name stays whole; its path gives way at the end.
+            name.attributedStringValue = Typography.truncating(text, .byTruncatingTail)
         } else {
             name.attributedStringValue = NSAttributedString(string: node.name, attributes: [
                 .font: NSFont.systemFont(ofSize: 12.5), .foregroundColor: color,
+                .paragraphStyle: Typography.paragraph(.byTruncatingMiddle),
             ])
         }
         // "+12 −3", like a pull request: lines added and removed in this file or below this folder.
@@ -186,7 +189,7 @@ final class FileCellView: NSTableCellView {
             }
         }
         text.addAttribute(.font, value: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), range: NSRange(location: 0, length: text.length))
-        stats.attributedStringValue = text
+        stats.attributedStringValue = Typography.truncating(text, .byClipping, alignment: .right)
         var tip = node.path
         if let change { tip += "\n" + Self.word(for: change) }
         if let lines, lines.added + lines.removed > 0 {
@@ -200,12 +203,21 @@ final class FileCellView: NSTableCellView {
     /// What the counts column shows, for the self-test.
     var statsText: String { stats.stringValue }
 
+    /// Lines the name needs at `width` (1 unless something makes it wrap), for the self-test.
+    func nameLines(atWidth width: CGFloat) -> Int {
+        guard let cell = name.cell, let font = name.font else { return 0 }
+        let height = cell.cellSize(forBounds: NSRect(x: 0, y: 0, width: width, height: 1000)).height
+        let line = NSLayoutManager().defaultLineHeight(for: font)
+        return Int((height / line).rounded())
+    }
+
     func configureHidden(_ entries: HiddenEntries) {
         node = nil
         icon.image = nil
         stats.stringValue = ""
         name.attributedStringValue = NSAttributedString(string: "… \(entries.count.formatted()) more items", attributes: [
             .font: NSFont.systemFont(ofSize: 12, weight: .regular), .foregroundColor: Theme.textDim,
+            .paragraphStyle: Typography.paragraph(.byTruncatingTail),
         ])
         toolTip = "This folder is too large to list in full."
     }

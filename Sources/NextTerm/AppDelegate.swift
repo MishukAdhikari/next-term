@@ -412,7 +412,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         shell.addItem(withTitle: "Open Projects In", action: nil, keyEquivalent: "").submenu = targetMenu
         item(shell, "Close Project", #selector(TerminalWindowController.closeProject(_:)), "")
         shell.addItem(.separator())
-        item(shell, "Rename Tab…", #selector(TerminalWindowController.renameTab(_:)), "r", [.command, .shift])
+        item(shell, "Rename Tab…", #selector(TerminalWindowController.renameTab(_:)), "r", [.command, .option])
         item(shell, "Use Option as Meta Key", #selector(toggleOptionAsMeta(_:)), "", target: self)
         shell.addItem(.separator())
         item(shell, "Close Tab", #selector(TerminalWindowController.closeTab(_:)), "w")
@@ -433,6 +433,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         findItem(find, "Find Next", .next, "g")
         findItem(find, "Find Previous", .previous, "g", [.command, .shift])
         findItem(find, "Use Selection for Find", .setFindString, "e")
+        find.addItem(.separator())
+        item(find, "Find in Files…", #selector(TerminalWindowController.findInFiles(_:)), "f", [.command, .shift])
+        item(find, "Replace in Files…", #selector(TerminalWindowController.replaceInFiles(_:)), "r", [.command, .shift])
         edit.addItem(.separator())
         item(edit, "Clear Buffer", #selector(TerminalWindowController.clearBuffer(_:)), "k")
 
