@@ -146,6 +146,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         ])
         editorArea.delegate = self
         editorArea.onShowChanges = { [weak self] url in self?.showChanges(of: url) }
+        editorArea.tabBar.onReveal = { [weak self] in self?.revealInSidebar(nil) }
         editorArea.isHidden = true
         applyLayout()
         setSidebarVisible(AppDelegate.shared.sidebarVisible)
@@ -573,6 +574,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(clearBuffer(_:)) {
             return !(KeyboardShortcuts.shared.preset.clearsOnlyInTerminal && isEditorFocused)
         }
+        if item.action == #selector(revealInSidebar(_:)) { return editorArea.activeEditor != nil }
         if item.action == #selector(toggleTerminalCollapsed(_:)) {
             item.title = terminalCollapsed ? "Expand Terminal" : "Collapse Terminal"
             return !editorArea.isHidden
@@ -802,6 +804,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         if editorArea.open(url, line: line, column: column) != .opened { return SafeOpen.open(url, from: window) }
         let path = canonicalPath(url.path)
+        // Opened from ⌘P, a search result or a link: the sidebar shows where it is, even if it was in front.
+        frontFile = editorArea.activeEditor?.document.path
+        if isSidebarVisible { sidebar.reveal(path) }
         recentFiles.removeAll { $0 == path }
         recentFiles.insert(path, at: 0)
         if recentFiles.count > 50 { recentFiles.removeLast() }
@@ -840,6 +845,26 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         show(tab)
         tab.runWhenReady(command)
         return tab
+    }
+
+    // MARK: the open file in the sidebar
+
+    /// The file in front in the editor, shown in the project sidebar (the sidebar comes back if hidden).
+    @objc func revealInSidebar(_ sender: Any?) {
+        guard let path = editorArea.activeEditor?.document.path else { return NSSound.beep() }
+        if !isSidebarVisible { toggleProjectSidebar(nil) }
+        sidebar.reveal(path)
+    }
+
+    /// The file that was in front last time we looked, so moving the caret doesn't reveal it again.
+    private var frontFile: String?
+
+    /// The sidebar follows the file in front when another one comes forward (a tab, a closed tab).
+    private func followActiveFile() {
+        let path = editorArea.activeEditor?.document.path
+        guard path != frontFile else { return }
+        frontFile = path
+        if let path, isSidebarVisible { sidebar.reveal(path) }
     }
 
     // MARK: go to file
@@ -882,6 +907,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func editorAreaDidChangeDocuments(_ area: EditorArea) {
+        followActiveFile()
         setEditorVisible(!area.isEmpty)
     }
 
@@ -890,6 +916,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private var selectionShare: DispatchWorkItem?
 
     func editorAreaSelectionChanged(_ area: EditorArea) {
+        followActiveFile()
         guard ClaudeIDEServer.shared.isRunning || GeminiIDEServer.shared.isRunning else { return }
         selectionShare?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.shareSelectionWithClaude() }

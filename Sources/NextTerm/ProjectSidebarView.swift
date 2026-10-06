@@ -181,6 +181,30 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         while savedOrder.count > 8 { savedTrees[savedOrder.removeFirst()] = nil }
     }
 
+    /// Opens the folders down to a file (reading them as needed), selects it and scrolls it into view,
+    /// leaving the keyboard where it is. Files outside the tree are left alone.
+    func reveal(_ path: String) {
+        let target = canonicalPath(path)
+        guard let root, target.hasPrefix(root.path + "/") else { return }
+        let names = target.dropFirst(root.path.count + 1).split(separator: "/").map(String.init)
+        revealStep(root, names[...])
+    }
+
+    private func revealStep(_ node: FileNode, _ rest: ArraySlice<String>) {
+        load(node) { [weak self] in
+            guard let self, let name = rest.first, let child = node.children?.first(where: { $0.name == name }) else { return }
+            if !self.outline.isItemExpanded(node) { self.outline.expandItem(node) }
+            if rest.count == 1 {
+                let row = self.outline.row(forItem: child)
+                guard row >= 0 else { return }
+                self.outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+                self.outline.scrollRowToVisible(row)
+            } else if child.isDirectory {
+                self.revealStep(child, rest.dropFirst())
+            }
+        }
+    }
+
     /// Reads a folder off the main thread, then installs it and updates the outline.
     private func load(_ node: FileNode, then completion: (() -> Void)? = nil) {
         if node.isLoaded {

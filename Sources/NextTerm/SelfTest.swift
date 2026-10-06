@@ -833,6 +833,21 @@ enum SelfTest {
             caretLine = editor.document.lines.line(at: editor.textView.selectedRange().location) + 1
         }
         check(opened && caretLine == 3 && !finder.isVisible, "and opens the file at that line", "line \(caretLine)")
+        // The sidebar follows: the folders open and the file is selected.
+        let mainPath = canonicalPath(proj.appendingPathComponent("src/main.php").path)
+        if c.sidebar.root?.path == canonicalPath(proj.path) {
+            check(await wait(5) { c.sidebar.selection.contains { canonicalPath($0.url.path) == mainPath } },
+                  "the project sidebar shows the file opened with ⌘P", c.sidebar.selection.map(\.url.lastPathComponent).joined(separator: ","))
+            if let src = c.sidebar.root?.children?.first(where: { $0.name == "src" }) {
+                c.sidebar.outline.collapseItem(src)
+                c.sidebar.outline.deselectAll(nil)
+                c.revealInSidebar(nil)
+                check(await wait(5) { c.sidebar.selection.contains { canonicalPath($0.url.path) == mainPath } },
+                      "the reveal button finds it again after its folder was closed")
+            }
+        } else {
+            note("sidebar root is \(c.sidebar.root?.path ?? "none"), not the test project: reveal not checked here")
+        }
         finder.show(root: proj.path, recent: c.recentFiles, over: window)
         check(await wait(5) { finder.shownPaths.first == "src/main.php" }, "with nothing typed, recently opened files come first",
               finder.shownPaths.prefix(3).joined(separator: ", "))

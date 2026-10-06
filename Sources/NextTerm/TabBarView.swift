@@ -70,6 +70,16 @@ final class TabBarView: NSView {
     static let sidebarButtonWidth: CGFloat = 30
     private var tabsStart: CGFloat { leadingInset + (sidebarButton.isHidden ? 0 : Self.sidebarButtonWidth) }
 
+    /// A button at the right end that shows the open file in the project sidebar (the editor's tab bar).
+    var onReveal: (() -> Void)? {
+        didSet {
+            revealButton.isHidden = onReveal == nil
+            needsLayout = true
+        }
+    }
+    private let revealButton = HoverButton()
+    private var revealWidth: CGFloat { revealButton.isHidden ? 0 : Self.collapseButtonWidth }
+
     /// A collapse/expand button before the ⋯ (the terminal, when the editor shares the window).
     var onToggleCollapse: (() -> Void)? {
         didSet {
@@ -126,6 +136,17 @@ final class TabBarView: NSView {
         collapseButton.action = #selector(collapseClicked)
         collapseButton.isHidden = true
         addSubview(collapseButton)
+        revealButton.bezelStyle = .regularSquare
+        revealButton.isBordered = false
+        revealButton.contentTintColor = Theme.textDim
+        revealButton.image = NSImage(systemSymbolName: "scope", accessibilityDescription: "Show in Project Sidebar")?
+            .withSymbolConfiguration(.init(pointSize: 12, weight: .regular))
+        revealButton.toolTip = "Show this file in the project sidebar"
+        revealButton.setAccessibilityLabel("Show in Project Sidebar")
+        revealButton.target = self
+        revealButton.action = #selector(revealClicked)
+        revealButton.isHidden = true
+        addSubview(revealButton)
         sidebarButton.bezelStyle = .regularSquare
         sidebarButton.isBordered = false
         sidebarButton.contentTintColor = Theme.textDim
@@ -188,7 +209,7 @@ final class TabBarView: NSView {
     /// Width for tabs, keeping a strip on the right for dragging the window.
     private var availableWidth: CGFloat {
         max(0, bounds.width - tabsStart - (allowsNewTab ? Self.newTabButtonWidth : 0) - (moreButton == nil ? 0 : Self.moreButtonWidth)
-            - collapseWidth - 24)
+            - collapseWidth - revealWidth - 24)
     }
 
     /// How many tabs fit at a readable width.
@@ -237,11 +258,13 @@ final class TabBarView: NSView {
             x += Self.overflowButtonWidth
         }
         let more: CGFloat = moreButton == nil ? 0 : Self.moreButtonWidth
-        newTabButton.frame = NSRect(x: min(x, bounds.width - Self.newTabButtonWidth - more - collapseWidth), y: 0,
+        newTabButton.frame = NSRect(x: min(x, bounds.width - Self.newTabButtonWidth - more - collapseWidth - revealWidth), y: 0,
                                     width: Self.newTabButtonWidth, height: bounds.height - 1)
         moreButton?.frame = NSRect(x: bounds.width - Self.moreButtonWidth - 4, y: 0, width: Self.moreButtonWidth, height: bounds.height - 1)
         collapseButton.frame = NSRect(x: bounds.width - more - 4 - Self.collapseButtonWidth, y: 0,
                                       width: Self.collapseButtonWidth, height: bounds.height - 1)
+        revealButton.frame = NSRect(x: bounds.width - more - 4 - collapseWidth - Self.collapseButtonWidth, y: 0,
+                                    width: Self.collapseButtonWidth, height: bounds.height - 1)
         updateOverflowButton()
     }
 
@@ -255,6 +278,7 @@ final class TabBarView: NSView {
     }
 
     @objc private func collapseClicked() { onToggleCollapse?() }
+    @objc private func revealClicked() { onReveal?() }
 
     @objc private func showOverflowMenu() {
         let menu = NSMenu()
