@@ -126,3 +126,49 @@ import Testing
         #expect(untracked.isNew && untracked.hunks.first?.added == 2)
     }
 }
+
+@Suite struct GitIndexSafetyTests {
+    /// Reading git state must never rewrite .git/index: while it holds index.lock, an agent's
+    /// `git add` or `git commit` in the same repository fails.
+    @Test func refreshAndDiffsLeaveTheIndexAlone() throws {
+        guard let git = GitRunner.locateGit() else { return }
+        let root = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path)).appendingPathComponent("nt-index-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        func sh(_ args: String...) {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: git)
+            p.arguments = ["-C", root.path, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"] + args
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            try? p.run()
+            p.waitUntilExit()
+        }
+        let a = root.appendingPathComponent("a.txt"), b = root.appendingPathComponent("b.txt")
+        try "same\n".write(to: a, atomically: true, encoding: .utf8)
+        try "one\n".write(to: b, atomically: true, encoding: .utf8)
+        sh("init", "-q")
+        sh("add", "-A")
+        sh("commit", "-qm", "one")
+        // Stat-dirty: same content, newer timestamp. This is what makes porcelain git refresh the index.
+        Thread.sleep(forTimeInterval: 1.1)
+        try "same\n".write(to: a, atomically: true, encoding: .utf8)
+        try "two\n".write(to: b, atomically: true, encoding: .utf8)
+        let index = root.appendingPathComponent(".git/index")
+        let before = try FileManager.default.attributesOfItem(atPath: index.path)[.modificationDate] as? Date
+        let bytes = try Data(contentsOf: index)
+
+        let snapshot = try #require(GitRunner.snapshot(for: root.path, git: git))
+        #expect(snapshot.files["b.txt"] == .modified)
+        _ = GitRunner.diff(of: "b.txt", in: root.path, git: git, base: .head)
+        _ = GitRunner.diff(of: "b.txt", in: root.path, git: git, base: .staged)
+        _ = GitRunner.diff(of: "b.txt", in: root.path, git: git, base: .unstaged)
+        _ = ProjectSearch.files(in: root.path, git: git)
+
+        let after = try FileManager.default.attributesOfItem(atPath: index.path)[.modificationDate] as? Date
+        #expect(before == after, "the index was rewritten")
+        #expect(try Data(contentsOf: index) == bytes)
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(".git/index.lock").path))
+        #expect(snapshot.fileStats["b.txt"] == LineStats(added: 1, removed: 1, files: 1))
+    }
+}

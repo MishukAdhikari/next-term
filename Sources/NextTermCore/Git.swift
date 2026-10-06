@@ -228,7 +228,9 @@ public enum GitRunner {
         var snapshot = GitSnapshot.parse(root: root, status: status, numstat: Data())
         // Lines changed against HEAD (staged and unstaged together); before the first commit, against nothing.
         let base = snapshot.head == nil ? emptyTree(git: git, root: root) : "HEAD"
-        let numstat = base.flatMap { run(git, ["-C", root, "--no-optional-locks", "diff", "--numstat", "-z", $0, "--"], timeout: timeout) } ?? Data()
+        // Plumbing, not `git diff`: the porcelain refreshes and rewrites .git/index (taking index.lock) even
+        // with --no-optional-locks, which can make an agent's `git commit` fail mid-refresh.
+        let numstat = base.flatMap { run(git, ["-C", root, "--no-optional-locks", "diff-index", "--numstat", "-z", "-M", $0, "--"], timeout: timeout) } ?? Data()
         snapshot = GitSnapshot.parse(root: root, status: status, numstat: numstat)
         snapshot.addUntrackedLines(countLines(of: snapshot.files.filter { $0.value == .untracked }.map(\.key), in: root))
         return snapshot
@@ -267,16 +269,17 @@ public enum GitRunner {
     /// `context` lines around each change (a large number gives the whole file).
     public static func diff(of relativePath: String, in root: String, git: String, base: DiffBase = .head,
                             context: Int = 3, untracked: Bool = false) -> FileDiff? {
-        let common = ["-C", root, "--no-optional-locks", "-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff",
-                      "--no-textconv", "-M", "-U\(context)"]
+        // Plumbing (diff-index, diff-files) so reading a diff never rewrites .git/index; see snapshot().
+        let options = ["--no-color", "--no-ext-diff", "--no-textconv", "-M", "--histogram", "-p", "-U\(context)"]
+        let prefix = ["-C", root, "--no-optional-locks", "-c", "core.quotepath=off", "-c", "diff.autoRefreshIndex=false"]
         let args: [String]
         if untracked {
-            args = common + ["--no-index", "--", "/dev/null", relativePath]
+            args = prefix + ["diff", "--no-index"] + options + ["--", "/dev/null", relativePath]
         } else {
             switch base {
-            case .head: args = common + ["HEAD", "--", relativePath]
-            case .staged: args = common + ["--cached", "--", relativePath]
-            case .unstaged: args = common + ["--", relativePath]
+            case .head: args = prefix + ["diff-index"] + options + ["HEAD", "--", relativePath]
+            case .staged: args = prefix + ["diff-index", "--cached"] + options + ["HEAD", "--", relativePath]
+            case .unstaged: args = prefix + ["diff-files"] + options + ["--", relativePath]
             }
         }
         // `diff --no-index` exits 1 when the files differ, which is the expected case here.
