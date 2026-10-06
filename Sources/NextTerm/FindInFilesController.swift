@@ -105,7 +105,10 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
     private func build() {
         guard let content = window?.contentView else { return }
         for (field, placeholder) in [(queryField, "Find"), (replaceField, "Replace with"), (maskField, "File mask, e.g. *.php, !vendor/**")] {
-            field.placeholderString = placeholder
+            // What you type is code (monospaced); the hint is interface text.
+            field.placeholderAttributedString = NSAttributedString(string: placeholder, attributes: [
+                .font: NSFont.systemFont(ofSize: 12.5), .foregroundColor: NSColor.placeholderTextColor,
+            ])
             field.delegate = self
             field.font = Theme.monoFont(size: 12)
             field.lineBreakMode = .byClipping
@@ -139,7 +142,8 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
         outline.addTableColumn(column)
         outline.outlineTableColumn = column
         outline.headerView = nil
-        outline.rowHeight = 20
+        outline.rowHeight = 22
+        outline.intercellSpacing = NSSize(width: 0, height: 2)
         outline.style = .plain
         outline.allowsMultipleSelection = true
         outline.dataSource = self
@@ -421,22 +425,59 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
 
     func outlineViewSelectionDidChange(_ notification: Notification) { updateButtons() }
 
+    /// File rows a little taller than match rows: each file starts a group.
+    func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
+        item is FileResult ? 28 : 22
+    }
+
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         let label = NSTextField(labelWithString: "")
         if let file = item as? FileResult {
-            Typography.singleLine(label, truncation: .byTruncatingMiddle) // a long path keeps its file name
-            let text = NSMutableAttributedString(string: file.path, attributes: [.font: NSFont.systemFont(ofSize: 12.5, weight: .medium)])
-            text.append(Typography.gap(10, font: .systemFont(ofSize: 12.5)))
+            // "Alertable.php   app/Contracts   3": the name first, its folder quieter, the count in figures.
+            Typography.singleLine(label, truncation: .byTruncatingMiddle) // a long folder keeps both ends
+            let text = NSMutableAttributedString()
+            let attachment = NSTextAttachment()
+            let icon = FileIcons.icon(for: URL(fileURLWithPath: file.path), size: 16)
+            attachment.image = icon
+            attachment.bounds = NSRect(x: 0, y: -3, width: 16, height: 16)
+            text.append(NSAttributedString(attachment: attachment))
+            text.append(Typography.gap(6, font: .systemFont(ofSize: 13)))
+            let name = (file.path as NSString).lastPathComponent
+            let folder = (file.path as NSString).deletingLastPathComponent
+            text.append(NSAttributedString(string: name, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: NSColor.labelColor]))
+            if !folder.isEmpty {
+                text.append(Typography.gap(8, font: .systemFont(ofSize: 12)))
+                text.append(NSAttributedString(string: folder, attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.secondaryLabelColor]))
+            }
+            text.append(Typography.gap(10, font: .systemFont(ofSize: 12)))
             text.append(NSAttributedString(string: file.matches.count.formatted(), attributes: [
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.secondaryLabelColor,
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium), .foregroundColor: NSColor.tertiaryLabelColor,
             ]))
             label.attributedStringValue = Typography.truncating(text, .byTruncatingMiddle)
+            label.toolTip = file.path
         } else if let item = item as? MatchItem {
             Typography.singleLine(label, truncation: .byTruncatingTail)
             label.attributedStringValue = Typography.truncating(line(for: item.match), .byTruncatingTail)
             label.toolTip = item.match.lineText
         }
         return label
+    }
+
+    /// Colours a result line as the editor would (one line, without the state of the lines before it,
+    /// which is right for nearly every line).
+    private func syntaxColours(for match: SearchMatch) -> [(NSRange, NSColor)] {
+        guard let engine = SyntaxEngine.shared else { return [] }
+        let detected = EditorLanguage.id(forFileName: (match.relativePath as NSString).lastPathComponent)
+        guard var language = engine.language(detected) else { return [] }
+        // A lone line from a .php file is PHP code (it sits inside <?php … ?>), unless it opens or closes it.
+        if language == "php", match.lineText.contains("<?") || match.lineText.contains("?>") {
+            language = engine.language("blade") ?? language
+        }
+        guard let (tokens, _) = engine.tokenize(line: match.lineText, language: language, after: nil) else { return [] }
+        return tokens.compactMap { token in
+            guard let color = engine.color(token.color) else { return nil }
+            return (NSRange(location: token.offset, length: (token.content as NSString).length), color)
+        }
     }
 
     /// "12  the line, with the match highlighted" — and, with replace text, what it would become.
@@ -453,7 +494,8 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
         while start < match.range.location, start < ns.length, CharacterSet.whitespaces.contains(Unicode.Scalar(ns.character(at: start)) ?? " ") { start += 1 }
         let before = ns.substring(with: NSRange(location: start, length: match.range.location - start))
         let after = ns.substring(from: NSMaxRange(match.range))
-        text.append(NSAttributedString(string: before, attributes: [.font: mono, .foregroundColor: NSColor.labelColor]))
+        let codeStart = text.length
+        text.append(NSAttributedString(string: before, attributes: [.font: mono, .foregroundColor: Theme.terminalForeground]))
         let replacement = replaceField.stringValue
         if replaceMode || !replacement.isEmpty, let preview = ProjectSearch.preview(match, replacement: replacement, query: query) {
             let replacedText = (preview as NSString).substring(with: NSRange(location: match.range.location,
@@ -466,10 +508,23 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
             ]))
         } else {
             text.append(NSAttributedString(string: match.matchedText, attributes: [
-                .font: mono, .foregroundColor: NSColor.labelColor, .backgroundColor: Theme.accent.withAlphaComponent(0.45),
+                .font: mono, .foregroundColor: NSColor.white, .backgroundColor: Theme.accent.withAlphaComponent(0.55),
             ]))
         }
-        text.append(NSAttributedString(string: after, attributes: [.font: mono, .foregroundColor: NSColor.labelColor]))
+        let afterStart = text.length
+        text.append(NSAttributedString(string: after, attributes: [.font: mono, .foregroundColor: Theme.terminalForeground]))
+        // Syntax colours on the code around the match (the match keeps its own highlight).
+        for (range, color) in syntaxColours(for: match) {
+            // Before the match: shifted by the trimmed indentation.
+            let beforeRange = NSIntersectionRange(range, NSRange(location: start, length: match.range.location - start))
+            if beforeRange.length > 0 {
+                text.addAttribute(.foregroundColor, value: color, range: NSRange(location: codeStart + beforeRange.location - start, length: beforeRange.length))
+            }
+            let afterRange = NSIntersectionRange(range, NSRange(location: NSMaxRange(match.range), length: ns.length - NSMaxRange(match.range)))
+            if afterRange.length > 0 {
+                text.addAttribute(.foregroundColor, value: color, range: NSRange(location: afterStart + afterRange.location - NSMaxRange(match.range), length: afterRange.length))
+            }
+        }
         return text
     }
 }

@@ -693,6 +693,7 @@ enum SelfTest {
         let listed = c.finder.listedFiles
         check(listed.first == "src/main.php" && listed.firstIndex(of: "src/z.php").map { $0 < (listed.firstIndex(of: "a-greet.md") ?? 0) } == true,
               "results list this file, then .php files, then the rest", listed.joined(separator: ", "))
+        if let panel = c.finder.window { await screenshot(panel, suffix: "-find") }
         c.finder.close()
         window.makeKeyAndOrderFront(nil)
         try? FileManager.default.removeItem(at: proj.appendingPathComponent("a-greet.md"))
@@ -973,7 +974,12 @@ enum SelfTest {
 
     /// Captures the window exactly as it is on screen (an app may always capture its own windows).
     private static func screenshot(_ c: TerminalWindowController, suffix: String) async {
-        guard let base = reportPath, let window = c.window else { return }
+        guard let window = c.window else { return }
+        await screenshot(window, suffix: suffix)
+    }
+
+    private static func screenshot(_ window: NSWindow, suffix: String) async {
+        guard let base = reportPath else { return }
         await pause(0.4)
         guard let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber),
                                                   [.boundsIgnoreFraming, .bestResolution]) else {
