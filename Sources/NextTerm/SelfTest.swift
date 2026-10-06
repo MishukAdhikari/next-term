@@ -404,6 +404,15 @@ enum SelfTest {
         let gap = Typography.gap(10, font: .systemFont(ofSize: 12))
         check(gap.string == " " && abs(gap.size().width - 10) < 1, "gaps are one space widened to a measured width", "\(gap.size().width)")
 
+        // Row tooltips: the path of the row under the pointer, and nothing outside the visible rows.
+        c.sidebar.outline.layoutSubtreeIfNeeded()
+        let firstRow = c.sidebar.outline.rect(ofRow: 0)
+        let tipInside = c.sidebar.view(c.sidebar.outline, stringForToolTip: 0, point: NSPoint(x: firstRow.midX, y: firstRow.midY), userData: nil)
+        let above = NSPoint(x: firstRow.midX, y: c.sidebar.outline.visibleRect.minY - 10)
+        let tipAbove = c.sidebar.view(c.sidebar.outline, stringForToolTip: 0, point: above, userData: nil)
+        check(tipInside.hasPrefix(proj.path) && tipAbove.isEmpty, "row tooltips show the row's path, and never outside the visible rows",
+              "inside \(tipInside.debugDescription), above \(tipAbove.debugDescription)")
+
         // File operations, each undone with ⌘Z.
         let undo = window.undoManager
         let notes = proj.appendingPathComponent("notes.md")
@@ -795,6 +804,36 @@ enum SelfTest {
             tv.scroll(NSPoint(x: 0, y: 9.5))
         }
         await screenshot(c, suffix: "-editor")
+
+        // Every menu shortcut can be changed; the built menus are the defaults.
+        let shortcuts = KeyboardShortcuts.shared
+        let savedBindings = UserDefaults.standard.data(forKey: "keyBindings")
+        UserDefaults.standard.removeObject(forKey: "keyBindings")
+        shortcuts.apply()
+        let ids = shortcuts.commands.map(\.id)
+        check(shortcuts.commands.count >= 40 && Set(ids).count == ids.count, "every menu command is listed once (\(ids.count))")
+        check(shortcuts.chord(for: "newTab:")?.display == "⌘T" && shortcuts.chord(for: "showNextTab:")?.display == "⇧⌘]",
+              "today's shortcuts are the defaults", shortcuts.chord(for: "showNextTab:")?.display ?? "none")
+        let newTabItem = shortcuts.commands.first { $0.id == "newTab:" }?.item
+        shortcuts.set(KeyChord(key: "t", command: true, control: true), for: "newTab:")
+        check(newTabItem?.keyEquivalent == "t" && newTabItem?.keyEquivalentModifierMask == [.command, .control],
+              "a new shortcut goes straight into the menu", newTabItem.map { "\($0.keyEquivalentModifierMask.rawValue)" } ?? "")
+        check(shortcuts.bindings.owner(of: KeyChord(key: "f", command: true), defaults: shortcuts.defaults, except: "newTab:") == "performFindPanelAction:#1",
+              "a shortcut already in use is found, so it can be moved deliberately")
+        if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0, windowNumber: 0,
+                                        context: nil, characters: "}", charactersIgnoringModifiers: "}", isARepeat: false, keyCode: 30) {
+            let pressed = KeyboardShortcuts.chord(from: event)
+            check(pressed == KeyChord(key: "]", command: true, shift: true), "a pressed ⇧⌘] is recorded as ⇧⌘]", pressed?.display ?? "none")
+        }
+        shortcuts.set(nil, for: "clearBuffer:")
+        check(shortcuts.commands.first { $0.id == "clearBuffer:" }?.item?.keyEquivalent == "", "a shortcut can be removed")
+        AppDelegate.shared.showSettings(nil)
+        check(NSApp.windows.contains { $0.title == "Keyboard Shortcuts" && $0.isVisible }, "Keyboard Shortcuts opens with ⌘,")
+        NSApp.windows.first { $0.title == "Keyboard Shortcuts" }?.close()
+        shortcuts.resetAll()
+        check(newTabItem?.keyEquivalentModifierMask == .command && shortcuts.chord(for: "clearBuffer:")?.display == "⌘K", "Restore All Defaults")
+        UserDefaults.standard.set(savedBindings, forKey: "keyBindings")
+        shortcuts.apply()
 
         // The terminal can sit on any side of the editor, and the sidebar on either side of the window.
         let app = AppDelegate.shared!

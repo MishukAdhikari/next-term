@@ -50,8 +50,9 @@ enum LayoutMenu {
         let menu = NSMenu(title: "Project")
         sidebarItems(into: menu)
         menu.addItem(.separator())
-        let hide = menu.addItem(withTitle: "Hide Project Sidebar", action: #selector(TerminalWindowController.toggleProjectSidebar(_:)), keyEquivalent: "b")
-        hide.keyEquivalentModifierMask = .command
+        let hide = menu.addItem(withTitle: "Hide Project Sidebar", action: #selector(TerminalWindowController.toggleProjectSidebar(_:)), keyEquivalent: "")
+        // Shows the user's shortcut for it, whatever it is now.
+        KeyboardShortcuts.set(KeyboardShortcuts.shared.chord(for: "toggleProjectSidebar:"), on: hide)
         return menu
     }
 

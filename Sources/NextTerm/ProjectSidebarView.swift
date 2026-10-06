@@ -102,6 +102,11 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
         addSubview(header)
         addSubview(scrollView)
+        // Row tooltips through one area over the visible rows. Tooltips set on the row views themselves
+        // stay live for rows scrolled out of sight, so hovering the header showed some hidden row's path.
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(updateToolTips), name: NSView.boundsDidChangeNotification,
+                                               object: scrollView.contentView)
 
         git.onChange = { [weak self] snapshot in self?.gitChanged(snapshot) }
     }
@@ -115,6 +120,20 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         header.inset = headerInset
         header.frame = NSRect(x: 0, y: 0, width: bounds.width, height: TabBarView.height)
         scrollView.frame = NSRect(x: 0, y: TabBarView.height, width: bounds.width, height: max(0, bounds.height - TabBarView.height))
+        updateToolTips()
+    }
+
+    @objc private func updateToolTips() {
+        outline.removeAllToolTips()
+        outline.addToolTip(outline.visibleRect, owner: self, userData: nil)
+    }
+
+    /// The tooltip for the row under the pointer (NSViewToolTipOwner).
+    @objc func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
+        let row = outline.row(at: point)
+        guard row >= 0, outline.visibleRect.contains(point),
+              let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? FileCellView else { return "" }
+        return cell.tipText
     }
 
     // MARK: root

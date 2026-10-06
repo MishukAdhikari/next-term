@@ -91,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = buildMenu()
+        KeyboardShortcuts.shared.capture(NSApp.mainMenu!) // the menus as built are the defaults
         setUpNotifications()
         // Write the shell integration before the first shell starts. Without it tabs fall back to process polling.
         if AppSupport.zshIntegrationDirectory == nil { NSLog("Next Term: could not install zsh integration") }
@@ -176,6 +177,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         welcome?.close()
         target.window?.makeKeyAndOrderFront(nil)
         target.openFile(URL(fileURLWithPath: path), line: line, column: column)
+    }
+
+    private var settings: SettingsWindowController?
+
+    @objc func showSettings(_ sender: Any?) {
+        if settings == nil { settings = SettingsWindowController() }
+        settings?.reload()
+        settings?.showWindow(nil)
+        settings?.window?.makeKeyAndOrderFront(nil)
     }
 
     @objc func checkForUpdates(_ sender: Any?) {
@@ -622,6 +632,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let app = submenu(main, "Next Term")
         app.addItem(withTitle: "About Next Term", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         app.addItem(.separator())
+        item(app, "Keyboard Shortcuts…", #selector(showSettings(_:)), ",", target: self)
         item(app, "Check for Updates…", #selector(checkForUpdates(_:)), "", target: self)
         item(app, "Check for Updates Automatically", #selector(toggleAutomaticUpdates(_:)), "", target: self)
         item(app, "Install Command Line Tool (nxtrm)…", #selector(installCommandLineTool(_:)), "", target: self)

@@ -1,0 +1,341 @@
+import AppKit
+import NextTermCore
+
+/// Every menu command's shortcut can be changed (Settings, Keyboard Shortcuts). The menus as built are
+/// the defaults; the user's changes are saved as overrides and laid over them.
+final class KeyboardShortcuts {
+    static let shared = KeyboardShortcuts()
+
+    struct Command {
+        let id: String
+        let title: String
+        /// "Edit › Find" — where it lives in the menu bar.
+        let path: String
+        let defaultChord: KeyChord?
+        weak var item: NSMenuItem?
+    }
+
+    private(set) var commands: [Command] = []
+    private static let defaultsKey = "keyBindings"
+
+    var bindings: KeyBindings {
+        get { KeyBindings.decode(UserDefaults.standard.data(forKey: Self.defaultsKey)) }
+        set { UserDefaults.standard.set(newValue.encoded(), forKey: Self.defaultsKey) }
+    }
+
+    var defaults: [String: KeyChord?] {
+        Dictionary(commands.map { ($0.id, $0.defaultChord) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// Records the menus' commands and their default shortcuts, then applies the user's.
+    func capture(_ menu: NSMenu) {
+        commands = []
+        walk(menu, path: [])
+        apply()
+    }
+
+    private func walk(_ menu: NSMenu, path: [String]) {
+        for item in menu.items {
+            if let submenu = item.submenu {
+                walk(submenu, path: path + [item.title])
+                continue
+            }
+            // Hidden aliases (⌘= for Bigger) follow their visible item; dynamic menus (Open Recent) have none.
+            guard !item.isSeparatorItem, !item.isHidden, let id = Self.id(of: item),
+                  !commands.contains(where: { $0.id == id }) else { continue }
+            commands.append(Command(id: id, title: item.title, path: path.joined(separator: " › "),
+                                    defaultChord: Self.chord(of: item), item: item))
+        }
+    }
+
+    /// A stable name for a menu command: its action, plus what tells same-action items apart.
+    static func id(of item: NSMenuItem) -> String? {
+        guard let action = item.action else { return nil }
+        var id = NSStringFromSelector(action)
+        if let value = item.representedObject as? String { id += value } else if item.tag != 0 { id += "#\(item.tag)" }
+        return id
+    }
+
+    static func chord(of item: NSMenuItem) -> KeyChord? {
+        guard !item.keyEquivalent.isEmpty else { return nil }
+        let mask = item.keyEquivalentModifierMask
+        return KeyChord(key: item.keyEquivalent, command: mask.contains(.command), shift: mask.contains(.shift),
+                        option: mask.contains(.option), control: mask.contains(.control))
+    }
+
+    static func set(_ chord: KeyChord?, on item: NSMenuItem) {
+        guard let chord else {
+            item.keyEquivalent = ""
+            item.keyEquivalentModifierMask = []
+            return
+        }
+        var mask: NSEvent.ModifierFlags = []
+        if chord.command { mask.insert(.command) }
+        if chord.shift { mask.insert(.shift) }
+        if chord.option { mask.insert(.option) }
+        if chord.control { mask.insert(.control) }
+        item.keyEquivalent = chord.key
+        item.keyEquivalentModifierMask = mask
+    }
+
+    /// The shortcut a key press makes, with the key unshifted ("]" for ⇧⌘], "t" for ⇧⌘T).
+    static func chord(from event: NSEvent) -> KeyChord? {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        var key = event.characters(byApplyingModifiers: []) ?? event.charactersIgnoringModifiers ?? ""
+        if key == "\u{7F}" { key = "\u{8}" } // the Delete key, as menus spell it
+        if key == "\u{3}" { key = "\r" }      // Enter on the keypad
+        guard key.count == 1 else { return nil }
+        return KeyChord(key: key.lowercased(), command: flags.contains(.command), shift: flags.contains(.shift),
+                        option: flags.contains(.option), control: flags.contains(.control))
+    }
+
+    func chord(for id: String) -> KeyChord? {
+        bindings.chord(for: id, default: commands.first { $0.id == id }?.defaultChord ?? nil)
+    }
+
+    func title(of id: String) -> String {
+        commands.first { $0.id == id }?.title ?? id
+    }
+
+    /// Lays the user's shortcuts over the menus.
+    func apply() {
+        let bindings = self.bindings
+        for command in commands {
+            guard let item = command.item else { continue }
+            Self.set(bindings.chord(for: command.id, default: command.defaultChord), on: item)
+        }
+    }
+
+    func set(_ chord: KeyChord?, for id: String) {
+        var bindings = self.bindings
+        bindings.set(chord, for: id, default: commands.first { $0.id == id }?.defaultChord ?? nil)
+        self.bindings = bindings
+        apply()
+    }
+
+    func reset(_ id: String) {
+        var bindings = self.bindings
+        bindings.reset(id)
+        self.bindings = bindings
+        apply()
+    }
+
+    func resetAll() {
+        bindings = KeyBindings()
+        apply()
+    }
+
+    func isCustomised(_ id: String) -> Bool { bindings.overrides[id] != nil }
+}
+
+// MARK: - Settings window
+
+/// Settings (⌘,): every command with its shortcut. Click a shortcut and press the new one; ⌫ removes it,
+/// ⎋ cancels.
+final class SettingsWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
+    private let table = NSTableView()
+    private let search = NSSearchField()
+    private var rows: [KeyboardShortcuts.Command] = []
+
+    init() {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 560), styleMask: [.titled, .closable, .resizable],
+                              backing: .buffered, defer: false)
+        window.title = "Keyboard Shortcuts"
+        window.minSize = NSSize(width: 480, height: 320)
+        window.isReleasedWhenClosed = false
+        super.init(window: window)
+        build()
+        reload()
+        window.center()
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    private func build() {
+        guard let content = window?.contentView else { return }
+        search.placeholderString = "Search commands or shortcuts"
+        search.delegate = self
+        search.sendsSearchStringImmediately = true
+
+        for (id, title, width) in [("command", "Command", 330.0), ("shortcut", "Shortcut", 150.0), ("reset", "", 90.0)] {
+            let column = NSTableColumn(identifier: .init(id))
+            column.title = title
+            column.width = width
+            column.minWidth = id == "command" ? 200 : width
+            column.resizingMask = id == "command" ? .autoresizingMask : []
+            table.addTableColumn(column)
+        }
+        table.dataSource = self
+        table.delegate = self
+        table.rowHeight = 30
+        table.usesAlternatingRowBackgroundColors = true
+        table.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
+        let scroll = NSScrollView()
+        scroll.documentView = table
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+
+        let restore = NSButton(title: "Restore All Defaults", target: self, action: #selector(restoreAll))
+        restore.bezelStyle = .rounded
+        let hint = NSTextField(labelWithString: "Click a shortcut, then press the new keys. ⌫ removes it, ⎋ cancels.")
+        hint.textColor = .secondaryLabelColor
+        hint.font = .systemFont(ofSize: 11)
+        Typography.singleLine(hint, truncation: .byTruncatingTail)
+        hint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let bottom = NSStackView(views: [hint, NSView(), restore])
+        bottom.orientation = .horizontal
+
+        for view in [search, scroll, bottom] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            content.addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            search.topAnchor.constraint(equalTo: content.topAnchor, constant: 14),
+            search.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            search.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            scroll.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 10),
+            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            bottom.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 10),
+            bottom.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            bottom.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            bottom.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -14),
+        ])
+    }
+
+    func reload() {
+        let query = search.stringValue.trimmingCharacters(in: .whitespaces).lowercased()
+        let shortcuts = KeyboardShortcuts.shared
+        rows = shortcuts.commands.filter { command in
+            guard !query.isEmpty else { return true }
+            let shortcut = shortcuts.chord(for: command.id)?.display.lowercased() ?? ""
+            return command.title.lowercased().contains(query) || command.path.lowercased().contains(query) || shortcut.contains(query)
+        }
+        table.reloadData()
+    }
+
+    func controlTextDidChange(_ notification: Notification) { reload() }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
+
+    func tableView(_ tableView: NSTableView, viewFor column: NSTableColumn?, row: Int) -> NSView? {
+        let command = rows[row]
+        switch column?.identifier.rawValue {
+        case "command":
+            let label = NSTextField(labelWithString: "")
+            let text = NSMutableAttributedString(string: command.title, attributes: [.font: NSFont.systemFont(ofSize: 13)])
+            if !command.path.isEmpty {
+                text.append(NSAttributedString(string: "  " + command.path, attributes: [
+                    .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor,
+                ]))
+            }
+            label.attributedStringValue = Typography.truncating(text, .byTruncatingTail)
+            return label
+        case "shortcut":
+            let recorder = ShortcutRecorder(commandID: command.id)
+            recorder.onChange = { [weak self] in self?.reload() }
+            return recorder
+        default:
+            guard KeyboardShortcuts.shared.isCustomised(command.id) else { return NSView() }
+            let button = NSButton(title: "Default", target: self, action: #selector(resetRow(_:)))
+            button.bezelStyle = .rounded
+            button.controlSize = .small
+            button.identifier = .init(command.id)
+            button.toolTip = "Back to " + (command.defaultChord?.display ?? "no shortcut")
+            return button
+        }
+    }
+
+    @objc private func resetRow(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue else { return }
+        KeyboardShortcuts.shared.reset(id)
+        reload()
+    }
+
+    @objc private func restoreAll() {
+        KeyboardShortcuts.shared.resetAll()
+        reload()
+    }
+}
+
+/// A shortcut you click and then type.
+final class ShortcutRecorder: NSButton {
+    let commandID: String
+    var onChange: (() -> Void)?
+    private var monitor: Any?
+    private var clickMonitor: Any?
+
+    init(commandID: String) {
+        self.commandID = commandID
+        super.init(frame: .zero)
+        bezelStyle = .rounded
+        controlSize = .small
+        target = self
+        action = #selector(startRecording)
+        showCurrent()
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    private func showCurrent() {
+        title = KeyboardShortcuts.shared.chord(for: commandID)?.display ?? "—"
+        setAccessibilityLabel("Shortcut for \(KeyboardShortcuts.shared.title(of: commandID)): \(title)")
+    }
+
+    @objc private func startRecording() {
+        guard monitor == nil else { return }
+        title = "Type shortcut…"
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.record(event)
+            return nil // the keys belong to the recorder, not to the menus
+        }
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            self?.stopRecording()
+            return event
+        }
+    }
+
+    private func record(_ event: NSEvent) {
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if event.keyCode == 53 { return stopRecording() } // ⎋
+        if flags.isEmpty, event.keyCode == 51 || event.keyCode == 117 { // ⌫ or ⌦ alone: no shortcut
+            commit(nil)
+            return
+        }
+        guard let chord = KeyboardShortcuts.chord(from: event), chord.isUsable else {
+            NSSound.beep() // needs ⌘ or ⌃ (or a function key), so typing is never swallowed
+            return
+        }
+        commit(chord)
+    }
+
+    private func commit(_ chord: KeyChord?) {
+        stopRecording()
+        let shortcuts = KeyboardShortcuts.shared
+        if let chord, let owner = shortcuts.bindings.owner(of: chord, defaults: shortcuts.defaults, except: commandID) {
+            let alert = NSAlert()
+            alert.messageText = "\(chord.display) is used by “\(shortcuts.title(of: owner))”."
+            alert.informativeText = "Use it for “\(shortcuts.title(of: commandID))” instead? “\(shortcuts.title(of: owner))” is left without a shortcut."
+            alert.addButton(withTitle: "Use It Here")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return showCurrent() }
+            shortcuts.set(nil, for: owner)
+        }
+        shortcuts.set(chord, for: commandID)
+        showCurrent()
+        onChange?()
+    }
+
+    private func stopRecording() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+        monitor = nil
+        clickMonitor = nil
+        showCurrent()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { stopRecording() }
+    }
+}

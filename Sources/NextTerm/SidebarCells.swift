@@ -223,10 +223,13 @@ final class FileCellView: NSTableCellView {
         if let lines, lines.added + lines.removed > 0 {
             tip += "\n+\(lines.added) −\(lines.removed) lines" + (node.isDirectory ? " in \(lines.files) file\(lines.files == 1 ? "" : "s")" : "")
         }
-        toolTip = tip
+        tipText = tip // shown by the sidebar, for visible rows only (see ProjectSidebarView.updateToolTips)
         setAccessibilityLabel([node.name, change.map(Self.word(for:)), stats.stringValue.isEmpty ? nil : stats.stringValue]
             .compactMap { $0 }.joined(separator: ", "))
     }
+
+    /// The row's tooltip: its path, git state and line counts.
+    private(set) var tipText = ""
 
     /// What the counts column shows, for the self-test.
     var statsText: String { stats.stringValue }
