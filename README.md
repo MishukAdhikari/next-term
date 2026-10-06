@@ -1,16 +1,18 @@
 # Next Term
 
-A native macOS terminal for the AI era, in the spirit of the PhpStorm terminal.
+**The missing IDE for the terminal.**
 
-Run Claude Code, Codex, a test suite and a dev server side by side, one per tab, and see at a glance
-which ones are still working, which finished, which failed, and which are waiting for you.
+A native macOS terminal for the AI era, in the spirit of the PhpStorm terminal. Run Claude Code, Codex,
+Command Code, Junie, a test suite and a dev server side by side, one per tab, and see at a glance which
+agents are working, which are done, and which are waiting on your decision.
 
-- **Tabs that report status.** Every tab carries a status mark: a spinner while working, a green check
-  when done, a red cross when a command failed, an amber "!" when a program asked for attention.
-  It clears when you look at the tab.
-- **Knows when an agent is waiting for you.** Agents like `claude` and `codex` never exit, so "done"
-  means "stopped printing and wants your input". This works however you start them: directly, through an
-  alias or a shell function, `npx`, or `cd app && claude`.
+- **Agent status, in step with the agent.** A spinner shows only while an agent is really working, read
+  from the agent's own screen ("esc to interrupt"), so it stops the moment Claude or Codex stops. A green
+  check means done and waiting for your next prompt, an amber "!" means it is asking you something.
+  Plain commands show no spinner and end with a check or a red cross. Marks clear when you look at the tab.
+- **Decisions come to you.** When an agent asks for permission ("Do you want to make this edit…?"),
+  a notification says so with the question; click it to land on that tab. Works however you start the
+  agent: directly, through an alias or a shell function, `npx`, or `cd app && claude`.
 - **Projects.** Open a folder as a project (⌘O): its window keeps the project in the sidebar, and new tabs
   open in it by default. Open Recent, Close Project, and a Welcome window, like an IDE.
 - **Project sidebar with git.** The project as a live file tree: changed files and folders coloured, with
@@ -18,7 +20,9 @@ which ones are still working, which finished, which failed, and which are waitin
   Files your agents create or change show up on their own.
 - **File operations.** Rename (Return), drag to move (Option to copy), New File / New Folder, Move to Trash,
   all undoable with ⌘Z. Drag a file onto a terminal to type its path.
-- **Dock badge and notifications** for tabs that finished while you were in another app.
+- **Find and Replace in Files** (⌘⇧F / ⌘⇧R) across the project, with regular expressions, file masks and
+  a preview of every replacement; a file an agent changed since the search is never overwritten.
+- **Dock badge and notifications** for agents that finished while you were in another app.
 - **Native.** Swift and AppKit, universal (Apple Silicon and Intel): a 3 MB download, about 8 MB installed.
   macOS 13 or later.
 
@@ -40,11 +44,11 @@ NextTerm-x.y.z.dmg.sha256` before allowing it.
 
 | Mark | Meaning |
 |---|---|
-| none | At the prompt, nothing new |
-| spinner | A command is running, or an agent is printing |
-| green ✓ | Finished successfully, or an agent stopped and is waiting for you |
-| red ✕ | Exited with an error (the exit code is in the tooltip) |
-| amber ! | The program rang the bell or sent a notification (OSC 9 / OSC 777) |
+| none | At the prompt, or a plain command running |
+| spinner | An AI agent is working |
+| green ✓ | An agent stopped and is waiting for your next prompt, or a command finished |
+| amber ! | An agent is waiting on your decision (the question is in the tooltip), or a program rang the bell |
+| red ✕ | A command exited with an error (the exit code is in the tooltip) |
 
 How it knows, most reliable first:
 
@@ -52,10 +56,12 @@ How it knows, most reliable first:
    points `ZDOTDIR` back at your real config, loads your `.zshenv`, and adds `preexec`/`precmd` hooks that
    report each command (as typed and with aliases expanded), its exit code, the working directory and any
    suspended jobs. Your `.zprofile`, `.zshrc` and frameworks such as oh-my-zsh load exactly as before.
-2. **Agents.** `claude`, `codex`, `gemini`, `aider`, `opencode` and friends stay in the foreground, so
-   for them Next Term watches output: printing means working; 2.5 s of silence means waiting for you.
-   Your own typing and window resizes don't count as work. When a command looks plain (a shell function),
-   Next Term also asks the kernel what is really running.
+2. **Agents.** `claude`, `codex`, `commandcode`, `junie`, `gemini`, `aider`, `opencode` and friends stay
+   in the foreground, so Next Term reads the agent's own screen, the way you would: "esc to interrupt"
+   means working, a question with choices means it is waiting on you, anything else means idle. For an
+   agent whose screen it does not recognise yet, it falls back to output timing (printing means working,
+   2.5 s of silence means done). When a command looks plain (a shell function), Next Term also asks the
+   kernel what is really running.
 3. **Other shells.** For bash and fish, or after `exec bash`, Next Term asks the kernel for the terminal's
    foreground process and working directory twice a second.
 
@@ -72,9 +78,10 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | Close tab | ⌘W |
 | Select tab 1–8 / last tab | ⌘1…⌘8 / ⌘9 |
 | Next / previous tab | ⌘⇧] / ⌘⇧[, Ctrl-Tab / Ctrl-Shift-Tab |
-| Rename tab | ⌘⇧R, or double-click the tab |
+| Rename tab | ⌥⌘R, or double-click the tab |
 | Project sidebar | ⌘B |
 | Find / next / previous | ⌘F / ⌘G / ⌘⇧G |
+| Find in Files / Replace in Files | ⌘⇧F / ⌘⇧R |
 | Clear | ⌘K |
 | Font size | ⌘+ / ⌘- / ⌘0 |
 | Option as Meta (for Emacs-style keys) | Shell menu, off by default |
@@ -139,8 +146,8 @@ front end can reuse it.
 
 ## Roadmap
 
-In progress: a code editor with syntax highlighting for many languages, a side-by-side diff view, find and
-replace in files, sending a selection to the agent in a tab, and open-source file icons. Later: split panes,
+In progress: a code editor with syntax highlighting for many languages, a side-by-side diff view with
+hunk staging, sending a selection to the agent in a tab, and open-source file icons. Later: split panes,
 session restore, settings, notarized releases. A Linux build would need a different UI layer (AppKit is
 macOS-only); the core logic would carry over.
 
