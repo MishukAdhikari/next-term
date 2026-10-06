@@ -85,10 +85,12 @@ Status reports from the shell carry a random secret for each tab that programs n
 |---|---|
 | New tab (in the project, or the current tab’s folder) | <kbd>⌘T</kbd> or the + button |
 | Close tab | <kbd>⌘W</kbd> (the focused pane, in a split tab), or middle-click the tab |
-| Select tab 1–8, or the last tab | <kbd>⌘1</kbd>–<kbd>⌘8</kbd>, <kbd>⌘9</kbd> |
+| Select tab 1–8, or the last tab | <kbd>⌘1</kbd>–<kbd>⌘8</kbd>, <kbd>⌘9</kbd> (each tab shows its own) |
 | Next or previous tab | <kbd>⇧⌘]</kbd> and <kbd>⇧⌘[</kbd>, or <kbd>⌃⇥</kbd> and <kbd>⌃⇧⇥</kbd> |
 | Rename a tab | <kbd>⌥⌘R</kbd>, or double-click it |
 | Split a tab into panes | <kbd>⌘D</kbd> right, <kbd>⇧⌘D</kbd> down |
 | Reorder | Drag a tab sideways |
+
+With two or more tabs, each one shows the shortcut that selects it, where its × button appears (before the × on the selected tab, when there is room). A shortcut you change in Settings shows as changed.
 
 A split tab shows the mark of its most urgent pane; see [Split panes](/docs/layouts/#split-panes). Tabs that do not fit go behind the **»** button, which shows how many are hidden and the most urgent mark among them. A program can set its own tab title; a name you give a tab wins over it.

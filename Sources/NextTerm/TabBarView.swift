@@ -12,6 +12,8 @@ struct TabBarItem: Equatable {
     var icon: NSImage? = nil
     /// Editor tabs: unsaved changes, shown as a dot in place of the close button (as in VS Code).
     var modified = false
+    /// Terminal tabs: the shortcut that selects it ("⌘1"), shown before the close button.
+    var shortcut: String? = nil
 }
 
 protocol TabBarViewDelegate: AnyObject {
@@ -124,6 +126,9 @@ final class TabBarView: NSView {
     private var pendingUpdate: (items: [TabBarItem], selected: Int)?
 
     var isEditing: Bool { tabViews.contains { $0.isEditing } }
+
+    /// The shortcut a tab shows, if there is room for it (for the self-test).
+    func shownShortcut(at index: Int) -> String? { tabViews[safe: index]?.shownShortcut }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -457,6 +462,8 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     private let iconView = NSImageView()
     private let label = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
+    /// "⌘1": how to get to this tab from the keyboard.
+    private let hint = NSTextField(labelWithString: "")
     private var renameField: NSTextField?
     private var hovering = false { didSet { refresh() } }
     private var selected = false
@@ -483,6 +490,13 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         closeButton.action = #selector(closeClicked)
         closeButton.toolTip = "Close tab (⌘W)"
         addSubview(closeButton)
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = Theme.textDim
+        hint.alignment = .right
+        Typography.singleLine(hint, truncation: .byClipping)
+        hint.isHidden = true
+        hint.setAccessibilityElement(false) // said in the tab's own help instead
+        addSubview(hint)
 
         setAccessibilityElement(true)
         setAccessibilityRole(.radioButton)
@@ -494,13 +508,20 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     override var mouseDownCanMoveWindow: Bool { false }
 
     private var item: TabBarItem?
+    var shownShortcut: String? { hint.isHidden ? nil : hint.stringValue }
 
     // Called several times a second: touch only what changed (re-setting a tooltip resets it).
     func configure(item newItem: TabBarItem, selected isSelected: Bool) {
         guard newItem != item || isSelected != selected else { return }
         if label.stringValue != newItem.title { label.stringValue = newItem.title }
         if label.lineBreakMode != newItem.truncation { label.lineBreakMode = newItem.truncation }
-        if toolTip != newItem.tooltip { toolTip = newItem.tooltip }
+        let tip = newItem.tooltip + (newItem.shortcut.map { "\n\($0) switches to this tab" } ?? "")
+        if toolTip != tip { toolTip = tip }
+        if hint.stringValue != newItem.shortcut ?? "" {
+            hint.stringValue = newItem.shortcut ?? ""
+            needsLayout = true
+        }
+        setAccessibilityHelp(newItem.shortcut.map { "\($0) switches to this tab" })
         dot.state = newItem.state
         if iconView.image !== newItem.icon { iconView.image = newItem.icon }
         iconView.isHidden = newItem.icon == nil
@@ -517,7 +538,11 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         label.textColor = selected || hovering ? Theme.text : Theme.textDim
         // Unsaved: a dot that turns into the close button under the pointer.
         let modified = item?.modified == true
-        closeButton.isHidden = !(selected || hovering || modified)
+        let closeHidden = !(selected || hovering || modified)
+        if closeButton.isHidden != closeHidden {
+            closeButton.isHidden = closeHidden
+            needsLayout = true // the shortcut moves into its place, or out of it
+        }
         let symbol = modified && !hovering ? "circle.fill" : "xmark"
         if closeButton.image?.accessibilityDescription != (symbol == "xmark" ? "Close Tab" : "Unsaved changes") {
             closeButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: symbol == "xmark" ? "Close Tab" : "Unsaved changes")?
@@ -534,7 +559,18 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         closeButton.frame = NSRect(x: bounds.width - 24, y: (h - 18) / 2, width: 18, height: 18)
         let labelX: CGFloat = 29
         let labelHeight = label.intrinsicContentSize.height
-        label.frame = NSRect(x: labelX, y: (h - labelHeight) / 2, width: max(0, bounds.width - labelX - 28), height: labelHeight)
+        var labelEnd = bounds.width - 28
+        // The shortcut: in the close button's place while that is hidden, else just before it, as long as
+        // the title keeps room to be read.
+        let hintWidth = hint.stringValue.isEmpty ? 0 : ceil(hint.intrinsicContentSize.width)
+        let hintEnd = closeButton.isHidden ? bounds.width - 9 : bounds.width - 27
+        hint.isHidden = hintWidth == 0 || hintEnd - hintWidth - 6 - labelX < (closeButton.isHidden ? 40 : 56)
+        if !hint.isHidden {
+            let hintHeight = hint.intrinsicContentSize.height
+            hint.frame = NSRect(x: hintEnd - hintWidth, y: (h - hintHeight) / 2, width: hintWidth, height: hintHeight)
+            labelEnd = min(labelEnd, hint.frame.minX - 6)
+        }
+        label.frame = NSRect(x: labelX, y: (h - labelHeight) / 2, width: max(0, labelEnd - labelX), height: labelHeight)
         renameField?.frame = NSRect(x: labelX - 3, y: (h - 22) / 2, width: max(40, bounds.width - labelX - 26), height: 22)
     }
 

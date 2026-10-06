@@ -95,6 +95,13 @@ enum SelfTest {
             c.newTab(nil)
         }
         check(c.tabs.count == 2 && c.activeIndex == 1, "⌘T opens a second tab and selects it", "tabs=\(c.tabs.count) active=\(c.activeIndex)")
+        // Each tab says how to get to it: ⌘1…⌘8, and ⌘9 for the last; nothing while there is one tab.
+        c.tabBar.layoutSubtreeIfNeeded()
+        check(c.tabBar.items.map(\.shortcut) == ["⌘1", "⌘2"] && c.tabBar.shownShortcut(at: 0) == "⌘1",
+              "tabs show the shortcut that selects them", "\(c.tabBar.items.map(\.shortcut)) shown \(c.tabBar.shownShortcut(at: 0) ?? "nil")")
+        let ten = TerminalWindowController.tabShortcuts(count: 10)
+        check(TerminalWindowController.tabShortcuts(count: 1) == [nil] && ten[7] == "⌘8" && ten[8] == nil && ten[9] == "⌘9",
+              "⌘9 is the last tab's; one tab shows none", "\(ten)")
         let second = c.tabs[1]
         check(await wait(20) { second.status.integrated }, "second tab's shell starts")
         check(await wait(5) { second.currentDirectory() == "/private/tmp" }, "new tab opens in the same directory", second.currentDirectory())

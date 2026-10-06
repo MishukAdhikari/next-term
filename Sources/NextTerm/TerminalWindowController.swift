@@ -407,17 +407,19 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func refresh() {
-        let items = groups.map { group -> TabBarItem in
+        let shortcuts = Self.tabShortcuts(count: groups.count)
+        let items = groups.enumerated().map { index, group -> TabBarItem in
             let tab = group.focused
             guard group.isSplit else {
                 return TabBarItem(title: tab.title, truncation: tab.titleTruncation, state: tab.status.state, tooltip: tab.tooltip,
-                                  accessibilityStatus: tab.stateDescription)
+                                  accessibilityStatus: tab.stateDescription, shortcut: shortcuts[index])
             }
             // A split tab: named by the pane with the keyboard, marked by the pane that most needs you.
             let lines = group.panes.map { "\($0.title): \($0.stateDescription)" }
             return TabBarItem(title: tab.title + "  +\(group.panes.count - 1)", truncation: tab.titleTruncation,
                               state: Self.mostUrgent(group.panes.map(\.status.state)),
-                              tooltip: lines.joined(separator: "\n"), accessibilityStatus: lines.joined(separator: "; "))
+                              tooltip: lines.joined(separator: "\n"), accessibilityStatus: lines.joined(separator: "; "),
+                              shortcut: shortcuts[index])
         }
         tabBar.update(items: items, selectedIndex: activeIndex)
         announceBackgroundChanges()
@@ -1121,9 +1123,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             return showChanges(of: editor.document.url)
         }
         if let file = sidebar.selection.first(where: { !$0.isFolder }) { return showChanges(of: file.url) }
+        if let gone = sidebar.selectedDeleted.first(where: { !$0.isDirectory }) { return showChanges(of: gone.url) }
         NSSound.beep()
     }
-        if let gone = sidebar.selectedDeleted.first(where: { !$0.isDirectory }) { return showChanges(of: gone.url) }
 
     func sidebar(_ sidebar: ProjectSidebarView, showChanges url: URL) { showChanges(of: url) }
 
@@ -1199,6 +1201,21 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     @objc func renameTab(_ sender: Any?) {
         tabBar.beginRename(at: activeIndex)
+    }
+
+    /// What selects each tab, as the Window menu has it now (Settings can change it): ⌘1…⌘8 the first
+    /// eight, ⌘9 the last. None with a single tab, where there is nothing to switch to.
+    static func tabShortcuts(count: Int) -> [String?] {
+        guard count > 1 else { return Array(repeating: nil, count: count) }
+        var byNumber: [Int: String] = [:]
+        let action = #selector(selectTabByNumber(_:))
+        for item in NSApp.mainMenu?.items.compactMap(\.submenu).flatMap(\.items) ?? [] where item.action == action {
+            if let chord = KeyboardShortcuts.chord(of: item) { byNumber[item.tag] = chord.display }
+        }
+        return (0..<count).map { index in
+            if index < 8 { return byNumber[index + 1] }
+            return index == count - 1 ? byNumber[9] : nil
+        }
     }
 
     @objc func selectTabByNumber(_ sender: NSMenuItem) {
