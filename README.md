@@ -6,6 +6,9 @@ A native macOS terminal and editor for the AI era. Run Claude Code, Codex,
 Command Code, Junie, a test suite and a dev server side by side, one per tab, and see at a glance which
 agents are working, which are done, and which are waiting on your decision.
 
+**[Download for macOS](https://github.com/MishukAdhikari/next-term/releases/latest/download/NextTerm.dmg)** ·
+website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)**
+
 - **Agent status, in step with the agent.** A spinner shows only while an agent is really working, read
   from the agent's own screen ("esc to interrupt"), so it stops the moment Claude or Codex stops. A green
   check means done and waiting for your next prompt, an amber "!" means it is asking you something.
