@@ -118,20 +118,66 @@ final class NextTermView: LocalProcessTerminalView {
             }
             return
         }
-        // A plain path such as "src/main.swift:12:4", relative to the tab's folder.
+        // A plain path, relative to the tab's folder: "src/main.swift:12:4", a Python traceback's
+        // `File "…/graph.py", line 42`, pytest's "tests/x.py:42:", or a graph's "graph.py:graph".
         guard opensFiles else { return NSSound.beep() }
-        var path = (link as NSString).expandingTildeInPath
-        if !path.hasPrefix("/"), let base = linkBaseDirectory?() { path = (base as NSString).appendingPathComponent(path) }
-        var line: Int?, column = 1
-        if !FileManager.default.fileExists(atPath: path),
-           let range = path.range(of: #":[0-9]+(:[0-9]+)?:?$"#, options: .regularExpression) {
-            let numbers = path[range].split(separator: ":").compactMap { Int($0) }
-            line = numbers.first
-            column = numbers.count > 1 ? numbers[1] : 1
-            path = String(path[..<range.lowerBound])
+        let base = linkBaseDirectory?()
+        guard let reference = FileReference.resolve(
+            link: link, row: clickedLine(containing: link),
+            absolute: { printed in
+                let path = (printed as NSString).expandingTildeInPath
+                guard !path.hasPrefix("/"), let base else { return path }
+                return ((base as NSString).appendingPathComponent(path) as NSString).standardizingPath
+            },
+            exists: { FileManager.default.fileExists(atPath: $0) })
+        else { return NSSound.beep() }
+        let url = URL(fileURLWithPath: reference.path)
+        var line = reference.line
+        if let symbol = reference.symbol {
+            // Where the name is defined, read from a file of a sensible size; else the top.
+            if let size = (try? FileManager.default.attributesOfItem(atPath: reference.path)[.size] as? Int) ?? nil, size < 5_000_000,
+               let text = try? String(contentsOf: url, encoding: .utf8) {
+                line = FileReference.definitionLine(of: symbol, in: text)
+            }
         }
-        guard FileManager.default.fileExists(atPath: path) else { return NSSound.beep() }
-        if let openFile { openFile(URL(fileURLWithPath: path), line, column) } else { SafeOpen.open(URL(fileURLWithPath: path), from: window) }
+        if let openFile { openFile(url, line, reference.column ?? 1) } else { SafeOpen.open(url, from: window) }
+    }
+
+    /// Where the mouse button went up last, in the view: which row a ⌘-click was on.
+    var lastClickPoint: NSPoint?
+
+    override func mouseUp(with event: NSEvent) {
+        lastClickPoint = convert(event.locationInWindow, from: nil)
+        super.mouseUp(with: event)
+    }
+
+    /// The text of the line a link was clicked in, its wrapped rows joined: where a traceback says
+    /// `line 42`. SwiftTerm gives only the link, so this finds the logical lines on screen that contain
+    /// it and takes the one nearest the click (its row, estimated from the view's height).
+    func clickedLine(containing link: String) -> String? {
+        let terminal = getTerminal()
+        let rows = terminal.rows
+        guard rows > 0 else { return nil }
+        let estimate = lastClickPoint.map { point -> Int in
+            Int((frame.height - point.y) / (frame.height / CGFloat(rows)))
+        }
+        var best: (distance: Int, text: String)?
+        var row = 0
+        while row < rows {
+            guard let first = terminal.getLine(row: row) else { row += 1; continue }
+            var end = row
+            var text = first.translateToString(trimRight: false)
+            while let next = terminal.getLine(row: end + 1), next.isWrapped {
+                text += next.translateToString(trimRight: false)
+                end += 1
+            }
+            if text.contains(link) {
+                let distance = estimate.map { $0 < row ? row - $0 : $0 > end ? $0 - end : 0 } ?? row
+                if best == nil || distance < best!.distance { best = (distance, text) }
+            }
+            row = end + 1
+        }
+        return best.map { $0.text.trimmingCharacters(in: .whitespaces) }
     }
 }
 

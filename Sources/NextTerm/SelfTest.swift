@@ -623,6 +623,8 @@ enum SelfTest {
         AppDelegate.shared.resetFontSize(nil)
         AppDelegate.shared.fontSize = size
 
+        await linkChecks(c)
+
         try? FileManager.default.removeItem(at: dir)
     }
 
