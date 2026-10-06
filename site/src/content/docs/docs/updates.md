@@ -1,0 +1,33 @@
+---
+title: Updates
+description: "How Next Term updates itself from GitHub Releases: a daily check and one-click install verified by SHA-256, and how to turn automatic checks off."
+---
+
+You install Next Term once. After that it keeps itself current from GitHub Releases, and every update is checked before it replaces anything.
+
+## How it works
+
+1. **A daily check.** About 20 seconds after launch, and then once a day, Next Term asks GitHub for the latest release. Drafts and pre-releases are ignored.
+2. **You decide.** When there is a newer version, an alert names it, shows the start of its release notes, and offers **Install and Relaunch**, **Later** and **Release Notes**. On an automatic check you can also tick **Skip this version**.
+3. **Download and verify.** **Install and Relaunch** downloads the disk image with a progress window and checks it against the SHA-256 published with the release. It then opens the image read-only, copies the new app next to the current one, and checks that it really is Next Term, at the expected version, with an intact code signature.
+4. **Swap on quit.** “Next Term 0.2.0 is ready” offers to relaunch now (running commands and agents stop) or later. The new version replaces the old one when Next Term quits; if anything goes wrong during the swap, the old app is put back.
+
+If any step fails, nothing is replaced. Next Term says what went wrong, and you can download the release from its page instead.
+
+## Check now
+
+**Next Term › Check for Updates…** checks at once and tells you either way: a new version, “Next Term is up to date”, or that GitHub did not answer.
+
+## Turn automatic checks off
+
+Untick **Next Term › Check for Updates Automatically**. Next Term then makes no network request on its own at all; **Check for Updates…** still works when you ask.
+
+## What the check sends
+
+Only a request for the latest release of `MishukAdhikari/next-term` on GitHub, with the app’s version in the `User-Agent` header (“NextTerm/0.2.0”). There is no other identifying data, no account and no analytics. If GitHub’s API is rate-limited, Next Term reads the newest version from the releases page instead. Downloads are accepted only over HTTPS from GitHub.
+
+## Updating from 0.1.0
+
+Next Term 0.1.0 already has the updater: choose **Next Term › Check for Updates…** and install 0.2.0 from there. Release notes for every version are on the [releases page](https://github.com/MishukAdhikari/next-term/releases).
+
+Development builds (`swift run`) have no version and never check for updates.

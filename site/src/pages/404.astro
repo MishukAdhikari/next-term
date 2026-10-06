@@ -1,0 +1,28 @@
+---
+// The page a web server shows for a missing address (dist/404.html).
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+---
+
+<StarlightPage
+	frontmatter={{
+		title: 'Page not found',
+		description: 'This page is not on the Next Term site. It may have moved when the documentation changed.',
+		template: 'splash',
+		pagefind: false,
+		editUrl: false,
+		lastUpdated: false,
+		prev: false,
+		next: false,
+		tableOfContents: false,
+		head: [{ tag: 'meta', attrs: { name: 'robots', content: 'noindex' } }],
+		hero: {
+			title: 'Page not found',
+			tagline:
+				'There is nothing at this address. It may have moved when the documentation changed; the documentation home lists every page.',
+			actions: [
+				{ text: 'Documentation', link: '/docs/', variant: 'primary' },
+				{ text: 'Home', link: '/', variant: 'secondary' },
+			],
+		},
+	}}
+/>

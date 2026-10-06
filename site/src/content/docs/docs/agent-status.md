@@ -1,0 +1,93 @@
+---
+title: Agent status in every tab
+description: "How Next Term shows which agent is working, done or waiting on you — tab marks, notifications, the Dock badge — and how it reads each agent’s screen."
+head:
+  - tag: title
+    content: Agent status for Claude Code and Codex tabs — Next Term
+---
+
+Run five agents in five tabs and the hard part is no longer the typing. It is knowing which one is still working, which one finished ten minutes ago, and which one has been waiting for your “yes” all along. Next Term puts that answer on every tab.
+
+![Four tabs from Next Term’s tab bar: a green check on a finished command, a red cross on a failed one, an amber exclamation mark on a tab waiting for a decision, and a blue spinner on a tab where an agent is working.](../../../assets/screenshots/tab-marks.webp)
+
+## The marks
+
+| Mark | Meaning |
+|---|---|
+| none | At the prompt, or a plain command running |
+| <span class="nt-mark nt-mark--working">◌</span> spinner | An AI agent is working |
+| <span class="nt-mark nt-mark--done">✓</span> green check | An agent stopped and is waiting for your next prompt, or a command finished |
+| <span class="nt-mark nt-mark--attention">!</span> amber | An agent is waiting on your decision (the question is in the tooltip), or a program rang the bell |
+| <span class="nt-mark nt-mark--failed">✕</span> red cross | A command exited with an error (the exit code is in the tooltip) |
+
+Each mark is a shape as well as a colour, so it reads without colour vision too. A mark clears when you look at the tab.
+
+The spinner is reserved for AI agents, and it runs only while the agent itself says it is working. A build or a test run shows no spinner while it runs; it ends with a check or a cross. A dev server or an editor never shows one at all.
+
+## Decisions come to you
+
+When an agent asks for permission (“Do you want to make this edit to `User.php`?”), the tab turns amber and a notification names the agent and quotes the question. Click it to land on that tab, in that window. This happens even while you are in Next Term, as long as that tab is not the one on screen.
+
+Answer the question in the terminal as usual; the amber mark clears once the question goes away.
+
+## Notifications and the Dock badge
+
+- **Finished work** produces a notification only when you are in another app. In Next Term, the tab mark says it already. A notification is sent only for work that took at least 5 seconds.
+- **An agent that stopped** is “waiting for you”; an agent that exited (`claude -p …`) has “finished”; a failed command says so, with its exit code.
+- **A bell**, or a program’s own notification (OSC 9 or OSC 777), marks the tab amber: it needs your attention.
+- **The Dock badge** counts the tabs with a mark you have not seen yet.
+- **Repeats are held back:** each tab replaces its previous notification, and the same message is not repeated within 10 seconds.
+- **VoiceOver** announces when a background tab finishes, fails or needs your attention, since the marks themselves are visual.
+
+Notifications use macOS’s own Notification Center. If you declined them at first launch, turn them on in **System Settings → Notifications → Next Term**.
+
+## How Next Term knows
+
+Next Term uses the most reliable source available, in this order.
+
+### 1. zsh integration
+
+Next Term starts zsh with its own `ZDOTDIR` holding a tiny `.zshenv`. That file points `ZDOTDIR` back at your real configuration, loads your `.zshenv`, and adds `preexec` and `precmd` hooks that report each command (as typed, and with aliases expanded), its exit code, the working directory and any suspended jobs.
+
+Your `.zprofile`, `.zshrc` and frameworks such as oh-my-zsh load exactly as before, and none of your configuration files is edited.
+
+### 2. The agent’s own screen
+
+Agents such as `claude`, `codex`, `commandcode`, `junie`, `gemini`, `qwen`, `aider` and `opencode` stay in the foreground, so Next Term reads the bottom of the agent’s screen the way you would:
+
+- **“esc to interrupt”** (or Gemini’s “esc to cancel”) means the agent is working.
+- **A question with choices** (“Do you want to…? 1. Yes …”) means it is waiting on you.
+- **Anything else** means it is idle, waiting for your next prompt.
+
+Reading the screen keeps the mark in step with the agent: the spinner stops the moment Claude or Codex stops, even if the agent keeps redrawing a clock or a status line. For an agent whose screen Next Term does not recognise yet, it falls back to output timing: printing means working, and 2.5 seconds of silence means done.
+
+It does not matter how you start the agent: directly, through an alias or a shell function, with `npx`, or as `cd app && claude`. When a command looks plain (a shell function, say), Next Term also asks the kernel what is really running.
+
+Next Term recognises these agents by name: Claude Code, Codex, Gemini CLI, Qwen Code, Command Code, Junie, opencode, Aider, Amp, Cursor Agent, Goose, Crush, GitHub Copilot CLI, Droid, Kiro, Amazon Q, Kimi, Plandex, Cline and Auggie.
+
+### 3. Other shells
+
+For bash and fish, or after `exec bash`, Next Term asks the kernel for the terminal’s foreground process and working directory twice a second.
+
+## What never shows as “done”
+
+Interactive programs (`vim`, `ssh`, `less`, `htop`, database shells, REPLs and the like) are never reported as done: they are waiting for you by design.
+
+Closing a tab or quitting asks first if a program is running, or a job is suspended (<kbd>⌃Z</kbd>) or in the background, and names it, for example: Quitting stops “npm run dev” (running).
+
+## Why the marks can be trusted
+
+Status reports from the shell carry a random secret for each tab that programs never see. Output in the terminal — a `cat` of a log, a remote host over ssh — cannot fake “command finished” and skip the close confirmation. See [Security and privacy](/docs/security-and-privacy/).
+
+## Working with tabs
+
+| Action | How |
+|---|---|
+| New tab (in the project, or the current tab’s folder) | <kbd>⌘T</kbd> or the + button |
+| Close tab | <kbd>⌘W</kbd>, or middle-click the tab |
+| Select tab 1–8, or the last tab | <kbd>⌘1</kbd>–<kbd>⌘8</kbd>, <kbd>⌘9</kbd> |
+| Next or previous tab | <kbd>⇧⌘]</kbd> and <kbd>⇧⌘[</kbd>, or <kbd>⌃⇥</kbd> and <kbd>⌃⇧⇥</kbd> |
+| Rename a tab | <kbd>⌥⌘R</kbd>, or double-click it |
+| Reorder | Drag a tab sideways |
+
+Tabs that do not fit go behind the **»** button, which shows how many are hidden and the most urgent mark among them. A program can set its own tab title; a name you give a tab wins over it.

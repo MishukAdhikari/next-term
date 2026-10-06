@@ -1,0 +1,18 @@
+// Facts about Next Term that several pages repeat. Change them here when a release ships.
+// The site's own address is not here: it is `site` in astro.config.mjs (read as `Astro.site`).
+
+export const APP_NAME = 'Next Term';
+export const TAGLINE = 'The missing IDE for the terminal';
+export const VERSION = '0.2.0';
+export const MIN_MACOS = 'macOS 13 or later';
+export const AUTHOR = 'Mishuk Adhikari';
+export const AUTHOR_URL = 'https://github.com/MishukAdhikari';
+export const REPO = 'https://github.com/MishukAdhikari/next-term';
+/** Always the newest release page; the DMG is attached there as NextTerm-x.y.z.dmg. */
+export const RELEASES_LATEST = `${REPO}/releases/latest`;
+export const RELEASE_NOTES = `${REPO}/releases/tag/v${VERSION}`;
+export const LICENSE_URL = `${REPO}/blob/main/LICENSE`;
+
+/** One-sentence description used for the home page, JSON-LD and llms.txt. */
+export const SUMMARY =
+	'Next Term is a free, open-source (MIT) native macOS terminal and code editor for running AI coding agents such as Claude Code, Codex and Gemini CLI side by side, with a status mark on every tab that shows which agent is working, done, or waiting on you.';
