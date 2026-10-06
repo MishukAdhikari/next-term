@@ -85,8 +85,6 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         splitView.delegate = self
         splitView.addArrangedSubview(sidebar)
         splitView.addArrangedSubview(mainPane)
-        splitView.setHoldingPriority(.init(260), forSubviewAt: 0) // window resizes go to the terminal
-        splitView.setHoldingPriority(.init(250), forSubviewAt: 1)
         window.contentView = splitView
         sidebar.delegate = self
 
@@ -110,8 +108,6 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         workSplit.delegate = self
         workSplit.addArrangedSubview(editorArea)
         workSplit.addArrangedSubview(terminalPane)
-        workSplit.setHoldingPriority(.init(250), forSubviewAt: 0)
-        workSplit.setHoldingPriority(.init(260), forSubviewAt: 1)
         workSplit.translatesAutoresizingMaskIntoConstraints = false
         mainPane.addSubview(workSplit)
         NSLayoutConstraint.activate([
@@ -122,6 +118,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         ])
         editorArea.delegate = self
         editorArea.isHidden = true
+        applyLayout()
         setSidebarVisible(AppDelegate.shared.sidebarVisible)
 
         let ticker = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
@@ -374,11 +371,61 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return true
     }
 
+    // MARK: layout: where the sidebar and the terminal go
+
+    private var sidebarOnRight: Bool { AppDelegate.shared.sidebarSide == .right }
+    private var terminalPosition: AppDelegate.TerminalPosition { AppDelegate.shared.terminalPosition }
+    /// The terminal comes before the editor (left of it, or above it).
+    private var terminalFirst: Bool { terminalPosition == .left || terminalPosition == .top }
+
+    /// Puts the sidebar and the terminal where the View menu says, keeping their sizes.
+    func applyLayout() {
+        let sidebarWidth = AppDelegate.shared.sidebarWidth
+        let order: [NSView] = sidebarOnRight ? [mainPane, sidebar] : [sidebar, mainPane]
+        if splitView.arrangedSubviews != order {
+            order.forEach(splitView.removeArrangedSubview)
+            order.forEach(splitView.addArrangedSubview)
+        }
+        // Window resizes go to the work area, not the sidebar.
+        splitView.setHoldingPriority(.init(260), forSubviewAt: sidebarOnRight ? 1 : 0)
+        splitView.setHoldingPriority(.init(250), forSubviewAt: sidebarOnRight ? 0 : 1)
+
+        workSplit.isVertical = terminalPosition == .left || terminalPosition == .right
+        let work: [NSView] = terminalFirst ? [terminalPane, editorArea] : [editorArea, terminalPane]
+        if workSplit.arrangedSubviews != work {
+            work.forEach(workSplit.removeArrangedSubview)
+            work.forEach(workSplit.addArrangedSubview)
+        }
+        // Window resizes go to the editor; the terminal keeps its size.
+        workSplit.setHoldingPriority(.init(250), forSubviewAt: terminalFirst ? 1 : 0)
+        workSplit.setHoldingPriority(.init(260), forSubviewAt: terminalFirst ? 0 : 1)
+        splitView.adjustSubviews()
+        workSplit.adjustSubviews()
+        if isSidebarVisible { placeSidebarDivider(width: sidebarWidth) }
+        placeWorkDivider()
+        updateInsets()
+    }
+
+    private func placeSidebarDivider(width: CGFloat) {
+        splitView.layoutSubtreeIfNeeded()
+        let position = sidebarOnRight ? splitView.bounds.width - width - splitView.dividerThickness : width
+        splitView.setPosition(position, ofDividerAt: 0)
+    }
+
+    /// The editor gets its remembered share of the work area, on whichever side it is.
+    private func placeWorkDivider() {
+        guard !editorArea.isHidden else { return }
+        workSplit.layoutSubtreeIfNeeded()
+        let length = workSplit.isVertical ? workSplit.bounds.width : workSplit.bounds.height
+        let editor = round(length * AppDelegate.shared.editorFraction)
+        workSplit.setPosition(terminalFirst ? length - editor - workSplit.dividerThickness : editor, ofDividerAt: 0)
+    }
+
     func setSidebarVisible(_ visible: Bool) {
         sidebar.isHidden = !visible
         if visible {
             splitView.adjustSubviews()
-            splitView.setPosition(AppDelegate.shared.sidebarWidth, ofDividerAt: 0)
+            placeSidebarDivider(width: AppDelegate.shared.sidebarWidth)
             projectKey = nil
             updateProjectRoot()
         } else {
@@ -394,30 +441,47 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         setSidebarVisible(visible)
     }
 
-    /// Traffic lights sit over whichever pane is leftmost; full screen has none.
+    /// The traffic lights sit over whichever pane is top-left; full screen has none. Tab bars along the
+    /// top of the window drag it, like a title bar; one lower down does not.
     private func updateInsets() {
         let lights: CGFloat = isFullScreen ? 8 : 78
-        sidebar.headerInset = isFullScreen ? 8 : 70
-        // Whichever tab bar is at the top of the window sits beside the traffic lights.
-        let top = isSidebarVisible ? 8 : lights
-        editorArea.tabBar.leadingInset = top
-        tabBar.leadingInset = editorArea.isHidden ? top : 8
-        tabBar.dragsWindow = editorArea.isHidden
+        let sidebarTopLeft = isSidebarVisible && !sidebarOnRight
+        sidebar.headerInset = sidebarTopLeft && !isFullScreen ? 70 : 8
+        let corner = sidebarTopLeft ? 8 : lights
+        let editorShown = !editorArea.isHidden
+        // Which bar starts at the work area's top-left corner, and which bars run along its top edge.
+        let terminalAtCorner = !editorShown || terminalFirst
+        let terminalAtTop = !editorShown || terminalPosition != .bottom
+        let editorAtTop = terminalPosition != .top
+        tabBar.leadingInset = terminalAtCorner ? corner : 8
+        tabBar.dragsWindow = terminalAtTop
+        editorArea.tabBar.leadingInset = terminalAtCorner ? 8 : corner
+        editorArea.tabBar.dragsWindow = editorAtTop
     }
 
+    /// The smallest a pane may get along the work split: room for its tabs and a few lines.
+    private var workMinimum: CGFloat { workSplit.isVertical ? 240 : TabBarView.height + 60 }
+
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {
-        splitView === workSplit ? TabBarView.height + 60 : 160
+        if splitView === workSplit { return workMinimum }
+        // The sidebar is 160–640 wide, on either side.
+        return sidebarOnRight ? max(320, splitView.bounds.width - 640) : 160
     }
 
     func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {
-        splitView === workSplit ? splitView.bounds.height - TabBarView.height - 60 : min(640, splitView.bounds.width - 320)
+        if splitView === workSplit {
+            return (workSplit.isVertical ? splitView.bounds.width : splitView.bounds.height) - workMinimum
+        }
+        return sidebarOnRight ? splitView.bounds.width - 160 : min(640, splitView.bounds.width - 320)
     }
 
     func splitViewDidResizeSubviews(_ notification: Notification) {
         if (notification.object as? NSSplitView) === workSplit {
             // Remember the split the user dragged to (not the one a window resize produces).
-            if !editorArea.isHidden, workSplit.bounds.height > 200, NSApp.currentEvent?.type == .leftMouseDragged {
-                AppDelegate.shared.editorFraction = editorArea.frame.height / workSplit.bounds.height
+            let length = workSplit.isVertical ? workSplit.bounds.width : workSplit.bounds.height
+            if !editorArea.isHidden, length > 200, NSApp.currentEvent?.type == .leftMouseDragged {
+                let editor = workSplit.isVertical ? editorArea.frame.width : editorArea.frame.height
+                AppDelegate.shared.editorFraction = editor / length
             }
             return
         }
@@ -468,8 +532,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         editorArea.isHidden = !visible
         workSplit.adjustSubviews()
         if visible {
-            let fraction = AppDelegate.shared.editorFraction
-            workSplit.setPosition(round(workSplit.bounds.height * fraction), ofDividerAt: 0)
+            placeWorkDivider()
         } else if let view = activeTab?.view {
             window?.makeFirstResponder(view)
         }

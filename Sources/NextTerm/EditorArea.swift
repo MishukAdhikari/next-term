@@ -240,6 +240,10 @@ final class EditorArea: NSView, TabBarViewDelegate {
         editors.forEach { $0.applyFont() }
     }
 
+    func applyWrap() {
+        editors.forEach { $0.applyWrap() }
+    }
+
     // MARK: TabBarViewDelegate
 
     func tabBar(_ bar: TabBarView, didSelect index: Int) { select(index) }

@@ -441,12 +441,20 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     // MARK: environment
 
+    /// PATH as given to the shell (for the self-test).
+    private(set) var environmentPath = ""
+
     private func environment(shellName: String) -> [String] {
         var env = ProcessInfo.processInfo.environment
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["TERM_PROGRAM"] = "NextTerm"
         env["TERM_PROGRAM_VERSION"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        // `nxtrm` works in every tab from the first launch, with no install step.
+        if let bin = CommandLineTool.script?.deletingLastPathComponent().path {
+            let path = env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+            if !path.split(separator: ":").contains(Substring(bin)) { env["PATH"] = path + ":" + bin }
+        }
         // Apps opened from Finder get no LANG; without it zsh and most CLIs mangle UTF-8.
         if env["LANG"]?.isEmpty ?? true { env["LANG"] = "en_US.UTF-8" }
         // Never leak the launching terminal's identity into ours.
@@ -458,6 +466,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             env["ZDOTDIR"] = zdotdir.path
             env[ShellIntegration.nonceVariable] = nonce // the shell removes it from its environment at once
         }
+        environmentPath = env["PATH"] ?? ""
         return env.map { "\($0.key)=\($0.value)" }
     }
 

@@ -32,6 +32,10 @@ cp -R .build/arm64-apple-macosx/release/SwiftTerm_SwiftTerm.bundle "$APP/Content
 # The editor's grammars (licence-checked; see scripts/update-highlighting.py). shiki-swift's own bundle,
 # which includes GPL grammars, is deliberately not copied.
 cp -R Resources/Highlighting "$APP/Contents/Resources/Highlighting"
+# nxtrm, the command line tool (on PATH in Next Term's tabs; Shell > Install Command Line Tool for others).
+mkdir -p "$APP/Contents/Resources/bin"
+cp scripts/nxtrm "$APP/Contents/Resources/bin/nxtrm"
+chmod 755 "$APP/Contents/Resources/bin/nxtrm"
 # License notices travel with the app; Credits.html is what About Next Term shows.
 cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
 {
@@ -84,6 +88,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
       <key>CFBundleTypeRole</key><string>Viewer</string>
       <key>LSHandlerRank</key><string>Alternate</string>
       <key>LSItemContentTypes</key><array><string>public.folder</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>Text and source code</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key><array><string>public.text</string><string>public.source-code</string><string>public.script</string><string>public.json</string><string>public.yaml</string></array>
     </dict>
   </array>
   <key>NSAppleEventsUsageDescription</key><string>A command you ran in Next Term wants to control another app.</string>

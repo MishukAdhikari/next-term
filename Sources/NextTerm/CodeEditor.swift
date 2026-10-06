@@ -300,6 +300,7 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         scrollView.hasVerticalRuler = true
         scrollView.rulersVisible = true
         ruler.updateThickness()
+        applyWrap()
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(scrollView)
@@ -310,7 +311,7 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
 
-        if document.highlighter == nil, let engine = SyntaxEngine.shared, let language = document.language,
+        if document.highlighter == nil, let engine = SyntaxEngine.shared, let language = document.grammar,
            document.storage.length <= DocumentHighlighter.maxLength {
             document.highlighter = DocumentHighlighter(engine: engine, language: language, storage: document.storage,
                                                        layoutManager: layoutManager) { [weak document] in document?.lines ?? LineIndex() }
@@ -318,6 +319,32 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// Soft wrap (View menu): long lines wrap at the window's edge instead of scrolling sideways.
+    /// Line numbers stay on each line's first row.
+    func applyWrap() {
+        let wrap = AppDelegate.shared?.softWrap ?? true
+        guard let container = textView.textContainer else { return }
+        let width = scrollView.contentSize.width
+        if wrap {
+            scrollView.hasHorizontalScroller = false
+            textView.isHorizontallyResizable = false
+            textView.autoresizingMask = [.width]
+            container.widthTracksTextView = true
+            textView.setFrameSize(NSSize(width: width, height: textView.frame.height))
+            container.containerSize = NSSize(width: width - textView.textContainerInset.width * 2, height: .greatestFiniteMagnitude)
+        } else {
+            container.widthTracksTextView = false
+            container.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+            textView.isHorizontallyResizable = true
+            textView.autoresizingMask = []
+            scrollView.hasHorizontalScroller = true
+        }
+        textView.layoutManager?.invalidateLayout(forCharacterRange: NSRange(location: 0, length: document.storage.length), actualCharacterRange: nil)
+        textView.sizeToFit()
+        ruler.needsDisplay = true
+        textView.needsDisplay = true
+    }
 
     func applyFont() {
         let font = EditorDocument.font

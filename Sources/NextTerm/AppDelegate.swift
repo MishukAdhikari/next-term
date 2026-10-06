@@ -33,7 +33,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set { UserDefaults.standard.set(Double(newValue), forKey: "sidebarWidth") }
     }
 
-    /// How much of the window's height open files get, above the terminal.
+    /// Where the terminal sits relative to the editor.
+    enum TerminalPosition: String, CaseIterable {
+        case bottom, right, left, top
+        var title: String { rawValue.capitalized }
+    }
+
+    enum SidebarSide: String { case left, right }
+
+    var terminalPosition: TerminalPosition {
+        get { TerminalPosition(rawValue: UserDefaults.standard.string(forKey: "terminalPosition") ?? "") ?? .bottom }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "terminalPosition") }
+    }
+
+    var sidebarSide: SidebarSide {
+        get { SidebarSide(rawValue: UserDefaults.standard.string(forKey: "sidebarSide") ?? "") ?? .left }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "sidebarSide") }
+    }
+
+    @objc func setTerminalPosition(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let position = TerminalPosition(rawValue: raw) else { return }
+        terminalPosition = position
+        controllers.forEach { $0.applyLayout() }
+    }
+
+    /// Long lines in the editor wrap at the edge (on unless turned off).
+    var softWrap: Bool {
+        get { UserDefaults.standard.object(forKey: "softWrap") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "softWrap") }
+    }
+
+    @objc func toggleSoftWrap(_ sender: Any?) {
+        softWrap.toggle()
+        controllers.forEach { $0.editorArea.applyWrap() }
+    }
+
+    @objc func toggleSidebarSide(_ sender: Any?) {
+        sidebarSide = sidebarSide == .left ? .right : .left
+        controllers.forEach { $0.applyLayout() }
+    }
+
+    /// How much of the work area open files get; the terminal has the rest.
     var editorFraction: CGFloat {
         get {
             let saved = UserDefaults.standard.double(forKey: "editorFraction")
@@ -55,14 +95,90 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Write the shell integration before the first shell starts. Without it tabs fall back to process polling.
         if AppSupport.zshIntegrationDirectory == nil { NSLog("Next Term: could not install zsh integration") }
         NSApp.activate(ignoringOtherApps: true)
+        // `nxtrm` in a terminal, while Next Term runs.
+        DistributedNotificationCenter.default().addObserver(self, selector: #selector(commandLineRequest(_:)),
+                                                            name: .init(CommandLineOpen.notificationName), object: nil,
+                                                            suspensionBehavior: .deliverImmediately)
         if SelfTest.isRequested {
             newWindow(nil)
             SelfTest.run()
             return
         }
+        CommandLineTool.registerQuietly()
+        // `nxtrm` started us: open what it asked for, not the last session.
+        let arguments = CommandLine.arguments
+        if let flag = arguments.firstIndex(of: "--open-request"), flag + 1 < arguments.count,
+           let command = try? JSONDecoder().decode(OpenCommand.self, from: Data(arguments[flag + 1].utf8)) {
+            handle(command)
+            if !controllers.isEmpty { return }
+        }
         // A folder dropped on the app or `open -a "Next Term" dir` arrives before this and opens itself.
         guard controllers.isEmpty else { return }
         if !reopenLastProjects() { chooseStartingFolder() }
+    }
+
+    // MARK: nxtrm
+
+    @objc private func commandLineRequest(_ notification: Notification) {
+        guard let text = notification.userInfo?["request"] as? String,
+              let command = try? JSONDecoder().decode(OpenCommand.self, from: Data(text.utf8)),
+              command.app == Bundle.main.bundlePath else { return } // another copy of Next Term's request
+        handle(command)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Opens what `nxtrm` asked for: folders as projects, files in the editor at their line.
+    func handle(_ command: OpenCommand) {
+        if command.items.isEmpty {
+            if command.newWindow || controllers.isEmpty { newWindow(nil) }
+            return
+        }
+        for item in command.items {
+            if item.isDirectory {
+                openFolder(item.path, newWindow: command.newWindow)
+            } else {
+                openFile(item.path, line: item.line, column: item.column ?? 1, newWindow: command.newWindow)
+            }
+        }
+    }
+
+    /// A folder from outside (nxtrm, Finder): its window if it is open, an unused window, or a new one.
+    private func openFolder(_ path: String, newWindow: Bool) {
+        let path = canonicalPath(path)
+        recent.add(path)
+        welcome?.close()
+        if !newWindow, let open = controllers.first(where: { $0.project == path }) {
+            open.window?.makeKeyAndOrderFront(nil)
+        } else if !newWindow, let unused = controllers.first(where: \.isPristine) {
+            unused.adoptProject(path)
+            unused.window?.makeKeyAndOrderFront(nil)
+        } else {
+            openWindow(directory: path, project: path)
+        }
+    }
+
+    /// A file from outside: in the window whose project holds it, else the front window, else a new window
+    /// on the file's project (its git root, or its folder).
+    private func openFile(_ path: String, line: Int?, column: Int, newWindow: Bool) {
+        let path = canonicalPath(path)
+        let owners = controllers.filter { controller in controller.project.map { path.hasPrefix($0 + "/") } ?? false }
+        let owner = owners.max { ($0.project?.count ?? 0) < ($1.project?.count ?? 0) }
+        let front = (NSApp.keyWindow?.windowController as? TerminalWindowController) ?? controllers.last
+        let target: TerminalWindowController
+        if !newWindow, let window = owner ?? front {
+            target = window
+        } else {
+            let root = ProjectRoot.find(from: (path as NSString).deletingLastPathComponent)
+            recent.add(root)
+            target = openWindow(directory: root, project: root)
+        }
+        welcome?.close()
+        target.window?.makeKeyAndOrderFront(nil)
+        target.openFile(URL(fileURLWithPath: path), line: line, column: column)
+    }
+
+    @objc func installCommandLineTool(_ sender: Any?) {
+        CommandLineTool.install(from: NSApp.keyWindow)
     }
 
     /// The project windows open when Next Term last quit, so it starts where you left off.
@@ -323,8 +439,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls {
             var isDir: ObjCBool = false
-            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+            guard url.isFileURL, FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { continue }
+            if isDir.boolValue {
                 openProject(at: url, from: NSApp.keyWindow?.windowController as? TerminalWindowController)
+            } else {
+                openFile(url.path, line: nil, column: 1, newWindow: false) // Finder's Open With
             }
         }
     }
@@ -393,6 +512,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleOptionAsMeta(_:)) { item.state = Preferences.optionAsMeta ? .on : .off }
+        if item.action == #selector(setTerminalPosition(_:)) {
+            item.state = item.representedObject as? String == terminalPosition.rawValue ? .on : .off
+        }
+        if item.action == #selector(toggleSidebarSide(_:)) { item.state = sidebarSide == .right ? .on : .off }
+        if item.action == #selector(toggleSoftWrap(_:)) { item.state = softWrap ? .on : .off }
         return true
     }
 
@@ -485,6 +609,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let app = submenu(main, "Next Term")
         app.addItem(withTitle: "About Next Term", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         app.addItem(.separator())
+        item(app, "Install Command Line Tool (nxtrm)…", #selector(installCommandLineTool(_:)), "", target: self)
+        app.addItem(.separator())
         let services = NSMenu()
         app.addItem(withTitle: "Services", action: nil, keyEquivalent: "").submenu = services
         NSApp.servicesMenu = services
@@ -546,6 +672,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let view = submenu(main, "View")
         item(view, "Hide Project Sidebar", #selector(TerminalWindowController.toggleProjectSidebar(_:)), "b") // title follows the state
         item(view, "Focus Editor", #selector(TerminalWindowController.toggleEditorFocus(_:)), "`", [.control]) // title follows the focus
+        view.addItem(.separator())
+        let positions = NSMenu(title: "Terminal Position")
+        for position in TerminalPosition.allCases {
+            let entry = item(positions, position.title, #selector(setTerminalPosition(_:)), "", target: self)
+            entry.representedObject = position.rawValue
+        }
+        view.addItem(withTitle: "Terminal Position", action: nil, keyEquivalent: "").submenu = positions
+        item(view, "Soft Wrap", #selector(toggleSoftWrap(_:)), "", target: self)
+        item(view, "Project Sidebar on the Right", #selector(toggleSidebarSide(_:)), "", target: self)
         view.addItem(.separator())
         item(view, "Bigger", #selector(increaseFontSize(_:)), "+", target: self)
         let biggerAlt = item(view, "Bigger", #selector(increaseFontSize(_:)), "=", target: self)

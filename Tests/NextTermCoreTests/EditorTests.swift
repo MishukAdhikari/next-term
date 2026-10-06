@@ -132,3 +132,49 @@ import Testing
         #expect(EditorLanguage.indentUnit(of: "flat\ntext\n") == "    ")
     }
 }
+
+@Suite struct CommandLineOpenTests {
+    func sandbox() throws -> String {
+        let dir = canonicalPath(FileManager.default.temporaryDirectory.path) + "/nt-cli-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir + "/src", withIntermediateDirectories: true)
+        try Data("x\n".utf8).write(to: URL(fileURLWithPath: dir + "/src/app.ts"))
+        return dir
+    }
+
+    @Test func foldersFilesAndLines() throws {
+        let dir = try sandbox()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        guard case .open(let command) = CommandLineOpen.parse([".", "src/app.ts:42:7", "-n", "src/app.ts:3"], cwd: dir) else {
+            return #expect(Bool(false))
+        }
+        #expect(command.newWindow)
+        #expect(command.items == [
+            OpenRequest(path: dir, isDirectory: true),
+            OpenRequest(path: dir + "/src/app.ts", line: 42, column: 7),
+            OpenRequest(path: dir + "/src/app.ts", line: 3),
+        ])
+    }
+
+    @Test func newFilesAndMistakes() throws {
+        let dir = try sandbox()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        #expect(CommandLineOpen.parse(["src/new.md"], cwd: dir) == .open(OpenCommand(items: [OpenRequest(path: dir + "/src/new.md", isNew: true)])))
+        #expect(CommandLineOpen.parse(["nowhere/new.md"], cwd: dir) == .error("nowhere/new.md: no such file or folder"))
+        #expect(CommandLineOpen.parse(["src:4"], cwd: dir) == .error("src:4: a folder has no lines"))
+        #expect(CommandLineOpen.parse(["--frobnicate"], cwd: dir) == .error("unknown option --frobnicate (see nxtrm --help)"))
+        #expect(CommandLineOpen.parse(["-h"], cwd: dir) == .help)
+        // After --, a file named like an option.
+        if case .open(let command) = CommandLineOpen.parse(["--", "-weird"], cwd: dir) {
+            #expect(command.items.first?.path == dir + "/-weird" && command.items.first?.isNew == true)
+        } else {
+            #expect(Bool(false))
+        }
+        #expect(CommandLineOpen.parse([], cwd: dir) == .open(OpenCommand(items: [])))
+    }
+
+    @Test func requestsSurviveTheTrip() throws {
+        let command = OpenCommand(items: [OpenRequest(path: "/a b/é.ts", line: 1, column: 2)], newWindow: true, app: "/Applications/Next Term.app")
+        let data = try JSONEncoder().encode(command)
+        #expect(try JSONDecoder().decode(OpenCommand.self, from: data) == command)
+    }
+}

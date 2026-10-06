@@ -14,6 +14,9 @@ final class EditorDocument: NSObject, NSTextStorageDelegate {
     let undoManager = UndoManager()
     private(set) var lines = LineIndex()
     let language: String?
+    /// The grammar that colours it: PHP files use the one that also understands the HTML around
+    /// `<?php … ?>` (shiki's `php` grammar covers only the code inside the tags).
+    var grammar: String? { language == "php" ? SyntaxEngine.shared?.language("blade") ?? language : language }
     let indentUnit: String
     var highlighter: DocumentHighlighter?
     /// What is on disk as of the last load or save.

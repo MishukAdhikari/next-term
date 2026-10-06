@@ -1,0 +1,16 @@
+#!/bin/bash
+# nxtrm: open folders and files in Next Term from any terminal, like `subl` or `code`.
+#   nxtrm .                 this folder as a project
+#   nxtrm src/app.ts:42:7   a file, at a line and column
+# This script lives in Next Term.app/Contents/Resources/bin; /usr/local/bin/nxtrm links to it.
+set -euo pipefail
+self="$0"
+while [ -L "$self" ]; do
+  target="$(readlink "$self")"
+  case "$target" in
+    /*) self="$target" ;;
+    *) self="$(dirname "$self")/$target" ;;
+  esac
+done
+app="$(cd "$(dirname "$self")/../../.." && pwd -P)"
+exec "$app/Contents/MacOS/NextTerm" --cli "$@"

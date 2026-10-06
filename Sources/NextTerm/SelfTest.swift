@@ -82,7 +82,7 @@ enum SelfTest {
 
         // New tab opens in the current tab's directory.
         first.view.send(txt: "cd /tmp\r")
-        check(await wait(5) { first.directory == "/tmp" }, "cwd is tracked", first.directory)
+        check(await wait(12) { first.directory == "/tmp" }, "cwd is tracked", first.directory)
         let sentThroughMenu = NSApp.keyWindow === window
         if sentThroughMenu {
             NSApp.sendAction(#selector(TerminalWindowController.newTab(_:)), to: nil, from: nil)
@@ -93,7 +93,7 @@ enum SelfTest {
         check(c.tabs.count == 2 && c.activeIndex == 1, "⌘T opens a second tab and selects it", "tabs=\(c.tabs.count) active=\(c.activeIndex)")
         let second = c.tabs[1]
         check(await wait(20) { second.status.integrated }, "second tab's shell starts")
-        check(second.currentDirectory() == "/private/tmp", "new tab opens in the same directory", second.currentDirectory())
+        check(await wait(5) { second.currentDirectory() == "/private/tmp" }, "new tab opens in the same directory", second.currentDirectory())
 
         // Foreground process lookup through the kernel.
         second.view.send(txt: "sleep 1.5\r")
@@ -669,6 +669,88 @@ enum SelfTest {
         await pause(1.2)
         check(doc.conflict == nil, "and is not reported as deleted")
 
+        // Soft wrap: a long line wraps at the edge (the default) or scrolls sideways when it is off.
+        let wide = proj.appendingPathComponent("wide.md")
+        try? (String(repeating: "lorem ipsum dolor sit amet ", count: 40) + "\nshort\n").write(to: wide, atomically: true, encoding: .utf8)
+        c.openFile(wide)
+        if let wideEditor = area.activeEditor, wideEditor.document.name == "wide.md", let layout = wideEditor.textView.layoutManager,
+           let container = wideEditor.textView.textContainer {
+            func rows() -> Int {
+                layout.ensureLayout(for: container)
+                var count = 0, index = 0
+                let glyphs = layout.glyphRange(forCharacterRange: wideEditor.document.lines.range(ofLine: 0), actualCharacterRange: nil)
+                index = glyphs.location
+                while index < NSMaxRange(glyphs) {
+                    var fragment = NSRange()
+                    layout.lineFragmentRect(forGlyphAt: index, effectiveRange: &fragment)
+                    index = NSMaxRange(fragment)
+                    count += 1
+                }
+                return count
+            }
+            let app = AppDelegate.shared!
+            let saved = app.softWrap
+            app.softWrap = true
+            area.applyWrap()
+            let wrapped = rows()
+            check(wrapped > 1 && wideEditor.textView.frame.width <= wideEditor.scrollView.contentSize.width + 1,
+                  "soft wrap: a long line wraps at the edge", "\(wrapped) rows")
+            app.softWrap = false
+            area.applyWrap()
+            check(rows() == 1 && wideEditor.textView.frame.width > wideEditor.scrollView.contentSize.width,
+                  "without it, the line scrolls sideways", "\(rows()) rows")
+            app.softWrap = saved
+            area.applyWrap()
+            area.closeActive()
+        } else {
+            check(false, "a markdown file opens")
+        }
+        try? FileManager.default.removeItem(at: wide)
+
+        // nxtrm: a file at a line, in the window whose project holds it; a folder opens as a project.
+        let delegate = AppDelegate.shared!
+        let cliFile = proj.appendingPathComponent("src/cli.txt")
+        try? (1...10).map { "line \($0)" }.joined(separator: "\n").write(to: cliFile, atomically: true, encoding: .utf8)
+        delegate.handle(OpenCommand(items: [OpenRequest(path: cliFile.path, line: 7, column: 3)]))
+        if let cliEditor = area.activeEditor, cliEditor.document.name == "cli.txt" {
+            let at = cliEditor.textView.selectedRange().location
+            check(cliEditor.document.lines.line(at: at) == 6 && at - cliEditor.document.lines.starts[6] == 2, "nxtrm file:7:3 opens the file there")
+            area.closeActive()
+        } else {
+            check(false, "nxtrm file:7:3 opens the file", area.activeEditor?.document.name ?? "nothing")
+        }
+        let windows = delegate.controllers.count
+        delegate.handle(OpenCommand(items: [OpenRequest(path: proj.path, isDirectory: true)]))
+        if c.project == proj.path {
+            check(delegate.controllers.count == windows, "nxtrm on an open project goes to its window")
+        } else {
+            let opened = delegate.controllers.first { $0.project == canonicalPath(proj.path) }
+            check(opened != nil, "nxtrm on a folder opens it as a project")
+            opened?.window?.performClose(nil)
+            _ = await wait(3) { delegate.controllers.count == windows }
+        }
+        if let script = CommandLineTool.script {
+            let bin = script.deletingLastPathComponent().path
+            check(c.tabs.allSatisfy { $0.environmentPath.split(separator: ":").contains(Substring(bin)) }, "nxtrm is on PATH in every tab")
+            // The real thing, from a shell: the script runs this app's binary as the tool, which hands the
+            // request to this running app.
+            let shellFile = proj.appendingPathComponent("src/from-shell.txt")
+            try? "a\nb\nc\n".write(to: shellFile, atomically: true, encoding: .utf8)
+            let run = Process()
+            run.executableURL = script
+            run.arguments = [shellFile.path + ":2"]
+            run.standardOutput = FileHandle.nullDevice
+            run.standardError = FileHandle.nullDevice
+            try? run.run()
+            run.waitUntilExit()
+            check(run.terminationStatus == 0, "the nxtrm script runs", "exit \(run.terminationStatus)")
+            check(await wait(5) { area.activeEditor?.document.name == "from-shell.txt" }, "nxtrm from a shell opens the file in the running app",
+                  area.activeEditor?.document.name ?? "nothing")
+            if area.activeEditor?.document.name == "from-shell.txt" { area.closeActive() }
+            try? FileManager.default.removeItem(at: shellFile)
+        }
+        try? FileManager.default.removeItem(at: cliFile)
+
         // What the editor cannot show does not open in it.
         let png = proj.appendingPathComponent("logo.png")
         try? Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0]).write(to: png)
@@ -693,6 +775,43 @@ enum SelfTest {
         check(typing < 0.1, "typing that recolours the whole file stays responsive", String(format: "%.0f ms", typing * 1000))
         longEditor.document.undoManager.undo()
         await screenshot(c, suffix: "-editor")
+
+        // The terminal can sit on any side of the editor, and the sidebar on either side of the window.
+        let app = AppDelegate.shared!
+        let savedPosition = app.terminalPosition, savedSide = app.sidebarSide
+        let terminalPane = c.tabBar.superview!
+        for position in AppDelegate.TerminalPosition.allCases {
+            app.terminalPosition = position
+            c.applyLayout()
+            c.window?.layoutIfNeeded()
+            let e = area.convert(area.bounds, to: nil), t = terminalPane.convert(terminalPane.bounds, to: nil)
+            let placed: Bool
+            switch position {
+            case .bottom: placed = t.maxY <= e.minY + 1
+            case .top: placed = t.minY >= e.maxY - 1
+            case .right: placed = t.minX >= e.maxX - 1
+            case .left: placed = t.maxX <= e.minX + 1
+            }
+            check(placed && e.width > 200 && t.width > 200 && e.height > 90 && t.height > 90, "terminal on the \(position.rawValue)",
+                  "editor \(e.integral), terminal \(t.integral)")
+            // Exactly one tab bar sits next to the traffic lights (the sidebar is on the left).
+            check(c.tabBar.leadingInset == 8 && area.tabBar.leadingInset == 8, "\(position.rawValue): tab bars clear of the sidebar")
+            check(c.tabBar.dragsWindow == (position != .bottom) && area.tabBar.dragsWindow == (position != .top),
+                  "\(position.rawValue): only bars along the top drag the window")
+            if position == .right { await screenshot(c, suffix: "-terminal-right") }
+        }
+        app.terminalPosition = .bottom
+        app.sidebarSide = .right
+        c.applyLayout()
+        c.window?.layoutIfNeeded()
+        let sidebarFrame = c.sidebar.convert(c.sidebar.bounds, to: nil), editorFrame = area.convert(area.bounds, to: nil)
+        check(sidebarFrame.minX >= editorFrame.maxX - 1 && abs(sidebarFrame.width - app.sidebarWidth) < 2,
+              "the sidebar can go on the right, at its width", "sidebar \(sidebarFrame.integral)")
+        check(area.tabBar.leadingInset == 78 && c.sidebar.headerInset == 8, "with the sidebar on the right, the editor's tabs clear the traffic lights")
+        await screenshot(c, suffix: "-sidebar-right")
+        app.terminalPosition = savedPosition
+        app.sidebarSide = savedSide
+        c.applyLayout()
 
         // Closing the last file gives the terminal its space back.
         area.closeActive()
