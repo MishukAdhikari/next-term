@@ -46,9 +46,9 @@ Yes. Run `codex` in a tab: its tab shows when it is working, done or asking for 
 
 No. The agent links listen only on your Mac (`127.0.0.1`), with a fresh secret token each launch, and never share `.env` files or keys. The only request Next Term makes on its own is the daily update check to GitHub, which you can turn off. Your agents talk to their own providers as they always do. See [Security and privacy](/docs/security-and-privacy/).
 
-## Is Next Term an open-source alternative to Warp?
+## Is Next Term an alternative to Warp?
 
-If you are looking for an open-source terminal built around AI agents on the Mac, Next Term is one. It is MIT-licensed, written in Swift and AppKit, needs no account, and has no AI of its own: it runs the agent CLIs you choose, shows each one’s status on its tab, and adds a code editor, side-by-side diffs and a git-aware sidebar. See [Next Term vs Warp](/compare/warp/).
+For agent work on the Mac, yes. Both are open source now: Warp’s client under AGPL since April 2026, Next Term under MIT. Next Term is the smaller, native one. It is written in Swift and AppKit, needs no account, and has no AI of its own: it runs the agent CLIs you choose, shows each one’s status on its tab, and adds a code editor, side-by-side diffs, a git-aware sidebar and an MCP server through which one agent runs the others. Choose Warp for its built-in agent, cloud agents, team features, or Linux and Windows. See [Next Term vs Warp](/compare/warp/).
 
 ## Can one agent control the others?
 
