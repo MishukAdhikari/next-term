@@ -80,4 +80,4 @@ Not today. Next Term is built with AppKit, which is macOS-only. Its core logic h
 
 ## What is coming next?
 
-Next: every agent’s saved sessions for a project on the Welcome screen and in the sidebar, to resume in one click. After that: remote development over SSH, remote access to the MCP server for agents outside your Mac (such as ChatGPT and Claude on the web), more of the diff view, an IDE link for Copilot CLI, session restore and notarized releases. None of these is released yet.
+Next: tabs on your servers over SSH, with agents that keep running while your Mac is away. After that: importing your settings and shortcuts from VS Code and JetBrains IDEs, remote access to the MCP server for agents outside your Mac (such as ChatGPT and Claude on the web), more of the diff view, an IDE link for Copilot CLI, session restore and notarized releases. None of these is released yet.

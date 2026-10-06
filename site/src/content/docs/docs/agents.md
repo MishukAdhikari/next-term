@@ -89,12 +89,16 @@ Several items go on one line for agents that use @-mentions; for the others they
 
 More in [Security and privacy](/docs/security-and-privacy/).
 
+## Pick up any agent’s conversation
+
+The Welcome window lists every conversation Claude Code, Codex and Command Code kept for a project, and resumes one in a click, in a tab in the right folder. In a project window, <kbd>⌥⌘O</kbd> does the same. See [The Welcome window and agent sessions](/docs/projects-and-git/#the-welcome-window-and-agent-sessions).
+
 ## One agent can run the others
 
 Next Term is also an MCP server. An orchestrator agent can list every project and tab with each agent’s state, start agents in new tabs, send them prompts, wait for them, read their screens and answer their questions. It is set up for you in the agents above. See [Orchestrate agents (MCP)](/docs/orchestration/).
 
 ## Coming next
 
-<span class="nt-soon">Coming next</span> **Agent sessions for each project:** every agent’s saved sessions for a project on the Welcome screen and in the sidebar, to resume in one click.
+<span class="nt-soon">Coming next</span> **Tabs on your servers:** connect a VPS over SSH, run agents there in tabs that keep running while your Mac is away, and drive them through MCP.
 
 <span class="nt-soon">Coming later</span> An IDE link for GitHub Copilot CLI, and remote access to the MCP server for agents outside your Mac.

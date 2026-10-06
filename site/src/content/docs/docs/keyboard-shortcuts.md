@@ -44,6 +44,8 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | New Tab | <kbd>⌘T</kbd> |
 | New Window | <kbd>⌘N</kbd> |
 | Open Project… | <kbd>⌘O</kbd> |
+| Go to File… | <kbd>⌘P</kbd> |
+| Resume Agent Session… | <kbd>⌥⌘O</kbd> |
 | Open Recent, Open Projects In | — |
 | Close Project | — |
 | Save | <kbd>⌘S</kbd> |
@@ -81,6 +83,7 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 |---|---|
 | Hide or Show Project Sidebar | <kbd>⌘B</kbd> |
 | Focus Editor or Focus Terminal | <kbd>⌃&#96;</kbd> |
+| Collapse Terminal or Expand Terminal | <kbd>⌘J</kbd> |
 | Terminal Position › Bottom, Right, Left, Top | — |
 | Show Changes | <kbd>⌥⌘G</kbd> |
 | Soft Wrap | — |

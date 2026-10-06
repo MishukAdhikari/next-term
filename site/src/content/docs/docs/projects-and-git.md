@@ -13,7 +13,17 @@ A project is a folder that a window is about. Its files stay in the sidebar, new
 - **New tabs open in the project** by default. You can still `cd` anywhere.
 - **Reopen at launch:** Next Term reopens the project windows that were open when you quit. On the very first launch it asks for a folder.
 - **Open Recent** (in the Shell menu) lists your recent projects, with **Clear Menu**. The Dock icon’s menu lists them too, with **New Window**.
-- **Close Project** (in the Shell menu) closes the window, asking first if something is still running in it. When the last project closes, the **Welcome** window shows your recent projects one click away, with **Open Project…** and **New Terminal**. Open it any time from **Window › Welcome to Next Term**.
+- **Close Project** (in the Shell menu) closes the window, asking first if something is still running in it. When the last project closes, the **Welcome** window appears. Open it any time from **Window › Welcome to Next Term**.
+
+### The Welcome window and agent sessions
+
+The **Welcome** window lists your projects on the left, with a search field, each project’s branch, and which ones are open. Choose one and the right side shows every conversation **Claude Code**, **Codex** and **Command Code** kept for it, newest first, including the ones started in its subfolders: the title (in bold when you named it), the agent, when, the branch and the model, and a mark when an agent has it open right now. Filter by agent at the top.
+
+- **Resume** runs the agent’s own resume command (`claude --resume …`, `codex resume …`) in a new tab, in the folder the session was started in.
+- **Fork** continues a copy and leaves the original as it was: the safe choice while the session is open in another terminal.
+- In a project window, **Shell › Resume Agent Session…** (<kbd>⌥⌘O</kbd>) shows the same list as a panel: type to filter, <kbd>↩</kbd> resumes, <kbd>⌘↩</kbd> forks.
+
+Next Term reads only titles, dates, branches and models from each agent’s own files, never whole conversations, removes anything that looks like a secret from titles, and writes nothing. Claude Code deletes conversations after 30 days unless you change its `cleanupPeriodDays` setting.
 
 ### Where a project opens
 

@@ -30,6 +30,8 @@ Press <kbd>⌘P</kbd> and type: any file in the project, found by name or path a
 - **Fuzzy:** the letters only need to appear in order, so `usrctl` finds `UserController.php`. The path counts too, so a folder name narrows the list.
 - **File names first:** a match in the file’s name ranks above a match somewhere in its path.
 - **At a line:** add the line number, as in `UserController.php:42`, and the file opens there.
+- **From a selection:** with text selected in the editor or the terminal, <kbd>⌘P</kbd> starts with it, as Find does. Select `app/Models/User.php:42` in a stack trace and press <kbd>⌘P</kbd>, then <kbd>↩</kbd>.
+- **Recently opened first:** with nothing typed, the list is the files you opened lately, newest first.
 
 ## 103 languages
 
@@ -86,3 +88,13 @@ Agents edit the files you have open. Next Term checks them about once a second:
 - **Renames and moves in the sidebar** carry open files along.
 
 To see exactly what an agent changed, press <kbd>⌥⌘G</kbd>. See [Side-by-side diffs](/docs/diffs/).
+
+## Changes in the gutter
+
+Beside the line numbers, a thin bar marks every line that differs from the last commit, as you type or as an agent writes, unsaved edits included:
+
+- **Green:** an added line.
+- **Blue:** a changed line.
+- **A red wedge** between two lines: lines were deleted there.
+
+Click a mark to open the file’s changes side by side. After a commit (yours or an agent’s) the marks clear on their own. Files outside git, or not committed yet, show none.
