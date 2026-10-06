@@ -12,7 +12,8 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "check": "python3 scripts/check-dist.py"
+    "check": "python3 scripts/check-dist.py",
+    "indexnow": "node scripts/indexnow.mjs"
   },
   "dependencies": {
     "@astrojs/markdown-remark": "7.3.2",

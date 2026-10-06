@@ -61,7 +61,7 @@ export default defineConfig({
 					},
 				},
 				{ tag: 'meta', attrs: { name: 'twitter:image', content: `${SITE}/og.jpg` } },
-				{ tag: 'link', attrs: { rel: 'alternate', type: 'text/plain', href: '/llms.txt', title: 'llms.txt' } },
+				{ tag: 'link', attrs: { rel: 'describedby', type: 'text/plain', href: '/llms.txt', title: 'llms.txt' } },
 			],
 			sidebar: [
 				{
