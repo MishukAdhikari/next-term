@@ -188,6 +188,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// Tabs whose closing would stop a program or a job.
     var busyTabs: [TerminalTab] { tabs.filter { $0.closeWarning != nil } }
+
+    /// "“vim notes.md” (suspended); “npm run dev” (running); and more in 2 other tabs." The same ending
+    /// for every alert that stops tabs.
+    static func stopList(_ busy: [TerminalTab]) -> String {
+        let listed = busy.prefix(4).compactMap(\.closeWarning).joined(separator: "; ")
+        let rest = busy.count - 4
+        return listed + (rest > 0 ? "; and more in \(rest) other tab\(rest == 1 ? "" : "s")." : ".")
+    }
     var unseenTabCount: Int { tabs.filter { $0.status.unseen != nil }.count }
 
     // MARK: status
@@ -223,7 +231,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func refresh() {
         let items = tabs.map { tab in
-            TabBarItem(title: tab.title, state: tab.status.state, tooltip: tab.tooltip,
+            TabBarItem(title: tab.title, truncation: tab.titleTruncation, state: tab.status.state, tooltip: tab.tooltip,
                        accessibilityStatus: tab.stateDescription)
         }
         tabBar.update(items: items, selectedIndex: activeIndex)
@@ -319,6 +327,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(closeProject(_:)) { return project != nil }
+        if item.action == #selector(toggleProjectSidebar(_:)) {
+            item.title = isSidebarVisible ? "Hide Project Sidebar" : "Show Project Sidebar"
+        }
         return true
     }
 
@@ -423,8 +434,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Close this window?"
-        alert.informativeText = "Closing it stops " + busy.prefix(4).compactMap(\.closeWarning).joined(separator: "; ")
-            + (busy.count > 4 ? ", and more in \(busy.count - 4) other tabs." : ".")
+        alert.informativeText = "Closing it stops " + Self.stopList(busy)
         alert.addButton(withTitle: "Close Window")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: sender) { [weak self] response in

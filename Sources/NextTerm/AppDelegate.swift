@@ -69,8 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = "Quit Next Term?"
-            alert.informativeText = "Quitting stops " + busy.prefix(4).compactMap(\.closeWarning).joined(separator: "; ")
-                + (busy.count > 4 ? ", and more in \(busy.count - 4) other tabs." : ".")
+            alert.informativeText = "Quitting stops " + TerminalWindowController.stopList(busy)
             alert.addButton(withTitle: "Quit")
             alert.addButton(withTitle: "Cancel")
             if alert.runModal() != .alertFirstButtonReturn { return .terminateCancel }
@@ -207,8 +206,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         var choice = projectTarget
         if choice == .ask {
             let alert = NSAlert()
-            alert.messageText = "Open “\(url.lastPathComponent)”"
-            alert.informativeText = "Open the project in this window, or in a new one?"
+            alert.messageText = "Where do you want to open “\(url.lastPathComponent)”?"
+            alert.informativeText = "You can open it in a new window, or in this window in place of its tabs."
             alert.addButton(withTitle: "New Window")
             alert.addButton(withTitle: "This Window")
             alert.addButton(withTitle: "Cancel")
@@ -231,8 +230,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if !busy.isEmpty {
             let alert = NSAlert()
             alert.alertStyle = .warning
-            alert.messageText = "Replace the project in this window?"
-            alert.informativeText = "This stops " + busy.prefix(4).compactMap(\.closeWarning).joined(separator: "; ") + "."
+            alert.messageText = target.project == nil ? "Replace the tabs in this window?" : "Replace the project in this window?"
+            alert.informativeText = "This stops " + TerminalWindowController.stopList(busy)
             alert.addButton(withTitle: "Replace")
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -283,7 +282,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 item.target = self
                 item.representedObject = path
                 let title = NSMutableAttributedString(string: (path as NSString).lastPathComponent)
-                title.append(NSAttributedString(string: "   " + RecentProjects.abbreviate(path), attributes: [.foregroundColor: NSColor.secondaryLabelColor]))
+                title.append(Typography.gap(10, font: .menuFont(ofSize: 0)))
+                title.append(NSAttributedString(string: RecentProjects.abbreviate(path), attributes: [.foregroundColor: NSColor.secondaryLabelColor]))
                 item.attributedTitle = title
                 item.toolTip = path
             }
@@ -346,8 +346,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if let last = lastNotified[tab.id], Date().timeIntervalSince(last) < 10 { return }
         lastNotified[tab.id] = Date()
         let content = UNMutableNotificationContent()
-        content.title = String(tab.title.prefix(80))
-        let program = String(notice.program.prefix(60))
+        content.title = Typography.shortened(tab.title, to: 80)
+        let program = Typography.shortened(notice.program, to: 60)
         switch notice.state {
         case .done:
             // Only an agent that is still running is waiting; one that exited (`claude -p …`) finished.
@@ -440,7 +440,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(edit, "Clear Buffer", #selector(TerminalWindowController.clearBuffer(_:)), "k")
 
         let view = submenu(main, "View")
-        item(view, "Project Sidebar", #selector(TerminalWindowController.toggleProjectSidebar(_:)), "b")
+        item(view, "Hide Project Sidebar", #selector(TerminalWindowController.toggleProjectSidebar(_:)), "b") // title follows the state
         view.addItem(.separator())
         item(view, "Bigger", #selector(increaseFontSize(_:)), "+", target: self)
         let biggerAlt = item(view, "Bigger", #selector(increaseFontSize(_:)), "=", target: self)

@@ -21,7 +21,7 @@ final class SidebarHeaderView: NSView {
         Typography.singleLine(title, truncation: .byTruncatingMiddle) // long branch names keep both ends
         summary.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .medium)
         summary.alignment = .right
-        Typography.singleLine(summary, truncation: .byClipping)
+        Typography.singleLine(summary, truncation: .byTruncatingTail)
         [branchIcon, title, summary].forEach(addSubview)
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
@@ -32,6 +32,12 @@ final class SidebarHeaderView: NSView {
 
     override var isFlipped: Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
+    /// Whether the counts are cut short (for the self-test).
+    var summaryIsTruncated: Bool {
+        layoutSubtreeIfNeeded()
+        return summary.cell?.expansionFrame(withFrame: summary.bounds, in: summary) != .zero
+    }
+
     // The whole header is a drag handle for the window.
     override func hitTest(_ point: NSPoint) -> NSView? { frame.contains(point) ? self : nil }
     override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }
@@ -47,22 +53,26 @@ final class SidebarHeaderView: NSView {
             return
         }
         branchIcon.isHidden = false
-        title.stringValue = snapshot.branch ?? "detached at \(snapshot.head ?? "?")"
+        title.stringValue = snapshot.branch ?? "Detached at \(snapshot.head ?? "?")"
         let totals = snapshot.totals
         let text = NSMutableAttributedString()
         let font = NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .medium)
-        func add(_ s: String, _ color: NSColor) { text.append(NSAttributedString(string: s, attributes: [.foregroundColor: color, .font: font])) }
-        if totals.added > 0 { add("+\(totals.added) ", Theme.linesAdded) }
-        if totals.removed > 0 { add("−\(totals.removed) ", Theme.linesRemoved) }
-        if snapshot.ahead > 0 { add("↑\(snapshot.ahead) ", Theme.textDim) }
-        if snapshot.behind > 0 { add("↓\(snapshot.behind) ", Theme.textDim) }
-        summary.attributedStringValue = Typography.truncating(text, .byClipping, alignment: .right)
+        // One space between items, none after the last.
+        func add(_ s: String, _ color: NSColor) {
+            if text.length > 0 { text.append(NSAttributedString(string: " ", attributes: [.font: font])) }
+            text.append(NSAttributedString(string: s, attributes: [.foregroundColor: color, .font: font]))
+        }
+        if totals.added > 0 { add("+\(totals.added)", Theme.linesAdded) }
+        if totals.removed > 0 { add("−\(totals.removed)", Theme.linesRemoved) }
+        if snapshot.ahead > 0 { add("↑\(snapshot.ahead)", Theme.textDim) }
+        if snapshot.behind > 0 { add("↓\(snapshot.behind)", Theme.textDim) }
+        summary.attributedStringValue = Typography.truncating(text, .byTruncatingTail, alignment: .right)
         toolTip = Self.describe(snapshot)
         setAccessibilityLabel(Self.describe(snapshot))
         needsLayout = true
     }
 
-    /// "Branch main, tracking origin/main: 2 ahead, 1 behind. 3 modified, 1 new, 2 untracked. +41 −10 lines."
+    /// "Branch main, tracking origin/main: 2 ahead, 1 behind. 3 modified, 1 added, 2 untracked. +41 −10 lines."
     static func describe(_ s: GitSnapshot) -> String {
         var parts: [String] = []
         var branch = s.branch.map { "Branch \($0)" } ?? "Detached HEAD at \(s.head ?? "?")"
@@ -71,7 +81,7 @@ final class SidebarHeaderView: NSView {
         if s.ahead > 0 { sync.append("\(s.ahead) ahead") }
         if s.behind > 0 { sync.append("\(s.behind) behind") }
         parts.append(branch + (sync.isEmpty ? "" : ": " + sync.joined(separator: ", ")))
-        let counts: [(GitChange, String)] = [(.modified, "modified"), (.added, "new"), (.renamed, "renamed"),
+        let counts: [(GitChange, String)] = [(.modified, "modified"), (.added, "added"), (.renamed, "renamed"),
                                              (.deleted, "deleted"), (.untracked, "untracked"), (.conflicted, "conflicted")]
         let listed = counts.compactMap { change, word -> String? in
             let n = s.count(of: change)
@@ -86,16 +96,21 @@ final class SidebarHeaderView: NSView {
     override func layout() {
         super.layout()
         let h = bounds.height
-        let summaryWidth = min(ceil(summary.intrinsicContentSize.width) + 2, bounds.width * 0.5)
-        summary.frame = NSRect(x: bounds.width - summaryWidth - 10, y: (h - summary.intrinsicContentSize.height) / 2,
-                               width: summaryWidth, height: summary.intrinsicContentSize.height)
+        let titleHeight = title.intrinsicContentSize.height
+        let titleY = (h - titleHeight) / 2
+        // The counts sit on the branch name's baseline; centring a smaller box against a larger one
+        // leaves them a little high.
+        let summaryHeight = summary.intrinsicContentSize.height
+        let summaryY = titleY + title.firstBaselineOffsetFromTop - summary.firstBaselineOffsetFromTop
+        // The text cell needs about 4 pt of its own margin beyond the text, or it truncates.
+        let summaryWidth = min(ceil(summary.intrinsicContentSize.width) + 6, bounds.width * 0.5)
+        summary.frame = NSRect(x: bounds.width - summaryWidth - 10, y: summaryY, width: summaryWidth, height: summaryHeight)
         var x = inset + 4
         if !branchIcon.isHidden {
             branchIcon.frame = NSRect(x: x, y: (h - 14) / 2, width: 14, height: 14)
             x += 18
         }
-        let titleHeight = title.intrinsicContentSize.height
-        title.frame = NSRect(x: x, y: (h - titleHeight) / 2, width: max(0, summary.frame.minX - x - 6), height: titleHeight)
+        title.frame = NSRect(x: x, y: titleY, width: max(0, summary.frame.minX - x - 6), height: titleHeight)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -118,6 +133,8 @@ final class FileCellView: NSTableCellView {
     private let stats = NSTextField(labelWithString: "")
     private(set) weak var node: FileNode?
     private(set) var isRenaming = false
+    /// While renaming, the field takes the row's free width (up to the counts), as in Finder.
+    private lazy var renameWidth = name.trailingAnchor.constraint(equalTo: stats.leadingAnchor, constant: -6)
 
     init() {
         super.init(frame: .zero)
@@ -147,7 +164,7 @@ final class FileCellView: NSTableCellView {
             name.centerYAnchor.constraint(equalTo: centerYAnchor),
             name.trailingAnchor.constraint(lessThanOrEqualTo: stats.leadingAnchor, constant: -6),
             stats.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
-            stats.centerYAnchor.constraint(equalTo: centerYAnchor),
+            stats.firstBaselineAnchor.constraint(equalTo: name.firstBaselineAnchor),
         ])
     }
 
@@ -165,7 +182,8 @@ final class FileCellView: NSTableCellView {
             let text = NSMutableAttributedString(string: node.name, attributes: [
                 .font: NSFont.systemFont(ofSize: 12.5, weight: .semibold), .foregroundColor: Theme.text,
             ])
-            text.append(NSAttributedString(string: "  \(shown)", attributes: [
+            text.append(Typography.gap(7, font: .systemFont(ofSize: 12)))
+            text.append(NSAttributedString(string: shown, attributes: [
                 .font: NSFont.systemFont(ofSize: 12), .foregroundColor: Theme.textDim,
             ]))
             // The project name stays whole; its path gives way at the end.
@@ -191,7 +209,10 @@ final class FileCellView: NSTableCellView {
         text.addAttribute(.font, value: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), range: NSRange(location: 0, length: text.length))
         stats.attributedStringValue = Typography.truncating(text, .byClipping, alignment: .right)
         var tip = node.path
-        if let change { tip += "\n" + Self.word(for: change) }
+        if let change {
+            let word = Self.word(for: change)
+            tip += "\n" + word.prefix(1).uppercased() + word.dropFirst()
+        }
         if let lines, lines.added + lines.removed > 0 {
             tip += "\n+\(lines.added) −\(lines.removed) lines" + (node.isDirectory ? " in \(lines.files) file\(lines.files == 1 ? "" : "s")" : "")
         }
@@ -215,11 +236,14 @@ final class FileCellView: NSTableCellView {
         node = nil
         icon.image = nil
         stats.stringValue = ""
-        name.attributedStringValue = NSAttributedString(string: "… \(entries.count.formatted()) more items", attributes: [
+        let more = "\(entries.count.formatted()) more item\(entries.count == 1 ? "" : "s")"
+        name.attributedStringValue = NSAttributedString(string: "… " + more, attributes: [
             .font: NSFont.systemFont(ofSize: 12, weight: .regular), .foregroundColor: Theme.textDim,
             .paragraphStyle: Typography.paragraph(.byTruncatingTail),
         ])
         toolTip = "This folder is too large to list in full."
+        // Cells are reused: replace the previous file's label, or VoiceOver reads it here.
+        setAccessibilityLabel(more + " not shown")
     }
 
     static func word(for change: GitChange) -> String {
@@ -229,7 +253,7 @@ final class FileCellView: NSTableCellView {
         case .renamed: return "renamed"
         case .deleted: return "has deleted files"
         case .untracked: return "untracked"
-        case .conflicted: return "conflict"
+        case .conflicted: return "conflicted"
         case .ignored: return "ignored"
         }
     }
@@ -243,6 +267,9 @@ final class FileCellView: NSTableCellView {
         name.isEditable = true
         name.isSelectable = true
         name.isBezeled = true
+        name.lineBreakMode = .byClipping // edit the whole name, never a truncated one
+        name.cell?.isScrollable = true   // the editor follows the caret past the edge
+        renameWidth.isActive = true
         name.bezelStyle = .squareBezel
         name.drawsBackground = true
         name.backgroundColor = Theme.background
@@ -261,6 +288,8 @@ final class FileCellView: NSTableCellView {
         name.isBezeled = false
         name.drawsBackground = false
         name.delegate = nil
+        renameWidth.isActive = false
+        Typography.singleLine(name, truncation: .byTruncatingMiddle)
     }
 
     var renameText: String { name.stringValue }

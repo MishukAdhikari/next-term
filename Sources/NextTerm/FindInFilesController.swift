@@ -88,7 +88,7 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
         for (field, placeholder) in [(queryField, "Find"), (replaceField, "Replace with"), (maskField, "File mask, e.g. *.php, !vendor/**")] {
             field.placeholderString = placeholder
             field.delegate = self
-            field.font = .monospacedSystemFont(ofSize: 12.5, weight: .regular)
+            field.font = Theme.monoFont(size: 12)
             field.lineBreakMode = .byClipping
             field.cell?.isScrollable = true
             field.cell?.wraps = false
@@ -280,7 +280,7 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
         let byFile = Dictionary(grouping: matches, by: \.relativePath)
         if confirm, let window {
             let alert = NSAlert()
-            alert.messageText = "Replace \(matches.count.formatted()) match\(matches.count == 1 ? "" : "es") in \(byFile.count) file\(byFile.count == 1 ? "" : "s")?"
+            alert.messageText = "Replace \(matches.count.formatted()) match\(matches.count == 1 ? "" : "es") in \(byFile.count.formatted()) file\(byFile.count == 1 ? "" : "s")?"
             alert.informativeText = replacement.isEmpty ? "The matches will be deleted. You can undo this with ⌘Z." : "You can undo this with ⌘Z."
             alert.addButton(withTitle: "Replace All")
             alert.addButton(withTitle: "Cancel")
@@ -317,9 +317,12 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
         scheduleSearch(after: 0)
         if skipped > 0 || !failures.isEmpty, let window {
             let alert = NSAlert()
-            alert.messageText = "Replaced \(replaced) match\(replaced == 1 ? "" : "es")."
+            alert.messageText = "Replaced \(replaced.formatted()) match\(replaced == 1 ? "" : "es")."
             var lines: [String] = []
-            if skipped > 0 { lines.append("\(skipped) changed since the search and were left alone.") }
+            if skipped > 0 {
+                lines.append(skipped == 1 ? "1 match changed since the search and was left alone."
+                    : "\(skipped.formatted()) matches changed since the search and were left alone.")
+            }
             lines += failures
             alert.informativeText = lines.joined(separator: "\n")
             alert.beginSheetModal(for: window)
@@ -382,7 +385,8 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
         if let file = item as? FileResult {
             Typography.singleLine(label, truncation: .byTruncatingMiddle) // a long path keeps its file name
             let text = NSMutableAttributedString(string: file.path, attributes: [.font: NSFont.systemFont(ofSize: 12.5, weight: .medium)])
-            text.append(NSAttributedString(string: "   \(file.matches.count)", attributes: [
+            text.append(Typography.gap(10, font: .systemFont(ofSize: 12.5)))
+            text.append(NSAttributedString(string: file.matches.count.formatted(), attributes: [
                 .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.secondaryLabelColor,
             ]))
             label.attributedStringValue = Typography.truncating(text, .byTruncatingMiddle)
@@ -396,8 +400,10 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
 
     /// "12  the line, with the match highlighted" — and, with replace text, what it would become.
     private func line(for match: SearchMatch) -> NSAttributedString {
-        let mono = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-        let text = NSMutableAttributedString(string: String(format: "%5d  ", match.line), attributes: [
+        let mono = Theme.monoFont(size: 12)
+        let number = String(match.line)
+        // Right-aligned with figure spaces (as wide as a digit), then one en space: a clean column.
+        let text = NSMutableAttributedString(string: String(repeating: "\u{2007}", count: max(0, 5 - number.count)) + number + "\u{2002}", attributes: [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.tertiaryLabelColor,
         ])
         // Trim leading indentation so the match is in view.

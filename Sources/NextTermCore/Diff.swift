@@ -61,8 +61,10 @@ public enum UnifiedDiff {
             current = nil
         }
 
-        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = String(raw)
+        // Split on the "\n" scalar, not on Character: Swift treats "\r\n" as one Character, which would
+        // glue every line of a CRLF file together. The "\r" stays part of the line, as git sees it.
+        for raw in text.unicodeScalars.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(String.UnicodeScalarView(raw))
             if line.hasPrefix("diff --git ") {
                 closeFile()
                 var file = FileDiff()

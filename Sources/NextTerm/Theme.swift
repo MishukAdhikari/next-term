@@ -51,12 +51,14 @@ enum Theme {
     static let defaultFontSize: CGFloat = 13
     static let fontSizeRange: ClosedRange<CGFloat> = 8...32
 
-    static func terminalFont(size: CGFloat) -> NSFont {
-        for name in ["JetBrainsMono-Regular", "JetBrains Mono", "SFMono-Regular", "Menlo-Regular"] {
-            if let font = NSFont(name: name, size: size) { return font }
-        }
-        return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+    /// The one monospaced face for code: the terminal, and the Find fields and results. JetBrains Mono
+    /// (an open-source font) when installed, otherwise the system's SF Mono.
+    static func monoFont(size: CGFloat, weight: NSFont.Weight = .regular) -> NSFont {
+        if weight == .regular, let font = NSFont(name: "JetBrainsMono-Regular", size: size) { return font }
+        return NSFont.monospacedSystemFont(ofSize: size, weight: weight)
     }
+
+    static func terminalFont(size: CGFloat) -> NSFont { monoFont(size: size) }
 
     static func apply(to view: TerminalView, fontSize: CGFloat) {
         view.font = terminalFont(size: fontSize)
@@ -97,6 +99,20 @@ enum Typography {
         field.cell?.isScrollable = false
         field.cell?.truncatesLastVisibleLine = true
         field.lineBreakMode = mode
+    }
+
+    /// One word space widened to `width` points: the gap between two runs on one line, instead of
+    /// several typed spaces.
+    static func gap(_ width: CGFloat, font: NSFont) -> NSAttributedString {
+        let space = NSAttributedString(string: " ", attributes: [.font: font])
+        return NSAttributedString(string: " ", attributes: [.font: font, .kern: max(0, width - space.size().width)])
+    }
+
+    /// Shortens plain text the system lays out itself (notification titles, menu items): one ellipsis
+    /// character, never a silent cut, no space left before the ellipsis.
+    static func shortened(_ text: String, to limit: Int) -> String {
+        guard text.count > limit else { return text }
+        return String(text.prefix(limit - 1)).trimmingCharacters(in: .whitespaces) + "…"
     }
 
     /// Applies a truncation style to a whole attributed string.

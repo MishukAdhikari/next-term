@@ -338,6 +338,7 @@ enum SelfTest {
                   "its folder rolls up +3 −1", "\(String(describing: snap?.stats(at: "src", isDirectory: true)))")
             check(snap?.change(at: "AGENTS.md", isDirectory: false) == .untracked, "a new file is untracked")
             check(SidebarHeaderView.describe(snap!).contains("Branch main"), "the header tooltip describes it", SidebarHeaderView.describe(snap!))
+            check(!c.sidebar.header.summaryIsTruncated, "the header shows its counts in full")
             if let src = c.sidebar.root?.children?.first(where: { $0.name == "src" }) {
                 let row = c.sidebar.outline.row(forItem: src)
                 let cell = c.sidebar.outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? FileCellView
@@ -361,6 +362,13 @@ enum SelfTest {
             check(false, "a long folder name stays on one line", "folder not listed")
         }
         try? FileManager.default.removeItem(at: longName)
+
+        // Typography helpers: one ellipsis character, no space before it, measured gaps instead of typed spaces.
+        let shortened = Typography.shortened(String(repeating: "word ", count: 30), to: 60)
+        check(shortened.count <= 60 && shortened.hasSuffix("…") && !shortened.hasSuffix(" …") && !shortened.contains("..."),
+              "long titles shorten with one ellipsis character", shortened)
+        let gap = Typography.gap(10, font: .systemFont(ofSize: 12))
+        check(gap.string == " " && abs(gap.size().width - 10) < 1, "gaps are one space widened to a measured width", "\(gap.size().width)")
 
         // File operations, each undone with ⌘Z.
         let undo = window.undoManager

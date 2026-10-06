@@ -172,3 +172,15 @@ import Testing
         #expect(snapshot.fileStats["b.txt"] == LineStats(added: 1, removed: 1, files: 1))
     }
 }
+
+@Suite struct CRLFDiffTests {
+    @Test func crlfLinesStaySeparateAndKeepTheirCarriageReturn() {
+        let diff = "diff --git a/w.bat b/w.bat\r\n".replacingOccurrences(of: "\r\n", with: "\n")
+            + "--- a/w.bat\n+++ b/w.bat\n@@ -1,2 +1,2 @@\n echo one\r\n-echo two\r\n+echo 2\r\n"
+        let file = UnifiedDiff.parse(diff)[0]
+        #expect(file.hunks[0].lines.count == 3)
+        #expect(file.hunks[0].lines[1] == DiffLine(kind: .removed, text: "echo two\r", oldNumber: 2, newNumber: nil))
+        // The patch keeps the \r, so it applies to the CRLF file byte for byte.
+        #expect(UnifiedDiff.patch(for: file.hunks[0], in: file).contains("-echo two\r\n+echo 2\r\n"))
+    }
+}

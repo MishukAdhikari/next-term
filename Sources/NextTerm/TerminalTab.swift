@@ -274,16 +274,30 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     var closeWarning: String? {
         guard !exited else { return nil }
         var items: [String] = []
-        if status.running { items.append(status.program.isEmpty ? "a running process" : "“\(status.program)”, running") }
+        if status.running { items.append(status.program.isEmpty ? "a running process" : "“\(status.program)” (running)") }
         if status.integrated {
             if status.jobs > 0 {
-                items += status.jobSummary.split(separator: "\n").map { "“\($0)”" }
+                // "vim notes.md (suspended)" -> “vim notes.md” (suspended): the state is not part of the command.
+                items += status.jobSummary.split(separator: "\n").map { line -> String in
+                    if line.hasSuffix(")"), let open = line.range(of: " (", options: .backwards) {
+                        return "“\(line[..<open.lowerBound])”" + line[open.lowerBound...]
+                    }
+                    return "“\(line)”"
+                }
                 if items.isEmpty { items.append("\(status.jobs) background job\(status.jobs == 1 ? "" : "s")") }
             }
         } else if !status.running {
             items += ProcessInspector.childProcessNames(of: view.process.shellPid).map { "“\($0)”" }
         }
         return items.isEmpty ? nil : items.joined(separator: ", ")
+    }
+
+    /// A folder or program name keeps both ends, like Finder; a title a program sets is prose and gives
+    /// way at the end.
+    var titleTruncation: NSLineBreakMode {
+        if let userTitle, !userTitle.isEmpty { return .byTruncatingMiddle }
+        if status.running, let programTitle, !programTitle.trimmingCharacters(in: .whitespaces).isEmpty { return .byTruncatingTail }
+        return .byTruncatingMiddle
     }
 
     var title: String {

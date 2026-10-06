@@ -118,7 +118,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate {
             text.append(NSAttributedString(string: RecentProjects.abbreviate(path), attributes: [
                 .font: NSFont.systemFont(ofSize: 11), .foregroundColor: Theme.textDim,
             ]))
-            button.attributedTitle = text
+            button.attributedTitle = Typography.truncating(text, .byTruncatingMiddle) // name and path keep both ends
             button.identifier = NSUserInterfaceItemIdentifier(path)
             button.toolTip = path
             button.heightAnchor.constraint(equalToConstant: 40).isActive = true

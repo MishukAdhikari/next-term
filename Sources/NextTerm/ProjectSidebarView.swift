@@ -40,7 +40,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     var headerInset: CGFloat = 70 { didSet { needsLayout = true } }
 
     private(set) var root: FileNode?
-    private let header = SidebarHeaderView()
+    let header = SidebarHeaderView()
     private let scrollView = NSScrollView()
     let outline = SidebarOutlineView()
     private var watcher: DirectoryWatcher?

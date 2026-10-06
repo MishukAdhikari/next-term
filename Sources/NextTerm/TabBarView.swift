@@ -3,6 +3,8 @@ import NextTermCore
 
 struct TabBarItem: Equatable {
     var title: String
+    /// Folder and program names keep both ends (as in Finder); a title a program sets is prose.
+    var truncation: NSLineBreakMode = .byTruncatingMiddle
     var state: TabState
     var tooltip: String
     var accessibilityStatus: String
@@ -56,7 +58,7 @@ final class TabBarView: NSView {
         newTabButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "New Tab")?
             .withSymbolConfiguration(.init(pointSize: 13, weight: .regular))
         newTabButton.contentTintColor = Theme.textDim
-        newTabButton.toolTip = "New Tab (⌘T)"
+        newTabButton.toolTip = "New tab (⌘T)"
         newTabButton.target = self
         newTabButton.action = #selector(newTabClicked)
         addSubview(newTabButton)
@@ -177,13 +179,19 @@ final class TabBarView: NSView {
         let menu = NSMenu()
         let range = visibleRange
         for (i, item) in items.enumerated() {
-            let entry = NSMenuItem(title: item.title, action: #selector(overflowMenuSelected(_:)), keyEquivalent: "")
+            let title = Typography.shortened(item.title, to: 60) // the full title is in the tooltip
+            let entry = NSMenuItem(title: title, action: #selector(overflowMenuSelected(_:)), keyEquivalent: "")
             entry.target = self
             entry.tag = i
             entry.image = StatusGlyph.image(for: item.state)
             entry.state = i == selectedIndex ? .on : .off
             entry.toolTip = item.tooltip
-            if range.contains(i) { entry.attributedTitle = NSAttributedString(string: item.title, attributes: [.foregroundColor: NSColor.secondaryLabelColor]) }
+            // Tabs already on screen are dimmed; same menu font as the others.
+            if range.contains(i) {
+                entry.attributedTitle = NSAttributedString(string: title, attributes: [
+                    .foregroundColor: NSColor.secondaryLabelColor, .font: NSFont.menuFont(ofSize: 0),
+                ])
+            }
             menu.addItem(entry)
         }
         menu.popUp(positioning: nil, at: NSPoint(x: overflowButton.frame.minX, y: overflowButton.frame.maxY), in: self)
@@ -330,9 +338,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         wantsLayer = true
 
         label.font = .systemFont(ofSize: 12.5)
-        label.lineBreakMode = .byTruncatingTail
-        label.cell?.truncatesLastVisibleLine = true
-        label.maximumNumberOfLines = 1
+        Typography.singleLine(label, truncation: .byTruncatingMiddle)
         addSubview(label)
         addSubview(dot)
 
@@ -343,7 +349,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         closeButton.contentTintColor = Theme.textDim
         closeButton.target = self
         closeButton.action = #selector(closeClicked)
-        closeButton.toolTip = "Close Tab (⌘W)"
+        closeButton.toolTip = "Close tab (⌘W)"
         addSubview(closeButton)
 
         setAccessibilityElement(true)
@@ -361,6 +367,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     func configure(item newItem: TabBarItem, selected isSelected: Bool) {
         guard newItem != item || isSelected != selected else { return }
         if label.stringValue != newItem.title { label.stringValue = newItem.title }
+        if label.lineBreakMode != newItem.truncation { label.lineBreakMode = newItem.truncation }
         if toolTip != newItem.tooltip { toolTip = newItem.tooltip }
         dot.state = newItem.state
         item = newItem
@@ -439,6 +446,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         field.bezelStyle = .roundedBezel
         field.delegate = self
         field.placeholderString = "Tab name"
+        field.usesSingleLineMode = true // a pasted line break becomes a space
         renameField = field
         label.isHidden = true
         addSubview(field)
@@ -462,7 +470,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     func controlTextDidEndEditing(_ notification: Notification) {
         guard let field = renameField else { return }
         renameField = nil
-        let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = field.stringValue.components(separatedBy: .newlines).joined(separator: " ").trimmingCharacters(in: .whitespaces)
         field.removeFromSuperview()
         label.isHidden = false
         if renameCancelled {
@@ -587,7 +595,7 @@ private final class OverflowButton: NSButton {
         super.init(frame: frame)
         bezelStyle = .regularSquare
         isBordered = false
-        font = .systemFont(ofSize: 12, weight: .medium)
+        font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         contentTintColor = Theme.textDim
         addSubview(dot)
         setAccessibilityLabel("More tabs")
@@ -596,9 +604,12 @@ private final class OverflowButton: NSButton {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     func configure(hiddenCount: Int, state: TabState) {
-        attributedTitle = NSAttributedString(string: "» \(hiddenCount)   ", attributes: [
-            .foregroundColor: Theme.textDim, .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+        let text = NSMutableAttributedString(string: "» \(hiddenCount)", attributes: [
+            .foregroundColor: Theme.textDim, .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium),
         ])
+        // Room for the status dot after the count is kerning, not padding spaces, and only when a dot shows.
+        if state != .idle { text.addAttribute(.kern, value: 14, range: NSRange(location: text.length - 1, length: 1)) }
+        attributedTitle = text
         dot.state = state
         toolTip = "\(hiddenCount) more tab\(hiddenCount == 1 ? "" : "s")"
         needsLayout = true
@@ -606,7 +617,9 @@ private final class OverflowButton: NSButton {
 
     override func layout() {
         super.layout()
-        dot.frame = NSRect(x: bounds.width - 15, y: (bounds.height - 10) / 2, width: 10, height: 10)
+        // At the end of the centred title, so a two-digit count never runs into it.
+        let titleWidth = attributedTitle.size().width
+        dot.frame = NSRect(x: (bounds.width + titleWidth) / 2 - 10, y: (bounds.height - 10) / 2, width: 10, height: 10)
     }
 }
 
