@@ -228,6 +228,8 @@ final class FileCellView: NSTableCellView {
             .compactMap { $0 }.joined(separator: ", "))
     }
 
+    func setIcon(_ image: NSImage) { icon.image = image }
+
     /// The row's tooltip: its path, git state and line counts.
     private(set) var tipText = ""
 

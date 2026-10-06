@@ -404,6 +404,27 @@ enum SelfTest {
         let gap = Typography.gap(10, font: .systemFont(ofSize: 12))
         check(gap.string == " " && abs(gap.size().width - 10) < 1, "gaps are one space widened to a measured width", "\(gap.size().width)")
 
+        // A named pipe in the tree gets an icon without anyone reading it (that would hang).
+        let pipePath = proj.appendingPathComponent("events-pipe").path
+        mkfifo(pipePath, 0o600)
+        _ = FileIcons.icon(for: URL(fileURLWithPath: pipePath))
+        check(true, "a named pipe in the project does not freeze the sidebar")
+        check(c.editorArea.open(URL(fileURLWithPath: pipePath)) == .notText, "nor the editor")
+        unlink(pipePath)
+
+        // Open-source file icons: Material Icon Theme, by name, extension and folder.
+        check(FileIcons.theme != nil, "the file-icon theme loads")
+        let iconName = { (url: URL) in FileIcons.icon(for: url).accessibilityDescription ?? "" }
+        check(iconName(proj.appendingPathComponent("routes/web.php")) == "routing" && iconName(proj.appendingPathComponent("a/welcome.blade.php")) == "laravel"
+              && iconName(proj.appendingPathComponent("next.config.mjs")) == "next",
+              "framework files get their icons (Laravel routes and Blade, Next.js)",
+              [iconName(proj.appendingPathComponent("routes/web.php")), iconName(proj.appendingPathComponent("a/welcome.blade.php"))].joined(separator: ", "))
+        if let src = c.sidebar.root?.children?.first(where: { $0.name == "src" }) {
+            let closed = FileIcons.image(for: src, expanded: false).accessibilityDescription
+            let open = FileIcons.image(for: src, expanded: true).accessibilityDescription
+            check(closed == "folder-src" && open == "folder-src-open", "folders have open and closed icons", "\(closed ?? "-") / \(open ?? "-")")
+        }
+
         // Row tooltips: the path of the row under the pointer, and nothing outside the visible rows.
         c.sidebar.outline.layoutSubtreeIfNeeded()
         let firstRow = c.sidebar.outline.rect(ofRow: 0)

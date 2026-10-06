@@ -134,7 +134,7 @@ public enum ProjectSearch {
 
     /// Text of a file if it is searchable: not too big, not binary, valid UTF-8.
     static func text(of url: URL) -> String? {
-        guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= maxFileSize,
+        guard isRegularFile(url.path), let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= maxFileSize,
               let data = try? Data(contentsOf: url), !data.prefix(8000).contains(0) else { return nil }
         return String(data: data, encoding: .utf8)
     }

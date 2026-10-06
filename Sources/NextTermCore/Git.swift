@@ -246,7 +246,7 @@ public enum GitRunner {
         var counts: [String: Int] = [:]
         for path in paths.prefix(500) {
             let url = URL(fileURLWithPath: root).appendingPathComponent(path)
-            guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= 1_000_000,
+            guard isRegularFile(url.path), let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= 1_000_000,
                   let data = try? Data(contentsOf: url), !data.prefix(8000).contains(0) else { continue }
             var lines = data.reduce(0) { $1 == 0x0A ? $0 + 1 : $0 }
             if let last = data.last, last != 0x0A { lines += 1 }

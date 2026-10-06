@@ -32,6 +32,8 @@ cp -R .build/arm64-apple-macosx/release/SwiftTerm_SwiftTerm.bundle "$APP/Content
 # The editor's grammars (licence-checked; see scripts/update-highlighting.py). shiki-swift's own bundle,
 # which includes GPL grammars, is deliberately not copied.
 cp -R Resources/Highlighting "$APP/Contents/Resources/Highlighting"
+# File icons: Material Icon Theme (MIT), packed by scripts/update-icons.py.
+cp -R Resources/Icons "$APP/Contents/Resources/Icons"
 # nxtrm, the command line tool (on PATH in Next Term's tabs; Shell > Install Command Line Tool for others).
 mkdir -p "$APP/Contents/Resources/bin"
 cp scripts/nxtrm "$APP/Contents/Resources/bin/nxtrm"
@@ -40,7 +42,7 @@ chmod 755 "$APP/Contents/Resources/bin/nxtrm"
 cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
 {
   echo '<html><body style="font: 11px -apple-system; color: #888">'
-  echo "<p>Next Term is free software under the MIT License. It includes SwiftTerm (MIT), code from libsixel (MIT), Unicode data (Unicode License v3), shiki-swift (MIT) with Oniguruma (BSD-2-Clause), and TextMate grammars under their own permissive licences.</p>"
+  echo "<p>Next Term is free software under the MIT License. It includes SwiftTerm (MIT), code from libsixel (MIT), Unicode data (Unicode License v3), shiki-swift (MIT) with Oniguruma (BSD-2-Clause), TextMate grammars under their own permissive licences, Material Icon Theme (MIT; icons from Pictogrammers MDI and Google Material Symbols, Apache-2.0) and SwiftDraw (Zlib). Product and technology logos are trademarks of their owners and are used only to identify file types.</p>"
   echo "<pre style=\"font: 10px ui-monospace, Menlo; white-space: pre-wrap\">"
   sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' LICENSE THIRD_PARTY_NOTICES.md
   echo "</pre></body></html>"

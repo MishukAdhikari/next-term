@@ -195,3 +195,10 @@ public enum FileOps {
         return target
     }
 }
+
+/// A plain file (not a named pipe, socket or device): only these are read. Opening a named pipe waits
+/// for a writer, which could be forever.
+public func isRegularFile(_ path: String) -> Bool {
+    var info = stat()
+    return stat(path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFREG
+}

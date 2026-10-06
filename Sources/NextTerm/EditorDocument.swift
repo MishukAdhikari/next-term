@@ -55,6 +55,7 @@ final class EditorDocument: NSObject, NSTextStorageDelegate {
     }
 
     private static func read(_ url: URL) throws -> Data {
+        guard isRegularFile(url.path) else { throw OpenError.notText } // a named pipe would block forever
         let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
         guard size <= TextFile.maxEditableSize else { throw OpenError.tooLarge }
         guard let data = try? Data(contentsOf: url) else { throw OpenError.unreadable }

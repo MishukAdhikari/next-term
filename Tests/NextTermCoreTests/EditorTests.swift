@@ -52,6 +52,15 @@ import Testing
         #expect((try FileManager.default.attributesOfItem(atPath: script.path)[.posixPermissions] as? Int) == 0o755)
     }
 
+    @Test func namedPipesAreNotRegularFiles() throws {
+        let fifo = canonicalPath(FileManager.default.temporaryDirectory.path) + "/nt-fifo-\(UUID().uuidString)"
+        defer { unlink(fifo) }
+        #expect(mkfifo(fifo, 0o600) == 0)
+        #expect(!isRegularFile(fifo)) // reading it would wait for a writer forever
+        #expect(ProjectSearch.text(of: URL(fileURLWithPath: fifo)) == nil)
+        #expect(isRegularFile(#filePath))
+    }
+
     @Test func stampsChangeWhenTheFileDoes() throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("nt-stamp-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: file) }

@@ -12,6 +12,8 @@ let package = Package(
         // TextMate grammars (as in VS Code), tokenized natively. Exact: 0.x and one author, so updates are
         // reviewed by hand. Only its engine ships; grammars come from Resources/Highlighting (licence-checked).
         .package(url: "https://github.com/fayazara/shiki-swift.git", exact: "0.1.2"),
+        // SVG file icons. Exact: 0.25+ needs SwiftUI preview macros the Command Line Tools lack.
+        .package(url: "https://github.com/swhitty/SwiftDraw.git", exact: "0.24.0"),
     ],
     targets: [
         // Platform-neutral logic (tab status, command classification). No AppKit, so an iOS app can reuse it.
@@ -22,6 +24,7 @@ let package = Package(
                 "NextTermCore",
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
                 .product(name: "Shiki", package: "shiki-swift"),
+                .product(name: "SwiftDraw", package: "SwiftDraw"),
             ]
         ),
         .testTarget(name: "NextTermCoreTests", dependencies: ["NextTermCore"]),

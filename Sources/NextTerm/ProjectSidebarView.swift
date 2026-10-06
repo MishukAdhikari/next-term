@@ -301,6 +301,17 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     // MARK: delegate
 
+    // Folder icons open and close with the folder.
+    func outlineViewItemDidExpand(_ notification: Notification) { refreshIcon(of: notification) }
+    func outlineViewItemDidCollapse(_ notification: Notification) { refreshIcon(of: notification) }
+
+    private func refreshIcon(of notification: Notification) {
+        guard let node = notification.userInfo?["NSObject"] as? FileNode else { return }
+        let row = outline.row(forItem: node)
+        guard row >= 0, let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? FileCellView else { return }
+        cell.setIcon(FileIcons.image(for: node, expanded: outline.isItemExpanded(node)))
+    }
+
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         let id = NSUserInterfaceItemIdentifier("cell")
         let cell = outlineView.makeView(withIdentifier: id, owner: self) as? FileCellView ?? FileCellView()
