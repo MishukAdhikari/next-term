@@ -100,6 +100,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             (window ?? self.controllers.last)?.shareSelectionWithClaude(only: [client])
         }
         server.onClientGone = { [weak self] client in self?.claudeTabs.removeValue(forKey: client) }
+        // Claude's proposed edits: shown as a diff in the window of the tab it runs in.
+        server.onOpenDiff = { [weak self] client, path, proposed, tabName in
+            guard let self else { return }
+            let tab = self.claudeTabs[client]?.value
+            let controller = tab.flatMap { tab in self.controllers.first { $0.tabs.contains { $0 === tab } } }
+                ?? (NSApp.keyWindow?.windowController as? TerminalWindowController) ?? self.controllers.last
+            guard let controller else { return ClaudeIDEServer.shared.resolveDiff(tabName, accepted: false, text: nil) }
+            let original: String = {
+                guard isRegularFile(path), let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+                      let (text, _) = TextFile.decode(data) else { return "" }
+                return text
+            }()
+            let proposal = DiffPane.Proposal(original: original, proposed: proposed, author: "Claude", tag: tabName, client: client)
+            controller.editorArea.openProposal(for: canonicalPath(path), proposal: proposal) { accepted, text in
+                ClaudeIDEServer.shared.resolveDiff(tabName, accepted: accepted, text: text)
+            }
+        }
+        server.onCloseDiffs = { [weak self] client, names in
+            guard let self else { return }
+            for controller in self.controllers {
+                for pane in controller.editorArea.proposals where pane.proposal?.client == client && names.contains(pane.proposal?.tag ?? "") {
+                    controller.editorArea.close(pane)
+                }
+            }
+        }
         server.start(workspaces: controllers.compactMap(\.project))
         GeminiIDEServer.shared.start(workspaces: agentWorkspaces)
         enableAgentIDEModes()

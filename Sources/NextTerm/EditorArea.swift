@@ -139,6 +139,25 @@ final class EditorArea: NSView, TabBarViewDelegate {
 
     // MARK: diffs
 
+    /// An agent's proposed edit, to accept or reject. Closing its tab rejects it.
+    @discardableResult
+    func openProposal(for path: String, proposal: DiffPane.Proposal, onDecision: @escaping (Bool, String) -> Void) -> DiffPane {
+        let pane = DiffPane(proposalFor: path, proposal: proposal)
+        pane.onDecision = onDecision
+        pane.onTitleChange = { [weak self] in self?.refresh() }
+        insert(pane)
+        select(activeIndex)
+        return pane
+    }
+
+    var proposals: [DiffPane] { diffs.filter { $0.proposal != nil } }
+
+    /// Closes a tab without asking (a decided proposal, a diff).
+    func close(_ pane: NSView) {
+        if let editor = pane as? CodeEditorView { return requestClose(editor) }
+        remove(pane)
+    }
+
     /// Shows a file's changes (or brings its diff to the front, comparing against `base`).
     func openDiff(root: String, path: String, base: GitRunner.DiffBase = .head) {
         if let index = panes.firstIndex(where: { ($0 as? DiffPane)?.matches(root: root, path: path) == true }),
@@ -184,6 +203,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
 
     private func remove(_ pane: NSView) {
         guard let index = panes.firstIndex(where: { $0 === pane }) else { return }
+        (pane as? DiffPane)?.decide(false) // closing an undecided proposal rejects it
         let hadFocus = (window?.firstResponder as? NSView)?.isDescendant(of: pane) == true
         pane.removeFromSuperview()
         if let editor = pane as? CodeEditorView {

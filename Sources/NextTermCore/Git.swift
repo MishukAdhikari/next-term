@@ -255,6 +255,21 @@ public enum GitRunner {
         return counts
     }
 
+    /// The diff between two texts (an agent's proposed version against the file on disk), by git's
+    /// histogram diff on temporary files.
+    public static func diff(old: String, new: String, git: String, context: Int = 3) -> FileDiff? {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("next-term-diff-\(UUID().uuidString)")
+        guard (try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)) != nil else { return nil }
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let a = folder.appendingPathComponent("a"), b = folder.appendingPathComponent("b")
+        guard (try? Data(old.utf8).write(to: a)) != nil, (try? Data(new.utf8).write(to: b)) != nil else { return nil }
+        let args = ["--no-optional-locks", "diff", "--no-index", "--no-color", "--no-ext-diff", "--histogram", "-U\(context)",
+                    "--src-prefix=a/", "--dst-prefix=b/", "--", a.path, b.path]
+        // Exit 1 means "they differ", the expected case.
+        guard let data = run(git, args, timeout: 15, acceptedStatus: [0, 1]), let text = String(data: data, encoding: .utf8) else { return nil }
+        return UnifiedDiff.parse(text).first ?? FileDiff()
+    }
+
     /// Whether git tracks the file (an untracked file's diff is all additions).
     public static func isTracked(_ relativePath: String, in root: String, git: String) -> Bool {
         run(git, ["-C", root, "ls-files", "--error-unmatch", "--", relativePath], timeout: 10) != nil

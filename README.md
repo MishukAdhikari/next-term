@@ -26,7 +26,8 @@ agents are working, which are done, and which are waiting on your decision.
   never presses Enter for you.
 - **Agents see your editor.** Claude Code, Gemini CLI and Qwen Code in a Next Term tab connect to Next Term
   as their IDE, the way they connect to VS Code: the lines you select go with your next prompt ("⧉ 10 lines
-  selected"), and ⌥⌘K puts `@file#L10-20` into Claude's prompt. Nothing to set up: Next Term turns Gemini's
+  selected"), and ⌥⌘K puts `@file#L10-20` into Claude's prompt. When Claude wants to edit a file, its change
+  opens as a diff to Accept (⌘↩) or Reject, as in VS Code; answering in the terminal works too. Nothing to set up: Next Term turns Gemini's
   and Qwen's IDE mode on for you. Local only, with a fresh secret per launch; `.env` files are never shared;
   Settings turns it off. Codex and other agents get Send to Agent, and soon an MCP tool for the selection.
 - **`nxtrm`, like `subl` or `code`.** `nxtrm .` opens the folder as a project, `nxtrm app/User.php:42` a

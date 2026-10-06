@@ -1139,6 +1139,39 @@ enum SelfTest {
 
         await geminiLinkChecks(c)
 
+        // Claude's proposed edits: shown as a diff to accept or reject; the file is never written by Next Term.
+        let target = proj.appendingPathComponent("src/main.php")
+        let before = (try? String(contentsOf: target, encoding: .utf8)) ?? ""
+        let proposed = before.replacingOccurrences(of: "Hello", with: "Hi")
+        func openDiff(_ id: Int, _ tab: String) {
+            claude.send(["jsonrpc": "2.0", "id": id, "method": "tools/call", "params": ["name": "openDiff", "arguments": [
+                "old_file_path": target.path, "new_file_path": target.path, "new_file_contents": proposed, "tab_name": tab]]])
+        }
+        func answer(_ id: Int) -> [String]? {
+            ((claude.received.first { ($0["id"] as? Int) == id }?["result"] as? [String: Any])?["content"] as? [[String: Any]])?.compactMap { $0["text"] as? String }
+        }
+        openDiff(30, "✻ [Claude Code] main.php (abc123) ⧉")
+        let shown = await wait(4) { c.editorArea.proposals.count == 1 }
+        if shown, let pane = c.editorArea.proposals.first {
+            check(await wait(4) { pane.hunkCount >= 1 } && pane.sideTexts.1.contains("Hi"), "Claude's proposed edit opens as a diff to review")
+            check(pane.changedLineCount == 1, "only the changed line is marked (CRLF files too)", "\(pane.changedLineCount) lines")
+            await screenshot(c, suffix: "-proposal")
+            pane.decide(true)
+            c.editorArea.close(pane)
+            check(await wait(3) { answer(30) == ["FILE_SAVED", proposed] }, "Accept tells Claude to write it (FILE_SAVED and the text)", "\(answer(30) ?? [])")
+            check(((try? String(contentsOf: target, encoding: .utf8)) ?? "") == before, "Next Term itself never writes the file")
+        } else {
+            check(false, "Claude's proposed edit opens as a diff to review")
+        }
+        openDiff(31, "second")
+        _ = await wait(4) { c.editorArea.proposals.count == 1 }
+        if let pane = c.editorArea.proposals.first { c.editorArea.close(pane) } // closing the tab
+        check(await wait(3) { answer(31) == ["DIFF_REJECTED"] }, "closing or rejecting it says DIFF_REJECTED", "\(answer(31) ?? [])")
+        openDiff(32, "third")
+        _ = await wait(4) { c.editorArea.proposals.count == 1 }
+        claude.send(["jsonrpc": "2.0", "id": 33, "method": "tools/call", "params": ["name": "close_tab", "arguments": ["tab_name": "third"]]])
+        check(await wait(3) { c.editorArea.proposals.isEmpty }, "when you answer in the terminal, Claude closes the diff tab")
+
         // .env files are never shared.
         let env = proj.appendingPathComponent(".env")
         try? "SECRET=1\n".write(to: env, atomically: true, encoding: .utf8)

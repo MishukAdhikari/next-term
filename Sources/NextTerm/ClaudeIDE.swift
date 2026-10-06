@@ -14,7 +14,8 @@ import Security
 ///
 /// Security: loopback only; a fresh 256-bit token each launch, compared in constant time; any request
 /// carrying `Origin` (a browser) is refused; the lock is 0600 in a 0700 folder and removed on quit.
-/// Nothing a client sends can write files: this end only reports the selection.
+/// Nothing a client sends can write files: this end reports the selection, and shows proposed edits
+/// for the user to accept or reject (the CLI writes the file itself, after an accept).
 final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `queue`
     typealias ClientID = ObjectIdentifier
 
@@ -38,6 +39,14 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
     /// Called on the main queue when a `claude` process is connected and listening (with its pid).
     var onClientReady: ((ClientID, pid_t?) -> Void)?
     var onClientGone: ((ClientID) -> Void)?
+    /// openDiff: show the proposed text for a file; answer with `resolveDiff`.
+    var onOpenDiff: ((ClientID, _ path: String, _ proposed: String, _ tabName: String) -> Void)?
+    /// close_tab / closeAllDiffTabs: close these proposal tabs (undecided ones count as rejected).
+    var onCloseDiffs: ((ClientID, _ tabNames: [String]) -> Void)?
+    /// tab_name -> the waiting openDiff call.
+    private var pendingDiffs: [String: (client: ClientID, id: Any)] = [:]
+    /// Proposal tabs each client has open.
+    private var openDiffs: [ClientID: Set<String>] = [:]
 
     private init() {
         var bytes = [UInt8](repeating: 0, count: 32)
@@ -189,7 +198,12 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
                 receive(connection)
             case .failed, .cancelled:
                 if sessions.removeValue(forKey: id) != nil {
-                    DispatchQueue.main.async { self.onClientGone?(id) }
+                    pendingDiffs = pendingDiffs.filter { $0.value.client != id }
+                    let names = Array(openDiffs.removeValue(forKey: id) ?? [])
+                    DispatchQueue.main.async {
+                        self.onCloseDiffs?(id, names)
+                        self.onClientGone?(id)
+                    }
                 }
             default:
                 break
@@ -240,18 +254,68 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
         case "ping":
             reply(connection, id, result: [:])
         case "tools/list":
-            reply(connection, id, result: ["tools": [[String: Any]]()])
+            reply(connection, id, result: ["tools": Self.tools])
         case "tools/call":
-            // Claude closes diff views at every turn; there are none yet. Anything else is unknown here.
             let name = params["name"] as? String ?? ""
-            if name == "closeAllDiffTabs" {
-                reply(connection, id, result: ["content": [["type": "text", "text": "CLOSED_0_DIFF_TABS"]]])
-            } else {
-                reply(connection, id, result: ["content": [["type": "text", "text": "Not available in Next Term: \(name)"]], "isError": true])
-            }
+            let arguments = params["arguments"] as? [String: Any] ?? [:]
+            callTool(name, arguments, id: id, client: client, connection: connection)
         default:
             reply(connection, id, error: ["code": -32601, "message": "Method not found: \(method)"])
         }
+    }
+
+    // MARK: proposed edits
+
+    static let tools: [[String: Any]] = [
+        ["name": "openDiff", "description": "Show a proposed change to a file and wait for the user to accept or reject it",
+         "inputSchema": ["type": "object", "required": ["old_file_path", "new_file_path", "new_file_contents", "tab_name"],
+                         "properties": ["old_file_path": ["type": "string"], "new_file_path": ["type": "string"],
+                                        "new_file_contents": ["type": "string"], "tab_name": ["type": "string"]]]],
+        ["name": "close_tab", "description": "Close a proposed-change tab",
+         "inputSchema": ["type": "object", "required": ["tab_name"], "properties": ["tab_name": ["type": "string"]]]],
+        ["name": "closeAllDiffTabs", "description": "Close every proposed-change tab",
+         "inputSchema": ["type": "object", "properties": [String: Any]()]],
+    ]
+
+    private func callTool(_ name: String, _ arguments: [String: Any], id: Any, client: ClientID, connection: NWConnection) {
+        switch name {
+        case "openDiff":
+            guard let path = arguments["new_file_path"] as? String ?? arguments["old_file_path"] as? String, path.hasPrefix("/"),
+                  let proposed = arguments["new_file_contents"] as? String, let tab = arguments["tab_name"] as? String else {
+                return reply(connection, id, error: ["code": -32602, "message": "Invalid params"])
+            }
+            // No reply now: it goes when the user decides (there is no time limit).
+            pendingDiffs[tab] = (client, id)
+            openDiffs[client, default: []].insert(tab)
+            DispatchQueue.main.async { self.onOpenDiff?(client, path, proposed, tab) }
+        case "close_tab":
+            let tab = arguments["tab_name"] as? String ?? ""
+            openDiffs[client]?.remove(tab)
+            DispatchQueue.main.async { self.onCloseDiffs?(client, [tab]) }
+            resolveOnQueue(tab, accepted: false, text: nil) // decided in the terminal: the CLI ignores this answer
+            reply(connection, id, result: ["content": [["type": "text", "text": "TAB_CLOSED"]]])
+        case "closeAllDiffTabs":
+            let tabs = Array(openDiffs.removeValue(forKey: client) ?? [])
+            DispatchQueue.main.async { self.onCloseDiffs?(client, tabs) }
+            for tab in tabs { resolveOnQueue(tab, accepted: false, text: nil) }
+            reply(connection, id, result: ["content": [["type": "text", "text": "CLOSED_\(tabs.count)_DIFF_TABS"]]])
+        default:
+            reply(connection, id, result: ["content": [["type": "text", "text": "Not available in Next Term: \(name)"]], "isError": true])
+        }
+    }
+
+    /// The user accepted (the proposed text) or rejected a proposal.
+    func resolveDiff(_ tabName: String, accepted: Bool, text: String?) {
+        queue.async { self.resolveOnQueue(tabName, accepted: accepted, text: text) }
+    }
+
+    private func resolveOnQueue(_ tabName: String, accepted: Bool, text: String?) {
+        guard let pending = pendingDiffs.removeValue(forKey: tabName), let session = sessions[pending.client] else { return }
+        // FILE_SAVED must be followed by the text: the CLI reads the second item without checking.
+        let content: [[String: Any]] = accepted
+            ? [["type": "text", "text": "FILE_SAVED"], ["type": "text", "text": text ?? ""]]
+            : [["type": "text", "text": "DIFF_REJECTED"]]
+        reply(session.connection, pending.id, result: ["content": content])
     }
 
     // MARK: sending

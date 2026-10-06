@@ -298,3 +298,16 @@ import Testing
         #expect(Date().timeIntervalSince(start) < 20)
     }
 }
+
+@Suite struct TextDiffTests {
+    @Test func diffsTwoTexts() throws {
+        guard let git = GitRunner.locateGit() else { return }
+        let diff = try #require(GitRunner.diff(old: "a\nb\nc\n", new: "a\nB\nc\nd\n", git: git))
+        #expect(diff.hunks.count == 1 && diff.hunks[0].added == 2 && diff.hunks[0].removed == 1)
+        let rows = SideBySide.rows(for: diff)
+        #expect(rows.contains { $0.kind == .changed && $0.left?.text == "b" && $0.right?.text == "B" })
+        #expect(GitRunner.diff(old: "same\n", new: "same\n", git: git)?.hunks.isEmpty == true)
+        // A new file: everything added.
+        #expect(GitRunner.diff(old: "", new: "x\ny\n", git: git)?.hunks.first?.added == 2)
+    }
+}

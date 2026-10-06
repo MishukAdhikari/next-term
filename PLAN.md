@@ -26,15 +26,15 @@ terminal. This file is the map of what is built and what comes next; the README 
 | Editor | 103 languages, incremental highlighting, line numbers, line height, soft wrap with hanging indent, auto-indent, ⌘/, ⌘L, find, encodings and line endings kept, files changed by agents reloaded |
 | Search | Find/Replace in Files (regex, masks, preview, undo), seeded from the selection, same type first |
 | Diffs | Side by side (⌘D), word highlights, all/unstaged/staged, stage/unstage/revert per hunk with blob checks, live refresh |
-| Agents | Send to Agent (⌥⌘K) in each agent's syntax; Claude Code IDE link (live selection, @-mentions); Gemini CLI and Qwen Code IDE link (open files, selection), IDE mode on by default |
+| Agents | Send to Agent (⌥⌘K) in each agent's syntax; Claude Code IDE link (live selection, @-mentions, proposed edits as diffs to accept or reject); Gemini CLI and Qwen Code IDE link (open files, selection), IDE mode on by default |
 | App | `nxtrm` CLI, layouts (terminal on any side, sidebar left/right, ⋯ menus), Settings (editor, every shortcut), self-update from GitHub Releases (checksum-verified) |
 
 ## Next
 
 1. **MCP tools for every agent** (Codex, Junie, Command Code, Cursor, opencode, Copilot, Amp…): a `next-term`
    MCP server with the editor's selection and open files, registered in each installed agent by default.
-2. **Agents' proposed edits in the diff view:** Claude's openDiff and Gemini's openDiff shown there to accept
-   or reject; fold long unchanged runs; stage selected lines.
+2. **More of the diff view:** Gemini's proposed edits (Claude's are done), fold long unchanged runs, stage
+   selected lines, edit the proposed side before accepting.
 3. **Copilot CLI IDE link** (its protocol is published).
 4. Split panes, session restore, notarized releases.
 
