@@ -25,4 +25,4 @@ export const INDEXNOW_KEY = '851176fab7f883cc1789f08a5ef768c0';
 
 /** One-sentence description used for the home page, JSON-LD and llms.txt. */
 export const SUMMARY =
-	'Next Term is a free, open-source (MIT) native macOS terminal and code editor for running AI coding agents such as Claude Code, Codex and Gemini CLI side by side, with a status mark on every tab that shows which agent is working, done, or waiting on you.';
+	'Next Term is a free, open-source (MIT) macOS IDE for AI coding agents: a native terminal and code editor that runs Claude Code, Codex, Gemini CLI and others side by side, shows which agent is working, done or waiting on you, and lets one agent run the others over MCP.';

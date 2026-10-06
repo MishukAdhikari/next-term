@@ -25,7 +25,7 @@ const site = Astro.site!;
 const home = new URL('/', site).href;
 const pageTitle = 'Next Term — the missing IDE for the terminal';
 const description =
-	'A native macOS terminal and editor for AI coding agents. Run Claude Code, Codex and Gemini CLI side by side and see which one is working, done or waiting.';
+	'The missing IDE for the terminal: a free, open-source macOS IDE for AI coding agents. Run Claude Code, Codex and Gemini CLI side by side, with live status.';
 
 const head = [
 	{ tag: 'title' as const, content: pageTitle },
@@ -49,7 +49,8 @@ const head = [
 		image: new URL('/icon-512.png', site).href,
 		screenshot: new URL('/og.jpg', site).href,
 		applicationCategory: 'DeveloperApplication',
-		applicationSubCategory: 'Terminal and code editor for AI coding agents',
+		applicationSubCategory: 'IDE for AI coding agents',
+		keywords: 'AI IDE, IDE for AI coding agents, AI coding agents, agentic coding, Claude Code, Codex, Gemini CLI, MCP, terminal, code editor, macOS',
 		operatingSystem: MIN_MACOS.replace(' or later', '+'),
 		softwareVersion: VERSION,
 		downloadUrl: DOWNLOAD_DMG,
