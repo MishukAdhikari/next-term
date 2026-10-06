@@ -169,6 +169,11 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private var loginRefused = false
     /// ssh is asking for something in this tab right now (a password, a passphrase, a host key).
     private(set) var loginPrompt = false
+    /// Which of the host's master connections this tab uses (see RemoteConnection.tabsPerMaster).
+    private(set) var controlSlot: Int?
+    var controlPath: String? { remote.flatMap { remote in controlSlot.map { RemoteConnection.controlPath(remote.host, slot: $0) } } }
+    /// Lost its connection when the master went too: reconnect as soon as a master is up again (once).
+    private(set) var wakesWithMaster = false
     /// herdr's agents, last reported (a herdr tab).
     private(set) var herdrAgents: [HerdrAgent] = []
     private var connectedAt: TimeInterval = 0
@@ -245,11 +250,15 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     func start() {
         if let remote {
-            // Another tab is logging in to this host: wait for its connection rather than ask twice.
-            guard RemoteConnection.mayConnect(self, to: remote.host) else {
+            if controlSlot == nil { controlSlot = RemoteConnection.slot(for: self, host: remote.host) }
+            let path = RemoteConnection.controlPath(remote.host, slot: controlSlot ?? 0)
+            // Another tab is logging in on this master: wait for its connection rather than ask twice.
+            guard RemoteConnection.mayConnect(self, to: remote.host, path: path) else {
+                disconnected = false
+                wakesWithMaster = false
                 if !waitingForConnection {
                     waitingForConnection = true
-                    let other = RemoteConnection.loginTab(for: remote.host).map { " (the tab “\($0.title)”)" } ?? ""
+                    let other = RemoteConnection.loginTab(path: path).map { " (the tab “\($0.title)”)" } ?? ""
                     view.feed(text: "\u{1b}[2m[Waiting for another tab's login to \(remote.host.name)\(other)…]\u{1b}[0m\r\n")
                     delegate?.tabDidChange(self)
                 }
@@ -268,7 +277,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             connectionToken = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16)).lowercased()
             view.interceptInput = nil
             view.acceptsInput = true
-            view.startProcess(executable: shellPath, args: RemoteConnection.tabArguments(remote, tabKey: remoteKey, token: connectionToken),
+            view.startProcess(executable: shellPath, args: RemoteConnection.tabArguments(remote, path: path, tabKey: remoteKey, token: connectionToken),
                               environment: RemoteConnection.environment(), execName: nil, currentDirectory: NSHomeDirectory())
             return
         }
@@ -572,15 +581,15 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             let raw = waitStatus ?? 0
             if raw & 0x7F == 0, (raw >> 8) & 0xFF == 255 {
                 // 255: ssh's own failure, or the remote shell's own `exit 255`. After a dropped connection
-                // the master is gone too; looked at a moment later, once it had time to go.
-                let lastLines = screenTail(8)
+                // the master is gone too; looked at a moment later, once it had time to go (and ssh's
+                // last words have reached the screen).
                 loginPrompt = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                     guard let self, !self.exited, !self.view.process.running else { return }
-                    if self.remoteConnected && RemoteConnection.masterAlive(remote.host) {
+                    if self.remoteConnected, let path = self.controlPath, RemoteConnection.masterAlive(path: path) {
                         self.shellEnded(waitStatus)
                     } else {
-                        self.connectionLost(remote, lastLines: lastLines)
+                        self.connectionLost(remote)
                     }
                 }
                 return
@@ -611,28 +620,33 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     // MARK: remote
 
     /// Whether ssh's last words say the login itself was refused: retrying by itself would only ask again
-    /// (or count against the host's ban list). nil: the network, most likely.
+    /// (or count against the host's ban list). nil: the network, most likely. Rows are joined without
+    /// spaces, so a phrase that wrapped at the edge of the tab is still found.
     static func loginRefusal(_ lines: [String]) -> String? {
-        let text = lines.joined(separator: "\n")
-        if text.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") || text.contains("Host key verification failed") {
+        let text = lines.joined().replacingOccurrences(of: " ", with: "")
+        func has(_ phrase: String) -> Bool { text.contains(phrase.replacingOccurrences(of: " ", with: "")) }
+        if has("REMOTE HOST IDENTIFICATION HAS CHANGED") || has("Host key verification failed") {
             return "The host key could not be verified."
         }
-        if text.contains("Permission denied") || text.contains("Too many authentication failures")
-            || text.contains("No more authentication methods") || text.contains("Authentication failed") {
-            return "ssh could not log in."
+        if has("Permission denied") || has("Too many authentication failures") || has("No more authentication methods")
+            || has("Authentication failed") {
+            return "ssh could not log in. If your key is in an agent your shell sets up, Next Term uses the SSH_AUTH_SOCK your login shell exports; otherwise set IdentityAgent in ~/.ssh/config."
         }
         return nil
     }
 
-    /// A kept tab that dropped for a network reason comes back by itself: always once it had connected,
-    /// a few times when it never did (the host may be booting, or the Wi-Fi not up yet).
-    var mayReconnectByItself: Bool { isKept && !loginRefused && (everConnected || reconnectAttempts < 5) }
+    /// A kept tab that dropped for a network reason comes back by itself: up to 30 attempts in a row
+    /// that never get through once it had connected (about half an hour), 5 when it never did (the host
+    /// may be booting, or the Wi-Fi not up yet). Then Return.
+    var mayReconnectByItself: Bool { isKept && !loginRefused && reconnectAttempts < (everConnected ? 30 : 5) }
 
     /// The connection dropped or could not be made. The tab stays, says why, and Return reconnects.
-    private func connectionLost(_ remote: RemoteTab, lastLines: [String]) {
-        let wasUp = remoteConnected && Self.now - connectedAt >= 10
-        if wasUp { reconnectAttempts = 0 }
-        let refusal = Self.loginRefusal(lastLines)
+    private func connectionLost(_ remote: RemoteTab) {
+        // Only an attempt that never proved its own login can have been refused at the login: once the
+        // tab's script ran, "Permission denied" on its screen is some program's (a git push), not ssh's.
+        let provedLogin = remoteConnected
+        if provedLogin { reconnectAttempts = 0 }
+        let refusal = provedLogin ? nil : Self.loginRefusal(screenTail(16))
         loginRefused = refusal != nil
         let stopped = !isKept && status.running ? status.program : nil
         disconnected = true
@@ -654,6 +668,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         } else if mayReconnectByItself {
             let delay = [2, 5, 10, 20, 30, 60][min(reconnectAttempts, 5)]
             reconnectAttempts += 1
+            // The master went with it: wake as soon as one is up again (another tab, the network back).
+            wakesWithMaster = !(controlPath.map(RemoteConnection.masterAlive(path:)) ?? false)
             note = everConnected
                 ? "Connection to \(name) lost. Reconnecting in \(delay) s (Return: now). The session keeps running on the host; ⌘W closes this tab."
                 : "Could not connect to \(name). Trying again in \(delay) s (Return: now); ⌘W closes this tab."
@@ -679,6 +695,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// Connects again: to the same tmux session or herdr (they kept running), or a new shell.
     func reconnect() {
         guard remote != nil, disconnected, !exited else { return }
+        wakesWithMaster = false
         reconnectWork?.cancel()
         reconnectWork = nil
         view.feed(text: "\r\n")
@@ -690,10 +707,14 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// key)? Then the tab says so, and is marked for attention when it is not the one in front.
     private func watchLogin() {
         let asking: Bool
-        if remote != nil, !remoteConnected, !disconnected, !waitingForConnection, view.process.running {
-            let line = (screenTail(2).last ?? "").lowercased()
-            asking = line.contains("password") || line.contains("passphrase") || line.contains("(yes/no")
-                || line.contains("verification code") || line.contains("one-time") || line.contains("pin for")
+        // ssh asks on the normal screen, on the last line, in a few known shapes; a remote program's own
+        // text (a file named password.ts, a MOTD about passwords) is not a question from ssh.
+        if remote != nil, !remoteConnected, !disconnected, !waitingForConnection, view.process.running,
+           !view.getTerminal().isCurrentBufferAlternate {
+            let line = (screenTail(1).last ?? "").lowercased().trimmingCharacters(in: .whitespaces)
+            asking = line.hasSuffix("password:") || line.hasSuffix("passphrase:") || line.hasPrefix("enter passphrase for")
+                || line.contains("(yes/no") || line.hasSuffix("verification code:") || line.hasSuffix("one-time password:")
+                || (line.hasPrefix("enter pin for") && line.hasSuffix(":")) || line.hasSuffix("otp:")
         } else {
             asking = false
         }
@@ -712,6 +733,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             remoteConnected = true
             everConnected = true
             loginPrompt = false
+            reconnectAttempts = 0
         }
         guard remoteConnected else { return } // files on the host from another connection prove nothing
         if report.plain { fellBack = true }

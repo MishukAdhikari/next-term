@@ -29,6 +29,8 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
     private let sessionPopup = NSPopUpButton()
     private let sessionNote = NSTextField(wrappingLabelWithString: "")
     private var sessions: [RemoteSession] = []
+    /// Each load of the session list; an answer to an older one is dropped.
+    private var sessionLoad = 0
     private let problemLabel = NSTextField(wrappingLabelWithString: "")
     private var hosts = RemoteHosts.all
 
@@ -171,6 +173,8 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
 
     /// The saved host's tmux sessions, over a connection a tab already has (the sheet never logs in).
     private func loadSessions() {
+        sessionLoad += 1
+        let load = sessionLoad
         sessions = []
         sessionPopup.removeAllItems()
         sessionPopup.addItem(withTitle: "New session")
@@ -182,12 +186,17 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
         }
         sessionNote.stringValue = "Looking for sessions on \(host.name)…"
         RemoteConnection.run(host, script: RemoteShell.sessionsScript, timeout: 15) { [weak self] output in
-            guard let self, self.selectedHost?.id == host.id else { return }
+            guard let self, load == self.sessionLoad, self.selectedHost?.id == host.id else { return }
+            guard let listed = RemoteSession.parseList(output.output) else {
+                self.sessionNote.stringValue = "Could not list the sessions: \(output.problem)"
+                return
+            }
             let open = Set(AppDelegate.shared.controllers.flatMap(\.tabs).compactMap { $0.exited ? nil : $0.remote?.session })
-            self.sessions = (RemoteSession.parseList(output.output)?.sessions ?? []).filter { !open.contains($0.name) }
+            self.sessions = listed.sessions.filter { !open.contains($0.name) }
             for session in self.sessions {
                 let what = session.program.isEmpty ? "" : " — \(session.program)"
                 self.sessionPopup.addItem(withTitle: "Reattach \(session.name)\(what) (\((session.directory as NSString).lastPathComponent))")
+                self.sessionPopup.lastItem?.representedObject = session.name
             }
             self.sessionNote.stringValue = self.sessions.isEmpty ? "No other sessions are running there."
                 : "\(self.sessions.count) session\(self.sessions.count == 1 ? "" : "s") still running there, from tabs that were closed."
@@ -249,8 +258,8 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
         }
         RemoteHosts.save(host)
         UserDefaults.standard.set(host.id, forKey: "lastRemoteHost")
-        let index = sessionPopup.indexOfSelectedItem - 1
-        let session = host.keep == .tmux && sessions.indices.contains(index) ? sessions[index] : nil
+        let chosen = sessionPopup.selectedItem?.representedObject as? String
+        let session = host.keep == .tmux ? sessions.first { $0.name == chosen } : nil
         panel.sheetParent?.endSheet(panel)
         open(RemoteTab(host: host, directory: session?.directory.isEmpty == false ? session?.directory : nil, session: session?.name))
     }

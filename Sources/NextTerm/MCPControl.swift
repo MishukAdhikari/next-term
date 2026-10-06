@@ -212,7 +212,7 @@ enum MCPControl {
         case "send_to_tab": sendToTab(arguments, caller: caller, reply: reply)
         case "press_keys": pressKeys(arguments, caller: caller, reply: reply)
         case "show_tab": reply(withTab(arguments) { tab in showTab(tab) })
-        case "close_tab": reply(closeTab(arguments, caller: caller))
+        case "close_tab": closeTab(arguments, caller: caller, reply: reply)
         case "open_in_editor": reply(openInEditor(arguments))
         case "list_hosts", "add_host", "remove_host", "check_host", "new_remote_tab", "host_sessions", "host_changes":
             RemoteMCP.call(tool, arguments, caller: caller, reply: reply)
@@ -523,35 +523,47 @@ enum MCPControl {
         return ok(["id": tab.id.uuidString.lowercased(), "shown": true])
     }
 
-    private static func closeTab(_ arguments: [String: Any], caller: TerminalTab?) -> MCPServer.CallResult {
+    private static func closeTab(_ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
         guard let tab = findTab(arguments["tab_id"]), let controller = controller(of: tab) else {
-            return fail("No tab with that id; list_tabs shows them.")
+            return reply(fail("No tab with that id; list_tabs shows them."))
         }
-        if tab === caller { return fail("That is your own tab.") }
+        if tab === caller { return reply(fail("That is your own tab.")) }
         let force = arguments["force"] as? Bool ?? false
-        // A kept tmux tab: closing only detaches, and what runs there goes on. force ends the session.
-        if let remote = tab.remote, tab.isKept, remote.keep == .tmux, tab.remoteConnected {
-            let program = tab.status.running ? tab.status.program : nil
-            guard force else {
-                controller.remove(tab)
-                lastSent.removeValue(forKey: tab.id)
-                var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "closed": true, "detached": true,
-                                           "host": remote.host.name, "session": remote.session]
-                if let program { info["still_running"] = program }
-                info["note"] = "The tmux session keeps running on the host: reattach with new_remote_tab (session), or end it with close_tab force."
-                return ok(info)
-            }
-            RemoteConnection.endSession(remote.host, session: remote.session) { _ in }
+        let id = tab.id.uuidString.lowercased()
+        func close() {
             controller.remove(tab)
             lastSent.removeValue(forKey: tab.id)
-            return ok(["id": tab.id.uuidString.lowercased(), "closed": true, "session_ended": remote.session])
+        }
+        // A tab kept on its host: closing only detaches, and what runs there goes on.
+        if let remote = tab.remote, tab.isKept {
+            if remote.keep == .herdr {
+                close()
+                return reply(ok(["id": id, "closed": true, "detached": true, "host": remote.host.name,
+                                 "note": "herdr keeps its agents running on the host; stop them in herdr. A new herdr tab shows them again."]))
+            }
+            guard force else {
+                let program = tab.status.running ? tab.status.program : nil
+                close()
+                var info: [String: Any] = ["id": id, "closed": true, "detached": true, "host": remote.host.name, "session": remote.session]
+                if let program { info["still_running"] = program }
+                info["note"] = "The tmux session keeps running on the host: reattach with new_remote_tab (session), or end it with close_tab force."
+                return reply(ok(info))
+            }
+            // force: end the tmux session first; the tab closes only once it has ended.
+            RemoteConnection.endSession(remote.host, session: remote.session) { problem in
+                if let problem {
+                    return reply(fail("Could not end tmux session \(remote.session) on \(remote.host.name), so the tab stays open: \(problem)"))
+                }
+                close()
+                reply(ok(["id": id, "closed": true, "session_ended": remote.session]))
+            }
+            return
         }
         if let warning = tab.closeWarning, !force {
-            return fail("The tab is running \(warning); pass force: true to stop it and close the tab.")
+            return reply(fail("The tab is running \(warning); pass force: true to stop it and close the tab."))
         }
-        controller.remove(tab)
-        lastSent.removeValue(forKey: tab.id)
-        return ok(["id": tab.id.uuidString.lowercased(), "closed": true])
+        close()
+        reply(ok(["id": id, "closed": true]))
     }
 
     private static func openInEditor(_ arguments: [String: Any]) -> MCPServer.CallResult {

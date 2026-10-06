@@ -76,6 +76,8 @@ import Testing
         #expect(SSHArguments.configText.contains("StrictHostKeyChecking ask"))
         let lines = SSHArguments.configText.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
         #expect(lines.firstIndex(of: "StrictHostKeyChecking ask")! < lines.firstIndex(of: "Include ~/.ssh/config")!)
+        // The user's config before the system's, as ssh itself reads them (the first value wins).
+        #expect(lines.firstIndex(of: "Include ~/.ssh/config")! < lines.firstIndex(of: "Include /etc/ssh/ssh_config")!)
         #expect(lines.contains("Include /etc/ssh/ssh_config"))
     }
 
@@ -152,6 +154,19 @@ import Testing
         #expect(output.contains("is not a folder on this host"))
         #expect(output.hasSuffix(home + "\n"))
         #expect(FileManager.default.fileExists(atPath: home + "/.cache/next-term/tabs/tab2.nodir"))
+    }
+
+    @Test func theTokenFallsBackToAPrivateTmpFolderWhenTheCacheCannotBeWritten() throws {
+        let home = try temporaryHome()
+        // ~/.cache is a file: nothing can be written under it.
+        FileManager.default.createFile(atPath: home + "/.cache", contents: Data())
+        let key = "tab-\(UUID().uuidString.prefix(8))"
+        let script = RemoteShell.tabScript(keep: .off, directory: "~", session: "s", tabID: key, token: "tok3n")
+            .replacingOccurrences(of: "exec \"${SHELL:-/bin/sh}\" -l", with: "exit 0")
+        _ = try run(RemoteShell.command(script), home: home)
+        let poll = try #require(RemotePoll.parse(try run(RemoteShell.command(RemoteShell.pollScript(tabs: [(id: key, keep: .off, session: "")])), home: home)))
+        #expect(poll.tabs[key]?.token == "tok3n")
+        try? FileManager.default.removeItem(atPath: "/tmp/nt-\(getuid())-tabs/\(key)")
     }
 
     @Test func aTmuxTabWithoutTmuxMarksItselfPlain() throws {

@@ -333,7 +333,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                 switch response {
                 case .alertFirstButtonReturn: self?.remove(tab)
                 case .alertThirdButtonReturn:
-                    RemoteConnection.endSession(remote.host, session: remote.session) { _ in self?.remove(tab) }
+                    RemoteConnection.endSession(remote.host, session: remote.session) { problem in
+                        guard let problem else { self?.remove(tab); return }
+                        // Not ended: the tab stays, so the session is not left running out of sight.
+                        let failed = NSAlert()
+                        failed.messageText = "Could not end the session on \(remote.host.name)"
+                        failed.informativeText = problem
+                        failed.beginSheetModal(for: window)
+                    }
                 default: break
                 }
             }
@@ -391,6 +398,17 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// Tabs whose closing would stop a program or a job.
     var busyTabs: [TerminalTab] { tabs.filter { $0.closeWarning != nil } }
+
+    /// What keeps running on servers after `tabs` close (kept tmux tabs with a program in front), for the
+    /// close alerts: "“claude” on web-1 (tmux session nt-app-1a2b3c)". Empty: nothing.
+    static func keptList(_ tabs: [TerminalTab]) -> String {
+        let kept = tabs.compactMap { tab -> String? in
+            guard tab.keptNote != nil, let remote = tab.remote else { return nil }
+            return "“\(tab.status.program)” on \(remote.host.name) (tmux session \(remote.session))"
+        }
+        guard !kept.isEmpty else { return "" }
+        return "Still running after closing, on the host: " + kept.joined(separator: "; ") + ". Reopen from Shell › New Remote Tab…"
+    }
 
     /// "“vim notes.md” (suspended); “npm run dev” (running); and more in 2 other tabs." The same ending
     /// for every alert that stops tabs.
@@ -1307,11 +1325,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         editorsConfirmed = false
         let busy = busyTabs
-        guard !busy.isEmpty else { return true }
+        let kept = Self.keptList(tabs)
+        guard !busy.isEmpty || !kept.isEmpty else { return true }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Close this window?"
-        alert.informativeText = "Closing it stops " + Self.stopList(busy)
+        alert.informativeText = [busy.isEmpty ? "" : "Closing it stops " + Self.stopList(busy), kept].filter { !$0.isEmpty }.joined(separator: "\n\n")
         alert.addButton(withTitle: "Close Window")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: sender) { [weak self] response in
@@ -1358,11 +1377,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         guard group.isSplit else { return requestClose(group.focused) }
         // The tab's × closes all its panes, asking once if that stops anything.
         let busy = group.panes.filter { $0.closeWarning != nil }
-        guard !busy.isEmpty, let window else { return group.panes.forEach(remove) }
+        let kept = Self.keptList(group.panes)
+        guard !busy.isEmpty || !kept.isEmpty, let window else { return group.panes.forEach(remove) }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Close this tab and its \(group.panes.count) panes?"
-        alert.informativeText = "Closing it stops " + Self.stopList(busy)
+        alert.informativeText = [busy.isEmpty ? "" : "Closing it stops " + Self.stopList(busy), kept].filter { !$0.isEmpty }.joined(separator: "\n\n")
         alert.addButton(withTitle: "Close Tab")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in

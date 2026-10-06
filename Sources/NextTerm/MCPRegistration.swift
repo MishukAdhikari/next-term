@@ -97,15 +97,32 @@ enum LoginShell {
     /// What an interactive login shell (5 s at most) sets that a Finder-launched app lacks: PATH, and the
     /// ssh agent socket (Secretive, 1Password, gpg-agent for a YubiKey are set up in .zshrc). One probe
     /// per launch serves the agents' registration and remote tabs' ssh.
+    /// The command reads the environment with /usr/bin/env, so it is the same text in zsh, bash, fish and
+    /// tcsh (fish and csh reject `${VAR:-}`, and fish's "$PATH" is a list joined by spaces).
     private static let probed: (path: [String], sshAuthSock: String?) = {
+        defer { isProbed = true }
         let marker = "__NEXTTERM_ENV__"
-        guard let output = capture(shell, ["-l", "-i", "-c", "printf '\(marker)%s\(marker)%s\(marker)' \"$PATH\" \"${SSH_AUTH_SOCK:-}\""], timeout: 5)
+        guard let output = capture(shell, ["-l", "-i", "-c", "/usr/bin/printf %s \(marker); /usr/bin/env; /usr/bin/printf %s \(marker)"], timeout: 5)
         else { return ([], nil) }
         let parts = output.components(separatedBy: marker)
-        guard parts.count >= 4 else { return ([], nil) }
-        let socket = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
-        return (parts[1].split(separator: ":").map(String.init), socket.isEmpty ? nil : socket)
+        guard parts.count >= 3 else { return ([], nil) }
+        var path: [String] = []
+        var socket: String?
+        for line in parts[1].split(separator: "\n") {
+            if line.hasPrefix("PATH=") { path = line.dropFirst(5).split(separator: ":").map(String.init) }
+            if line.hasPrefix("SSH_AUTH_SOCK="), line.count > 14 { socket = String(line.dropFirst(14)) }
+        }
+        return (path, socket)
     }()
+
+    /// The probe has run (reading `path` or `sshAuthSock` will not wait for it).
+    nonisolated(unsafe) static var isProbed = false
+
+    /// Runs the probe off the main thread, if it has not run yet.
+    static func warmUp() {
+        guard !isProbed else { return }
+        DispatchQueue.global(qos: .utility).async { _ = path }
+    }
 
     /// SSH_AUTH_SOCK as the user's shell sets it (nil: the shell leaves launchd's in place).
     static var sshAuthSock: String? { probed.sshAuthSock }
@@ -116,7 +133,7 @@ enum LoginShell {
         var directories = probed.path
         directories += ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "\(home)/.npm-global/bin",
                         "\(home)/.bun/bin", "\(home)/.volta/bin", "\(home)/.claude/local", "\(home)/.opencode/bin",
-                        "\(home)/.amp/bin", "\(home)/.cargo/bin"]
+                        "\(home)/.amp/bin", "\(home)/.cargo/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
         var seen = Set<String>()
         return directories.filter { !$0.isEmpty && seen.insert($0).inserted }
     }()

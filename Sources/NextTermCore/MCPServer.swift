@@ -98,7 +98,7 @@ public enum MCPServer {
              inputSchema: #"{"type": "object", "properties": {\#(tabID)}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "close_tab", title: "Close a tab",
-             description: "Closes a tab. A tab with something running is refused unless force is true, which stops it. A remote tab kept by tmux only detaches: what runs there keeps running on the host (the answer says so; new_remote_tab with session reattaches), and force ends that tmux session.",
+             description: "Closes a tab. A tab with something running is refused unless force is true, which stops it. A remote tab kept by tmux only detaches: what runs there keeps running on the host (the answer says so; new_remote_tab with session reattaches), and force ends that tmux session (the tab closes only once it has ended). A herdr tab only detaches; herdr keeps its agents.",
              inputSchema: #"{"type": "object", "properties": {\#(tabID), "force": {"type": "boolean"}}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: false, timeout: 15),
         Tool(name: "list_hosts", title: "List remote hosts",

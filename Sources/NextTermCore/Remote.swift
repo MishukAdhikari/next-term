@@ -182,14 +182,16 @@ public enum SSHArguments {
             + ["-T", "-o", "BatchMode=yes", "-o", "ProxyCommand=/usr/bin/false", "--", host.destination, command]
     }
 
-    /// Next Term's ssh config, given with -F: the user's own config (system and ~/.ssh/config) as ssh would
-    /// read it, after one rule. ssh passes -F to ProxyJump hops, so they ask about host keys too.
+    /// Next Term's ssh config, given with -F: the user's own config, then the system's, as ssh itself
+    /// reads them (the first value wins), after one rule. ssh passes -F to ProxyJump hops, so they ask
+    /// about host keys too. (A hop written as `ProxyCommand ssh …` gets no -F and follows the user's
+    /// config; the target host is still asked about.)
     public static let configText = """
         # Written by Next Term for its remote tabs; your own config is included below, unchanged.
         Host *
           StrictHostKeyChecking ask
-        Include /etc/ssh/ssh_config
         Include ~/.ssh/config
+        Include /etc/ssh/ssh_config
 
         """
 
@@ -310,7 +312,12 @@ public enum RemoteShell {
             "  printf 'Next Term: %s is not a folder on this host; this tab opened in your home folder.\\r\\n' \(quote(directory))",
             "  cd",
             "fi",
-            "printf '%s %s\\n' \"$$\" \(quote(safeName(token))) > \"$K\" 2>/dev/null",
+            // The pid and token; where ~/.cache cannot be written (root-owned, read-only home, full disk), in
+            // a private folder of the user's in /tmp instead, which the status check reads too.
+            "if ! printf '%s %s\\n' \"$$\" \(quote(safeName(token))) > \"$K\" 2>/dev/null; then",
+            "  A=/tmp/nt-$(id -u)-tabs; mkdir -p \"$A\" 2>/dev/null; chmod 700 \"$A\" 2>/dev/null",
+            "  [ -O \"$A\" ] && printf '%s %s\\n' \"$$\" \(quote(safeName(token))) > \"$A/\(safeName(tabID))\" 2>/dev/null",
+            "fi",
         ]
         switch keep {
         case .off:
@@ -371,7 +378,8 @@ public enum RemoteShell {
         for tab in tabs {
             let id = safeName(tab.id)
             // The pid file: "<shell pid> <this connection's token>".
-            lines.append("set -- $(cat \"$C/tabs/\(id)\" 2>/dev/null); s=$1; t=$(printf '%s' \"$2\" | tr -cd '0-9A-Za-z_-'); p=$s; d=")
+            lines.append("set -- $(cat \"$C/tabs/\(id)\" 2>/dev/null); [ -n \"$1\" ] || { A=/tmp/nt-$(id -u)-tabs; [ -O \"$A\" ] && set -- $(cat \"$A/\(id)\" 2>/dev/null); }")
+            lines.append("s=$1; t=$(printf '%s' \"$2\" | tr -cd '0-9A-Za-z_-'); p=$s; d=")
             switch tab.keep {
             case .herdr:
                 break // herdr reports its agents itself; the pid file shows the tab got past ssh's login

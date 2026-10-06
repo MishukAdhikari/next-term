@@ -127,6 +127,9 @@ extension SelfTest {
         master.start()
         defer { master.stop() }
         check(RemoteConnection.masterAlive(host), "remote: a master that accepts connections counts as up")
+        let config = RemoteConnection.configFile ?? ""
+        check(!config.isEmpty && !config.contains(" ") && (try? String(contentsOfFile: config, encoding: .utf8))?.contains("StrictHostKeyChecking ask") == true,
+              "remote: Next Term's ssh config sits at a path with no spaces (ssh passes it to ProxyJump hops unquoted)", config)
 
         // A plain remote shell: ssh in the tab's pty, the host's prompt, status from the host.
         let plain = c.addRemoteTab(RemoteTab(host: host))
