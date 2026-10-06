@@ -1,6 +1,6 @@
 ---
 title: Security and privacy
-description: "What Next Term shares and with whom: local-only agent links with a fresh token per launch, no telemetry, and clipboard, paste and file-opening safeguards."
+description: "What Next Term shares and with whom: local-only agent links and MCP socket, a fresh token per launch, no telemetry, and clipboard and paste safeguards."
 ---
 
 A terminal sees everything you type, and an agent link exposes your editor to programs. Next Term is built so that both stay on your Mac and under your control. The source is public under the MIT licence, so every claim on this page can be checked.
@@ -24,9 +24,20 @@ Claude Code, Gemini CLI and Qwen Code connect to Next Term as their IDE. That li
 
 Next Term turns on Gemini CLI’s and Qwen Code’s IDE mode by changing exactly one setting in their settings files, and never rewrites a file with comments. See [Gemini CLI and Qwen Code](/docs/agents/#gemini-cli-and-qwen-code).
 
+## The MCP server
+
+Agents can drive Next Term through its MCP server ([Orchestrate agents](/docs/orchestration/)). It is built to the same standard:
+
+- **No network port.** The app listens on a Unix socket, `~/Library/Application Support/Next Term/mcp.sock`, with mode `0600`, and checks that every connection comes from your own user. That is the reach your own shell already has.
+- **Honest tool descriptions:** typing into a tab, pressing keys, opening and closing tabs are marked destructive, so agents ask before they use them.
+- **No self-control:** an agent cannot type into, or close, the tab it runs in.
+- **Busy tabs are protected:** closing a tab that runs something needs an explicit `force`.
+- **Your files are respected:** registering in an agent writes only Next Term’s own `next-term` entry, keeps comments and every other server, and never touches an entry it did not write.
+- **Off switch:** **Settings › Editor › Agents: “Let agents control Next Term”** closes the socket and removes the entries.
+
 ## Tabs start fresh
 
-A new tab is a fresh terminal, not a child of whatever launched Next Term. Variables that agents and editors set for their own child processes are removed: Claude Code’s session markers (so `claude` never thinks it is a sub-agent), other programs’ messaging secrets, IDE links left by another editor’s terminal, VS Code’s terminal variables, and a git password helper that belonged to an editor. Settings you set on purpose, such as `ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, stay.
+A new tab is a fresh terminal, not a child of whatever launched Next Term. Variables that agents and editors set for their own child processes are removed: Claude Code’s session markers (so `claude` never thinks it is a sub-agent), other programs’ messaging secrets, IDE links and terminal variables left by another editor, and a git password helper that belonged to an editor. Settings you set on purpose, such as `ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, stay.
 
 ## The terminal
 

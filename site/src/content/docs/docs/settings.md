@@ -1,6 +1,6 @@
 ---
 title: Settings
-description: "Next Term’s Settings (⌘,): line height, font size, soft wrap, sidebar icons, the agent link switch, every shortcut, and the preferences in the menus."
+description: "Next Term’s Settings (⌘,): line height, font size, soft wrap, sidebar icons, the agent link and MCP switches, every shortcut, and menu preferences."
 ---
 
 Open **Next Term › Settings…** (<kbd>⌘,</kbd>). Settings has two tabs, **Editor** and **Keyboard Shortcuts**. Every change applies at once, to every window.
@@ -14,6 +14,7 @@ Open **Next Term › Settings…** (<kbd>⌘,</kbd>). Settings has two tabs, **E
 | **Wrap long lines at the edge** | On | Soft wrap, with a hanging indent. Also **View › Soft Wrap**. |
 | **Sidebar: Icons on configuration folders (.github, .claude, .idea…)** | Off | Gives configuration folders their brand icons. Off, they stay plain and quiet. |
 | **Agents: Agents in a tab see the editor (Claude Code, Gemini CLI, Qwen Code)** | On | The IDE link. Agents started in a tab see your open files and selected lines (never from `.env` files), and their proposed edits open as diffs. Next Term keeps Gemini’s and Qwen’s IDE mode on while this is on. Off stops sharing. |
+| **Let agents control Next Term (MCP: projects, tabs, prompts, the editor)** | On | Registers Next Term’s MCP server in your agents, so one can drive the others. The line below it says where it is registered. Off closes the server and removes Next Term’s entries. See [Orchestrate agents](/docs/orchestration/). |
 
 More about the editor in [Code editor](/docs/editor/), and about the agent link in [Agents and the IDE link](/docs/agents/).
 
@@ -23,7 +24,7 @@ Every menu command, with its shortcut and where it lives in the menus. Search by
 
 ## Preferences in the menus
 
-Some choices live where you use them:
+Some choices live where you use them. The View and Shell menus show a checkmark next to the choice in effect:
 
 | Preference | Where | Default |
 |---|---|---|

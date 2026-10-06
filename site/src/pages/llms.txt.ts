@@ -13,7 +13,7 @@ export const GET: APIRoute = async ({ site }) => {
 	};
 	const groups: [string, string[]][] = [
 		['Get started', ['docs/getting-started', 'docs/updates']],
-		['Agents', ['docs/agent-status', 'docs/agents']],
+		['Agents', ['docs/agent-status', 'docs/agents', 'docs/orchestration']],
 		['Editor and diffs', ['docs/editor', 'docs/diffs', 'docs/search', 'docs/layouts']],
 		['Projects and git', ['docs/projects-and-git', 'docs/command-line']],
 		['Reference', ['docs/keyboard-shortcuts', 'docs/settings', 'docs/security-and-privacy', 'docs/faq']],
@@ -30,8 +30,9 @@ export const GET: APIRoute = async ({ site }) => {
 		'- Each terminal tab shows its agent’s state: a spinner while working (read from the agent’s own screen), a green check when done, an amber “!” when it waits on a decision, a red cross when a command failed. Decisions also arrive as macOS notifications.',
 		'- Claude Code, Gemini CLI and Qwen Code connect to Next Term as their IDE (local only, fresh token per launch): they see the selected lines, and their proposed edits open as side-by-side diffs to accept (⌘↩) or reject.',
 		'- Send to Agent (⌥⌘K) types a reference to the selection or files into any agent’s prompt in that agent’s syntax.',
-		'- Built in: a code editor for 103 languages, side-by-side git diffs with hunk staging (⌘D), a project sidebar with git status and +/− line counts, Find and Replace in Files, the `nxtrm` command, configurable layouts and shortcuts, and checksum-verified self-updates.',
-		'- Coming next, not released yet: an MCP server for orchestration, so one agent can drive Next Term across several projects.',
+		'- Next Term is an MCP server (`nxtrm mcp`, 13 tools) for orchestration: one agent can list every project and tab with each agent’s state, open projects, start agents in new tabs or split panes, send prompts and keys, wait for them, read their screens, and use the editor (selection, open files, open a file at a line). It registers itself in Claude Code, Codex, Gemini CLI, Qwen Code, Cursor Agent, opencode, Copilot CLI, Amp, Junie and Command Code. Local only: a 0600 Unix socket, no network port.',
+		'- Built in: split panes (⌘D, ⇧⌘D), Go to File (⌘P, fuzzy), a code editor for 103 languages, side-by-side git diffs with hunk staging (⌥⌘G), a project sidebar with git status and +/− line counts, Find and Replace in Files, the `nxtrm` command, configurable layouts and shortcuts, and checksum-verified self-updates.',
+		'- Not released yet: agent sessions per project (coming next) and remote access to the MCP server for agents outside the Mac (coming later).',
 		'',
 		`Download: ${RELEASES_LATEST}`,
 		`Source code: ${REPO}`,

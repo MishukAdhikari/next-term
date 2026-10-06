@@ -9,7 +9,7 @@ A project is a folder that a window is about. Its files stay in the sidebar, new
 
 ## Projects
 
-- **Open a project:** **Shell › Open Project…** (<kbd>⌘O</kbd>) and choose a folder. From another terminal, run `nxtrm .` (see [The nxtrm command](/docs/command-line/)). You can also drop a folder on Next Term’s Dock icon, or run `open -a "Next Term" ~/Code/app`.
+- **Open a project:** **Shell › Open Project…** (<kbd>⌘O</kbd>) and choose a folder. Agents can open projects too, through [MCP](/docs/orchestration/). From another terminal, run `nxtrm .` (see [The nxtrm command](/docs/command-line/)). You can also drop a folder on Next Term’s Dock icon, or run `open -a "Next Term" ~/Code/app`.
 - **New tabs open in the project** by default. You can still `cd` anywhere.
 - **Reopen at launch:** Next Term reopens the project windows that were open when you quit. On the very first launch it asks for a folder.
 - **Open Recent** (in the Shell menu) lists your recent projects, with **Clear Menu**. The Dock icon’s menu lists them too, with **New Window**.
@@ -47,7 +47,7 @@ Toggle it with <kbd>⌘B</kbd> (**View › Hide Project Sidebar**). Put it on th
 
 **The header** shows the branch, the total lines added and removed, and how far you are ahead of or behind the upstream: `main +41 −10 ↑2 ↓1`. Hover it for the full story, such as “Branch main, tracking origin/main: 2 ahead, 1 behind. 3 modified, 1 added, 2 untracked.”
 
-Next Term runs git read-only, with `--no-optional-locks`, so the sidebar never holds the index lock while your own git commands, or your agents’, are running. To see a file’s changes in full, press <kbd>⌘D</kbd>: see [Side-by-side diffs](/docs/diffs/).
+Next Term runs git read-only, with `--no-optional-locks`, so the sidebar never holds the index lock while your own git commands, or your agents’, are running. To see a file’s changes in full, press <kbd>⌥⌘G</kbd>: see [Side-by-side diffs](/docs/diffs/).
 
 ## File operations
 
@@ -60,7 +60,7 @@ Everything here can be undone with <kbd>⌘Z</kbd>.
 | Copy | Drag with <kbd>⌥</kbd> held |
 | New file, new folder | Right-click › **New File** or **New Folder** |
 | Move to the Trash | <kbd>⌘⌫</kbd> (asks first), or right-click › **Move to Trash** |
-| Open a file | Double-click, or <kbd>⌘↓</kbd> |
+| Open a file | Double-click, or <kbd>⌘↓</kbd>; from anywhere, <kbd>⌘P</kbd> ([Go to File](/docs/editor/#go-to-file)) |
 
 Rename selects the name without its extension, as Finder does. Open files follow a rename or a move.
 

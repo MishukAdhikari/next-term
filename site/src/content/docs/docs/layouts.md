@@ -1,17 +1,39 @@
 ---
-title: Layouts
-description: "Put the terminal below, beside or above the editor, and the project sidebar on the left or right, from the ⋯ buttons or the View menu."
+title: Layouts and split panes
+description: "Split any tab into panes (⌘D, ⇧⌘D), put the terminal below, beside or above the editor, and the project sidebar on the left or right."
 ---
 
-A Next Term window has three parts: the project sidebar, the editor for open files, and the terminal tabs. Arrange them the way you work: a wide terminal under the code, or agents in a column beside it.
+A Next Term window has three parts: the project sidebar, the editor for open files, and the terminal tabs, each of which can be split into panes. Arrange them the way you work: a wide terminal under the code, agents in a column beside it, or an agent next to its test run.
 
 ![A Next Term window with the terminal on the right of the editor: the sidebar on the left, long.ts open with soft-wrapped lines in the middle, and a terminal tab on the right.](../../../assets/screenshots/layout-terminal-right.webp)
+
+## Split panes
+
+Any tab can hold several terminals, side by side or one above the other, as many as fit: an agent beside its test run, or two agents next to each other.
+
+| Action | Keys |
+|---|---|
+| Split Right (**Shell** menu, or the terminal’s ⋯) | <kbd>⌘D</kbd> |
+| Split Down | <kbd>⇧⌘D</kbd> |
+| Select the pane on the left, right, above or below | <kbd>⌥⌘←</kbd> <kbd>⌥⌘→</kbd> <kbd>⌥⌘↑</kbd> <kbd>⌥⌘↓</kbd> |
+| Select the next or previous pane | <kbd>⌥⌘]</kbd>, <kbd>⌥⌘[</kbd> |
+| Maximize the pane, and back | <kbd>⇧⌘↩︎</kbd> |
+| Make Panes Equal | **Window** menu |
+| Close the pane (the menu says **Close Pane**) | <kbd>⌘W</kbd> |
+
+- **A new pane starts in the folder** of the pane you split.
+- **You can tell where your typing goes:** the panes without the keyboard are shaded.
+- **The tab bar still shows one tab,** named after the pane with the keyboard plus how many others there are, such as “claude +2”. Its mark is the most urgent of its panes, so a pane waiting on you is never hidden.
+- **Drag a divider** to resize. Panes keep their proportions when the window resizes or you split again.
+- **Maximize Pane** gives one pane the whole tab while the others keep running; press it again to bring them back.
+- **The tab’s ×** closes all its panes, asking once if that would stop anything. A pane whose shell exits closes, and its neighbour takes its room and the keyboard.
+- **Agents can split too:** an orchestrator can open a worker in a pane beside another tab ([`new_tab` with `split_beside`](/docs/orchestration/#the-tools)).
 
 ## Where the terminal goes
 
 The terminal can sit **below** the editor (the default), on its **right**, on its **left**, or **above** it.
 
-- Click the **⋯** button at the right end of the terminal’s tab bar and choose under **Move Terminal To**.
+- Click the **⋯** button at the right end of the terminal’s tab bar and choose under **Move Terminal To**. The same menu splits the terminal.
 - Or use **View › Terminal Position**.
 
 The editor area appears when you open a file and hides again when the last one closes, giving the terminal the whole window.
@@ -35,6 +57,6 @@ Your layout applies to every window and is remembered across launches.
 
 ## Moving around
 
-- <kbd>⌃&#96;</kbd> moves the keyboard between the editor and the terminal (**View › Focus Editor**), as in VS Code.
+- <kbd>⌃&#96;</kbd> moves the keyboard between the editor and the terminal (**View › Focus Editor**).
 - The tab bars along the top of the window drag the window, like a title bar.
 - <kbd>⌘+</kbd>, <kbd>⌘-</kbd> and <kbd>⌘0</kbd> change the font size of the terminal and the editor together.

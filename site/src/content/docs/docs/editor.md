@@ -1,6 +1,6 @@
 ---
 title: Code editor
-description: "The editor above your terminal: 103 languages with VS Code’s grammars, line height, soft wrap, ⌘/ comments, ⌘L, and files that follow agents’ edits."
+description: "The editor above your terminal: Go to File (⌘P), 103 languages, line height, soft wrap, ⌘/ comments, ⌘L, and files that follow your agents’ edits."
 head:
   - tag: title
     content: A native macOS terminal with a code editor — Next Term
@@ -12,6 +12,7 @@ Next Term has a real code editor, not a viewer, and it sits right above the term
 
 ## Opening files
 
+- **Go to File** (<kbd>⌘P</kbd>): type part of a file’s name or path and pick it. See [below](#go-to-file).
 - **Double-click** a file in the project sidebar, or select it and press <kbd>⌘↓</kbd>.
 - **<kbd>⌘</kbd>-click a path** in terminal output, such as `src/app.ts:42:7` from a compiler, linter or agent: the file opens at that line and column.
 - **Pick a result** in [Find in Files](/docs/search/).
@@ -22,9 +23,17 @@ Each file opens in its own tab above the terminal; a dot in place of the close b
 
 Move between the editor and the terminal with <kbd>⌃&#96;</kbd> (**View › Focus Editor**). <kbd>⌘W</kbd> closes the file you are editing when the editor has the keyboard, and the terminal tab otherwise.
 
+## Go to File
+
+Press <kbd>⌘P</kbd> and type: any file in the project, found by name or path as you type.
+
+- **Fuzzy:** the letters only need to appear in order, so `usrctl` finds `UserController.php`. The path counts too, so a folder name narrows the list.
+- **File names first:** a match in the file’s name ranks above a match somewhere in its path.
+- **At a line:** add the line number, as in `UserController.php:42`, and the file opens there.
+
 ## 103 languages
 
-Colours come from VS Code’s TextMate grammars, the family Sublime Text also uses, through shiki-swift. Highlighting is incremental, so long files stay fast. The theme is Next Term’s own, Next Dark.
+Colours come from open-source TextMate grammars, through shiki-swift. Highlighting is incremental, so long files stay fast. The theme is Next Term’s own, Next Dark.
 
 - **Web:** HTML, CSS, SCSS, Sass, Less, Stylus, PostCSS, JavaScript, TypeScript, JSX, TSX, Vue, Svelte, Astro, Angular templates, Marko, Glimmer, GraphQL, HTTP.
 - **Templates:** Blade (Laravel), Twig, Liquid, Handlebars, Jinja (Django, Flask), ERB and Haml (Rails), Pug, Edge, Razor, templ.
@@ -76,4 +85,4 @@ Agents edit the files you have open. Next Term checks them about once a second:
 - **A file that was deleted or moved** shows a banner too: **Keep My Changes** or **Close**.
 - **Renames and moves in the sidebar** carry open files along.
 
-To see exactly what an agent changed, press <kbd>⌘D</kbd>. See [Side-by-side diffs](/docs/diffs/).
+To see exactly what an agent changed, press <kbd>⌥⌘G</kbd>. See [Side-by-side diffs](/docs/diffs/).

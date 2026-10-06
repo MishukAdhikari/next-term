@@ -1,6 +1,6 @@
 ---
 title: Side-by-side diffs
-description: "Open a changed file as a side-by-side diff with ⌘D, then stage, unstage or revert one hunk at a time, without overwriting an agent’s concurrent edit."
+description: "Open a changed file as a side-by-side diff with ⌥⌘G, then stage, unstage or revert one hunk at a time, without overwriting an agent’s concurrent edit."
 head:
   - tag: title
     content: Side-by-side git diffs with hunk staging — Next Term
@@ -12,8 +12,8 @@ An agent just touched twelve files. Before you commit, you want to see each chan
 
 ## Open a diff
 
-- Press <kbd>⌘D</kbd> (**View › Show Changes**) to see the changes of the file you are editing.
-- In the project sidebar, select a changed file and press <kbd>⌘D</kbd>, or right-click it and choose **Show Changes**.
+- Press <kbd>⌥⌘G</kbd> (**View › Show Changes**) to see the changes of the file you are editing.
+- In the project sidebar, select a changed file and press <kbd>⌥⌘G</kbd>, or right-click it and choose **Show Changes**.
 
 The file has to be in a git repository: changes are shown against the last commit.
 

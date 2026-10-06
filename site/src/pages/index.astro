@@ -64,6 +64,9 @@ const head = [
 			'Claude Code IDE integration: live selection, @-mentions, proposed edits as diffs',
 			'Gemini CLI and Qwen Code IDE integration',
 			'Send to Agent (⌥⌘K) in each agent’s own syntax',
+			'MCP server for orchestration: one agent starts, prompts, waits for and reads the others across projects',
+			'Split panes',
+			'Go to File: fuzzy search for any file in the project',
 			'Code editor for 103 languages',
 			'Side-by-side git diffs with hunk staging',
 			'Project sidebar with git status and line counts',
@@ -95,6 +98,22 @@ const agentsOthers = [
 	'Auggie',
 ];
 
+const mcpTools = [
+	'list_tabs',
+	'read_tab',
+	'wait_for_tab',
+	'list_projects',
+	'get_editor_selection',
+	'get_open_files',
+	'open_project',
+	'new_tab',
+	'send_to_tab',
+	'press_keys',
+	'show_tab',
+	'close_tab',
+	'open_in_editor',
+];
+
 const faq = [
 	{
 		q: 'Is Next Term free?',
@@ -107,6 +126,10 @@ const faq = [
 	{
 		q: 'Does Next Term send my code anywhere?',
 		a: 'No. The agent links listen only on your Mac, with a fresh token each launch, and never share .env files or keys. The only request Next Term makes on its own is a daily update check to GitHub, which you can turn off.',
+	},
+	{
+		q: 'Can one agent control the others?',
+		a: 'Yes. Next Term is an MCP server, set up for you in Claude Code, Codex, Gemini CLI and seven other agents. An orchestrator can list every tab with its agent’s state, start agents, send them prompts, wait for them and read their screens. It works only on your Mac, and Settings turns it off.',
 	},
 	{
 		q: 'Is it an open-source alternative to Warp?',
@@ -228,8 +251,8 @@ const faq = [
 					<li>
 						<h3>Claude Code’s IDE link, built in</h3>
 						<p>
-							Select lines and Claude gets them with your next prompt (“⧉ 10 lines selected”), as in VS Code.
-							Nothing to install or configure.
+							Select lines and Claude gets them with your next prompt (“⧉ 10 lines selected”). Nothing to
+							install or configure.
 						</p>
 					</li>
 					<li>
@@ -260,6 +283,57 @@ const faq = [
 			</figure>
 		</section>
 
+		<section class="band band--mcp" aria-labelledby="orchestrate">
+			<h2 id="orchestrate">One agent can run the others</h2>
+			<p class="lede">
+				Next Term is an MCP server. Ask Claude Code, Codex or any agent that speaks MCP to open your projects,
+				start other agents in new tabs, give them their tasks, wait for them and read what they did. You watch
+				every tab, and step in whenever you like.
+			</p>
+			<figure class="ask">
+				<figcaption>You ask your agent</figcaption>
+				<blockquote>
+					<p>
+						Open ~/Code/api and ~/Code/web. Start Claude Code in api and Codex in web, give each its task, wait
+						for both, and tell me what each one changed.
+					</p>
+				</blockquote>
+			</figure>
+			<ul class="features features--grid">
+				<li>
+					<h3>Sees every tab</h3>
+					<p>Every project and tab, with each agent’s state: working, done, failed, or waiting on a decision, with the question.</p>
+				</li>
+				<li>
+					<h3>Acts as you would</h3>
+					<p>Opens projects, starts agents in new tabs or split panes, types prompts, presses keys, waits until an agent stops, reads its screen.</p>
+				</li>
+				<li>
+					<h3>Uses the editor</h3>
+					<p>Your selection, the open files, and any file opened at a line, for agents with no editor link of their own.</p>
+				</li>
+				<li>
+					<h3>Set up for you</h3>
+					<p>
+						In Claude Code, Codex, Gemini CLI, Qwen Code, Cursor Agent, opencode, Copilot CLI, Amp, Junie and
+						Command Code. Only its own entry is written, comments kept.
+					</p>
+				</li>
+				<li>
+					<h3>Asks before it acts</h3>
+					<p>Typing into a tab and closing one are marked as destructive, so agents ask first. No agent can type into its own tab.</p>
+				</li>
+				<li>
+					<h3>Private</h3>
+					<p>A socket only you can open, and no network port. Settings turns it off and removes the entries.</p>
+				</li>
+			</ul>
+			<ul class="tools" aria-label="The 13 MCP tools">
+				{mcpTools.map((tool) => <li><code>{tool}</code></li>)}
+			</ul>
+			<p class="more"><a href="/docs/orchestration/">Orchestrate agents (MCP)</a></p>
+		</section>
+
 		<section class="band band--split band--reverse" aria-labelledby="workbench">
 			<div>
 				<h2 id="workbench">An editor where the agents work</h2>
@@ -267,14 +341,14 @@ const faq = [
 					<li>
 						<h3>A real code editor</h3>
 						<p>
-							Above the terminal: 103 languages with VS Code’s grammars, soft wrap, <kbd>⌘/</kbd> to comment,{' '}
-							<kbd>⌘L</kbd> to go to a line. When an agent changes an open file, the editor follows.
+							Above the terminal: 103 languages, soft wrap, <kbd>⌘P</kbd> to go to any file, <kbd>⌘/</kbd> to
+							comment, <kbd>⌘L</kbd> to go to a line. When an agent changes an open file, the editor follows.
 						</p>
 					</li>
 					<li>
 						<h3>Changes side by side</h3>
 						<p>
-							<kbd>⌘D</kbd> shows old beside new, changed words marked. Stage, unstage or revert one hunk at a
+							<kbd>⌥⌘G</kbd> shows old beside new, changed words marked. Stage, unstage or revert one hunk at a
 							time; each action checks the file first, so an agent’s edit is never overwritten.
 						</p>
 					</li>
@@ -310,11 +384,22 @@ const faq = [
 			<h2 id="fit">Made to fit how you work</h2>
 			<ul class="features features--grid">
 				<li>
+					<h3>Split panes</h3>
+					<p>
+						<kbd>⌘D</kbd> splits a tab right, <kbd>⇧⌘D</kbd> down; <kbd>⌥⌘</kbd> and the arrows move between
+						panes. The tab shows the mark of the pane that most needs you.
+					</p>
+				</li>
+				<li>
+					<h3>Go to File</h3>
+					<p><kbd>⌘P</kbd> and a few letters: <code>usrctl</code> finds <code>UserController.php</code>. Add <code>:42</code> for the line.</p>
+				</li>
+				<li>
 					<h3>Your layout</h3>
 					<p>The terminal below, beside or above the editor; the sidebar on the left or right.</p>
 				</li>
 				<li>
-					<h3><code>nxtrm</code>, like <code>subl</code></h3>
+					<h3><code>nxtrm</code> in any terminal</h3>
 					<p><code>nxtrm .</code> opens a project; <code>nxtrm app/User.php:42</code> opens a file at a line.</p>
 				</li>
 				<li>
@@ -324,14 +409,6 @@ const faq = [
 				<li>
 					<h3>Updates in one click</h3>
 					<p>Checked against the published SHA-256 before anything is replaced.</p>
-				</li>
-				<li>
-					<h3>Native and small</h3>
-					<p>Swift and AppKit, universal, a 3 MB download.</p>
-				</li>
-				<li>
-					<h3>Projects, like an IDE</h3>
-					<p>Open a folder with <kbd>⌘O</kbd>; Next Term reopens your projects at launch.</p>
 				</li>
 			</ul>
 		</section>
@@ -345,14 +422,14 @@ const faq = [
 			<div class="agents">
 				<div>
 					<h3>Connected as their IDE</h3>
-					<p class="hint">Status, live selection, proposed edits as diffs, Send to Agent</p>
+					<p class="hint">Status, live selection, proposed edits as diffs, MCP tools, Send to Agent</p>
 					<ul class="chips">
 						{agentsLinked.map((name) => <li class="chip chip--strong">{name}</li>)}
 					</ul>
 				</div>
 				<div>
 					<h3>Recognised by name</h3>
-					<p class="hint">Status on the tab, decisions as notifications, Send to Agent</p>
+					<p class="hint">Status on the tab, decisions as notifications, Send to Agent; MCP tools set up for Codex, Cursor Agent, opencode, Copilot CLI, Amp, Junie and Command Code</p>
 					<ul class="chips">
 						{agentsOthers.map((name) => <li class="chip">{name}</li>)}
 					</ul>
@@ -365,7 +442,7 @@ const faq = [
 			<ul class="features features--grid">
 				<li>
 					<h3>Your code stays on your Mac</h3>
-					<p>The agent links listen on <code>127.0.0.1</code> only and refuse requests from browsers.</p>
+					<p>The agent links listen on <code>127.0.0.1</code> only and refuse browsers; the MCP server uses a private socket, with no network port.</p>
 				</li>
 				<li>
 					<h3>A fresh token every launch</h3>
@@ -411,14 +488,17 @@ const faq = [
 		</section>
 
 		<section class="band band--next" aria-labelledby="next">
-			<h2 id="next"><span class="nt-soon">Coming next</span> Orchestration over MCP</h2>
-			<p class="lede">
-				A Next Term MCP server built for orchestration: one agent — Claude, Codex, ChatGPT or another MCP
-				client — drives Next Term across several projects at once. It will list projects and tabs with each
-				agent’s status, start an agent in a new tab, send it a prompt, read its screen, wait until it finishes,
-				and use the editor’s selection and open files. Local first, over <code>nxtrm mcp</code>; a secure remote
-				link later.
-			</p>
+			<h2 id="next">What comes next</h2>
+			<ul class="next">
+				<li>
+					<span class="nt-soon">Coming next</span> <strong>Agent sessions for each project.</strong> Every agent’s
+					saved sessions for a project on the Welcome screen and in the sidebar, to resume in one click.
+				</li>
+				<li>
+					<span class="nt-soon">Coming later</span> <strong>Remote access to the MCP server</strong> for agents that
+					do not run on your Mac, such as ChatGPT and Claude on the web, through a secure link.
+				</li>
+			</ul>
 		</section>
 
 		<section class="band" aria-labelledby="faq">
@@ -734,17 +814,52 @@ const faq = [
 		background: var(--sl-color-gray-6);
 	}
 	.band--next h2 {
+		font-size: clamp(1.25rem, 1rem + 1vw, 1.5rem);
+	}
+
+	.ask {
+		margin: 0 0 2rem;
+		padding: 1.25rem 1.5rem;
+		max-width: 68ch;
+		border-left: 3px solid var(--sl-color-accent);
+		border-radius: 0 10px 10px 0;
+		background: var(--sl-color-gray-6);
+	}
+	.ask figcaption {
+		margin-bottom: 0.4rem;
+		color: var(--sl-color-gray-3);
+		font-size: var(--sl-text-sm);
+		font-weight: 600;
+	}
+	.ask blockquote {
+		margin: 0;
+		color: var(--sl-color-white);
+		font-size: 1.0625rem;
+	}
+	.tools {
 		display: flex;
 		flex-wrap: wrap;
-		align-items: center;
-		gap: 0.75rem;
+		gap: 0.4rem;
+		margin-top: 1.75rem !important;
+		list-style: none;
 	}
-	.band--next .nt-soon {
-		font-size: 0.75rem;
-		vertical-align: 0;
+	.tools code {
+		display: inline-block;
+		padding: 0.2rem 0.55rem;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 6px;
+		background: transparent;
+		color: var(--sl-color-gray-2);
+		font-size: var(--sl-text-xs);
 	}
-	.band--next .lede {
-		margin-bottom: 0 !important;
+	.next {
+		display: grid;
+		gap: 0.9rem;
+		max-width: 68ch;
+		list-style: none;
+	}
+	.next .nt-soon {
+		margin-right: 0.35rem;
 	}
 
 	.faq {

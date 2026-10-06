@@ -14,8 +14,11 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 |---|---|
 | New tab (in the project, or the current tab’s folder) | <kbd>⌘T</kbd> |
 | Open a project | <kbd>⌘O</kbd> |
+| Go to File: any file in the project by name | <kbd>⌘P</kbd> |
+| Split the tab right, or down | <kbd>⌘D</kbd>, <kbd>⇧⌘D</kbd> |
+| Move between panes | <kbd>⌥⌘←</kbd> <kbd>⌥⌘→</kbd> <kbd>⌥⌘↑</kbd> <kbd>⌥⌘↓</kbd> |
 | Send the selection to the agent in your tab | <kbd>⌥⌘K</kbd> |
-| Show a file’s changes side by side | <kbd>⌘D</kbd> |
+| Show a file’s changes side by side | <kbd>⌥⌘G</kbd> |
 | Accept an agent’s proposed edit | <kbd>⌘↩︎</kbd> |
 | Find in Files, Replace in Files | <kbd>⇧⌘F</kbd>, <kbd>⇧⌘R</kbd> |
 | Between the editor and the terminal | <kbd>⌃&#96;</kbd> |
@@ -45,9 +48,11 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Close Project | — |
 | Save | <kbd>⌘S</kbd> |
 | Save All | <kbd>⌥⌘S</kbd> |
+| Split Right | <kbd>⌘D</kbd> |
+| Split Down | <kbd>⇧⌘D</kbd> |
 | Rename Tab… | <kbd>⌥⌘R</kbd> |
 | Use Option as Meta Key (off by default; for Emacs-style keys) | — |
-| Close Tab (or the file being edited, when the editor has the keyboard) | <kbd>⌘W</kbd> |
+| Close Tab (Close Pane in a split tab; the file being edited when the editor has the keyboard) | <kbd>⌘W</kbd> |
 | Close Window | <kbd>⇧⌘W</kbd> |
 
 ## Edit menu
@@ -77,7 +82,7 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Hide or Show Project Sidebar | <kbd>⌘B</kbd> |
 | Focus Editor or Focus Terminal | <kbd>⌃&#96;</kbd> |
 | Terminal Position › Bottom, Right, Left, Top | — |
-| Show Changes | <kbd>⌘D</kbd> |
+| Show Changes | <kbd>⌥⌘G</kbd> |
 | Soft Wrap | — |
 | Line Height › 1.0 to 2.0 | — |
 | Project Sidebar on the Right | — |
@@ -93,6 +98,11 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Minimize | <kbd>⌘M</kbd> |
 | Show Next Tab | <kbd>⇧⌘]</kbd> |
 | Show Previous Tab | <kbd>⇧⌘[</kbd> |
+| Select Pane on the Left, on the Right | <kbd>⌥⌘←</kbd>, <kbd>⌥⌘→</kbd> |
+| Select Pane Above, Below | <kbd>⌥⌘↑</kbd>, <kbd>⌥⌘↓</kbd> |
+| Select Next Pane, Previous Pane | <kbd>⌥⌘]</kbd>, <kbd>⌥⌘[</kbd> |
+| Maximize Pane (again to restore) | <kbd>⇧⌘↩︎</kbd> |
+| Make Panes Equal | — |
 | Select Tab 1 to 8 | <kbd>⌘1</kbd> to <kbd>⌘8</kbd> |
 | Select Last Tab | <kbd>⌘9</kbd> |
 | Welcome to Next Term | — |
@@ -114,6 +124,7 @@ These are fixed.
 | Sidebar | Move to the Trash | <kbd>⌘⌫</kbd> |
 | Sidebar | Copy instead of move while dragging | Hold <kbd>⌥</kbd> |
 | Agent’s proposed edit | Accept | <kbd>⌘↩︎</kbd> |
+| Go to File | Open at a line | Type `name:42` |
 
 ## Change any shortcut
 

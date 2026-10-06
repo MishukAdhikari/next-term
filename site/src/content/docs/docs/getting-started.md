@@ -14,7 +14,7 @@ Next Term is one app: a terminal with tabs, a code editor above it, and a projec
 
 ## Download and install
 
-1. Open the [latest release on GitHub](https://github.com/MishukAdhikari/next-term/releases/latest) and download `NextTerm-0.2.0.dmg`.
+1. Open the [latest release on GitHub](https://github.com/MishukAdhikari/next-term/releases/latest) and download `NextTerm-0.3.0.dmg`.
 2. Open the disk image and drag **Next Term** to **Applications**.
 3. Eject the disk image and open Next Term from Applications.
 
@@ -31,13 +31,13 @@ macOS remembers the choice; later launches open normally. Notarized releases are
 
 ### Check the download (optional)
 
-Each release includes a checksum file, `NextTerm-0.2.0.dmg.sha256`. Download it next to the disk image and run this in that folder before you allow the app:
+Each release includes a checksum file, `NextTerm-0.3.0.dmg.sha256`. Download it next to the disk image and run this in that folder before you allow the app:
 
 ```sh
-shasum -a 256 -c NextTerm-0.2.0.dmg.sha256
+shasum -a 256 -c NextTerm-0.3.0.dmg.sha256
 ```
 
-`NextTerm-0.2.0.dmg: OK` means your file matches the checksum published with the release, byte for byte. Releases are built by GitHub Actions from the public source.
+`NextTerm-0.3.0.dmg: OK` means your file matches the checksum published with the release, byte for byte. Releases are built by GitHub Actions from the public source.
 
 ## First launch: choose a folder
 
@@ -52,7 +52,8 @@ macOS also asks whether Next Term may send notifications. Allow them: that is ho
 1. Press <kbd>⌘T</kbd> for a new tab. In a project window it opens in the project folder.
 2. Start an agent, for example `claude`.
 3. Press <kbd>⌘T</kbd> again and start another, for example `codex`.
-4. Give each a task and switch away. Each tab shows a spinner while its agent works, a green check when it is done, and an amber “!” when it is asking you something. If you are elsewhere, a notification tells you which agent needs a decision; click it to land on that tab.
+4. Or keep them in one tab: <kbd>⌘D</kbd> splits it, and each pane runs its own agent.
+5. Give each a task and switch away. Each tab shows a spinner while its agent works, a green check when it is done, and an amber “!” when it is asking you something. If you are elsewhere, a notification tells you which agent needs a decision; click it to land on that tab.
 
 Read [Agent status in every tab](/docs/agent-status/) for what each mark means.
 
@@ -62,6 +63,7 @@ Files open in the editor above the terminal:
 
 - Double-click a file in the sidebar.
 - <kbd>⌘</kbd>-click a path such as `src/app.ts:42:7` anywhere in terminal output: the file opens at that line and column.
+- Press <kbd>⌘P</kbd> and type part of its name ([Go to File](/docs/editor/#go-to-file)).
 - Run `nxtrm app/User.php:42` in a tab. See [The nxtrm command](/docs/command-line/).
 
 Select some lines and press <kbd>⌥⌘K</kbd> to hand them to the agent in your tab, or just ask Claude Code about “the selected lines”: it sees your selection. See [Agents and the IDE link](/docs/agents/).
@@ -81,4 +83,5 @@ scripts/build-dmg.sh          # universal app, DMG and checksum in dist/
 
 - [Agent status in every tab](/docs/agent-status/): the marks, notifications and the Dock badge.
 - [Agents and the IDE link](/docs/agents/): what Claude Code, Gemini CLI and Qwen Code see, and Send to Agent.
+- [Orchestrate agents (MCP)](/docs/orchestration/): let one agent start and steer the others.
 - [Keyboard shortcuts](/docs/keyboard-shortcuts/): the full list, and how to change any of them.

@@ -6,6 +6,7 @@ export const DOCS_ORDER = [
 	'docs/updates',
 	'docs/agent-status',
 	'docs/agents',
+	'docs/orchestration',
 	'docs/editor',
 	'docs/diffs',
 	'docs/search',

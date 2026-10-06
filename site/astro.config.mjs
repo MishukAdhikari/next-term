@@ -74,7 +74,7 @@ export default defineConfig({
 				},
 				{
 					label: 'Agents',
-					items: [{ slug: 'docs/agent-status' }, { slug: 'docs/agents' }],
+					items: [{ slug: 'docs/agent-status' }, { slug: 'docs/agents' }, { slug: 'docs/orchestration' }],
 				},
 				{
 					label: 'Editor & diffs',

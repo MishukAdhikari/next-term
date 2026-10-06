@@ -1,6 +1,6 @@
 ---
 title: Frequently asked questions
-description: "Answers about Next Term: supported agents and Macs, Open Anyway, privacy, Claude Code and Codex, Warp and VS Code comparisons, and what comes next."
+description: "Answers about Next Term: supported agents and Macs, Open Anyway, privacy, Claude Code and Codex, orchestration over MCP, split panes, and what comes next."
 head:
   - tag: title
     content: Next Term FAQ — AI terminal for macOS
@@ -34,7 +34,7 @@ Releases are not notarized by Apple yet. On macOS 15 and later, open Next Term o
 
 It reads the agent’s own screen, the way you would. “esc to interrupt” means working; a question with choices means it is waiting on you; anything else means it is idle. With zsh, a small shell integration also reports each command and its exit code. See [Agent status in every tab](/docs/agent-status/).
 
-## How do I connect Claude Code to Next Term, as with VS Code?
+## How do I connect Claude Code to Next Term?
 
 Start `claude` in a Next Term tab. It connects by itself: the lines you select go with your prompt, <kbd>⌥⌘K</kbd> adds an @-mention, and Claude’s proposed edits open as a diff to accept (<kbd>⌘↩︎</kbd>) or reject. There is nothing to install or configure. See [Claude Code sees your editor](/docs/agents/#claude-code-sees-your-editor).
 
@@ -50,9 +50,17 @@ No. The agent links listen only on your Mac (`127.0.0.1`), with a fresh secret t
 
 If you are looking for an open-source terminal built around AI agents on the Mac, Next Term is one. It is MIT-licensed, written in Swift and AppKit, needs no account, and has no AI of its own: it runs the agent CLIs you choose, shows each one’s status on its tab, and adds a code editor, side-by-side diffs and a git-aware sidebar.
 
-## How is this different from running agents in VS Code’s terminal?
+## Can one agent control the others?
 
-Claude Code connects to Next Term the same way it connects to VS Code, so selection sharing and diff review carry over. Next Term is built around the terminal tabs instead of the editor: every tab shows its agent’s status, decisions arrive as notifications, and you can run many agents side by side and see at a glance which one needs you. It is not a full IDE: there is no debugger, language server or extension system.
+Yes. Next Term is an MCP server, set up for you in Claude Code, Codex, Gemini CLI, Qwen Code, Cursor Agent, opencode, Copilot CLI, Amp, Junie and Command Code. An orchestrator agent can list every project and tab with each agent’s state, start agents in new tabs, send them prompts, wait for them, read their screens and answer their questions. It works only on your Mac, through a private socket with no network port, and **Settings** turns it off. See [Orchestrate agents (MCP)](/docs/orchestration/).
+
+## Can I split a tab into panes?
+
+Yes. <kbd>⌘D</kbd> splits the tab to the right and <kbd>⇧⌘D</kbd> down, as often as you like; <kbd>⌥⌘</kbd> with the arrows moves between panes. The tab shows the mark of its most urgent pane. See [Split panes](/docs/layouts/#split-panes).
+
+## Is Next Term a full IDE?
+
+No. It is built around the terminal tabs where your agents work: every tab shows its agent’s status, decisions arrive as notifications, and an editor, diffs and a git-aware sidebar sit next to them. There is no debugger, language server or extension system.
 
 ## Will my zsh configuration and oh-my-zsh still work?
 
@@ -72,4 +80,4 @@ Not today. Next Term is built with AppKit, which is macOS-only. Its core logic h
 
 ## What is coming next?
 
-Next is an MCP server for orchestration: one agent, such as Claude, Codex or ChatGPT, drives Next Term across several projects — listing tabs and each agent’s status, starting agents, sending prompts, reading their screens and waiting for them to finish — locally over `nxtrm mcp` first. After that: MCP tools that let Codex and other agents see the editor’s selection, more of the diff view, notarized releases, split panes and session restore. None of these is released yet.
+Next: every agent’s saved sessions for a project on the Welcome screen and in the sidebar, to resume in one click. After that: remote development over SSH, remote access to the MCP server for agents outside your Mac (such as ChatGPT and Claude on the web), more of the diff view, an IDE link for Copilot CLI, session restore and notarized releases. None of these is released yet.

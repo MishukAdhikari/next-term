@@ -1,12 +1,12 @@
 ---
 title: The nxtrm command
-description: "Open folders as projects and files at a line from any terminal with nxtrm, Next Term’s command-line tool, as subl and code do for other editors."
+description: "Open folders as projects and files at a line from any terminal with nxtrm, Next Term’s command-line tool. nxtrm mcp is the MCP server agents start."
 head:
   - tag: title
     content: nxtrm, the command-line tool for Next Term
 ---
 
-`nxtrm` is to Next Term what `subl` is to Sublime Text and `code` is to VS Code: a command that opens folders and files in the app from a terminal.
+`nxtrm` opens folders and files in Next Term from any terminal: a project with `nxtrm .`, a file at a line with `nxtrm src/app.ts:42`.
 
 ## Usage
 
@@ -24,6 +24,8 @@ nxtrm -n ~/Code/api       # in a new window
 | `-h`, `--help` | Show the help |
 | `-v`, `--version` | Show the version |
 | `--` | Treat everything after it as a path, even if it starts with `-` |
+
+`nxtrm mcp` is different: it is Next Term’s MCP server, which agents start themselves. See [Orchestrate agents (MCP)](/docs/orchestration/).
 
 ## What it opens where
 

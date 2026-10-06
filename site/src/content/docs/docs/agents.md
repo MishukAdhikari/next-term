@@ -1,27 +1,30 @@
 ---
 title: Agents and the IDE link
-description: "Claude Code, Gemini CLI and Qwen Code connect to Next Term as their IDE: live selection, edits as diffs. Send to Agent (⌥⌘K) works with every agent."
+description: "Claude Code, Gemini CLI and Qwen Code connect to Next Term as their IDE: live selection, edits as diffs. Send to Agent (⌥⌘K) and MCP work with every agent."
 head:
   - tag: title
     content: Claude Code IDE integration and Send to Agent — Next Term
 ---
 
-Agents in a terminal work blind: they cannot see what you are looking at, and their edits land in files you have not read yet. Next Term closes that gap in two ways. Agents that have an IDE protocol connect to Next Term the way they connect to VS Code or a JetBrains IDE. Every other agent gets **Send to Agent**, which types a reference to your selection into its prompt.
+Agents in a terminal work blind: they cannot see what you are looking at, and their edits land in files you have not read yet. Next Term closes that gap. Agents that have an IDE protocol connect to Next Term as their IDE. Every agent gets **Send to Agent**, which types a reference to your selection into its prompt, and Next Term’s **MCP tools**, which let it read the editor’s selection and open files — and drive other agents.
 
 ## What each agent gets
 
-| Agent | Tab status | Sees your selection | Proposed edits as diffs | Send to Agent (<kbd>⌥⌘K</kbd>) |
+| Agent | Tab status | IDE link: live selection, edits as diffs | MCP tools, set up for you | Send to Agent (<kbd>⌥⌘K</kbd>) |
 |---|---|---|---|---|
-| Claude Code | Yes | Yes, live | Yes | Yes, as an @-mention |
+| Claude Code | Yes | Yes | Yes | Yes, as an @-mention |
 | Gemini CLI, Qwen Code | Yes | Yes, with the open files | Yes | Yes |
-| Codex, Command Code, Junie, opencode and others | Yes | — | — | Yes |
+| Codex, Cursor Agent, opencode, Copilot CLI, Amp, Junie, Command Code | Yes | — | Yes | Yes |
+| Other agents | Yes, for the ones it recognises | — | Add `nxtrm mcp` yourself | Yes |
+
+With the MCP tools, any of these agents can ask for the editor’s selection (`get_editor_selection`) and open files (`get_open_files`), and one of them can run the others. See [Orchestrate agents (MCP)](/docs/orchestration/).
 
 ## Claude Code sees your editor
 
-There is nothing to set up. Start `claude` in a Next Term tab and it connects to Next Term as its IDE, the same way it connects to VS Code. This is verified with Claude Code 2.1.280.
+There is nothing to set up. Start `claude` in a Next Term tab and it connects to Next Term as its IDE, through the protocol Claude Code uses for editors. This is verified with Claude Code 2.1.280.
 
 - **The lines you select go with your next prompt.** Claude shows “⧉ 10 lines selected” above its input, so you can ask about “this function” without pasting it. With nothing selected, Claude knows which file you have open.
-- **<kbd>⌥⌘K</kbd> puts an @-mention straight into Claude’s prompt**, such as `@app/User.php#L10-20`, as VS Code does.
+- **<kbd>⌥⌘K</kbd> puts an @-mention straight into Claude’s prompt**, such as `@app/User.php#L10-20`.
 - **A `claude` started in another terminal** inside one of your open projects finds Next Term too.
 
 ![The editor with two lines selected in main.php, and Claude Code running in the terminal below, showing “2 lines selected” in its prompt.](../../../assets/screenshots/claude-selection.webp)
@@ -86,10 +89,12 @@ Several items go on one line for agents that use @-mentions; for the others they
 
 More in [Security and privacy](/docs/security-and-privacy/).
 
+## One agent can run the others
+
+Next Term is also an MCP server. An orchestrator agent can list every project and tab with each agent’s state, start agents in new tabs, send them prompts, wait for them, read their screens and answer their questions. It is set up for you in the agents above. See [Orchestrate agents (MCP)](/docs/orchestration/).
+
 ## Coming next
 
-<span class="nt-soon">Coming next</span> **Orchestration over MCP.** A Next Term MCP server built for orchestration: one agent — Claude, Codex, ChatGPT or another MCP client — drives Next Term across several projects at once. It will list projects and tabs with each agent’s status (working, done, needs attention), open a project, start an agent in a new tab, send it a prompt, read its screen, wait until it finishes, and use the editor tools: the selection, the open files, opening a file at a line. Local first, over stdio (`nxtrm mcp`); remote access through a secure link later.
+<span class="nt-soon">Coming next</span> **Agent sessions for each project:** every agent’s saved sessions for a project on the Welcome screen and in the sidebar, to resume in one click.
 
-<span class="nt-soon">Coming soon</span> **MCP tools for Codex and other agents**, so Codex, Junie, Command Code, Cursor, opencode, Copilot, Amp and others can read the editor’s selection and open files the way Claude Code does today.
-
-<span class="nt-soon">Coming soon</span> **An agent session browser for each project**, and an IDE link for GitHub Copilot CLI.
+<span class="nt-soon">Coming later</span> An IDE link for GitHub Copilot CLI, and remote access to the MCP server for agents outside your Mac.

@@ -56,8 +56,8 @@ Bing’s index also feeds ChatGPT search, Copilot and DuckDuckGo, so it matters 
 - **One set of facts everywhere.** Name (“Next Term”), tagline (“The missing IDE for the terminal”), what it is (a native macOS terminal and editor for running AI coding agents side by side), version, MIT. Keep the GitHub README, the repository’s About text and the release notes saying the same thing as the site.
 - **Link the site from GitHub.** Set the repository’s Website field to `https://next-term.mishuk.me` and link it from the README. Add topics such as `macos`, `terminal`, `terminal-emulator`, `code-editor`, `swift`, `appkit`, `ai-agents`, `claude-code`, `codex`, `gemini-cli`.
 - **Be where people and models read about agent tooling:** awesome lists (for example awesome-claude-code and awesome-macos), a Show HN post, and short write-ups that link to the docs. Assistants answer from what is widely and consistently written.
-- **Answer-shaped pages.** The FAQ and the docs are written as direct answers (“How do I connect Claude Code to Next Term, as with VS Code?”). Add a question when people ask it.
-- **Check every few weeks** by asking ChatGPT, Claude, Perplexity and Gemini questions such as “What terminal shows which Claude Code agent is waiting on me?”, “open-source Warp alternative for macOS”, “terminal for running several AI coding agents”, and note whether Next Term is named and described correctly.
+- **Answer-shaped pages.** The FAQ and the docs are written as direct answers (“How do I connect Claude Code to Next Term?”). Add a question when people ask it.
+- **Check every few weeks** by asking ChatGPT, Claude, Perplexity and Gemini questions such as “What terminal shows which Claude Code agent is waiting on me?”, “open-source Warp alternative for macOS”, “terminal for running several AI coding agents”, “MCP server to orchestrate Claude Code and Codex”, and note whether Next Term is named and described correctly.
 
 ## 5. Social cards
 

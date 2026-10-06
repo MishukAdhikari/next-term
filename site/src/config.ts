@@ -3,7 +3,7 @@
 
 export const APP_NAME = 'Next Term';
 export const TAGLINE = 'The missing IDE for the terminal';
-export const VERSION = '0.2.0';
+export const VERSION = '0.3.0';
 export const MIN_MACOS = 'macOS 13 or later';
 export const AUTHOR = 'Mishuk Adhikari';
 export const AUTHOR_URL = 'https://github.com/MishukAdhikari';
