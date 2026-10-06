@@ -306,10 +306,16 @@ public enum GitRunner {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
-        var env = ProcessInfo.processInfo.environment
+        // Inherited GIT_* variables (GIT_DIR, GIT_INDEX_FILE, GIT_WORK_TREE from the shell that launched
+        // the app) would point every command at the wrong repository: start from a clean slate.
+        var env = ProcessInfo.processInfo.environment.filter { !$0.key.hasPrefix("GIT_") }
         env["GIT_OPTIONAL_LOCKS"] = "0"
         env["GIT_TERMINAL_PROMPT"] = "0"
         env["LC_ALL"] = "C"
+        // No fsmonitor daemon spawned by our reads.
+        env["GIT_CONFIG_COUNT"] = "1"
+        env["GIT_CONFIG_KEY_0"] = "core.fsmonitor"
+        env["GIT_CONFIG_VALUE_0"] = "false"
         process.environment = env
         let out = Pipe()
         process.standardOutput = out
