@@ -42,7 +42,11 @@ enum FileIcons {
         if let theme {
             let name: String
             if node.isDirectory {
-                name = theme.icon(forFolder: node.name, parent: node.parent?.name, expanded: expanded, isRoot: node.parent == nil)
+                // Dot folders are configuration (.claude, .idea, .phpunit.cache): a quiet plain folder, so the
+                // code folders (app, routes, tests) stand out. Settings can show their icons too.
+                let quiet = node.name.hasPrefix(".") && node.parent != nil && !(AppDelegate.shared?.iconsOnDotFolders ?? false)
+                name = quiet ? (expanded ? theme.folderExpanded : theme.folder)
+                    : theme.icon(forFolder: node.name, parent: node.parent?.name, expanded: expanded, isRoot: node.parent == nil)
             } else {
                 // A symlink gets its target's icon, so a link to a script does not pass for a document.
                 let real = node.isSymlink ? node.url.resolvingSymlinksInPath() : node.url

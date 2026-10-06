@@ -363,6 +363,7 @@ final class EditorSettingsView: NSView {
     private let lineHeight = NSSlider(value: 1.35, minValue: 1.0, maxValue: 2.0, target: nil, action: nil)
     private let lineHeightValue = NSTextField(labelWithString: "")
     private let wrap = NSButton(checkboxWithTitle: "Wrap long lines at the edge", target: nil, action: nil)
+    private let dotIcons = NSButton(checkboxWithTitle: "Icons on configuration folders (.github, .claude, .idea…)", target: nil, action: nil)
     private let fontSize = NSStepper()
     private let fontSizeValue = NSTextField(labelWithString: "")
 
@@ -376,6 +377,8 @@ final class EditorSettingsView: NSView {
         lineHeightValue.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         wrap.target = self
         wrap.action = #selector(wrapChanged)
+        dotIcons.target = self
+        dotIcons.action = #selector(dotIconsChanged)
         fontSize.minValue = Double(Theme.fontSizeRange.lowerBound)
         fontSize.maxValue = Double(Theme.fontSizeRange.upperBound)
         fontSize.increment = 1
@@ -400,6 +403,7 @@ final class EditorSettingsView: NSView {
             row("Line height:", [lineHeight, lineHeightValue]),
             row("Font size:", [fontSize, fontSizeValue]),
             row("", [wrap]),
+            row("Sidebar:", [dotIcons]),
             note,
         ])
         stack.orientation = .vertical
@@ -427,6 +431,7 @@ final class EditorSettingsView: NSView {
         lineHeight.doubleValue = Double(app.editorLineHeight)
         lineHeightValue.stringValue = String(format: "%.2f×", app.editorLineHeight)
         wrap.state = app.softWrap ? .on : .off
+        dotIcons.state = app.iconsOnDotFolders ? .on : .off
         fontSize.doubleValue = Double(app.fontSize)
         fontSizeValue.stringValue = "\(Int(app.fontSize)) pt"
     }
@@ -438,6 +443,11 @@ final class EditorSettingsView: NSView {
 
     @objc private func wrapChanged() {
         if (wrap.state == .on) != AppDelegate.shared.softWrap { AppDelegate.shared.toggleSoftWrap(nil) }
+        refresh()
+    }
+
+    @objc private func dotIconsChanged() {
+        AppDelegate.shared.iconsOnDotFolders = dotIcons.state == .on
         refresh()
     }
 

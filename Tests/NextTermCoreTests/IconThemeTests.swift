@@ -46,6 +46,6 @@ import Testing
         #expect(theme.icon(forFolder: "workflows", parent: ".github", expanded: false) == "folder-gh-workflows")
         #expect(theme.icon(forFolder: "Livewire", expanded: false) == "folder-components")
         #expect(theme.icon(forFolder: "something", expanded: false) == theme.folder)
-        #expect(theme.icon(forFolder: "xCloud", expanded: true, isRoot: true) == theme.rootFolderExpanded)
+        #expect(theme.icon(forFolder: "xCloud", expanded: true, isRoot: true) == theme.folderExpanded)
     }
 }

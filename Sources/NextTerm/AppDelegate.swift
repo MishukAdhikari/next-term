@@ -75,6 +75,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if let value = sender.representedObject as? Double { editorLineHeight = CGFloat(value) }
     }
 
+    /// Brand icons on configuration folders (.github, .claude, .idea); off: they stay plain and quiet.
+    var iconsOnDotFolders: Bool {
+        get { UserDefaults.standard.bool(forKey: "iconsOnDotFolders") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "iconsOnDotFolders")
+            controllers.forEach { $0.sidebar.outline.reloadData() }
+        }
+    }
+
     /// Long lines in the editor wrap at the edge (on unless turned off).
     var softWrap: Bool {
         get { UserDefaults.standard.object(forKey: "softWrap") as? Bool ?? true }

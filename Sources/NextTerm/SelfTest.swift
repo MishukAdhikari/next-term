@@ -425,6 +425,23 @@ enum SelfTest {
             check(closed == "folder-src" && open == "folder-src-open", "folders have open and closed icons", "\(closed ?? "-") / \(open ?? "-")")
         }
 
+        // Configuration folders stay plain unless asked for (Settings > Editor > Sidebar).
+        if let root = c.sidebar.root {
+            let dotFolder = proj.appendingPathComponent(".claude")
+            try? FileManager.default.createDirectory(at: dotFolder, withIntermediateDirectories: true)
+            let node = FileNode(url: dotFolder, parent: root)
+            let app = AppDelegate.shared!
+            let saved = app.iconsOnDotFolders
+            app.iconsOnDotFolders = false
+            let plain = FileIcons.image(for: node, expanded: false).accessibilityDescription
+            app.iconsOnDotFolders = true
+            let branded = FileIcons.image(for: node, expanded: false).accessibilityDescription
+            app.iconsOnDotFolders = saved
+            check(plain == FileIcons.theme?.folder && branded == "folder-claude", "dot folders are plain, or branded when asked",
+                  "\(plain ?? "-") / \(branded ?? "-")")
+            try? FileManager.default.removeItem(at: dotFolder)
+        }
+
         // Row tooltips: the path of the row under the pointer, and nothing outside the visible rows.
         c.sidebar.outline.layoutSubtreeIfNeeded()
         let firstRow = c.sidebar.outline.rect(ofRow: 0)
