@@ -15,13 +15,18 @@ final class EditorArea: NSView, TabBarViewDelegate {
     private let container = NSView()
     private let banner = EditorBanner()
     private var bannerHeight: NSLayoutConstraint!
-    private(set) var editors: [CodeEditorView] = []
+    /// Tabs in order: files being edited (CodeEditorView) and diffs (DiffPane).
+    private(set) var panes: [NSView] = []
     private(set) var activeIndex = 0
 
-    var activeEditor: CodeEditorView? { editors[safe: activeIndex] }
+    var editors: [CodeEditorView] { panes.compactMap { $0 as? CodeEditorView } }
+    var diffs: [DiffPane] { panes.compactMap { $0 as? DiffPane } }
+    var activePane: NSView? { panes[safe: activeIndex] }
+    var activeEditor: CodeEditorView? { activePane as? CodeEditorView }
+    var activeDiff: DiffPane? { activePane as? DiffPane }
     var documents: [EditorDocument] { editors.map(\.document) }
     var dirtyDocuments: [EditorDocument] { documents.filter(\.isDirty) }
-    var isEmpty: Bool { editors.isEmpty }
+    var isEmpty: Bool { panes.isEmpty }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -68,9 +73,10 @@ final class EditorArea: NSView, TabBarViewDelegate {
     @discardableResult
     func open(_ url: URL, line: Int? = nil, column: Int = 1, focus: Bool = true) -> OpenResult {
         let path = canonicalPath(url.path)
-        if let index = editors.firstIndex(where: { $0.document.path == path }) {
+        if let index = panes.firstIndex(where: { ($0 as? CodeEditorView)?.document.path == path }),
+           let editor = panes[index] as? CodeEditorView {
             select(index, focus: focus)
-            if let line { editors[index].textView.go(toLine: line, column: column) }
+            if let line { editor.textView.go(toLine: line, column: column) }
             return .opened
         }
         let document: EditorDocument
@@ -89,36 +95,62 @@ final class EditorArea: NSView, TabBarViewDelegate {
             guard let self else { return }
             self.delegate?.editorAreaSelectionChanged(self)
         }
-        editor.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(editor)
-        NSLayoutConstraint.activate([
-            editor.topAnchor.constraint(equalTo: container.topAnchor),
-            editor.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            editor.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            editor.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
-        let insertAt = editors.isEmpty ? 0 : activeIndex + 1
-        editors.insert(editor, at: insertAt)
-        if editors.count == 1 { delegate?.editorAreaDidChangeDocuments(self) }
-        select(insertAt, focus: focus)
+        insert(editor)
+        select(activeIndex, focus: focus)
         container.layoutSubtreeIfNeeded()
         editor.textView.go(toLine: line ?? 1, column: line == nil ? 1 : column)
         return .opened
     }
 
+    /// Adds a tab next to the current one, filling the content area.
+    private func insert(_ pane: NSView) {
+        pane.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(pane)
+        NSLayoutConstraint.activate([
+            pane.topAnchor.constraint(equalTo: container.topAnchor),
+            pane.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            pane.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            pane.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        let insertAt = panes.isEmpty ? 0 : activeIndex + 1
+        panes.insert(pane, at: insertAt)
+        activeIndex = insertAt
+        if panes.count == 1 { delegate?.editorAreaDidChangeDocuments(self) }
+    }
+
     func select(_ index: Int, focus: Bool = true) {
-        guard editors.indices.contains(index) else { return }
+        guard panes.indices.contains(index) else { return }
         activeIndex = index
-        editors[index].document.lastFocused = Date()
-        for (i, editor) in editors.enumerated() { editor.isHidden = i != index }
-        if focus { window?.makeFirstResponder(editors[index].textView) }
+        for (i, pane) in panes.enumerated() { pane.isHidden = i != index }
+        if let editor = panes[index] as? CodeEditorView {
+            editor.document.lastFocused = Date()
+            if focus { window?.makeFirstResponder(editor.textView) }
+        } else if let diff = panes[index] as? DiffPane, focus {
+            window?.makeFirstResponder(diff.focusView)
+        }
         refresh()
         delegate?.editorAreaSelectionChanged(self)
     }
 
     func cycle(by delta: Int) {
-        guard !editors.isEmpty else { return }
-        select((activeIndex + delta + editors.count) % editors.count)
+        guard !panes.isEmpty else { return }
+        select((activeIndex + delta + panes.count) % panes.count)
+    }
+
+    // MARK: diffs
+
+    /// Shows a file's changes (or brings its diff to the front, comparing against `base`).
+    func openDiff(root: String, path: String, base: GitRunner.DiffBase = .head) {
+        if let index = panes.firstIndex(where: { ($0 as? DiffPane)?.matches(root: root, path: path) == true }),
+           let diff = panes[index] as? DiffPane {
+            diff.base = base
+            select(index)
+            return
+        }
+        let diff = DiffPane(root: root, path: path, base: base)
+        diff.onTitleChange = { [weak self] in self?.refresh() }
+        insert(diff)
+        select(activeIndex)
     }
 
     // MARK: closing
@@ -147,16 +179,18 @@ final class EditorArea: NSView, TabBarViewDelegate {
     }
 
     func closeActive() {
-        if let editor = activeEditor { requestClose(editor) }
+        if let editor = activeEditor { requestClose(editor) } else if let pane = activePane { remove(pane) }
     }
 
-    private func remove(_ editor: CodeEditorView) {
-        guard let index = editors.firstIndex(where: { $0 === editor }) else { return }
-        let hadFocus = (window?.firstResponder as? NSView)?.isDescendant(of: editor) == true
-        editor.removeFromSuperview()
-        editor.document.storage.layoutManagers.forEach { editor.document.storage.removeLayoutManager($0) }
-        editors.remove(at: index)
-        if editors.isEmpty {
+    private func remove(_ pane: NSView) {
+        guard let index = panes.firstIndex(where: { $0 === pane }) else { return }
+        let hadFocus = (window?.firstResponder as? NSView)?.isDescendant(of: pane) == true
+        pane.removeFromSuperview()
+        if let editor = pane as? CodeEditorView {
+            editor.document.storage.layoutManagers.forEach { editor.document.storage.removeLayoutManager($0) }
+        }
+        panes.remove(at: index)
+        if panes.isEmpty {
             refresh()
             delegate?.editorAreaDidChangeDocuments(self)
             delegate?.editorAreaSelectionChanged(self)
@@ -168,7 +202,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
 
     /// Closes every editor without asking (the window is closing and the user already chose).
     func closeAll() {
-        for editor in editors { remove(editor) }
+        for pane in panes { remove(pane) }
     }
 
     // MARK: saving
@@ -204,6 +238,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
     /// Picks up changes other programs (agents, git) made to open files. Called about once a second.
     func checkDisk() {
         for editor in editors { editor.document.checkDisk() }
+        for diff in diffs { diff.refreshIfChanged() }
     }
 
     private func resolveConflict(keepMine: Bool) {
@@ -229,7 +264,12 @@ final class EditorArea: NSView, TabBarViewDelegate {
     func refresh() {
         // Same name twice: add the folder, as editors do.
         let names = Dictionary(grouping: documents, by: \.name)
-        let items = documents.map { document -> TabBarItem in
+        let items = panes.map { pane -> TabBarItem in
+            if let diff = pane as? DiffPane {
+                return TabBarItem(title: diff.title, state: .idle, tooltip: diff.tooltip, accessibilityStatus: "changes",
+                                  icon: FileIcons.icon(for: URL(fileURLWithPath: diff.absolutePath), size: 16), modified: false)
+            }
+            let document = (pane as! CodeEditorView).document
             var title = document.name
             if (names[document.name]?.count ?? 0) > 1 {
                 title += " — " + document.url.deletingLastPathComponent().lastPathComponent
@@ -247,6 +287,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
 
     func applyFont() {
         editors.forEach { $0.applyFont() }
+        diffs.forEach { $0.applyFont() }
     }
 
     func applyWrap() {
@@ -258,14 +299,14 @@ final class EditorArea: NSView, TabBarViewDelegate {
     func tabBar(_ bar: TabBarView, didSelect index: Int) { select(index) }
 
     func tabBar(_ bar: TabBarView, didClose index: Int) {
-        if let editor = editors[safe: index] { requestClose(editor) }
+        if let editor = panes[safe: index] as? CodeEditorView { requestClose(editor) } else if let pane = panes[safe: index] { remove(pane) }
     }
 
     func tabBar(_ bar: TabBarView, didMove from: Int, to: Int) {
-        guard editors.indices.contains(from), editors.indices.contains(to) else { return }
-        let active = activeEditor
-        editors.insert(editors.remove(at: from), at: to)
-        activeIndex = active.flatMap { a in editors.firstIndex { $0 === a } } ?? 0
+        guard panes.indices.contains(from), panes.indices.contains(to) else { return }
+        let active = activePane
+        panes.insert(panes.remove(at: from), at: to)
+        activeIndex = active.flatMap { a in panes.firstIndex { $0 === a } } ?? 0
         refresh()
     }
 

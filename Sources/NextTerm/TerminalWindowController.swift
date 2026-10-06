@@ -398,6 +398,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil }
         if item.action == #selector(saveAllDocuments(_:)) { return !editorArea.dirtyDocuments.isEmpty }
         if item.action == #selector(goToLine(_:)) { return editorArea.activeEditor != nil }
+        if item.action == #selector(showChanges(_:)) { return editorArea.activeEditor != nil || sidebar.selection.contains { !$0.isFolder } }
         if item.action == #selector(sendToAgent(_:)) { return agentTab != nil && (editorArea.activeEditor != nil || !sidebar.selection.isEmpty) }
         if item.action == #selector(toggleEditorFocus(_:)) {
             item.title = isEditorFocused ? "Focus Terminal" : "Focus Editor"
@@ -733,6 +734,32 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// For the self-test: what `send` would type into `tab`.
     func agentText(_ items: [ContextItem], for program: String) -> String {
         AgentPrompt.segments(instruction: "", items: items, dialect: AgentDialect.forProgram(program)).joined(separator: "\n")
+    }
+
+    // MARK: diffs
+
+    /// ⌘D: the changes of the file being edited, or the file selected in the sidebar, side by side.
+    @objc func showChanges(_ sender: Any?) {
+        if let editor = editorArea.activeEditor, isEditorFocused || window?.firstResponder !== sidebar.outline {
+            return showChanges(of: editor.document.url)
+        }
+        if let file = sidebar.selection.first(where: { !$0.isFolder }) { return showChanges(of: file.url) }
+        NSSound.beep()
+    }
+
+    func sidebar(_ sidebar: ProjectSidebarView, showChanges url: URL) { showChanges(of: url) }
+
+    func showChanges(of url: URL, base: GitRunner.DiffBase = .head) {
+        let path = canonicalPath(url.path)
+        let root = canonicalPath(ProjectRoot.find(from: (path as NSString).deletingLastPathComponent))
+        guard path.hasPrefix(root + "/"), FileManager.default.fileExists(atPath: (root as NSString).appendingPathComponent(".git")) else {
+            let alert = NSAlert()
+            alert.messageText = "“\(url.lastPathComponent)” is not in a git repository"
+            alert.informativeText = "Changes are shown against the last commit, so the file has to be in one."
+            if let window { alert.beginSheetModal(for: window) }
+            return
+        }
+        editorArea.openDiff(root: root, path: String(path.dropFirst(root.count + 1)), base: base)
     }
 
     @objc func saveDocument(_ sender: Any?) { editorArea.saveActive() }

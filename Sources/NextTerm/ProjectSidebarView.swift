@@ -15,6 +15,8 @@ protocol ProjectSidebarDelegate: AnyObject {
     func sidebar(_ sidebar: ProjectSidebarView, didMove from: String, to: String)
     /// Hand these files or folders to the agent in a tab.
     func sidebar(_ sidebar: ProjectSidebarView, sendToAgent urls: [(url: URL, isFolder: Bool)])
+    /// Show a file's changes side by side.
+    func sidebar(_ sidebar: ProjectSidebarView, showChanges url: URL)
 }
 
 /// Outline view with the keys a file tree needs: Return renames (as in Finder), ⌘⌫ moves to the Trash,
@@ -371,6 +373,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         guard let node = nodes.first else { return }
         let single = nodes.count == 1
         if single && !node.isDirectory { add(menu, "Open", #selector(openNode)) }
+        if single && !node.isDirectory, change(of: node) != nil { add(menu, "Show Changes", #selector(showChangesFromMenu)) }
         if single {
             let folder = node.isDirectory ? node.path : node.url.deletingLastPathComponent().path
             add(menu, node.isDirectory ? "Open in New Tab" : "Open Folder in New Tab", #selector(openTab)).representedObject = folder
@@ -398,6 +401,18 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
         item.target = self
         return item
+    }
+
+    @objc private func showChangesFromMenu() {
+        if let node = menuNodes.first { delegate?.sidebar(self, showChanges: node.url) }
+    }
+
+    /// The git change of a file, if any (for the context menu).
+    private func change(of node: FileNode) -> GitChange? {
+        guard let snapshot = git.snapshot else { return nil }
+        let root = canonicalPath(snapshot.root), path = canonicalPath(node.url.path)
+        guard path.hasPrefix(root + "/") else { return nil }
+        return snapshot.files[String(path.dropFirst(root.count + 1))]
     }
 
     @objc private func sendToAgentFromMenu() {

@@ -816,6 +816,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             entry.representedObject = position.rawValue
         }
         view.addItem(withTitle: "Terminal Position", action: nil, keyEquivalent: "").submenu = positions
+        item(view, "Show Changes", #selector(TerminalWindowController.showChanges(_:)), "d")
+        view.addItem(.separator())
         item(view, "Soft Wrap", #selector(toggleSoftWrap(_:)), "", target: self)
         let heights = NSMenu(title: "Line Height")
         for value in Self.lineHeights {

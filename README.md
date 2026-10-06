@@ -40,6 +40,10 @@ agents are working, which are done, and which are waiting on your decision.
 - **Project sidebar with git.** The project as a live file tree: changed files and folders coloured, with
   `+12 −3` line counts like a pull request, and the branch, total changes and ahead/behind at the top.
   Files your agents create or change show up on their own.
+- **Changes side by side (⌘D).** A file's diff in a tab: the old version beside the new, rows aligned, the
+  changed words marked, syntax-coloured, scrolling together. All changes, unstaged or staged; step through
+  them and stage, unstage or revert one hunk at a time (⌘Z undoes a revert). Each action first checks the
+  file is still what the diff showed, so a change an agent made meanwhile is never overwritten.
 - **File operations.** Rename (Return), drag to move (Option to copy), New File / New Folder, Move to Trash,
   all undoable with ⌘Z. Drag a file onto a terminal to type its path.
 - **Find and Replace in Files** (⌘⇧F / ⌘⇧R) across the project, with regular expressions, file masks and

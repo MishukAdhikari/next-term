@@ -880,6 +880,8 @@ enum SelfTest {
         check(area.open(png) == .notText && area.editors.count == 1, "binary files are not opened as text")
         try? FileManager.default.removeItem(at: png)
 
+        await diffChecks(c, proj: proj)
+
         // A long file colours in the background without blocking typing.
         let long = proj.appendingPathComponent("long.ts")
         let body = (1...6000).map { "export function f\($0)(x: number): string { return `v${x}` + \"\($0)\"; } // \($0)" }.joined(separator: "\n")
@@ -1010,6 +1012,67 @@ enum SelfTest {
         check(c.tabBar.leadingInset == topInset, "and the terminal's tabs return to the top")
         try? FileManager.default.removeItem(at: long)
         try? FileManager.default.removeItem(at: proj.appendingPathComponent("src/main.php"))
+    }
+
+    // MARK: diff view
+
+    private static func diffChecks(_ c: TerminalWindowController, proj: URL) async {
+        guard let git = GitRunner.locateGit() else { return }
+        func run(_ args: String...) {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: git)
+            p.arguments = ["-C", proj.path, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"] + args
+            p.standardInput = FileHandle.nullDevice
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            try? p.run()
+            p.waitUntilExit()
+        }
+        let file = proj.appendingPathComponent("src/diff.txt")
+        let original = (1...14).map { "line \($0)" }.joined(separator: "\n") + "\n"
+        try? original.write(to: file, atomically: true, encoding: .utf8)
+        run("add", "src/diff.txt")
+        run("commit", "-qm", "diff test")
+        var lines = original.components(separatedBy: "\n")
+        lines[1] = "line two"
+        lines[11] = "line twelve"
+        let changed = lines.joined(separator: "\n")
+        try? changed.write(to: file, atomically: true, encoding: .utf8)
+
+        c.showChanges(of: file)
+        guard let diff = c.editorArea.activeDiff else { return check(false, "⌘D shows the file's changes") }
+        check(await wait(5) { diff.hunkCount == 2 }, "the diff shows both changes", "\(diff.hunkCount) hunks")
+        check(diff.sideTexts.0.contains("line 2\n") && diff.sideTexts.1.contains("line two\n")
+              && diff.sideTexts.0.components(separatedBy: "\n").count == diff.sideTexts.1.components(separatedBy: "\n").count,
+              "old on the left, new on the right, rows aligned")
+        await screenshot(c, suffix: "-diff")
+
+        // Stage one hunk; it moves to Staged. Unstage it again.
+        diff.base = .unstaged
+        _ = await wait(5) { diff.hunkCount == 2 }
+        diff.go(toHunk: 0)
+        diff.perform(.stage)
+        diff.base = .staged
+        check(await wait(5) { diff.hunkCount == 1 && diff.sideTexts.1.contains("line two") }, "Stage Hunk stages just that change",
+              "\(diff.hunkCount) staged")
+        diff.go(toHunk: 0)
+        diff.perform(.unstage)
+        check(await wait(5) { diff.hunkCount == 0 }, "Unstage Hunk takes it back out")
+
+        // Revert one change in the file; ⌘Z brings it back.
+        diff.base = .head
+        _ = await wait(5) { diff.hunkCount == 2 }
+        diff.go(toHunk: 1)
+        await pause(0.3)
+        check(diff.currentHunk == 1, "the stepper's choice holds even when the whole diff fits on screen", "hunk \(diff.currentHunk + 1)")
+        diff.perform(.revert)
+        let reverted = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+        check(reverted.contains("line 12\n") && reverted.contains("line two\n"), "Revert Hunk undoes just that change in the file")
+        _ = await wait(5) { diff.hunkCount == 1 }
+        c.window?.undoManager?.undo()
+        check(((try? String(contentsOf: file, encoding: .utf8)) ?? "") == changed, "⌘Z brings the reverted change back")
+        c.editorArea.closeActive()
+        run("checkout", "--", "src/diff.txt")
     }
 
     // MARK: Claude Code link

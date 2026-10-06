@@ -25,6 +25,7 @@ terminal. This file is the map of what is built and what comes next; the README 
 | Projects | Open/close/recent, last projects reopened at launch, first-run folder choice; sidebar with git status and +/− per file and folder; file operations with undo; open-source icons with framework icons |
 | Editor | 103 languages, incremental highlighting, line numbers, line height, soft wrap with hanging indent, auto-indent, ⌘/, ⌘L, find, encodings and line endings kept, files changed by agents reloaded |
 | Search | Find/Replace in Files (regex, masks, preview, undo), seeded from the selection, same type first |
+| Diffs | Side by side (⌘D), word highlights, all/unstaged/staged, stage/unstage/revert per hunk with blob checks, live refresh |
 | Agents | Send to Agent (⌥⌘K) in each agent's syntax; Claude Code IDE link (live selection, @-mentions); Gemini CLI and Qwen Code IDE link (open files, selection), IDE mode on by default |
 | App | `nxtrm` CLI, layouts (terminal on any side, sidebar left/right, ⋯ menus), Settings (editor, every shortcut), self-update from GitHub Releases (checksum-verified) |
 
@@ -32,8 +33,8 @@ terminal. This file is the map of what is built and what comes next; the README 
 
 1. **MCP tools for every agent** (Codex, Junie, Command Code, Cursor, opencode, Copilot, Amp…): a `next-term`
    MCP server with the editor's selection and open files, registered in each installed agent by default.
-2. **Diff view:** side-by-side with word highlights; stage, unstage and revert hunks (HunkOps is built and
-   tested); Claude's and Gemini's proposed edits shown there to accept or reject.
+2. **Agents' proposed edits in the diff view:** Claude's openDiff and Gemini's openDiff shown there to accept
+   or reject; fold long unchanged runs; stage selected lines.
 3. **Copilot CLI IDE link** (its protocol is published).
 4. Split panes, session restore, notarized releases.
 

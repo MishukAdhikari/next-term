@@ -255,6 +255,11 @@ public enum GitRunner {
         return counts
     }
 
+    /// Whether git tracks the file (an untracked file's diff is all additions).
+    public static func isTracked(_ relativePath: String, in root: String, git: String) -> Bool {
+        run(git, ["-C", root, "ls-files", "--error-unmatch", "--", relativePath], timeout: 10) != nil
+    }
+
     /// What a diff compares.
     public enum DiffBase: Sendable {
         /// Working tree against HEAD: staged and unstaged changes together.
