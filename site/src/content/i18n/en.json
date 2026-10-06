@@ -1,0 +1,5 @@
+{
+	"page.editLink": "Edit this page on GitHub",
+	"404.text": "There is nothing at this address. It may have moved when the documentation changed; the documentation home lists every page.",
+	"search.devWarning": "Search works in production builds only. Run npm run build, then npm run preview, to try it locally."
+}

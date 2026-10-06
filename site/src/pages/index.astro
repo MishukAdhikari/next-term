@@ -1,0 +1,913 @@
+---
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { Image } from 'astro:assets';
+import { LinkButton } from '@astrojs/starlight/components';
+import proposalShot from '../assets/screenshots/proposal-window.webp';
+import tabsShot from '../assets/screenshots/tab-status.webp';
+import claudeShot from '../assets/screenshots/claude-selection.webp';
+import diffShot from '../assets/screenshots/diff.webp';
+import {
+	AUTHOR,
+	AUTHOR_URL,
+	MIN_MACOS,
+	RELEASE_NOTES,
+	RELEASES_LATEST,
+	REPO,
+	SUMMARY,
+	TAGLINE,
+	VERSION,
+} from '../config';
+import { jsonLd } from '../lib/structured-data';
+
+const site = Astro.site!;
+const home = new URL('/', site).href;
+const pageTitle = 'Next Term — the missing IDE for the terminal';
+const description =
+	'A native macOS terminal and editor for AI coding agents. Run Claude Code, Codex and Gemini CLI side by side and see which one is working, done or waiting.';
+
+const head = [
+	{ tag: 'title' as const, content: pageTitle },
+	{ tag: 'meta' as const, attrs: { property: 'og:title', content: pageTitle } },
+	{ tag: 'meta' as const, attrs: { property: 'og:type', content: 'website' } },
+	jsonLd({
+		'@context': 'https://schema.org',
+		'@type': 'WebSite',
+		name: 'Next Term',
+		url: home,
+		description,
+		inLanguage: 'en',
+		publisher: { '@type': 'Person', name: AUTHOR, url: AUTHOR_URL },
+	}),
+	jsonLd({
+		'@context': 'https://schema.org',
+		'@type': 'SoftwareApplication',
+		name: 'Next Term',
+		description: SUMMARY,
+		url: home,
+		image: new URL('/icon-512.png', site).href,
+		screenshot: new URL('/og.jpg', site).href,
+		applicationCategory: 'DeveloperApplication',
+		applicationSubCategory: 'Terminal and code editor for AI coding agents',
+		operatingSystem: MIN_MACOS.replace(' or later', '+'),
+		softwareVersion: VERSION,
+		downloadUrl: RELEASES_LATEST,
+		releaseNotes: RELEASE_NOTES,
+		fileSize: '3MB',
+		license: 'https://opensource.org/license/mit',
+		isAccessibleForFree: true,
+		offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+		author: { '@type': 'Person', name: AUTHOR, url: AUTHOR_URL },
+		sameAs: [REPO],
+		featureList: [
+			'Status for every terminal tab: working, done, or waiting on your decision',
+			'Notifications when an agent needs a decision',
+			'Claude Code IDE integration: live selection, @-mentions, proposed edits as diffs',
+			'Gemini CLI and Qwen Code IDE integration',
+			'Send to Agent (⌥⌘K) in each agent’s own syntax',
+			'MCP server for orchestration: one agent starts, prompts, waits for and reads the others across projects',
+			'Split panes',
+			'Go to File: fuzzy search for any file in the project',
+			'Code editor for 103 languages',
+			'Side-by-side git diffs with hunk staging',
+			'Project sidebar with git status and line counts',
+			'Find and Replace in Files',
+			'nxtrm command-line tool',
+			'Checksum-verified self-updates',
+		],
+	}),
+];
+
+const agentsLinked = ['Claude Code', 'Gemini CLI', 'Qwen Code'];
+const agentsOthers = [
+	'Codex',
+	'Command Code',
+	'Junie',
+	'opencode',
+	'Aider',
+	'Amp',
+	'Cursor Agent',
+	'Goose',
+	'Crush',
+	'GitHub Copilot CLI',
+	'Droid',
+	'Kiro',
+	'Amazon Q',
+	'Kimi',
+	'Plandex',
+	'Cline',
+	'Auggie',
+];
+
+const mcpTools = [
+	'list_tabs',
+	'read_tab',
+	'wait_for_tab',
+	'list_projects',
+	'get_editor_selection',
+	'get_open_files',
+	'open_project',
+	'new_tab',
+	'send_to_tab',
+	'press_keys',
+	'show_tab',
+	'close_tab',
+	'open_in_editor',
+];
+
+const faq = [
+	{
+		q: 'Is Next Term free?',
+		a: 'Yes. It is free and open source under the MIT licence, with no account and no paid tier. The source is on GitHub.',
+	},
+	{
+		q: 'Does it come with its own AI?',
+		a: 'No. Next Term runs the agent command-line tools you already use, such as Claude Code, Codex and Gemini CLI, signed in the way each of them normally is.',
+	},
+	{
+		q: 'Does Next Term send my code anywhere?',
+		a: 'No. The agent links listen only on your Mac, with a fresh token each launch, and never share .env files or keys. The only request Next Term makes on its own is a daily update check to GitHub, which you can turn off.',
+	},
+	{
+		q: 'Can one agent control the others?',
+		a: 'Yes. Next Term is an MCP server, set up for you in Claude Code, Codex, Gemini CLI and seven other agents. An orchestrator can list every tab with its agent’s state, start agents, send them prompts, wait for them and read their screens. It works only on your Mac, and Settings turns it off.',
+	},
+	{
+		q: 'Is it an open-source alternative to Warp?',
+		a: 'If you want an open-source terminal built around AI agents on the Mac, Next Term is one: MIT-licensed, native Swift and AppKit, no account, no AI of its own. It runs the agent CLIs you choose and adds status for every tab, a code editor, diffs and a git-aware sidebar.',
+	},
+	{
+		q: 'Why does macOS ask me to allow the first launch?',
+		a: 'Releases are not notarized by Apple yet. Allow Next Term once with Open Anyway in System Settings → Privacy & Security (macOS 15 and later), or right-click › Open (macOS 13 and 14).',
+	},
+];
+---
+
+<StarlightPage
+	frontmatter={{
+		title: 'Next Term',
+		description,
+		template: 'splash',
+		head,
+		editUrl: false,
+		lastUpdated: false,
+		prev: false,
+		next: false,
+		tableOfContents: false,
+		hero: {
+			title: `<span class="hero-eyebrow">Next Term<span class="sr-only">:</span></span> ${TAGLINE}`,
+			tagline:
+				'A native macOS terminal and code editor for running AI coding agents side by side. Claude Code, Codex, Gemini CLI and the rest each get a tab, and every tab shows whether its agent is working, done, or waiting on you.',
+			actions: [
+				{ text: 'Download for macOS', link: RELEASES_LATEST, variant: 'primary', icon: 'download' },
+				{ text: 'View on GitHub', link: REPO, variant: 'secondary', icon: 'github' },
+			],
+		},
+	}}
+>
+	<div class="landing not-content">
+		<p class="facts">
+			<span>Version {VERSION}</span>
+			<span>Free and open source (MIT)</span>
+			<span>{MIN_MACOS}</span>
+			<span>Apple Silicon and Intel</span>
+			<span>3 MB download</span>
+		</p>
+
+		<figure class="shot shot--hero">
+			<Image
+				src={proposalShot}
+				alt="The Next Term window: a project sidebar with git line counts on the left, and a diff tab where Claude proposes changes to main.php, old on the left and new on the right, with Reject and Accept buttons. Terminal tabs run along the bottom."
+				loading="eager"
+				fetchpriority="high"
+				widths={[800, 1200, 1600]}
+				sizes="(min-width: 72rem) 67.5rem, 100vw"
+			/>
+			<figcaption>
+				Claude Code proposes an edit; Next Term shows it as a side-by-side diff. Accept with <kbd>⌘↩︎</kbd>,
+				or Reject.
+			</figcaption>
+		</figure>
+
+		<section class="band band--problem" aria-labelledby="problem">
+			<div class="band__text">
+				<h2 id="problem">Five agents, five tabs. Which one needs you?</h2>
+				<p>
+					Running agents in parallel is fast until you lose track of them. One is still thinking, one finished
+					ten minutes ago, one has been waiting for your “yes” the whole time. A plain terminal shows five
+					identical tabs.
+				</p>
+				<p>
+					Next Term reads each agent’s own screen and marks its tab: a spinner while it works, a green check
+					when it is done, an amber “!” when it is asking you something. When an agent needs a decision, a
+					notification says so and takes you to the tab.
+				</p>
+			</div>
+			<figure class="shot shot--strip">
+				<Image
+					src={tabsShot}
+					alt="A row of terminal tabs: two plain shells, then a green check, a red cross, an amber exclamation mark and a blue spinner."
+					widths={[800, 1613]}
+					sizes="(min-width: 72rem) 67.5rem, 100vw"
+				/>
+			</figure>
+		</section>
+
+		<section class="band" aria-labelledby="status">
+			<h2 id="status">Know which agent needs you</h2>
+			<ul class="features">
+				<li>
+					<h3>Status in step with the agent</h3>
+					<p>
+						A spinner only while an agent is really working, read from its own screen, so it stops the moment
+						Claude or Codex stops. Plain commands end with a check or a red cross.
+					</p>
+				</li>
+				<li>
+					<h3>Decisions come to you</h3>
+					<p>
+						When an agent asks for permission, a notification quotes the question. Click it to land on that
+						tab.
+					</p>
+				</li>
+				<li>
+					<h3>However you start it</h3>
+					<p>
+						Directly, through an alias or a shell function, with <code>npx</code>, or as{' '}
+						<code>cd app && claude</code>. Your zsh setup loads exactly as before.
+					</p>
+				</li>
+				<li>
+					<h3>A count on the Dock</h3>
+					<p>The Dock badge shows how many tabs finished while you were in another app.</p>
+				</li>
+			</ul>
+			<p class="more"><a href="/docs/agent-status/">How agent status works</a></p>
+		</section>
+
+		<section class="band band--split" aria-labelledby="editor-link">
+			<div>
+				<h2 id="editor-link">Your agents see your editor</h2>
+				<ul class="features features--stack">
+					<li>
+						<h3>Claude Code’s IDE link, built in</h3>
+						<p>
+							Select lines and Claude gets them with your next prompt (“⧉ 10 lines selected”). Nothing to
+							install or configure.
+						</p>
+					</li>
+					<li>
+						<h3>Edits you approve</h3>
+						<p>
+							Claude’s proposed changes open as a side-by-side diff. Accept with <kbd>⌘↩︎</kbd>, or Reject.
+							Gemini CLI and Qwen Code work the same way.
+						</p>
+					</li>
+					<li>
+						<h3>Send to Agent, for every agent</h3>
+						<p>
+							<kbd>⌥⌘K</kbd> types your selection or files into the agent’s prompt in its own syntax:{' '}
+							<code>@app/User.php#L10-20</code> for Claude, <code>app/User.php:10-20</code> for Codex. It
+							never presses Return for you.
+						</p>
+					</li>
+				</ul>
+				<p class="more"><a href="/docs/agents/">The IDE link and Send to Agent</a></p>
+			</div>
+			<figure class="shot">
+				<Image
+					src={claudeShot}
+					alt="Two lines selected in the editor, and Claude Code in the terminal below showing “2 lines selected” in its prompt."
+					widths={[700, 1400]}
+					sizes="(min-width: 72rem) 34rem, 100vw"
+				/>
+			</figure>
+		</section>
+
+		<section class="band band--mcp" aria-labelledby="orchestrate">
+			<h2 id="orchestrate">One agent can run the others</h2>
+			<p class="lede">
+				Next Term is an MCP server. Ask Claude Code, Codex or any agent that speaks MCP to open your projects,
+				start other agents in new tabs, give them their tasks, wait for them and read what they did. You watch
+				every tab, and step in whenever you like.
+			</p>
+			<figure class="ask">
+				<figcaption>You ask your agent</figcaption>
+				<blockquote>
+					<p>
+						Open ~/Code/api and ~/Code/web. Start Claude Code in api and Codex in web, give each its task, wait
+						for both, and tell me what each one changed.
+					</p>
+				</blockquote>
+			</figure>
+			<ul class="features features--grid">
+				<li>
+					<h3>Sees every tab</h3>
+					<p>Every project and tab, with each agent’s state: working, done, failed, or waiting on a decision, with the question.</p>
+				</li>
+				<li>
+					<h3>Acts as you would</h3>
+					<p>Opens projects, starts agents in new tabs or split panes, types prompts, presses keys, waits until an agent stops, reads its screen.</p>
+				</li>
+				<li>
+					<h3>Uses the editor</h3>
+					<p>Your selection, the open files, and any file opened at a line, for agents with no editor link of their own.</p>
+				</li>
+				<li>
+					<h3>Set up for you</h3>
+					<p>
+						In Claude Code, Codex, Gemini CLI, Qwen Code, Cursor Agent, opencode, Copilot CLI, Amp, Junie and
+						Command Code. Only its own entry is written, comments kept.
+					</p>
+				</li>
+				<li>
+					<h3>Asks before it acts</h3>
+					<p>Typing into a tab and closing one are marked as destructive, so agents ask first. No agent can type into its own tab.</p>
+				</li>
+				<li>
+					<h3>Private</h3>
+					<p>A socket only you can open, and no network port. Settings turns it off and removes the entries.</p>
+				</li>
+			</ul>
+			<ul class="tools" aria-label="The 13 MCP tools">
+				{mcpTools.map((tool) => <li><code>{tool}</code></li>)}
+			</ul>
+			<p class="more"><a href="/docs/orchestration/">Orchestrate agents (MCP)</a></p>
+		</section>
+
+		<section class="band band--split band--reverse" aria-labelledby="workbench">
+			<div>
+				<h2 id="workbench">An editor where the agents work</h2>
+				<ul class="features features--stack">
+					<li>
+						<h3>A real code editor</h3>
+						<p>
+							Above the terminal: 103 languages, soft wrap, <kbd>⌘P</kbd> to go to any file, <kbd>⌘/</kbd> to
+							comment, <kbd>⌘L</kbd> to go to a line. When an agent changes an open file, the editor follows.
+						</p>
+					</li>
+					<li>
+						<h3>Changes side by side</h3>
+						<p>
+							<kbd>⌥⌘G</kbd> shows old beside new, changed words marked. Stage, unstage or revert one hunk at a
+							time; each action checks the file first, so an agent’s edit is never overwritten.
+						</p>
+					</li>
+					<li>
+						<h3>Git at a glance</h3>
+						<p>
+							The project sidebar colours changed files and shows <span class="counts"
+								><span class="plus">+12</span> <span class="minus">−3</span></span
+							> per file and folder, like a pull request, with the branch and ahead/behind at the top.
+						</p>
+					</li>
+					<li>
+						<h3>Find and Replace in Files</h3>
+						<p>
+							<kbd>⇧⌘F</kbd> and <kbd>⇧⌘R</kbd> across the project, with regular expressions, file masks and a
+							preview of every replacement.
+						</p>
+					</li>
+				</ul>
+				<p class="more"><a href="/docs/editor/">The editor</a> · <a href="/docs/diffs/">Diffs</a> · <a href="/docs/projects-and-git/">Projects and git</a></p>
+			</div>
+			<figure class="shot">
+				<Image
+					src={diffShot}
+					alt="A side-by-side diff of diff.txt against HEAD, with All Changes, Unstaged and Staged views, +2 −2, and a Revert Hunk button."
+					widths={[700, 1400]}
+					sizes="(min-width: 72rem) 34rem, 100vw"
+				/>
+			</figure>
+		</section>
+
+		<section class="band" aria-labelledby="fit">
+			<h2 id="fit">Made to fit how you work</h2>
+			<ul class="features features--grid">
+				<li>
+					<h3>Split panes</h3>
+					<p>
+						<kbd>⌘D</kbd> splits a tab right, <kbd>⇧⌘D</kbd> down; <kbd>⌥⌘</kbd> and the arrows move between
+						panes. The tab shows the mark of the pane that most needs you.
+					</p>
+				</li>
+				<li>
+					<h3>Go to File</h3>
+					<p><kbd>⌘P</kbd> and a few letters: <code>usrctl</code> finds <code>UserController.php</code>. Add <code>:42</code> for the line.</p>
+				</li>
+				<li>
+					<h3>Your layout</h3>
+					<p>The terminal below, beside or above the editor; the sidebar on the left or right.</p>
+				</li>
+				<li>
+					<h3><code>nxtrm</code> in any terminal</h3>
+					<p><code>nxtrm .</code> opens a project; <code>nxtrm app/User.php:42</code> opens a file at a line.</p>
+				</li>
+				<li>
+					<h3>Every shortcut is yours</h3>
+					<p>Change any of them in Settings (<kbd>⌘,</kbd>).</p>
+				</li>
+				<li>
+					<h3>Updates in one click</h3>
+					<p>Checked against the published SHA-256 before anything is replaced.</p>
+				</li>
+			</ul>
+		</section>
+
+		<section class="band" aria-labelledby="works-with">
+			<h2 id="works-with">Works with the agents you already use</h2>
+			<p class="lede">
+				Next Term brings no AI of its own and needs no account. It runs the agent command-line tools you
+				install, and anything else you run in a terminal: tests, dev servers, ssh.
+			</p>
+			<div class="agents">
+				<div>
+					<h3>Connected as their IDE</h3>
+					<p class="hint">Status, live selection, proposed edits as diffs, MCP tools, Send to Agent</p>
+					<ul class="chips">
+						{agentsLinked.map((name) => <li class="chip chip--strong">{name}</li>)}
+					</ul>
+				</div>
+				<div>
+					<h3>Recognised by name</h3>
+					<p class="hint">Status on the tab, decisions as notifications, Send to Agent; MCP tools set up for Codex, Cursor Agent, opencode, Copilot CLI, Amp, Junie and Command Code</p>
+					<ul class="chips">
+						{agentsOthers.map((name) => <li class="chip">{name}</li>)}
+					</ul>
+				</div>
+			</div>
+		</section>
+
+		<section class="band" aria-labelledby="privacy">
+			<h2 id="privacy">Local by design</h2>
+			<ul class="features features--grid">
+				<li>
+					<h3>Your code stays on your Mac</h3>
+					<p>The agent links listen on <code>127.0.0.1</code> only and refuse browsers; the MCP server uses a private socket, with no network port.</p>
+				</li>
+				<li>
+					<h3>A fresh token every launch</h3>
+					<p>A new 256-bit secret each time Next Term starts. <code>.env</code> files and keys are never shared.</p>
+				</li>
+				<li>
+					<h3>No account, no telemetry</h3>
+					<p>The only request Next Term makes on its own is a daily update check to GitHub. You can turn it off.</p>
+				</li>
+				<li>
+					<h3>Open source, MIT</h3>
+					<p>
+						Read every line on GitHub. Releases are built from it by GitHub Actions, with a SHA-256 checksum
+						for every download.
+					</p>
+				</li>
+			</ul>
+			<p class="more"><a href="/docs/security-and-privacy/">Security and privacy in detail</a></p>
+		</section>
+
+		<section class="band band--install" aria-labelledby="install">
+			<h2 id="install">Install in a minute</h2>
+			<ol class="steps">
+				<li>
+					<strong>Download</strong> <code>NextTerm-{VERSION}.dmg</code> from the{' '}
+					<a href={RELEASES_LATEST}>latest release on GitHub</a>.
+				</li>
+				<li><strong>Open it</strong> and drag Next Term to Applications.</li>
+				<li>
+					<strong>Allow the first launch.</strong> Releases are not notarized yet. On macOS 15 and later, open
+					Next Term once, then go to System Settings → Privacy & Security and click <strong>Open Anyway</strong>.
+					On macOS 13 and 14, right-click the app, choose <strong>Open</strong>, then <strong>Open</strong> again.
+				</li>
+				<li>
+					<strong>Choose a folder</strong> to work in. Next Term opens it as a project, and reopens it next time.
+				</li>
+			</ol>
+			<p class="hint">
+				Optional: check the download first with <code>shasum -a 256 -c NextTerm-{VERSION}.dmg.sha256</code>.
+				After this, Next Term updates itself.
+			</p>
+			<p class="more"><a href="/docs/getting-started/">The full install guide</a></p>
+		</section>
+
+		<section class="band band--next" aria-labelledby="next">
+			<h2 id="next">What comes next</h2>
+			<ul class="next">
+				<li>
+					<span class="nt-soon">Coming next</span> <strong>Agent sessions for each project.</strong> Every agent’s
+					saved sessions for a project on the Welcome screen and in the sidebar, to resume in one click.
+				</li>
+				<li>
+					<span class="nt-soon">Coming later</span> <strong>Remote access to the MCP server</strong> for agents that
+					do not run on your Mac, such as ChatGPT and Claude on the web, through a secure link.
+				</li>
+			</ul>
+		</section>
+
+		<section class="band" aria-labelledby="faq">
+			<h2 id="faq">Questions</h2>
+			<div class="faq">
+				{
+					faq.map(({ q, a }) => (
+						<details>
+							<summary>{q}</summary>
+							<p>{a}</p>
+						</details>
+					))
+				}
+			</div>
+			<p class="more"><a href="/docs/faq/">All questions and answers</a></p>
+		</section>
+
+		<section class="cta" aria-labelledby="cta">
+			<h2 id="cta">Run your agents side by side</h2>
+			<p>Version {VERSION} for {MIN_MACOS}. Free, open source, about a minute to install.</p>
+			<div class="cta__actions">
+				<LinkButton href={RELEASES_LATEST} variant="primary" icon="download">Download for macOS</LinkButton>
+				<LinkButton href="/docs/" variant="secondary">Read the documentation</LinkButton>
+			</div>
+		</section>
+	</div>
+</StarlightPage>
+
+<style is:global>
+	/* The home and 404 heroes: calmer than Starlight’s default, left-aligned on wide screens. */
+	[data-has-hero] .hero {
+		padding-block: clamp(2rem, calc(1rem + 6vmin), 5rem) 1rem;
+	}
+	/* Left-aligned at every width: centred paragraphs are hard to read. */
+	[data-has-hero] .hero .stack {
+		text-align: start;
+	}
+	[data-has-hero] .hero .copy {
+		align-items: flex-start;
+	}
+	[data-has-hero] .hero .actions {
+		justify-content: flex-start;
+		gap: 0.75rem 1rem;
+	}
+	[data-has-hero] .hero h1 {
+		font-weight: 700;
+		letter-spacing: -0.02em;
+		max-width: 16ch;
+	}
+	[data-has-hero] .hero .tagline {
+		max-width: 60ch;
+		line-height: 1.45;
+		color: var(--sl-color-gray-2);
+	}
+	.hero-eyebrow {
+		display: block;
+		margin-bottom: 0.6rem;
+		color: var(--sl-color-text-accent);
+		font-size: var(--sl-text-base);
+		font-weight: 600;
+		letter-spacing: 0;
+	}
+	@media (min-width: 50rem) {
+		[data-has-hero] .hero {
+			grid-template-columns: 100%;
+		}
+	}
+</style>
+
+<style>
+	.landing {
+		--gap: clamp(3.5rem, 8vw, 6rem);
+		color: var(--sl-color-gray-2);
+		line-height: 1.45;
+	}
+	.landing h2 {
+		margin: 0 0 1rem;
+		color: var(--sl-color-white);
+		font-size: clamp(1.5rem, 1.1rem + 1.6vw, 2.1rem);
+		font-weight: 700;
+		line-height: 1.2;
+		letter-spacing: -0.015em;
+		text-wrap: balance;
+	}
+	.landing h3 {
+		margin: 0 0 0.35rem;
+		color: var(--sl-color-white);
+		font-size: 1.0625rem;
+		font-weight: 600;
+		line-height: 1.3;
+	}
+	.landing p {
+		margin: 0;
+		max-width: 68ch;
+		text-wrap: pretty;
+	}
+	.landing p + p {
+		margin-top: 0.85em;
+	}
+	.landing a {
+		color: var(--sl-color-text-accent);
+		text-decoration-thickness: 1px;
+		text-underline-offset: 0.18em;
+	}
+	.landing a:hover {
+		color: var(--sl-color-white);
+	}
+	.landing code {
+		padding: 0.05em 0.35em;
+		border-radius: 4px;
+		background: var(--sl-color-bg-inline-code);
+		font-family: var(--__sl-font-mono);
+		font-size: 0.88em;
+	}
+	.landing ul,
+	.landing ol {
+		margin: 0;
+		padding: 0;
+	}
+
+	.facts {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.35rem 0;
+		margin: 0 0 2rem !important;
+		max-width: none !important;
+		color: var(--sl-color-gray-3);
+		font-size: var(--sl-text-sm);
+		font-variant-numeric: tabular-nums;
+	}
+	.facts span:not(:last-child)::after {
+		content: '·';
+		margin: 0 0.6em;
+		color: var(--sl-color-gray-4);
+	}
+
+	.shot {
+		margin: 0;
+	}
+	.shot :global(img) {
+		display: block;
+		width: 100%;
+		height: auto;
+		border: 1px solid var(--nt-shot-border);
+		border-radius: 12px;
+		background: var(--nt-bg);
+	}
+	.shot--hero :global(img) {
+		box-shadow: 0 24px 60px -24px rgb(0 0 0 / 0.6);
+	}
+	.shot--strip :global(img) {
+		border-radius: 8px;
+	}
+	.shot figcaption {
+		margin-top: 0.75rem;
+		color: var(--sl-color-gray-3);
+		font-size: var(--sl-text-sm);
+	}
+
+	.band {
+		margin-top: var(--gap);
+	}
+	.band--problem {
+		display: grid;
+		gap: 1.75rem;
+	}
+	.band__text {
+		max-width: 68ch;
+	}
+	.lede {
+		margin-bottom: 1.5rem !important;
+	}
+	.more {
+		margin-top: 1.5rem !important;
+		font-weight: 600;
+	}
+	.more a::after {
+		content: ' →';
+	}
+	.hint {
+		color: var(--sl-color-gray-3);
+		font-size: var(--sl-text-sm);
+	}
+
+	.features {
+		display: grid;
+		gap: 1.5rem 2.5rem;
+		list-style: none;
+	}
+	.features li {
+		padding-top: 1rem;
+		border-top: 1px solid var(--sl-color-gray-5);
+	}
+	.features--stack li:first-child {
+		border-top: 0;
+		padding-top: 0;
+	}
+	@media (min-width: 40rem) {
+		.features:not(.features--stack) {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+	}
+	@media (min-width: 62rem) {
+		.features--grid {
+			grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+		}
+	}
+
+	.band--split {
+		display: grid;
+		gap: 2rem;
+		align-items: start;
+	}
+	@media (min-width: 62rem) {
+		.band--split {
+			grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+			gap: 3.5rem;
+		}
+		.band--reverse > figure {
+			order: -1;
+		}
+		.band--split .shot {
+			position: sticky;
+			top: calc(var(--sl-nav-height) + 2rem);
+		}
+	}
+
+	.counts {
+		font-family: var(--__sl-font-mono);
+		font-size: 0.9em;
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
+	}
+	.plus {
+		color: var(--sl-color-green);
+	}
+	.minus {
+		color: var(--sl-color-red);
+	}
+
+	.agents {
+		display: grid;
+		gap: 2rem;
+	}
+	@media (min-width: 50rem) {
+		.agents {
+			grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+			gap: 3rem;
+		}
+	}
+	.agents .hint {
+		margin-bottom: 0.9rem;
+	}
+	.chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		list-style: none;
+	}
+	.chip {
+		padding: 0.3rem 0.75rem;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 999px;
+		background: var(--sl-color-gray-6);
+		color: var(--sl-color-gray-2);
+		font-size: var(--sl-text-sm);
+		white-space: nowrap;
+	}
+	.chip--strong {
+		border-color: var(--sl-color-accent);
+		color: var(--sl-color-white);
+	}
+
+	.steps {
+		display: grid;
+		gap: 0.9rem;
+		max-width: 68ch;
+		margin-bottom: 1.25rem !important;
+		list-style: none;
+		counter-reset: step;
+	}
+	.steps li {
+		position: relative;
+		padding-left: 2.4rem;
+		counter-increment: step;
+	}
+	.steps li::before {
+		content: counter(step);
+		position: absolute;
+		left: 0;
+		top: 0.05em;
+		display: grid;
+		place-items: center;
+		width: 1.6rem;
+		height: 1.6rem;
+		border-radius: 50%;
+		background: var(--sl-color-accent-low);
+		color: var(--sl-color-text-accent);
+		font-size: var(--sl-text-sm);
+		font-weight: 700;
+		font-variant-numeric: tabular-nums;
+	}
+	.steps strong,
+	.landing strong {
+		color: var(--sl-color-white);
+		font-weight: 600;
+	}
+
+	.band--next {
+		padding: 1.75rem clamp(1.25rem, 3vw, 2rem);
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 12px;
+		background: var(--sl-color-gray-6);
+	}
+	.band--next h2 {
+		font-size: clamp(1.25rem, 1rem + 1vw, 1.5rem);
+	}
+
+	.ask {
+		margin: 0 0 2rem;
+		padding: 1.25rem 1.5rem;
+		max-width: 68ch;
+		border-left: 3px solid var(--sl-color-accent);
+		border-radius: 0 10px 10px 0;
+		background: var(--sl-color-gray-6);
+	}
+	.ask figcaption {
+		margin-bottom: 0.4rem;
+		color: var(--sl-color-gray-3);
+		font-size: var(--sl-text-sm);
+		font-weight: 600;
+	}
+	.ask blockquote {
+		margin: 0;
+		color: var(--sl-color-white);
+		font-size: 1.0625rem;
+	}
+	.tools {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+		margin-top: 1.75rem !important;
+		list-style: none;
+	}
+	.tools code {
+		display: inline-block;
+		padding: 0.2rem 0.55rem;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 6px;
+		background: transparent;
+		color: var(--sl-color-gray-2);
+		font-size: var(--sl-text-xs);
+	}
+	.next {
+		display: grid;
+		gap: 0.9rem;
+		max-width: 68ch;
+		list-style: none;
+	}
+	.next .nt-soon {
+		margin-right: 0.35rem;
+	}
+
+	.faq {
+		max-width: 68ch;
+		border-top: 1px solid var(--sl-color-gray-5);
+	}
+	.faq details {
+		border-bottom: 1px solid var(--sl-color-gray-5);
+	}
+	.faq summary {
+		display: flex;
+		justify-content: space-between;
+		gap: 1rem;
+		padding: 1rem 0;
+		color: var(--sl-color-white);
+		font-weight: 600;
+		cursor: pointer;
+		list-style: none;
+	}
+	.faq summary::-webkit-details-marker {
+		display: none;
+	}
+	.faq summary::after {
+		content: '+';
+		color: var(--sl-color-gray-3);
+		font-weight: 400;
+	}
+	.faq details[open] summary::after {
+		content: '−';
+	}
+	.faq details p {
+		padding-bottom: 1rem;
+	}
+
+	.cta {
+		margin-top: var(--gap);
+		padding: clamp(2rem, 5vw, 3.5rem) clamp(1.25rem, 4vw, 3rem);
+		border-radius: 14px;
+		background: var(--sl-color-gray-6);
+		border: 1px solid var(--sl-color-gray-5);
+	}
+	.cta p {
+		color: var(--sl-color-gray-3);
+	}
+	.cta__actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 1rem;
+		margin-top: 1.5rem;
+	}
+</style>

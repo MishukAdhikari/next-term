@@ -1,0 +1,51 @@
+---
+title: Documentation
+description: "Learn Next Term, the open-source macOS terminal and editor for AI coding agents: install, agent status, the IDE link, editor, diffs, git, shortcuts."
+head:
+  - tag: title
+    content: Next Term docs — the macOS terminal for AI coding agents
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Next Term is a native macOS terminal and code editor for running AI coding agents side by side. These pages cover every feature: what it does, how to use it, and why it works the way it does. New here? Start with [Install and get started](/docs/getting-started/).
+
+## Get started
+
+<CardGrid>
+	<LinkCard title="Install and get started" href="/docs/getting-started/" description="Download, the first launch on macOS, choosing a project folder, your first two agents." />
+	<LinkCard title="Updates" href="/docs/updates/" description="The daily check, one-click install, and the checksum and signature checks behind it." />
+</CardGrid>
+
+## Agents
+
+<CardGrid>
+	<LinkCard title="Agent status in every tab" href="/docs/agent-status/" description="The spinner, check, amber “!” and red cross; notifications; how detection reads each agent’s screen." />
+	<LinkCard title="Agents and the IDE link" href="/docs/agents/" description="What Claude Code, Gemini CLI and Qwen Code see, proposed edits as diffs, and Send to Agent (⌥⌘K)." />
+	<LinkCard title="Orchestrate agents (MCP)" href="/docs/orchestration/" description="One agent opens projects, starts the others in tabs, sends prompts, waits and reads their screens." />
+</CardGrid>
+
+## Editor and diffs
+
+<CardGrid>
+	<LinkCard title="Code editor" href="/docs/editor/" description="Go to File (⌘P), 103 languages, line height, soft wrap, comments, and files that follow your agents." />
+	<LinkCard title="Side-by-side diffs" href="/docs/diffs/" description="⌥⌘G on any changed file; stage, unstage or revert one hunk at a time, safely." />
+	<LinkCard title="Find and Replace in Files" href="/docs/search/" description="⇧⌘F and ⇧⌘R across the project, with regular expressions, masks and a preview." />
+	<LinkCard title="Layouts and split panes" href="/docs/layouts/" description="Split tabs into panes; the terminal below, beside or above the editor; the sidebar on either side." />
+</CardGrid>
+
+## Projects and git
+
+<CardGrid>
+	<LinkCard title="Projects and git" href="/docs/projects-and-git/" description="Projects that reopen at launch, git colours and +/− counts, file operations with undo." />
+	<LinkCard title="The nxtrm command" href="/docs/command-line/" description="Open folders and files at a line from any terminal; nxtrm mcp for agents." />
+</CardGrid>
+
+## Reference
+
+<CardGrid>
+	<LinkCard title="Keyboard shortcuts" href="/docs/keyboard-shortcuts/" description="Every default shortcut, and how to change any of them." />
+	<LinkCard title="Settings" href="/docs/settings/" description="The Editor and Keyboard Shortcuts tabs, and the preferences in the menus." />
+	<LinkCard title="Security and privacy" href="/docs/security-and-privacy/" description="Local-only agent links, no telemetry, clipboard and paste protections." />
+	<LinkCard title="Frequently asked questions" href="/docs/faq/" description="Supported agents and Macs, Open Anyway, comparisons and what comes next." />
+</CardGrid>
