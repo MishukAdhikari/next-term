@@ -1,4 +1,5 @@
 import AppKit
+import Network
 import NextTermCore
 
 /// End-to-end check of the real app: real shells, real tabs, real status changes.
@@ -759,6 +760,7 @@ enum SelfTest {
         check(await wait(4) { agentTab.screenTail(4).joined().contains("@src/") }, "a folder from the sidebar goes in as @src/")
         check(c.agentText([ContextItem(path: "app/User.php", lines: 10...12)], for: "codex") == "app/User.php:10-12",
               "Codex and other agents get path:lines")
+        await claudeLinkChecks(c, proj: proj, agentTab: agentTab)
         agentTab.view.send(txt: "\u{03}")
         _ = await wait(4) { !agentTab.status.running }
         c.requestClose(agentTab)
@@ -1010,6 +1012,83 @@ enum SelfTest {
         try? FileManager.default.removeItem(at: proj.appendingPathComponent("src/main.php"))
     }
 
+    // MARK: Claude Code link
+
+    private static func claudeLinkChecks(_ c: TerminalWindowController, proj: URL, agentTab: TerminalTab) async {
+        let server = ClaudeIDEServer.shared
+        guard let port = server.port else { return check(false, "the Claude Code link is listening") }
+        let lock = ClaudeIDEServer.lockFolder.appendingPathComponent("\(port).lock")
+        let attributes = try? FileManager.default.attributesOfItem(atPath: lock.path)
+        let lockJSON = (try? Data(contentsOf: lock)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        check((attributes?[.posixPermissions] as? Int) == 0o600 && lockJSON?["ideName"] as? String == "Next Term"
+              && lockJSON?["authToken"] as? String == server.token && lockJSON?["transport"] as? String == "ws",
+              "the lock file announces Next Term to Claude Code, private to you (0600)")
+        check(agentTab.claudePort == String(port), "tabs tell claude where Next Term listens (CLAUDE_CODE_SSE_PORT)", agentTab.claudePort ?? "none")
+
+        // Strangers are refused: no token, a wrong token, or a browser page (it sends Origin).
+        for (label, client) in [("no token", ClaudeTestClient(port: port, token: nil)),
+                                ("a wrong token", ClaudeTestClient(port: port, token: String(repeating: "0", count: 64))),
+                                ("a web page", ClaudeTestClient(port: port, token: server.token, origin: "https://evil.example"))] {
+            client.send(["jsonrpc": "2.0", "id": 1, "method": "initialize", "params": ["protocolVersion": "2025-11-25"]])
+            await pause(0.6)
+            check(client.received.isEmpty, "a client with \(label) gets nothing")
+            client.close()
+        }
+
+        // Claude itself: handshake, then it says which process it is; that maps it to its tab.
+        let claude = ClaudeTestClient(port: port, token: server.token)
+        claude.send(["jsonrpc": "2.0", "id": 1, "method": "initialize",
+                     "params": ["protocolVersion": "2025-11-25", "clientInfo": ["name": "claude-code", "version": "2.1.280"]]])
+        let initialized = await wait(3) { claude.received.contains { ($0["id"] as? Int) == 1 } }
+        let result = claude.received.first { ($0["id"] as? Int) == 1 }?["result"] as? [String: Any]
+        check(initialized && result?["protocolVersion"] as? String == "2025-11-25", "Claude Code's handshake is answered")
+        claude.send(["jsonrpc": "2.0", "id": 2, "method": "server/discover"])
+        _ = await wait(2) { claude.received.contains { ($0["id"] as? Int) == 2 } }
+        let unknown = claude.received.first { ($0["id"] as? Int) == 2 }?["error"] as? [String: Any]
+        check(unknown?["code"] as? Int == -32601, "unknown methods get Method not found")
+        claude.send(["jsonrpc": "2.0", "method": "ide_connected", "params": ["pid": Int(agentTab.view.process.shellPid)]])
+        let mapped = await wait(3) { AppDelegate.shared.claudeClient(for: agentTab) != nil }
+        check(mapped, "the connected claude is matched to the tab it runs in")
+
+        // The editor's selection follows Claude: lines 2–3 of main.php, 0-based.
+        c.openFile(proj.appendingPathComponent("src/main.php"))
+        if let editor = c.editorArea.activeEditor {
+            let lines = editor.document.lines
+            c.window?.makeFirstResponder(editor.textView)
+            editor.textView.setSelectedRange(NSRange(location: lines.starts[1], length: lines.starts[3] - lines.starts[1]))
+            let shared = await wait(3) {
+                let selection = claude.last("selection_changed")?["selection"] as? [String: Any]
+                let start = selection?["start"] as? [String: Any], end = selection?["end"] as? [String: Any]
+                return start?["line"] as? Int == 1 && end?["line"] as? Int == 3 && end?["character"] as? Int == 0
+            }
+            check(shared && claude.last("selection_changed")?["filePath"] as? String == editor.document.path,
+                  "selecting lines in the editor tells Claude Code (⧉ 2 lines selected)",
+                  "\(claude.last("selection_changed") ?? [:])")
+
+            // ⌥⌘K with Claude connected: an @-mention in its prompt, nothing typed into the terminal.
+            let screenBefore = agentTab.screenTail(3).joined()
+            c.sendEditorSelection()
+            let mentioned = await wait(3) { claude.last("at_mentioned")?["lineStart"] as? Int == 1 }
+            check(mentioned && claude.last("at_mentioned")?["lineEnd"] as? Int == 2, "⌥⌘K sends the lines straight into Claude's prompt",
+                  "\(claude.last("at_mentioned") ?? [:])")
+            check(agentTab.screenTail(3).joined() == screenBefore, "and types nothing into the terminal")
+        }
+
+        // .env files are never shared.
+        let env = proj.appendingPathComponent(".env")
+        try? "SECRET=1\n".write(to: env, atomically: true, encoding: .utf8)
+        c.openFile(env)
+        if let editor = c.editorArea.activeEditor, editor.document.name == ".env" {
+            editor.textView.setSelectedRange(NSRange(location: 0, length: 6))
+            _ = await wait(2) { claude.last("selection_changed")?["filePath"] == nil }
+            check(claude.last("selection_changed")?["filePath"] == nil && claude.last("selection_changed")?["text"] == nil,
+                  "a selection in .env is never shared")
+            c.editorArea.closeActive()
+        }
+        try? FileManager.default.removeItem(at: env)
+        claude.close()
+    }
+
     /// Captures the window exactly as it is on screen (an app may always capture its own windows).
     private static func screenshot(_ c: TerminalWindowController, suffix: String) async {
         guard let window = c.window else { return }
@@ -1036,10 +1115,62 @@ enum SelfTest {
     }
 
     private static func finish() {
+        ClaudeIDEServer.shared.stop() // remove the test run's lock file
         lines.append(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
         let report = lines.joined(separator: "\n") + "\n"
         if let path = reportPath { try? report.write(toFile: path, atomically: true, encoding: .utf8) }
         print(report, terminator: "")
         exit(failures == 0 ? 0 : 1)
     }
+}
+
+/// A stand-in for the `claude` CLI's IDE client, for the self-test: connects the way it does (WebSocket,
+/// subprotocol mcp, the token header) and records what Next Term sends.
+final class ClaudeTestClient: @unchecked Sendable {
+    private let connection: NWConnection
+    private let queue = DispatchQueue(label: "selftest.claude-client")
+    private var messages: [[String: Any]] = []
+    private(set) var closed = false
+
+    init(port: UInt16, token: String?, origin: String? = nil) {
+        let options = NWProtocolWebSocket.Options()
+        options.setSubprotocols(["mcp"])
+        var headers: [(name: String, value: String)] = []
+        if let token { headers.append((name: "X-Claude-Code-Ide-Authorization", value: token)) }
+        if let origin { headers.append((name: "Origin", value: origin)) }
+        options.setAdditionalHeaders(headers)
+        let parameters = NWParameters.tcp
+        parameters.defaultProtocolStack.applicationProtocols.insert(options, at: 0)
+        connection = NWConnection(to: .url(URL(string: "ws://127.0.0.1:\(port)/")!), using: parameters)
+        connection.stateUpdateHandler = { [weak self] state in
+            if case .failed = state { self?.closed = true }
+            if case .cancelled = state { self?.closed = true }
+        }
+        connection.start(queue: queue)
+        receive()
+    }
+
+    private func receive() {
+        connection.receiveMessage { [weak self] data, _, _, error in
+            guard let self, error == nil else { self?.closed = true; return }
+            if let data, let message = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                self.messages.append(message)
+            }
+            self.receive()
+        }
+    }
+
+    func send(_ object: [String: Any]) {
+        guard let body = try? JSONSerialization.data(withJSONObject: object) else { return }
+        let context = NWConnection.ContentContext(identifier: "t", metadata: [NWProtocolWebSocket.Metadata(opcode: .text)])
+        connection.send(content: body, contentContext: context, isComplete: true, completion: .contentProcessed { _ in })
+    }
+
+    var received: [[String: Any]] { queue.sync { messages } }
+
+    func last(_ method: String) -> [String: Any]? {
+        received.last { $0["method"] as? String == method }?["params"] as? [String: Any]
+    }
+
+    func close() { connection.cancel() }
 }

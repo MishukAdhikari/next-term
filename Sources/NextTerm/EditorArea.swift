@@ -4,6 +4,8 @@ import NextTermCore
 protocol EditorAreaDelegate: AnyObject {
     /// The last editor closed (hide the area) or the first opened (show it).
     func editorAreaDidChangeDocuments(_ area: EditorArea)
+    /// The selection moved, or another file came to the front.
+    func editorAreaSelectionChanged(_ area: EditorArea)
 }
 
 /// Open files above the terminal, one tab each, like an IDE's editor area.
@@ -83,6 +85,10 @@ final class EditorArea: NSView, TabBarViewDelegate {
         }
         let editor = CodeEditorView(document: document)
         document.onChange = { [weak self] _ in self?.refresh() }
+        editor.onSelectionChange = { [weak self] in
+            guard let self else { return }
+            self.delegate?.editorAreaSelectionChanged(self)
+        }
         editor.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(editor)
         NSLayoutConstraint.activate([
@@ -106,6 +112,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
         for (i, editor) in editors.enumerated() { editor.isHidden = i != index }
         if focus { window?.makeFirstResponder(editors[index].textView) }
         refresh()
+        delegate?.editorAreaSelectionChanged(self)
     }
 
     func cycle(by delta: Int) {
@@ -151,6 +158,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
         if editors.isEmpty {
             refresh()
             delegate?.editorAreaDidChangeDocuments(self)
+            delegate?.editorAreaSelectionChanged(self)
             return
         }
         if index <= activeIndex { activeIndex = max(0, activeIndex - 1) }

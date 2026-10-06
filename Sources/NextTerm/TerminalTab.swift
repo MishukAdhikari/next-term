@@ -446,6 +446,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     /// PATH as given to the shell (for the self-test).
     private(set) var environmentPath = ""
+    /// The Claude Code link's port as given to the shell (for the self-test).
+    private(set) var claudePort: String?
 
     private func environment(shellName: String) -> [String] {
         var env = ProcessInfo.processInfo.environment
@@ -453,6 +455,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         env["COLORTERM"] = "truecolor"
         env["TERM_PROGRAM"] = "NextTerm"
         env["TERM_PROGRAM_VERSION"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        // Claude Code connects to Next Term as its IDE (and never to another editor's leftover port).
+        ClaudeIDEServer.shared.prepare(&env)
         // `nxtrm` works in every tab from the first launch, with no install step.
         if let bin = CommandLineTool.script?.deletingLastPathComponent().path {
             let path = env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
@@ -470,6 +474,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             env[ShellIntegration.nonceVariable] = nonce // the shell removes it from its environment at once
         }
         environmentPath = env["PATH"] ?? ""
+        claudePort = env["CLAUDE_CODE_SSE_PORT"]
         return env.map { "\($0.key)=\($0.value)" }
     }
 

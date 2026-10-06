@@ -24,6 +24,11 @@ agents are working, which are done, and which are waiting on your decision.
   the agent in your tab: Next Term types the reference in that agent's own syntax (`@app/User.php#L10-20` for
   Claude, `app/User.php:10-20` for Codex and others) and hands you the prompt to add your instruction. It
   never presses Enter for you.
+- **Claude Code sees your editor.** Claude Code in a Next Term tab connects to Next Term as its IDE, the way
+  it connects to VS Code: the lines you select go with your next prompt ("⧉ 10 lines selected"), and ⌥⌘K
+  puts `@file#L10-20` into its prompt. Local only, with a fresh secret per launch; `.env` files are never
+  shared; Settings turns it off. Gemini CLI and Qwen Code are next; Codex and other agents have no such
+  protocol yet, and get Send to Agent.
 - **`nxtrm`, like `subl` or `code`.** `nxtrm .` opens the folder as a project, `nxtrm app/User.php:42` a
   file at a line. It works in every Next Term tab from the first launch; Next Term > Install Command Line
   Tool adds it to other terminals.

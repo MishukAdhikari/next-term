@@ -364,6 +364,7 @@ final class EditorSettingsView: NSView {
     private let lineHeightValue = NSTextField(labelWithString: "")
     private let wrap = NSButton(checkboxWithTitle: "Wrap long lines at the edge", target: nil, action: nil)
     private let dotIcons = NSButton(checkboxWithTitle: "Icons on configuration folders (.github, .claude, .idea…)", target: nil, action: nil)
+    private let claude = NSButton(checkboxWithTitle: "Claude Code in a tab sees the editor's selection", target: nil, action: nil)
     private let fontSize = NSStepper()
     private let fontSizeValue = NSTextField(labelWithString: "")
 
@@ -379,6 +380,8 @@ final class EditorSettingsView: NSView {
         wrap.action = #selector(wrapChanged)
         dotIcons.target = self
         dotIcons.action = #selector(dotIconsChanged)
+        claude.target = self
+        claude.action = #selector(claudeChanged)
         fontSize.minValue = Double(Theme.fontSizeRange.lowerBound)
         fontSize.maxValue = Double(Theme.fontSizeRange.upperBound)
         fontSize.increment = 1
@@ -394,7 +397,7 @@ final class EditorSettingsView: NSView {
             stack.spacing = 10
             return stack
         }
-        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own line height; 1.35 reads well for code. The font size is shared with the terminal (⌘+ and ⌘-).")
+        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own line height; 1.35 reads well for code. The font size is shared with the terminal (⌘+ and ⌘-). Claude Code started in a new tab connects to Next Term as its IDE: the selected lines go with each prompt (never from .env files), and ⌥⌘K adds an @-mention to its prompt.")
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 11)
         note.preferredMaxLayoutWidth = 420
@@ -404,6 +407,7 @@ final class EditorSettingsView: NSView {
             row("Font size:", [fontSize, fontSizeValue]),
             row("", [wrap]),
             row("Sidebar:", [dotIcons]),
+            row("Agents:", [claude]),
             note,
         ])
         stack.orientation = .vertical
@@ -432,6 +436,7 @@ final class EditorSettingsView: NSView {
         lineHeightValue.stringValue = String(format: "%.2f×", app.editorLineHeight)
         wrap.state = app.softWrap ? .on : .off
         dotIcons.state = app.iconsOnDotFolders ? .on : .off
+        claude.state = app.shareWithClaude ? .on : .off
         fontSize.doubleValue = Double(app.fontSize)
         fontSizeValue.stringValue = "\(Int(app.fontSize)) pt"
     }
@@ -443,6 +448,11 @@ final class EditorSettingsView: NSView {
 
     @objc private func wrapChanged() {
         if (wrap.state == .on) != AppDelegate.shared.softWrap { AppDelegate.shared.toggleSoftWrap(nil) }
+        refresh()
+    }
+
+    @objc private func claudeChanged() {
+        AppDelegate.shared.shareWithClaude = claude.state == .on
         refresh()
     }
 

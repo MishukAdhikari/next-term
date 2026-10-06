@@ -465,6 +465,13 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
 
     func undoManager(for view: NSTextView) -> UndoManager? { document.undoManager }
 
+    /// Claude Code follows the selection (debounced in the window controller).
+    var onSelectionChange: (() -> Void)?
+
+    func textViewDidChangeSelection(_ notification: Notification) {
+        onSelectionChange?()
+    }
+
     func textDidChange(_ notification: Notification) {
         if let lines = document.takePendingIndentLines() {
             document.storage.beginEditing()

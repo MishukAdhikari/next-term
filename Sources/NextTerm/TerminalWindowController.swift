@@ -569,6 +569,42 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         setEditorVisible(!area.isEmpty)
     }
 
+    // MARK: Claude Code sees the selection
+
+    private var selectionShare: DispatchWorkItem?
+
+    func editorAreaSelectionChanged(_ area: EditorArea) {
+        guard ClaudeIDEServer.shared.isRunning else { return }
+        selectionShare?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.shareSelectionWithClaude() }
+        selectionShare = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work) // while dragging, once it settles
+    }
+
+    /// Tells the `claude` sessions in this window's tabs what the editor shows: the selected lines, or the
+    /// file the caret is in, or nothing (no file open).
+    func shareSelectionWithClaude(only clients: Set<ClaudeIDEServer.ClientID>? = nil) {
+        let recipients = clients ?? AppDelegate.shared.claudeClients(in: self)
+        guard !recipients.isEmpty else { return }
+        ClaudeIDEServer.shared.notify("selection_changed", currentSelectionForClaude(), to: recipients)
+    }
+
+    func currentSelectionForClaude() -> [String: Any] {
+        guard let editor = editorArea.activeEditor else {
+            return ClaudeIDEServer.selectionParams(path: nil, text: "", start: (0, 0), end: (0, 0))
+        }
+        let text = editor.textView.string as NSString
+        let range = editor.textView.selectedRange()
+        let lines = editor.document.lines
+        func position(_ offset: Int) -> (line: Int, character: Int) {
+            let line = lines.line(at: min(offset, text.length))
+            return (line, min(offset, text.length) - lines.starts[line])
+        }
+        let selected = range.length > 0 && NSMaxRange(range) <= text.length ? text.substring(with: range) : ""
+        return ClaudeIDEServer.selectionParams(path: editor.document.path, text: selected,
+                                               start: position(range.location), end: position(NSMaxRange(range)))
+    }
+
     private func setEditorVisible(_ visible: Bool) {
         guard editorArea.isHidden == visible else { return }
         editorArea.isHidden = !visible
@@ -650,11 +686,23 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             if path == base { item.path = "." } else if path.hasPrefix(base + "/") { item.path = String(path.dropFirst(base.count + 1)) }
             return item
         }
+        if let index = tabs.firstIndex(where: { $0 === tab }) { select(index) }
+        defer { window.makeFirstResponder(tab.view) }
+        // Claude connected to Next Term: the mentions go into its prompt directly, as from VS Code.
+        if let client = AppDelegate.shared.claudeClient(for: tab), items.allSatisfy({ !$0.isFolder && $0.code == nil }) {
+            for item in items {
+                var params: [String: Any] = ["filePath": canonicalPath(item.path)]
+                if let lines = item.lines {
+                    params["lineStart"] = lines.lowerBound - 1
+                    params["lineEnd"] = lines.upperBound - 1
+                }
+                ClaudeIDEServer.shared.notify("at_mentioned", params, to: [client])
+            }
+            return
+        }
         let dialect = AgentDialect.forProgram(tab.status.program)
         let segments = AgentPrompt.segments(instruction: "", items: relative, dialect: dialect)
-        if let index = tabs.firstIndex(where: { $0 === tab }) { select(index) }
         for segment in segments { tab.view.typeIn(segment) }
-        window.makeFirstResponder(tab.view)
     }
 
     /// For the self-test: what `send` would type into `tab`.

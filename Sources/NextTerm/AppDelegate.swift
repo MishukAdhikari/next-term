@@ -75,6 +75,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if let value = sender.representedObject as? Double { editorLineHeight = CGFloat(value) }
     }
 
+    // MARK: Claude Code link
+
+    /// Claude Code in a tab sees the editor's selection (and ⌥⌘K goes straight into its prompt).
+    var shareWithClaude: Bool {
+        get { UserDefaults.standard.object(forKey: "shareWithClaude") as? Bool ?? true }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "shareWithClaude")
+            if newValue { startClaudeLink() } else { ClaudeIDEServer.shared.stop() }
+        }
+    }
+
+    /// Which tab each connected `claude` runs in.
+    private(set) var claudeTabs: [ClaudeIDEServer.ClientID: Weak<TerminalTab>] = [:]
+
+    private func startClaudeLink() {
+        let server = ClaudeIDEServer.shared
+        server.onClientReady = { [weak self] client, pid in
+            guard let self else { return }
+            let tabs = self.controllers.flatMap(\.tabs)
+            if let pid, let tab = ClaudeIDEServer.tab(for: pid, among: tabs) { self.claudeTabs[client] = Weak(tab) }
+            // It starts with whatever the editor shows now.
+            let window = self.claudeTabs[client]?.value.flatMap { tab in self.controllers.first { $0.tabs.contains { $0 === tab } } }
+            (window ?? self.controllers.last)?.shareSelectionWithClaude(only: [client])
+        }
+        server.onClientGone = { [weak self] client in self?.claudeTabs.removeValue(forKey: client) }
+        server.start(workspaces: controllers.compactMap(\.project))
+    }
+
+    /// The `claude` clients whose tab is in `controller` (and, for the key window, ones whose tab is unknown).
+    func claudeClients(in controller: TerminalWindowController) -> Set<ClaudeIDEServer.ClientID> {
+        var result = Set<ClaudeIDEServer.ClientID>()
+        for client in ClaudeIDEServer.shared.clients where client.ready {
+            if let tab = claudeTabs[client.id]?.value {
+                if controller.tabs.contains(where: { $0 === tab }) { result.insert(client.id) }
+            } else if NSApp.keyWindow === controller.window {
+                result.insert(client.id)
+            }
+        }
+        return result
+    }
+
+    func claudeClient(for tab: TerminalTab) -> ClaudeIDEServer.ClientID? {
+        claudeTabs.first { $0.value.value === tab }?.key
+    }
+
+    /// The open projects, so a `claude` started in another terminal inside one finds Next Term too.
+    func projectsChanged() {
+        ClaudeIDEServer.shared.updateWorkspaces(controllers.compactMap(\.project))
+    }
+
     /// Brand icons on configuration folders (.github, .claude, .idea); off: they stay plain and quiet.
     var iconsOnDotFolders: Bool {
         get { UserDefaults.standard.bool(forKey: "iconsOnDotFolders") }
@@ -117,6 +167,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     // MARK: lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Claude Code's IDE link, before the first tab so every tab can use it.
+        if shareWithClaude { startClaudeLink() }
         NSApp.mainMenu = buildMenu()
         KeyboardShortcuts.shared.capture(NSApp.mainMenu!) // the menus as built are the defaults
         setUpNotifications()
@@ -319,6 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        ClaudeIDEServer.shared.stop() // removes the lock file
         MainActor.assumeIsolated { Updater.shared.installStagedUpdateOnQuit() }
         if !SelfTest.isRequested { sessionProjects = controllers.compactMap(\.project) }
         for controller in controllers { for tab in controller.tabs { tab.terminate() } }
@@ -343,6 +396,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 guard let self else { return }
                 self.controllers.removeAll { $0 === closed }
                 self.updateBadge()
+                self.projectsChanged()
                 // Closing the last project leaves the Welcome window, with recent projects, like an IDE.
                 if closedProject && self.controllers.isEmpty && !self.isTerminating { self.showWelcome(nil) }
             }
@@ -361,6 +415,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             controller.window?.center()
         }
         controllers.append(controller)
+        projectsChanged()
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
         return controller
