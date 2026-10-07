@@ -23,9 +23,9 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
   Go and templ, Rust, Elixir, YAML, SQL and more. Line numbers, adjustable line height, soft wrap, auto-indent, ⌘/ to comment, ⌘L to go to a line, find, undo. Files keep
   their encoding, line endings and permissions. When an agent changes a file you have open, the editor
   follows; if you have unsaved edits it asks first.
-- **Send to Agent (⌥⌘K).** Select code in the editor, or files and folders in the sidebar, and send them to
-  the agent in your tab: Next Term types the reference in that agent's own syntax (`@app/User.php#L10-20` for
-  Claude, `app/User.php:10-20` for Codex and others) and hands you the prompt to add your instruction. It
+- **Send to Agent (⌥⌘K).** Select code in the editor or a diff, or files and folders in the sidebar, and send
+  them to the agent in your tab: Next Term types the reference in that agent's own syntax (`@app/User.php#L10-20`
+  for Claude, `app/User.php:10-20` for Codex and others) and hands you the prompt to add your instruction. It
   never presses Enter for you.
 - **Agents see your editor.** Claude Code, Gemini CLI and Qwen Code in a Next Term tab connect to Next Term
   as their IDE, the way they connect to VS Code: the lines you select go with your next prompt ("⧉ 10 lines
