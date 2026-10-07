@@ -1777,7 +1777,9 @@ enum SelfTest {
 
     /// Background fetch: a clone of a local bare remote that gets a new commit shows “Pull 1” without a
     /// click, FETCH_HEAD is never written, nothing asks for anything, and Git Commands lists the fetches
-    /// only when asked to. Then the branch popup fetches as it opens, and its counts update in place.
+    /// only when asked to. Then the branch popup fetches as it opens, and its counts update in place. A
+    /// remote that needs a password pauses quietly until a fetch of yours works, and a command of yours
+    /// stops a slow fetch.
     private static func backgroundFetchChecks(_ c: TerminalWindowController) async {
         guard let git = GitRunner.locateGit() else { return }
         let base = URL(fileURLWithPath: canonicalPath(NSTemporaryDirectory())).appendingPathComponent("nt-selftest-fetch-\(getpid())")
@@ -1873,6 +1875,32 @@ enum SelfTest {
         check(await wait(5) { header.syncText == "Pull 2" || header.syncText == "↓2" }, "and the header follows", header.syncText)
         check(!FileManager.default.fileExists(atPath: fetchHead), "FETCH_HEAD is still untouched")
         popup.close()
+
+        // A remote that needs a password (here one that says so, as a server does): the fetch fails quietly,
+        // background fetch leaves that remote alone, and nothing asks, opens a tab or tries again.
+        run(["config", "remote.origin.uploadpack", "echo 'fatal: Authentication failed for x' >&2; exit 128; :"], in: work)
+        let tabs = w.tabs.count
+        fetcher.test = (root: work.path, interval: 1, staleAfter: 3600)
+        let paused = await wait(10) { fetcher.schedule.isPausedForPerson(repository, remote: "origin") }
+        func lastBackground() -> GitCommandLog.Entry? { GitCommandLog.shared.entries.last { $0.background } }
+        let failure = lastBackground()
+        await pause(2) // two intervals
+        let retried = lastBackground()?.start != failure?.start
+        let prompted = w.window?.attachedSheet != nil || NSApp.modalWindow != nil || w.tabs.count != tabs
+        check(paused && failure?.status == 128 && !retried && !prompted,
+              "a remote that needs a password pauses background fetch quietly: no sheet, no tab, no second try",
+              "paused \(paused), exit \(failure?.status ?? -1), retried \(retried), prompted \(prompted)")
+        // A fetch of yours that works takes the remote up again.
+        run(["config", "--unset", "remote.origin.uploadpack"], in: work)
+        fetcher.fetchedByHand(repository: repository)
+        let resumed = await wait(10) {
+            guard let entry = lastBackground(), entry.start != failure?.start else { return false }
+            return entry.status == 0
+        }
+        check(resumed && !fetcher.schedule.isPausedForPerson(repository), "and a fetch of yours that works turns it back on",
+              lastBackground()?.output ?? "no background fetch")
+        fetcher.test = nil
+        _ = await wait(5) { !fetcher.schedule.isRunning(repository) }
 
         // A command of yours never waits behind a background fetch: one from a remote that takes 20 seconds
         // to answer is stopped for it.
