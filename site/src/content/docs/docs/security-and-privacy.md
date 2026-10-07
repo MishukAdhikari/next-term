@@ -126,7 +126,7 @@ It never uses `sudo`, never replaces a Next Term that is running, and changes no
 
 ## The first launch warning
 
-Releases are not notarized by Apple yet, which is why macOS asks you to allow the first launch of a disk image downloaded in a browser. Each release ships a `.sha256` file so you can check the download yourself first; see [Check the download](/docs/getting-started/#check-the-download-optional). With the one-line installer, which checks the signed checksum for you, macOS does not ask.
+Next Term is not notarized by Apple, which is why macOS asks you to allow the first launch of a disk image downloaded in a browser. The source is public, and releases are built from it by GitHub Actions. Each release ships a `.sha256` file so you can check the download yourself first; see [Check the download](/docs/getting-started/#check-the-download-optional). With the one-line installer, which checks the signed checksum for you, macOS does not ask.
 
 ## Report a problem
 

@@ -12,10 +12,17 @@ Agents in a terminal work blind: they cannot see what you are looking at, and th
 
 | Agent | Tab status | IDE link: live selection, edits as diffs | MCP tools, set up for you | Send to Agent (<kbd>⌥⌘K</kbd>) |
 |---|---|---|---|---|
-| Claude Code | Yes | Yes | Yes | Yes, as an @-mention |
-| Gemini CLI, Qwen Code | Yes | Yes, with the open files | Yes | Yes |
-| Codex, Cursor Agent, opencode, Copilot CLI, Amp, Junie, Command Code | Yes | — | Yes | Yes |
-| Other agents | Yes, for the ones it recognises | — | Add `nxtrm mcp` yourself | Yes |
+| Claude Code | From its screen | Yes | Yes | Yes, as an @-mention |
+| Gemini CLI | From its screen | Yes, with the open files | Yes | Yes |
+| Qwen Code | From output timing | Yes, with the open files | Yes | Yes |
+| Codex, Command Code | From its screen | — | Yes | Yes |
+| Cursor Agent, opencode, Copilot CLI, Amp, Junie | From output timing | — | Yes | Yes |
+| Other agents | From output timing, for the ones it recognises by name | — | Add `nxtrm mcp` yourself | Yes |
+
+- **From its screen:** the spinner follows the agent’s own “esc to interrupt” hint, so it stops the moment the agent stops, and its permission questions turn the tab amber. The hints are checked against that agent’s own screen.
+- **From output timing:** printing counts as working and 2.5 seconds of silence as done. An idle agent that keeps redrawing its screen can keep the spinner going, and a question turns the tab amber only if the agent words it the way Claude Code or Codex does, or rings the bell. Next Term reads every agent’s screen the same way, so if one of these agents shows the same hints, its tab follows them.
+
+See [How Next Term knows](/docs/agent-status/#how-next-term-knows).
 
 With the MCP tools, any of these agents can ask for the editor’s selection (`get_editor_selection`) and open files (`get_open_files`), and one of them can run the others. See [Orchestrate agents (MCP)](/docs/orchestration/).
 

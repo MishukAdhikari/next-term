@@ -8,7 +8,7 @@ head:
     content: Next Term vs Ghostty for AI coding agents
 ---
 
-Ghostty is a free, MIT-licensed terminal emulator for macOS and Linux, developed as non-profit work. It renders with the GPU (Metal on macOS), uses native tabs and splits, and offers a quick terminal, hundreds of built-in themes, the Kitty graphics protocol, AppleScript on macOS, and configuration in a text file. Programs in Ghostty can post desktop notifications and show progress bars, which Claude Code does by default. Next Term is also native, MIT-licensed and free, but it does a different job: it is a macOS terminal and code editor built around running several AI coding agents side by side. It reads each agent’s screen to show its status on the tab, quotes its questions in notifications, adds an editor, side-by-side diffs and a git-aware sidebar, and is an MCP server through which one agent runs the others. Choose Ghostty for a fast, general-purpose terminal on the Mac and Linux. Choose Next Term for agent work. They sit well side by side.
+Ghostty is a free, MIT-licensed terminal emulator for macOS and Linux, developed as non-profit work. It renders with the GPU (Metal on macOS), uses native tabs and splits, and offers a quick terminal, hundreds of built-in themes, the Kitty graphics protocol, AppleScript on macOS, and configuration in a text file. Programs in Ghostty can post desktop notifications and show progress bars, which Claude Code does by default. Next Term is also native, MIT-licensed and free, but it does a different job: it is a macOS terminal and code editor built around running several AI coding agents side by side. It shows each agent’s status on its tab (read from the screen for Claude Code, Codex, Command Code and Gemini CLI), quotes its questions in notifications, adds an editor, side-by-side diffs and a git-aware sidebar, and is an MCP server through which one agent runs the others. Choose Ghostty for a fast, general-purpose terminal on the Mac and Linux. Choose Next Term for agent work. They sit well side by side.
 
 ## At a glance
 
@@ -18,14 +18,14 @@ Ghostty is a free, MIT-licensed terminal emulator for macOS and Linux, developed
 | Price and licence | Free, MIT | Free, MIT; a non-profit project |
 | Native interface | ✓ Swift and AppKit | ✓ Swift, AppKit and SwiftUI on macOS; GTK on Linux |
 | Tabs and split panes | ✓ | ✓ |
-| Status of each agent | ✓ Read from the agent’s screen for 20 agents: working, done, waiting (with the question), failed | Partly: programs can show a progress bar, as Claude Code does |
+| Status of each agent | ✓ For the 20 agents it recognises, with no setup: working, done, waiting (with the question), failed. Read from the screen for Claude Code, Codex, Command Code and Gemini CLI, and from output timing for the rest | Partly: programs can show a progress bar, as Claude Code does |
 | Notifications | ✓ Quote the agent’s question; Dock badge | ✓ Programs can post notifications; command-finished notifications, off by default |
 | One agent runs the others | ✓ An MCP server: start, prompt, wait for and read agents | Partly: AppleScript can open tabs and splits, type text and send keys |
 | Code editor | ✓ 112 languages, Go to File (<kbd>⌘P</kbd>) | — |
 | Side-by-side diffs, per-hunk staging | ✓ <kbd>⌥⌘G</kbd> | — |
 | Project sidebar with git status | ✓ | — |
 | Quick terminal, hundreds of themes | — | ✓ |
-| Configuration | A Settings window; every shortcut can be changed | A text file; no settings window yet |
+| Configuration | A Settings window; every menu shortcut can be changed | A text file; no settings window yet |
 
 ## Choose Ghostty if…
 

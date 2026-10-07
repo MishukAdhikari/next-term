@@ -163,7 +163,7 @@ const faq = [
 	},
 	{
 		q: 'Why does macOS ask me to allow the first launch?',
-		a: 'Releases are not notarized by Apple yet. Allow Next Term once with Open Anyway in System Settings → Privacy & Security (macOS 15 and later), or right-click › Open (macOS 13 and 14).',
+		a: 'Next Term is not notarized by Apple. Allow it once with Open Anyway in System Settings → Privacy & Security (macOS 15 and later), or right-click › Open (macOS 13 and 14).',
 	},
 ];
 ---
@@ -223,9 +223,9 @@ const faq = [
 					identical tabs.
 				</p>
 				<p>
-					Next Term reads each agent’s own screen and marks its tab: a spinner while it works, a green check
-					when it is done, an amber “!” when it is asking you something. When an agent needs a decision, a
-					notification says so and takes you to the tab.
+					Next Term marks each agent’s tab: a spinner while it works, a green check when it is done, an
+					amber “!” when it is asking you something. When an agent needs a decision, a notification says so
+					and takes you to the tab.
 				</p>
 			</div>
 			<figure class="shot shot--strip">
@@ -244,8 +244,9 @@ const faq = [
 				<li>
 					<h3>Status in step with the agent</h3>
 					<p>
-						A spinner only while an agent is really working, read from its own screen, so it stops the moment
-						Claude or Codex stops. Plain commands end with a check or a red cross.
+						A spinner while an agent is working, read from its own screen for Claude Code, Codex, Command Code
+						and Gemini CLI, so it stops the moment they stop; other agents go by output timing. Plain commands
+						end with a check or a red cross.
 					</p>
 				</li>
 				<li>
@@ -575,7 +576,7 @@ const faq = [
 					<p><code>nxtrm .</code> opens a project; <code>nxtrm app/User.php:42</code> opens a file at a line.</p>
 				</li>
 				<li>
-					<h3>Every shortcut is yours</h3>
+					<h3>Every menu shortcut is yours</h3>
 					<p>Change any of them in Settings (<kbd>⌘,</kbd>), or keep the keys you know from another editor.</p>
 				</li>
 				<li>
@@ -688,7 +689,7 @@ const faq = [
 				</li>
 				<li><strong>Open it</strong> and drag Next Term to Applications.</li>
 				<li>
-					<strong>Allow the first launch.</strong> Releases are not notarized yet. On macOS 15 and later, open
+					<strong>Allow the first launch.</strong> Next Term is not notarized. On macOS 15 and later, open
 					Next Term once, then go to System Settings → Privacy & Security and click <strong>Open Anyway</strong>.
 					On macOS 13 and 14, right-click the app, choose <strong>Open</strong>, then <strong>Open</strong> again.
 				</li>

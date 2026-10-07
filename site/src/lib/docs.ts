@@ -15,6 +15,7 @@ export const DOCS_ORDER = [
 	'docs/projects-and-git',
 	'docs/remote',
 	'docs/command-line',
+	'docs/langchain-and-langgraph',
 	'docs/keyboard-shortcuts',
 	'docs/settings',
 	'docs/security-and-privacy',

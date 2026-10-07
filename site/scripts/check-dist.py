@@ -44,6 +44,8 @@ LINK_HOSTS |= {
     "cursor.com", "devin.ai", "docs.devin.ai", "zed.dev",
     "iterm2.com", "ghostty.org",
 }
+# The vendor docs a guide cites (/docs/langchain-and-langgraph/).
+LINK_HOSTS |= {"docs.langchain.com"}
 
 errors: list[str] = []
 warnings: list[str] = []

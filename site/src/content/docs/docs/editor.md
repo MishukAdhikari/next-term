@@ -43,7 +43,7 @@ Colours come from open-source TextMate grammars, through shiki-swift. Highlighti
 - **Data and configuration:** JSON, JSON5, JSON with Comments, JSON Lines, YAML, TOML, INI, XML, CSV, TSV, SQL, Cypher, SPARQL, Turtle, Prisma, Protocol Buffers, Terraform and HCL, Nix, dotenv, pip requirements, Dockerfile, Makefile, CMake, Just.
 - **Writing and git:** Markdown, MDX, reStructuredText, Mermaid, diffs, commit and rebase messages, log files.
 
-**Prompts read as prompts.** In RAG and agent projects (LangChain, LangGraph, LlamaIndex…), `{context}` placeholders and `{{ question }}` or `{% for %}` templates inside Python strings get their own colours, as they do in `.jinja`, `.j2` and `.prompty` files. A Markdown file’s front matter (a `SKILL.md`, say) and every language in its code fences colour from the moment it opens.
+**Prompts read as prompts.** In RAG and agent projects (LangChain, LangGraph, LlamaIndex…), `{context}` placeholders and `{{ question }}` or `{% for %}` templates inside Python strings get their own colours, as they do in `.jinja`, `.j2` and `.prompty` files. A Markdown file’s front matter (a `SKILL.md`, say) and every language in its code fences colour from the moment it opens. See [Next Term for LangChain and LangGraph](/docs/langchain-and-langgraph/).
 
 PHP files are coloured with the grammar that also understands the HTML around `<?php … ?>`. Each grammar keeps its upstream licence; the list is in the repository’s `GRAMMARS.md`.
 

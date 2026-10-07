@@ -22,7 +22,7 @@ Run five agents in five tabs and the hard part is no longer the typing. It is kn
 
 Each mark is a shape as well as a colour, so it reads without colour vision too. A mark clears when you look at the tab.
 
-The spinner is reserved for AI agents, and it runs only while the agent itself says it is working. A build or a test run shows no spinner while it runs; it ends with a check or a cross. A dev server or an editor never shows one at all.
+The spinner is reserved for AI agents. It runs while the agent says it is working, or, for an agent whose screen hints are not known yet, while it prints (see [How Next Term knows](#how-next-term-knows)). A build or a test run shows no spinner while it runs; it ends with a check or a cross. A dev server or an editor never shows one at all.
 
 ## Decisions come to you
 
@@ -53,13 +53,13 @@ Your `.zprofile`, `.zshrc` and frameworks such as oh-my-zsh load exactly as befo
 
 ### 2. The agent’s own screen
 
-Agents such as `claude`, `codex`, `commandcode`, `junie`, `gemini`, `qwen`, `aider` and `opencode` stay in the foreground, so Next Term reads the bottom of the agent’s screen the way you would:
+AI agents such as `claude`, `codex`, `commandcode` and `gemini` stay in the foreground, so Next Term reads the bottom of the agent’s screen the way you would:
 
 - **“esc to interrupt”** (or Gemini’s “esc to cancel”) means the agent is working.
 - **A question with choices** (“Do you want to…? 1. Yes …”) means it is waiting on you.
 - **Anything else** means it is idle, waiting for your next prompt.
 
-Reading the screen keeps the mark in step with the agent: the spinner stops the moment Claude or Codex stops, even if the agent keeps redrawing a clock or a status line. For an agent whose screen Next Term does not recognise yet, it falls back to output timing: printing means working, and 2.5 seconds of silence means done.
+Reading the screen keeps the mark in step with the agent: the spinner stops the moment Claude or Codex stops, even if the agent keeps redrawing a clock or a status line. These hints are checked against Claude Code, Codex, Command Code and Gemini CLI. Any other agent, Junie, opencode or Qwen Code for example, goes by output timing until its screen shows one of them: printing means working, and 2.5 seconds of silence means done, so an idle agent that keeps redrawing can keep the spinner going. The table in [Agents and the IDE link](/docs/agents/#what-each-agent-gets) shows which is which.
 
 It does not matter how you start the agent: directly, through an alias or a shell function, with `npx`, or as `cd app && claude`. When a command looks plain (a shell function, say), Next Term also asks the kernel what is really running.
 

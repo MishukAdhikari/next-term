@@ -8,7 +8,7 @@ head:
     content: Next Term vs Zed for AI coding agents
 ---
 
-Zed is an open-source code editor written in Rust, for macOS, Linux and Windows, with language servers, a debugger, extensions, real-time collaboration and remote development over SSH. For AI it has its own agent, edit predictions, and two ways to run other agents: External Agents such as Claude, Codex and Gemini CLI through the Agent Client Protocol, and Terminal Threads that run any agent CLI inside Zed, several at once. Next Term is a much smaller macOS terminal and editor with no AI of its own and no language servers. It runs command-line agents in tabs, reads each agent’s own screen to show whether it is working, done or waiting on you, quotes its question in a notification, and lets one agent run the others over MCP. If Zed is your editor, its Terminal Threads may be all you need; Next Term is for people who want a terminal built around agents, with status that needs no setup, next to whatever editor they use.
+Zed is an open-source code editor written in Rust, for macOS, Linux and Windows, with language servers, a debugger, extensions, real-time collaboration and remote development over SSH. For AI it has its own agent, edit predictions, and two ways to run other agents: External Agents such as Claude, Codex and Gemini CLI through the Agent Client Protocol, and Terminal Threads that run any agent CLI inside Zed, several at once. Next Term is a much smaller macOS terminal and editor with no AI of its own and no language servers. It runs command-line agents in tabs, shows whether each is working, done or waiting on you (read from the screen for Claude Code, Codex, Command Code and Gemini CLI), quotes its question in a notification, and lets one agent run the others over MCP. If Zed is your editor, its Terminal Threads may be all you need; Next Term is for people who want a terminal built around agents, with status that needs no setup, next to whatever editor they use.
 
 ## At a glance
 
@@ -21,7 +21,7 @@ Zed is an open-source code editor written in Rust, for macOS, Linux and Windows,
 | AI of its own | — Runs the agents you install | ✓ The Agent Panel and edit predictions, with hosted models or your own API keys |
 | Agents from other vendors | ✓ Any agent that runs in a terminal; 20 recognised by name | ✓ External Agents over ACP, and Terminal Threads for any agent CLI |
 | Several agents at once | ✓ Tabs and split panes | ✓ Parallel Agents in the Threads Sidebar, optionally in Git worktrees |
-| Status of each agent | ✓ Read from the agent’s screen: working, done, waiting (with the question), failed | ✓ A status indicator for each thread in the sidebar |
+| Status of each agent | ✓ Working, done, waiting (with the question), failed. Read from the screen for Claude Code, Codex, Command Code and Gemini CLI, and from output timing for other agents | ✓ A status indicator for each thread in the sidebar |
 | Notifications | ✓ Quote the agent’s question, no setup; Dock badge | ✓ When an agent finishes or waits; Terminal Threads notify on the terminal bell |
 | MCP | ✓ An MCP server: one agent starts, prompts, waits for and reads the others | ✓ An MCP client, its servers forwarded to External Agents |
 | Code editor | ✓ 112 languages, Go to File (<kbd>⌘P</kbd>) | ✓ Language servers, Vim mode, a much fuller editor |
@@ -40,7 +40,7 @@ Zed is an open-source code editor written in Rust, for macOS, Linux and Windows,
 
 ## Choose Next Term if…
 
-- **You want agent status with nothing to configure.** Next Term reads each agent’s screen, the way you would, so Claude Code, Codex, Gemini CLI and 17 more show working, done or waiting on their tab as soon as they start. In Zed, a Terminal Thread notifies you when the program rings the terminal bell, and Claude Code has to be set to ring it.
+- **You want agent status with nothing to configure.** Next Term shows working, done or waiting on the tab of 20 agents as soon as they start: Claude Code, Codex, Command Code and Gemini CLI read from their screen, the way you would, and the others from output timing. In Zed, a Terminal Thread notifies you when the program rings the terminal bell, and Claude Code has to be set to ring it.
 - **You want the question in the notification.** When an agent asks for permission, Next Term’s notification quotes it and takes you to the tab.
 - **You want one agent to run the others.** Next Term is an MCP server: an orchestrator can list every tab with its agent’s state, start agents, send prompts, wait and read their screens, across projects.
 - **You want a small native Mac app,** about 3 MB, with no account and no AI service attached.
@@ -54,7 +54,7 @@ Zed is an open-source code editor written in Rust, for macOS, Linux and Windows,
 
 ### Zed can already run Claude Code in a Terminal Thread. Why add Next Term?
 
-If Zed is the only app you want open, Terminal Threads cover a lot. Next Term adds status read from each agent’s own screen, with no settings to change, notifications that quote the agent’s question, Claude Code’s, Gemini CLI’s and Qwen Code’s IDE link (your selection, and proposed edits as diffs to accept or reject), and an MCP server through which one agent orchestrates the others.
+If Zed is the only app you want open, Terminal Threads cover a lot. Next Term adds status on each agent’s tab, with no settings to change, notifications that quote the agent’s question, Claude Code’s, Gemini CLI’s and Qwen Code’s IDE link (your selection, and proposed edits as diffs to accept or reject), and an MCP server through which one agent orchestrates the others.
 
 ### Is Zed free?
 

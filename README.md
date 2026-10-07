@@ -9,15 +9,16 @@ agents are working, which are done, and which are waiting on your decision.
 **[Download for macOS](https://github.com/MishukAdhikari/next-term/releases/latest/download/NextTerm.dmg)** ·
 website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)**
 
-- **Agent status, in step with the agent.** A spinner shows only while an agent is really working, read
-  from the agent's own screen ("esc to interrupt"), so it stops the moment Claude or Codex stops. A green
-  check means done and waiting for your next prompt, an amber "!" means it is asking you something.
-  Plain commands show no spinner and end with a check or a red cross. Marks clear when you look at the tab.
+- **Agent status, in step with the agent.** A spinner shows while an agent is working, read from the
+  agent's own screen ("esc to interrupt") for Claude Code, Codex, Command Code and Gemini CLI, so it stops
+  the moment they stop; other agents go by output timing. A green check means done and waiting for your
+  next prompt, an amber "!" means it is asking you something. Plain commands show no spinner and end
+  with a check or a red cross. Marks clear when you look at the tab.
 - **Decisions come to you.** When an agent asks for permission ("Do you want to make this edit…?"),
   a notification says so with the question; click it to land on that tab. Works however you start the
   agent: directly, through an alias or a shell function, `npx`, or `cd app && claude`.
 - **Code editor.** Double-click a file, pick a Find in Files result, or ⌘-click `src/app.ts:42:7` in any
-  output: the file opens above the terminal at that line, coloured by VS Code's TextMate grammars for 103
+  output: the file opens above the terminal at that line, coloured by VS Code's TextMate grammars for 112
   languages: PHP and Blade (Laravel, WordPress), Ruby and ERB (Rails),
   Python and Jinja (Django, Flask), JS/TS/TSX (React, Next.js), Vue, Svelte, Astro, Angular, Liquid, Twig,
   Go and templ, Rust, Elixir, YAML, SQL and more. Line numbers, adjustable line height, soft wrap, auto-indent, ⌘/ to comment, ⌘L to go to a line, find, undo. Files keep
@@ -87,8 +88,15 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
 - **Find and Replace in Files** (⌘⇧F / ⌘⇧R) across the project, with regular expressions, file masks and
   a preview of every replacement; a file an agent changed since the search is never overwritten.
 - **Dock badge and notifications** for agents that finished while you were in another app.
-- **Every shortcut is yours.** Next Term > Settings (⌘,) > Keyboard Shortcuts lists every command; click one and press
-  new keys. The shortcuts below are the defaults.
+- **Every menu shortcut is yours.** Next Term > Settings (⌘,) > Keyboard Shortcuts lists every menu
+  command; click one and press new keys. The shortcuts below are the defaults.
+- **Bring your settings over.** Coming from VS Code, Cursor, Devin Desktop, a JetBrains IDE, Zed, iTerm2,
+  Ghostty or Terminal? Next Term > Import Settings and Shortcuts… (also offered on first launch) brings
+  the matching shortcut set, the keys you changed yourself, font size, line height, wrap, fonts, terminal
+  colours and recent projects. Nothing changes unless you choose it: the preview shows every item as a
+  checkbox, and what it leaves out and why; Undo Import puts it all back. It only reads, on this Mac, and
+  never opens files that can hold secrets. See
+  [Switching to Next Term](https://next-term.mishuk.me/docs/switching/).
 - **Updates in one click.** Next Term checks GitHub Releases once a day (or Check for Updates). A new
   version opens a window with what's new (Install, Remind Me Later or Skip This Version), and a blue
   Update button at the top right brings it back. It downloads, is verified against its published
@@ -109,7 +117,7 @@ Applications, with no `sudo` and no first-launch prompt ([the script](site/src/i
 download `NextTerm-x.y.z.dmg` from [Releases](../../releases), open it, and drag **Next Term** to
 Applications. After that, Next Term updates itself (Next Term > Check for Updates).
 
-Releases are not notarized yet, so with the disk image macOS blocks the first launch:
+Next Term is not notarized by Apple, so with the disk image macOS blocks the first launch. Allow it once:
 
 - **macOS 15 and later:** open Next Term once (it will be blocked), then go to **System Settings →
   Privacy & Security**, scroll down, click **Open Anyway** next to Next Term, and confirm.
@@ -134,12 +142,13 @@ How it knows, most reliable first:
    points `ZDOTDIR` back at your real config, loads your `.zshenv`, and adds `preexec`/`precmd` hooks that
    report each command (as typed and with aliases expanded), its exit code, the working directory and any
    suspended jobs. Your `.zprofile`, `.zshrc` and frameworks such as oh-my-zsh load exactly as before.
-2. **Agents.** `claude`, `codex`, `commandcode`, `junie`, `gemini`, `aider`, `opencode` and friends stay
-   in the foreground, so Next Term reads the agent's own screen, the way you would: "esc to interrupt"
-   means working, a question with choices means it is waiting on you, anything else means idle. For an
-   agent whose screen it does not recognise yet, it falls back to output timing (printing means working,
-   2.5 s of silence means done). When a command looks plain (a shell function), Next Term also asks the
-   kernel what is really running.
+2. **Agents.** `claude`, `codex`, `commandcode`, `gemini` and other agents stay in the foreground, so
+   Next Term reads the agent's own screen, the way you would: "esc to interrupt" means working, a question
+   with choices means it is waiting on you, anything else means idle. These hints are checked against
+   Claude Code, Codex, Command Code and Gemini CLI. Other agents (Junie, opencode, Qwen Code and the rest)
+   go by output timing until their screen shows one of them: printing means working, 2.5 s of silence
+   means done. When a command looks plain (a shell function), Next Term also asks the kernel what is
+   really running.
 3. **Other shells.** For bash and fish, or after `exec bash`, Next Term asks the kernel for the terminal's
    foreground process and working directory twice a second.
 
@@ -249,9 +258,8 @@ front end can reuse it.
 ## Roadmap
 
 Next: sessions from more agents (Gemini CLI, opencode, Copilot CLI, Cursor). Then a server's files in
-the editor and sidebar next to its remote tabs, then Dev Containers, and a secure link so agents outside
-this Mac (ChatGPT, Claude) can use the MCP server. Later: more of the diff view, a Copilot CLI IDE link,
-session restore and notarized releases. A Linux build would need a different UI layer (AppKit is
+the editor and sidebar next to its remote tabs, then Dev Containers. Later: more of the diff view, a
+Copilot CLI IDE link and session restore. A Linux build would need a different UI layer (AppKit is
 macOS-only); the core logic would carry over.
 
 ## Credits

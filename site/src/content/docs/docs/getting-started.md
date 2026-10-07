@@ -34,12 +34,12 @@ After this first install, Next Term updates itself. See [Updates](/docs/updates/
 
 ### The first launch: “Open Anyway”
 
-Releases are not notarized by Apple yet, so macOS blocks the first launch. You allow it once:
+Next Term is not notarized by Apple, so macOS blocks the first launch of a disk image downloaded in a browser. You allow it once:
 
 - **macOS 15 Sequoia and later:** open Next Term (macOS blocks it), then go to **System Settings → Privacy & Security**, scroll down, click **Open Anyway** next to Next Term, and confirm.
 - **macOS 13 Ventura and macOS 14 Sonoma:** in Applications, right-click Next Term, choose **Open**, then **Open** again in the dialog.
 
-macOS remembers the choice; later launches open normally. Notarized releases are planned.
+macOS remembers the choice; later launches open normally. The one-line installer above skips this step.
 
 ### Check the download (optional)
 

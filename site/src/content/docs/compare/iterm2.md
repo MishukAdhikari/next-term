@@ -8,7 +8,7 @@ head:
     content: Next Term vs iTerm2 for AI coding agents
 ---
 
-iTerm2 is a free, open-source (GPL v2) terminal for macOS with a long list of features: split panes and tab groups, tmux integration, triggers, badges, profiles, a hotkey window, Instant Replay, a Python API and a Metal renderer. Version 3.7 added a Claude Code integration that shows each Claude session as working, waiting or idle, and an optional AI plugin, used with your own API key, adds a chat that can watch and operate your sessions. Next Term is a younger, narrower app: a macOS terminal and code editor built around running several AI coding agents side by side. It reads each agent’s own screen to show its status on the tab, for 20 agents with no hooks to install, and adds an editor, side-by-side diffs, a git-aware project sidebar, and an MCP server through which one agent runs the others. Choose iTerm2 as an all-round terminal; choose Next Term for agent work. Many people keep both.
+iTerm2 is a free, open-source (GPL v2) terminal for macOS with a long list of features: split panes and tab groups, tmux integration, triggers, badges, profiles, a hotkey window, Instant Replay, a Python API and a Metal renderer. Version 3.7 added a Claude Code integration that shows each Claude session as working, waiting or idle, and an optional AI plugin, used with your own API key, adds a chat that can watch and operate your sessions. Next Term is a younger, narrower app: a macOS terminal and code editor built around running several AI coding agents side by side. It shows the status of 20 agents on their tabs with no hooks to install (read from the screen for Claude Code, Codex, Command Code and Gemini CLI), and adds an editor, side-by-side diffs, a git-aware project sidebar, and an MCP server through which one agent runs the others. Choose iTerm2 as an all-round terminal; choose Next Term for agent work. Many people keep both.
 
 ## At a glance
 
@@ -17,7 +17,7 @@ iTerm2 is a free, open-source (GPL v2) terminal for macOS with a long list of fe
 | Platforms | macOS 13 or later | macOS; the current release needs macOS 13 or later |
 | Price and licence | Free, MIT | Free, GPL v2 |
 | Tabs and split panes | ✓ | ✓ With tab groups |
-| Status of each agent | ✓ Read from the agent’s screen for 20 agents, no setup | Partly: Claude Code, through hooks it adds to Claude’s settings; other programs can report status with an escape sequence |
+| Status of each agent | ✓ For the 20 agents it recognises, with no setup: read from the screen for Claude Code, Codex, Command Code and Gemini CLI, and from output timing for the rest | Partly: Claude Code, through hooks it adds to Claude’s settings; other programs can report status with an escape sequence |
 | Notifications | ✓ Quote the agent’s question; Dock badge | ✓ On idle, bell, session end, triggers, or any session’s status change |
 | One agent runs the others | ✓ An MCP server any agent can use: start, prompt, wait for and read agents | Partly: an AI chat that can read your sessions and, after asking, type into them; needs your own API key |
 | AI of its own | — Runs the agents you install | Partly: an optional AI plugin, with your own API key |
@@ -37,7 +37,7 @@ iTerm2 is a free, open-source (GPL v2) terminal for macOS with a long list of fe
 
 ## Choose Next Term if…
 
-- **You run several different agents.** Next Term reads each agent’s own screen, so Claude Code, Codex, Gemini CLI, Qwen Code and 16 more show working, done or waiting on their tab, with nothing added to their settings.
+- **You run several different agents.** Next Term recognises 20 agents and shows working, done or waiting on their tab, with nothing added to their settings: Claude Code, Codex, Command Code and Gemini CLI from their own screen, the others from output timing.
 - **You want to read and fix what the agents change, in the same window:** an editor for 112 languages, side-by-side diffs with per-hunk stage, unstage and revert, Find and Replace in Files, and a sidebar with `+12 −3` line counts.
 - **You want your agents to see your editor.** Claude Code, Gemini CLI and Qwen Code connect to Next Term as their IDE, so your selection goes with the next prompt and proposed edits open as diffs to accept or reject.
 - **You want your own agent to orchestrate the others.** Next Term’s MCP server is used by the agents you already have, under their own subscriptions, with no extra API key.
@@ -52,7 +52,7 @@ iTerm2 is a free, open-source (GPL v2) terminal for macOS with a long list of fe
 
 ### iTerm2 3.7 shows Claude Code’s status. Why add Next Term?
 
-If Claude Code is the only agent you run, iTerm2 may be enough. Next Term shows status for 20 agents by reading their screens, with no hooks in their settings and no Python API to enable, and adds the editor, diffs, project sidebar, IDE link and MCP server around them.
+If Claude Code is the only agent you run, iTerm2 may be enough. Next Term shows status for 20 agents (four of them read from their screens), with no hooks in their settings and no Python API to enable, and adds the editor, diffs, project sidebar, IDE link and MCP server around them.
 
 ### Does Next Term support tmux integration, triggers or profiles?
 

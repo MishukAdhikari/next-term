@@ -38,11 +38,11 @@ It checks that the release’s checksum is signed with the Next Term release key
 
 ## Why does macOS block the first launch?
 
-Releases are not notarized by Apple yet, so macOS asks before it opens one downloaded in a browser. Installed with the one-line installer, Next Term opens without asking. On macOS 15 and later, open Next Term once, then go to **System Settings → Privacy & Security** and click **Open Anyway**. On macOS 13 and 14, right-click the app, choose **Open**, then **Open** again. You only do this once. Each release includes a SHA-256 checksum so you can verify the download first. See [Install and get started](/docs/getting-started/#the-first-launch-open-anyway).
+Next Term is not notarized by Apple, so macOS asks before it opens a copy downloaded in a browser. Installed with the one-line installer, Next Term opens without asking. On macOS 15 and later, open Next Term once, then go to **System Settings → Privacy & Security** and click **Open Anyway**. On macOS 13 and 14, right-click the app, choose **Open**, then **Open** again. You only do this once. Each release includes a SHA-256 checksum so you can verify the download first. See [Install and get started](/docs/getting-started/#the-first-launch-open-anyway).
 
 ## How does Next Term know when an agent is done or waiting on me?
 
-It reads the agent’s own screen, the way you would. “esc to interrupt” means working; a question with choices means it is waiting on you; anything else means it is idle. With zsh, a small shell integration also reports each command and its exit code. See [Agent status in every tab](/docs/agent-status/).
+It reads the agent’s own screen, the way you would. “esc to interrupt” means working; a question with choices means it is waiting on you; anything else means it is idle. This is checked against Claude Code, Codex, Command Code and Gemini CLI; other agents go by output timing, where 2.5 seconds of silence means done. With zsh, a small shell integration also reports each command and its exit code. See [Agent status in every tab](/docs/agent-status/).
 
 ## How do I connect Claude Code to Next Term?
 
@@ -102,4 +102,4 @@ Not today. Next Term is built with AppKit, which is macOS-only. Its core logic h
 
 ## What is coming next?
 
-Next: the conversations Gemini CLI, opencode, Copilot CLI and Cursor keep, in the Welcome window beside the agent sessions it lists today, and Zed’s own key changes in the import. After that: a server’s files in the editor and sidebar, then dev containers; remote access to the MCP server for agents outside your Mac (such as ChatGPT and Claude on the web); more of the diff view; an IDE link for Copilot CLI; session restore and notarized releases. None of these is released yet.
+Next: the conversations Gemini CLI, opencode, Copilot CLI and Cursor keep, in the Welcome window beside the agent sessions it lists today, and Zed’s own key changes in the import. After that: a server’s files in the editor and sidebar, then dev containers; remote access to the MCP server for agents outside your Mac (such as ChatGPT and Claude on the web); more of the diff view; an IDE link for Copilot CLI; session restore. None of these is released yet.

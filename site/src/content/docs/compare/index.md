@@ -6,7 +6,7 @@ head:
     content: Next Term compared with IDEs, editors and terminals
 ---
 
-Next Term is a native macOS terminal and code editor built for one job: running several AI coding agents side by side and showing which one is working, done or waiting on you. It is not a full IDE, so most people keep the IDE or editor they already use, for language intelligence, refactoring and debugging, and add Next Term for their agents. Compared with AI editors such as Cursor, Devin Desktop and Zed, Next Term brings no AI of its own: it runs the agent command-line tools you already have, under your own subscriptions. Compared with terminals such as iTerm2 and Ghostty, it adds status for each agent read from its own screen, an editor with side-by-side diffs and git history, and an MCP server through which one agent runs the others. Every page below also says plainly what the other tool does better.
+Next Term is a native macOS terminal and code editor built for one job: running several AI coding agents side by side and showing which one is working, done or waiting on you. It is not a full IDE, so most people keep the IDE or editor they already use, for language intelligence, refactoring and debugging, and add Next Term for their agents. Compared with AI editors such as Cursor, Devin Desktop and Zed, Next Term brings no AI of its own: it runs the agent command-line tools you already have, under your own subscriptions. Compared with terminals such as iTerm2 and Ghostty, it adds a status mark for each agent, an editor with side-by-side diffs and git history, and an MCP server through which one agent runs the others. Every page below also says plainly what the other tool does better.
 
 ## Every comparison
 
@@ -24,7 +24,7 @@ Next Term is a native macOS terminal and code editor built for one job: running 
 
 ## What Next Term adds to any setup
 
-- **Every agent in sight.** Each agent gets a tab or a split pane, and each tab shows whether its agent is working, done, waiting on a decision (with the question) or failed. The status is read from the agent’s own screen, with nothing to configure.
+- **Every agent in sight.** Each agent gets a tab or a split pane, and each tab shows whether its agent is working, done, waiting on a decision (with the question) or failed. The status is read from the agent’s own screen for Claude Code, Codex, Command Code and Gemini CLI, and from output timing for the other agents it recognises, with nothing to configure.
 - **Decisions come to you.** When an agent asks for permission, a notification quotes the question and takes you to its tab. The Dock badge counts tabs that finished while you were away.
 - **Any agent.** Claude Code, Codex, Gemini CLI, Qwen Code and 16 more are recognised by name, and anything else that runs in a terminal works too. Next Term brings no AI of its own and needs no account.
 - **One agent can run the others.** Next Term is an MCP server: an orchestrator agent can list every tab with its agent’s state, start agents in new tabs, send prompts, wait for them and read their screens, across projects.
@@ -41,7 +41,7 @@ Next Term is a native macOS terminal and code editor built for one job: running 
 - **Mac only.** macOS 13 or later; there is no Windows or Linux version.
 - **No remote development.** Remote tabs run agents on your servers over ssh, but the editor and sidebar open only your Mac’s files. No dev containers, and no real-time collaboration.
 - **No cloud agents.** Agents run on your Mac, or on servers you reach with ssh, in Next Term’s tabs.
-- **Not notarized yet.** macOS asks you to allow the first launch once.
+- **Not notarized.** macOS asks you to allow the first launch of the disk image once (Open Anyway); the one-line installer does not need it.
 
 ## Questions
 
