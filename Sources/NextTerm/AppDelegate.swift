@@ -842,22 +842,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         NSApp.dockTile.badgeLabel = count > 0 ? String(count) : nil
     }
 
-    /// Posts a system notification for a background tab, only when Next Term is not in front:
-    /// while you are in the app, the tab dot says it already.
-    func post(_ notice: TabNotice, tab: TerminalTab, in controller: TerminalWindowController) {
-        guard let center = notificationCenter else { return }
+    /// Posts a system notification for a tab you are not looking at, as Settings › Notifications says. The
+    /// settings are read each time, so a change applies at once. `appActive` stands in for whether Next Term
+    /// is in front, for the self-test.
+    func post(_ notice: TabNotice, tab: TerminalTab, in controller: TerminalWindowController, appActive: Bool? = nil) {
+        let settings = NotificationSettings(defaults: .standard)
+        let active = appActive ?? NSApp.isActive
+        guard settings.shouldNotify(notice, appActive: active, tabVisible: controller.isOnScreen(tab)) else { return }
         let program = Typography.shortened(notice.program, to: 60)
+        let title = Typography.shortened(tab.title, to: 80)
+        // Which project the tab is in (or its folder), unless its title says it already.
+        let place = Typography.shortened(controller.placeName(of: tab), to: 60)
+        let shownPlace = place == title ? nil : place
         let content = UNMutableNotificationContent()
         if let question = notice.question {
-            // An agent is blocked on a decision: say so even while Next Term is in front (the tab itself
-            // is not on screen, or there would be no notice). Clicking it opens the tab.
+            // An agent is blocked on a decision. Clicking the notification opens the tab.
             content.title = "\(program.isEmpty ? "The agent" : program) needs your decision"
-            content.subtitle = Typography.shortened(tab.title, to: 80)
+            content.subtitle = [title, shownPlace].compactMap { $0 }.joined(separator: " — ")
             content.body = question
         } else {
-            // Finished work: only when you are in another app; in Next Term the tab mark says it.
-            guard !NSApp.isActive else { return }
-            content.title = Typography.shortened(tab.title, to: 80)
+            content.title = title
+            content.subtitle = shownPlace ?? ""
             switch notice.state {
             case .done:
                 // Only an agent that is still running is waiting; one that exited (`claude -p …`) finished.
@@ -875,9 +880,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let key = content.title + "\u{0}" + content.body
         if let last = lastNotified[tab.id], Date().timeIntervalSince(last.at) < 10, last.key == key { return }
         lastNotified[tab.id] = (Date(), key)
-        content.sound = .default
+        content.sound = settings.sound ? .default : nil
         content.userInfo = ["tab": tab.id.uuidString]
-        center.add(UNNotificationRequest(identifier: tab.id.uuidString, content: content, trigger: nil))
+        deliver(UNNotificationRequest(identifier: tab.id.uuidString, content: content, trigger: nil))
+    }
+
+    /// While the self-test runs, notifications land here instead of in Notification Center: it checks what
+    /// would be shown, and shows you nothing.
+    var testNotifications: [UNNotificationRequest] = []
+
+    private func deliver(_ request: UNNotificationRequest) {
+        if SelfTest.isRequested { return testNotifications.append(request) }
+        notificationCenter?.add(request)
+    }
+
+    /// Settings › Notifications › Send Test Notification: one like a tab's, with the sound as set. Asks macOS
+    /// first if it has not asked yet (once answered, asking again changes nothing).
+    func sendTestNotification(then done: @escaping () -> Void) {
+        let content = UNMutableNotificationContent()
+        content.title = "Next Term"
+        content.body = "This is how Next Term tells you a tab needs you. Clicking a tab’s notification takes you to it."
+        content.sound = NotificationSettings(defaults: .standard).sound ? .default : nil
+        let request = UNNotificationRequest(identifier: "test", content: content, trigger: nil)
+        guard let center = notificationCenter, !SelfTest.isRequested else {
+            deliver(request)
+            return done()
+        }
+        center.requestAuthorization(options: [.alert, .sound]) { _, _ in
+            center.add(request)
+            DispatchQueue.main.async(execute: done)
+        }
+    }
+
+    /// What macOS lets Next Term do (System Settings › Notifications), for Settings › Notifications.
+    enum NotificationPermission {
+        case allowed, off, notAsked
+        /// `swift run`: no app bundle, so no notifications.
+        case unavailable
+    }
+
+    func notificationPermission(_ done: @escaping (NotificationPermission) -> Void) {
+        guard let center = notificationCenter else { return done(.unavailable) }
+        center.getNotificationSettings { settings in
+            let permission: NotificationPermission
+            switch settings.authorizationStatus {
+            case .denied: permission = .off
+            case .notDetermined: permission = .notAsked
+            default: permission = .allowed // authorized, provisional, ephemeral
+            }
+            DispatchQueue.main.async { done(permission) }
+        }
     }
 
     /// Show banners even while Next Term is in front (decisions in tabs you are not looking at).

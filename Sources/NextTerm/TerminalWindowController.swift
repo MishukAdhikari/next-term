@@ -550,16 +550,29 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func refreshVisibility() {
-        // Folded to its rail, no terminal is on screen: what happens in the tab in front is news too.
-        let visible = userCanSeeActiveTab && !terminalRailed
-        for (i, group) in groups.enumerated() {
+        for group in groups {
             for tab in group.panes {
-                // Every pane of the selected tab is on screen (unless another fills the tab).
-                let isVisible = visible && i == activeIndex && (group.zoomed == nil || group.zoomed === tab)
+                let isVisible = isOnScreen(tab)
                 tab.status.setVisible(isVisible)
                 tab.view.beepAllowed = isVisible && tab === group.focused
             }
         }
+    }
+
+    /// Whether you are looking at `tab`: a pane of the selected tab (every pane, unless another fills the
+    /// tab), in the key window of the active app. Folded to its rail, no terminal is on screen, so what
+    /// happens in the tab in front is news too. Its status and its notifications both go by this.
+    func isOnScreen(_ tab: TerminalTab) -> Bool {
+        guard userCanSeeActiveTab, !terminalRailed, let group = activeGroup, group.panes.contains(where: { $0 === tab }) else { return false }
+        return group.zoomed == nil || group.zoomed === tab
+    }
+
+    /// What a notification says the tab is in: the window's project, else the tab's folder.
+    func placeName(of tab: TerminalTab) -> String {
+        if let project { return (project as NSString).lastPathComponent }
+        if tab.directory == FileManager.default.homeDirectoryForCurrentUser.path { return "~" }
+        let last = (tab.directory as NSString).lastPathComponent
+        return last.isEmpty ? tab.directory : last
     }
 
     private func tick() {
