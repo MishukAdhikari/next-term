@@ -338,9 +338,11 @@ extension SelfTest {
         let linkRow = sidebarRow(c, folder.appendingPathComponent("large-link.log"))
         if linkRow >= 0 {
             outline.scrollRowToVisible(linkRow)
+            let linkNode = outline.item(atRow: linkRow) as? FileNode
+            let isLink = linkNode?.isSymlink == true && linkNode?.name == "large-link.log"
             let linkClicked = click(outline, at: namePoint(outline, linkRow)) && outline.selectedRowIndexes == IndexSet(integer: linkRow)
-            check(linkClicked && area.panes.count == count, "a click on a link to it selects the link and opens nothing",
-                  "clicked \(linkClicked), \(area.panes.count) tabs, front \(area.activeName ?? "none")")
+            check(isLink && linkClicked && area.panes.count == count, "a click on a link to it selects the link and opens nothing",
+                  "the row is \(linkNode?.name ?? "none") (a link: \(linkNode?.isSymlink == true)), clicked \(linkClicked), \(area.panes.count) tabs, front \(area.activeName ?? "none")")
         } else {
             check(false, "the link to the file over 4 MB is listed in the tree")
         }
@@ -627,10 +629,12 @@ extension SelfTest {
     }
 
     /// The tree's node for a file or a folder. `node(at:)` finds folders only: a file is found in its folder.
+    /// Only the folder is resolved: a link's row is its own, not its target's.
     private static func sidebarNode(_ c: TerminalWindowController, _ url: URL) -> FileNode? {
-        let path = canonicalPath(url.path)
-        if let folder = c.sidebar.root?.node(at: path) { return folder }
-        return c.sidebar.root?.node(at: (path as NSString).deletingLastPathComponent)?.children?.first { $0.path == path }
+        let folder = canonicalPath(url.deletingLastPathComponent().path)
+        let path = (folder as NSString).appendingPathComponent(url.lastPathComponent)
+        if let node = c.sidebar.root?.node(at: path) { return node }
+        return c.sidebar.root?.node(at: folder)?.children?.first { $0.path == path }
     }
 
     /// On a row's name: past its disclosure arrow and its icon.
