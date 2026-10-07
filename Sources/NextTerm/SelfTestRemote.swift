@@ -11,6 +11,7 @@ import NextTermCore
 extension SelfTest {
     static func remoteChecks(_ c: TerminalWindowController) async {
         remoteTabBarChecks()
+        remoteMarkShapeChecks()
         remoteFilesNoteChecks()
         #if DEBUG
         await remoteChecksWithStandInSSH(c)
@@ -74,6 +75,37 @@ extension SelfTest {
         }
         check(changing.isEmpty, "remote tabs: a selected tab keeps the words it has unselected", changing.prefix(4).joined(separator: ", "))
         window.contentView = nil
+    }
+
+    /// The server marks read without colour: drawn into a bitmap and taken as ink or not (white is a cut,
+    /// like the bar), each connection's mark has a shape of its own. A few pixels at the edges always differ.
+    private static func remoteMarkShapeChecks() {
+        let size = RemoteMarkView.size
+        func shape(_ link: RemoteLink) -> [Bool] {
+            guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width) * 3, pixelsHigh: Int(size.height) * 3,
+                                             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                             colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return [] }
+            rep.size = size
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            RemoteMarkView.draw(link, tint: .gray, in: NSRect(origin: .zero, size: size))
+            NSGraphicsContext.restoreGraphicsState()
+            return (0..<rep.pixelsWide * rep.pixelsHigh).map { i in
+                guard let pixel = rep.colorAt(x: i % rep.pixelsWide, y: i / rep.pixelsWide) else { return false }
+                let lightness = (pixel.redComponent + pixel.greenComponent + pixel.blueComponent) / 3
+                return pixel.alphaComponent > 0.5 && lightness < 0.9
+            }
+        }
+        let links: [RemoteLink] = [.connected, .connecting, .disconnected, .ended]
+        let shapes = links.map(shape)
+        let alike = links.indices.flatMap { i in
+            links.indices.filter { $0 > i }.compactMap { j -> String? in
+                let differ = zip(shapes[i], shapes[j]).filter { $0 != $1 }.count
+                return differ >= 20 ? nil : "\(links[i].rawValue) and \(links[j].rawValue) (\(differ) pixels apart)"
+            }
+        }
+        check(!shapes[0].isEmpty && alike.isEmpty, "remote tabs: each connection's server mark has a shape of its own, not only a colour",
+              alike.joined(separator: ", "))
     }
 
     /// The sidebar's line while a remote tab is active: VoiceOver reads its sentence, not that and then its

@@ -859,8 +859,9 @@ private final class StatusDotView: NSView {
 
 /// A remote tab's server mark: a server with the connection's dot cut into its corner. The dot says it
 /// by shape as well as colour: filled green when connected, an amber ring while on its way (connecting,
-/// a login), red with a bar when lost, grey with a bar once the shell ended, and the server fades then.
-/// Local tabs have none: remote is the exception that stands out.
+/// a login), red with a bar when lost (the server fades). Once the shell ended there is no connection to
+/// show or make: no dot, the server alone, faded. Local tabs have none: remote is the exception that
+/// stands out.
 final class RemoteMarkView: NSView {
     /// The 11 pt glyph's image is 16 × 13; the dot reaches 3 pt past its corner.
     static let size = NSSize(width: 19, height: 17)
@@ -881,11 +882,12 @@ final class RemoteMarkView: NSView {
         if let link { Self.draw(link, tint: tint, in: bounds) }
     }
 
-    static func dotColor(for link: RemoteLink) -> NSColor {
+    /// nil once the shell ended: nothing to reconnect, and the status mark says how it ended.
+    static func dotColor(for link: RemoteLink) -> NSColor? {
         switch link {
         case .connected: return Theme.done
         case .disconnected: return Theme.failed
-        case .ended: return Theme.textDim // nothing to reconnect: the status mark says how it ended
+        case .ended: return nil
         case .connecting, .waiting, .logIn: return Theme.attention
         }
     }
@@ -897,19 +899,22 @@ final class RemoteMarkView: NSView {
               let glyph = NSImage(systemSymbolName: "server.rack", accessibilityDescription: nil)?.withSymbolConfiguration(config)
         else { return }
         let glyphRect = NSRect(x: rect.minX, y: rect.minY + 1, width: glyph.size.width, height: glyph.size.height)
+        // Faded when disconnected or ended, but not below 3:1 against the bar: it still says "a server".
+        let fraction: CGFloat = link == .disconnected || link == .ended ? 0.7 : 1
+        guard let color = dotColor(for: link) else {
+            glyph.draw(in: glyphRect, from: .zero, operation: .sourceOver, fraction: fraction, respectFlipped: true, hints: nil)
+            return
+        }
         let d: CGFloat = 7
         let dot = NSRect(x: glyphRect.maxX - d / 2 - 0.5, y: glyphRect.maxY - d / 2 - 0.5, width: d, height: d)
         // The dot is cut into the server, so it reads on any background (a tab, its hover, a menu).
         context.saveGState()
         context.beginTransparencyLayer(auxiliaryInfo: nil)
-        // Faded when disconnected or ended, but not below 3:1 against the bar: it still says "a server".
-        let gone = link == .disconnected || link == .ended
-        glyph.draw(in: glyphRect, from: .zero, operation: .sourceOver, fraction: gone ? 0.7 : 1, respectFlipped: true, hints: nil)
+        glyph.draw(in: glyphRect, from: .zero, operation: .sourceOver, fraction: fraction, respectFlipped: true, hints: nil)
         context.setBlendMode(.clear)
         context.fillEllipse(in: dot.insetBy(dx: -1.5, dy: -1.5))
         context.endTransparencyLayer()
         context.restoreGState()
-        let color = dotColor(for: link)
         if link.isOnItsWay {
             let ring = NSBezierPath(ovalIn: dot.insetBy(dx: 0.75, dy: 0.75))
             ring.lineWidth = 1.5
@@ -919,7 +924,7 @@ final class RemoteMarkView: NSView {
         }
         color.setFill()
         NSBezierPath(ovalIn: dot).fill()
-        if gone {
+        if link == .disconnected {
             NSColor.white.setFill()
             NSRect(x: dot.minX + 1.75, y: dot.midY - 0.65, width: d - 3.5, height: 1.3).fill()
         }

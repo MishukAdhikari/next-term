@@ -29,9 +29,9 @@ A remote tab has a small server before its title. Tabs on your Mac have none, so
 | Filled green dot | Connected |
 | Amber ring | Connecting, logging in, or waiting for another tab’s login to the same server |
 | Red dot with a bar, the server faded | Disconnected: <kbd>↩︎</kbd> connects again |
-| Grey dot with a bar, the server faded | The shell on the server ended, and the tab says why; <kbd>⌘W</kbd> closes it |
+| No dot, the server faded | The shell on the server ended, and the tab says why; <kbd>⌘W</kbd> closes it |
 
-The dots differ in shape as well as colour, so they read without colour too. The agent’s own mark (the spinner, the check, the “!”) keeps its place at the start of the tab, before the server.
+The marks differ in shape as well as colour, so they read without colour too. The agent’s own mark (the spinner, the check, the “!”) keeps its place at the start of the tab, before the server.
 
 - **Hover over a tab** for where it runs, such as “Remote: web-1 (deploy@203.0.113.5), connected”. VoiceOver says the same.
 - **A tab too narrow for its whole title** drops “web-1: ” first, then the note, and shows “app”: the mark says the rest. Selecting the tab or pointing at it keeps the same words: its shortcut, such as <kbd>⌘2</kbd>, gives way to them.
