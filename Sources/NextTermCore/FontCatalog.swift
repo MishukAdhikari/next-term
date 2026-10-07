@@ -24,11 +24,11 @@ public struct FontCatalog: Sendable {
     }
 
     /// The fonts installed on this Mac (CoreText; no AppKit, so Core stays platform-neutral). Each catalog
-    /// reads the list of families once, as it is made: reading it takes longer the more fonts a Mac has, so
-    /// an import uses one catalog for its whole plan.
+    /// reads the list of families once, at its first lookup: reading it takes longer the more fonts a Mac
+    /// has, so an import uses one catalog for its whole plan.
     public static var system: FontCatalog {
-        let families = SystemFonts.families()
-        return FontCatalog { SystemFonts.lookup($0, families: families) }
+        let families = SystemFamilies()
+        return FontCatalog { SystemFonts.lookup($0, families: families.byName) }
     }
 
     /// The system's monospaced face, which Terminal's profiles use ("SFMono-Regular"). It isn't in the list
@@ -44,6 +44,21 @@ public struct FontCatalog: Sendable {
         var monospaced = visible.filter { SystemFonts.font(family: $0).map(SystemFonts.isMonospaced) ?? false }
         if !monospaced.contains(systemMonospacedFamily) { monospaced.append(systemMonospacedFamily) }
         return monospaced.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+}
+
+/// The installed families by lowercased name, read on first use and then kept.
+final class SystemFamilies: @unchecked Sendable {
+    private let lock = NSLock()
+    private var read: [String: String]?
+
+    var byName: [String: String] {
+        lock.lock()
+        defer { lock.unlock() }
+        if let read { return read }
+        let families = SystemFonts.families()
+        read = families
+        return families
     }
 }
 

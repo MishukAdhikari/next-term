@@ -29,7 +29,6 @@ import Testing
             #expect(fonts.lookup(name) == sfMono, "\(name)")
         }
         #expect(fonts.lookup("SFMonoX") == nil)
-        #expect(FontCatalog.monospacedFamilies().filter { $0 == "SF Mono" }.count == 1)
     }
 
     /// One catalog reads the installed families once, so a long font list in a settings file stays quick
@@ -46,5 +45,6 @@ import Testing
         #expect(families.contains("Menlo") && families.contains("Monaco"))
         #expect(!families.contains("Helvetica"))
         #expect(!families.contains { $0.hasPrefix(".") })
+        #expect(families.filter { $0 == "SF Mono" }.count == 1, "the system's own monospaced face, once")
     }
 }
