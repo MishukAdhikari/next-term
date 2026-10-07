@@ -218,6 +218,14 @@ import Testing
         #expect(reasons(refused)["keybind super+super+t → new_window"] == "key not recognised")
         #expect(ImportGhostty.triggerID("a+shift") == ImportGhostty.triggerID("shift+a"))
         #expect(ImportGhostty.triggerID("shift+shift+a") == nil)
+
+        // Ghostty reads each step of a two-step key on its own, so a later line for the same steps replaces it.
+        #expect(ImportGhostty.triggerID("ctrl+a>ctrl+n") == ImportGhostty.triggerID("control+a>control+n"))
+        #expect(ImportGhostty.triggerID("ctrl+a>ctrl+n") != ImportGhostty.triggerID("ctrl+a>shift+n"))
+        #expect(ImportGhostty.triggerID("ctrl+a>") == nil)
+        let steps = try self.plan("keybind = ctrl+a>ctrl+n=new_tab\nkeybind = control+a>control+n=unbind")
+        #expect(reasons(steps)["keybind ctrl+a>ctrl+n → new_tab"] == nil)
+        #expect(reasons(steps)["1 keybind"] != nil)
     }
 
     @Test func safety() throws {

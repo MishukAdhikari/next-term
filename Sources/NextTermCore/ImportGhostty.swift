@@ -472,10 +472,15 @@ public enum ImportGhostty {
     }
 
     /// A trigger as Ghostty tells them apart: without its flags, its modifiers in a set order, and its key by place
-    /// or by character (`bracket_left` and `left_bracket` are one key, `[` another). Nil for one Ghostty turns down.
+    /// or by character (`bracket_left` and `left_bracket` are one key, `[` another). A two-step key is read a step
+    /// at a time between ">" signs, as Ghostty reads it. Nil for one Ghostty turns down, an empty step among them.
     static func triggerID(_ trigger: String) -> String? {
-        guard let parsed = parseTrigger(withoutFlags(trigger)) else { return nil }
-        return (parsed.modifiers + [vsCodeKey(parsed.key)]).joined(separator: "+")
+        var steps: [String] = []
+        for step in withoutFlags(trigger).split(separator: ">", omittingEmptySubsequences: false) {
+            guard let parsed = parseTrigger(String(step)) else { return nil }
+            steps.append((parsed.modifiers + [vsCodeKey(parsed.key)]).joined(separator: "+"))
+        }
+        return steps.joined(separator: ">")
     }
 
     /// A Ghostty trigger ("super+shift+d", "cmd+bracket_left") read the way VS Code's keys are. Key
