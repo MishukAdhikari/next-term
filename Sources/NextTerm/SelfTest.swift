@@ -1964,6 +1964,13 @@ enum SelfTest {
         check(front.view.getTerminal().cols == columns && lastRow != nil && front.lastTextRow() == lastRow,
               "folding to the rail never squeezes the terminals: their width and scrollback stay whole",
               "\(columns) → \(front.view.getTerminal().cols) columns, last row \(lastRow ?? -1) → \(front.lastTextRow() ?? -1)")
+        // Dragging the line out of the rail: where the drag would leave the terminal (it is on the right).
+        if let split = pane.superview as? NSSplitView {
+            let room = split.bounds.width - split.dividerThickness
+            let dragged = [60, 150, 400].map { (room - c.splitView(split, constrainSplitPosition: room - $0, ofSubviewAt: 0)).rounded() }
+            check(dragged == [TerminalRail.width, 240, 400], "dragged out of the rail, the terminal is the rail or its usual width, never a few columns",
+                  "60, 150, 400 → \(dragged)")
+        }
         let states = c.tabBar.items.map(\.state)
         check(rail.marks.count == c.groups.count && rail.marks.map(\.state) == states && rail.marks[safe: c.activeIndex]?.selected == true,
               "the rail has a mark for each tab, in order, as the tab bar has them", "\(rail.marks.map(\.state)) vs \(states)")

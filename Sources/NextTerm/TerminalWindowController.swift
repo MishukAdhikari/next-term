@@ -926,6 +926,16 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return sidebarOnRight ? splitView.bounds.width - 160 : min(640, splitView.bounds.width - 320)
     }
 
+    /// Dragged out of the rail, the terminal is the rail or at least its usual width, never a few columns:
+    /// the drag's limits are set when it starts, and folded the terminal's is the rail's.
+    func splitView(_ splitView: NSSplitView, constrainSplitPosition proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {
+        guard splitView === workSplit, workSplit.isVertical, !editorArea.isHidden else { return proposed }
+        let room = workSplit.bounds.width - workSplit.dividerThickness
+        let terminal = terminalFirst ? proposed : room - proposed
+        let wanted = terminalRailed && terminal < workMinimum / 2 ? collapsedLength : max(terminal, workMinimum)
+        return terminalFirst ? wanted : room - wanted
+    }
+
     /// A one-pixel divider is hard to hit: grab it anywhere within 3 points either side.
     func splitView(_ splitView: NSSplitView, effectiveRect proposedEffectiveRect: NSRect, forDrawnRect drawnRect: NSRect,
                    ofDividerAt dividerIndex: Int) -> NSRect {
