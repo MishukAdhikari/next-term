@@ -551,6 +551,26 @@ public enum DataHead {
         return columns
     }
 
+    /// JSON Lines: each record's values of `columns`, as `value(for:)` finds them (the first of a repeated
+    /// key), from one pass over its keys. `value(for:)` goes through them for every column, which on lines
+    /// of thousands of keys holds up a copy of a few hundred rows for seconds.
+    public static func values(of records: [DataRecord], columns: [String]) -> [[String?]] {
+        var index: [String: Int] = [:]
+        for (i, column) in columns.enumerated() where index[column] == nil { index[column] = i }
+        let first = columns.indices.map { index[columns[$0]] ?? $0 } // a repeated column reads the first
+        return records.map { record in
+            var row = [String?](repeating: nil, count: columns.count)
+            var left = index.count
+            for (k, key) in record.keys.enumerated() where k < record.fields.count {
+                guard let i = index[key], row[i] == nil else { continue }
+                row[i] = record.fields[k]
+                left -= 1
+                if left == 0 { break }
+            }
+            return first.map { row[$0] }
+        }
+    }
+
     /// A CSV or TSV record's fields, all of them: split again from `raw` when it has more than it keeps.
     public static func allFields(of record: DataRecord, delimiter: UInt8) -> [String] {
         guard record.hasMoreFields else { return record.fields }
@@ -886,6 +906,13 @@ public enum DataExport {
     /// Rows as CSV with a header line, quoted where needed.
     public static func csv(columns: [String], rows: [[String?]]) -> String {
         TableExport.csv(columns: columns, rows: rows.map(values))
+    }
+
+    /// JSON Lines rows as CSV: a column for each key, the values shown as cells show them.
+    public static func csv(jsonLines records: [DataRecord]) -> String {
+        let columns = DataHead.columns(of: records)
+        let rows = DataHead.values(of: records, columns: columns).map { row in row.map { $0.map(DataHead.displayValue) } }
+        return csv(columns: columns, rows: rows)
     }
 
     private static func values(_ row: [String?]) -> [SQLiteValue] {

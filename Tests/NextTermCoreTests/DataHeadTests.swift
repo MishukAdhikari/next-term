@@ -313,6 +313,27 @@ import Testing
         #expect(DataFileKind(path: "/x/a.NDJSON") == .jsonLines && DataFileKind(path: "b.tsv") == .delimited && DataFileKind(path: "c.log") == .lines)
     }
 
+    /// Copy As CSV of JSON lines: a column for each key, the first of a repeated key, strings without
+    /// their quotes. A line's keys are looked through once for all the columns, so copying a page of
+    /// lines with thousands of keys in another order takes a fraction of a second, not seconds.
+    @Test func jsonLinesCopyAsCSV() {
+        let a = DataRecord(line: 1, raw: "", fields: ["1", #""x, y""#, "true"], keys: ["id", "q", "ok"])
+        let b = DataRecord(line: 2, raw: "", fields: ["false", "2", "3", #""dup""#], keys: ["ok", "id", "id", "extra"])
+        #expect(DataExport.csv(jsonLines: [a, b]) == "id,q,ok,extra\n1,\"x, y\",true,\n2,,false,dup\n")
+        #expect(DataHead.values(of: [b], columns: ["id", "q", "id"]) == [["2", nil, "2"]])
+
+        let keys = (0..<5000).map { "key_\($0)" }
+        let first = DataRecord(line: 1, raw: "", fields: keys.indices.map { "\($0)" }, keys: keys)
+        let reversed = DataRecord(line: 2, raw: "", fields: first.fields.reversed(), keys: keys.reversed())
+        let page = [first] + Array(repeating: reversed, count: 99)
+        let started = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) // this thread's time: other tests run alongside
+        let csv = DataExport.csv(jsonLines: page)
+        let elapsed = Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - started) / 1e9
+        let row = (0..<200).map { "\($0)" }.joined(separator: ",")
+        #expect(csv.hasSuffix("\n" + row + "\n" + row + "\n"))
+        #expect(elapsed < 1, "the copy took \(elapsed) s")
+    }
+
     /// A 200 MB file: the first page comes back fast without reading the rest, and the line count streams.
     @Test func twoHundredMegabytes() throws {
         let project = FixtureProject()
