@@ -5,10 +5,10 @@ import NextTermCore
 /// asks: resolve a link to one commit, list the skills in it, read the repository's stars and licence,
 /// and download that commit's files. Only github.com hosts are accepted, after redirects too.
 enum SkillsGitHub {
-    struct Failure: Error { let message: String }
+    struct Failure: Error, Sendable { let message: String }
 
     /// A source resolved to one commit, and the skills in it.
-    struct Resolved {
+    struct Resolved: Sendable {
         let source: SkillSource
         let commit: String
         let date: Date?
@@ -17,7 +17,7 @@ enum SkillsGitHub {
         let truncated: Bool
     }
 
-    struct Found: Equatable {
+    struct Found: Equatable, Sendable {
         /// The skill's folder in the repository ("" for the root).
         let path: String
         /// That folder's git tree hash at the commit.
@@ -26,7 +26,7 @@ enum SkillsGitHub {
         var skillPath: String { path.isEmpty ? "SKILL.md" : path + "/SKILL.md" }
     }
 
-    struct RepoInfo {
+    struct RepoInfo: Sendable {
         let stars: Int
         let license: String?
         let description: String?

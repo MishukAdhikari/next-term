@@ -36,6 +36,20 @@ public struct SkillReview: Sendable {
     public let capabilities: [String]
     /// Every web address the skill's files mention (fetched at run time, outside the pinned commit).
     public let urls: [String]
+    /// The first line of the skill's own licence file (LICENSE, LICENSE.txt, …): "Apache License", say.
+    public let licenseFile: String?
+
+    /// The licence as stated: SKILL.md's `license` field, else the skill's licence file.
+    public var license: String? {
+        if let stated = frontMatter?.license?.trimmingCharacters(in: .whitespaces), !stated.isEmpty { return stated }
+        return licenseFile
+    }
+
+    /// The licence keeps rights back (Anthropic's document skills are "All rights reserved"): reading it
+    /// matters before using or sharing the skill.
+    public var licenseIsRestrictive: Bool {
+        [frontMatter?.license, licenseFile].compactMap { $0?.lowercased() }.contains { $0.contains("proprietary") || $0.contains("all rights reserved") }
+    }
 
     public var refused: Bool { flags.contains { $0.level == .refuse } }
 
@@ -56,6 +70,7 @@ public struct SkillReview: Sendable {
 
         let walker = manager.enumerator(atPath: folder)
         var total = 0
+        var executables: [String] = []
         while let relative = walker?.nextObject() as? String {
             let full = (folder as NSString).appendingPathComponent(relative)
             var info = stat()
@@ -83,21 +98,33 @@ public struct SkillReview: Sendable {
             let script = scriptExtensions.contains(ext) || data.starts(with: Data("#!".utf8))
             files.append(File(path: relative, size: size, executable: executable, script: script, binary: binary, linkTarget: nil))
             if binary { flags.append(Flag(level: .warning, file: relative, text: "A compiled program.")) }
-            else if executable { flags.append(Flag(level: .warning, file: relative, text: "An executable file.")) }
+            else if executable { executables.append(relative) }
             if size > 1_000_000 { flags.append(Flag(level: .warning, file: relative, text: "A large file (\(size / 1000) KB).")) }
             if packedExtensions.contains(ext) { flags.append(Flag(level: .warning, file: relative, text: "An archive: its contents are not reviewed here.")) }
             guard !binary, let text = String(data: data, encoding: .utf8) else { continue }
-            flags += textFlags(text, file: relative)
+            flags += textFlags(text, file: relative, readByAgents: readByAgentsExtensions.contains(ext))
             for url in findURLs(text) { urls.insert(url) }
         }
         if total > 20_000_000 { flags.append(Flag(level: .warning, file: "", text: "The skill is large (\(total / 1_000_000) MB).")) }
+        if !executables.isEmpty {
+            // Scripts that are marked executable are usual; listed once, as a note.
+            let listed = executables.sorted().prefix(5).joined(separator: ", ") + (executables.count > 5 ? ", …" : "")
+            flags.append(Flag(level: .note, file: "", text: "\(executables.count) executable file\(executables.count == 1 ? "" : "s"): \(listed)."))
+        }
+        let licenseFile = ["LICENSE", "LICENSE.txt", "LICENSE.md", "COPYING"].lazy
+            .compactMap { try? String(contentsOfFile: (folder as NSString).appendingPathComponent($0), encoding: .utf8) }
+            .compactMap { $0.split(separator: "\n").lazy.map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } }
+            .first.map { String($0.prefix(100)) }
         return SkillReview(name: folderName, frontMatter: front, skillText: skillText, files: files.sorted { $0.path < $1.path },
                            flags: flags.sorted { $0.level > $1.level }, capabilities: capabilities(front: front, skillText: skillText, files: files),
-                           urls: urls.sorted())
+                           urls: urls.sorted(), licenseFile: licenseFile)
     }
 
     static let scriptExtensions: Set<String> = ["sh", "bash", "zsh", "fish", "py", "js", "mjs", "cjs", "ts", "rb", "pl", "php", "ps1", "command", "applescript", "scpt"]
     static let packedExtensions: Set<String> = ["zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "jar", "whl", "dmg", "pkg"]
+    /// Files an agent reads as instructions (SKILL.md and the notes it points to), where an HTML comment
+    /// is text the agent sees and a rendered view hides. In HTML or code, `<!--` is ordinary.
+    static let readByAgentsExtensions: Set<String> = ["md", "markdown", "mdx", "txt", ""]
 
     /// A link is fine when it resolves inside the skill folder.
     static func linkStaysInside(relative: String, target: String) -> Bool {
@@ -120,14 +147,14 @@ public struct SkillReview: Sendable {
     }
 
     /// Hidden characters, HTML comments, and commands that fetch and run code that the commit does not hold.
-    static func textFlags(_ text: String, file: String) -> [Flag] {
+    static func textFlags(_ text: String, file: String, readByAgents: Bool = true) -> [Flag] {
         var flags: [Flag] = []
         let hidden = text.unicodeScalars.filter(isHidden)
         if !hidden.isEmpty {
             let kinds = Set(hidden.map(hiddenKind)).sorted().joined(separator: ", ")
             flags.append(Flag(level: .warning, file: file, text: "\(hidden.count) hidden characters (\(kinds)). They are shown in the text below."))
         }
-        if text.contains("<!--") { flags.append(Flag(level: .warning, file: file, text: "An HTML comment: text agents read but rendered Markdown hides.")) }
+        if readByAgents, text.contains("<!--") { flags.append(Flag(level: .warning, file: file, text: "An HTML comment: text agents read but rendered Markdown hides.")) }
         let lower = text.lowercased()
         let patterns: [(String, String)] = [
             (#"(curl|wget)[^\n|]*\|\s*(sudo\s+)?(sh|bash|zsh|python3?)\b"#, "Downloads a script and runs it (curl … | sh)."),
@@ -138,7 +165,8 @@ public struct SkillReview: Sendable {
             (#"base64\s+(-d|--decode)[^\n]*\|\s*(sh|bash|eval)"#, "Decodes hidden text and runs it."),
             (#"\beval\s*\(?\s*\$?\(?\s*(atob|base64)"#, "Decodes hidden text and runs it."),
             (#"(~|\$home)/\.(ssh|aws|gnupg|config/gh|netrc|docker/config)"#, "Mentions a folder that holds credentials."),
-            (#"\b(id_rsa|id_ed25519|\.env\b|keychain)"#, "Mentions keys or secrets."),
+            // A .env file, not code's `process.env`.
+            (#"\b(id_rsa|id_ed25519|keychain)|(?<![\w])\.env\b"#, "Mentions keys or secrets."),
         ]
         for (pattern, message) in patterns where lower.range(of: pattern, options: .regularExpression) != nil {
             flags.append(Flag(level: .warning, file: file, text: message))

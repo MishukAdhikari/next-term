@@ -4,7 +4,7 @@ import NextTermCore
 /// Settings › Skills: every personal skill on this Mac, and what Claude Code, Codex and Command Code
 /// each load for it. Copies of one skill that drifted apart, or that an agent ignores, are marked, and
 /// Unify turns them into one shared copy every agent sees (with Undo). Read-only until the user acts.
-final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelegate {
+final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
     private let table = NSTableView()
     private let filter = NSPopUpButton()
     private let summary = NSTextField(labelWithString: "")
@@ -12,14 +12,29 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     private let openButton = NSButton(title: "Open SKILL.md", target: nil, action: nil)
     private let revealButton = NSButton(title: "Show in Finder", target: nil, action: nil)
     private let undoButton = NSButton(title: "Undo", target: nil, action: nil)
+    private let linkButton = NSButton(title: "Link for Claude Code", target: nil, action: nil)
+    private let updateButton = NSButton(title: "Update…", target: nil, action: nil)
+    private let removeButton = NSButton(title: "Remove…", target: nil, action: nil)
+    private let checkButton = NSButton(title: "Check for Updates", target: nil, action: nil)
+    private let browseButton = NSButton(title: "Browse Skills…", target: nil, action: nil)
+    private let checkOnOpen = NSButton(checkboxWithTitle: "Check for updates when the Skills window opens (at most once an hour)", target: nil, action: nil)
     private var inventory: SkillInventory?
     private var rows: [SkillRow] = []
+    /// The open projects the filter offers, after its two fixed choices.
+    private var projects: [String] = []
+    /// A project's skills are shown, read-only.
+    private var project: String? {
+        let index = filter.indexOfSelectedItem - 3
+        return projects.indices.contains(index) ? projects[index] : nil
+    }
+    private var review: SkillsReviewSheet?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         build()
         reload()
         NotificationCenter.default.addObserver(self, selector: #selector(reloadFromNotification), name: SkillsStore.changed, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(reloadFromNotification), name: SkillsInstaller.updatesChanged, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -32,6 +47,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         intro.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
 
         filter.addItems(withTitles: ["All skills", "Needs attention"])
+        filter.menu?.delegate = self
         filter.target = self
         filter.action = #selector(filterChanged)
 
@@ -57,16 +73,25 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
 
         summary.textColor = .secondaryLabelColor
         summary.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        for (button, action) in [(unifyButton, #selector(unify)), (openButton, #selector(openSkill)), (revealButton, #selector(reveal)), (undoButton, #selector(undo))] {
+        let actions: [(NSButton, Selector)] = [(unifyButton, #selector(unify)), (openButton, #selector(openSkill)), (revealButton, #selector(reveal)),
+                                               (undoButton, #selector(undo)), (linkButton, #selector(linkForClaude)), (updateButton, #selector(update)),
+                                               (removeButton, #selector(remove)), (checkButton, #selector(checkForUpdates)), (browseButton, #selector(browse))]
+        for (button, action) in actions {
             button.target = self
             button.action = action
             button.bezelStyle = .rounded
         }
-        let top = NSStackView(views: [filter, summary])
-        top.spacing = 12
-        let buttons = NSStackView(views: [unifyButton, openButton, revealButton, NSView(), undoButton])
+        checkOnOpen.target = self
+        checkOnOpen.action = #selector(checkOnOpenChanged)
+        checkOnOpen.state = SkillsWindowController.checksOnOpen ? .on : .off
+        checkOnOpen.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        let top = NSStackView(views: [filter, summary, NSView(), checkButton, browseButton])
+        top.spacing = 8
+        let buttons = NSStackView(views: [unifyButton, linkButton, updateButton, removeButton, NSView(), undoButton])
         buttons.spacing = 8
-        let stack = NSStackView(views: [intro, top, scroll, buttons])
+        let more = NSStackView(views: [openButton, revealButton, NSView(), checkOnOpen])
+        more.spacing = 8
+        let stack = NSStackView(views: [intro, top, scroll, buttons, more])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -81,6 +106,8 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
             intro.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
             buttons.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
+            more.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
+            top.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
             scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 200),
         ])
     }
@@ -90,12 +117,16 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     @objc private func reloadFromNotification() { reload() }
 
     func reload() {
-        let inventory = SkillsStore.inventory()
+        let inventory = project.map { SkillInventory.scan(home: $0) } ?? SkillsStore.inventory()
         self.inventory = inventory
         let needsAttention = filter.indexOfSelectedItem == 1
         rows = inventory.rows.filter { !needsAttention || Self.needsAttention($0) }
         let problems = inventory.rows.filter(Self.needsAttention).count
-        summary.stringValue = "\(inventory.rows.count) skills · \(problems) need attention"
+        if let project {
+            summary.stringValue = "\(inventory.rows.count) skills in \(SkillStep.short(project)) · shown as they are; Next Term never changes a project"
+        } else {
+            summary.stringValue = "\(inventory.rows.count) skills · \(problems) need attention"
+        }
         table.reloadData()
         updateButtons()
     }
@@ -111,6 +142,17 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
 
     @objc private func filterChanged() { reload() }
 
+    /// The filter lists the projects open right now, each time it opens.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        let chosen = project
+        while filter.numberOfItems > 2 { filter.removeItem(at: 2) }
+        projects = Array(Set(SkillsInstaller.openProjects)).sorted()
+        guard !projects.isEmpty else { return }
+        filter.menu?.addItem(.separator())
+        for path in projects { filter.addItem(withTitle: "Project: " + (path as NSString).lastPathComponent) }
+        if let chosen, let index = projects.firstIndex(of: chosen) { filter.selectItem(at: index + 3) }
+    }
+
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row index: Int) -> NSView? {
@@ -125,6 +167,16 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         case "state":
             cell.stringValue = Self.stateText(row)
             cell.textColor = Self.needsAttention(row) ? .systemOrange : .secondaryLabelColor
+            if project == nil, let state = SkillsInstaller.updates[row.name] {
+                switch state {
+                case .available:
+                    cell.stringValue = "Update available"
+                    cell.textColor = .controlAccentColor
+                case .unknown(let reason):
+                    cell.toolTip = "The update check could not tell: \(reason)"
+                case .current: break
+                }
+            }
         default:
             guard let agent = SkillAgent(rawValue: column.identifier.rawValue) else { return cell }
             let (text, tip) = Self.cellText(row, agent: agent)
@@ -168,9 +220,18 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
 
     private var selectedRow: SkillRow? { rows.indices.contains(table.selectedRow) ? rows[table.selectedRow] : nil }
 
+    /// The selected skill has a copy in the shared folder (what Install puts there, and Remove takes).
+    private var sharedCopy: SkillCopy? { selectedRow?.copies.first { $0.root.kind == .shared && !$0.broken } }
+
     private func updateButtons() {
         let row = selectedRow
-        unifyButton.isEnabled = row.map { !$0.isUnified && !$0.distinctCopies.isEmpty } ?? false
+        let personal = project == nil
+        unifyButton.isEnabled = personal && (row.map { !$0.isUnified && !$0.distinctCopies.isEmpty } ?? false)
+        let claudeRoot = inventory?.root(.claude)
+        linkButton.isEnabled = personal && sharedCopy != nil && claudeRoot != nil && row?.copies.contains { $0.root.kind == .claude } == false
+        removeButton.isEnabled = personal && sharedCopy != nil
+        if let row, case .available = SkillsInstaller.updates[row.name] { updateButton.isEnabled = personal } else { updateButton.isEnabled = false }
+        checkButton.isEnabled = personal
         openButton.isEnabled = row?.distinctCopies.isEmpty == false
         revealButton.isEnabled = row != nil
         let last = SkillsStore.lastChange
@@ -179,6 +240,79 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     }
 
     // MARK: actions
+
+    @objc private func checkOnOpenChanged() { SkillsWindowController.checksOnOpen = checkOnOpen.state == .on }
+
+    @objc private func browse() { SkillsWindowController.show() }
+
+    @objc private func checkForUpdates() {
+        checkButton.isEnabled = false
+        checkButton.title = "Checking…"
+        Task {
+            await SkillsInstaller.checkForUpdates()
+            checkButton.title = "Check for Updates"
+            checkButton.isEnabled = true
+            let count = SkillsInstaller.updates.values.filter { if case .available = $0 { return true }; return false }.count
+            summary.stringValue += count == 0 ? " · no updates" : " · \(count) update\(count == 1 ? "" : "s")"
+        }
+    }
+
+    /// Claude Code reads only ~/.claude/skills: a link there to the shared copy.
+    @objc private func linkForClaude() {
+        guard let row = selectedRow, let inventory, let claudeRoot = inventory.root(.claude), let sharedRoot = inventory.root(.shared), let window else { return }
+        let at = (claudeRoot.path as NSString).appendingPathComponent(row.name)
+        let to = (sharedRoot.path as NSString).appendingPathComponent(row.name)
+        if case .failure(let failure) = SkillsStore.apply([.link(at: at, to: to)], title: "Link \(row.name) for Claude Code") { Self.tell(failure.message, in: window) }
+    }
+
+    /// An update: the new commit is fetched and reviewed like an install, with what changed.
+    @objc private func update() {
+        guard let row = selectedRow, let window else { return }
+        updateButton.isEnabled = false
+        Task {
+            defer { updateButtons() }
+            guard let item = await SkillsInstaller.tracked().first(where: { $0.name == row.name }) else { return }
+            do {
+                let fetched = try await SkillsInstaller.fetch(SkillSource(owner: item.source.owner, repo: item.source.repo, ref: item.source.ref, path: item.path))
+                let sheet = SkillsReviewSheet(fetched: fetched) { [weak self] installed in
+                    self?.review = nil
+                    if installed { SkillsInstaller.updates[row.name] = .current }
+                }
+                review = sheet
+                if let sheetWindow = sheet.window { window.beginSheet(sheetWindow, completionHandler: nil) }
+            } catch {
+                Self.tell((error as? SkillsGitHub.Failure)?.message ?? error.localizedDescription, in: window, title: "The update could not be fetched")
+            }
+        }
+    }
+
+    /// Remove: the shared copy, its Claude Code link, its lock entry and record, after the developer has
+    /// seen exactly that, and what the skill asked for that outlives it.
+    @objc private func remove() {
+        guard let row = selectedRow, let window else { return }
+        Task {
+            let (steps, leftovers) = await SkillsInstaller.removal(row.name)
+            guard !steps.isEmpty else { return }
+            let alert = NSAlert()
+            alert.messageText = "Remove “\(row.name)”?"
+            var lines = steps.map { "• " + $0.summary }
+            lines.append("")
+            lines.append("Agent sessions that are open now keep it until they restart.")
+            lines += leftovers.map { "• " + $0 }
+            let others = row.copies.filter { $0.root.kind == .codex || $0.root.kind == .commandCode }
+            if !others.isEmpty { lines.append("Copies in \(others.map { SkillStep.short($0.path) }.joined(separator: ", ")) are not part of this install and stay.") }
+            lines.append("Undo puts it back.")
+            alert.informativeText = lines.joined(separator: "\n")
+            alert.addButton(withTitle: "Remove")
+            alert.addButton(withTitle: "Cancel")
+            alert.buttons[0].keyEquivalent = ""
+            alert.buttons[1].keyEquivalent = "\r"
+            alert.beginSheetModal(for: window) { response in
+                guard response == .alertFirstButtonReturn else { return }
+                if case .failure(let failure) = SkillsStore.apply(steps, title: "Remove \(row.name)") { Self.tell(failure.message, in: window) }
+            }
+        }
+    }
 
     @objc private func openSkill() {
         guard let copy = selectedRow?.distinctCopies.first else { return }
@@ -216,10 +350,10 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         }
     }
 
-    static func tell(_ message: String, in window: NSWindow) {
+    static func tell(_ message: String, in window: NSWindow, title: String = "The skills were not changed") {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "The skills were not changed"
+        alert.messageText = title
         alert.informativeText = message
         alert.beginSheetModal(for: window)
     }

@@ -12,6 +12,7 @@ A terminal sees everything you type, and an agent link exposes your editor to pr
   - the daily update check to GitHub (see [Updates](/docs/updates/#what-the-check-sends));
   - `git fetch` from your projects’ own remotes, on a schedule (see [Background fetch](#background-fetch) below).
 - **Everything else only when you ask.** A fetch, update or push you choose in the branch popup talks to your git remote. A remote tab connects only to the server you opened it on, through your own ssh; a tmux or herdr tab reconnects to it by itself, and reopens at launch. **Open in TablePlus** hands a database to TablePlus, and **Open in Vercel** runs Vercel’s own command line in a new tab. Nothing else starts by itself.
+- **The Skills library asks GitHub only when you do:** when you review a skill, install or update one, or click Check for Updates in Settings › Skills. Opening Window › Skills also checks your installed skills for updates, at most once an hour, unless you turn that off in Settings › Skills. Each request names a public repository and a commit; nothing about you or your other skills is sent. See [Skills from GitHub](#skills-from-github).
 - **No AI of its own.** Next Term runs the agents you install. What those agents send to their providers is between you and them.
 
 ## The agent links
@@ -123,6 +124,17 @@ The one-line installer (`curl -fsSL https://next-term.mishuk.me/install.sh | bas
 - **“latest” is not older than this site’s version,** so an older signed release cannot be passed off as the newest.
 
 It never uses `sudo` and never replaces a Next Term that is running. Besides the app, it adds at most the `nxtrm` command: a link in a folder already on your `PATH` that you can write (see [The nxtrm command](/docs/command-line/#installing-it)). It never changes your `PATH`, and never replaces anyone else’s `nxtrm`. [Read the script](https://github.com/MishukAdhikari/next-term/blob/main/site/src/install.sh) before you run it, if you like.
+
+## Skills from GitHub
+
+Window › Skills installs agent skills from public GitHub repositories. A skill is instructions and sometimes scripts that your agents follow, so nothing is written until you have seen it:
+
+- **One commit, checked.** Next Term fetches one commit and compares every skill folder with the git tree hash GitHub lists for it. Files that differ are refused.
+- **A review before anything is written.** You see every file as written, with hidden characters spelled out and HTML comments shown, plus what the skill may do (pre-approved tools, hooks, shell lines) and anything that looks risky. Install has no Return key, so a keystroke meant for a terminal never installs anything.
+- **Never updated on its own.** An update is a new commit, reviewed like an install, with the changes shown.
+- **One shared copy, with Undo.** A skill goes to `~/.agents/skills`, linked for Claude Code if you want. Copies it replaces go to the Trash, and Undo puts them back. Undo refuses, changing nothing, if anything changed since.
+- **Projects are never changed.** Settings › Skills shows a project's skills without writing to them.
+- **No skill ships with Next Term.** The Featured list holds only names, places and the commit that was looked at.
 
 ## The first launch warning
 
