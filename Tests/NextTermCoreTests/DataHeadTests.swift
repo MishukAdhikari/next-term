@@ -248,8 +248,11 @@ import Testing
         while !scanner.isFull { autoreleasepool { scanner.feed(line) } } // as DataHead.page reads
         let grew = Int64(Self.footprint()) - Int64(before)
         let count = scanner.records.count
-        #expect(count > 100 && scanner.records[0].keys.count == 2000, "\(count) records")
-        #expect(grew < 128 << 20, "\(count) records, memory grew by \(grew >> 20) MB")
+        // Each line's 4,000 strings cost about 264 KB with their own allocations, so a 64 MB page holds about
+        // 250 of them; counting only the strings' 16 bytes would let in over 600. The count is the exact test
+        // (the process's memory also holds what tests running beside this one allocate).
+        #expect(count > 100 && count < 400 && scanner.records[0].keys.count == 2000, "\(count) records")
+        #expect(grew < 256 << 20, "\(count) records, memory grew by \(grew >> 20) MB")
         withExtendedLifetime(scanner) {}
     }
 
