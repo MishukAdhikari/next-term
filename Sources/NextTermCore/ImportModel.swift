@@ -54,14 +54,14 @@ public enum KeymapPreset: String, CaseIterable, Codable, Sendable {
 
 /// The apps an import can read.
 public enum ImportSourceKind: String, CaseIterable, Codable, Sendable {
-    case vsCode, vsCodeInsiders, vsCodium, cursor, devinDesktop, jetBrains, zed, iTerm2
+    case vsCode, vsCodeInsiders, vsCodium, cursor, devinDesktop, jetBrains, zed, iTerm2, ghostty
 
     /// The preset that fits people coming from it.
     public var preset: KeymapPreset {
         switch self {
         case .vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop: return .vsCode
         case .jetBrains: return .jetBrains
-        case .zed, .iTerm2: return .nextTerm
+        case .zed, .iTerm2, .ghostty: return .nextTerm
         }
     }
 }

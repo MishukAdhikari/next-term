@@ -446,9 +446,9 @@ public enum ImportITerm2 {
     }
 }
 
-/// Reads for the importers in this file: regular files only (never a pipe or a device), through a read
-/// handle, up to a size no settings file reaches.
-private enum ImportFile {
+/// Reads for the importers of Zed, the terminals and Warp: regular files only (never a pipe or a device),
+/// through a read handle, up to a size no settings file reaches.
+enum ImportFile {
     static let limit = 64 << 20
 
     static func data(_ path: String) -> Data? {
