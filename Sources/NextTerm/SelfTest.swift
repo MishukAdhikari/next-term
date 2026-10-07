@@ -3128,6 +3128,19 @@ enum SelfTest {
         try? FileManager.default.removeItem(at: proj.appendingPathComponent("a-greet.md"))
         try? FileManager.default.removeItem(at: proj.appendingPathComponent("src/z.php"))
 
+        // With no agent running, ⌥⌘K stays on and says why nothing was sent.
+        if c.agentTab == nil {
+            c.openFile(proj.appendingPathComponent("src/main.php"))
+            let sendItem = NSMenuItem(title: "Send to Agent", action: #selector(TerminalWindowController.sendToAgent(_:)), keyEquivalent: "")
+            check(c.validateMenuItem(sendItem), "Send to Agent stays on with no agent running")
+            c.sendEditorSelection()
+            func texts(_ view: NSView) -> [String] { view.subviews.flatMap { ($0 as? NSTextField).map { [$0.stringValue] } ?? texts($0) } }
+            check(await wait(2) { window.attachedSheet?.contentView.map(texts)?.contains("No agent is running in this window") == true },
+                  "and sending says no agent is running", window.attachedSheet?.contentView.map(texts)?.joined(separator: " | ") ?? "no sheet")
+            if let sheet = window.attachedSheet { window.endSheet(sheet) }
+            _ = await wait(2) { window.attachedSheet == nil }
+        }
+
         // Send to Agent: an "agent" (cat under the name claude, so the tty echoes what it is given) in a tab.
         let fakeBin = proj.deletingLastPathComponent().appendingPathComponent("fake-agent-bin")
         try? FileManager.default.createDirectory(at: fakeBin, withIntermediateDirectories: true)

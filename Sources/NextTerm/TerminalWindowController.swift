@@ -630,9 +630,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(showChanges(_:)) {
             return editorArea.activePath != nil || sidebar.selection.contains { !$0.isFolder } || sidebar.selectedDeleted.contains { !$0.isDirectory }
         }
+        // On with no agent running too: sending then says that none is.
         if item.action == #selector(sendToAgent(_:)) {
             let sendable = editorArea.activePath != nil && editorArea.activeDiff?.proposal == nil
-            return agentTab != nil && (sendable || !sidebar.selection.isEmpty)
+            return sendable || !sidebar.selection.isEmpty
         }
         if item.action == #selector(toggleEditorFocus(_:)) {
             item.title = isEditorFocused ? "Focus Terminal" : "Focus Editor"
