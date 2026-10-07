@@ -301,6 +301,38 @@ public struct CommitDetails: Equatable, Sendable {
     }
 }
 
+/// Which of a run of requests is the newest, readable from any thread. Work queued for an older one is
+/// skipped if a newer one came before it started: the Git Log reads one commit's details at a time, and
+/// a read can take half a minute (a treeless clone whose remote does not answer), so clicking through
+/// three commits waits for at most the one being read, then the last one, not all three.
+public final class NewestRequest: @unchecked Sendable {
+    private let lock = NSLock()
+    private var newest = 0
+
+    public init() {}
+
+    /// A new request, now the newest: its token.
+    public func next() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        newest += 1
+        return newest
+    }
+
+    public func isNewest(_ token: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return token == newest
+    }
+
+    /// Runs `work` on `queue` unless, by the time its turn comes, a newer request has been made.
+    public func async(on queue: DispatchQueue, for token: Int, _ work: @escaping @Sendable () -> Void) {
+        queue.async {
+            if self.isNewest(token) { work() }
+        }
+    }
+}
+
 public enum CommitLog {
     public static let pageSize = 1000
     public static let fileLimit = 2000

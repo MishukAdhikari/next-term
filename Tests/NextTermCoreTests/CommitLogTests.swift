@@ -348,6 +348,30 @@ import Testing
         #expect(CommitLog.details(of: two, in: repo.work, git: repo.git)?.isListed == true)
     }
 
+    /// Reads queued behind a slow one, for commits already left, are skipped: only the read under way
+    /// and the newest one run.
+    @Test func readsForCommitsAlreadyLeftAreSkipped() {
+        let requests = NewestRequest(), queue = DispatchQueue(label: "nt-test-newest")
+        let started = DispatchSemaphore(value: 0), slow = DispatchSemaphore(value: 0)
+        // Written on the serial queue alone, and read once it is empty.
+        final class Ran: @unchecked Sendable { var tokens: [Int] = [] }
+        let ran = Ran()
+        let first = requests.next()
+        requests.async(on: queue, for: first) {
+            started.signal()
+            slow.wait()
+            ran.tokens.append(first)
+        }
+        started.wait()
+        for _ in 0..<3 {
+            let token = requests.next()
+            requests.async(on: queue, for: token) { ran.tokens.append(token) }
+        }
+        slow.signal()
+        queue.sync {}
+        #expect(ran.tokens == [1, 4] && requests.isNewest(4) && !requests.isNewest(3))
+    }
+
     /// A file that became a link shows both sides; an added empty file is new, with nothing in it.
     @Test func aTypeChangeAndAnEmptyFile() throws {
         let repo = try #require(ScratchRepo())
