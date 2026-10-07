@@ -175,6 +175,7 @@ extension SelfTest {
         // Flags in the test folder: "deny" makes ssh refuse the login (a wrong password), "unreachable"
         // fails the network, "drop" ends a tab's connection (255) once its remote command ends. Only a
         // tab's ssh (-t) takes "drop": a status check (-T) running at that moment must not use it up.
+        // "slow" holds each check (not a tab's ssh) 2 s before it runs.
         let fakeSSH = bin.appendingPathComponent("ssh")
         let script = """
             #!/bin/bash
@@ -193,6 +194,7 @@ extension SelfTest {
             [ "$op" = exit ] && exit 0
             if [ -e "$B/deny" ]; then echo 'nt@selftest.invalid: Permission denied (publickey).' >&2; exit 255; fi
             if [ -e "$B/unreachable" ]; then echo 'ssh: connect to host selftest.invalid port 22: Connection refused' >&2; exit 255; fi
+            if [ -z "$tty" ] && [ -e "$B/slow" ]; then sleep 2; fi
             export HOME=\(RemoteShell.quote(home.path)) SHELL=/bin/zsh PATH=\(RemoteShell.quote(bin.path)):/usr/bin:/bin:/usr/sbin:/sbin TMUX_TMPDIR="$B/tmux"
             unset ZDOTDIR NEXTTERM_USER_ZDOTDIR
             cd "$HOME"
@@ -464,6 +466,7 @@ extension SelfTest {
               kept.screenTail(8).joined(separator: " | "))
         c.remove(kept)
         check(await wait(5) { sh("tmux -L nextterm list-sessions -F '#{session_name}'").contains(session) }, "remote tmux: closing the tab only detaches")
+        await endSessionChecks(host: host, slow: { flag("slow", $0) }, sessions: { sh("tmux -L nextterm list-sessions -F '#{session_name}' 2>/dev/null") })
         _ = sh("tmux -L nextterm kill-server") // the test's own server (TMUX_TMPDIR)
     }
     #endif

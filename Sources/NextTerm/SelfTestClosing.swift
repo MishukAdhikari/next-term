@@ -38,6 +38,12 @@ extension SelfTest {
         let asked = sheetWords(window)
         check(asked.contains("Save changes to “notes.txt” before closing?") && asked.contains("closes the window"),
               "it asks as closing the window does, naming the file", asked)
+        // Another close of that tab while the sheet is up (an agent's, End Session's once the session has
+        // ended) leaves it to the sheet: the window does not go from under it.
+        w.remove(tab)
+        w.remove(tab, saveAsked: true)
+        check(window.isVisible && window.attachedSheet != nil && w.tabs.first === tab,
+              "another close of that tab while the sheet is up waits for the sheet", "sheet \(window.attachedSheet != nil), tabs \(w.tabs.count)")
         check(await pressSheetButton("Cancel", in: window), "the sheet offers Cancel")
         await pause(0.2)
         check(window.isVisible && w.tabs.first === tab && !tab.exited && doc.isDirty && onDisk() == "one\n",
@@ -123,6 +129,70 @@ extension SelfTest {
             let asked = u.window?.attachedSheet != nil
             let closed = await wait(3) { !app.controllers.contains { $0 === u } }
             check(!asked && closed, "with nothing unsaved, closing the last tab closes its window at once", "asked \(asked), closed \(closed)")
+        }
+    }
+
+    /// A kept tmux tab, its window's last, closed with a file unsaved: Don't Save, then End Session. Ending
+    /// it takes a moment (`slow` holds the host's checks 2 s), and the editor is in use meanwhile. With no
+    /// edit, the window goes once the session has ended, without asking twice; with an edit, it waits and
+    /// asks again. `sessions` lists the tmux sessions on the stand-in host.
+    static func endSessionChecks(host: RemoteHost, slow: (Bool) -> Void, sessions: () -> String) async {
+        let app = AppDelegate.shared!
+        let root = URL(fileURLWithPath: canonicalPath(NSTemporaryDirectory())).appendingPathComponent("nt-end-session-\(getpid())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("plan.txt")
+        try? "plan\n".write(to: file, atomically: true, encoding: .utf8)
+        func onDisk() -> String { (try? String(contentsOf: file, encoding: .utf8)) ?? "" }
+
+        for editsMeanwhile in [false, true] {
+            let w = app.openWindow(directory: root.path)
+            guard let window = w.window, let local = w.tabs.first else { return check(false, "remote tmux: a window opens for End Session") }
+            let kept = w.addRemoteTab(RemoteTab(host: host, keep: .tmux))
+            w.remove(local)
+            let session = kept.remote?.session ?? ""
+            _ = await wait(20) { kept.remoteReady }
+            kept.view.send(txt: "sleep 300\r")
+            _ = await wait(10) { kept.status.running }
+            w.openFile(file)
+            if let editor = w.editorArea.activeEditor, kept.keptNote != nil {
+                editor.textView.insertText("first ", replacementRange: NSRange(location: 0, length: 0))
+                window.makeFirstResponder(kept.view)
+                w.closeTab(nil)
+                let asked = await pressSheetButton("Don’t Save", in: window)
+                slow(true)
+                let offered = await pressSheetButton("End Session", in: window)
+                check(asked && offered, "remote tmux: closing a kept last tab with a file unsaved asks to save, then offers End Session")
+                if editsMeanwhile {
+                    _ = await wait(1) { window.attachedSheet == nil }
+                    await pause(0.3) // well within the 2 s the session takes to end
+                    editor.textView.insertText("second ", replacementRange: NSRange(location: 0, length: 0))
+                }
+                let ended = await wait(15) { !sessions().contains(session) }
+                slow(false)
+                if editsMeanwhile {
+                    let again = await wait(5) { window.attachedSheet != nil }
+                    check(ended && again && window.isVisible && w.editorArea.dirtyDocuments.count == 1,
+                          "End Session: a file edited while the session ends is asked about, and the window waits",
+                          "ended \(ended), asked \(again), visible \(window.isVisible): \(sheetWords(window))")
+                    _ = await pressSheetButton("Don’t Save", in: window)
+                }
+                let closed = await wait(5) { !app.controllers.contains { $0 === w } }
+                check(ended && closed && onDisk() == "plan\n",
+                      editsMeanwhile ? "End Session: and Don’t Save then closes the window"
+                          : "End Session: with nothing edited since Don’t Save, the window goes once the session has ended, not asking twice",
+                      "ended \(ended), closed \(closed), sheet \(window.attachedSheet != nil)")
+            } else {
+                check(false, "remote tmux: a kept tab with a program running, and a file open, for End Session",
+                      "running \(kept.status.running), connected \(kept.remoteConnected)")
+            }
+            // Whatever is left (a check that failed) goes without asking.
+            slow(false)
+            if app.controllers.contains(where: { $0 === w }) {
+                if window.attachedSheet != nil { _ = await pressSheetButton("Cancel", in: window) }
+                w.editorArea.closeAll()
+                for tab in w.tabs { w.remove(tab) }
+            }
         }
     }
 
