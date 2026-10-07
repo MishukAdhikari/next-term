@@ -270,7 +270,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         window.minSize = NSSize(width: 480, height: 320)
         window.isReleasedWhenClosed = false
         super.init(window: window)
-        // The editor's settings, the terminal's, every shortcut, and imports.
+        // The editor's settings, the terminal's, notifications, every shortcut, and imports.
         let tabs = NSTabView()
         let editorTab = NSTabViewItem(identifier: "editor")
         editorTab.label = "Editor"
@@ -278,6 +278,9 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         let terminalTab = NSTabViewItem(identifier: "terminal")
         terminalTab.label = "Terminal"
         terminalTab.view = TerminalSettingsView()
+        let notificationsTab = NSTabViewItem(identifier: "notifications")
+        notificationsTab.label = "Notifications"
+        notificationsTab.view = NotificationSettingsView()
         let keysTab = NSTabViewItem(identifier: "keys")
         keysTab.label = "Keyboard Shortcuts"
         keysTab.view = NSView()
@@ -286,6 +289,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         importTab.view = ImportSettingsView()
         tabs.addTabViewItem(editorTab)
         tabs.addTabViewItem(terminalTab)
+        tabs.addTabViewItem(notificationsTab)
         tabs.addTabViewItem(keysTab)
         tabs.addTabViewItem(importTab)
         // A preset switched (here or by an import) changes the shortcuts listed.
