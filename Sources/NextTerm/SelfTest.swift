@@ -484,6 +484,7 @@ enum SelfTest {
         await editorChecks(c, proj: proj, tab: inProject)
         await goToFileChecks(c, proj: proj)
         await gutterAndCollapseChecks(c, proj: proj)
+        await blameChecks(c, proj: proj)
         await deletedFileChecks(c, proj: proj)
         await notebookChecks(c, proj: proj)
         await updateChecks(c)
@@ -1307,6 +1308,69 @@ enum SelfTest {
         check(await wait(5) { editor.changeMarks.isEmpty }, "the marks go once the file matches the commit again")
         c.editorArea.close(editor)
         _ = window
+    }
+
+    /// View › Annotate with Git Blame: who last changed each line, beside the numbers; edited lines are not
+    /// committed, and the lines below keep their commit.
+    private static func blameChecks(_ c: TerminalWindowController, proj: URL) async {
+        guard let git = GitRunner.locateGit(), let app = AppDelegate.shared else { return }
+        func commit(_ author: String, _ message: String) {
+            for args in [["add", "blame.txt"], ["-c", "user.name=\(author)", "-c", "user.email=\(author.prefix(3).lowercased())@example.com",
+                                                "-c", "commit.gpgsign=false", "commit", "-qm", message, "--", "blame.txt"]] {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: git)
+                process.arguments = ["-C", proj.path] + args
+                try? process.run()
+                process.waitUntilExit()
+            }
+        }
+        let file = proj.appendingPathComponent("blame.txt")
+        try? "one\ntwo\n".write(to: file, atomically: true, encoding: .utf8)
+        commit("Ann Lee", "First lines")
+        try? "one\ntwo\nthree\n".write(to: file, atomically: true, encoding: .utf8)
+        commit("Bob Stone", "Add a third line")
+        let saved = (app.blameAnnotations, app.currentLineBlame)
+        if app.blameAnnotations { app.toggleBlameAnnotations(nil) }
+        c.openFile(file)
+        guard let editor = c.editorArea.activeEditor, editor.document.path.hasSuffix("blame.txt"),
+              let ruler = editor.scrollView.verticalRulerView else { return check(false, "blame.txt opens") }
+        let narrow = ruler.ruleThickness
+        app.toggleBlameAnnotations(nil)
+        func column(_ line: Int) -> String { editor.blameColumnText(line: line) ?? "off" }
+        check(await wait(5) { column(0).hasPrefix("Ann ") && column(2).hasPrefix("Bob ") }, "blame shows who last changed each line",
+              "\(column(0)) / \(column(2))")
+        check(column(1).isEmpty, "only on the first line of a commit’s run of lines", column(1))
+        check(ruler.ruleThickness > narrow + 100, "in a column beside the line numbers", "\(narrow) → \(ruler.ruleThickness)")
+        if let blame = editor.editedBlame {
+            let tip = BlameText.toolTip(blame, line: 2)
+            check(tip.hasPrefix("Add a third line\nBob Stone <bob@example.com>\n"), "hovering a commit’s lines tells its summary and author", tip)
+        }
+        await screenshot(c, suffix: "blame")
+
+        // An edited line is not committed at once, and still after the diff; a line added above moves the rest down.
+        editor.textView.insertText("TWO", replacementRange: NSRange(location: 4, length: 3))
+        check(column(1) == "Not committed", "an edited line shows as not committed while typing", column(1))
+        editor.textView.insertText("zero\n", replacementRange: NSRange(location: 0, length: 0))
+        check(await wait(5) { editor.changeMarks.lines == [0: .added, 2: .modified] && column(1).hasPrefix("Ann ") },
+              "after the diff, only the new and changed lines are not committed", "\(column(0)) / \(column(1)) / \(column(2)) / \(column(3))")
+        check(column(0) == "Not committed" && column(2) == "Not committed" && column(3).hasPrefix("Bob "), "and the lines below keep their commit",
+              "\(column(2)) / \(column(3))")
+
+        // The caret line's note.
+        if !app.currentLineBlame { app.toggleCurrentLineBlame(nil) }
+        let note = editor.blameNoteText(line: 3) ?? "none"
+        check(note.hasPrefix("Bob, ") && note.hasSuffix(" · Add a third line"), "View › Current Line Blame notes the caret line’s commit", note)
+
+        // Off again, and the file as committed.
+        if app.currentLineBlame { app.toggleCurrentLineBlame(nil) }
+        app.toggleBlameAnnotations(nil)
+        check(editor.blameColumnText(line: 0) == nil && abs(ruler.ruleThickness - narrow) < 1, "turned off, the column goes",
+              "\(ruler.ruleThickness)")
+        editor.textView.insertText("one\ntwo\nthree\n", replacementRange: NSRange(location: 0, length: (editor.textView.string as NSString).length))
+        c.editorArea.save(editor.document)
+        c.editorArea.close(editor)
+        if app.blameAnnotations != saved.0 { app.toggleBlameAnnotations(nil) }
+        if app.currentLineBlame != saved.1 { app.toggleCurrentLineBlame(nil) }
     }
 
     /// ⌘P: the project's files by a few letters; `name:line`; recently opened files first.
