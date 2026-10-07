@@ -64,11 +64,13 @@ public enum ImportVSCode {
              applications: ["/Applications", (home as NSString).appendingPathComponent("Applications")])
     }
 
-    /// `applications`: the folders searched for the app bundle (tests pass their own).
-    static func plan(for app: DetectedApp, home: String, usKeyboard: Bool, applications: [String]) -> ImportPlan {
+    /// `applications`: the folders searched for the app bundle; `fonts`: the fonts this Mac has (tests pass
+    /// their own of both).
+    static func plan(for app: DetectedApp, home: String, usKeyboard: Bool, applications: [String],
+                     fonts: FontCatalog = .system) -> ImportPlan {
         var plan = ImportPlan(preset: app.preset)
         guard family.contains(app.kind) else { return plan }
-        let settings = settingsPlan(user: app.configPath, appName: app.name, usKeyboard: usKeyboard)
+        let settings = settingsPlan(user: app.configPath, appName: app.name, usKeyboard: usKeyboard, fonts: fonts)
         plan.settings = settings.settings
         let keys = keybindingsPlan(user: app.configPath, usKeyboard: usKeyboard)
         plan.shortcuts = keys.shortcuts
@@ -87,25 +89,22 @@ public enum ImportVSCode {
 
     // MARK: settings.json
 
-    static let fontLater = "font choice is coming"
     static let themesLater = "colour themes come later"
     static let canHoldSecrets = "never imported: can hold secrets"
     static let runsCommands = "never imported: runs commands"
     static let notRecognised = "value not recognised"
     static let credential = "looked like a credential"
 
-    /// Keys this import turns into a setting (§3.1). Only these values are ever converted.
+    /// Keys this import turns into a setting (§3.1). Only these values are ever converted. The colour theme's
+    /// name is read only to pick the colour customizations made for it.
     static let mappedKeys: Set<String> = [
         "editor.fontSize", "window.zoomLevel", "terminal.integrated.fontSize", "editor.lineHeight", "editor.wordWrap",
         "terminal.integrated.macOptionIsMeta", "workbench.sideBar.location", "workbench.panel.defaultLocation",
+        "editor.fontFamily", "terminal.integrated.fontFamily", "workbench.colorCustomizations", "workbench.colorTheme",
     ]
 
     /// Keys Next Term has no setting for yet (§3.5), reported by name when the user set them.
     static let laterKeys: [String: String] = [
-        "editor.fontFamily": fontLater,
-        "terminal.integrated.fontFamily": fontLater,
-        "workbench.colorTheme": themesLater,
-        "workbench.colorCustomizations": themesLater,
         "editor.tabSize": "tab width and spaces come later",
         "editor.insertSpaces": "tab width and spaces come later",
         "editor.detectIndentation": "tab width and spaces come later",
@@ -171,7 +170,7 @@ public enum ImportVSCode {
     }
 
     /// The default profile's settings.json (`<User>/settings.json`) as preview rows.
-    static func settingsPlan(user: String, appName: String, usKeyboard: Bool) -> SettingsResult {
+    static func settingsPlan(user: String, appName: String, usKeyboard: Bool, fonts: FontCatalog = .system) -> SettingsResult {
         let path = (user as NSString).appendingPathComponent("settings.json")
         guard isRegularFile(path) else { return SettingsResult() }
         guard let text = readText(path, limit: 4 << 20) else {
@@ -183,10 +182,10 @@ public enum ImportVSCode {
         guard let file = SettingsFile(text) else {
             return SettingsResult(skipped: [SkippedItem("settings.json", "couldn't be read as JSON; settings were skipped")])
         }
-        return settingsPlan(file, appName: appName, usKeyboard: usKeyboard)
+        return settingsPlan(file, appName: appName, usKeyboard: usKeyboard, fonts: fonts)
     }
 
-    static func settingsPlan(_ file: SettingsFile, appName: String, usKeyboard: Bool) -> SettingsResult {
+    static func settingsPlan(_ file: SettingsFile, appName: String, usKeyboard: Bool, fonts: FontCatalog = .system) -> SettingsResult {
         var result = SettingsResult()
         let font = fontSize(file)
         result.settings += [font.setting].compactMap { $0 }
@@ -200,7 +199,103 @@ public enum ImportVSCode {
         let rest = optionAndPanels(file, appName: appName, usKeyboard: usKeyboard)
         result.settings += rest.settings
         result.skipped += rest.skipped
+        let families = fontFamilies(file, appName: appName, fonts: fonts)
+        result.settings += families.settings
+        result.skipped += families.skipped
+        let colours = terminalColours(file, appName: appName)
+        result.settings += colours.settings
+        result.skipped += colours.skipped
         result.skipped += unmappedKeys(file)
+        return result
+    }
+
+    // MARK: fonts and colours
+
+    /// editor.fontFamily and terminal.integrated.fontFamily (CSS lists: the first font this Mac has that is
+    /// monospaced). VS Code's terminal uses the editor's list while its own is unset or empty, and so does
+    /// the import.
+    static func fontFamilies(_ file: SettingsFile, appName: String, fonts: FontCatalog) -> SettingsResult {
+        var result = SettingsResult()
+        func list(_ key: String) -> String? {
+            guard file.has(key) else { return nil }
+            // Each name in it is checked for credentials as it is looked up.
+            guard let text = file.value(key) as? String else {
+                result.skipped.append(SkippedItem(key, notRecognised))
+                return nil
+            }
+            return text.trimmingCharacters(in: .whitespaces).isEmpty ? nil : text
+        }
+        let editorKey = "editor.fontFamily", terminalKey = "terminal.integrated.fontFamily"
+        let editorList = list(editorKey)
+        if let editorList {
+            let editor = ImportFonts.row(.editor, list: editorList, source: editorKey, fonts: fonts)
+            result.settings += [editor.setting].compactMap { $0 }
+            result.skipped += editor.skipped
+        }
+        if let terminalList = list(terminalKey) {
+            let terminal = ImportFonts.row(.terminal, list: terminalList, source: terminalKey, fonts: fonts)
+            result.settings += [terminal.setting].compactMap { $0 }
+            result.skipped += terminal.skipped
+        } else if let editorList {
+            // The fonts passed over were reported for the editor already.
+            let note = "\(appName)'s terminal uses the editor font while \(terminalKey) is unset"
+            let terminal = ImportFonts.row(.terminal, list: editorList, source: editorKey, fonts: fonts, note: note)
+            result.settings += [terminal.setting].compactMap { $0 }
+        }
+        return result
+    }
+
+    /// workbench.colorCustomizations keys for the terminal, by slot: the 16 ANSI colours, then text,
+    /// background, cursor and selection.
+    static let terminalColourKeys: [String] = {
+        let names = TerminalPalette.ansiNames.map { $0.prefix(1).uppercased() + $0.dropFirst() }
+        let normal = names.map { "terminal.ansi" + $0 }
+        let bright = names.map { "terminal.ansiBright" + $0 }
+        let others = ["terminal.foreground", "terminal.background", "terminalCursor.foreground", "terminal.selectionBackground"]
+        return normal + bright + others
+    }()
+
+    /// The terminal colours set in workbench.colorCustomizations: the top-level ones, then the block for
+    /// the colour theme in use (`"[Theme Name]": {…}`), which wins. Other colours in it, and the theme
+    /// itself, are reported.
+    static func terminalColours(_ file: SettingsFile, appName: String) -> SettingsResult {
+        var result = SettingsResult()
+        let themeKey = "workbench.colorTheme", key = "workbench.colorCustomizations"
+        let theme = file.has(themeKey) ? string(file.value(themeKey)) : nil
+        if file.has(themeKey) { result.skipped.append(SkippedItem(themeKey, themesLater)) }
+        guard file.has(key) else { return result }
+        guard let customizations = file.value(key) as? [String: Any] else {
+            result.skipped.append(SkippedItem(key, notRecognised))
+            return result
+        }
+        var values: [String: Any] = customizations.filter { !$0.key.hasPrefix("[") }
+        var scope = ""
+        if let theme, let scoped = customizations["[\(theme)]"] as? [String: Any] {
+            values.merge(scoped) { _, scoped in scoped }
+            scope = " and its [\(theme)] block"
+        }
+        var palette = TerminalPalette(name: "\(appName) terminal colours")
+        var selection: (rgb: UInt32, alpha: Double)?
+        for (slot, name) in terminalColourKeys.enumerated() {
+            guard let value = values[name] else { continue }
+            guard let text = value as? String, let colour = TerminalPalette.hex(text) else {
+                result.skipped.append(SkippedItem("\(key) \(name)", notRecognised))
+                continue
+            }
+            switch slot {
+            case 0..<16: palette.ansi[slot] = colour.rgb
+            case 16: palette.foreground = colour.rgb
+            case 17: palette.background = colour.rgb
+            case 18: palette.cursor = colour.rgb
+            default: selection = colour
+            }
+        }
+        if let selection {
+            palette.selection = ImportColours.opaqueSelection(selection.rgb, alpha: selection.alpha, background: palette.background)
+        }
+        if let row = ImportColours.row(palette, source: "terminal colours in \(key)\(scope)") { result.settings.append(row) }
+        let others = Set(values.keys).subtracting(terminalColourKeys).count
+        if others > 0 { result.skipped.append(SkippedItem("\(key): \(counted(others, "other colour"))", themesLater)) }
         return result
     }
 
