@@ -623,7 +623,7 @@ final class EditorSettingsView: NSView {
         let status = !app.agentControl ? "Off: no agent can reach Next Term, and it is removed from the agents it was added to."
             : CommandLineTool.script == nil ? "Only the installed app adds itself to your agents."
             : "Any agent can open projects and tabs, start agents, give them prompts and read their screens. " + MCPRegistration.summary
-        controlStatus.stringValue = status + MCPRegistration.claudeAppNote
+        controlStatus.stringValue = status + MCPRegistration.claudeAppNote(on: app.agentControl)
         fontSize.doubleValue = Double(app.fontSize)
         fontSizeValue.stringValue = "\(Int(app.fontSize)) pt"
         fontFamily.show(Preferences.editorFontFamily)

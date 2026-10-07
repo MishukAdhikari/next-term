@@ -8,9 +8,11 @@ enum MCPRegistration {
     /// Per agent (`MCPRegistrar.Target.id`, and "claude"), what the last pass found.
     nonisolated(unsafe) private(set) static var statuses: [String: MCPRegistrar.Status] = [:]
     private static let queue = DispatchQueue(label: "nextterm.mcp-registration")
-    /// The Claude app (`MCPRegistrar.Target.id`), and when a pass last added Next Term to it or took it out.
+    /// The Claude app (`MCPRegistrar.Target.id`): its file is edited only while it is closed, so an edit waits
+    /// for it to quit (see `MCPRegistrar.claudeAppBundle`).
     private static let claudeApp = "claude-desktop"
-    nonisolated(unsafe) private static var claudeAppChanged: Date?
+    /// What waits for the Claude app to quit: true adds Next Term, false takes it out (nil: nothing).
+    nonisolated(unsafe) private static var claudeAppWaiting: Bool?
 
     static var names: [String: String] {
         var names = ["claude": "Claude Code"]
@@ -21,27 +23,60 @@ enum MCPRegistration {
     /// Posted on the main thread when a pass is done (Settings shows the result).
     static let changed = Notification.Name("NextTermMCPRegistrationsChanged")
 
-    /// Registers (on) or unregisters (off) everywhere, off the main thread.
-    static func update(on: Bool) {
+    /// Registers (on) or unregisters (off) everywhere, off the main thread. `claudeAppOnly`: just the Claude app
+    /// (when it quits, and at launch with the setting off, in case it was open when the setting was turned off).
+    static func update(on: Bool, claudeAppOnly: Bool = false) {
         guard !SelfTest.isRequested, let script = CommandLineTool.script, CommandLineTool.isInStableLocation else { return }
         let command = script.path
+        let apps = installedApps
         queue.async {
-            let programs = LoginShell.programs
+            // The Claude app has no program to look for, so its own pass needs no login shell.
+            let programs = claudeAppOnly ? [:] : LoginShell.programs
+            let found = programs.merging(apps) { program, _ in program }
             var results: [String: MCPRegistrar.Status] = [:]
-            var claudeAppEdited: Date?
-            for target in MCPRegistrar.targets() {
-                let installed = MCPRegistrar.isInstalled(target, found: programs)
-                let before = target.id == claudeApp ? FileManager.default.contents(atPath: target.file) : nil
-                results[target.id] = on ? MCPRegistrar.register(target, command: command, programInstalled: installed)
-                                        : MCPRegistrar.unregister(target)
-                if target.id == claudeApp, FileManager.default.contents(atPath: target.file) != before { claudeAppEdited = Date() }
+            var waiting: Bool?
+            for target in MCPRegistrar.targets() where !claudeAppOnly || target.id == claudeApp {
+                let installed = MCPRegistrar.isInstalled(target, found: found)
+                guard target.id == claudeApp, isClaudeAppOpen else {
+                    results[target.id] = on ? MCPRegistrar.register(target, command: command, programInstalled: installed)
+                                            : MCPRegistrar.unregister(target)
+                    continue
+                }
+                let open = MCPRegistrar.whileClaudeAppIsOpen(target, command: on ? command : nil, programInstalled: installed)
+                results[target.id] = open.status
+                waiting = open.waiting
             }
-            results["claude"] = claude(on: on, command: command, program: programs["claude"])
+            if !claudeAppOnly { results["claude"] = claude(on: on, command: command, program: found["claude"]) }
             DispatchQueue.main.async {
-                statuses = results
-                if let claudeAppEdited { claudeAppChanged = claudeAppEdited }
+                statuses = claudeAppOnly ? statuses.merging(results) { _, new in new } : results
+                claudeAppWaiting = waiting
                 NotificationCenter.default.post(name: changed, object: nil)
             }
+        }
+    }
+
+    /// The Claude app is running. It is asked just before its file would be edited.
+    private static var isClaudeAppOpen: Bool {
+        NSRunningApplication.runningApplications(withBundleIdentifier: MCPRegistrar.claudeAppBundle).contains { !$0.isTerminated }
+    }
+
+    /// Desktop apps that read an agent's file (`MCPRegistrar.Target.apps`): bundle identifier → path.
+    private static var installedApps: [String: String] {
+        var found: [String: String] = [:]
+        for id in MCPRegistrar.targets().flatMap(\.apps) {
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) { found[id] = url.path }
+        }
+        return found
+    }
+
+    /// When the Claude app quits, the edit that waited for it is made, with the setting as it is then.
+    static func watchClaudeApp() {
+        let center = NSWorkspace.shared.notificationCenter
+        _ = center.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            guard app?.bundleIdentifier == MCPRegistrar.claudeAppBundle else { return }
+            let on = MainActor.assumeIsolated { AppDelegate.shared.agentControl }
+            update(on: on, claudeAppOnly: true)
         }
     }
 
@@ -84,13 +119,9 @@ enum MCPRegistration {
         return text
     }
 
-    /// For Settings: the Claude app reads its servers only when it starts, so while it has been open since
-    /// Next Term was added or taken out, " Restart the Claude app to load it." (or unload); "" otherwise.
-    static var claudeAppNote: String {
-        guard let changed = claudeAppChanged else { return "" }
-        let open = NSRunningApplication.runningApplications(withBundleIdentifier: "com.anthropic.claudefordesktop")
-        guard open.contains(where: { ($0.launchDate ?? .distantPast) < changed }) else { return "" }
-        return statuses[claudeApp] == .removed ? " Restart the Claude app to unload it." : " Restart the Claude app to load it."
+    /// For Settings: " Quit and reopen the Claude app to add it there too." while that waits (`on`: the setting).
+    static func claudeAppNote(on: Bool) -> String {
+        MCPRegistrar.claudeAppNote(waiting: claudeAppWaiting, on: on)
     }
 }
 

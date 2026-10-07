@@ -34,7 +34,7 @@ Through 0.9.0, by release.
 | 0.6.0 | Remote tabs over the system ssh (⌥⌘T), kept in tmux or herdr, with the same status marks and seven MCP tools for hosts; the update window (notes, Remind Me Later, Skip); deleted files keep their rows; each tab shows its shortcut; prompt placeholders, TOML and `.env` keys coloured; RAG platform keys scrubbed from titles and imports |
 | 0.7.0 | The branch popup (⌥⌘B): checkout with stash-switch, new/rename/delete with Undo, update, merge, rebase, commit, push, the git command log; read-only Jupyter notebooks; Jinja and Mustache inside Python strings; Prompty, requirements, Mermaid, Cypher, SPARQL, Turtle, reStructuredText and TSV (112 grammars); your own VS Code and JetBrains keys in the import; Python traceback and `graph.py:graph` links; tabs that show a dev server's port; ML and agent state folders skipped |
 | 0.8.0 | Databases a project names, in the sidebar (Laravel/Herd, `DATABASE_URL` and family, Prisma, Drizzle, Supabase, Vercel, SQLite), passwords masked; a read-only SQLite viewer; hand-offs to TablePlus, mysql and psql. Five more MCP tools (18): `answer_agent`, `read_file`, `find_in_files`, `git_status`, `get_diff`. The one-line installer with a signed checksum |
-| 0.9.0 | The Git Log (⌥⌘L): the history as a graph, filters, the selected commit and its diffs. Git blame in the editor. A read-only head view for large JSON Lines, CSV and TSV files. The editor's and terminal's fonts, and terminal colours of your own. Fonts and terminal colours in the import, and imports from more terminals, Ghostty and Terminal among them. Pull and Push in the sidebar header. ⌘P stays Go to File under the JetBrains keys |
+| 0.9.0 | The Git Log (⌥⌘L): the history as a graph, filters, the selected commit and its diffs. Git blame in the editor. A read-only head view for large JSON Lines, CSV and TSV files. The editor's and terminal's fonts, and terminal colours of your own. Fonts and terminal colours in the import, and imports from more terminals, Ghostty and Terminal among them. Pull and Push in the sidebar header. ⌘P stays Go to File under the JetBrains keys. `nxtrm mcp` registered in the Claude and ChatGPT desktop apps too |
 
 ## Next
 
@@ -51,8 +51,7 @@ Through 0.9.0, by release.
 Also next, in no fixed order:
 
 - **Agents:** an IDE link for Copilot CLI, and opencode's accepted through a peer-process check; tab
-  status hints for Junie, opencode, Copilot CLI, Amp and Cursor; Claude Desktop and the ChatGPT desktop
-  app on the local MCP server.
+  status hints for Junie, opencode, Copilot CLI, Amp and Cursor.
 - **MCP:** tools that propose edits, change settings, commit and control panes, once there is a consent
   model.
 - **Git:** Delete on Remote, Checkout and Update, and Write with Agent in the branch popup; then

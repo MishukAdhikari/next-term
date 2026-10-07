@@ -228,6 +228,13 @@ import Testing
         #expect(json(gemini.file)?["theme"] as? String == "GitHub")
         #expect(MCPRegistrar.unregister(gemini) == .removed)
         #expect(try read(gemini.file) == original) // the container it added goes too
+        // A comment on the { line stays there.
+        let commented = "{ // mine\n  \"theme\": \"GitHub\"\n}\n"
+        try write(commented, gemini.file)
+        #expect(MCPRegistrar.register(gemini, command: command, programInstalled: true) == .registered)
+        #expect(try read(gemini.file).hasPrefix("{ // mine\n  \"mcpServers\": {\n"))
+        #expect(MCPRegistrar.unregister(gemini) == .removed)
+        #expect(try read(gemini.file) == commented)
         // An empty file object.
         try write("{}", gemini.file)
         #expect(MCPRegistrar.register(gemini, command: command, programInstalled: true) == .registered)
@@ -411,6 +418,196 @@ import Testing
         try write(trailing, app.file)
         #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .skipped("trailing commas in a file that must be plain JSON"))
         #expect(try read(app.file) == trailing)
+        // Taking ours out of such a file is refused too.
+        let oursAndTrailing = "{\n  \"mcpServers\": {\n    \"next-term\": {\"args\":[\"mcp\"],\"command\":\"\(command)\"}\n  },\n  \"preferences\": {\"a\": 1,}\n}\n"
+        try write(oursAndTrailing, app.file)
+        #expect(MCPRegistrar.unregister(app) == .skipped("trailing commas in a file that must be plain JSON"))
+        #expect(try read(app.file) == oursAndTrailing)
+    }
+
+    @Test func turningOffLeavesTheFileAsItWas() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let app = try target("claude-desktop", home: home)
+        let originals = [
+            // An empty container that was there before stays, first or not.
+            "{\n  \"mcpServers\": {},\n  \"preferences\": {\n    \"sidebarMode\": \"chat\"\n  }\n}\n",
+            "{\n  \"preferences\": {},\n  \"mcpServers\": {}\n}",
+            // A file on one line.
+            "{\"preferences\":{\"sidebarMode\":\"chat\"}}",
+            "{ \"preferences\": {\"sidebarMode\": \"chat\"} }",
+        ]
+        for original in originals {
+            try write(original, app.file)
+            #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .registered, "\(original)")
+            #expect((strictJSON(app.file)?["mcpServers"] as? [String: Any])?["next-term"] != nil, "\(original)")
+            #expect(MCPRegistrar.unregister(app) == .removed, "\(original)")
+            #expect(try read(app.file) == original)
+        }
+        // A byte order mark stays.
+        let marked = Data([0xEF, 0xBB, 0xBF]) + Data(claudePreferences.utf8)
+        try marked.write(to: URL(fileURLWithPath: app.file))
+        #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .registered)
+        #expect(FileManager.default.contents(atPath: app.file)?.starts(with: [0xEF, 0xBB, 0xBF]) == true)
+        #expect(MCPRegistrar.unregister(app) == .removed)
+        #expect(FileManager.default.contents(atPath: app.file) == marked)
+    }
+
+    @Test func textIsReadByUnicodeScalar() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let app = try target("claude-desktop", home: home)
+        // A combining mark just after a quote, or a prepended one just before it, joins the quote in one Character.
+        for value in ["\u{301}accent first", "number sign last\u{600}"] {
+            let original = "{\n  \"preferences\": {\n    \"note\": \"\(value)\"\n  }\n}\n"
+            try write(original, app.file)
+            #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .registered, "\(value)")
+            #expect((strictJSON(app.file)?["preferences"] as? [String: Any])?["note"] as? String == value)
+            #expect(MCPRegistrar.unregister(app) == .removed, "\(value)")
+            #expect(try read(app.file) == original)
+        }
+        #expect(JSONC.plain("{\"a\": \"\u{301}\",}") == "{\"a\": \"\u{301}\"}")
+    }
+
+    @Test func repeatedKeysAreLeftAlone() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let app = try target("claude-desktop", home: home)
+        // JSON parsers take the last of repeated keys.
+        let files = [
+            "{\"mcpServers\": {}, \"mcpServers\": {\"weather\": {\"command\": \"w\"}}}",
+            "{\"mcpServers\": {}, \"mcpServers\": null}",
+            "{\"mcpServers\": {\"next-term\": {\"command\": \"\(moved)\", \"args\": [\"mcp\"]}, \"next-term\": {\"command\": \"/opt/theirs\"}}}",
+        ]
+        for text in files {
+            try write(text, app.file)
+            #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .skipped("repeated keys"), "\(text)")
+            #expect(MCPRegistrar.unregister(app) == .skipped("repeated keys"), "\(text)")
+            #expect(try read(app.file) == text)
+        }
+    }
+
+    @Test func anotherCopysEntryKeepsWhatTheUserAdded() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let app = try target("claude-desktop", home: home)
+        let original = """
+            {
+              "mcpServers": {
+                "next-term": {
+                  "command": "\(moved)",
+                  "args": ["mcp"],
+                  "env": {"NXTRM_LOG": "1"}
+                }
+              }
+            }
+
+            """
+        try write(original, app.file)
+        #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .registered)
+        #expect(try read(app.file) == original.replacingOccurrences(of: moved, with: command))
+        // opencode's command is an array: its first word changes.
+        let opencode = try target("opencode", home: home)
+        let theirs = "{\n  \"mcp\": {\n    \"next-term\": {\"type\": \"local\", \"command\": [\"\(moved)\", \"mcp\"], \"enabled\": false}\n  }\n}\n"
+        try write(theirs, opencode.file)
+        #expect(MCPRegistrar.register(opencode, command: command, programInstalled: true) == .registered)
+        #expect(try read(opencode.file) == theirs.replacingOccurrences(of: moved, with: command))
+    }
+
+    @Test func aLinkToAMissingFileStaysALink() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        for id in ["claude-desktop", "codex"] {
+            let target = try target(id, home: home)
+            let destination = home + "/dotfiles/\(id)"
+            try FileManager.default.createDirectory(atPath: (target.file as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+            try FileManager.default.createSymbolicLink(atPath: target.file, withDestinationPath: destination)
+            #expect(MCPRegistrar.register(target, command: command, programInstalled: true) == .skipped("a link to a file that is not there"), "\(id)")
+            #expect(try FileManager.default.destinationOfSymbolicLink(atPath: target.file) == destination)
+            #expect(!FileManager.default.fileExists(atPath: destination))
+        }
+    }
+
+    @Test func aReadOnlyFileIsLeftAlone() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let app = try target("claude-desktop", home: home)
+        try write(claudePreferences, app.file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: app.file)
+        #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .skipped("read-only"))
+        #expect(try read(app.file) == claudePreferences)
+        let codex = try target("codex", home: home)
+        try write("model = \"gpt-5\"\n", codex.file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: codex.file)
+        #expect(MCPRegistrar.register(codex, command: command, programInstalled: true) == .skipped("read-only"))
+        #expect(try read(codex.file) == "model = \"gpt-5\"\n")
+        // Nothing to write: ours is there.
+        let ours = "{\"mcpServers\": {\"next-term\": {\"args\": [\"mcp\"], \"command\": \"\(command)\"}}}"
+        try FileManager.default.removeItem(atPath: app.file)
+        try write(ours, app.file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: app.file)
+        #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .alreadyRegistered)
+    }
+
+    @Test func aFileSavedDuringAnEditIsLeftAlone() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let app = try target("claude-desktop", home: home)
+        try write(claudePreferences, app.file)
+        let planned = MCPRegistrar.plan(app, command: command, programInstalled: true)
+        #expect(planned.status == .registered && planned.text != nil)
+        // The agent saves its settings between the read and the write: the edit would put the old ones back.
+        let saved = claudePreferences.replacingOccurrences(of: "\"chat\"", with: "\"code\"")
+        try write(saved, app.file)
+        #expect(MCPRegistrar.write(planned, to: app.file) == .skipped("changed while being edited"))
+        #expect(try read(app.file) == saved)
+    }
+
+    @Test func codexIsFoundByTheChatGPTAppOrItsFolder() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        // The ChatGPT app reads Codex's file; it runs its own copy of codex, not one on the PATH.
+        let codex = try target("codex", home: home)
+        #expect(codex.apps == ["com.openai.codex"])
+        #expect(!MCPRegistrar.isInstalled(codex, found: [:]))
+        #expect(MCPRegistrar.isInstalled(codex, found: ["com.openai.codex": "/Applications/ChatGPT.app"]))
+        try FileManager.default.createDirectory(atPath: home + "/.codex", withIntermediateDirectories: true)
+        #expect(MCPRegistrar.isInstalled(codex, found: [:]))
+        #expect(MCPRegistrar.register(codex, command: command, programInstalled: MCPRegistrar.isInstalled(codex, found: [:])) == .registered)
+        #expect(try read(codex.file) == "[mcp_servers.next-term]\ncommand = \"\(command)\"\nargs = [\"mcp\"]\n")
+    }
+
+    @Test func claudeAppWaitsUntilItQuits() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let app = try target("claude-desktop", home: home)
+        try write(claudePreferences, app.file)
+        // Open: nothing written; adding Next Term waits.
+        let adding = MCPRegistrar.whileClaudeAppIsOpen(app, command: command, programInstalled: true)
+        #expect(adding.status == .skipped("the Claude app is open") && adding.waiting == true)
+        #expect(MCPRegistrar.whileClaudeAppIsOpen(app, command: nil, programInstalled: true).waiting == nil) // nothing to take out
+        #expect(try read(app.file) == claudePreferences)
+        // Closed: written. Open again: nothing waits while the setting stays on; taking it out does.
+        #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .registered)
+        let added = try read(app.file)
+        let on = MCPRegistrar.whileClaudeAppIsOpen(app, command: command, programInstalled: true)
+        #expect(on.status == .alreadyRegistered && on.waiting == nil)
+        let removing = MCPRegistrar.whileClaudeAppIsOpen(app, command: nil, programInstalled: true)
+        #expect(removing.status == .skipped("the Claude app is open") && removing.waiting == false)
+        #expect(try read(app.file) == added)
+        // Someone else's next-term: nothing waits.
+        let theirs = "{\"mcpServers\": {\"next-term\": {\"command\": \"/opt/next-term/server\"}}}"
+        try write(theirs, app.file)
+        #expect(MCPRegistrar.whileClaudeAppIsOpen(app, command: command, programInstalled: true) == (.nameTaken, nil))
+    }
+
+    @Test func claudeAppNoteFollowsTheSetting() {
+        #expect(MCPRegistrar.claudeAppNote(waiting: true, on: true) == " Quit and reopen the Claude app to add it there too.")
+        #expect(MCPRegistrar.claudeAppNote(waiting: false, on: false) == " Quit the Claude app to remove it there too.")
+        #expect(MCPRegistrar.claudeAppNote(waiting: nil, on: true).isEmpty)
+        // Just after the setting changed, the last pass was for the other one: no note until the new pass is done.
+        #expect(MCPRegistrar.claudeAppNote(waiting: true, on: false).isEmpty)
+        #expect(MCPRegistrar.claudeAppNote(waiting: false, on: true).isEmpty)
     }
 
     // MARK: Claude Code and ownership

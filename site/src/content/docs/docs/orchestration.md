@@ -24,7 +24,7 @@ Next Term is an MCP server, so one agent can run the others. An orchestrator —
 | Amp | `~/.config/amp/settings.json` |
 | Junie | `~/.junie/mcp/mcp.json` |
 | Command Code | `~/.commandcode/mcp.json` |
-| Claude desktop app (chats) | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Claude app | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 
 Agents you start after that see Next Term’s tools. The line under the setting says where it is registered, for example “Registered in Claude Code, Codex and Cursor.”
 
@@ -35,8 +35,8 @@ Agents you start after that see Next Term’s tools. The line under the setting 
 
 ### The Claude and ChatGPT desktop apps
 
-- **Claude:** its chats read `claude_desktop_config.json`, and only when the app starts, so restart Claude after turning the setting on or off (the line under the setting reminds you while Claude is open). Next Term adds only its own server there; the app’s preferences in the same file stay as they were. Claude’s Code tab uses Claude Code’s entry.
-- **ChatGPT:** the desktop app reads Codex’s `~/.codex/config.toml`, so the Codex entry covers it.
+- **Claude:** the app reads `claude_desktop_config.json` only when it starts, for its chats and for the local sessions in its Code tab (there this entry is used instead of Claude Code’s). It also saves the whole file from the copy it read, so Next Term changes the file only while Claude is closed. If Claude is open, Next Term adds itself (or, with the setting off, takes itself out) when you quit Claude, and the line under the setting says so; open Claude again to load it. Next Term adds only its own server there; the app’s preferences in the same file stay as they were.
+- **ChatGPT:** the desktop app reads Codex’s `~/.codex/config.toml`, so the Codex entry covers it. Next Term writes it when the ChatGPT app or Codex is installed. Restart ChatGPT if it was open when Next Term added itself.
 
 ### Any other MCP client
 
