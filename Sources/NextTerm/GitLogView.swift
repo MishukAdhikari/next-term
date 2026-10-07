@@ -491,7 +491,7 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         graphColumn.title = ""
         graphColumn.width = GitLogStyle.graphWidth(lanes: 1)
         graphColumn.minWidth = 20
-        graphColumn.maxWidth = GitLogStyle.graphWidth(lanes: GitLogStyle.maxLanes)
+        graphColumn.maxWidth = GitLogStyle.graphWidth(lanes: GitLogStyle.maxLanes + 1) // and the overflow column
         graphColumn.resizingMask = []
         let subject = NSTableColumn(identifier: .init("subject"))
         subject.title = "Subject"

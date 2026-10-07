@@ -8,7 +8,7 @@ enum GitLogStyle {
     static let rowHeight: CGFloat = 24
     static let laneWidth: CGFloat = 14
     static let graphInset: CGFloat = 6
-    /// Wider than this many lanes, the rightmost share the last column.
+    /// Lanes drawn in full; those further right share one more column (CommitGraph.maxColumns).
     static let maxLanes = 20
 
     static func lane(_ index: Int) -> NSColor { lanes[((index % lanes.count) + lanes.count) % lanes.count] }
@@ -116,7 +116,14 @@ final class GitGraphView: NSView {
         let color = GitLogStyle.lane(row.color)
         let radius: CGFloat = 4
         let dot = NSBezierPath(ovalIn: NSRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
-        if row.isMerge {
+        if row.isOverflow {
+            // On a lane too far right to draw: a dim ring, in no lane's colour.
+            Theme.background.setFill()
+            dot.fill()
+            dot.lineWidth = 1.4
+            Theme.textDim.setStroke()
+            dot.stroke()
+        } else if row.isMerge {
             // A merge: a ring, hollow in the middle.
             Theme.background.setFill()
             dot.fill()

@@ -64,12 +64,32 @@ import Testing
         #expect(unrelated.map(\.column) == [0, 0])
     }
 
-    @Test func manyParallelBranchesShareTheLastColumn() {
+    /// Lanes past maxColumns share one overflow column, with no line through it: a line there would
+    /// join commits of unrelated branches.
+    @Test func manyParallelBranchesOverflow() {
         let tips = (0..<40).map { ("t\($0)", ["r"]) }
         let rows = layout(tips + [("r", [])], maxColumns: 10)
-        #expect(rows.allSatisfy { $0.width <= 10 && $0.column <= 9 })
-        #expect(rows[39].column == 9 && rows[39].top.allSatisfy { $0.from <= 9 && $0.to <= 9 })
-        #expect(rows[40].column == 0 && rows[40].top.count == 40 && rows[40].top.allSatisfy { $0.to == 0 })
+        #expect(rows.allSatisfy { $0.width <= 11 && $0.column <= 10 })
+        #expect(rows[9].column == 9 && !rows[9].isOverflow && rows[10].column == 10 && rows[10].isOverflow)
+        // t39: the ten lanes on the left pass through; the 29 others, and its own, are not drawn.
+        #expect(rows[39].column == 10 && rows[39].top.count == 10 && rows[39].bottom.count == 10)
+        #expect((rows[10...39]).allSatisfy { row in (row.top + row.bottom).allSatisfy { min($0.from, $0.to) < 10 } })
+        // r: every lane ends in it; from the overflow, once a colour.
+        let r = rows[40]
+        #expect(r.column == 0 && !r.isOverflow && r.top.allSatisfy { $0.to == 0 } && r.width == 11)
+        #expect(r.top.filter { $0.from < 10 }.count == 10 && r.top.filter { $0.from == 10 }.count == CommitGraph.colorCount)
+        #expect(Set(r.top).count == r.top.count)
+    }
+
+    /// A merge in a lane drawn in full whose second parent waits in the overflow: the line ends at the
+    /// overflow column, and the parent's dot is there, with only the lanes on the left through its row.
+    @Test func aLineIntoTheOverflow() {
+        let rows = layout([("a", ["p"]), ("b", ["r"]), ("c", ["x"]), ("p", ["r", "x"]), ("x", [])], maxColumns: 2)
+        let c = rows[2], p = rows[3], x = rows[4]
+        #expect(c.isOverflow && c.column == 2 && c.width == 3)
+        #expect(!p.isOverflow && p.column == 0 && p.bottom.contains(Line(from: 0, to: 2, color: c.color)) && p.width == 3)
+        #expect((p.top + p.bottom).allSatisfy { min($0.from, $0.to) < 2 })
+        #expect(x.isOverflow && x.column == 2 && x.top.map(\.from) == [0, 1] && x.bottom.map(\.from) == [0, 1])
     }
 
     @Test func pagesCarryTheLanesOver() {

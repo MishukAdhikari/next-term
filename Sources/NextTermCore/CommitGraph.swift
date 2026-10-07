@@ -20,6 +20,9 @@ public struct GraphRow: Equatable, Sendable {
     public let column: Int
     public let color: Int
     public let isMerge: Bool
+    /// On a lane further right than the graph draws in full: the dot sits in the overflow column, and
+    /// no line runs through it there.
+    public let isOverflow: Bool
     /// Lanes passing through (from == to), and lanes ending in the dot (to == column): the commit's
     /// children, or branches that started from it.
     public let top: [Line]
@@ -28,10 +31,11 @@ public struct GraphRow: Equatable, Sendable {
     /// Columns this row uses.
     public let width: Int
 
-    public init(column: Int, color: Int, isMerge: Bool, top: [Line], bottom: [Line], width: Int) {
+    public init(column: Int, color: Int, isMerge: Bool, top: [Line], bottom: [Line], width: Int, isOverflow: Bool = false) {
         self.column = column
         self.color = color
         self.isMerge = isMerge
+        self.isOverflow = isOverflow
         self.top = top
         self.bottom = bottom
         self.width = width
@@ -46,7 +50,9 @@ public struct GraphRow: Equatable, Sendable {
 /// The state carries over from page to page: `add` the next page and the lines go on.
 public struct CommitGraph: Sendable {
     public static let colorCount = 8
-    /// Wider than this, the rightmost lanes share the last column: the graph stays readable.
+    /// Lanes drawn in full. Those further right share one more column, the overflow, where only their
+    /// dots and the ends of lines from the lanes on the left show: lines between them would join
+    /// unrelated commits into one false line.
     public let maxColumns: Int
     /// Without lines (a log filtered by message or author, where parents are mostly not listed):
     /// every commit is a dot in the first column.
@@ -117,12 +123,20 @@ public struct CommitGraph: Sendable {
             lanes.removeLast()
             colors.removeLast()
         }
-        let last = maxColumns - 1
-        let cap = { (c: Int) in min(c, last) }
-        let clamp = { (line: GraphRow.Line) in GraphRow.Line(from: cap(line.from), to: cap(line.to), color: line.color) }
-        let widest = (top + bottom).reduce(column) { max($0, $1.from, $1.to) }
-        return GraphRow(column: cap(column), color: color, isMerge: parents.count > 1, top: top.map(clamp), bottom: bottom.map(clamp),
-                        width: cap(widest) + 1)
+        let shownTop = visible(top), shownBottom = visible(bottom)
+        let widest = (shownTop + shownBottom).reduce(min(column, maxColumns)) { max($0, $1.from, $1.to) }
+        return GraphRow(column: min(column, maxColumns), color: color, isMerge: parents.count > 1, top: shownTop, bottom: shownBottom,
+                        width: widest + 1, isOverflow: column >= maxColumns)
+    }
+
+    /// The lines with an end in a lane drawn in full, the other end moved into the overflow column if it
+    /// is further right; each once (lanes in the overflow would repeat the same line many times).
+    private func visible(_ lines: [GraphRow.Line]) -> [GraphRow.Line] {
+        let overflow = maxColumns
+        var seen = Set<GraphRow.Line>()
+        return lines.filter { min($0.from, $0.to) < overflow }
+            .map { GraphRow.Line(from: min($0.from, overflow), to: min($0.to, overflow), color: $0.color) }
+            .filter { seen.insert($0).inserted }
     }
 
     /// The first free lane, or a new one at the right.
