@@ -50,8 +50,6 @@ public enum EditorLanguage {
         "tsv": "tsv", "tab": "tsv", "rst": "rst", "mmd": "mermaid", "mermaid": "mermaid", "cypher": "cypher",
         "cyp": "cypher", "rq": "sparql", "sparql": "sparql", "ttl": "turtle", "jsonld": "json", "cff": "yaml",
         "ipy": "python",
-        // Notebooks are JSON until they get a view of their own.
-        "ipynb": "json",
         // Prompt files: Dotprompt is Handlebars under YAML front matter; Cursor rules are Markdown.
         "prompt": "handlebars", "prompty": "prompty", "mdc": "markdown",
         // No grammar of their own yet: HTML colours the markup around the template tags.
