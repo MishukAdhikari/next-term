@@ -97,6 +97,13 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
     override init() {
         super.init()
         build()
+        NotificationCenter.default.addObserver(self, selector: #selector(fetchedInBackground(_:)), name: BackgroundFetcher.fetched, object: nil)
+    }
+
+    /// A background fetch of this repository worked: the counts update in place.
+    @objc private func fetchedInBackground(_ notification: Notification) {
+        guard panel.isVisible, notification.object as? String == GitWriter.repository(of: directory) else { return }
+        reload()
     }
 
     // MARK: showing
@@ -118,6 +125,8 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         panel.makeFirstResponder(field)
         rebuild()
         reload()
+        // It draws first; if the last fetch is over five minutes old, a background fetch brings the counts up to date.
+        BackgroundFetcher.shared.popupOpened(directory: directory)
     }
 
     func close() {

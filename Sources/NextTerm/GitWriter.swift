@@ -8,6 +8,8 @@ import NextTermCore
 final class GitWriter {
     static let shared = GitWriter()
     static let git = GitRunner.locateGit()
+    /// That git's version, read once (on the first background fetch's queue, not the main thread).
+    static let version = git.flatMap { GitRunner.version(git: $0) }
 
     struct Result {
         let status: Int32
@@ -17,6 +19,8 @@ final class GitWriter {
         var failure: GitFailure? { GitOutput.classify(output) }
     }
 
+    /// One queue per repository (its common git folder, canonical): your writes and background fetches
+    /// take turns.
     private var queues: [String: DispatchQueue] = [:]
 
     /// A run that talks to a remote, shown as a spinning sync arrow in the sidebar header.
@@ -27,6 +31,10 @@ final class GitWriter {
     static let activityChanged = Notification.Name("NextTermGitActivityChanged")
     /// The remote runs under way, by work-tree folder (canonical), oldest first. Main thread.
     private var activities: [String: [Activity]] = [:]
+    /// Runs that talk to a remote, yours and background fetches, by repository (canonical). Main thread.
+    private var remoteRuns: [String: Int] = [:]
+    /// The background fetch under way in each repository (canonical). Main thread.
+    private var backgroundRuns: [String: BackgroundRun] = [:]
 
     /// What the work tree at `directory` is doing with its remote now, if anything.
     func activity(in directory: String) -> Activity? { activities[canonicalPath(directory)]?.last }
@@ -38,23 +46,58 @@ final class GitWriter {
         NotificationCenter.default.post(name: Self.activityChanged, object: self)
     }
 
+    /// Whether a fetch, pull or push runs in the repository (any of its worktrees) now, a background fetch
+    /// included.
+    func isTalkingToRemote(repository: String) -> Bool { remoteRuns[canonicalPath(repository)] != nil }
+
+    /// Whether a background fetch runs now in the repository of the work tree at `directory`.
+    func isFetchingInBackground(in directory: String) -> Bool { backgroundRuns[Self.repository(of: directory)] != nil }
+
+    /// For the self-test: as if a background fetch had started (or ended) in the work tree's repository.
+    func setFetchingInBackground(_ fetching: Bool, in directory: String) {
+        backgroundRuns[Self.repository(of: directory)] = fetching ? BackgroundRun() : nil
+        NotificationCenter.default.post(name: Self.activityChanged, object: self)
+    }
+
+    /// The repository a folder is in: the common git folder of its work tree, canonical (worktrees of one
+    /// repository share it). Read from the files, no git run.
+    static func repository(of directory: String) -> String {
+        canonicalPath(GitRunner.commonGitDir(root: ProjectRoot.find(from: directory)) ?? directory)
+    }
+
+    private func writeQueue(for repository: String) -> DispatchQueue {
+        let key = canonicalPath(repository)
+        let queue = queues[key] ?? DispatchQueue(label: "nextterm.git-writes.\(key)")
+        queues[key] = queue
+        return queue
+    }
+
+    private func remoteRunChanged(_ repository: String, by delta: Int) {
+        let key = canonicalPath(repository)
+        let count = (remoteRuns[key] ?? 0) + delta
+        remoteRuns[key] = count > 0 ? count : nil
+    }
+
     /// Runs each step (the arguments after `git -C directory`) in order, stopping at the first that fails,
     /// and reports the last one run, on the main thread. `repository` (the common git dir) serializes.
-    /// `activity` marks a run that talks to a remote, for as long as it runs.
+    /// `activity` marks a run that talks to a remote, for as long as it runs. A background fetch in the
+    /// repository makes way: it stops now, rather than keep this waiting behind a slow remote.
     func run(_ title: String, in directory: String, repository: String, steps: [[String]], activity: Activity? = nil,
              completion: @escaping (Result) -> Void) {
         guard let git = Self.git else { return completion(Result(status: 127, output: "Git is not installed.")) }
-        let queue = queues[repository] ?? DispatchQueue(label: "nextterm.git-writes.\(repository)")
-        queues[repository] = queue
+        backgroundRuns[canonicalPath(repository)]?.stop()
+        let queue = writeQueue(for: repository)
         let key = canonicalPath(directory)
         if let activity {
             activities[key, default: []].append(activity)
+            remoteRunChanged(repository, by: 1)
             NotificationCenter.default.post(name: Self.activityChanged, object: self)
         }
         let completion: (Result) -> Void = { [weak self] result in
             if let self, let activity, let index = self.activities[key]?.firstIndex(of: activity) {
                 self.activities[key]?.remove(at: index)
                 if self.activities[key]?.isEmpty == true { self.activities[key] = nil }
+                self.remoteRunChanged(repository, by: -1)
                 NotificationCenter.default.post(name: Self.activityChanged, object: self)
             }
             completion(result)
@@ -70,6 +113,41 @@ final class GitWriter {
                 if !last.ok { break }
             }
             DispatchQueue.main.async { completion(last) }
+        }
+    }
+
+    /// A background fetch of each remote in `remotes`, one after another on the repository's queue (so
+    /// never at the same time as a write of yours), each with its own result, on the main thread. Nothing
+    /// can prompt, FETCH_HEAD stays as it is, and each stops after three minutes. A command of yours for
+    /// the repository stops it (see `run`). In Git Commands only when "Show background fetches" is on.
+    func fetchInBackground(in directory: String, repository: String, remotes: [String], completion: @escaping ([Result]) -> Void) {
+        guard let git = Self.git else { return completion([Result(status: 127, output: "Git is not installed.")]) }
+        let key = canonicalPath(repository)
+        let run = BackgroundRun()
+        backgroundRuns[key] = run
+        remoteRunChanged(repository, by: 1)
+        NotificationCenter.default.post(name: Self.activityChanged, object: self)
+        writeQueue(for: repository).async {
+            var results: [Result] = []
+            for remote in remotes where !run.isStopped {
+                let args = FetchSchedule.arguments(remote: remote, porcelain: FetchSchedule.hasPorcelainFetch(Self.version))
+                let started = Date()
+                var result = Self.execute(git, ["-C", directory] + args, environment: Self.backgroundEnvironment, timeout: 180,
+                                          started: run.started)
+                run.ended()
+                if run.isStopped { result = Result(status: result.status, output: result.output + "\nStopped, so a command of yours could run.") }
+                results.append(result)
+                let entry = GitCommandLog.Entry(title: "Background fetch", command: Self.commandLine(args), directory: directory, start: started,
+                                                duration: Date().timeIntervalSince(started), status: result.status, output: result.output,
+                                                background: true)
+                DispatchQueue.main.async { GitCommandLog.shared.add(entry) }
+            }
+            DispatchQueue.main.async { [weak self] in
+                if self?.backgroundRuns[key] === run { self?.backgroundRuns[key] = nil }
+                self?.remoteRunChanged(repository, by: -1)
+                NotificationCenter.default.post(name: Self.activityChanged, object: self)
+                completion(results)
+            }
         }
     }
 
@@ -98,9 +176,18 @@ final class GitWriter {
         return env
     }()
 
+    /// A background fetch's: as above, and the Git Credential Manager fails rather than open its window.
+    static let backgroundEnvironment: [String: String] = {
+        var env = environment
+        env["GCM_INTERACTIVE"] = "never"
+        return env
+    }()
+
     /// One git run: output to a file (never a pipe a long-lived child could hold open), no stdin, and a
-    /// stop after ten minutes with SIGTERM only: a git that is writing is never killed outright.
-    private static func execute(_ git: String, _ arguments: [String]) -> Result {
+    /// stop after ten minutes (or `timeout`) with SIGTERM only: a git that is writing is never killed outright.
+    /// `started` is handed the running git.
+    private static func execute(_ git: String, _ arguments: [String], environment: [String: String] = environment,
+                                timeout: TimeInterval = 600, started: ((Process) -> Void)? = nil) -> Result {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: git)
         process.arguments = arguments
@@ -119,14 +206,52 @@ final class GitWriter {
             return Result(status: 127, output: error.localizedDescription)
         }
         try? handle.close()
+        started?(process)
         var timedOut = false
-        if exited.wait(timeout: .now() + 600) == .timedOut {
+        if exited.wait(timeout: .now() + timeout) == .timedOut {
             timedOut = true
             process.terminate()
             exited.wait()
         }
         let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        return Result(status: timedOut ? 124 : process.terminationStatus, output: timedOut ? text + "\nStopped after 10 minutes." : text)
+        guard timedOut else { return Result(status: process.terminationStatus, output: text) }
+        return Result(status: 124, output: text + "\nStopped after \(Int(timeout / 60)) minutes.")
+    }
+}
+
+/// A background fetch under way. A command of yours for the same repository stops it rather than wait
+/// behind it: SIGTERM, which git cleans up after (it removes its lock files), and the remotes still to go
+/// are skipped. The next interval tries again.
+private final class BackgroundRun: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var stopped = false
+
+    var isStopped: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return stopped
+    }
+
+    /// One of its gits started (on the repository's queue). One that starts after `stop` stops at once.
+    func started(_ process: Process) {
+        lock.lock()
+        defer { lock.unlock() }
+        if stopped { process.terminate() } else { self.process = process }
+    }
+
+    func ended() {
+        lock.lock()
+        defer { lock.unlock() }
+        process = nil
+    }
+
+    /// A command of yours was queued (main thread).
+    func stop() {
+        lock.lock()
+        defer { lock.unlock() }
+        stopped = true
+        process?.terminate()
     }
 }
 
@@ -143,21 +268,38 @@ final class GitCommandLog {
         let duration: TimeInterval
         let status: Int32
         let output: String
+        /// A background fetch: listed only when "Show background fetches" is on.
+        var background = false
     }
 
     private(set) var entries: [Entry] = []
     var onChange: (() -> Void)?
 
+    /// Background fetches are listed too (Git Commands' "Show background fetches").
+    var showBackground: Bool {
+        get { UserDefaults.standard.bool(forKey: "gitCommandsShowBackground") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "gitCommandsShowBackground")
+            onChange?()
+        }
+    }
+
     func add(_ entry: Entry) {
         entries.append(entry)
         if entries.count > 500 { entries.removeFirst(entries.count - 500) }
-        onChange?()
+        // Background fetches keep to the last 100, so they never push your own commands out.
+        let background = entries.indices.filter { entries[$0].background }
+        if background.count > 100 { entries.remove(at: background[0]) }
+        if !entry.background || showBackground { onChange?() }
     }
+
+    /// The entries listed now.
+    var shown: [Entry] { showBackground ? entries : entries.filter { !$0.background } }
 
     var text: String {
         let time = DateFormatter()
         time.dateFormat = "HH:mm:ss"
-        return entries.map { e in
+        return shown.map { e in
             var block = "\(time.string(from: e.start))  \(e.title)  ·  \(e.status == 0 ? "done" : "exit \(e.status)")  ·  "
                 + String(format: "%.1f s", e.duration) + "\n$ cd " + ShellQuote.quote(e.directory) + "\n$ " + e.command
             let output = e.output.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -171,6 +313,8 @@ final class GitCommandLog {
 final class GitCommandsWindowController: NSWindowController {
     static let shared = GitCommandsWindowController()
     private let textView: NSTextView
+    /// Lists the fetches Next Term makes by itself too.
+    let showBackground = NSButton(checkboxWithTitle: "Show background fetches", target: nil, action: nil)
 
     private init() {
         let scroll = NSTextView.scrollableTextView()
@@ -179,18 +323,39 @@ final class GitCommandsWindowController: NSWindowController {
                               backing: .buffered, defer: false)
         window.title = "Git Commands"
         window.isReleasedWhenClosed = false
-        window.contentView = scroll
+        let content = NSView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        showBackground.translatesAutoresizingMaskIntoConstraints = false
+        showBackground.controlSize = .small
+        showBackground.font = .systemFont(ofSize: 11)
+        content.addSubview(scroll)
+        content.addSubview(showBackground)
+        NSLayoutConstraint.activate([
+            scroll.topAnchor.constraint(equalTo: content.topAnchor),
+            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            showBackground.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 7),
+            showBackground.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
+            showBackground.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -8),
+        ])
+        window.contentView = content
         super.init(window: window)
         textView.isEditable = false
         textView.font = .monospacedSystemFont(ofSize: 11.5, weight: .regular)
         textView.textContainerInset = NSSize(width: 10, height: 10)
+        showBackground.target = self
+        showBackground.action = #selector(showBackgroundChanged)
+        showBackground.toolTip = "The fetches Next Term makes by itself, to keep “Pull” up to date (Settings › Editor › Git)."
         GitCommandLog.shared.onChange = { [weak self] in self?.reload() }
         window.center()
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
+    @objc private func showBackgroundChanged() { GitCommandLog.shared.showBackground = showBackground.state == .on }
+
     func reload() {
+        showBackground.state = GitCommandLog.shared.showBackground ? .on : .off
         let text = GitCommandLog.shared.text
         textView.string = text.isEmpty ? "Nothing yet: the git commands Next Term runs for you appear here, exactly as they would be typed." : text
         textView.scrollToEndOfDocument(nil)

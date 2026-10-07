@@ -1,6 +1,6 @@
 ---
 title: Projects and git
-description: "Projects that reopen at launch, git at a glance, the branch popup and the commit graph, file operations with undo, and a project’s databases."
+description: "Projects that reopen at launch, git at a glance, background fetch, the branch popup, the commit graph, file operations with undo, a project’s databases."
 ---
 
 A project is a folder that a window is about. Its files stay in the sidebar, new tabs start in it, and Next Term brings it back the next time you launch. The sidebar is also where you see, at a glance, what your agents have changed.
@@ -62,15 +62,28 @@ Toggle it with <kbd>⌘B</kbd> (**View › Hide Project Sidebar**). Put it on th
 
 **The header** shows the branch and the total lines added and removed: `main +41 −10`. Hover it for the full story, such as “Branch main, tracking origin/main: 2 ahead, 1 behind. 3 modified, 1 added, 2 untracked.”
 
-When the upstream has commits your branch doesn’t, a blue button with git’s commit mark says how many: **Pull 152**. Click it to pull them (the same as **Update Project**). When your branch has commits the upstream doesn’t, it says **Push 3**; when both have changed, it shows both counts, `↓152 ↑3`, and a click asks whether to rebase or merge. In a narrow sidebar it shortens to `↓152`. The counts are as of the last fetch, and the button’s tooltip says when that was. While Next Term fetches, pulls or pushes, the mark turns into a spinning sync arrow.
+When the upstream has commits your branch doesn’t, a blue button with git’s commit mark says how many: **Pull 152**. Click it to pull them (the same as **Update Project**). When your branch has commits the upstream doesn’t, it says **Push 3**; when both have changed, it shows both counts, `↓152 ↑3`, and a click asks whether to rebase or merge. In a narrow sidebar it shortens to `↓152`. The counts are as of the last fetch, and the button’s tooltip says when that was. Next Term fetches by itself every 10 minutes, so new commits on the remote show up without a click (see [Background fetch](#background-fetch)). While Next Term fetches, pulls or pushes, the mark turns into a spinning sync arrow. A background fetch only spins a button that is already there: it never makes one appear.
 
 The sidebar reads git with `--no-optional-locks`, so it never holds the index lock while your own git commands, or your agents’, are running. To see a file’s changes in full, press <kbd>⌥⌘G</kbd>: see [Side-by-side diffs](/docs/diffs/).
+
+### Background fetch
+
+Next Term fetches the repositories open in its windows by itself, so **Pull 3** appears when someone pushes, without a click.
+
+- **When:** every 10 minutes while a window for the project is open and Next Term is the app in front, and when you open the branch popup if the last fetch is over 5 minutes old. The popup shows at once, and its counts update when the fetch ends.
+- **What it runs:** `git fetch --no-write-fetch-head --no-auto-maintenance --no-recurse-submodules <remote>`, once for each remote that one of your local branches tracks, with `--porcelain` too when your git is 2.41 or later. Like any `git fetch`, it updates the remote-tracking branches (`origin/main`) and brings the tags that come with them. It never touches your own branches or files, and never `FETCH_HEAD`, so a `git pull` running in a tab at the same moment still merges what it fetched itself. Submodules are not fetched.
+- **It waits its turn, and gives way.** It runs after any git command Next Term is running for you in that repository, never beside it, and it skips a round while another fetch or pull runs there, Next Term’s or one you typed in a tab. If you start a git command from Next Term while a background fetch is still running, the fetch stops and yours runs at once. A slow remote never keeps you waiting.
+- **It never asks for anything.** When git needs a password, a key passphrase or a new host key, the fetch fails quietly and background fetch leaves that remote alone until a fetch you start works (or until Next Term restarts): **Fetch** in the branch popup, **Update Project**, or `git fetch` in a terminal (in any of the repository’s worktrees). The repository’s other remotes go on as before.
+- **It pauses** in Low Power Mode, on a network macOS marks as expensive (a phone’s hotspot) or in Low Data Mode, and when you are offline.
+- **The setting:** **Settings › Editor › Git › Fetch in the background**: **Every 5 minutes**, **Every 10 minutes** (the default), **Every 30 minutes**, **Only when opening the branch popup**, or **Off**.
+
+The sidebar’s “Last fetched” counts these fetches too, although they leave `FETCH_HEAD` alone. **Git › Git Commands** lists them only when **Show background fetches** is on.
 
 ## Branches
 
 Click the branch name at the top of the sidebar, or press <kbd>⌥⌘B</kbd> (**Git › Branches…**). One search covers branches and actions: type a few letters of either.
 
-- **Actions** come first: **Update Project** (with how many commits are waiting, `↓3`), **Commit…** (with your uncommitted `+/−`), **Push…** (`↑2`, or **Publish** for a new branch), **New Branch…**, **Checkout Tag or Revision…** and **Git Log**. The ⟳ button (<kbd>⌘R</kbd>) fetches.
+- **Actions** come first: **Update Project** (with how many commits are waiting, `↓3`), **Commit…** (with your uncommitted `+/−`), **Push…** (`↑2`, or **Publish** for a new branch), **New Branch…**, **Checkout Tag or Revision…** and **Git Log**. The ⟳ button (<kbd>⌘R</kbd>) fetches. Opening the popup fetches too when the last fetch is over 5 minutes old, and the counts update in place.
 - **Recent**: the last branches this folder was on, including switches made in a terminal or by an agent.
 - **Local**: the current branch first, then folders by prefix (`feat/`, `fix/`), and **Agent branches**, where branches agents make (`claude/…`, `codex/…`, `worktree-…`) stay out of your way. Each shows `↓` and `↑` against its upstream, `gone` when the upstream was deleted, and the worktree it is checked out in.
 - **Worktrees** and **Remote**, when there are any.
@@ -87,7 +100,7 @@ Click the branch name at the top of the sidebar, or press <kbd>⌥⌘B</kbd> (**
 
 **Commit…** shows exactly what goes in (what you staged, or every change, with new files marked and anything that looks like a secret or is over 5 MB called out), with **Amend last commit**, **Commit and Push**, and **Let Agent Commit**. A commit can be undone until it is pushed.
 
-Every git command Next Term runs for you is in **Git › Git Commands**, exactly as it would be typed (the commit history is the [Git Log](#git-log)). Next Term never waits on a password prompt: when git needs your password, a key passphrase or a new host key, it says so and opens a terminal tab with the command ready.
+Every git command Next Term runs for you is in **Git › Git Commands**, exactly as it would be typed (the commit history is the [Git Log](#git-log)); [background fetches](#background-fetch) too, with **Show background fetches** on. Next Term never waits on a password prompt: when git needs your password, a key passphrase or a new host key, it says so and opens a terminal tab with the command ready.
 
 ### Compare a branch
 

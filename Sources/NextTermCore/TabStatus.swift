@@ -34,6 +34,9 @@ public struct TabStatus {
     public private(set) var running = false
     /// The command line as typed.
     public private(set) var command = ""
+    /// `command` with its aliases expanded (`gl` is `git pull` with oh-my-zsh), from the shell
+    /// integration; empty when nothing in it was expanded.
+    public private(set) var expandedCommand = ""
     /// Program name of `command`, worked out once when it starts.
     public private(set) var program = ""
     public private(set) var kind: CommandKind = .command
@@ -87,6 +90,7 @@ public struct TabStatus {
         }
         integrated = true
         start(typed, kind: max(CommandClassifier.kind(of: typed), expanded.map(CommandClassifier.kind(of:)) ?? .command), at: now)
+        expandedCommand = expanded ?? ""
         let typedProgram = CommandClassifier.programName(typed)
         if typedProgram.isEmpty, let expanded { program = CommandClassifier.programName(expanded) }
     }
@@ -264,6 +268,7 @@ public struct TabStatus {
         commandsStarted += 1
         running = true
         command = commandLine
+        expandedCommand = ""
         program = CommandClassifier.programName(commandLine)
         kind = newKind
         startedAt = now

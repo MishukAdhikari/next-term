@@ -498,6 +498,7 @@ enum SelfTest {
         await gitLogChecks(c, proj: proj)
         await gitLogPagingChecks(c)
         await branchCompareChecks(c)
+        await backgroundFetchChecks(c)
         await ragColorChecks(c, proj: proj)
         await importChecks(c, proj: proj)
 
@@ -694,6 +695,16 @@ enum SelfTest {
               "while fetching, the header says so with a spinning sync arrow", header.syncText)
         GitWriter.shared.setActivity(nil, in: real.root)
         check(await wait(2) { header.syncText.isEmpty }, "and it goes when the fetch ends", header.syncText)
+        // A background fetch spins the arrow of a button that is there, and never makes one appear.
+        GitWriter.shared.setFetchingInBackground(true, in: real.root)
+        await pause(0.2)
+        check(header.syncText.isEmpty && !header.syncButton.busy, "a background fetch never makes a “Fetching…” button appear", header.syncText)
+        fake.behind = 2
+        header.show(fake)
+        layOut(width: 460)
+        check(header.syncText == "Pull 2" && header.syncButton.busy, "but spins the arrow of one already there", "\(header.syncText), busy \(header.syncButton.busy)")
+        GitWriter.shared.setFetchingInBackground(false, in: real.root)
+        check(await wait(2) { !header.syncButton.busy && header.syncText == "Pull 2" }, "and stops when it ends", header.syncText)
         header.frame = frame
         header.show(c.sidebar.git.snapshot)
     }
@@ -1981,6 +1992,161 @@ enum SelfTest {
         check(await wait(10) { clean.messageText.hasPrefix("The files on disk are the same as on main.") }, "files on disk that match the branch say so",
               clean.messageText + " " + clean.rowTitles.joined(separator: " | "))
         c.editorArea.close(clean)
+    }
+
+    /// Background fetch: a clone of a local bare remote that gets a new commit shows “Pull 1” without a
+    /// click, FETCH_HEAD is never written, nothing asks for anything, and Git Commands lists the fetches
+    /// only when asked to. Then the branch popup fetches as it opens, and its counts update in place. A
+    /// remote that needs a password pauses quietly until a fetch of yours works, and a command of yours
+    /// stops a slow fetch.
+    private static func backgroundFetchChecks(_ c: TerminalWindowController) async {
+        guard let git = GitRunner.locateGit() else { return }
+        let base = URL(fileURLWithPath: canonicalPath(NSTemporaryDirectory())).appendingPathComponent("nt-selftest-fetch-\(getpid())")
+        let remote = base.appendingPathComponent("remote.git"), work = base.appendingPathComponent("work")
+        try? FileManager.default.removeItem(at: base)
+        try? FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        @discardableResult func run(_ args: [String], in dir: URL) -> String {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: git)
+            p.arguments = ["-C", dir.path, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main"] + args
+            let out = Pipe()
+            p.standardOutput = out
+            p.standardError = FileHandle.nullDevice
+            p.standardInput = FileHandle.nullDevice
+            try? p.run()
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        run(["init", "-q", "--bare", remote.path], in: base)
+        run(["init", "-q"], in: work)
+        try? "hello\n".write(to: work.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
+        run(["add", "README.md"], in: work)
+        run(["commit", "-qm", "first"], in: work)
+        run(["remote", "add", "origin", remote.path], in: work)
+        run(["push", "-q", "-u", "origin", "main"], in: work)
+        /// Someone else's commit lands on the remote.
+        func theirs(_ message: String) {
+            run(["update-ref", "refs/heads/main", run(["commit-tree", "main^{tree}", "-p", "main", "-m", message], in: remote)], in: remote)
+        }
+        let fetchHead = work.appendingPathComponent(".git/FETCH_HEAD").path
+
+        // A fetch every second, whatever the setting, as if Next Term were in front on an ordinary network.
+        let fetcher = BackgroundFetcher.shared
+        fetcher.test = (root: work.path, interval: 1, staleAfter: 3600)
+        defer { fetcher.test = nil }
+        let w = AppDelegate.shared.openWindow(directory: work.path, project: work.path)
+        let header = w.sidebar.header
+        check(await wait(10) { w.sidebar.git.snapshot?.upstream == "origin/main" }, "a clone of a local remote opens with its upstream",
+              w.sidebar.git.snapshot?.upstream ?? "no upstream")
+        var appeared = ""
+        for _ in 0..<50 {
+            if !header.syncText.isEmpty { appeared = header.syncText }
+            await pause(0.05)
+        }
+        check(fetcher.lastFetch(at: work.path) != nil && appeared.isEmpty, "background fetches of a branch that is up to date show no button",
+              "last fetch \(String(describing: fetcher.lastFetch(at: work.path))), shown \(appeared.debugDescription)")
+        theirs("their change")
+        check(await wait(10) { header.syncText == "Pull 1" || header.syncText == "↓1" }, "a commit pushed elsewhere shows “Pull 1” without a click",
+              header.syncText.isEmpty ? "no button" : header.syncText)
+        check(!FileManager.default.fileExists(atPath: fetchHead), "the background fetch leaves FETCH_HEAD alone (a git pull in a tab reads it)")
+        check(header.syncButton.toolTip?.contains("Last fetched") == true, "the button says when Next Term last fetched", header.syncButton.toolTip ?? "")
+        let env = GitWriter.backgroundEnvironment
+        let refuses = env["GCM_INTERACTIVE"] == "never" && env["GIT_TERMINAL_PROMPT"] == "0" && env["GIT_ASKPASS"] == "/usr/bin/false"
+        let asked = w.window?.attachedSheet != nil || NSApp.modalWindow != nil
+        check(refuses && !asked, "and nothing asks for a password: no sheet, no prompt", "refuses \(refuses), asked \(asked)")
+
+        // Git Commands: the background fetches only with "Show background fetches" on.
+        let log = GitCommandLog.shared
+        let shown = log.showBackground
+        log.showBackground = false
+        let hidden = !log.text.contains("--no-write-fetch-head")
+        log.showBackground = true
+        let porcelain = FetchSchedule.hasPorcelainFetch(GitWriter.version)
+        let command = GitWriter.commandLine(FetchSchedule.arguments(remote: "origin", porcelain: porcelain))
+        let listed = log.text.contains(command)
+        log.showBackground = shown
+        check(hidden && listed, "Git Commands lists background fetches only with “Show background fetches” on", "hidden \(hidden), listed \(listed)")
+        // --porcelain only where git knows it (2.41 or later; macOS 13 and 14 have 2.39), submodules never.
+        let numbers: [String] = (GitWriter.version ?? []).map { String($0) }
+        let version = numbers.isEmpty ? "not read" : numbers.joined(separator: ".")
+        let fits = GitWriter.version != nil && command.contains("--porcelain") == porcelain && command.contains("--no-recurse-submodules")
+        let worked = log.entries.contains { $0.background && $0.command == command && $0.status == 0 }
+        check(fits && worked, "the background fetch fits the installed git, and works with it", "git \(version): \(command), worked \(worked)")
+
+        // The setting, in Settings › Editor.
+        let choices = EditorSettingsView().backgroundFetch
+        let titles = FetchFrequency.allCases.map(\.title)
+        check(choices.itemTitles == titles && choices.titleOfSelectedItem == fetcher.frequency.title,
+              "Settings › Editor › Git offers every 5, 10 or 30 minutes, only from the popup, or off", choices.itemTitles.joined(separator: " | "))
+
+        // The branch popup, once the last fetch is old (here: at once), fetches as it opens; the timer is out of the way.
+        fetcher.test = (root: work.path, interval: 3600, staleAfter: 0)
+        // A timer fetch still under way would make the popup skip its own; the schedule knows from its start
+        // (reading the tracked remotes), before GitWriter does.
+        let repository = GitWriter.repository(of: work.path)
+        _ = await wait(5) { !fetcher.schedule.isRunning(repository) }
+        theirs("another change")
+        w.showBranches(nil)
+        let popup = w.branchPopup
+        check(await wait(10) { popup.isVisible && popup.model?.currentRef?.behind == 2 },
+              "opening the branch popup fetches when the last fetch is old, and its counts update in place", "behind \(popup.model?.currentRef?.behind ?? -1)")
+        check(await wait(5) { header.syncText == "Pull 2" || header.syncText == "↓2" }, "and the header follows", header.syncText)
+        check(!FileManager.default.fileExists(atPath: fetchHead), "FETCH_HEAD is still untouched")
+        popup.close()
+
+        // A remote that needs a password (here one that says so, as a server does): the fetch fails quietly,
+        // background fetch leaves that remote alone, and nothing asks, opens a tab or tries again.
+        run(["config", "remote.origin.uploadpack", "echo 'fatal: Authentication failed for x' >&2; exit 128; :"], in: work)
+        let tabs = w.tabs.count
+        fetcher.test = (root: work.path, interval: 1, staleAfter: 3600)
+        let paused = await wait(10) { fetcher.schedule.isPausedForPerson(repository, remote: "origin") }
+        func lastBackground() -> GitCommandLog.Entry? { GitCommandLog.shared.entries.last { $0.background } }
+        let failure = lastBackground()
+        await pause(2) // two intervals
+        let retried = lastBackground()?.start != failure?.start
+        let prompted = w.window?.attachedSheet != nil || NSApp.modalWindow != nil || w.tabs.count != tabs
+        check(paused && failure?.status == 128 && !retried && !prompted,
+              "a remote that needs a password pauses background fetch quietly: no sheet, no tab, no second try",
+              "paused \(paused), exit \(failure?.status ?? -1), retried \(retried), prompted \(prompted)")
+        // A fetch of yours that works takes the remote up again.
+        run(["config", "--unset", "remote.origin.uploadpack"], in: work)
+        fetcher.fetchedByHand(repository: repository)
+        let resumed = await wait(10) {
+            guard let entry = lastBackground(), entry.start != failure?.start else { return false }
+            return entry.status == 0
+        }
+        check(resumed && !fetcher.schedule.isPausedForPerson(repository), "and a fetch of yours that works turns it back on",
+              lastBackground()?.output ?? "no background fetch")
+        fetcher.test = nil
+        _ = await wait(5) { !fetcher.schedule.isRunning(repository) }
+
+        // A command of yours never waits behind a background fetch: one from a remote that takes 20 seconds
+        // to answer is stopped for it.
+        run(["config", "remote.origin.uploadpack", "sleep 20; :"], in: work)
+        fetcher.test = (root: work.path, interval: 1, staleAfter: 3600)
+        let slow = await wait(5) { GitWriter.shared.isFetchingInBackground(in: work.path) }
+        fetcher.test = nil // this one only
+        let queued = Date()
+        var waited: TimeInterval?, status: Int32 = -1
+        GitWriter.shared.run("Status", in: work.path, repository: repository, steps: [["status", "--porcelain"]]) { result in
+            waited = Date().timeIntervalSince(queued)
+            status = result.status
+        }
+        let ran = await wait(10) { waited != nil }
+        let soon: Bool = (waited ?? 99) < 5
+        check(slow && ran && soon && status == 0, "a command of yours stops a slow background fetch rather than wait behind it",
+              "fetching \(slow), waited \(waited.map { String(format: "%.1f s", $0) } ?? "over 10 s"), exit \(status)")
+        let stopped = GitCommandLog.shared.entries.last { $0.background }
+        check(stopped?.output.contains("Stopped, so a command of yours could run.") == true, "and Git Commands says why it stopped",
+              stopped?.output ?? "no background entry")
+        _ = await wait(5) { !fetcher.schedule.isRunning(repository) }
+
+        fetcher.test = nil
+        w.closeProject(nil)
+        _ = await wait(5) { !AppDelegate.shared.controllers.contains { $0 === w } }
+        c.window?.makeKeyAndOrderFront(nil)
     }
 
     /// The links agent platforms print (LangGraph's dev server, LangSmith, Weave, MLflow) are found whole:

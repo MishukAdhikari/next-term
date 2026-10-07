@@ -464,7 +464,7 @@ final class ShortcutRecorder: NSButton {
     }
 }
 
-/// Settings › Editor: line height, soft wrap and font size, applied as they change.
+/// Settings › Editor: line height, soft wrap and font size, the sidebar, agents and git, applied as they change.
 final class EditorSettingsView: NSView {
     private let lineHeight = NSSlider(value: 1.35, minValue: 1.0, maxValue: 2.0, target: nil, action: nil)
     private let lineHeightValue = NSTextField(labelWithString: "")
@@ -476,10 +476,19 @@ final class EditorSettingsView: NSView {
     private let fontSize = NSStepper()
     private let fontSizeValue = NSTextField(labelWithString: "")
     private let fontFamily = FontFamilyPopup()
+    /// How often git fetches by itself, to keep the sidebar's "Pull 3" up to date.
+    let backgroundFetch = NSPopUpButton()
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         fontFamily.onChange = { family in AppDelegate.shared.setEditorFontFamily(family) }
+        for frequency in FetchFrequency.allCases {
+            backgroundFetch.addItem(withTitle: frequency.title)
+            backgroundFetch.lastItem?.representedObject = frequency.rawValue
+        }
+        backgroundFetch.target = self
+        backgroundFetch.action = #selector(backgroundFetchChanged)
+        backgroundFetch.toolTip = "Fetches the remotes your branches track, so the sidebar can say “Pull 3” by itself. It waits for the git commands Next Term runs for you, never asks for a password, and leaves FETCH_HEAD as it is."
         lineHeight.target = self
         lineHeight.action = #selector(lineHeightChanged)
         lineHeight.isContinuous = true
@@ -523,6 +532,7 @@ final class EditorSettingsView: NSView {
             row("Line height:", [lineHeight, lineHeightValue]),
             row("", [wrap]),
             row("Sidebar:", [dotIcons]),
+            row("Git:", [NSTextField(labelWithString: "Fetch in the background:"), backgroundFetch]),
             row("Agents:", [claude]),
             row("", [control]),
             row("", [controlStatus]),
@@ -567,6 +577,12 @@ final class EditorSettingsView: NSView {
         fontSize.doubleValue = Double(app.fontSize)
         fontSizeValue.stringValue = "\(Int(app.fontSize)) pt"
         fontFamily.show(Preferences.editorFontFamily)
+        backgroundFetch.selectItem(at: FetchFrequency.allCases.firstIndex(of: BackgroundFetcher.shared.frequency) ?? 0)
+    }
+
+    @objc private func backgroundFetchChanged() {
+        guard let raw = backgroundFetch.selectedItem?.representedObject as? String, let frequency = FetchFrequency(rawValue: raw) else { return }
+        BackgroundFetcher.shared.frequency = frequency
     }
 
     @objc private func lineHeightChanged() {

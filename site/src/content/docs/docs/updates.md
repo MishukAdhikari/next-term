@@ -27,7 +27,7 @@ While a new version waits, a blue **Update** button sits at the top right of eac
 
 ## Turn automatic checks off
 
-Untick **Next Term › Check for Updates Automatically**. Next Term then makes no network request on its own at all; **Check for Updates…** still works when you ask.
+Untick **Next Term › Check for Updates Automatically**. Next Term then makes no update check on its own; **Check for Updates…** still works when you ask. (Its only other requests of its own are background fetches from your projects’ git remotes, wherever they are hosted; **Settings › Editor › Git** turns those off. See [Background fetch](/docs/projects-and-git/#background-fetch).)
 
 ## What the check sends
 
