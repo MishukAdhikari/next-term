@@ -811,6 +811,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         terminalCollapsed = true
         workSplit.layoutSubtreeIfNeeded()
         containerWidth.constant = container.frame.width // what the terminals keep behind the rail
+        // Before the divider moves: setPosition lays the pane out at once, and every terminal squeezed to the
+        // rail for that moment would rewrap (and trim) its scrollback at 2 columns.
+        if terminalRailed { keepTerminalWidth(true) }
         let length = workSplit.isVertical ? workSplit.bounds.width : workSplit.bounds.height
         workSplit.setPosition(terminalFirst ? collapsedLength : length - collapsedLength - workSplit.dividerThickness, ofDividerAt: 0)
         if isTerminalFocused, let view = editorArea.activeTextView { window?.makeFirstResponder(view) }
@@ -858,6 +861,18 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private lazy var containerTrailing = container.trailingAnchor.constraint(equalTo: terminalPane.trailingAnchor)
     private lazy var containerWidth = container.widthAnchor.constraint(equalToConstant: workMinimum)
 
+    /// The terminals at `containerWidth` whatever the pane's width, or back to following the pane.
+    private func keepTerminalWidth(_ keep: Bool) {
+        // One off before the other on: both at once cannot be met.
+        if keep {
+            containerTrailing.isActive = false
+            containerWidth.isActive = true
+        } else {
+            containerWidth.isActive = false
+            containerTrailing.isActive = true
+        }
+    }
+
     private func installRail() {
         terminalRail.isHidden = true
         terminalRail.translatesAutoresizingMaskIntoConstraints = false
@@ -887,14 +902,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private func updateRail() {
         let railed = terminalRailed
         guard terminalRail.isHidden == railed else { return }
-        if railed {
-            containerTrailing.isActive = false
-            containerWidth.isActive = true
-        } else {
-            containerWidth.isActive = false
-            containerTrailing.isActive = true
-            terminalRail.stopPulse()
-        }
+        keepTerminalWidth(railed)
+        if !railed { terminalRail.stopPulse() }
         terminalRail.pointsLeft = terminalPosition == .right
         terminalRail.isHidden = !railed
         tabBar.isHidden = railed

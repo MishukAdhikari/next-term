@@ -1950,14 +1950,20 @@ enum SelfTest {
         window.layoutIfNeeded()
         let width = pane.frame.width
         let columns = front.view.getTerminal().cols
+        // History that a squeeze to a few columns would rewrap past the scrollback's end.
+        front.view.send(txt: "echo rail-top; seq -f '%070g' 1 400\r")
+        _ = await wait(5) { !front.status.running && front.screenTail(4).contains { $0.hasSuffix("0400") } }
+        await pause(0.3) // and the prompt after it
+        let lastRow = front.lastTextRow()
         window.makeFirstResponder(front.view)
         c.toggleTerminalCollapsed(nil)
         window.layoutIfNeeded()
         check(c.terminalRailed && abs(pane.frame.width - TerminalRail.width) < 2 && !rail.isHidden && c.tabBar.isHidden && rail.pointsLeft,
               "beside the editor, ⌘J folds the terminal to a rail at the window's edge", "\(width) → \(pane.frame.width)")
         check(window.firstResponder === editor.textView, "folding gives the keyboard to the editor")
-        check(front.view.getTerminal().cols == columns, "the terminals keep their width behind the rail",
-              "\(columns) → \(front.view.getTerminal().cols) columns")
+        check(front.view.getTerminal().cols == columns && lastRow != nil && front.lastTextRow() == lastRow,
+              "folding to the rail never squeezes the terminals: their width and scrollback stay whole",
+              "\(columns) → \(front.view.getTerminal().cols) columns, last row \(lastRow ?? -1) → \(front.lastTextRow() ?? -1)")
         let states = c.tabBar.items.map(\.state)
         check(rail.marks.count == c.groups.count && rail.marks.map(\.state) == states && rail.marks[safe: c.activeIndex]?.selected == true,
               "the rail has a mark for each tab, in order, as the tab bar has them", "\(rail.marks.map(\.state)) vs \(states)")
