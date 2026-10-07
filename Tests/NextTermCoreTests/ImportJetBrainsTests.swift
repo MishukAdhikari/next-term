@@ -384,7 +384,7 @@ import Testing
         defer { try? fm.removeItem(atPath: home) }
         let config = try ide(home, "PhpStorm2026.1")
         for (path, text) in files { try write(text, to: config + "/" + path) }
-        return ImportJetBrains.plan(for: app(config), home: home, usKeyboard: usKeyboard)
+        return ImportJetBrains.plan(for: app(config), home: home, usKeyboard: usKeyboard, now: Date(), fonts: testFonts)
     }
 
     @Test func editorFontSizeAndLineSpacing() throws {
@@ -395,9 +395,9 @@ import Testing
         #expect(plan.settings == [
             PlannedSetting(.fontSize(14), source: "options/editor-font.xml FONT_SIZE 14"),
             PlannedSetting(.editorLineHeight(1.35), source: "options/editor-font.xml LINE_SPACING 1.37"),
+            PlannedSetting(.editorFontFamily("Fira Code"), source: "options/editor-font.xml FONT_FAMILY Fira Code"),
         ])
-        #expect(plan.skipped == [SkippedItem("Editor font “Fira Code”", "font choice is coming"),
-                                 SkippedItem("Font ligatures", "font choice is coming")])
+        #expect(plan.skipped == [SkippedItem("Font ligatures", "Next Term has no ligature setting")])
     }
 
     @Test func valuesAreClamped() throws {
@@ -485,9 +485,9 @@ import Testing
         #expect(plan.settings == [
             PlannedSetting(.fontSize(15), source: "colors/_@user_Monokai Pro _Material_.icls EDITOR_FONT_SIZE 15"),
             PlannedSetting(.editorLineHeight(1.4), source: "colors/_@user_Monokai Pro _Material_.icls LINE_SPACING 1.4"),
+            PlannedSetting(.editorFontFamily("Menlo"), source: "colors/_@user_Monokai Pro _Material_.icls EDITOR_FONT_NAME Menlo"),
         ])
-        #expect(plan.skipped == [SkippedItem("Editor font “Menlo”", "font choice is coming"),
-                                 SkippedItem("Colour scheme “Monokai Pro (Material)”", "colour themes come later")])
+        #expect(plan.skipped == [SkippedItem("Colour scheme “Monokai Pro (Material)”", "colour themes come later")])
     }
 
     @Test func aSchemeWithOnlyColoursUsesTheIDEFont() throws {
@@ -504,8 +504,53 @@ import Testing
             "options/colors.scheme.xml": "<application>\n  <component name=\"EditorColorsManagerImpl\">\n    <global_color_scheme name=\"Monokai Pro\" />\n  </component>\n</application>",
             "colors/Monokai Pro.icls": "<scheme name=\"Monokai Pro\" version=\"142\">\n  <option name=\"LINE_SPACING\" value=\"1.3\" />\n  <option name=\"EDITOR_FONT_SIZE\" value=\"16\" />\n  <option name=\"EDITOR_FONT_NAME\" value=\"JetBrains Mono\" />\n  <option name=\"EDITOR_LIGATURES\" value=\"true\" />\n</scheme>",
         ])
-        #expect(plan.settings.map(\.setting) == [.fontSize(16), .editorLineHeight(1.3)])
-        #expect(plan.skipped.map(\.item) == ["Editor font “JetBrains Mono”", "Font ligatures", "Colour scheme “Monokai Pro”"])
+        #expect(plan.settings.map(\.setting) == [.fontSize(16), .editorLineHeight(1.3), .editorFontFamily("JetBrains Mono")])
+        #expect(plan.skipped.map(\.item) == ["Font ligatures", "Colour scheme “Monokai Pro”"])
+    }
+
+    @Test func consoleColoursFromTheActiveScheme() throws {
+        func attribute(_ name: String, _ value: String) -> String {
+            "    <option name=\"\(name)\">\n      <value>\n        <option name=\"FOREGROUND\" value=\"\(value)\" />\n        <option name=\"FONT_TYPE\" value=\"1\" />\n      </value>\n    </option>\n"
+        }
+        var attributes = attribute("CONSOLE_RED_OUTPUT", "ff6b68") + attribute("CONSOLE_DARKGRAY_OUTPUT", "555555")
+        attributes += attribute("CONSOLE_WHITE_OUTPUT", "ffffff") + attribute("CONSOLE_NORMAL_OUTPUT", "bbbbbb")
+        attributes += attribute("CONSOLE_BLUE_OUTPUT", "ff") + attribute("CONSOLE_GREEN_OUTPUT", "not-a-colour")
+        attributes += attribute("DEFAULT_KEYWORD", "cc7832")
+        let scheme = """
+            <scheme name="_@user_Darcula" version="142" parent_scheme="Darcula">
+              <colors>
+                <option name="CARET_COLOR" value="bbbbbb" />
+                <option name="CONSOLE_BACKGROUND_KEY" value="2b2b2b" />
+                <option name="SELECTION_BACKGROUND" value="214283" />
+                <option name="FILESTATUS_ADDED" value="629755" />
+              </colors>
+              <attributes>
+            \(attributes)  </attributes>
+            </scheme>
+            """
+        let plan = try self.plan([
+            "options/colors.scheme.xml": "<application>\n  <component name=\"EditorColorsManagerImpl\">\n    <global_color_scheme name=\"Darcula\" />\n  </component>\n</application>",
+            "colors/_@user_Darcula.icls": scheme,
+        ])
+        var ansi: [UInt32?] = Array(repeating: nil, count: 16)
+        ansi[1] = 0xFF6B68
+        ansi[4] = 0x0000FF // JetBrains drops leading zeros
+        ansi[8] = 0x555555 // "dark gray" is bright black
+        ansi[15] = 0xFFFFFF // "white" is bright white
+        let palette = TerminalPalette(name: "Darcula console colours", ansi: ansi, foreground: 0xBBBBBB, background: 0x2B2B2B,
+                                      cursor: 0xBBBBBB, selection: 0x214283)
+        #expect(plan.settings == [PlannedSetting(.terminalPalette(palette), source: "colors/_@user_Darcula.icls console colours",
+            note: "8 of 20 colours; the others stay Next Term's; colours the scheme doesn't set come from its parent in the IDE, which can't be read here")])
+        #expect(plan.skipped == [SkippedItem("colors/_@user_Darcula.icls CONSOLE_GREEN_OUTPUT", "not a colour Next Term can read"),
+                                 SkippedItem("Colour scheme “Darcula”", "colour themes come later")])
+
+        // A built-in scheme isn't a file: nothing to read.
+        let builtIn = try self.plan([
+            "options/colors.scheme.xml": "<application>\n  <component name=\"EditorColorsManagerImpl\">\n    <global_color_scheme name=\"Darcula\" />\n  </component>\n</application>",
+        ])
+        #expect(builtIn.settings.isEmpty)
+        #expect(builtIn.skipped == [SkippedItem("Colour scheme “Darcula”", "colour themes come later")])
+        #expect(ImportJetBrains.schemeColour("0") == 0 && ImportJetBrains.schemeColour("1234567") == nil && ImportJetBrains.schemeColour("") == nil)
     }
 
     func softWrap(_ options: [(String, String)]) throws -> (settings: [PlannedSetting], skipped: [SkippedItem]) {
@@ -575,7 +620,7 @@ import Testing
         let terminal = component("TerminalFontOptions", [("VERSION", "1"), ("FONT_FAMILY", "MesloLGS NF"), ("FONT_SIZE", "15.0")])
         var plan = try self.plan(["options/terminal-font.xml": terminal])
         #expect(plan.settings == [PlannedSetting(.fontSize(15), source: "options/terminal-font.xml FONT_SIZE 15")])
-        #expect(plan.skipped == [SkippedItem("Terminal font “MesloLGS NF”", "font choice is coming")])
+        #expect(plan.skipped == [SkippedItem("Terminal font “MesloLGS NF”", "not installed on this Mac")])
 
         plan = try self.plan(["options/terminal-font.xml": terminal, "options/editor-font.xml": component("DefaultFont", [("FONT_SIZE", "14")])])
         #expect(plan.settings.map(\.setting) == [.fontSize(14)])
