@@ -654,7 +654,7 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         case .terminalFontFamily(let family):
             return "Terminal font \(Preferences.terminalFontFamily ?? Theme.defaultFontName) → \(family)"
         case .terminalPalette(let palette):
-            return "Terminal colours from \(palette.name)"
+            return "Terminal colours \(Preferences.terminalPalette?.name ?? "Next Term default") → \(palette.name)"
         }
     }
 }

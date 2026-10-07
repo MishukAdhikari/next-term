@@ -130,6 +130,8 @@ import Testing
 
         // `keybind = clear` drops the ones before it.
         #expect(try self.plan("keybind = cmd+d=new_split:right\nkeybind = clear").shortcuts.isEmpty)
+        // Every action lands on a command an import may set (the self-test checks those are in the menus).
+        for (action, command) in ImportGhostty.actions { #expect(ImportShortcuts.titles[command] != nil, "\(action)") }
     }
 
     @Test func safety() throws {
