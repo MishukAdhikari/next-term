@@ -135,7 +135,8 @@ extension SelfTest {
     /// A kept tmux tab, its window's last, closed with a file unsaved: Don't Save, then End Session. Ending
     /// it takes a moment (`slow` holds the host's checks 2 s), and the editor is in use meanwhile. With no
     /// edit, the window goes once the session has ended, without asking twice; with an edit, it waits and
-    /// asks again. `sessions` lists the tmux sessions on the stand-in host.
+    /// asks again. And an agent's close_tab with force on such a tab is told the session has ended.
+    /// `sessions` lists the tmux sessions on the stand-in host.
     static func endSessionChecks(host: RemoteHost, slow: (Bool) -> Void, sessions: () -> String) async {
         let app = AppDelegate.shared!
         let root = URL(fileURLWithPath: canonicalPath(NSTemporaryDirectory())).appendingPathComponent("nt-end-session-\(getpid())")
@@ -193,6 +194,31 @@ extension SelfTest {
                 w.editorArea.closeAll()
                 for tab in w.tabs { w.remove(tab) }
             }
+        }
+
+        // An agent's close_tab with force on such a tab: the session ends first, and then the user is asked.
+        // The answer says both, so the agent does not take "closed: false" for nothing having happened.
+        guard MCPControlServer.shared.isRunning, let mcp = MCPTestClient(socket: MCPControlServer.shared.path) else { return }
+        let w = app.openWindow(directory: root.path)
+        guard let window = w.window, let local = w.tabs.first else { return }
+        let kept = w.addRemoteTab(RemoteTab(host: host, keep: .tmux))
+        w.remove(local)
+        let session = kept.remote?.session ?? ""
+        _ = await wait(20) { kept.remoteReady }
+        w.openFile(file)
+        w.editorArea.activeEditor?.textView.insertText("third ", replacementRange: NSRange(location: 0, length: 0))
+        _ = await mcp.call(1, "initialize", ["protocolVersion": "2025-06-18", "capabilities": [:], "clientInfo": ["name": "selftest", "version": "1"]])
+        let reply = await mcp.call(2, "tools/call", ["name": "close_tab", "arguments": ["tab_id": kept.id.uuidString.lowercased(), "force": true]], timeout: 30)
+        mcp.close()
+        let told = (((reply?["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String) ?? ""
+        let json = (try? JSONSerialization.jsonObject(with: Data(told.utf8))) as? [String: Any]
+        let asked = await wait(5) { window.attachedSheet != nil }
+        check(json?["closed"] as? Bool == false && json?["asking_user"] != nil && json?["session_ended"] as? String == session && asked,
+              "remote MCP: close_tab force on a kept last tab with a file unsaved says the session has ended, and that the user is asked", told)
+        _ = await pressSheetButton("Don’t Save", in: window)
+        if !(await wait(5) { !app.controllers.contains { $0 === w } }) {
+            w.editorArea.closeAll()
+            for tab in w.tabs { w.remove(tab) }
         }
     }
 
