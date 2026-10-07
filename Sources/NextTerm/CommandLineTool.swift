@@ -108,10 +108,14 @@ enum CommandLineTool {
     }
 
     /// The login shell's PATH; when it could not be read, the one macOS gives every login shell
-    /// (/etc/paths and /etc/paths.d).
+    /// (/etc/paths and /etc/paths.d), for the menu command. A launch uses only the login shell's.
     private static var searchPath: [String] {
         let probed = LoginShell.shellPath
-        if !probed.isEmpty { return probed }
+        return probed.isEmpty ? standardPath : probed
+    }
+
+    /// The PATH macOS gives every login shell, from /etc/paths and /etc/paths.d.
+    static var standardPath: [String] {
         let extras = (try? FileManager.default.contentsOfDirectory(atPath: "/etc/paths.d")) ?? []
         var folders: [String] = []
         for file in ["/etc/paths"] + extras.sorted().map({ "/etc/paths.d/" + $0 }) {
@@ -156,7 +160,10 @@ enum CommandLineTool {
     static func registerQuietly() {
         guard let script = script?.path, isInStableLocation else { return }
         DispatchQueue.global(qos: .utility).async {
-            guard register(script, path: searchPath) == .unavailable else { return }
+            // Never on a guessed PATH: /etc/paths has neither /opt/homebrew/bin nor ~/.local/bin, so a slow
+            // login shell would bring the password offer where neither needs one. A later launch decides.
+            let path = LoginShell.shellPath
+            guard !path.isEmpty, register(script, path: path) == .unavailable else { return }
             DispatchQueue.main.async { offer() }
         }
     }
