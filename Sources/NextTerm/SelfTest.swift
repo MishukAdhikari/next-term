@@ -842,13 +842,23 @@ enum SelfTest {
         header.layoutSubtreeIfNeeded()
         check(header.syncText == "↓152 ↑3", "both ways shows both counts", header.syncText)
         header.onSync = onSync
-        // Narrow (this window's sidebar, with the window buttons beside the branch): the name stays whole.
+        // Narrow, with the window buttons beside the branch: the name stays whole, then the line counts give
+        // way before “Pull” does, and only a sidebar too narrow for the word without them shows “↓152”.
         fake.ahead = 0
         header.show(fake)
-        layOut(width: frame.width)
+        let inset = header.inset
+        header.inset = 70
+        layOut(width: 300)
         let clear = !header.syncButton.frame.intersects(header.hideButton.frame) && header.syncButton.frame.minX > 0
-        check(header.syncText == "↓152" && !header.titleIsTruncated && clear,
-              "in a narrow sidebar it shortens to “↓152” and the branch name stays whole", "\(header.syncText) \(header.syncButton.frame) width \(frame.width)")
+        check(header.syncText == "Pull 152" && !header.summaryIsShown && !header.titleIsTruncated && clear,
+              "in a narrow sidebar the line counts give way first: “Pull 152” keeps its word and the branch name stays whole",
+              "\(header.syncText), counts shown \(header.summaryIsShown), \(header.syncButton.frame)")
+        layOut(width: ProjectSidebarView.defaultWidth)
+        let stillClear = !header.syncButton.frame.intersects(header.hideButton.frame) && header.syncButton.frame.minX > 0
+        check(header.syncText == "↓152" && !header.summaryIsShown && !header.titleIsTruncated && stillClear,
+              "narrower still (the default width), it shortens to “↓152” and the branch name stays whole",
+              "\(header.syncText), counts shown \(header.summaryIsShown), \(header.syncButton.frame)")
+        header.inset = inset
         // A fetch running here: the sync arrow spins, and a click does nothing until it ends.
         fake.behind = 0
         header.show(fake)

@@ -80,6 +80,12 @@ final class SidebarHeaderView: NSView {
         return summary.cell?.expansionFrame(withFrame: summary.bounds, in: summary) != .zero
     }
 
+    /// Whether the counts are shown at all (for the self-test).
+    var summaryIsShown: Bool {
+        layoutSubtreeIfNeeded()
+        return !summary.isHidden
+    }
+
     // The whole header is a drag handle for the window, except its ⋯ button.
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard frame.contains(point) else { return nil }
@@ -253,8 +259,8 @@ final class SidebarHeaderView: NSView {
         let summaryY = titleY + title.firstBaselineOffsetFromTop - summary.firstBaselineOffsetFromTop
         moreButton.frame = NSRect(x: bounds.width - 30, y: (h - 24) / 2, width: 26, height: 24)
         hideButton.frame = NSRect(x: bounds.width - 56, y: (h - 24) / 2, width: 26, height: 24)
-        // When room is short, the branch name keeps its own first, then the sync button shortens ("↓152"),
-        // then the line counts give way (they are in the tooltip, and on the tree's rows).
+        // When room is short, the branch name keeps its own first, then the line counts give way (they are
+        // in the tooltip, and on the tree's rows), and only then does the sync button lose its word ("↓152").
         let nameStart = inset + 4 + (branchIcon.isHidden ? 0 : 18)
         let chevronWidth: CGFloat = chevron.isHidden ? 0 : 12
         // The cell's own size, not the text's: it needs a few points of margin, or even "dev" truncates to "…".
@@ -264,7 +270,7 @@ final class SidebarHeaderView: NSView {
         let summaryText = summary.attributedStringValue.length > 0 ? ceil(summary.intrinsicContentSize.width) + 6 : 0
         var right = bounds.width - 60
         if !syncButton.isHidden {
-            let spare = right - nameStart - nameNeeded - chevronWidth - 6 - summaryText - 4
+            let spare = right - nameStart - nameNeeded - chevronWidth - 6 - 4
             syncButton.compact = syncButton.width(compact: false) > spare
             let width = syncButton.width(compact: syncButton.compact)
             syncButton.frame = NSRect(x: right - width, y: (h - SyncButton.height) / 2, width: width, height: SyncButton.height)
@@ -272,6 +278,7 @@ final class SidebarHeaderView: NSView {
         }
         var summaryWidth = min(summaryText, max(0, right - nameKept))
         if summaryWidth < 28 { summaryWidth = 0 } // an ellipsis alone says nothing
+        if !syncButton.isHidden && syncButton.isShortened { summaryWidth = 0 } // the counts went before the word did
         summary.isHidden = summaryWidth == 0
         summary.frame = NSRect(x: right - summaryWidth, y: summaryY, width: summaryWidth, height: summaryHeight)
         var x = inset + 4
@@ -332,6 +339,8 @@ final class SyncButton: NSButton {
     }
 
     var shownTitle: String { compact ? short : full }
+    /// It shows "↓152" for "Pull 152": its word is gone.
+    var isShortened: Bool { compact && short != full }
 
     private func label(_ text: String) -> NSAttributedString {
         NSAttributedString(string: text, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold),
