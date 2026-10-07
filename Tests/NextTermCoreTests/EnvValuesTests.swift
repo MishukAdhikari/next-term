@@ -47,6 +47,9 @@ import Testing
         #expect(values(text) == ["1", "\"two\"", "x"])
         #expect(!values(text).contains { $0.contains("\r") })
         #expect(values("KEY=\"a\r\nb\"\r\nN=1") == ["\"a\r\nb\"", "1"])
+        // The reader splits the same lines, so a value ends where its range does.
+        #expect(EnvFile.values(EnvFile.parse("A=1\r\nB=2\r\n")) == ["A": "1", "B": "2"])
+        #expect(EnvFile.values(EnvFile.parse("KEY=\"a\r\nb\"\r\nN=1")) == ["KEY": "a\nb", "N": "1"])
     }
 
     @Test func aQuotedValueOverSeveralLinesIsOneRange() {

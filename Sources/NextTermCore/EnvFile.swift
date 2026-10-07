@@ -32,9 +32,9 @@ public enum EnvFile {
     static func parse(_ text: String) -> [EnvEntry] {
         var body = text
         if body.hasPrefix("\u{FEFF}") { body.removeFirst() }
-        let lines = body.split(separator: "\n", omittingEmptySubsequences: false).map { line -> Substring in
-            line.hasSuffix("\r") ? line.dropLast() : line
-        }
+        // A CRLF is one Character in Swift, never equal to "\n", so it is a separator of its own.
+        let rows = body.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" })
+        let lines = rows.map { line -> Substring in line.hasSuffix("\r") ? line.dropLast() : line }
         var entries: [EnvEntry] = []
         var known: [String: String] = [:]
         var index = 0
