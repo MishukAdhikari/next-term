@@ -24,6 +24,12 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
   Go and templ, Rust, Elixir, YAML, SQL and more. Line numbers, adjustable line height, soft wrap, auto-indent, ⌘/ to comment, ⌘L to go to a line, find, undo. Files keep
   their encoding, line endings and permissions. When an agent changes a file you have open, the editor
   follows; if you have unsaved edits it asks first.
+- **Jupyter notebooks, read-only.** A `.ipynb` opens as cells, each coloured in the kernel's language,
+  with the outputs saved in the file: text, tables, images and errors. Nothing runs (there is no kernel);
+  Open as JSON shows the file itself.
+- **Large data files.** A JSON Lines, CSV or TSV file over 2 MB opens in a read-only head view: its first
+  1,000 rows as a table, as fast for a 2 GB file as for a small one, with Load More, search and Copy As.
+  Logs and other text files over 32 MB open there too.
 - **Send to Agent (⌥⌘K).** Select code in the editor or a diff, or files and folders in the sidebar, and send
   them to the agent in your tab: Next Term types the reference in that agent's own syntax (`@app/User.php#L10-20`
   for Claude, `app/User.php:10-20` for Codex and others) and hands you the prompt to add your instruction. It
@@ -59,7 +65,8 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
   `/opt/homebrew/bin`), or, when there is none, offers to put it in `/usr/local/bin` with your password.
   It never changes PATH or touches anyone else's `nxtrm`.
 - **Your layout.** The terminal below the editor (default), beside it on the right or left, or above it;
-  the project sidebar on the left or right. From the ⋯ buttons or the View menu.
+  the project sidebar on the left or right. From the ⋯ buttons or the View menu. ⌘J folds the terminal
+  away so the editor gets the room, and brings it back at its size.
 - **Projects.** Open a folder as a project (⌘O): its window keeps the project in the sidebar, and new tabs
   open in it by default. Next Term reopens your last projects at launch (on first launch it asks for a
   folder). Open Recent, Close Project, and a Welcome window, like an IDE.
@@ -67,12 +74,22 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
   `+12 −3` line counts like a pull request, and the branch and total changes at the top, with a **Pull 152**
   button when the upstream has commits you don't.
   Files your agents create or change show up on their own.
+- **Databases.** A Databases group in the sidebar lists the databases a project's own files name (Laravel
+  and Herd `DB_*` keys, `DATABASE_URL`, Prisma, Drizzle, Supabase, Vercel-linked projects, SQLite files),
+  found by reading them, without running project code; local or remote by host, passwords masked. SQLite
+  files open in a read-only viewer; the others hand off to TablePlus, or to `mysql` or `psql` in a tab.
 - **Branches in one popup.** Click the branch (⌥⌘B): search branches and actions, check out, branch,
   update, commit, push, rebase and merge. It asks before changing files under a working agent, keeps
   uncommitted changes in a named stash, and logs every git command exactly as typed (Git › Git Commands).
 - **Git Log.** The commit history as a graph in an editor tab (⌥⌘L): lanes per line of history, branch
   and tag badges, filters by branch, author, date, paths and message or hash, and each commit's changed
   files, with a double-click for a file's diff in that commit. It follows the repository as agents commit.
+- **Git blame.** View › Annotate with Git Blame shows who last changed each line, how long ago and the
+  commit, beside the line numbers; click to see that commit in the Git Log. View › Current Line Blame
+  adds a note after the line with the caret.
+- **Changes in the gutter.** A bar beside the line numbers marks the lines added (green) or changed (blue)
+  since the last commit, and a red wedge where lines were deleted, as you type or an agent writes. Click a
+  mark for the file's changes side by side.
 - **Split panes.** Split any tab right (⌘D) or down (⌘⇧D), as often as you like: an agent beside its
   test run, two agents side by side. Move between panes with ⌥⌘ and the arrows, maximize one with
   ⌘⇧↩, close it with ⌘W. The panes without the keyboard are shaded, and the tab's mark shows the pane
@@ -165,6 +182,7 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 |---|---|
 | New tab (in the project, or the current tab's folder) | ⌘T |
 | New window | ⌘N |
+| New remote tab (on one of your servers) | ⌥⌘T |
 | Open project / Close project | ⌘O / Shell menu |
 | Go to File (`name` or `name:line`) | ⌘P |
 | Resume an agent session (↩ resume, ⌘↩ fork) | ⌥⌘O |
@@ -176,7 +194,9 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | Next / previous tab | ⌘⇧] / ⌘⇧[, Ctrl-Tab / Ctrl-Shift-Tab |
 | Rename tab | ⌥⌘R, or double-click the tab |
 | Project sidebar | ⌘B |
+| Fold the terminal away (and back) | ⌘J |
 | Find / next / previous | ⌘F / ⌘G / ⌘⇧G |
+| Use the selection for Find | ⌘E |
 | Replace in the open file | ⌥⌘F |
 | Find in Files / Replace in Files | ⌘⇧F / ⌘⇧R |
 | Clear | ⌘K |
@@ -186,6 +206,8 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | Close the file being edited | ⌘W (with the editor focused) |
 | Comment line / Go to line | ⌘/ / ⌘L |
 | Show changes (side by side) | ⌥⌘G |
+| Branches (the branch popup) | ⌥⌘B |
+| Git Log (the commit graph) | ⌥⌘L |
 | Send to Agent | ⌥⌘K |
 | Indent / Outdent | ⌘] / ⌘[ (Tab / ⇧Tab on selected lines) |
 | Between editor and terminal | ⌃` |
@@ -277,7 +299,10 @@ macOS-only); the core logic would carry over.
 Terminal emulation by [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT). Syntax highlighting by
 [shiki-swift](https://github.com/fayazara/shiki-swift) (MIT) with Oniguruma (BSD), using TextMate grammars from
 [shikijs/textmate-grammars-themes](https://github.com/shikijs/textmate-grammars-themes), each under its own
-permissive licence ([list](Resources/Highlighting/GRAMMARS.md)).
+permissive licence ([list](Resources/Highlighting/GRAMMARS.md)). File icons from the
+[Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme) (MIT), whose icons
+draw on Pictogrammers' Material Design Icons and Google's Material Symbols (Apache 2.0), rendered with
+[SwiftDraw](https://github.com/swhitty/SwiftDraw) (zlib).
 
 ## License
 
