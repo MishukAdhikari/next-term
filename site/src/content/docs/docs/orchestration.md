@@ -1,6 +1,6 @@
 ---
 title: Orchestrate agents (MCP)
-description: "Next Term is an MCP server: one agent opens projects, starts other agents in tabs, sends them prompts, waits, reads their screens and answers their questions, and reads project files and diffs. 18 tools, local only."
+description: "Next Term as an MCP server: one agent starts others in tabs, prompts them, reads their screens, answers their questions and reads files. 18 local tools."
 head:
   - tag: title
     content: Orchestrate AI coding agents over MCP — Next Term
