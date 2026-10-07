@@ -40,7 +40,7 @@ Answer the question in the terminal as usual; the amber mark clears once the que
 - **A command that finished or failed**, such as a build or a test run, notifies only while you are in another app. In Next Term, the tab mark says it already. A failed command says so, with its exit code.
 - **Finished work** notifies only when it took at least 5 seconds. Settings can raise that to 30 seconds, 1 minute or 5 minutes. A decision or a bell notifies whatever its length.
 - **A bell**, or a program’s own notification (OSC 9 or OSC 777), marks the tab amber: it needs your attention. It notifies while you are in another app.
-- **Never the tab on screen:** none comes for the selected tab of the window you are working in, also while that window’s alert, <kbd>⌘P</kbd> or Find in Files has the keyboard. With another window in front, such as Settings, it notifies like any other tab. Folded to its rail, the terminal is not on screen, so the tab in front notifies like any other.
+- **Never the tab on screen:** none comes for the selected tab of the window you are working in, also while that window’s alert, <kbd>⌘P</kbd> or Find in Files has the keyboard. Another window in front, such as Settings, takes it off screen. Folded to its rail, the terminal is not on screen, so the tab in front notifies like any other.
 - **Each one names its tab and the window’s project** (or, without one, the tab’s folder). Click it to land on that tab, in that window.
 - **Repeats are held back:** each tab replaces its previous notification, and the same message is not repeated within 10 seconds. Several tabs finishing together make one sound, and a window’s notifications stack together in Notification Center.
 - **The Dock badge** counts the tabs with a mark you have not seen yet.
