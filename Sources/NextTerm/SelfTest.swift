@@ -2738,6 +2738,7 @@ enum SelfTest {
         c.openFile(file)
         guard let editor = c.editorArea.activeEditor, editor.document.path.hasSuffix("rail.txt") else { return check(false, "rail.txt opens") }
         let savedPosition = app.terminalPosition
+        let home = c.activeTab // the project's tab: the checks after this one read the project in the sidebar
         let rail = c.terminalRail
         // One tab in front, and one opened behind it (as an agent would).
         let front = c.addTab(directory: proj.path)
@@ -2908,6 +2909,8 @@ enum SelfTest {
         app.terminalPosition = savedPosition
         c.applyLayout()
         for tab in [front, back] { tab.status.setVisible(true); c.requestClose(tab) }
+        // Switching tabs above went round past the last one: back to the tab that was in front.
+        if let home { c.show(home) }
         c.editorArea.close(editor)
         try? FileManager.default.removeItem(at: file)
     }
