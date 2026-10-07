@@ -109,7 +109,7 @@ Applications, with no `sudo` and no first-launch prompt ([the script](site/src/i
 download `NextTerm-x.y.z.dmg` from [Releases](../../releases), open it, and drag **Next Term** to
 Applications. After that, Next Term updates itself (Next Term > Check for Updates).
 
-Releases are not notarized yet, so with the disk image macOS blocks the first launch:
+Next Term is not notarized by Apple, so with the disk image macOS blocks the first launch. Allow it once:
 
 - **macOS 15 and later:** open Next Term once (it will be blocked), then go to **System Settings →
   Privacy & Security**, scroll down, click **Open Anyway** next to Next Term, and confirm.
@@ -251,9 +251,9 @@ front end can reuse it.
 
 Next: sessions from more agents (Gemini CLI, opencode, Copilot CLI, Cursor). Then a server's files in
 the editor and sidebar next to its remote tabs, then Dev Containers, and a secure link so agents outside
-this Mac (ChatGPT, Claude) can use the MCP server. Later: more of the diff view, a Copilot CLI IDE link,
-session restore and notarized releases. A Linux build would need a different UI layer (AppKit is
-macOS-only); the core logic would carry over.
+this Mac (ChatGPT, Claude) can use the MCP server. Later: more of the diff view, a Copilot CLI IDE link
+and session restore. A Linux build would need a different UI layer (AppKit is macOS-only); the core
+logic would carry over.
 
 ## Credits
 

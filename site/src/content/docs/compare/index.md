@@ -41,7 +41,7 @@ Next Term is a native macOS terminal and code editor built for one job: running 
 - **Mac only.** macOS 13 or later; there is no Windows or Linux version.
 - **No remote development.** Remote tabs run agents on your servers over ssh, but the editor and sidebar open only your Mac’s files. No dev containers, and no real-time collaboration.
 - **No cloud agents.** Agents run on your Mac, or on servers you reach with ssh, in Next Term’s tabs.
-- **Not notarized yet.** macOS asks you to allow the first launch once.
+- **Not notarized.** macOS asks you to allow the first launch of the disk image once (Open Anyway); the one-line installer does not need it.
 
 ## Questions
 
