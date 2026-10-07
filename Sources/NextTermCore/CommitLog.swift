@@ -357,7 +357,7 @@ public enum CommitLog {
 
     /// The name commits here are made with (`user.name`), for "Me" in the author filter.
     public static func userName(in root: String, git: String) -> String? {
-        GitRunner.run(git, ["-C", root, "config", "user.name"], timeout: 5)
+        GitRunner.run(git, ["-C", root, "--no-optional-locks", "config", "user.name"], timeout: 5)
             .map { String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) }
             .flatMap { $0.isEmpty ? nil : $0 }
     }
