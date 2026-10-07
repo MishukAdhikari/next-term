@@ -88,8 +88,11 @@ public enum AgentScreen {
     /// is nil when the options reach above `lines`.
     static func form(in lines: [String]) -> (row: Int?, question: String)? {
         let start = max(0, lines.count - promptLines)
-        guard lines[start...].contains(where: { $0.contains(formHint) }),
-              let mark = lines[start...].lastIndex(where: { matches(formRow, splitCursor(inner($0)).rest) }) else { return nil }
+        // Its own rows sit just over its hint, with no other list between: the same rows in the transcript,
+        // with another picker's hint further down, are not the form.
+        guard let mark = lines[start...].lastIndex(where: { matches(formRow, splitCursor(inner($0)).rest) }),
+              let hint = lines[mark...].firstIndex(where: { $0.contains(formHint) }), hint - mark <= 4,
+              !lines[mark..<hint].dropFirst().contains(where: { formOptionLabel($0) != nil }) else { return nil }
         // Up from the form's own rows, the options count down to 1.
         var expected: Int?
         var first: Int?

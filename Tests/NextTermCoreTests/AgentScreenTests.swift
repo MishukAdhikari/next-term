@@ -257,6 +257,10 @@ import Testing
         // Another picker with the same hint, not a question to the user from the model.
         let picker = ["Select model", "", "❯ 1. Default (recommended)", "  2. Opus", "", "Enter to select · Esc to exit"]
         #expect(AgentScreen.activity(screenLines: picker) == .idle)
+        // Such a list in the transcript with that picker open under it: the hint is the picker's, not the list's.
+        let both = Array(prose.dropLast(3)) + picker
+        #expect(AgentScreen.activity(screenLines: both) == .idle)
+        #expect(AgentScreen.menu(screenLines: both) == nil)
     }
 }
 
