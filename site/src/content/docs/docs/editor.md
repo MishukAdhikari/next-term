@@ -19,7 +19,7 @@ Next Term has a real code editor, not a viewer, and it sits right above the term
 - **Run `nxtrm file:42`** in a tab or any terminal. See [The nxtrm command](/docs/command-line/).
 - **Finder:** use **Open With › Next Term**, or drop a file on Next Term’s Dock icon.
 
-Each file opens in its own tab above the terminal; a dot in place of the close button means unsaved changes. Jupyter notebooks open as notebooks, read-only (see [below](#jupyter-notebooks)). Images, binaries and files over 32 MB open in their usual app instead. An app, a script or an executable never opens without asking first, even behind a symlink or a Finder alias (see [Security and privacy](/docs/security-and-privacy/#opening-files-and-links)).
+Each file opens in its own tab above the terminal; a dot in place of the close button means unsaved changes. Jupyter notebooks open as notebooks, read-only (see [below](#jupyter-notebooks)). Large data files, and text files over 32 MB, open their first rows read-only (see [Large data files](#large-data-files)). Images and binaries open in their usual app instead. An app, a script or an executable never opens without asking first, even behind a symlink or a Finder alias (see [Security and privacy](/docs/security-and-privacy/#opening-files-and-links)).
 
 Move between the editor and the terminal with <kbd>⌃&#96;</kbd> (**View › Focus Editor**). <kbd>⌘W</kbd> closes the file you are editing when the editor has the keyboard, and the terminal tab otherwise.
 
@@ -103,6 +103,20 @@ A notebook (`.ipynb`) opens as a notebook, read-only: its Markdown laid out, eac
 - **The view follows the file.** When an agent or Jupyter saves it, the new version shows, and renames and moves in the sidebar carry it along.
 
 Notebooks up to 50 MB open this way; most of a large notebook is images and outputs, which are never laid out as text.
+
+## Large data files
+
+A JSON Lines (`.jsonl`, `.ndjson`), CSV or TSV file over 2 MB opens in a head view, read-only: its first 1,000 rows as a table, as quickly for a 2 GB file as for a small one. Smaller files open in the editor, with colours, and so does a UTF-16 one (some spreadsheet exports), which the head view does not read. Any other UTF-8 text file over 32 MB, a log for example, opens here too instead of in another app.
+
+- **Columns:** a JSON Lines file gets a column per top-level key, in the order the file has them, with nested values on one line. A CSV or TSV gets its header row when the first row looks like one; **First row is a header** changes that. Commas, semicolons and tabs are told apart by themselves, and a quoted field can hold commas, quotes and line breaks.
+- **Bad lines** stay in their place: a line that is not JSON is marked in red with the reason, and the rest of the file still reads.
+- **Table** or **Lines**, in the header, switches between the columns and each record as the file has it.
+- **Load More** reads the next 1,000 rows. The footer says how many are loaded and about how many the file holds, counting its lines in the background.
+- **Search** filters the loaded rows.
+- **Copy As** copies the selected rows as JSON, as CSV or as the file has them; <kbd>⌘C</kbd> copies them as the file has them. <kbd>⌥⌘K</kbd> sends the file to your agent at the selected rows’ lines.
+- **Open in Editor** opens the whole file in the editor, for files up to 32 MB. **Open in Default App** hands it to the app macOS uses for it.
+
+Nothing in the head view writes to the file. When a log grows while it is open, **Load More** reads its new lines, and a last line that was still being written reads whole. A file written again from the start while it is open (by `cp` or a script, for example) is read again.
 
 ## Changes in the gutter
 
