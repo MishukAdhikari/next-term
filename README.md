@@ -101,7 +101,7 @@ curl -fsSL https://next-term.mishuk.me/install.sh | bash
 ```
 
 It downloads the latest release, checks its SHA-256, the bundle and the signature, and copies it to
-Applications, with no `sudo` and no first-launch prompt ([the script](site/public/install.sh)). Or
+Applications, with no `sudo` and no first-launch prompt ([the script](site/src/install.sh)). Or
 download `NextTerm-x.y.z.dmg` from [Releases](../../releases), open it, and drag **Next Term** to
 Applications. After that, Next Term updates itself (Next Term > Check for Updates).
 

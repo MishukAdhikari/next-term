@@ -12,7 +12,7 @@
 #     NEXTTERM_VERSION=0.7.0    a particular version instead of the latest
 #     NEXTTERM_DIR=~/Apps       another folder
 #
-# Source: https://github.com/MishukAdhikari/next-term/blob/main/site/public/install.sh
+# Source: https://github.com/MishukAdhikari/next-term/blob/main/site/src/install.sh
 
 # What the exit trap cleans up. Not local to main: the trap also runs after main has returned.
 nt_work=""
@@ -20,13 +20,32 @@ nt_mount=""
 nt_lock=""
 nt_created_dir=""
 nt_done=""
+nt_staged=""
+nt_previous=""
+nt_destination=""
 
 nt_cleanup() {
     if [ -n "${nt_mount:-}" ] && [ -d "${nt_mount}" ]; then hdiutil detach "${nt_mount}" -quiet -force >/dev/null 2>&1 || true; fi
     if [ -n "${nt_work:-}" ]; then rm -rf "${nt_work}"; fi
+    # Stopped halfway through (Ctrl-C): the copy goes, and the old app comes back if it was moved aside.
+    if [ -n "${nt_staged:-}" ]; then rm -rf "${nt_staged}"; fi
+    if [ -n "${nt_previous:-}" ]; then
+        if [ -n "${nt_destination:-}" ] && ! [ -e "${nt_destination}" ] && [ -d "${nt_previous}/Next Term.app" ]; then
+            mv "${nt_previous}/Next Term.app" "${nt_destination}" 2>/dev/null || true
+        fi
+        if ! [ -d "${nt_previous}/Next Term.app" ]; then rm -rf "${nt_previous}"; fi
+    fi
     if [ -n "${nt_lock:-}" ]; then rmdir "${nt_lock}" 2>/dev/null || true; fi
-    # A folder this run made for nothing goes again.
-    if [ -z "${nt_done:-}" ] && [ -n "${nt_created_dir:-}" ]; then rmdir "${nt_created_dir}" 2>/dev/null || true; fi
+    # Folders this run made for nothing go again, innermost first, up to the first one it made.
+    if [ -z "${nt_done:-}" ] && [ -n "${nt_created_dir:-}" ]; then
+        local dir="${nt_destination%/*}"
+        # Only inside what this run made: a folder that was there before is never touched.
+        case "${dir}/" in "${nt_created_dir}/"*) ;; *) dir="${nt_created_dir}" ;; esac
+        while [ -n "${dir}" ] && rmdir "${dir}" 2>/dev/null; do
+            [ "${dir}" = "${nt_created_dir}" ] && break
+            dir="${dir%/*}"
+        done
+    fi
 }
 
 # Everything runs from main, called on the last line: a download cut short runs nothing.
@@ -53,28 +72,40 @@ main() {
         command -v "${tool}" >/dev/null 2>&1 || fail "${tool} is missing."
     done
 
+    # The oldest release "latest" may resolve to: GitHub decides which release is latest, the release
+    # key does not, so a GitHub account could otherwise point "latest" at an old signed release.
+    local min_version="@@MIN_VERSION@@" # the site fills in its current version
     local version="${NEXTTERM_VERSION:-}"
     version="${version#v}"
-    local base dmg_name
-    if [ -n "${version}" ]; then
-        local pattern='^[0-9]+(\.[0-9]+){1,3}(-[A-Za-z0-9.]+)?$'
-        [[ ${version} =~ ${pattern} ]] || fail "“${version}” isn’t a version number."
-        base="https://github.com/${repo}/releases/download/v${version}"
-        dmg_name="NextTerm-${version}.dmg"
-    else
-        base="https://github.com/${repo}/releases/latest/download"
-        dmg_name="NextTerm.dmg"
+    local pinned="${version}"
+    if [ -z "${version}" ]; then
+        local latest_url
+        latest_url="$(curl -fsS --proto '=https' --tlsv1.2 --connect-timeout 20 -o /dev/null -w '%{redirect_url}' "https://github.com/${repo}/releases/latest")" \
+            || fail "the latest release could not be found."
+        version="${latest_url##*/releases/tag/v}"
     fi
+    local pattern='^[0-9]+(\.[0-9]+){1,3}(-[A-Za-z0-9.]+)?$'
+    [[ ${version} =~ ${pattern} ]] || fail "“${version}” isn’t a version number."
+    nt_older() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | head -1)" = "$1" ]; }
+    if [ -z "${pinned}" ] && nt_older "${version}" "${min_version}"; then
+        fail "GitHub says the latest release is ${version}, older than ${min_version}; refusing a rollback."
+    fi
+    local base="https://github.com/${repo}/releases/download/v${version}"
+    local dmg_name="NextTerm-${version}.dmg"
 
     local target="${NEXTTERM_DIR:-/Applications}"
     if [ -z "${NEXTTERM_DIR:-}" ] && ! [ -w /Applications ]; then target="${HOME}/Applications"; fi
     if ! [ -d "${target}" ]; then
+        # The outermost folder this run creates, so a failure can take them all away again.
+        local top="${target%/}"
+        while [ -n "${top%/*}" ] && ! [ -d "${top%/*}" ]; do top="${top%/*}"; done
         mkdir -p "${target}" 2>/dev/null || fail "can’t create ${target}."
-        nt_created_dir="${target}"
+        nt_created_dir="$(cd "${top}" && pwd -P)" || nt_created_dir=""
     fi
     target="$(cd "${target}" && pwd -P)" || fail "can’t open ${target}."
     [ -w "${target}" ] || fail "can’t write to ${target}. Set NEXTTERM_DIR to a folder you own."
     local destination="${target}/${app_name}"
+    nt_destination="${destination}"
 
     # A running Next Term holds your terminals and agents: never replace it from under them. Every
     # process's executable is compared by file identity, so any spelling of the folder is caught.
@@ -90,10 +121,15 @@ main() {
     done <<PROCESSES
 ${processes}
 PROCESSES
+    # ps shows argv[0] as typed (./NextTerm, a symlink, exec -a); lsof finds the executable itself.
+    if [ -e "${destination}/Contents/MacOS/NextTerm" ] && lsof -t -- "${destination}/Contents/MacOS/NextTerm" >/dev/null 2>&1; then
+        fail "Next Term is running from ${target}. Use Next Term › Check for Updates…, or quit it and run this again."
+    fi
 
-    # One install into a folder at a time.
-    nt_lock="${target}/.Next Term.install.lock"
-    mkdir "${nt_lock}" 2>/dev/null || { nt_lock=""; fail "another install into ${target} is running (if not, remove “${target}/.Next Term.install.lock”)."; }
+    # One install into a folder at a time. nt_lock is set only once the lock is ours.
+    local lock="${target}/.Next Term.install.lock"
+    mkdir "${lock}" 2>/dev/null || fail "another install into ${target} is running (if not, remove “${lock}”)."
+    nt_lock="${lock}"
 
     nt_work="$(mktemp -d "${TMPDIR:-/tmp}/next-term-install.XXXXXX")"
     local work="${nt_work}"
@@ -114,6 +150,8 @@ PROCESSES
     local hex='^[0-9a-f]{64}$'
     [[ ${expected} =~ ${hex} ]] || fail "the published checksum is not a SHA-256."
     [ "${expected}" = "${actual}" ] || fail "the download does not match its signed SHA-256."
+    # The signed text names the file, and the file name names the version: a signature from another release is refused.
+    [ "$(cat "${work}/${dmg_name}.sha256")" = "${actual}  ${dmg_name}" ] || fail "the signed checksum is not for ${dmg_name}."
     say "Checked: signed by the Next Term release key, SHA-256 ${actual}"
 
     nt_mount="${work}/mount"
@@ -126,28 +164,34 @@ PROCESSES
     found_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${plist}" 2>/dev/null || true)"
     found_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${plist}" 2>/dev/null || true)"
     [ "${found_id}" = "${bundle_id}" ] || fail "the disk image holds something other than Next Term (${found_id})."
-    if [ -n "${version}" ] && [ "${found_version}" != "${version}" ]; then fail "the disk image holds ${found_version}, not ${version}."; fi
+    [ "${found_version}" = "${version}" ] || fail "the disk image holds ${found_version}, not ${version}."
+    # Never replace a newer Next Term with an older one unless that version was asked for.
+    if [ -z "${pinned}" ] && [ -f "${destination}/Contents/Info.plist" ]; then
+        local installed
+        installed="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${destination}/Contents/Info.plist" 2>/dev/null || true)"
+        if [ -n "${installed}" ] && nt_older "${version}" "${installed}"; then
+            fail "Next Term ${installed} is installed and GitHub's latest is the older ${version}; set NEXTTERM_VERSION=${version} to install it anyway."
+        fi
+    fi
     codesign --verify --deep --strict "${source}" 2>/dev/null || fail "the app’s signature is broken."
 
     # Copy beside the old one, check the copy, then swap: a failure leaves the old app as it was.
-    local staged previous
-    staged="$(mktemp -d "${target}/.Next Term.installing.XXXXXX")" || fail "can’t write to ${target}."
-    ditto "${source}" "${staged}/${app_name}" || { rm -rf "${staged}"; fail "the app could not be copied to ${target}."; }
-    codesign --verify --deep --strict "${staged}/${app_name}" 2>/dev/null || { rm -rf "${staged}"; fail "the copied app does not verify."; }
+    # Both folders are known to the exit trap from the moment they exist: Ctrl-C at any point leaves
+    # either the old app or the new one in place, and nothing else.
+    nt_staged="$(mktemp -d "${target}/.Next Term.installing.XXXXXX")" || fail "can’t write to ${target}."
+    ditto "${source}" "${nt_staged}/${app_name}" || fail "the app could not be copied to ${target}."
+    codesign --verify --deep --strict "${nt_staged}/${app_name}" 2>/dev/null || fail "the copied app does not verify."
+    trap '' INT TERM HUP # the two renames are not split by a keystroke
     if [ -e "${destination}" ]; then
-        previous="$(mktemp -d "${target}/.Next Term.previous.XXXXXX")" || { rm -rf "${staged}"; fail "can’t write to ${target}."; }
-        mv "${destination}" "${previous}/${app_name}" || { rm -rf "${staged}" "${previous}"; fail "the installed Next Term could not be moved aside."; }
-        if mv "${staged}/${app_name}" "${destination}"; then
-            rm -rf "${previous}" 2>/dev/null || say "The old copy could not be removed: ${previous}"
-        else
-            mv "${previous}/${app_name}" "${destination}" || fail "the new app could not be put in place; the old one is in ${previous}."
-            rm -rf "${staged}" "${previous}"
-            fail "the new app could not be put in place; the old one is back."
-        fi
+        nt_previous="$(mktemp -d "${target}/.Next Term.previous.XXXXXX")" || fail "can’t write to ${target}."
+        mv "${destination}" "${nt_previous}/${app_name}" || fail "the installed Next Term could not be moved aside."
+        mv "${nt_staged}/${app_name}" "${destination}" || fail "the new app could not be put in place; the old one is back."
+        rm -rf "${nt_previous}" 2>/dev/null || say "The old copy could not be removed: ${nt_previous}"
+        nt_previous=""
     else
-        mv "${staged}/${app_name}" "${destination}" || { rm -rf "${staged}"; fail "the app could not be put in place."; }
+        mv "${nt_staged}/${app_name}" "${destination}" || fail "the app could not be put in place."
     fi
-    rm -rf "${staged}"
+    trap - INT TERM HUP
     nt_done=1
 
     say "Installed Next Term ${found_version} in ${destination}"

@@ -20,7 +20,7 @@ Next Term is one app: a terminal with tabs, a code editor above it, and a projec
 curl -fsSL https://next-term.mishuk.me/install.sh | bash
 ```
 
-It downloads the latest release from GitHub, checks it against its published SHA-256, checks that the app inside is Next Term with an intact signature, and copies it to **Applications**. Nothing else changes: no `sudo`, and a Next Term that is running is never replaced (use **Check for Updates** in it instead). Because the download comes through `curl` rather than a browser, macOS doesn’t ask you to allow the first launch. [Read the script](https://github.com/MishukAdhikari/next-term/blob/main/site/public/install.sh) before you run it, if you like; it is short.
+It downloads the latest release from GitHub, checks it against its published SHA-256, checks that the app inside is Next Term with an intact signature, and copies it to **Applications**. Nothing else changes: no `sudo`, and a Next Term that is running is never replaced (use **Check for Updates** in it instead). Because the download comes through `curl` rather than a browser, macOS doesn’t ask you to allow the first launch. [Read the script](https://github.com/MishukAdhikari/next-term/blob/main/site/src/install.sh) before you run it, if you like; it is short.
 
 `NEXTTERM_VERSION=0.7.0` installs a particular version, and `NEXTTERM_DIR=~/Apps` another folder, for example `curl -fsSL https://next-term.mishuk.me/install.sh | NEXTTERM_DIR=~/Apps bash`.
 
