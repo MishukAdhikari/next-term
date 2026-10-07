@@ -209,8 +209,12 @@ public enum MCPRegistrar {
     /// tokens, and its folder can be open to other accounts), made with O_EXCL and O_NOFOLLOW so nothing already there
     /// is used; flushed to disk, given the file's permissions (0600 for a new file), and renamed over the file. Just
     /// before the rename the file is read again: when it no longer has the bytes `original` (nil: no file), its agent
-    /// saved it meanwhile, and the edit, made from the older bytes, is dropped.
-    static func replace(_ path: String, with data: Data, original: Data?, beforeRename: (_ temporary: String) -> Void) -> Replacement {
+    /// saved it meanwhile, and the edit, made from the older bytes, is dropped. (A save between that read and the rename
+    /// is still undone: the agents offer no lock.) A new file is put in place only if there is still none: by an
+    /// exclusive rename (`exclusiveRename`, replaced in tests), or on a volume without one (exFAT), by a rename once
+    /// there is still nothing there.
+    static func replace(_ path: String, with data: Data, original: Data?, beforeRename: (_ temporary: String) -> Void,
+                        exclusiveRename: (_ from: String, _ to: String) -> Int32 = { renamex_np($0, $1, UInt32(RENAME_EXCL)) }) -> Replacement {
         let target = canonicalPath(path)
         var info = stat()
         let permissions: mode_t = stat(target, &info) == 0 ? info.st_mode & 0o7777 : 0o600
@@ -239,13 +243,20 @@ public enum MCPRegistrar {
             return .changed
         }
         // A new file: only if there is still none.
-        let renamed: Int32
+        var renamed: Int32
+        var failure: Int32 = 0
         if original == nil {
-            renamed = renamex_np(temporary, target, UInt32(RENAME_EXCL))
+            renamed = exclusiveRename(temporary, target)
+            failure = errno
+            if renamed != 0, failure == ENOTSUP || failure == EINVAL {
+                let absent = lstat(target, &info) != 0 && errno == ENOENT
+                renamed = absent ? rename(temporary, target) : -1
+                failure = absent ? errno : EEXIST
+            }
         } else {
             renamed = rename(temporary, target)
+            failure = errno
         }
-        let failure = errno
         guard renamed == 0 else {
             unlink(temporary)
             return original == nil && failure == EEXIST ? .changed : .failed
@@ -458,9 +469,11 @@ public enum MCPRegistrar {
         case taken
     }
 
-    /// The `next-term` server in Claude Code's user configuration (`~/.claude.json`, top-level `mcpServers`).
+    /// The `next-term` server in Claude Code's user configuration (`~/.claude.json`, top-level `mcpServers`). A file
+    /// nested too deeply for Foundation's parser (see `JSONC.maxDepth`) is read as one it cannot parse.
     public static func claudeEntry(configuration text: String?) -> ClaudeEntry {
-        guard let text, let json = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any],
+        guard let text, JSONC.isShallow(text),
+              let json = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any],
               let entry = (json["mcpServers"] as? [String: Any])?[serverName] else { return .absent }
         guard let command = command(of: entry), isOurs(command: command) else { return .taken }
         return .ours(command: command)
@@ -630,8 +643,42 @@ struct JSONC {
     }
 
     /// Arrays and objects (in TOML, arrays and inline tables) in one another deeper than this make a file unreadable here,
-    /// so it is left alone: no agent writes one like that.
-    static let maxDepth = 512
+    /// so it is left alone: no agent writes one like that. Foundation's parser then reads what passes (an entry, a strict
+    /// agent's whole file): it follows objects by recursion and does not stop before it overflows the stack of a queue's
+    /// thread (512 KB, from about 460 levels), so this leaves it room.
+    static let maxDepth = 256
+
+    /// The text has no arrays or objects in one another deeper than `maxDepth`, counted over its bytes outside strings (a
+    /// bracket in a comment counts too). For text that only Foundation's parser reads, which may be large.
+    static func isShallow(_ text: String) -> Bool {
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for byte in text.utf8 {
+            if inString {
+                if escaped {
+                    escaped = false
+                } else if byte == UInt8(ascii: "\\") {
+                    escaped = true
+                } else if byte == UInt8(ascii: "\"") {
+                    inString = false
+                }
+                continue
+            }
+            switch byte {
+            case UInt8(ascii: "\""):
+                inString = true
+            case UInt8(ascii: "{"), UInt8(ascii: "["):
+                depth += 1
+                if depth > maxDepth { return false }
+            case UInt8(ascii: "}"), UInt8(ascii: "]"):
+                depth -= 1
+            default:
+                break
+            }
+        }
+        return true
+    }
 
     let text: String
     private let scalars: String.UnicodeScalarView

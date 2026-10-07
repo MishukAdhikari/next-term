@@ -591,6 +591,49 @@ import Testing
         #expect(try FileManager.default.contentsOfDirectory(atPath: home + "/.codex") == ["config.toml"])
     }
 
+    @Test func aVolumeWithoutExclusiveRenamesStillGetsANewFile() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let cursor = try target("cursor", home: home)
+        let folder = home + "/.cursor"
+        try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        let data = Data("{\n  \"mcpServers\": {}\n}\n".utf8)
+        func put(_ exclusiveRename: (String, String) -> Int32) -> MCPRegistrar.Replacement {
+            MCPRegistrar.replace(cursor.file, with: data, original: nil, beforeRename: { _ in }, exclusiveRename: exclusiveRename)
+        }
+        func mode() -> Int? {
+            ((try? FileManager.default.attributesOfItem(atPath: cursor.file))?[.posixPermissions] as? NSNumber)?.intValue
+        }
+        // exFAT cannot rename only when there is no file there (ENOTSUP); a volume may also refuse the flag (EINVAL).
+        for code in [ENOTSUP, EINVAL] {
+            let result = put { _, _ in
+                errno = code
+                return -1
+            }
+            #expect(result == .done)
+            #expect(FileManager.default.contents(atPath: cursor.file) == data && mode() == 0o600)
+            #expect(try FileManager.default.contentsOfDirectory(atPath: folder) == ["mcp.json"])
+            try FileManager.default.removeItem(atPath: cursor.file)
+        }
+        // A file that turns up meanwhile stays as it is.
+        let appeared = put { _, target in
+            try? "{}\n".write(toFile: target, atomically: false, encoding: .utf8)
+            errno = ENOTSUP
+            return -1
+        }
+        #expect(appeared == .changed)
+        #expect(try read(cursor.file) == "{}\n")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder) == ["mcp.json"])
+        try FileManager.default.removeItem(atPath: cursor.file)
+        // Any other error is a failed write, with nothing left behind.
+        let failed = put { _, _ in
+            errno = EIO
+            return -1
+        }
+        #expect(failed == .failed)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder).isEmpty)
+    }
+
     @Test func theTemporaryFileIsPrivateFromTheStart() throws {
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
@@ -644,6 +687,8 @@ import Testing
     @Test func deeplyNestedFilesAreRefusedNotACrash() throws {
         let gemini = try target("gemini", home: "/nonexistent")
         let codex = try target("codex", home: "/nonexistent")
+        let claudeApp = try target("claude-desktop", home: "/nonexistent")
+        let commandCode = try target("commandcode", home: "/nonexistent")
         func nested(_ depth: Int) -> String { String(repeating: "[", count: depth) + String(repeating: "]", count: depth) }
         func objects(_ depth: Int) -> String { String(repeating: "{\"a\": ", count: depth) + "1" + String(repeating: "}", count: depth) }
         let ours = "\n[mcp_servers.next-term]\ncommand = \"\(command)\"\n"
@@ -658,19 +703,45 @@ import Testing
         cases.append((codex, "a = \(nested(5000))\n", command, toml))
         cases.append((codex, "a = \(nested(5000))\n" + ours, nil, toml))
         cases.append((codex, inline, command, toml))
-        // 512 levels are still read, not one more.
-        cases.append((gemini, "{\"a\": \(nested(511))}", command, .registered))
-        cases.append((gemini, "{\"a\": \(nested(512))}", command, json))
-        cases.append((gemini, objects(512), command, .registered))
-        cases.append((gemini, objects(513), command, json))
-        cases.append((codex, "a = \(nested(512))\n", command, .registered))
-        cases.append((codex, "a = \(nested(513))\n", command, toml))
+        // As deep as is read, and one level more. What passes is read again by Foundation's parser, which follows objects
+        // by recursion: a strict agent's whole file, and the next-term entry, ours or not.
+        let limit = JSONC.maxDepth
+        cases.append((gemini, "{\"a\": \(nested(limit - 1))}", command, .registered))
+        cases.append((gemini, "{\"a\": \(nested(limit))}", command, json))
+        cases.append((gemini, objects(limit), command, .registered))
+        cases.append((gemini, objects(limit + 1), command, json))
+        cases.append((codex, "a = \(nested(limit))\n", command, .registered))
+        cases.append((codex, "a = \(nested(limit + 1))\n", command, toml))
+        func beside(_ depth: Int) -> String { "{\"mcpServers\": {}, \"p\": \(objects(depth - 1))}" }
+        for strict in [claudeApp, commandCode] {
+            cases.append((strict, beside(limit), command, .registered))
+            cases.append((strict, beside(limit + 1), command, json))
+        }
+        func inEntry(_ depth: Int, command: String) -> String {
+            "{\"mcpServers\": {\"next-term\": {\"command\": \"\(command)\", \"args\": [\"mcp\"], \"e\": \(objects(depth - 3))}}}"
+        }
+        for registering in [command, nil] {
+            cases.append((gemini, inEntry(limit, command: "npx"), registering, .nameTaken))
+            cases.append((gemini, inEntry(limit + 1, command: "npx"), registering, json))
+        }
+        cases.append((claudeApp, inEntry(limit, command: moved), command, .registered))
+        cases.append((claudeApp, inEntry(limit, command: moved), nil, .removed))
+        cases.append((claudeApp, inEntry(limit + 1, command: moved), nil, json))
         // On a queue's thread, as passes run, whose stack is smaller than the main thread's.
         let statuses: [MCPRegistrar.Status] = onAQueue {
             cases.map { MCPRegistrar.plan($0.0, text: $0.1, command: $0.2).status }
         }
         let expected: [MCPRegistrar.Status] = cases.map(\.3)
         #expect(statuses == expected)
+        // Claude Code's file is read by Foundation alone: one too deep for it is one it cannot read.
+        let claudeCode = "{\"mcpServers\": {\"next-term\": {\"command\": \"\(command)\"}}, \"projects\": "
+        let entries: [MCPRegistrar.ClaudeEntry] = onAQueue {
+            [limit, limit + 1, 5000].map { (depth: Int) -> MCPRegistrar.ClaudeEntry in
+                let text: String = claudeCode + objects(depth - 1) + "}"
+                return MCPRegistrar.claudeEntry(configuration: text)
+            }
+        }
+        #expect(entries == [.ours(command: command), .absent, .absent])
     }
 
     /// `body`'s result, run on a dispatch queue's thread.
