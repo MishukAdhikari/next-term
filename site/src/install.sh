@@ -240,6 +240,9 @@ PROCESSES
     nt_link_command() {
         local script="${destination}/Contents/Resources/bin/nxtrm"
         [ -x "${script}" ] || return 0
+        case "${destination}" in # as the app does: the link would break whenever that disk is ejected
+            /Volumes/*) say "nxtrm was not linked: ${target} is on another disk."; return 0 ;;
+        esac
         local folders=() folder link target free=""
         IFS=: read -r -a folders <<<"${PATH:-}" || true
         for folder in ${folders[@]+"${folders[@]}"}; do
