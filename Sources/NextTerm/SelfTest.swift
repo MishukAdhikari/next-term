@@ -638,6 +638,49 @@ enum SelfTest {
         try? FileManager.default.removeItem(at: dir)
     }
 
+    /// `nxtrm` for other terminals, on real folders: the first command folder on PATH that is writable
+    /// takes the link, which is kept, repointed when the app moves, and never put over someone else's.
+    private static func commandLineLinkChecks() {
+        let fm = FileManager.default
+        let home = (canonicalPath(NSTemporaryDirectory()) as NSString).appendingPathComponent("nt-nxtrm-\(getpid())")
+        let local = home + "/.local/bin", own = home + "/bin", tools = home + "/tools"
+        defer {
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: own)
+            try? fm.removeItem(atPath: home)
+        }
+        for folder in [local, own, tools] { try? fm.createDirectory(atPath: folder, withIntermediateDirectories: true) }
+        try? fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: own) // needs a password, as a stock /usr/local/bin does
+        let script = home + "/Next Term.app/Contents/Resources/bin/nxtrm"
+        let path = [own, tools, local, "/usr/bin", "/bin"]
+
+        let first = CommandLineTool.plan(for: script, path: path, home: home)
+        check(first == .link(local + "/nxtrm"), "nxtrm: the first writable command folder on PATH takes the link", "\(first)")
+        let linked = CommandLineTool.link(local + "/nxtrm", to: script)
+        let target = try? fm.destinationOfSymbolicLink(atPath: local + "/nxtrm")
+        check(linked && target == script, "nxtrm: the link points at the app", target ?? "no link")
+        let again = CommandLineTool.plan(for: script, path: path, home: home)
+        check(again == .linked(local + "/nxtrm"), "nxtrm: the next launch keeps it", "\(again)")
+
+        let moved = home + "/Moved/Next Term.app/Contents/Resources/bin/nxtrm"
+        let repoint = CommandLineTool.plan(for: moved, path: path, home: home)
+        let repointed = CommandLineTool.link(local + "/nxtrm", to: moved)
+        let movedTarget = try? fm.destinationOfSymbolicLink(atPath: local + "/nxtrm")
+        check(repoint == .link(local + "/nxtrm") && repointed && movedTarget == moved, "nxtrm: a moved app repoints its own link", "\(repoint)")
+
+        fm.createFile(atPath: tools + "/nxtrm", contents: Data("#!/bin/sh\n".utf8))
+        let taken = CommandLineTool.plan(for: moved, path: path, home: home)
+        let overwritten = CommandLineTool.link(tools + "/nxtrm", to: moved)
+        check(taken == .taken(tools + "/nxtrm") && !overwritten && CommandLineTool.entry(at: tools + "/nxtrm") == .file,
+              "nxtrm: someone else's comes first on PATH and is left alone", "\(taken)")
+
+        let none = CommandLineTool.plan(for: script, path: [own, "/usr/bin", "/bin"], home: home)
+        check(none == .unavailable && CommandLineTool.entry(at: own + "/nxtrm") == .nothing,
+              "nxtrm: with no writable command folder on PATH, nothing is written", "\(none)")
+        let buttons = CommandLineTool.offerAlert().buttons.map(\.title)
+        check(buttons == ["Install…", "Not Now", "Don’t Ask Again"], "nxtrm: the first-launch offer can be taken, put off or declined for good",
+              buttons.joined(separator: ", "))
+    }
+
     /// Agent sessions: listed per project on the Welcome window and in ⌥⌘O, resumed in a tab in their folder.
     /// The header's "Pull 152": the words, what a click does, the spinner while git talks to a remote, and
     /// what gives way in a narrow sidebar.
@@ -2445,6 +2488,7 @@ enum SelfTest {
             try? FileManager.default.removeItem(at: shellFile)
         }
         try? FileManager.default.removeItem(at: cliFile)
+        commandLineLinkChecks()
 
         // What the editor cannot show does not open in it.
         let png = proj.appendingPathComponent("logo.png")
