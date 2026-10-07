@@ -95,10 +95,10 @@ Click the branch name at the top of the sidebar, or press <kbd>⌥⌘B</kbd> (**
 - If an agent is working in the folder, Next Term asks before anything that changes its files.
 - If your uncommitted changes would be overwritten, it offers **Stash, Switch and Reapply**. If they don’t fit on the other branch, they stay in that stash, named “Next Term: switching from … to …”.
 - **Delete** shows the commit the branch was at, with **Undo**. A branch with unmerged commits lists them first.
-- **Force push** is only offered after a push is refused, lists the commits it would discard, and only replaces exactly what you saw. It is never offered for `main`, `master` or `release/*`.
+- **Force push** is only offered after a push is refused, lists the commits it would discard, and only replaces exactly what you saw. Next Term refuses it for `main`, `master`, `release/*` and the remote’s default branch.
 - Conflicts stop where you can see them: **Continue**, **Skip** and **Abort** appear in the popup, and **Ask Agent to Resolve** writes the request in your agent’s tab for you to send.
 
-**Commit…** shows exactly what goes in (what you staged, or every change, with new files marked and anything that looks like a secret or is over 5 MB called out), with **Amend last commit**, **Commit and Push**, and **Let Agent Commit**. A commit can be undone until it is pushed.
+**Commit…** shows exactly what goes in (what you staged, or every change, with new files marked and anything that looks like a secret or is over 5 MB called out), with **Amend last commit**, **Commit and Push**, and **Let Agent Commit**. The notice after a commit has **Undo** for 30 seconds, or until another notice takes its place: the commit is taken back and its changes stay staged. Undo is refused once a remote has the commit, and **Commit and Push** shows none.
 
 Every git command Next Term runs for you is in **Git › Git Commands**, exactly as it would be typed (the commit history is the [Git Log](#git-log)); [background fetches](#background-fetch) too, with **Show background fetches** on. Next Term never waits on a password prompt: when git needs your password, a key passphrase or a new host key, it says so and opens a terminal tab with the command ready.
 
