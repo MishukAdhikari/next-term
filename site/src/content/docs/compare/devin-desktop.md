@@ -25,7 +25,7 @@ Devin Desktop is the new name for Windsurf, Cognition’s AI code editor, since 
 | Notifications | ✓ Quote the agent’s question; Dock badge | ✓ When a session finishes or needs input; off by default |
 | Cloud agents | — Agents run on your Mac, or on your own servers in remote tabs | ✓ Devin cloud agents, on paid plans |
 | MCP | ✓ An MCP server: one agent starts, prompts, waits for and reads the others | ✓ An MCP client for the tools you add |
-| Code editor | ✓ 112 languages, Go to File (<kbd>⌘P</kbd>); no language servers | ✓ A full editor on VS Code OSS, with extensions from Open VSX |
+| Code editor | ✓ 112 grammars, Go to File (<kbd>⌘P</kbd>); no language servers | ✓ A full editor on VS Code OSS, with extensions from Open VSX |
 | Reviewing agent changes | ✓ Side-by-side diffs, stage, unstage or revert per hunk; the Git Log and blame | ✓ Diff zones with accept and reject for each hunk |
 | Remote work | Partly: terminal tabs on your servers over ssh, kept running in tmux or herdr | ✓ Remote-SSH, Dev Containers, WSL (beta) |
 | The app | Native Swift and AppKit, about a {{DOWNLOAD_SIZE}} download | Built on VS Code OSS |

@@ -16,7 +16,7 @@ PyCharm is JetBrains’ Python IDE for Windows, macOS and Linux, “built for we
 |---|---|---|
 | Platforms | macOS 13 or later | Windows, macOS, Linux |
 | Price | Free, MIT | Free core features; PyCharm Pro is a subscription |
-| Python code intelligence | — Highlighting only: Python, Jinja, prompt templates inside strings and 109 more languages; traceback links | ✓ Inspections, navigation, refactoring |
+| Python code intelligence | — Highlighting only: Python, Jinja, prompt templates inside strings and 109 more grammars; traceback links | ✓ Inspections, navigation, refactoring |
 | Debugger | — | ✓ In the free core features |
 | Jupyter notebooks | Partly: read-only, with the outputs saved in the file; nothing runs | ✓ Basic for free; full, local and remote, in Pro |
 | Django, Flask, FastAPI | — | ✓ Advanced support in Pro |

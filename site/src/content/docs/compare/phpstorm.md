@@ -16,7 +16,7 @@ PhpStorm is JetBrains’ IDE for PHP, on Windows, macOS and Linux. It understand
 |---|---|---|
 | Platforms | macOS 13 or later | Windows, macOS, Linux |
 | Price | Free, MIT | A subscription, with a 30-day trial; free for students and for non-commercial open-source work |
-| PHP code intelligence | — Highlighting only: PHP, Blade, Twig and 109 more languages | ✓ Inspections, navigation, refactoring |
+| PHP code intelligence | — Highlighting only: PHP, Blade, Twig and 109 more grammars | ✓ Inspections, navigation, refactoring |
 | Laravel, Symfony, WordPress, Drupal | — | ✓ Laravel support built in and free |
 | Debugging | — | ✓ Xdebug and Zend Debugger |
 | Tests | Run them in a tab or split pane | ✓ PHPUnit, Pest, Behat, Codeception, phpspec |

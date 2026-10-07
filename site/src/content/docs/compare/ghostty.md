@@ -21,7 +21,7 @@ Ghostty is a free, MIT-licensed terminal emulator for macOS and Linux, developed
 | Status of each agent | ✓ For the 20 agents it recognises, with no setup: working, done, waiting (with the question), failed. Read from the screen for Claude Code, Codex, Command Code and Gemini CLI, and from output timing for the rest | Partly: programs can show a progress bar, as Claude Code does |
 | Notifications | ✓ Quote the agent’s question; Dock badge | ✓ Programs can post notifications; command-finished notifications, off by default |
 | One agent runs the others | ✓ An MCP server: start, prompt, wait for and read agents | Partly: AppleScript can open tabs and splits, type text and send keys |
-| Code editor | ✓ 112 languages, Go to File (<kbd>⌘P</kbd>) | — |
+| Code editor | ✓ 112 grammars, Go to File (<kbd>⌘P</kbd>) | — |
 | Side-by-side diffs, per-hunk staging | ✓ <kbd>⌥⌘G</kbd> | — |
 | Project sidebar with git status | ✓ | — |
 | Quick terminal, hundreds of themes | — | ✓ |
