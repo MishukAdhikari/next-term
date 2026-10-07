@@ -2226,6 +2226,18 @@ enum SelfTest {
         check(!opened.isError && selection.json?["file"] as? String == canonicalPath(file.path)
               && (selection.json?["start"] as? [String: Any])?["line"] as? Int == 2 && open.text.contains("mcp-target.txt"),
               "MCP: open_in_editor, get_editor_selection and get_open_files", selection.text)
+        // A selection in a file that holds secrets is never handed over.
+        let envFile = proj.appendingPathComponent(".env.local")
+        try? "OPENAI_API_KEY=sk-test-not-real\n".write(to: envFile, atomically: true, encoding: .utf8)
+        _ = await tool("open_in_editor", ["path": envFile.path])
+        if let editor = c.editorArea.activeEditor, editor.document.path.hasSuffix(".env.local") {
+            editor.textView.setSelectedRange(NSRange(location: 0, length: (editor.document.text as NSString).length))
+            let secret = await tool("get_editor_selection")
+            check(secret.json?["text"] == nil && secret.json?["withheld"] != nil && !secret.text.contains("sk-test"),
+                  "MCP: a selection in a .env file is withheld", secret.text)
+            c.editorArea.close(editor)
+        }
+        try? FileManager.default.removeItem(at: envFile)
         let projects = await tool("list_projects")
         check((projects.json?["open"] as? [String])?.isEmpty == false, "MCP: list_projects", projects.text)
 

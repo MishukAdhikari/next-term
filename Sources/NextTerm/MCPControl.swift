@@ -350,7 +350,11 @@ enum MCPControl {
             "start": position(range.location),
             "end": position(NSMaxRange(range)),
         ]
-        if range.length > 0 {
+        // Files that tend to hold secrets (.env, keys, credentials) never share their text, as read_file
+        // and the editor links have it.
+        if MCPProjects.secretReason(document.path) != nil || ClaudeIDEServer.isSensitive(document.path) {
+            if range.length > 0 { info["withheld"] = "The selection is in a file that usually holds secrets, so its text isn't shared." }
+        } else if range.length > 0 {
             let selected = text.substring(with: range)
             info["text"] = selected.count > 200_000 ? String(selected.prefix(200_000)) + "\n… (cut at 200,000 characters)" : selected
         }
