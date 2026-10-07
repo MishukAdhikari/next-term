@@ -101,7 +101,8 @@ import Testing
         #expect(one.prefix(5) == ["diff-tree", "-r", "-p", "--histogram", "-M"])
         let tail: [String] = Array(one.suffix(6))
         #expect(tail == ["--end-of-options", mergeBase, "refs/heads/x", "--", "old.txt", "new.txt"])
-        #expect(["--src-prefix=a/", "-U3", "--no-ext-diff"].allSatisfy(one.contains) && !one.contains("--merge-base"))
+        #expect(["--src-prefix=a/", "-U3", "--no-ext-diff"].allSatisfy(one.contains))
+        #expect(!one.contains("--merge-base"))
         #expect(BranchCompare.fileDiffArguments(path: "a.txt", branch: "refs/heads/x", base: mergeBase).suffix(2) == ["--", "a.txt"])
         #expect(BranchCompare.workingTreeArguments(branch: "refs/heads/x") == ["diff-index", "-z", "-M", "--end-of-options", "refs/heads/x", "--"])
         // Paths are names, not patterns; reads never take a lock.
@@ -203,11 +204,13 @@ import Testing
         // compared, like any untracked file, rather than listed as deleted. A folder in its place is.
         try write("f.txt", "feat\n")
         let untracked = try #require(BranchCompare.workingTreeFiles(against: "refs/heads/feat", in: work, git: git))
-        #expect(untracked.map(\.path) == ["a.txt", "m.txt", "old.txt"])
+        let untrackedPaths: [String] = untracked.map(\.path)
+        #expect(untrackedPaths == ["a.txt", "m.txt", "old.txt"])
         try FileManager.default.removeItem(at: root.appendingPathComponent("f.txt"))
         try write("f.txt/inside.txt", "a folder now\n")
         let folder = try #require(BranchCompare.workingTreeFiles(against: "refs/heads/feat", in: work, git: git))
-        #expect(folder.map(\.path) == ["a.txt", "f.txt", "m.txt", "old.txt"])
+        let folderPaths: [String] = folder.map(\.path)
+        #expect(folderPaths == ["a.txt", "f.txt", "m.txt", "old.txt"])
         try FileManager.default.removeItem(at: root.appendingPathComponent("f.txt"))
         // A file's diff: the branch's version first, the disk's second.
         let file = try #require(GitRunner.diff(of: "a.txt", in: work, git: git, base: .ref("refs/heads/feat")))
@@ -283,8 +286,11 @@ import Testing
         #expect(c.currentOnly.map(\.subject) == ["Main 2", "Main merges feat"])
         #expect(c.mergeBase == picked && !c.filesUnread)
         // What `git diff HEAD...feat` lists.
-        let expected = repo.sh(["diff", "--name-status", "HEAD...feat"]).split(separator: "\n").map { String($0.split(separator: "\t").last ?? "") }
-        #expect(!c.files.isEmpty && c.files.map(\.path) == expected)
+        let lines = repo.sh(["diff", "--name-status", "HEAD...feat"]).split(separator: "\n")
+        let expected: [String] = lines.map { String($0.split(separator: "\t").last ?? "") }
+        let files: [String] = c.files.map(\.path)
+        #expect(!files.isEmpty)
+        #expect(files == expected)
         let diff = try #require(BranchCompare.diff(of: "f2.txt", branch: "refs/heads/feat", base: picked, in: repo.work, git: repo.git))
         let added: [String] = diff.hunks.flatMap(\.lines).filter { $0.kind == .added }.map(\.text)
         #expect(added == ["f2"])
@@ -307,12 +313,14 @@ import Testing
         for base in [feat, .head] {
             let bracket = try #require(GitRunner.diff(of: "a[1].txt", in: repo.work, git: repo.git, base: base))
             let added: [String] = bracket.hunks.flatMap(\.lines).filter { $0.kind == .added }.map(\.text)
-            #expect(bracket.newPath == "a[1].txt" && added == ["bracket changed"], "\(base)")
-            let all = GitRunner.diffs(in: repo.work, git: repo.git, base: base, paths: ["a[1].txt"])
-            #expect(all?.map(\.path) == ["a[1].txt"], "\(base)")
+            #expect(bracket.newPath == "a[1].txt", "\(base)")
+            #expect(added == ["bracket changed"], "\(base)")
+            let all: [String]? = GitRunner.diffs(in: repo.work, git: repo.git, base: base, paths: ["a[1].txt"])?.map(\.path)
+            #expect(all == ["a[1].txt"], "\(base)")
         }
         let same = try #require(GitRunner.diff(of: "same.txt", in: repo.work, git: repo.git, base: feat))
-        #expect(same.hunks.isEmpty && same.oldPath == nil && same.newPath == nil)
+        #expect(same.hunks.isEmpty)
+        #expect(same.oldPath == nil && same.newPath == nil)
         repo.sh(["branch", "-D", "feat"])
         #expect(GitRunner.diff(of: "a1.txt", in: repo.work, git: repo.git, base: feat) == nil)
         #expect(GitRunner.diff(of: "same.txt", in: repo.work, git: repo.git, base: feat) == nil)
