@@ -215,7 +215,9 @@ final class TabBarView: NSView {
                 return view
             }
         }
+        let hasRemote = newItems.contains { $0.remote != nil }
         for (i, item) in newItems.enumerated() {
+            tabViews[i].barHasRemote = hasRemote
             tabViews[i].configure(item: item, selected: i == newSelected)
         }
         let selectionChanged = newSelected != selectedIndex
@@ -479,6 +481,9 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     private var hovering = false { didSet { refresh() } }
     private var selected = false
     var isDragging = false { didSet { alphaValue = isDragging ? 0.85 : 1; layer?.zPosition = isDragging ? 10 : 0 } }
+    /// Some tab in the bar runs on a server: every tab then leaves "⌘2" the room a remote one has (its title
+    /// starts after the server mark), so all of them show it or none does.
+    var barHasRemote = false { didSet { if barHasRemote != oldValue { needsLayout = true } } }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -587,14 +592,16 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         // mark goes before the title, like an icon of the title.
         // Its server sits on the title's centre line; the dot hangs a point lower.
         remoteMark.frame = NSRect(x: 25, y: (h - 16) / 2, width: RemoteMarkView.size.width, height: RemoteMarkView.size.height)
-        let labelX: CGFloat = remoteMark.isHidden ? 29 : remoteMark.frame.maxX + 3
+        let remoteLabelX = remoteMark.frame.maxX + 3
+        let labelX: CGFloat = remoteMark.isHidden ? 29 : remoteLabelX
         let labelHeight = label.intrinsicContentSize.height
         var labelEnd = bounds.width - 28
         // The shortcut: in the close button's place while that is hidden, else just before it, as long as
         // the title keeps room to be read.
         let hintWidth = hint.stringValue.isEmpty ? 0 : ceil(hint.intrinsicContentSize.width)
         let hintEnd = closeButton.isHidden ? bounds.width - 9 : bounds.width - 27
-        hint.isHidden = hintWidth == 0 || hintEnd - hintWidth - 6 - labelX < (closeButton.isHidden ? 40 : 56)
+        let titleStart = barHasRemote ? remoteLabelX : labelX
+        hint.isHidden = hintWidth == 0 || hintEnd - hintWidth - 6 - titleStart < (closeButton.isHidden ? 40 : 56)
         if !hint.isHidden {
             let hintHeight = hint.intrinsicContentSize.height
             hint.frame = NSRect(x: hintEnd - hintWidth, y: (h - hintHeight) / 2, width: hintWidth, height: hintHeight)

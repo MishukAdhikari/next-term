@@ -19,7 +19,7 @@ extension SelfTest {
     }
 
     /// Remote tabs in a tab bar of their own, offscreen, with made-up items: what a tab too narrow for its
-    /// whole title keeps.
+    /// whole title keeps, and the ⌘N hints in a narrow bar.
     private static func remoteTabBarChecks() {
         func mark(_ link: RemoteLink) -> RemoteMark { RemoteMark(host: "web-1", destination: "deploy@203.0.113.5", link: link) }
         let items = [
@@ -50,6 +50,13 @@ extension SelfTest {
         let narrow = bar(width: 12 + 36 + 24 + TabBarView.minTabWidth * CGFloat(items.count))
         check(narrow.shownTitle(at: 1) == "app" && narrow.shownTitle(at: 2) == "app", "remote tabs: and the narrowest shows the folder alone",
               "\(items.indices.map { narrow.shownTitle(at: $0) ?? "" })")
+        // A remote tab's title starts after its server mark, so it has less room for "⌘2" than a local tab:
+        // the bar makes one choice for all of them, or the numbering looks broken.
+        let uneven = stride(from: TabBarView.minTabWidth, through: 140, by: 2).filter { tabWidth in
+            let tabs = bar(width: 12 + 36 + 24 + tabWidth * CGFloat(items.count))
+            return Set((1..<items.count).map { tabs.shownShortcut(at: $0) == nil }).count > 1 // the unselected ones
+        }
+        check(uneven.isEmpty, "remote tabs: in a narrow bar, local and remote tabs show their ⌘N alike", "they differ at tab widths \(uneven)")
         window.contentView = nil
     }
 
