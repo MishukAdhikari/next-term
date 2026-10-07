@@ -3990,6 +3990,63 @@ enum SelfTest {
         } else {
             check(false, "MCP: new_tab starts the stand-in agent", asking.text)
         }
+
+        // Claude Code's own question form (AskUserQuestion), drawn as Claude Code 2.1 draws it: the model's
+        // question and options, then rows of its own. A decision too, answered the same way.
+        try? """
+        #!/bin/zsh
+        labels=("Rewrite it" "Patch the bug" "Leave it")
+        sel=1
+        draw() {
+          printf '\\033[2J\\033[H'
+          print -r -- ' ☐ Approach'
+          print -r -- ''
+          print -r -- 'Which approach should I take for the parser?'
+          print -r -- ''
+          for i in 1 2 3; do
+            if (( i == sel )); then print -r -- "❯ $i. ${labels[$i]}"; else print -r -- "  $i. ${labels[$i]}"; fi
+            print -r -- '     What that means'
+          done
+          print -r -- '  4. Type something.'
+          print -r -- '────────────────────────────────────────'
+          print -r -- '  5. Chat about this'
+          print -r -- ''
+          print -r -- 'Enter to select · ↑/↓ to navigate · Esc to cancel'
+        }
+        printf '\\342\\234\\273 Pondering\\342\\200\\246 (2s \\302\\267 esc to interrupt)\\n'; sleep 1
+        draw
+        while read -rsk1 key; do
+          if [[ $key == $'\\e' ]]; then
+            read -rsk2 rest
+            [[ $rest == '[B' ]] && (( sel < 3 )) && (( sel += 1 ))
+            [[ $rest == '[A' ]] && (( sel > 1 )) && (( sel -= 1 ))
+            draw
+          elif [[ $key == $'\\r' || $key == $'\\n' ]]; then
+            break
+          fi
+        done
+        printf '\\033[2J\\033[Hpicked %s\\n' "$sel"
+        while true; do sleep 1; done
+        """.write(to: asker, atomically: true, encoding: .utf8)
+        chmod(asker.path, 0o755)
+        let form = await tool("new_tab", ["directory": proj.path, "command": "PATH=\(agentBin.path):$PATH claude", "title": "form"])
+        let formID = form.json?["id"] as? String ?? ""
+        if let formTab = AppDelegate.shared.controllers.flatMap(\.tabs).first(where: { $0.id.uuidString.lowercased() == formID }) {
+            check(await wait(10) { formTab.status.question == "Which approach should I take for the parser?" },
+                  "Claude Code's question form is a decision, with the model's question",
+                  formTab.status.question ?? formTab.screenTail(8).joined(separator: " | "))
+            let read = await tool("read_tab", ["tab_id": formID, "lines": 20])
+            let questionID = read.json?["question_id"] as? String ?? ""
+            check(read.json?["choices"] as? [String] == ["Rewrite it", "Patch the bug", "Leave it"],
+                  "MCP: its choices are the model's options, without the form's own rows", read.text.prefix(400).description)
+            let answered = await tool("answer_agent", ["tab_id": formID, "question_id": questionID, "answer": "Patch the bug"])
+            check(!answered.isError && answered.json?["answered"] as? String == "Patch the bug", "MCP: answer_agent answers the form", answered.text)
+            check(await wait(5) { formTab.screenTail(10).contains { $0.contains("picked 2") } },
+                  "MCP: the form got option 2", formTab.screenTail(6).joined(separator: " | "))
+            _ = await tool("close_tab", ["tab_id": formID, "force": true])
+        } else {
+            check(false, "MCP: new_tab starts the stand-in question form", form.text)
+        }
         try? FileManager.default.removeItem(at: agentBin)
 
         let closed = await tool("close_tab", ["tab_id": workerID])
