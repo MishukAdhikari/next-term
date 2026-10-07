@@ -535,6 +535,8 @@ extension SelfTest {
             check(await wait(3) { fm.fileExists(atPath: renamed.path) }, "and the rename is kept")
             c.sidebar.rename(renamed, to: "a.txt")
             _ = await wait(3) { sidebarRow(c, files[0]) >= 0 }
+        } else {
+            check(false, "a click that ends a rename selects the file it was on and opens nothing", "a.txt is not in the tree")
         }
 
         // Off, from Settings, with a preview open: it stays, as an ordinary tab, and clicks select again.
