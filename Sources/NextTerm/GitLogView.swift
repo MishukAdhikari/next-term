@@ -147,6 +147,64 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         }
     }
 
+    /// Reads the same query again (the refs moved): the list stays as it is meanwhile, then as many
+    /// commits as were loaded come back (and down to the selected one), with the same commit selected
+    /// and the same commit at the top of the view, unless the view was at the very top, where new
+    /// commits show.
+    func refresh() {
+        guard let git = Self.git, failure == nil, query.problem == nil, !commits.isEmpty else { return reload() }
+        generation += 1
+        isLoading = true // and no more pages of the list being replaced
+        let token = generation, query = self.query, root = self.root
+        let count = max(commits.count, CommitLog.pageSize), sha = selectedCommit?.sha ?? wanted?.sha
+        Self.queue.async { [weak self] in
+            let order = CommitLog.order(query, in: root, git: git)
+            let head = CommitLog.resolve("HEAD", in: root, git: git)
+            let end = order.map { max(min(count, $0.count), Self.end(of: $0, from: 0, through: sha)) } ?? 0
+            let page = order.flatMap { CommitLog.commits(0..<end, of: $0, in: root, git: git) }
+            var graph = CommitGraph(maxColumns: GitLogStyle.maxLanes, connected: query.isConnected)
+            let rows = page.map { graph.add($0) } ?? []
+            DispatchQueue.main.async {
+                guard let self, token == self.generation else { return }
+                self.isLoading = false
+                guard let order, let page else { return self.reload() }
+                self.replace(with: page, rows: rows, order: order, graph: graph, head: head)
+            }
+        }
+    }
+
+    private func replace(with page: [Commit], rows: [GraphRow], order: CommitOrder, graph: CommitGraph, head: String?) {
+        // Where the view is: the commit in its first row, and how far that row is scrolled past.
+        let visible = table.visibleRect
+        let top = table.rows(in: visible).location
+        let anchor = visible.minY > 0 ? commits[safe: top].map { ($0.sha, visible.minY - table.rect(ofRow: top).minY) } : nil
+        let selected = selectedCommit?.sha
+        commits = page
+        self.rows = rows
+        self.order = order
+        self.graph = graph
+        headSHA = head
+        isComplete = commits.count >= order.count
+        lanesShown = max(1, rows.map(\.width).max() ?? 1)
+        graphColumn.width = GitLogStyle.graphWidth(lanes: lanesShown)
+        table.reloadData()
+        if let selected, let index = commits.firstIndex(where: { $0.sha == selected }) {
+            table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+        } else {
+            table.deselectAll(nil)
+        }
+        // The same row (its branches may have changed) shows its details again.
+        if let commit = selectedCommit, commit != details.shown { details.show(commit) }
+        // At the very top the view stays there, so new commits show.
+        if let anchor, let index = commits.firstIndex(where: { $0.sha == anchor.0 }) {
+            table.scroll(NSPoint(x: visible.minX, y: table.rect(ofRow: index).minY + anchor.1))
+        } else if anchor != nil, table.selectedRow >= 0 {
+            table.scrollRowToVisible(table.selectedRow)
+        }
+        updateStatus()
+        findWanted()
+    }
+
     /// Where a load from `skip` ends: a page on, or half a page past the commit wanted, if the order lists it.
     private static func end(of order: CommitOrder, from skip: Int, through sha: String?) -> Int {
         var end = skip + CommitLog.pageSize
@@ -256,7 +314,7 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     @objc private func searchChanged() { apply { $0.text = searchField.stringValue } }
     @objc private func regexChanged() { apply { $0.regex = regexButton.state == .on } }
     @objc private func refreshClicked() {
-        reload()
+        refresh()
         readRefs()
     }
 
@@ -304,7 +362,7 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             DispatchQueue.main.async {
                 guard let self, let now, now != self.signature else { return }
                 self.signature = now
-                self.reload()
+                self.refresh()
                 self.readRefs()
             }
         }
