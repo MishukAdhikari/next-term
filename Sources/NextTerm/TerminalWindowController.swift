@@ -1397,6 +1397,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         openGitLog(root: root)?.select(sha: sha)
     }
 
+    /// Compare with Current, or Show Diff with Working Tree, for `branch` ("refs/heads/feat/x") of the
+    /// work tree at `root`, in an editor tab.
+    @discardableResult
+    func openBranchComparison(root: String, branch: String, mode: BranchComparePane.Mode, current: String?) -> BranchComparePane {
+        editorArea.openBranchComparison(root: root, branch: branch, mode: mode, current: current)
+    }
+
     @objc func selectTabByNumber(_ sender: NSMenuItem) {
         // ⌘1…⌘8 pick that tab; ⌘9 is always the last one, as in browsers.
         select(sender.tag == 9 ? groups.count - 1 : sender.tag - 1)

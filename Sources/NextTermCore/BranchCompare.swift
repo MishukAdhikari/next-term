@@ -172,8 +172,7 @@ public enum BranchCompare {
             result.currentCount = counts.current
             result.branchCount = counts.branch
         }
-        result.current = GitRunner.run(git, base + ["symbolic-ref", "--quiet", "--short", "HEAD"], timeout: timeout, acceptedStatus: [0, 1])
-            .map { String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap { $0.isEmpty ? nil : $0 }
+        result.current = current(in: root, git: git)
         // merge-base exits 1 when there is none: unrelated histories have no files to compare.
         let mergeBase = GitRunner.run(git, base + ["merge-base", "--end-of-options", "HEAD", branch], timeout: timeout, acceptedStatus: [0, 1])
             .map { String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
@@ -182,6 +181,13 @@ public enum BranchCompare {
         guard let files = GitRunner.run(git, base + filesArguments(branch: branch), timeout: timeout) else { return nil }
         result.files = parseNameStatus(files)
         return result
+    }
+
+    /// The branch checked out; nil when HEAD is detached.
+    public static func current(in root: String, git: String) -> String? {
+        let name = GitRunner.run(git, base(root) + ["symbolic-ref", "--quiet", "--short", "HEAD"], timeout: 10, acceptedStatus: [0, 1])
+            .map { String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
+        return name.isEmpty ? nil : name
     }
 
     /// The tracked files on disk that differ from `branch`; nil when git fails.

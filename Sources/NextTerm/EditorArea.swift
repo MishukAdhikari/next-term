@@ -18,7 +18,8 @@ final class EditorArea: NSView, TabBarViewDelegate {
     private let banner = EditorBanner()
     private var bannerHeight: NSLayoutConstraint!
     /// Tabs in order: files being edited (CodeEditorView), diffs (DiffPane), notebooks (NotebookPane),
-    /// SQLite files (DatabasePane), large data files (DataPane) and commit histories (GitLogPane).
+    /// SQLite files (DatabasePane), large data files (DataPane), commit histories (GitLogPane) and
+    /// branch comparisons (BranchComparePane).
     private(set) var panes: [NSView] = []
     /// The 5-second recheck of the open file's committed text (off in the self-test, to prove that a
     /// commit is noticed on its own).
@@ -31,6 +32,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
     var databases: [DatabasePane] { panes.compactMap { $0 as? DatabasePane } }
     var dataFiles: [DataPane] { panes.compactMap { $0 as? DataPane } }
     var gitLogs: [GitLogPane] { panes.compactMap { $0 as? GitLogPane } }
+    var comparisons: [BranchComparePane] { panes.compactMap { $0 as? BranchComparePane } }
     var activePane: NSView? { panes[safe: activeIndex] }
     var activeEditor: CodeEditorView? { activePane as? CodeEditorView }
     var activeDiff: DiffPane? { activePane as? DiffPane }
@@ -38,6 +40,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
     var activeDatabase: DatabasePane? { activePane as? DatabasePane }
     var activeData: DataPane? { activePane as? DataPane }
     var activeGitLog: GitLogPane? { activePane as? GitLogPane }
+    var activeComparison: BranchComparePane? { activePane as? BranchComparePane }
     /// Send to Agent was clicked in a SQLite viewer.
     var onSendToAgent: (([ContextItem]) -> Void)?
     /// The file in front: the one being edited, or the notebook, database or data file being read.
@@ -237,6 +240,8 @@ final class EditorArea: NSView, TabBarViewDelegate {
             window?.makeFirstResponder(data.focusView)
         } else if let log = panes[index] as? GitLogPane, focus {
             window?.makeFirstResponder(log.focusView)
+        } else if let comparison = panes[index] as? BranchComparePane, focus {
+            window?.makeFirstResponder(comparison.focusView)
         }
         refresh()
         delegate?.editorAreaSelectionChanged(self)
@@ -330,6 +335,31 @@ final class EditorArea: NSView, TabBarViewDelegate {
         insert(log)
         select(activeIndex)
         return log
+    }
+
+    /// Compare with Current or Show Diff with Working Tree for `branch` ("refs/heads/feat/x") of the work
+    /// tree at `root` (or brings that tab to the front, reading it again). `current` names what is
+    /// checked out until the tab has read it.
+    @discardableResult
+    func openBranchComparison(root: String, branch: String, mode: BranchComparePane.Mode, current: String?) -> BranchComparePane {
+        if let index = panes.firstIndex(where: { ($0 as? BranchComparePane)?.matches(root: root, branch: branch, mode: mode) == true }),
+           let pane = panes[index] as? BranchComparePane {
+            select(index)
+            pane.reload()
+            return pane
+        }
+        let pane = BranchComparePane(root: root, branch: branch, mode: mode, current: current)
+        pane.onTitleChange = { [weak self] in self?.refresh() }
+        pane.onOpenFile = { [weak self] file in
+            guard let self else { return }
+            switch mode {
+            case .compare: self.openBranchDiff(root: root, path: file.path, change: DiffPane.BranchChange(branch: branch, oldPath: file.oldPath))
+            case .workingTree: self.openWorkingTreeDiff(root: root, path: file.path, branch: branch, renamedFrom: file.oldPath)
+            }
+        }
+        insert(pane)
+        select(activeIndex)
+        return pane
     }
 
     // MARK: closing
@@ -488,6 +518,10 @@ final class EditorArea: NSView, TabBarViewDelegate {
                 // Two repositories' logs: each says whose.
                 let named = gitLogs.count > 1 ? log.title + " — " + (log.root as NSString).lastPathComponent : log.title
                 return TabBarItem(title: named, state: .idle, tooltip: log.tooltip, accessibilityStatus: "commit history", icon: GitLogPane.tabIcon, modified: false)
+            }
+            if let comparison = pane as? BranchComparePane {
+                return TabBarItem(title: comparison.title, state: .idle, tooltip: comparison.tooltip, accessibilityStatus: "branch comparison",
+                                  icon: BranchComparePane.tabIcon, modified: false)
             }
             if let notebook = pane as? NotebookPane {
                 return TabBarItem(title: title(notebook.url), state: .idle, tooltip: RecentProjects.abbreviate(notebook.path) + " (notebook, read-only)",
