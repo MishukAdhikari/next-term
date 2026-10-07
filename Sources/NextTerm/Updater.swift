@@ -251,6 +251,9 @@ final class Updater {
     /// A download, or the signature check before it, is under way.
     private var installing = false
 
+    /// `quietly`: a retry of an install asked for earlier (maybe hours ago), which opens nothing until it
+    /// is done or fails: no progress window, and no offer to relaunch, only the Update button reading
+    /// Relaunch to Update. Whatever is being typed stays where it is.
     private func download(_ release: ReleaseInfo, quietly: Bool = false) {
         guard let dmgURL = release.dmgURL, release.checksumURL != nil, !installing else { return }
         let waitingSince = awaitingSignature?.tag == release.tag ? awaitingSignature?.since : nil
@@ -259,6 +262,7 @@ final class Updater {
         installing = true
         if !quietly { showProgress(release) }
         Task {
+            var signed = false
             do {
                 // The checksum and its signature first: nothing big is downloaded for a release that is not signed yet.
                 guard let expected = try await ReleaseSignature.signedChecksum(of: release) else {
@@ -266,7 +270,8 @@ final class Updater {
                     hideProgress()
                     return waitForSignature(release, since: waitingSince ?? Date(), quietly: quietly)
                 }
-                if quietly { showProgress(release) }
+                signed = true
+                if quietly { downloading = true } // the Update button hides, as it does under the progress window
                 let dmg = try await fetch(dmgURL)
                 progress?.message = "Checking the download…"
                 let actual = try await Task.detached { try Self.sha256(of: dmg) }.value
@@ -280,9 +285,9 @@ final class Updater {
                 staged = (app, release.version)
                 installing = false
                 hideProgress()
-                relaunchPrompt(release.version)
+                if !quietly { relaunchPrompt(release.version) }
             } catch {
-                let beforeDownload = quietly && progress == nil
+                let beforeDownload = quietly && !signed
                 installing = false
                 hideProgress()
                 if let refusal = error as? ReleaseSignature.Refusal { return refuse(release, Self.text(of: refusal)) }
@@ -335,7 +340,7 @@ final class Updater {
         awaitingSignature = (release.tag, since, timer)
         if quietly { return }
         tell("Next Term \(release.version) is not signed yet",
-             "Each release is signed with the Next Term release key a few minutes after it is published, and only a signed one is installed. Next Term checks again every 10 minutes for the next two hours, and downloads it once it is signed.")
+             "Each release is signed with the Next Term release key a few minutes after it is published, and only a signed one is installed. Next Term checks again every 10 minutes for the next two hours, and downloads it once it is signed. The Update button then reads Relaunch to Update.")
     }
 
     /// Why the wait for a release's signature ended, or nil while it goes on.
