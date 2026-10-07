@@ -620,9 +620,10 @@ final class EditorSettingsView: NSView {
         dotIcons.state = app.iconsOnDotFolders ? .on : .off
         claude.state = app.shareWithClaude ? .on : .off
         control.state = app.agentControl ? .on : .off
-        controlStatus.stringValue = !app.agentControl ? "Off: no agent can reach Next Term, and it is removed from the agents it was added to."
+        let status = !app.agentControl ? "Off: no agent can reach Next Term, and it is removed from the agents it was added to."
             : CommandLineTool.script == nil ? "Only the installed app adds itself to your agents."
             : "Any agent can open projects and tabs, start agents, give them prompts and read their screens. " + MCPRegistration.summary
+        controlStatus.stringValue = status + MCPRegistration.claudeAppNote
         fontSize.doubleValue = Double(app.fontSize)
         fontSizeValue.stringValue = "\(Int(app.fontSize)) pt"
         fontFamily.show(Preferences.editorFontFamily)

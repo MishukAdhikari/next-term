@@ -8,6 +8,9 @@ enum MCPRegistration {
     /// Per agent (`MCPRegistrar.Target.id`, and "claude"), what the last pass found.
     nonisolated(unsafe) private(set) static var statuses: [String: MCPRegistrar.Status] = [:]
     private static let queue = DispatchQueue(label: "nextterm.mcp-registration")
+    /// The Claude app (`MCPRegistrar.Target.id`), and when a pass last added Next Term to it or took it out.
+    private static let claudeApp = "claude-desktop"
+    nonisolated(unsafe) private static var claudeAppChanged: Date?
 
     static var names: [String: String] {
         var names = ["claude": "Claude Code"]
@@ -25,14 +28,18 @@ enum MCPRegistration {
         queue.async {
             let programs = LoginShell.programs
             var results: [String: MCPRegistrar.Status] = [:]
+            var claudeAppEdited: Date?
             for target in MCPRegistrar.targets() {
                 let installed = MCPRegistrar.isInstalled(target, found: programs)
+                let before = target.id == claudeApp ? FileManager.default.contents(atPath: target.file) : nil
                 results[target.id] = on ? MCPRegistrar.register(target, command: command, programInstalled: installed)
                                         : MCPRegistrar.unregister(target)
+                if target.id == claudeApp, FileManager.default.contents(atPath: target.file) != before { claudeAppEdited = Date() }
             }
             results["claude"] = claude(on: on, command: command, program: programs["claude"])
             DispatchQueue.main.async {
                 statuses = results
+                if let claudeAppEdited { claudeAppChanged = claudeAppEdited }
                 NotificationCenter.default.post(name: changed, object: nil)
             }
         }
@@ -75,6 +82,15 @@ enum MCPRegistration {
             text += " " + ListFormatter.localizedString(byJoining: taken) + " already " + (taken.count == 1 ? "has" : "have") + " another server named “next-term”, left as it is."
         }
         return text
+    }
+
+    /// For Settings: the Claude app reads its servers only when it starts, so while it has been open since
+    /// Next Term was added or taken out, " Restart the Claude app to load it." (or unload); "" otherwise.
+    static var claudeAppNote: String {
+        guard let changed = claudeAppChanged else { return "" }
+        let open = NSRunningApplication.runningApplications(withBundleIdentifier: "com.anthropic.claudefordesktop")
+        guard open.contains(where: { ($0.launchDate ?? .distantPast) < changed }) else { return "" }
+        return statuses[claudeApp] == .removed ? " Restart the Claude app to unload it." : " Restart the Claude app to load it."
     }
 }
 

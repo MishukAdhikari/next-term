@@ -24,6 +24,7 @@ Next Term is an MCP server, so one agent can run the others. An orchestrator —
 | Amp | `~/.config/amp/settings.json` |
 | Junie | `~/.junie/mcp/mcp.json` |
 | Command Code | `~/.commandcode/mcp.json` |
+| Claude desktop app (chats) | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 
 Agents you start after that see Next Term’s tools. The line under the setting says where it is registered, for example “Registered in Claude Code, Codex and Cursor.”
 
@@ -31,6 +32,11 @@ Agents you start after that see Next Term’s tools. The line under the setting 
 - **Someone else’s `next-term` entry is never touched;** Settings tells you it is there.
 - **Turning the setting off removes Next Term’s entries** and stops the server.
 - Only the installed app registers itself, never a copy running from the disk image, so the entries never point at a path that is about to disappear.
+
+### The Claude and ChatGPT desktop apps
+
+- **Claude:** its chats read `claude_desktop_config.json`, and only when the app starts, so restart Claude after turning the setting on or off (the line under the setting reminds you while Claude is open). Next Term adds only its own server there; the app’s preferences in the same file stay as they were. Claude’s Code tab uses Claude Code’s entry.
+- **ChatGPT:** the desktop app reads Codex’s `~/.codex/config.toml`, so the Codex entry covers it.
 
 ### Any other MCP client
 

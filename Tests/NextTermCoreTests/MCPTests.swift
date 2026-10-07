@@ -278,6 +278,141 @@ import Testing
         #expect(try read(copilot.file) == "{\"mcpServers\": {")
     }
 
+    // MARK: The Claude app
+
+    /// Plain JSON only: the Claude app reads its file strictly.
+    func strictJSON(_ path: String) -> [String: Any]? {
+        (try? read(path)).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+    }
+
+    /// Made-up preferences of the kind the Claude app keeps beside its servers.
+    let claudePreferences = """
+        {
+          "preferences": {
+            "sidebarMode": "chat",
+            "launchOnLogin": false,
+            "pinned": ["notes", "drafts"]
+          },
+          "windowSizes": [800, 600]
+        }
+
+        """
+
+    @Test func claudeAppIsFoundByItsFolderAndGetsCommandAndArgs() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let app = try target("claude-desktop", home: home)
+        #expect(app.programs.isEmpty && app.format == .json(strict: true) && app.container == "mcpServers")
+        #expect(app.file == home + "/Library/Application Support/Claude/claude_desktop_config.json")
+        #expect(NSDictionary(dictionary: app.entry(command)).isEqual(to: ["command": command, "args": ["mcp"]]))
+        // No folder: not installed, nothing written.
+        #expect(!MCPRegistrar.isInstalled(app, found: [:]))
+        #expect(MCPRegistrar.register(app, command: command, programInstalled: false) == .notInstalled)
+        #expect(!FileManager.default.fileExists(atPath: app.file))
+        #expect(MCPRegistrar.unregister(app) == .notInstalled)
+        // The folder without the file: the file is created, as plain JSON.
+        try FileManager.default.createDirectory(atPath: home + "/Library/Application Support/Claude", withIntermediateDirectories: true)
+        #expect(MCPRegistrar.isInstalled(app, found: [:]))
+        #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .registered)
+        let servers = try #require(strictJSON(app.file)?["mcpServers"] as? [String: Any])
+        let entry = try #require(servers["next-term"] as? [String: Any])
+        #expect(entry.keys.sorted() == ["args", "command"])
+        #expect(entry["command"] as? String == command && entry["args"] as? [String] == ["mcp"])
+    }
+
+    @Test func claudeAppKeepsItsPreferences() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let app = try target("claude-desktop", home: home)
+        try write(claudePreferences, app.file)
+        #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .registered)
+        let after = try read(app.file)
+        // Ours goes first; every byte of the preferences stays as it was.
+        let entryText = "{\"args\":[\"mcp\"],\"command\":\"\(command)\"}"
+        let added = "{\n  \"mcpServers\": {\n    \"next-term\": \(entryText)\n  },"
+        #expect(after == added + String(claudePreferences.dropFirst()))
+        let file = try #require(strictJSON(app.file))
+        let original = try #require(try JSONSerialization.jsonObject(with: Data(claudePreferences.utf8)) as? [String: Any])
+        let preferences = try #require(file["preferences"] as? [String: Any])
+        let originalPreferences = try #require(original["preferences"] as? [String: Any])
+        #expect(NSDictionary(dictionary: preferences).isEqual(to: originalPreferences))
+        #expect(file["windowSizes"] as? [Int] == [800, 600])
+        let entry = (file["mcpServers"] as? [String: Any])?["next-term"] as? [String: Any]
+        #expect(entry.map { NSDictionary(dictionary: $0).isEqual(to: ["command": command, "args": ["mcp"]]) } == true)
+        // Again: nothing to do, nothing written.
+        #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .alreadyRegistered)
+        #expect(try read(app.file) == after)
+        // Off: ours goes, with the container registering added; the rest is as it was.
+        #expect(MCPRegistrar.unregister(app) == .removed)
+        #expect(try read(app.file) == claudePreferences)
+    }
+
+    @Test func claudeAppKeepsOtherServers() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let app = try target("claude-desktop", home: home)
+        let original = """
+            {
+              "mcpServers": {
+                "weather": {
+                  "command": "/usr/local/bin/weather-mcp",
+                  "args": ["--units", "metric"]
+                }
+              },
+              "preferences": {
+                "sidebarMode": "chat"
+              }
+            }
+
+            """
+        try write(original, app.file)
+        #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .registered)
+        let servers = try #require(strictJSON(app.file)?["mcpServers"] as? [String: Any])
+        #expect(servers.keys.sorted() == ["next-term", "weather"])
+        let weather = servers["weather"] as? [String: Any]
+        #expect(weather?["command"] as? String == "/usr/local/bin/weather-mcp" && weather?["args"] as? [String] == ["--units", "metric"])
+        #expect(MCPRegistrar.unregister(app) == .removed)
+        #expect(try read(app.file) == original) // the other server and its container stay
+    }
+
+    @Test func claudeAppAdoptsAnotherCopyAndLeavesOthersAlone() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let app = try target("claude-desktop", home: home)
+        let movedText = "{\n  \"mcpServers\": {\n    \"next-term\": {\"command\": \"\(moved)\", \"args\": [\"mcp\"]}\n  },\n  \"preferences\": {\"sidebarMode\": \"chat\"}\n}\n"
+        try write(movedText, app.file)
+        #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .registered)
+        let file = try #require(strictJSON(app.file))
+        #expect(((file["mcpServers"] as? [String: Any])?["next-term"] as? [String: Any])?["command"] as? String == command)
+        #expect((file["preferences"] as? [String: Any])?["sidebarMode"] as? String == "chat")
+        // A `next-term` that is not Next Term's.
+        let theirs = "{\"mcpServers\": {\"next-term\": {\"command\": \"/opt/next-term/server\", \"args\": []}}, \"preferences\": {}}"
+        try write(theirs, app.file)
+        #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .nameTaken)
+        #expect(MCPRegistrar.unregister(app) == .nameTaken)
+        #expect(try read(app.file) == theirs)
+    }
+
+    @Test func claudeAppRefusesFilesItCouldNotRead() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let app = try target("claude-desktop", home: home)
+        let broken = "{\"preferences\": {\"sidebarMode\": \"chat\""
+        try write(broken, app.file)
+        #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .skipped("not valid JSON"))
+        #expect(MCPRegistrar.unregister(app) == .skipped("not valid JSON"))
+        #expect(try read(app.file) == broken)
+        // JSON with comments or a trailing comma parses for other agents, not for the Claude app.
+        let commented = "{\n  // mine\n  \"preferences\": {}\n}\n"
+        try write(commented, app.file)
+        #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .skipped("comments in a file that must be plain JSON"))
+        #expect(try read(app.file) == commented)
+        let trailing = "{\n  \"preferences\": {},\n}\n"
+        try write(trailing, app.file)
+        #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .skipped("trailing commas in a file that must be plain JSON"))
+        #expect(try read(app.file) == trailing)
+    }
+
     // MARK: Claude Code and ownership
 
     @Test func claudeEntry() {

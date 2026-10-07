@@ -16,7 +16,7 @@ public enum MCPRegistrar {
         case notInstalled
         /// A `next-term` entry that is not Next Term's.
         case nameTaken
-        /// The file could not be edited safely (comments in a strict-JSON file, not parseable, odd shape).
+        /// The file could not be edited safely (comments or trailing commas in a strict-JSON file, not parseable, odd shape).
         case skipped(String)
     }
 
@@ -29,7 +29,8 @@ public enum MCPRegistrar {
         /// Program names: when one is installed, a missing configuration file is created.
         public let programs: [String]
         /// Folders whose existence also means the agent is installed (Cursor's command is now the
-        /// generic `agent`, too common a name to look for; its ~/.cursor folder says it is there).
+        /// generic `agent`, too common a name to look for; its ~/.cursor folder says it is there; the
+        /// Claude app has no command at all).
         public var markers: [String] = []
         public let file: String
         public let format: Format
@@ -79,6 +80,11 @@ public enum MCPRegistrar {
             Target(id: "commandcode", name: "Command Code", programs: ["commandcode", "command-code"], file: path(".commandcode/mcp.json"),
                    format: .json(strict: true), container: "mcpServers", preamble: [:],
                    entry: { ["transport": "stdio", "command": $0, "args": ["mcp"], "enabled": true] }),
+            // The Claude app's chats read only this file, and only when the app starts (its Code tab uses
+            // Claude Code's entry). The app keeps its own preferences in the same file.
+            Target(id: "claude-desktop", name: "Claude app", programs: [], markers: [path("Library/Application Support/Claude")],
+                   file: path("Library/Application Support/Claude/claude_desktop_config.json"),
+                   format: .json(strict: true), container: "mcpServers", preamble: [:], entry: standard),
         ]
     }
 
@@ -137,6 +143,8 @@ public enum MCPRegistrar {
         guard let text = read(target.file) else { return .skipped("unreadable") }
         guard let document = JSONC(text) else { return .skipped("not valid JSON") }
         if strict && document.hasComments { return .skipped("comments in a file that must be plain JSON") }
+        // Foundation's parser lets a trailing comma through; the agent's own would not.
+        if strict && JSONC.plain(text) != text { return .skipped("trailing commas in a file that must be plain JSON") }
         guard case .object(let root)? = document.root else { return .skipped("not a JSON object") }
         var updated = text
         if let container = root.member(target.container) {
