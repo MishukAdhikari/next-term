@@ -43,7 +43,7 @@ enum SafeOpen {
     }
 
     /// Handlers that execute whatever they open.
-    private static let launchers: Set<String> = [
+    static let launchers: Set<String> = [
         "org.python.PythonLauncher", "com.apple.JavaLauncher", "com.apple.installer",
         "com.apple.automator.Automator-Application-Stub",
     ]
