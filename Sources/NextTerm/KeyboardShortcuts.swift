@@ -292,6 +292,10 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         tabs.addTabViewItem(notificationsTab)
         tabs.addTabViewItem(keysTab)
         tabs.addTabViewItem(importTab)
+        let skillsTab = NSTabViewItem(identifier: "skills")
+        skillsTab.label = "Skills"
+        skillsTab.view = SkillsSettingsView()
+        tabs.addTabViewItem(skillsTab)
         // A preset switched (here or by an import) changes the shortcuts listed.
         NotificationCenter.default.addObserver(self, selector: #selector(presetChanged), name: ImportCoordinator.changed, object: nil)
         window.contentView = tabs

@@ -693,6 +693,7 @@ enum SelfTest {
 
         await linkChecks(c)
         await notificationChecks(c)
+        await skillsChecks()
 
         try? FileManager.default.removeItem(at: dir)
     }
