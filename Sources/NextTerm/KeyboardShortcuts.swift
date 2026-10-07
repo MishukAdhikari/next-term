@@ -215,11 +215,14 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         window.minSize = NSSize(width: 480, height: 320)
         window.isReleasedWhenClosed = false
         super.init(window: window)
-        // Two tabs: the editor's settings, and every shortcut.
+        // The editor's settings, the terminal's, every shortcut, and imports.
         let tabs = NSTabView()
         let editorTab = NSTabViewItem(identifier: "editor")
         editorTab.label = "Editor"
         editorTab.view = EditorSettingsView()
+        let terminalTab = NSTabViewItem(identifier: "terminal")
+        terminalTab.label = "Terminal"
+        terminalTab.view = TerminalSettingsView()
         let keysTab = NSTabViewItem(identifier: "keys")
         keysTab.label = "Keyboard Shortcuts"
         keysTab.view = NSView()
@@ -227,6 +230,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         importTab.label = "Import"
         importTab.view = ImportSettingsView()
         tabs.addTabViewItem(editorTab)
+        tabs.addTabViewItem(terminalTab)
         tabs.addTabViewItem(keysTab)
         tabs.addTabViewItem(importTab)
         // A preset switched (here or by an import) changes the shortcuts listed.
@@ -448,9 +452,11 @@ final class EditorSettingsView: NSView {
     private let controlStatus = NSTextField(wrappingLabelWithString: "")
     private let fontSize = NSStepper()
     private let fontSizeValue = NSTextField(labelWithString: "")
+    private let fontFamily = FontFamilyPopup()
 
     override init(frame: NSRect) {
         super.init(frame: frame)
+        fontFamily.onChange = { family in AppDelegate.shared.setEditorFontFamily(family) }
         lineHeight.target = self
         lineHeight.action = #selector(lineHeightChanged)
         lineHeight.isContinuous = true
@@ -483,14 +489,15 @@ final class EditorSettingsView: NSView {
             stack.spacing = 10
             return stack
         }
-        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own line height; 1.35 reads well for code. The font size is shared with the terminal (⌘+ and ⌘-). Claude Code, Gemini CLI and Qwen Code started in a new tab connect to Next Term as their IDE: the open files and the selected lines go with each prompt (never from .env files). They connect by themselves (Next Term turns Gemini's and Qwen's IDE mode on); turn this off to stop sharing. ⌥⌘K adds an @-mention to Claude's prompt.")
+        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own line height; 1.35 reads well for code. The font size is shared with the terminal (⌘+ and ⌘-); the terminal’s font is in the Terminal tab. Claude Code, Gemini CLI and Qwen Code started in a new tab connect to Next Term as their IDE: the open files and the selected lines go with each prompt (never from .env files). They connect by themselves (Next Term turns Gemini's and Qwen's IDE mode on); turn this off to stop sharing. ⌥⌘K adds an @-mention to Claude's prompt.")
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 11)
         note.preferredMaxLayoutWidth = 420
         lineHeight.widthAnchor.constraint(equalToConstant: 220).isActive = true
         let stack = NSStackView(views: [
-            row("Line height:", [lineHeight, lineHeightValue]),
+            row("Font:", [fontFamily]),
             row("Font size:", [fontSize, fontSizeValue]),
+            row("Line height:", [lineHeight, lineHeightValue]),
             row("", [wrap]),
             row("Sidebar:", [dotIcons]),
             row("Agents:", [claude]),
@@ -510,6 +517,8 @@ final class EditorSettingsView: NSView {
         ])
         refresh()
         NotificationCenter.default.addObserver(self, selector: #selector(registrationsChanged), name: MCPRegistration.changed, object: nil)
+        // An import or its undo can change the font.
+        NotificationCenter.default.addObserver(self, selector: #selector(registrationsChanged), name: ImportCoordinator.changed, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -534,6 +543,7 @@ final class EditorSettingsView: NSView {
             : "Any agent can open projects and tabs, start agents, give them prompts and read their screens. " + MCPRegistration.summary
         fontSize.doubleValue = Double(app.fontSize)
         fontSizeValue.stringValue = "\(Int(app.fontSize)) pt"
+        fontFamily.show(Preferences.editorFontFamily)
     }
 
     @objc private func lineHeightChanged() {

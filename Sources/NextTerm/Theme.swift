@@ -58,7 +58,26 @@ enum Theme {
         return NSFont.monospacedSystemFont(ofSize: size, weight: weight)
     }
 
-    static func terminalFont(size: CGFloat) -> NSFont { monoFont(size: size) }
+    /// The editor's face: the family chosen in Settings › Editor, else the one above.
+    static func editorFont(size: CGFloat) -> NSFont { font(family: Preferences.editorFontFamily, size: size) }
+
+    /// The terminal's face: the family chosen in Settings › Terminal, else the one above.
+    static func terminalFont(size: CGFloat) -> NSFont { font(family: Preferences.terminalFontFamily, size: size) }
+
+    /// A chosen family's regular face (its nearest one when it has no regular weight), or the default face
+    /// when none is chosen or the family is no longer installed. Safe off the main thread (notebooks lay out
+    /// there).
+    static func font(family: String?, size: CGFloat) -> NSFont {
+        guard let family, !family.isEmpty else { return monoFont(size: size) }
+        let traits: [NSFontDescriptor.TraitKey: Any] = [.weight: NSFont.Weight.regular]
+        let descriptor = NSFontDescriptor(fontAttributes: [.family: family, .traits: traits])
+        guard let font = NSFont(descriptor: descriptor, size: size),
+              font.familyName?.caseInsensitiveCompare(family) == .orderedSame else { return monoFont(size: size) }
+        return font
+    }
+
+    /// What the default face is called, for the font menus.
+    static var defaultFontName: String { NSFont(name: "JetBrainsMono-Regular", size: 12) != nil ? "JetBrains Mono" : "SF Mono" }
 
     static func apply(to view: TerminalView, fontSize: CGFloat) {
         view.font = terminalFont(size: fontSize)

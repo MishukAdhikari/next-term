@@ -104,7 +104,7 @@ final class EditorDocument: NSObject, NSTextStorageDelegate {
         onChange?(self)
     }
 
-    static var font: NSFont { Theme.monoFont(size: AppDelegate.shared?.fontSize ?? Theme.defaultFontSize) }
+    static var font: NSFont { Theme.editorFont(size: AppDelegate.shared?.fontSize ?? Theme.defaultFontSize) }
 
     static var attributes: [NSAttributedString.Key: Any] {
         [.font: font, .foregroundColor: Theme.terminalForeground]
