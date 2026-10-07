@@ -210,4 +210,45 @@ import Testing
         #expect(stopped == nil && seen == 1)
         withExtendedLifetime(project) {}
     }
+
+    /// A line longer than a page may read (a minified file, a log line with no break): memory stays flat,
+    /// the page ends partway through it, and the next page goes on along the same line.
+    @Test func aLineLongerThanAPageReads() throws {
+        let project = FixtureProject()
+        let path = project.root + "/minified.log"
+        FileManager.default.createFile(atPath: path, contents: nil)
+        let out = try #require(FileHandle(forWritingAtPath: path))
+        out.write(Data("first\n".utf8))
+        let block = Data(repeating: 0x78, count: 4 << 20)
+        for _ in 0..<((DataHead.maxScanBytes >> 22) + 8) { out.write(block) } // 32 MB past the limit
+        out.write(Data("\nlast\n".utf8))
+        try out.close()
+        let size = UInt64((try FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0)
+
+        let before = Self.footprint()
+        let page = try DataHead.page(at: path, kind: .lines)
+        let grew = Int64(Self.footprint()) - Int64(before)
+        #expect(grew < 48 << 20, "memory grew by \(grew >> 20) MB")
+        #expect(page.records.map(\.line) == [1, 2] && page.records[1].isTruncated && !page.isAtEnd)
+        #expect(page.end.line == 2 && page.end.offset >= UInt64(DataHead.maxScanBytes) && page.end.offset < size)
+
+        let rest = try DataHead.page(at: path, kind: .lines, from: page.end)
+        #expect(rest.records.map(\.line) == [2, 3] && rest.records[0].isTruncated && rest.records[1].raw == "last")
+        #expect(rest.isAtEnd)
+
+        // Stopping a page: a cut record ends where the reading is, one still being read is left for the next.
+        let long = Data(repeating: 0x61, count: DataHead.maxRecordBytes + 10)
+        for kind in [DataFileKind.lines, .delimited] {
+            var scanner = RecordScanner(kind: kind, delimiter: 0x2C, start: .start, limit: .max)
+            scanner.feed(Data("a,b\n".utf8) + long)
+            scanner.stop()
+            #expect(scanner.isFull && scanner.records.count == 2 && scanner.records[1].isTruncated, "\(kind)")
+            #expect(scanner.position == DataPosition(offset: UInt64(4 + long.count), line: 2), "\(kind)")
+            var partial = RecordScanner(kind: kind, delimiter: 0x2C, start: .start, limit: .max)
+            partial.feed(Data("a,b\nc,d".utf8))
+            partial.stop()
+            #expect(partial.records.count == 1 && partial.position == DataPosition(offset: 4, line: 2), "\(kind)")
+        }
+        withExtendedLifetime(project) {}
+    }
 }

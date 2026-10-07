@@ -115,6 +115,9 @@ public enum DataHead {
     public static let maxRecordBytes = 1 << 20
     /// A page stops early past this many bytes, so 1,000 huge records cannot fill memory.
     public static let maxPageBytes = 64 << 20
+    /// A page reads at most about this much. A record still going at that point (a multi-GB file with no
+    /// line breaks) ends there, and the next page goes on from the same place on the same line.
+    public static let maxScanBytes = 128 << 20
     static let chunkSize = 256 << 10
     /// How much of the start is looked at for a BOM, binary content and the CSV separator.
     static let headLength = 64 << 10
@@ -142,13 +145,18 @@ public enum DataHead {
             }
             try handle.seek(toOffset: position.offset)
             var scanner = RecordScanner(kind: kind, delimiter: separator ?? defaultDelimiter(for: path), start: position, limit: limit)
+            var scanned = 0
             while !scanner.isFull {
-                let chunk = try handle.read(upToCount: chunkSize) ?? Data()
-                if chunk.isEmpty {
-                    scanner.finish()
-                    break
+                // Each read is an autoreleased buffer: drain them as we go, or a file with no line
+                // breaks keeps every chunk it read in memory until the page returns.
+                let count = try autoreleasepool { () throws -> Int in
+                    let chunk = try handle.read(upToCount: chunkSize) ?? Data()
+                    if chunk.isEmpty { scanner.finish() } else { scanner.feed(chunk) }
+                    return chunk.count
                 }
-                scanner.feed(chunk)
+                if count == 0 { break }
+                scanned += count
+                if scanned >= maxScanBytes, !scanner.isFull { scanner.stop() }
             }
             let end = scanner.position
             return DataPage(records: scanner.records, delimiter: kind == .delimited ? separator : nil,
@@ -453,6 +461,8 @@ struct RecordScanner {
     private var carry: [UInt8] = []
     private var truncated = false
     private var pageBytes = 0
+    /// The page ended early: it read as much as one page may.
+    private var stopped = false
 
     // CSV and TSV
     private var fields: [String] = []
@@ -478,7 +488,7 @@ struct RecordScanner {
         recordLine = start.line
     }
 
-    var isFull: Bool { records.count >= limit || pageBytes >= DataHead.maxPageBytes }
+    var isFull: Bool { stopped || records.count >= limit || pageBytes >= DataHead.maxPageBytes }
 
     mutating func feed(_ chunk: Data) {
         chunk.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
@@ -509,6 +519,19 @@ struct RecordScanner {
         emit(next: offset)
     }
 
+    /// Ends the page where the reading is. A record already cut at maxRecordBytes ends here too (its
+    /// line goes on in the next page, under the same line number); one still being read is left for the
+    /// next page, which starts where it starts.
+    mutating func stop() {
+        stopped = true
+        if kind != .delimited {
+            if truncated { endLine(next: offset, lineEnds: false) }
+        } else if skipping {
+            endField()
+            emit(next: offset)
+        }
+    }
+
     // MARK: lines
 
     private mutating func feedLines(_ bytes: UnsafeBufferPointer<UInt8>) {
@@ -527,9 +550,9 @@ struct RecordScanner {
         }
     }
 
-    private mutating func endLine(next: UInt64) {
+    private mutating func endLine(next: UInt64, lineEnds: Bool = true) {
         let start = line
-        line += 1
+        if lineEnds { line += 1 }
         if !truncated, carry.last == 0x0D { carry.removeLast() }
         let blank = kind == .jsonLines && carry.allSatisfy { $0 == 0x20 || $0 == 0x09 || $0 == 0x0D }
         if !blank {
