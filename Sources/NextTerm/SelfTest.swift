@@ -638,20 +638,40 @@ enum SelfTest {
         try? FileManager.default.removeItem(at: dir)
     }
 
+    /// A stand-in Next Term.app with only its `nxtrm` script: the script's path.
+    private static func fakeApp(_ app: String) -> String {
+        let script = app + "/Contents/Resources/bin/nxtrm"
+        try? FileManager.default.createDirectory(atPath: (script as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: script, contents: Data("#!/bin/sh\n".utf8), attributes: [.posixPermissions: 0o755])
+        return script
+    }
+
     /// `nxtrm` for other terminals, on real folders: the first command folder on PATH that is writable
     /// takes the link, which is kept, repointed when the app moves, and never put over someone else's.
     private static func commandLineLinkChecks() {
         let fm = FileManager.default
         let home = (canonicalPath(NSTemporaryDirectory()) as NSString).appendingPathComponent("nt-nxtrm-\(getpid())")
         let local = home + "/.local/bin", own = home + "/bin", tools = home + "/tools"
+        let locked = home + "/locked", gone = home + "/gone"
         defer {
-            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: own)
+            for folder in [own, locked, gone] { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder) }
             try? fm.removeItem(atPath: home)
         }
-        for folder in [local, own, tools] { try? fm.createDirectory(atPath: folder, withIntermediateDirectories: true) }
-        try? fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: own) // needs a password, as a stock /usr/local/bin does
-        let script = home + "/Next Term.app/Contents/Resources/bin/nxtrm"
+        for folder in [local, own, tools, locked, gone] { try? fm.createDirectory(atPath: folder, withIntermediateDirectories: true) }
+        let script = fakeApp(home + "/Next Term.app")
+        let moved = fakeApp(home + "/Moved/Next Term.app")
+        // Links made with a password, as in a stock /usr/local/bin: to the first copy, and to one deleted since.
+        try? fm.createSymbolicLink(atPath: locked + "/nxtrm", withDestinationPath: script)
+        try? fm.createSymbolicLink(atPath: gone + "/nxtrm", withDestinationPath: home + "/Gone/Next Term.app/Contents/Resources/bin/nxtrm")
+        for folder in [own, locked, gone] { try? fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder) } // need a password
         let path = [own, tools, local, "/usr/bin", "/bin"]
+
+        let behind = CommandLineTool.plan(for: moved, path: [locked, local, "/usr/bin"], home: home)
+        check(behind == .unavailable, "nxtrm: no link goes behind one to another copy, which the shell would still run", "\(behind)")
+        let ahead = CommandLineTool.plan(for: moved, path: [local, locked, "/usr/bin"], home: home)
+        check(ahead == .link(local + "/nxtrm"), "nxtrm: a writable folder ahead of a link to another copy takes it", "\(ahead)")
+        let past = CommandLineTool.plan(for: moved, path: [gone, local, "/usr/bin"], home: home)
+        check(past == .link(local + "/nxtrm"), "nxtrm: a link to a copy that is gone is passed over, as the shell does", "\(past)")
 
         let first = CommandLineTool.plan(for: script, path: path, home: home)
         check(first == .link(local + "/nxtrm"), "nxtrm: the first writable command folder on PATH takes the link", "\(first)")
@@ -661,7 +681,6 @@ enum SelfTest {
         let again = CommandLineTool.plan(for: script, path: path, home: home)
         check(again == .linked(local + "/nxtrm"), "nxtrm: the next launch keeps it", "\(again)")
 
-        let moved = home + "/Moved/Next Term.app/Contents/Resources/bin/nxtrm"
         let repoint = CommandLineTool.plan(for: moved, path: path, home: home)
         let repointed = CommandLineTool.link(local + "/nxtrm", to: moved)
         let movedTarget = try? fm.destinationOfSymbolicLink(atPath: local + "/nxtrm")

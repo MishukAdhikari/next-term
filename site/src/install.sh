@@ -225,8 +225,9 @@ PROCESSES
 
     # nxtrm for other terminals (Next Term's own tabs always have it), the way the app links it at launch.
     # PATH is walked as the shell walks it, and its first nxtrm decides: a link to this copy stays, Next
-    # Term's link to another copy is repointed where it is, anyone else's is left alone. With none, the
-    # first folder meant for commands that is writable without sudo gets the link.
+    # Term's link to another copy is repointed where it is (or, needing sudo, only a folder ahead of it
+    # will do), anyone else's is left alone. With none, the first folder meant for commands that is
+    # writable without sudo gets the link.
     nt_link_command() {
         local script="${destination}/Contents/Resources/bin/nxtrm"
         [ -x "${script}" ] || return 0
@@ -246,7 +247,12 @@ PROCESSES
                 fi
                 case "${target}" in
                     */Contents/Resources/bin/nxtrm)
-                        [ -w "${folder}" ] || continue # needs sudo: passed over
+                        if ! [ -w "${folder}" ]; then
+                            [ -n "${free}" ] && break # a folder ahead of it on PATH takes the link
+                            [ -e "${link}" ] || continue # to a copy that is gone: the shell passes over it too
+                            say "${link} opens another copy of Next Term, and changing it needs your password: Next Term offers to when it opens."
+                            return 0
+                        fi
                         if /bin/ln -sfh "${script}" "${link}"; then
                             say "Pointed ${link} at this copy: nxtrm opens Next Term from any terminal."
                         else

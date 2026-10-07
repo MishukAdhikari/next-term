@@ -110,8 +110,10 @@ enum CommandLineTool {
     }
 
     static func entry(at path: String) -> CommandLineLink.Entry {
-        if let target = try? FileManager.default.destinationOfSymbolicLink(atPath: path) { return .link(target) }
-        // Not following links: a link pointing at nothing is still there.
+        if let target = try? FileManager.default.destinationOfSymbolicLink(atPath: path) {
+            // fileExists follows the link.
+            return FileManager.default.fileExists(atPath: path) ? .link(target) : .brokenLink(target)
+        }
         return (try? FileManager.default.attributesOfItem(atPath: path)) == nil ? .nothing : .file
     }
 
@@ -127,7 +129,7 @@ enum CommandLineTool {
         switch entry(at: path) {
         case .file:
             return false
-        case .link(let target):
+        case .link(let target), .brokenLink(let target):
             if target == script { return true }
             guard CommandLineLink.isOurs(target) else { return false }
             try? FileManager.default.removeItem(atPath: path)

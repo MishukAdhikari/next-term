@@ -9,6 +9,8 @@ public enum CommandLineLink {
         case nothing
         /// A symbolic link, and where it points.
         case link(String)
+        /// A symbolic link to nothing, which the shell passes over, and where it points.
+        case brokenLink(String)
         /// A file or folder of its own.
         case file
     }
@@ -52,9 +54,10 @@ public enum CommandLineLink {
     }
 
     /// Walks PATH in order, as the shell does. The first `nxtrm` there decides: this app's link (done),
-    /// Next Term's link to another copy (repointed, when its folder is writable; else passed over), or
-    /// anyone else's (left alone, and not shadowed by one of ours). With none, the first command folder
-    /// that `isWritable` takes it.
+    /// Next Term's link to another copy (repointed when its folder is writable; else only a folder ahead of
+    /// it on PATH will do, or the password route), or anyone else's (left alone, and not shadowed by one of
+    /// ours). Next Term's link to a copy that is gone is passed over, as the shell passes over it, unless it
+    /// can be repointed. With none, the first command folder that `isWritable` takes it.
     public static func plan(path: [String], home: String, script: String,
                             isWritable: (String) -> Bool, entry: (String) -> Entry) -> Plan {
         let allowed = Set(commandFolders(home: home))
@@ -67,8 +70,12 @@ public enum CommandLineLink {
             case .link(let target) where target == script:
                 return .linked(candidate)
             case .link(let target) where isOurs(target):
+                // The shell runs that copy from here: a link after it would never be reached.
                 if isWritable(folder) { return .link(candidate) }
-            case .link, .file:
+                return free.map { .link($0) } ?? .unavailable
+            case .brokenLink(let target) where isOurs(target):
+                if isWritable(folder) { return .link(candidate) }
+            case .link, .brokenLink, .file:
                 return .taken(candidate)
             case .nothing:
                 if free == nil, allowed.contains(folder), isWritable(folder) { free = candidate }

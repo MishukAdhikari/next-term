@@ -63,10 +63,24 @@ import Testing
         let writable: Set = ["/Users/ada/.local/bin", "/opt/homebrew/bin"]
         // Repointed where it is, not joined by a second link earlier on PATH.
         #expect(plan(path, writable: writable, entries: ["/opt/homebrew/bin/nxtrm": old]) == .link("/opt/homebrew/bin/nxtrm"))
-        // In a folder that needs a password: passed over, and a writable folder gets one.
-        #expect(plan(stock + ["/opt/homebrew/bin"], writable: ["/opt/homebrew/bin"], entries: ["/usr/local/bin/nxtrm": old])
+        // In a folder that needs a password, the shell still runs that copy: a link after it would never be
+        // reached, so only a folder ahead of it, or the password route, will do.
+        #expect(plan(stock + ["/opt/homebrew/bin"], writable: ["/opt/homebrew/bin"], entries: ["/usr/local/bin/nxtrm": old]) == .unavailable)
+        #expect(plan(["/opt/homebrew/bin"] + stock, writable: ["/opt/homebrew/bin"], entries: ["/usr/local/bin/nxtrm": old])
                 == .link("/opt/homebrew/bin/nxtrm"))
         #expect(plan(stock, entries: ["/usr/local/bin/nxtrm": old]) == .unavailable)
+    }
+
+    @Test func aLinkToACopyThatIsGoneIsPassedOverUnlessItCanBeRepointed() {
+        let gone = CommandLineLink.Entry.brokenLink("/Users/ada/Downloads/Next Term.app/Contents/Resources/bin/nxtrm")
+        // The shell passes over a link to nothing, so one later on PATH is reached.
+        #expect(plan(stock + ["/opt/homebrew/bin"], writable: ["/opt/homebrew/bin"], entries: ["/usr/local/bin/nxtrm": gone])
+                == .link("/opt/homebrew/bin/nxtrm"))
+        #expect(plan(stock, entries: ["/usr/local/bin/nxtrm": gone]) == .unavailable)
+        // Writable: repointed where it is.
+        let path = ["/Users/ada/.local/bin", "/opt/homebrew/bin"] + stock
+        #expect(plan(path, writable: ["/Users/ada/.local/bin", "/opt/homebrew/bin"], entries: ["/opt/homebrew/bin/nxtrm": gone])
+                == .link("/opt/homebrew/bin/nxtrm"))
     }
 
     @Test func someoneElsesNxtrmIsNeverTouchedOrShadowed() {
@@ -74,6 +88,7 @@ import Testing
         let writable: Set = ["/Users/ada/.local/bin", "/opt/homebrew/bin"]
         #expect(plan(path, writable: writable, entries: ["/opt/homebrew/bin/nxtrm": .file]) == .taken("/opt/homebrew/bin/nxtrm"))
         #expect(plan(path, writable: writable, entries: ["/Users/ada/.local/bin/nxtrm": .link("/opt/tools/nxtrm")]) == .taken("/Users/ada/.local/bin/nxtrm"))
+        #expect(plan(path, writable: writable, entries: ["/Users/ada/.local/bin/nxtrm": .brokenLink("/opt/tools/nxtrm")]) == .taken("/Users/ada/.local/bin/nxtrm"))
         // In a folder that is not a command folder, still first on PATH.
         #expect(plan(["/Users/ada/.cargo/bin"] + path, writable: writable, entries: ["/Users/ada/.cargo/bin/nxtrm": .file]) == .taken("/Users/ada/.cargo/bin/nxtrm"))
         // Ours first on PATH wins over theirs later.
