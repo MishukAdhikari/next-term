@@ -148,6 +148,11 @@ import Testing
         #expect(CommitLog.page(CommitQuery(scope: .ref("refs/heads/feat")), in: work, git: git)?.map(\.sha) == [rename, one])
         #expect(CommitLog.page(CommitQuery(scope: .ref("refs/tags/v1")), in: work, git: git)?.map(\.sha) == [one])
         #expect(CommitLog.page(CommitQuery(since: "2099-01-01"), in: work, git: git) == [])
+        // Dates git does not read, and patterns it cannot compile, are known before asking.
+        #expect(["2 weeks ago", "2025-01-31", "yesterday", "now", "Today"].allSatisfy { CommitLog.isDate($0, in: work, git: git) })
+        #expect(!CommitLog.isDate("not a date at all", in: work, git: git) && !CommitLog.isDate("garbage", in: work, git: git))
+        #expect(CommitQuery(text: "fix(", regex: true).problem != nil && CommitQuery(text: "[a", regex: true).problem != nil)
+        #expect(CommitQuery(text: "fix(", regex: false).problem == nil && CommitQuery(text: "^fix (a|b)$", regex: true).problem == nil)
         #expect(CommitLog.page(CommitQuery(scope: .ref("refs/heads/missing")), in: work, git: git) == nil)
         // Limited to a path, parents are the nearest commits that are listed.
         let onX = try #require(CommitLog.page(CommitQuery(paths: ["x.txt"]), in: work, git: git))

@@ -130,6 +130,17 @@ public struct CommitQuery: Equatable, Sendable {
     /// (GitRunner reads everything else in the C locale).
     var environment: [String: String] { isConnected ? [:] : ["LC_ALL": "en_US.UTF-8"] }
 
+    /// Why git could not run the query, known before asking it: a regular expression that does not
+    /// compile (git reads it with the same regcomp).
+    public var problem: String? {
+        let text = self.text.trimmingCharacters(in: .whitespaces)
+        guard regex, !text.isEmpty else { return nil }
+        var compiled = regex_t()
+        let result = regcomp(&compiled, text, REG_EXTENDED | REG_ICASE | REG_NOSUB)
+        if result == 0 { regfree(&compiled) }
+        return result == 0 ? nil : "This is not a valid regular expression. Turn off .* to search for the text as it is."
+    }
+
     /// The text, when it could be the start of a commit id (6 to 40 hex digits).
     public var hashPrefix: String? {
         let trimmed = text.trimmingCharacters(in: .whitespaces).lowercased()
@@ -270,6 +281,17 @@ public enum CommitLog {
             return hasHead || query.scope != .all ? nil : []
         }
         return parse(data)
+    }
+
+    /// Whether git reads `text` as a date. Words it does not know it takes for the moment it runs, so a
+    /// date that comes out as now is not one, unless it says so.
+    public static func isDate(_ text: String, in root: String, git: String, now: Date = Date()) -> Bool {
+        let words = text.trimmingCharacters(in: .whitespaces).lowercased()
+        if words.isEmpty || words == "now" || words == "today" { return true }
+        guard let data = GitRunner.run(git, ["-C", root, "rev-parse", "--since=" + words], timeout: 5) else { return false }
+        let output = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard output.hasPrefix("--max-age="), let stamp = Double(output.dropFirst("--max-age=".count)) else { return false }
+        return abs(stamp - now.timeIntervalSince1970) >= 2
     }
 
     /// The full id of the commit `revision` names, or nil.

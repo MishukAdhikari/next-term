@@ -112,6 +112,11 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             failure = "Git is not installed."
             return updateStatus()
         }
+        // A pattern git cannot read: say so, rather than that git failed.
+        if let problem = query.problem {
+            failure = problem
+            return updateStatus()
+        }
         isLoading = true
         updateStatus()
         let token = generation, skip = commits.count, query = self.query, root = self.root
@@ -376,9 +381,14 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         for (title, isSince) in [("Since…", true), ("Until…", false)] {
             menu.addBlock(title) { [weak self] in
                 guard let self else { return }
+                let root = self.root
+                let check = { (text: String) -> String? in
+                    guard let git = Self.git, !CommitLog.isDate(text, in: root, git: git) else { return nil }
+                    return "Git does not read this as a date."
+                }
                 GitPrompt.text(isSince ? "Commits Since" : "Commits Until", info: "A date such as 2025-01-31, or words git understands, such as “2 weeks ago” or “yesterday”.",
                                initial: (isSince ? self.query.since : self.query.until) ?? "", placeholder: "2025-01-31", button: "Show", over: self.window,
-                               check: { _ in nil }) { text in
+                               check: check) { text in
                     guard let text else { return }
                     self.apply { isSince ? ($0.since = text.isEmpty ? nil : text) : ($0.until = text.isEmpty ? nil : text) }
                 }
