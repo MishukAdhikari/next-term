@@ -69,7 +69,9 @@ public struct ReleaseInfo: Equatable, Sendable {
     }
 
     /// Parses GitHub's `GET /repos/{owner}/{repo}/releases/latest` JSON. Drafts and pre-releases are
-    /// ignored (the endpoint never returns them, but a mirror might). Downloads are accepted only over
+    /// ignored (the endpoint never returns them, but a mirror might), and so is a version with a
+    /// pre-release part (`v1.0.0-rc1`) not marked as one: GitHub decides which release is latest, the
+    /// release key does not, so install.sh refuses such a "latest" too. Downloads are accepted only over
     /// https from GitHub, unless `allowingFileURLs` (a local test feed).
     public static func parse(_ data: Data, allowingFileURLs: Bool = false) -> ReleaseInfo? {
         (try? JSONSerialization.jsonObject(with: data) as? [String: Any]).flatMap { parse(json: $0, allowingFileURLs: allowingFileURLs) }
@@ -90,7 +92,7 @@ public struct ReleaseInfo: Equatable, Sendable {
     }
 
     private static func parse(json: [String: Any], allowingFileURLs: Bool) -> ReleaseInfo? {
-        guard let tag = json["tag_name"] as? String, let version = AppVersion(tag),
+        guard let tag = json["tag_name"] as? String, let version = AppVersion(tag), version.preRelease == nil,
               let page = (json["html_url"] as? String).flatMap(URL.init(string:)),
               json["draft"] as? Bool != true, json["prerelease"] as? Bool != true else { return nil }
         let assets = (json["assets"] as? [[String: Any]]) ?? []
@@ -114,14 +116,14 @@ public struct ReleaseInfo: Equatable, Sendable {
     /// When the API refuses (60 requests an hour per address, shared behind an office router), the
     /// releases page still redirects `…/releases/latest` to `…/releases/tag/v1.2.3`; the assets are
     /// always `NextTerm-1.2.3.dmg`, its `.sha256` and `.sha256.sig` (scripts/build-dmg.sh, CI and
-    /// scripts/sign-release.sh name them so).
+    /// scripts/sign-release.sh name them so). A pre-release's tag is not taken, as in `parse`.
     public static func fromLatestRedirect(_ finalURL: URL, repository: String) -> ReleaseInfo? {
         // Exactly /owner/repo/releases/tag/<tag>.
         let parts = finalURL.pathComponents.filter { $0 != "/" }
         let expected = repository.split(separator: "/").map(String.init)
         guard finalURL.scheme == "https", finalURL.host?.lowercased() == "github.com", expected.count == 2,
               parts.count == 5, parts[0].lowercased() == expected[0].lowercased(), parts[1].lowercased() == expected[1].lowercased(),
-              parts[2] == "releases", parts[3] == "tag", let version = AppVersion(parts[4]) else { return nil }
+              parts[2] == "releases", parts[3] == "tag", let version = AppVersion(parts[4]), version.preRelease == nil else { return nil }
         let tag = parts[4]
         let base = "https://github.com/\(repository)/releases/download/\(tag)/" + dmgName(tag: tag)
         return ReleaseInfo(version: version, tag: tag, pageURL: finalURL, dmgURL: URL(string: base),

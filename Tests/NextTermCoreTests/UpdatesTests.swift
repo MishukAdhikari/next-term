@@ -75,4 +75,14 @@ import Testing
         #expect(ReleaseInfo.fromLatestRedirect(URL(string: "https://github.com/xMishukAdhikari/next-term/releases/tag/v9.0.0")!, repository: "MishukAdhikari/next-term") == nil)
         #expect(ReleaseInfo.fromLatestRedirect(URL(string: "https://evil.example/MishukAdhikari/next-term/releases/tag/v9.0.0")!, repository: "MishukAdhikari/next-term") == nil)
     }
+
+    /// GitHub decides which release is latest, the release key does not: a pre-release made latest is
+    /// not installed, as install.sh refuses it unless its version is asked for.
+    @Test func neverTakesAPreReleaseAsLatest() {
+        let page = URL(string: "https://github.com/MishukAdhikari/next-term/releases/tag/v9.0.0-rc1")!
+        #expect(ReleaseInfo.fromLatestRedirect(page, repository: "MishukAdhikari/next-term") == nil)
+        let json = #"{"tag_name":"v9.0.0-rc1","html_url":"\#(page.absoluteString)","prerelease":false,"assets":[]}"#
+        #expect(ReleaseInfo.parse(Data(json.utf8)) == nil)
+        #expect(ReleaseInfo.parseList(Data("[\(json)]".utf8)).isEmpty)
+    }
 }
