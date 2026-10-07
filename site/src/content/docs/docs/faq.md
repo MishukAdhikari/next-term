@@ -46,10 +46,6 @@ Yes. Run `codex` in a tab: its tab shows when it is working, done or asking for 
 
 No. The agent links listen only on your Mac (`127.0.0.1`), with a fresh secret token each launch, and never share `.env` files or keys. The only request Next Term makes on its own is the daily update check to GitHub, which you can turn off. Your agents talk to their own providers as they always do. See [Security and privacy](/docs/security-and-privacy/).
 
-## Is Next Term an alternative to Warp?
-
-For agent work on the Mac, yes. Both are open source now: Warp’s client under AGPL since April 2026, Next Term under MIT. Next Term is the smaller, native one. It is written in Swift and AppKit, needs no account, and has no AI of its own: it runs the agent CLIs you choose, shows each one’s status on its tab, and adds a code editor, side-by-side diffs, a git-aware sidebar and an MCP server through which one agent runs the others. Choose Warp for its built-in agent, cloud agents, team features, or Linux and Windows. See [Next Term vs Warp](/compare/warp/).
-
 ## Can one agent control the others?
 
 Yes. Next Term is an MCP server, set up for you in Claude Code, Codex, Gemini CLI, Qwen Code, Cursor Agent, opencode, Copilot CLI, Amp, Junie and Command Code. An orchestrator agent can list every project and tab with each agent’s state, start agents in new tabs, send them prompts, wait for them, read their screens and answer their questions. It works only on your Mac, through a private socket with no network port, and **Settings** turns it off. See [Orchestrate agents (MCP)](/docs/orchestration/).

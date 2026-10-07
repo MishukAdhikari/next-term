@@ -46,7 +46,7 @@ So: Search Console for Google, **Bing Webmaster Tools plus IndexNow** for Bing (
    - **Product Hunt**: optional; it brings a link and some traffic more than search value.
    - **Homebrew cask**: not yet. homebrew/cask requires apps to pass Gatekeeper, and releases are not notarized. Revisit after notarization (or offer a tap of your own).
 7. **Brave Search** (Claude’s web search): no console exists. Once the site is linked from GitHub and elsewhere, check `site:next-term.mishuk.me` on search.brave.com; if it is missing after a few weeks, use [search.brave.com/submit-url](https://search.brave.com/submit-url).
-8. **Check every few weeks**: Search Console **Pages**, **Performance** and the **Generative AI performance** report (AI Overviews and AI Mode), Bing’s **AI Performance**, and ask ChatGPT, Claude, Perplexity, Gemini and Copilot questions such as “terminal that shows which Claude Code agent is waiting on me”, “open-source Warp alternative for macOS”, “MCP server to orchestrate Claude Code and Codex”. Note whether Next Term is named and described correctly.
+8. **Check every few weeks**: Search Console **Pages**, **Performance** and the **Generative AI performance** report (AI Overviews and AI Mode), Bing’s **AI Performance**, and ask ChatGPT, Claude, Perplexity, Gemini and Copilot questions such as “terminal that shows which Claude Code agent is waiting on me”, “open-source agentic terminal for macOS”, “MCP server to orchestrate Claude Code and Codex”. Note whether Next Term is named and described correctly.
 
 ### Decisions for the owner
 

@@ -1,12 +1,12 @@
 ---
 title: Next Term compared
-description: "How Next Term compares with VS Code, JetBrains IDEs, Cursor, Devin Desktop, Zed, Warp, iTerm2 and Ghostty for running AI coding agents on a Mac."
+description: "How Next Term compares with VS Code, JetBrains IDEs, Cursor, Devin Desktop, Zed, iTerm2 and Ghostty for running AI coding agents on a Mac."
 head:
   - tag: title
     content: Next Term compared with IDEs, editors and terminals
 ---
 
-Next Term is a native macOS terminal and code editor built for one job: running several AI coding agents side by side and showing which one is working, done or waiting on you. It is not a full IDE, so most people keep the IDE or editor they already use, for language intelligence, refactoring and debugging, and add Next Term for their agents. Compared with AI editors such as Cursor, Devin Desktop and Zed, Next Term brings no AI of its own: it runs the agent command-line tools you already have, under your own subscriptions. Compared with terminals such as Warp, iTerm2 and Ghostty, it adds status for each agent read from its own screen, an editor with side-by-side diffs, and an MCP server through which one agent runs the others. Every page below also says plainly what the other tool does better.
+Next Term is a native macOS terminal and code editor built for one job: running several AI coding agents side by side and showing which one is working, done or waiting on you. It is not a full IDE, so most people keep the IDE or editor they already use, for language intelligence, refactoring and debugging, and add Next Term for their agents. Compared with AI editors such as Cursor, Devin Desktop and Zed, Next Term brings no AI of its own: it runs the agent command-line tools you already have, under your own subscriptions. Compared with terminals such as iTerm2 and Ghostty, it adds status for each agent read from its own screen, an editor with side-by-side diffs, and an MCP server through which one agent runs the others. Every page below also says plainly what the other tool does better.
 
 ## Every comparison
 
@@ -19,7 +19,6 @@ Next Term is a native macOS terminal and code editor built for one job: running 
 | [Cursor](/compare/cursor/) | An AI editor on the VS Code codebase | Its own agents and models, cloud agents, Windows and Linux | Cursor’s agent can drive Next Term’s tabs over MCP |
 | [Devin Desktop](/compare/devin-desktop/) | Cognition’s AI editor, formerly Windsurf | Local and cloud agents on one status board | Its agent can drive Next Term over MCP |
 | [Zed](/compare/zed/) | An open-source editor with its own agent and Terminal Threads | Language servers, a debugger, collaboration, Linux and Windows | Zed for code; Zed’s agent can drive Next Term over MCP |
-| [Warp](/compare/warp/) | An open-source agentic terminal | Its own agent, cloud agents, team features, Linux and Windows | Usually one or the other; both run the same agent CLIs |
 | [iTerm2](/compare/iterm2/) | A long-standing macOS terminal | tmux integration, triggers, a Python API, profiles | iTerm2 for ssh and tmux, Next Term for agent projects |
 | [Ghostty](/compare/ghostty/) | A fast, GPU-rendered terminal for macOS and Linux | Speed, themes, Linux | Ghostty as the everyday terminal, Next Term for agents |
 
@@ -54,7 +53,7 @@ No. It runs the agent command-line tools you install, such as Claude Code, Codex
 
 ### Is there a Windows or Linux version?
 
-No. Next Term is built with AppKit, which is macOS-only. If you need the same tool on other platforms, VS Code, the JetBrains IDEs, Cursor, Devin Desktop, Zed and Warp run on Windows and Linux, and Ghostty on Linux.
+No. Next Term is built with AppKit, which is macOS-only. If you need the same tool on other platforms, VS Code, the JetBrains IDEs, Cursor, Devin Desktop and Zed run on Windows and Linux, and Ghostty on Linux.
 
 ## Read more
 
