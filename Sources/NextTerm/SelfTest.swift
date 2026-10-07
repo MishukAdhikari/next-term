@@ -850,21 +850,26 @@ enum SelfTest {
         check(header.syncText == "↓152 ↑3", "both ways shows both counts", header.syncText)
         header.onSync = onSync
         // Narrow, with the window buttons beside the branch: the name stays whole, then the line counts give
-        // way before “Pull” does, and only a sidebar too narrow for the word without them shows “↓152”.
+        // way before “Pull” does, then the branch glyph, and only a sidebar too narrow for the word without
+        // them shows “↓152”.
         fake.ahead = 0
         header.show(fake)
         let inset = header.inset
         header.inset = 70
+        func clear() -> Bool { !header.syncButton.frame.intersects(header.hideButton.frame) && header.syncButton.frame.minX > 0 }
+        func state() -> String {
+            "\(header.syncText), counts shown \(header.summaryIsShown), glyph shown \(header.branchGlyphIsShown), \(header.syncButton.frame)"
+        }
         layOut(width: 300)
-        let clear = !header.syncButton.frame.intersects(header.hideButton.frame) && header.syncButton.frame.minX > 0
-        check(header.syncText == "Pull 152" && !header.summaryIsShown && !header.titleIsTruncated && clear,
-              "in a narrow sidebar the line counts give way first: “Pull 152” keeps its word and the branch name stays whole",
-              "\(header.syncText), counts shown \(header.summaryIsShown), \(header.syncButton.frame)")
+        check(header.syncText == "Pull 152" && !header.summaryIsShown && header.branchGlyphIsShown && !header.titleIsTruncated && clear(),
+              "in a narrow sidebar the line counts give way first: “Pull 152” keeps its word and the branch name stays whole", state())
         layOut(width: ProjectSidebarView.defaultWidth)
-        let stillClear = !header.syncButton.frame.intersects(header.hideButton.frame) && header.syncButton.frame.minX > 0
-        check(header.syncText == "↓152" && !header.summaryIsShown && !header.titleIsTruncated && stillClear,
-              "narrower still (the default width), it shortens to “↓152” and the branch name stays whole",
-              "\(header.syncText), counts shown \(header.summaryIsShown), \(header.syncButton.frame)")
+        let named = header.branchArea.contains(NSPoint(x: 70 + 4 + 2, y: header.bounds.midY))
+        check(header.syncText == "Pull 152" && !header.summaryIsShown && !header.branchGlyphIsShown && !header.titleIsTruncated && clear() && named,
+              "at the default width the branch glyph gives way too: still “Pull 152”, and a click on the whole name opens the branches", state())
+        layOut(width: 266)
+        check(header.syncText == "↓152" && !header.summaryIsShown && !header.branchGlyphIsShown && !header.titleIsTruncated && clear(),
+              "narrower still, it shortens to “↓152” and the branch name stays whole", state())
         header.inset = inset
         // A fetch running here: the sync arrow spins, and a click does nothing until it ends.
         fake.behind = 0

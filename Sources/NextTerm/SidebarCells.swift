@@ -103,8 +103,15 @@ final class SidebarHeaderView: NSView {
 
     /// The branch's icon, name and chevron, with a little room around them.
     var branchArea: NSRect {
-        guard !branchIcon.isHidden, onBranchClick != nil else { return .zero }
-        return branchIcon.frame.union(title.frame).union(chevron.frame).insetBy(dx: -5, dy: -4)
+        guard snapshot != nil, onBranchClick != nil else { return .zero }
+        let name = title.frame.union(chevron.frame)
+        return (branchIcon.isHidden ? name : branchIcon.frame.union(name)).insetBy(dx: -5, dy: -4)
+    }
+
+    /// Whether the branch glyph before the name is shown (for the self-test).
+    var branchGlyphIsShown: Bool {
+        layoutSubtreeIfNeeded()
+        return !branchIcon.isHidden
     }
 
     override func resetCursorRects() {
@@ -261,15 +268,19 @@ final class SidebarHeaderView: NSView {
         moreButton.frame = NSRect(x: bounds.width - 30, y: (h - 24) / 2, width: 26, height: 24)
         hideButton.frame = NSRect(x: bounds.width - 56, y: (h - 24) / 2, width: 26, height: 24)
         // When room is short, the branch name keeps its own first, then the line counts give way (they are
-        // in the tooltip, and on the tree's rows), and only then does the sync button lose its word ("↓152").
-        let nameStart = inset + 4 + (branchIcon.isHidden ? 0 : 18)
+        // in the tooltip, and on the tree's rows), then the branch glyph (the name and its chevron say it is
+        // a branch), and only then does the sync button lose its word ("↓152").
         let chevronWidth: CGFloat = chevron.isHidden ? 0 : 12
         // The cell's own size, not the text's: it needs a few points of margin, or even "dev" truncates to "…".
         let nameNeeded = ceil(title.cell?.cellSize.width ?? title.intrinsicContentSize.width + 4) + 1
+        var right = bounds.width - 60
+        let spareWithoutGlyph = right - (inset + 4) - nameNeeded - chevronWidth - 6 - 4
+        let glyphGoes = !syncButton.isHidden && syncButton.width(compact: false) > spareWithoutGlyph - 18
+        branchIcon.isHidden = snapshot == nil || glyphGoes
+        let nameStart = inset + 4 + (branchIcon.isHidden ? 0 : 18)
         let nameKept = nameStart + min(nameNeeded, 64) + chevronWidth + 6
         // The text cell needs about 4 pt of its own margin beyond the text, or it truncates.
         let summaryText = summary.attributedStringValue.length > 0 ? ceil(summary.intrinsicContentSize.width) + 6 : 0
-        var right = bounds.width - 60
         if !syncButton.isHidden {
             let spare = right - nameStart - nameNeeded - chevronWidth - 6 - 4
             syncButton.compact = syncButton.width(compact: false) > spare
