@@ -223,6 +223,34 @@ public enum DataHead {
         return !head.contains(0)
     }
 
+    /// Stricter, for a file whose name does not say it is data: also UTF-8 through its first 64 KB. Some
+    /// PDFs have no NUL byte early on, but none is UTF-8 that far.
+    public static func isUTF8Text(_ path: String) -> Bool {
+        guard isText(path), let handle = FileHandle(forReadingAtPath: path) else { return false }
+        defer { try? handle.close() }
+        guard let head = try? handle.read(upToCount: headLength) else { return false }
+        return isUTF8(head)
+    }
+
+    /// Whether the bytes are UTF-8, allowing a character cut off at the end (the read stopped inside it).
+    static func isUTF8(_ bytes: Data) -> Bool {
+        let all = Array(bytes)
+        var end = all.count
+        // Back up over the last character when it is short of the bytes its first byte says it has.
+        var i = end - 1
+        while i >= 0, end - i <= 4, all[i] & 0xC0 == 0x80 { i -= 1 }
+        if i >= 0, end - i <= 4, end - i < sequenceLength(all[i]) { end = i }
+        let failed = transcode(all[..<end].makeIterator(), from: UTF8.self, to: UTF32.self, stoppingOnError: true) { _ in }
+        return !failed
+    }
+
+    /// How many bytes a UTF-8 character starting with this byte has.
+    private static func sequenceLength(_ lead: UInt8) -> Int {
+        if lead >= 0xF0 { return 4 }
+        if lead >= 0xE0 { return 3 }
+        return lead >= 0xC0 ? 2 : 1
+    }
+
     // MARK: counting
 
     /// Counts a file's lines, 4 MB at a time, without keeping any of it. Calls `progress` with the bytes

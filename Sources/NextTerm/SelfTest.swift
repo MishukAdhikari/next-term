@@ -1101,6 +1101,23 @@ enum SelfTest {
         check(table.records[safe: 1]?.fields.first == "id", "from its new first row")
         area.close(table)
 
+        // UTF-16 with a BOM, as some spreadsheet exports write it: the head view does not read it, the editor does.
+        let wide = proj.appendingPathComponent("keywords.csv")
+        defer { try? fm.removeItem(at: wide) }
+        var sheet = "keyword\tvolume\n"
+        var units = sheet.utf16.count
+        while units * 2 < DataPane.threshold + 10_000 {
+            let row = "head view \(units)\t1000\n"
+            sheet += row
+            units += row.utf16.count
+        }
+        try? (Data([0xFF, 0xFE]) + (sheet.data(using: .utf16LittleEndian) ?? Data())).write(to: wide)
+        c.openFile(wide)
+        let sheetEditor = area.activeEditor
+        check(sheetEditor?.document.path == canonicalPath(wide.path) && area.activeData == nil,
+              "a 2 MB UTF-16 .csv opens in the editor, not the head view", area.activeName ?? "nothing")
+        if let sheetEditor { area.close(sheetEditor) }
+
         // A log still being written: its last line has no line break yet. Once the file grows, that line
         // is read again, whole.
         let growing = proj.appendingPathComponent("growing.jsonl")

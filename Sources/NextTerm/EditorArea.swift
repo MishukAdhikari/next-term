@@ -107,8 +107,8 @@ final class EditorArea: NSView, TabBarViewDelegate {
         } catch EditorDocument.OpenError.notText {
             return .notText
         } catch EditorDocument.OpenError.tooLarge {
-            // Its first rows instead of another app, when it is text.
-            if !asText, DataHead.isText(path) { return openData(path, focus: focus) }
+            // Its first rows instead of another app, when it is UTF-8 text (not a PDF with no NUL early on).
+            if !asText, DataHead.isUTF8Text(path) { return openData(path, focus: focus) }
             return .tooLarge
         } catch {
             return .failed

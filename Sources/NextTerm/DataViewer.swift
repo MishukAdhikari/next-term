@@ -742,9 +742,11 @@ extension DataPane {
     /// Below this the editor is better: it colours the file and opens it whole.
     static let threshold = 2 * 1024 * 1024
 
-    /// What opens here rather than in the editor: a data file over 2 MB.
+    /// What opens here rather than in the editor: a data file over 2 MB that the head view can read.
+    /// UTF-16 (some spreadsheet exports) goes to the editor, which reads it, or past its limit to its app.
     static func opens(_ path: String) -> Bool {
         guard extensions.contains((path as NSString).pathExtension.lowercased()), isRegularFile(path) else { return false }
-        return ((try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0) > threshold
+        let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+        return size > threshold && DataHead.isText(path)
     }
 }

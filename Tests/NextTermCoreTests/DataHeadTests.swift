@@ -144,6 +144,28 @@ import Testing
         #expect(throws: DataHeadError.utf16) { try DataHead.page(at: project.root + "/wide.tsv", kind: .delimited) }
         #expect(!DataHead.isText(project.root + "/blob.log") && DataHead.isText(project.root + "/app.log"))
         #expect(throws: DataHeadError.notAFile) { try DataHead.page(at: project.root, kind: .lines) }
+        #expect(!DataHead.isText(project.root + "/wide.tsv"))
+    }
+
+    /// A file over the editor's limit opens in the head view only when it is UTF-8: a PDF with no NUL
+    /// byte early on (some generators write none) goes to its app.
+    @Test func utf8TextOnly() throws {
+        let project = FixtureProject()
+        var pdf = Data("%PDF-1.4\n%".utf8) + Data([0x93, 0x8C, 0x8B, 0x9E]) + Data(" ReportLab Generated PDF document\n".utf8)
+        pdf += Data((0..<20_000).map { UInt8(1 + $0 % 255) })
+        project.write("paper.pdf", data: pdf)
+        #expect(DataHead.isText(project.root + "/paper.pdf") && !DataHead.isUTF8Text(project.root + "/paper.pdf"))
+
+        // UTF-8 whose 64 KB read stops inside a character.
+        var log = Data(repeating: 0x61, count: DataHead.headLength - 1) + Data("é and more\n".utf8)
+        log += Data(repeating: 0x62, count: 1000)
+        project.write("app.log", data: log)
+        #expect(DataHead.isUTF8Text(project.root + "/app.log"))
+        project.write("latin1.log", data: Data("caf".utf8) + Data([0xE9]) + Data(" au lait\n".utf8))
+        #expect(DataHead.isText(project.root + "/latin1.log") && !DataHead.isUTF8Text(project.root + "/latin1.log"))
+
+        #expect(DataHead.isUTF8(Data([0xE2, 0x82])) && DataHead.isUTF8(Data()) && DataHead.isUTF8(Data("€".utf8)))
+        #expect(!DataHead.isUTF8(Data([0xE2, 0x82, 0x41])) && !DataHead.isUTF8(Data([0x80])) && !DataHead.isUTF8(Data([0x80, 0x80, 0x80, 0x80, 0x80])))
     }
 
     /// A sparse matrix with thousands of columns keeps the first 1,000 fields of a row, not a String for
