@@ -52,8 +52,11 @@ Select lines on the new side (the right) and press <kbd>⌥⌘K</kbd> (**Edit �
 
 - **Staged:** the index isn’t the file on disk, so the reference says “(as staged)” and the selected lines are pasted after it.
 - **A past commit:** the reference says “(as of commit 4cc062d)”, with the selected lines pasted after it.
-- **A deleted file** is sent as “(deleted)”.
+- **Removed lines only:** select red lines on the old side and they are pasted after the reference, which says “(lines removed)”: the file no longer has them.
+- **A deleted file** is sent as “(deleted)”, with any lines you select pasted after it.
 - **An agent’s proposed edit:** nothing is sent. The agent is waiting for your answer in its terminal; accept or reject first.
+
+Lines pasted from two changes at once have a `⋯` line where the diff skips the unchanged lines between them. More than 200 lines (or 16 KB) are not pasted: the reference goes alone, and a selection of removed lines that large sends nothing.
 
 ## Safe while agents keep working
 
