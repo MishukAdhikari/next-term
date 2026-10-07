@@ -85,7 +85,7 @@ import Testing
         #expect(schedule.isPausedForPerson(repo))
         #expect(schedule.decision(for: repo, .timer, now: at(60), active: true) == .skip(.needsPerson))
         #expect(schedule.decision(for: repo, .popupOpened, now: at(60), active: true) == .skip(.needsPerson))
-        // A fetch in a terminal that succeeded (FETCH_HEAD is newer than the failure) resumes it.
+        // A fetch in a terminal that worked (a FETCH_HEAD with something in it, newer than the failure) resumes it.
         #expect(schedule.decision(for: repo, .timer, now: at(60), active: true, fetchedOnDisk: at(30)) == .fetch)
         #expect(schedule.decision(for: repo, .timer, now: at(60), active: true, fetchedOnDisk: at(-5)) == .skip(.needsPerson))
         // So does one started in Next Term.
@@ -236,6 +236,48 @@ import Testing
         sh(["update-ref", "refs/remotes/origin/main", appBefore], in: clone)
         sh(["fetch", "-q", "origin"], in: clone)
         #expect(sh(["rev-parse", "origin/main"], in: sub) != before, "a plain git fetch reaches the submodule's remote")
+    }
+
+    /// After git needed a person, a fetch in a terminal ends the pause only if it worked, in any work tree
+    /// of the repository: a failed one still writes FETCH_HEAD (empty), and a linked worktree's is its own.
+    @Test func onlyAFetchThatWorksInATerminalEndsThePause() throws {
+        guard let git = GitRunner.locateGit() else { return } // no git on this machine
+        let base = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path))
+            .appendingPathComponent("nt-bgfetch-pause-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: base) }
+        let main = base + "/main", linked = base + "/linked"
+        @discardableResult func sh(_ args: [String], in dir: String) -> Bool {
+            let config = ["-c", "user.name=T", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"]
+            return GitRunner.run(git, ["-C", dir] + config + args, timeout: 20) != nil
+        }
+        try FileManager.default.createDirectory(atPath: main, withIntermediateDirectories: true)
+        #expect(sh(["init", "-q", "--bare", base + "/remote.git"], in: base))
+        #expect(sh(["init", "-q"], in: main))
+        #expect(sh(["commit", "-q", "--allow-empty", "-m", "one"], in: main))
+        #expect(sh(["remote", "add", "origin", base + "/remote.git"], in: main))
+        #expect(sh(["push", "-q", "-u", "origin", "main"], in: main))
+        #expect(sh(["worktree", "add", "-q", "-b", "side", linked], in: main))
+
+        var schedule = FetchSchedule()
+        let paused = Date().addingTimeInterval(-1)
+        schedule.started(repo, at: paused)
+        schedule.finished(repo, at: paused, .needsPerson)
+        func decision() -> FetchSchedule.Decision {
+            schedule.decision(for: repo, .timer, now: Date().addingTimeInterval(3600), active: true,
+                              fetchedOnDisk: GitRunner.lastSuccessfulFetch(root: main))
+        }
+        #expect(decision() == .skip(.needsPerson))
+        // A fetch in a tab that fails: git writes FETCH_HEAD all the same, empty.
+        #expect(sh(["remote", "add", "gone", base + "/nowhere.git"], in: main))
+        #expect(!sh(["fetch", "gone"], in: main))
+        #expect(FileManager.default.fileExists(atPath: main + "/.git/FETCH_HEAD"))
+        #expect(decision() == .skip(.needsPerson))
+        // One that works, in the linked worktree, which has a FETCH_HEAD of its own.
+        #expect(sh(["fetch", "-q", "origin"], in: linked))
+        #expect(FileManager.default.fileExists(atPath: main + "/.git/worktrees/linked/FETCH_HEAD"))
+        #expect(decision() == .fetch)
+        #expect(GitRunner.lastSuccessfulFetch(root: linked) != nil)
+        #expect(GitRunner.lastSuccessfulFetch(root: linked) == GitRunner.lastSuccessfulFetch(root: main))
     }
 
     @Test func theRemotesLocalBranchesTrack() {

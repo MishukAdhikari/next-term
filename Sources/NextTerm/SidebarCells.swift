@@ -154,8 +154,9 @@ final class SidebarHeaderView: NSView {
         updateSyncButton()
     }
 
-    /// When the counts are from: FETCH_HEAD's date, or Next Term's own last fetch (a background fetch
-    /// leaves FETCH_HEAD alone), whichever is newer.
+    /// When the counts are from: the last fetch that worked in any work tree of the repository (its
+    /// FETCH_HEAD), or Next Term's own last fetch (a background fetch leaves FETCH_HEAD alone), whichever
+    /// is newer.
     private var lastFetch: Date? {
         let own = snapshot.flatMap { BackgroundFetcher.shared.lastFetch(at: $0.root) }
         return [snapshot?.lastFetch, own].compactMap { $0 }.max()

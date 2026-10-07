@@ -35,7 +35,8 @@ public struct GitSnapshot: Sendable {
     public var upstream: String?
     public var ahead = 0
     public var behind = 0
-    /// When the repository last fetched (FETCH_HEAD's date): ahead and behind are as of then.
+    /// When a fetch last worked in the repository (the newest FETCH_HEAD of its work trees): ahead and
+    /// behind are as of then.
     public var lastFetch: Date?
     public var files: [String: GitChange] = [:]
     public var fileStats: [String: LineStats] = [:]
@@ -267,15 +268,25 @@ public enum GitRunner {
         let numstat = base.flatMap { run(git, ["-C", root, "--no-optional-locks", "diff-index", "--numstat", "-z", "-M", $0, "--"], timeout: timeout) } ?? Data()
         snapshot = GitSnapshot.parse(root: root, status: status, numstat: numstat)
         snapshot.addUntrackedLines(countLines(of: snapshot.files.filter { $0.value == .untracked }.map(\.key), in: root))
-        if snapshot.upstream != nil { snapshot.lastFetch = lastFetch(root: root) }
+        if snapshot.upstream != nil { snapshot.lastFetch = lastSuccessfulFetch(root: root) }
         return snapshot
     }
 
-    /// When the repository at `root` last fetched: the date of FETCH_HEAD in its common git folder.
-    /// nil if it never has.
-    public static func lastFetch(root: String) -> Date? {
+    /// When a fetch last worked in the repository of the work tree at `root`, in any of its work trees:
+    /// the newest FETCH_HEAD among the common git folder's (the main work tree's) and each linked
+    /// worktree's own, in worktrees/<name>. Only one with something in it counts: a fetch that fails
+    /// still creates or empties FETCH_HEAD, and one that works writes a line for each ref it fetched.
+    /// nil if none has.
+    public static func lastSuccessfulFetch(root: String) -> Date? {
         guard let common = commonGitDir(root: root) else { return nil }
-        return (try? FileManager.default.attributesOfItem(atPath: common + "/FETCH_HEAD"))?[.modificationDate] as? Date
+        let linked = (try? FileManager.default.contentsOfDirectory(atPath: common + "/worktrees")) ?? []
+        let heads = [common + "/FETCH_HEAD"] + linked.map { common + "/worktrees/" + $0 + "/FETCH_HEAD" }
+        let dates = heads.compactMap { path -> Date? in
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+                  let size = attributes[.size] as? NSNumber, size.intValue > 0 else { return nil }
+            return attributes[.modificationDate] as? Date
+        }
+        return dates.max()
     }
 
     /// The installed git's version as numbers, [2, 39, 5], from `git version`; nil if it can't be read.

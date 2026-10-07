@@ -129,8 +129,9 @@ public struct FetchSchedule: Sendable {
 
     private var states: [String: State] = [:]
 
-    /// Whether to fetch `repository` now. `fetchedOnDisk` is FETCH_HEAD's date (a fetch or pull in a
-    /// terminal, or by an agent); `otherFetchRunning`, whether one runs now.
+    /// Whether to fetch `repository` now. `fetchedOnDisk` is when a fetch or pull in a terminal (or by an
+    /// agent) last worked, in any work tree (GitRunner.lastSuccessfulFetch); `otherFetchRunning`, whether
+    /// one runs now.
     public func decision(for repository: String, _ trigger: Trigger, now: Date, active: Bool,
                          fetchedOnDisk: Date? = nil, otherFetchRunning: Bool = false) -> Decision {
         let state = states[repository] ?? State()
@@ -183,7 +184,7 @@ public struct FetchSchedule: Sendable {
     }
 
     /// When Next Term itself last fetched `repository`. A background fetch leaves FETCH_HEAD alone, so
-    /// "Last fetched" is the newer of this and FETCH_HEAD's date.
+    /// "Last fetched" is the newer of this and GitRunner.lastSuccessfulFetch.
     public func lastFetch(of repository: String) -> Date? { states[repository]?.fetched }
 
     public func isRunning(_ repository: String) -> Bool { states[repository]?.running ?? false }

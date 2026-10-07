@@ -150,7 +150,7 @@ final class BackgroundFetcher {
 
     private func consider(_ repository: String, root: String, _ trigger: FetchSchedule.Trigger) {
         let decision = schedule.decision(for: repository, trigger, now: Date(), active: test != nil || NSApp.isActive,
-                                         fetchedOnDisk: GitRunner.lastFetch(root: root), otherFetchRunning: otherFetchRunning(repository))
+                                         fetchedOnDisk: GitRunner.lastSuccessfulFetch(root: root), otherFetchRunning: otherFetchRunning(repository))
         guard decision == .fetch, let git = GitWriter.git else { return }
         schedule.started(repository, at: Date())
         DispatchQueue.global(qos: .utility).async {

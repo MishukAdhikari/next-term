@@ -67,8 +67,8 @@ import Testing
 }
 
 @Suite struct GitRunnerTests {
-    /// A real repository: a clone with an upstream, local commits ahead, and every kind of change.
-    @Test func lastFetchIsReadFromTheCommonGitFolder() throws {
+    /// A real repository and a linked worktree of it: when a fetch last worked, in either.
+    @Test func lastSuccessfulFetchIsTheNewestFetchHeadOfAnyWorkTree() throws {
         guard let git = GitRunner.locateGit() else { return } // no git on this machine
         let base = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path))
             .appendingPathComponent("nt-fetch-\(UUID().uuidString)")
@@ -85,22 +85,36 @@ import Testing
             p.waitUntilExit()
             #expect(p.terminationStatus == 0, "git \(args.joined(separator: " "))")
         }
+        /// FETCH_HEAD as a fetch leaves it: a line for each ref when it worked, empty when it failed.
+        func fetchHead(_ path: String, worked: Bool, at date: Date) throws {
+            let line = "0123456789abcdef0123456789abcdef01234567\t\tbranch 'main' of /r/remote.git\n"
+            try Data(worked ? line.utf8 : "".utf8).write(to: URL(fileURLWithPath: path))
+            try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: path)
+        }
         try FileManager.default.createDirectory(atPath: main, withIntermediateDirectories: true)
         try sh(["init"], in: main)
         try sh(["commit", "--allow-empty", "-m", "one"], in: main)
         #expect(GitRunner.commonGitDir(root: main) == main + "/.git")
-        #expect(GitRunner.lastFetch(root: main) == nil) // never fetched
+        #expect(GitRunner.lastSuccessfulFetch(root: main) == nil) // never fetched
         let fetched = Date(timeIntervalSince1970: 1_790_000_000)
-        try Data().write(to: URL(fileURLWithPath: main + "/.git/FETCH_HEAD"))
-        try FileManager.default.setAttributes([.modificationDate: fetched], ofItemAtPath: main + "/.git/FETCH_HEAD")
-        #expect(GitRunner.lastFetch(root: main) == fetched)
-        // A linked worktree's .git is a file; its fetches land in the shared folder.
+        try fetchHead(main + "/.git/FETCH_HEAD", worked: true, at: fetched)
+        #expect(GitRunner.lastSuccessfulFetch(root: main) == fetched)
+        // A fetch that failed empties FETCH_HEAD: it is no fetch.
+        try fetchHead(main + "/.git/FETCH_HEAD", worked: false, at: fetched.addingTimeInterval(60))
+        #expect(GitRunner.lastSuccessfulFetch(root: main) == nil)
+        try fetchHead(main + "/.git/FETCH_HEAD", worked: true, at: fetched)
+        // A linked worktree's .git is a file, and its FETCH_HEAD its own, in worktrees/<name>. The refs are
+        // shared, so a fetch in either counts for both.
         try sh(["worktree", "add", "-q", "-b", "side", linked], in: main)
         #expect(GitRunner.commonGitDir(root: linked).map(canonicalPath) == canonicalPath(main + "/.git"))
-        #expect(GitRunner.lastFetch(root: linked) == fetched)
+        #expect(GitRunner.lastSuccessfulFetch(root: linked) == fetched)
+        let later = fetched.addingTimeInterval(3600)
+        try fetchHead(main + "/.git/worktrees/linked/FETCH_HEAD", worked: true, at: later)
+        #expect(GitRunner.lastSuccessfulFetch(root: main) == later && GitRunner.lastSuccessfulFetch(root: linked) == later)
         #expect(GitRunner.commonGitDir(root: base.path) == nil) // not a work tree
     }
 
+    /// A real repository: a clone with an upstream, local commits ahead, and every kind of change.
     @Test func snapshotOfARealRepository() throws {
         guard let git = GitRunner.locateGit() else { return } // no git on this machine
         let base = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path))
