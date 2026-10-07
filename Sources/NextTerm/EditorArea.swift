@@ -444,6 +444,8 @@ final class EditorArea: NSView, TabBarViewDelegate {
                 data.moved(to: URL(fileURLWithPath: new + data.path.dropFirst(old.count)))
             }
         }
+        // A new name can make a file a .env file, whose values may be hidden, or stop it being one.
+        editors.forEach { $0.textView.needsDisplay = true }
         refresh()
     }
 
