@@ -545,10 +545,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     // MARK: status
 
-    /// The user can see the active tab only while this window is key in the active app.
-    private var userCanSeeActiveTab: Bool {
-        guard let window else { return false }
-        return NSApp.isActive && window.isKeyWindow && !window.isMiniaturized
+    /// The user can see the active tab only while this window is in front in the active app: key, or main
+    /// while its own panel or sheet has the keyboard (⌘P, Find in Files, an alert). Panels and sheets never
+    /// become main; another window (Settings) does, and then this one is not in front.
+    private var userCanSeeWindow: Bool {
+        guard let window, NSApp.isActive, !window.isMiniaturized else { return false }
+        return window.isKeyWindow || window.isMainWindow
     }
 
     func refreshVisibility() {
@@ -562,10 +564,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     /// Whether you are looking at `tab`: a pane of the selected tab (every pane, unless another fills the
-    /// tab), in the key window of the active app. Folded to its rail, no terminal is on screen, so what
-    /// happens in the tab in front is news too. Its status and its notifications both go by this.
+    /// tab), in the window in front (userCanSeeWindow) of the active app. Folded to its rail, no terminal is on
+    /// screen, so what happens in the tab in front is news too. Its status and its notifications both go by this.
     func isOnScreen(_ tab: TerminalTab) -> Bool {
-        guard userCanSeeActiveTab, !terminalRailed, let group = activeGroup, group.panes.contains(where: { $0 === tab }) else { return false }
+        guard userCanSeeWindow, !terminalRailed, let group = activeGroup, group.panes.contains(where: { $0 === tab }) else { return false }
         return group.zoomed == nil || group.zoomed === tab
     }
 
@@ -1811,6 +1813,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func windowDidResignKey(_ notification: Notification) { refreshVisibility() }
+    func windowDidResignMain(_ notification: Notification) { refreshVisibility() }
 
     func windowWillEnterFullScreen(_ notification: Notification) { isFullScreen = true; updateInsets() }
     func windowWillExitFullScreen(_ notification: Notification) { isFullScreen = false; updateInsets() }

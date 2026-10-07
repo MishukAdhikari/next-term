@@ -118,11 +118,40 @@ extension SelfTest {
             app.post(agent("aider", after: 60), tab: front, in: c, appActive: true)
             app.post(decision("aider"), tab: front, in: c, appActive: true)
             check(c.isOnScreen(front) && app.testNotifications.count == before, "no notification for the tab on screen, not even a decision")
+            await inFrontChecks(c, front)
         } else {
             note("notifications: the tab on screen skipped, the app is not frontmost")
         }
 
         await settingsChecks(app)
+    }
+
+    /// The window's own sheet or ⌘P panel taking the keyboard leaves its tab in view; another window does not.
+    private static func inFrontChecks(_ c: TerminalWindowController, _ front: TerminalTab) async {
+        guard let window = c.window else { return }
+        let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 80), styleMask: [.titled], backing: .buffered, defer: false)
+        window.beginSheet(sheet) { _ in }
+        let sheetKey = await wait(3) { sheet.isKeyWindow }
+        check(sheetKey && c.isOnScreen(front), "the tab in front stays in view while its window's sheet has the keyboard")
+        window.endSheet(sheet)
+        _ = await wait(3) { window.isKeyWindow }
+
+        c.goToFile(nil)
+        let panelKey = await wait(3) { NSApp.keyWindow is GoToFilePanel }
+        check(panelKey && c.isOnScreen(front), "and while ⌘P’s panel has it")
+        c.fileFinder.close()
+        window.makeKeyAndOrderFront(nil)
+        _ = await wait(3) { window.isKeyWindow }
+
+        // Another window in front, such as Settings, takes it out of view: its agents notify as for any tab.
+        let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 80), styleMask: [.titled], backing: .buffered, defer: false)
+        other.isReleasedWhenClosed = false
+        other.makeKeyAndOrderFront(nil)
+        let otherInFront = await wait(3) { other.isKeyWindow && other.isMainWindow }
+        check(otherInFront && !c.isOnScreen(front), "but not while another window is in front")
+        other.orderOut(nil)
+        window.makeKeyAndOrderFront(nil)
+        _ = await wait(3) { window.isKeyWindow }
     }
 
     /// A key you press in a tab an agent drives makes it yours again; text sent to it does not.
