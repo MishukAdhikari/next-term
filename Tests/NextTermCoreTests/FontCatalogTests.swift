@@ -21,6 +21,26 @@ import Testing
         #expect(fonts.lookup(".AppleSystemUIFont") == nil)
     }
 
+    /// SF Mono, the font of most of Terminal's own profiles, isn't an installed family, but every Mac has it.
+    @Test func theSystemMonospacedFace() {
+        let fonts = FontCatalog.system
+        let sfMono = InstalledFont(family: "SF Mono", monospaced: true)
+        for name in ["SFMono-Regular", "SFMono-Bold", "SFMonoTerminal-Regular", "SF Mono", "sf mono"] {
+            #expect(fonts.lookup(name) == sfMono, "\(name)")
+        }
+        #expect(fonts.lookup("SFMonoX") == nil)
+        #expect(FontCatalog.monospacedFamilies().filter { $0 == "SF Mono" }.count == 1)
+    }
+
+    /// One catalog reads the installed families once, so a long font list in a settings file stays quick
+    /// however many fonts the Mac has.
+    @Test func manyLookupsStayQuick() {
+        let fonts = FontCatalog.system
+        let started = Date()
+        for index in 0..<200 { _ = fonts.lookup(index.isMultiple(of: 2) ? "Menlo" : "No Such Font \(index)") }
+        #expect(Date().timeIntervalSince(started) < 0.5)
+    }
+
     @Test func monospacedFamiliesForTheMenus() {
         let families = FontCatalog.monospacedFamilies()
         #expect(families.contains("Menlo") && families.contains("Monaco"))

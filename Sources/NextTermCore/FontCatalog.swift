@@ -23,28 +23,44 @@ public struct FontCatalog: Sendable {
         self.lookup = lookup
     }
 
-    /// The fonts installed on this Mac (CoreText; no AppKit, so Core stays platform-neutral).
-    public static let system = FontCatalog { SystemFonts.lookup($0) }
+    /// The fonts installed on this Mac (CoreText; no AppKit, so Core stays platform-neutral). Each catalog
+    /// reads the list of families once, as it is made: reading it takes longer the more fonts a Mac has, so
+    /// an import uses one catalog for its whole plan.
+    public static var system: FontCatalog {
+        let families = SystemFonts.families()
+        return FontCatalog { SystemFonts.lookup($0, families: families) }
+    }
 
-    /// Every installed monospaced family, sorted by name, for the font menus in Settings. Families macOS
-    /// keeps to itself (names starting with a dot) are left out.
+    /// The system's monospaced face, which Terminal's profiles use ("SFMono-Regular"). It isn't in the list
+    /// of installed families, so it is known by name; the app draws it with the system's monospaced font.
+    public static let systemMonospacedFamily = "SF Mono"
+
+    /// Every installed monospaced family and the system's own, sorted by name, for the font menus in
+    /// Settings. Families macOS keeps to itself (names starting with a dot) are left out. This measures
+    /// every installed font, so the app calls it off the main thread.
     public static func monospacedFamilies() -> [String] {
         let families = (CTFontManagerCopyAvailableFontFamilyNames() as? [String]) ?? []
         let visible = families.filter { !$0.hasPrefix(".") }
-        let monospaced = visible.filter { SystemFonts.font(family: $0).map(SystemFonts.isMonospaced) ?? false }
+        var monospaced = visible.filter { SystemFonts.font(family: $0).map(SystemFonts.isMonospaced) ?? false }
+        if !monospaced.contains(systemMonospacedFamily) { monospaced.append(systemMonospacedFamily) }
         return monospaced.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 }
 
 enum SystemFonts {
-    static func lookup(_ name: String) -> InstalledFont? {
+    /// Every installed family, by its lowercased name.
+    static func families() -> [String: String] {
+        let names = (CTFontManagerCopyAvailableFontFamilyNames() as? [String]) ?? []
+        return Dictionary(names.map { ($0.lowercased(), $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    static func lookup(_ name: String, families: [String: String]) -> InstalledFont? {
         let wanted = name.trimmingCharacters(in: .whitespaces)
         guard !wanted.isEmpty, !wanted.hasPrefix("."), wanted.count < 200 else { return nil }
-        let families = (CTFontManagerCopyAvailableFontFamilyNames() as? [String]) ?? []
-        if let family = families.first(where: { $0.caseInsensitiveCompare(wanted) == .orderedSame }),
-           let font = font(family: family) {
+        if let family = families[wanted.lowercased()], let font = font(family: family) {
             return InstalledFont(family: family, monospaced: isMonospaced(font))
         }
+        if isSystemMonospaced(wanted) { return InstalledFont(family: FontCatalog.systemMonospacedFamily, monospaced: true) }
         // A PostScript name. CoreText hands back a stand-in for a name it doesn't know, so the name must match.
         let font = CTFontCreateWithName(wanted as CFString, 12, nil)
         let postScript = CTFontCopyPostScriptName(font) as String
@@ -52,6 +68,13 @@ enum SystemFonts {
         let family = CTFontCopyFamilyName(font) as String
         guard !family.hasPrefix(".") else { return nil }
         return InstalledFont(family: family, monospaced: isMonospaced(font))
+    }
+
+    /// "SF Mono", or one of its PostScript names: "SFMono-Regular", and "SFMonoTerminal-Regular" (Terminal's
+    /// Clear Dark and Clear Light).
+    static func isSystemMonospaced(_ name: String) -> Bool {
+        let lowered = name.lowercased()
+        return lowered == "sf mono" || lowered.hasPrefix("sfmono-") || lowered.hasPrefix("sfmonoterminal-")
     }
 
     /// A face of `family` (its regular one when it has one), or nil when the family isn't installed.

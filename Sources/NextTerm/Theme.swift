@@ -69,6 +69,10 @@ enum Theme {
     /// there).
     static func font(family: String?, size: CGFloat) -> NSFont {
         guard let family, !family.isEmpty else { return monoFont(size: size) }
+        // SF Mono is the system's own face: not an installed family, so it is asked for as the system's.
+        if family.caseInsensitiveCompare(FontCatalog.systemMonospacedFamily) == .orderedSame {
+            return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        }
         let traits: [NSFontDescriptor.TraitKey: Any] = [.weight: NSFont.Weight.regular]
         let descriptor = NSFontDescriptor(fontAttributes: [.family: family, .traits: traits])
         guard let font = NSFont(descriptor: descriptor, size: size),
