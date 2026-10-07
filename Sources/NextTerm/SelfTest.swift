@@ -488,6 +488,7 @@ enum SelfTest {
         await deletedFileChecks(c, proj: proj)
         await notebookChecks(c, proj: proj)
         await databaseChecks(c, proj: proj)
+        await dataChecks(c, proj: proj)
         await updateChecks(c)
         await platformLinkChecks(c)
         await branchChecks(c, proj: proj)
@@ -1001,6 +1002,106 @@ enum SelfTest {
         try? fm.removeItem(at: env)
         try? fm.removeItem(at: folder)
         check(await wait(10) { group.items.isEmpty && !(sidebar.outline.item(atRow: 1) is DatabasesGroup) }, "the group goes when the files do")
+    }
+
+    /// Large data files open in the head view: a 20 MB JSON Lines file as a column per key, its bad line
+    /// marked and Load More adding rows; a CSV with quoted newlines under its header; a 34 MB log the
+    /// editor refuses. Nothing is written to them.
+    private static func dataChecks(_ c: TerminalWindowController, proj: URL) async {
+        let fm = FileManager.default
+        let area = c.editorArea
+        let jsonl = proj.appendingPathComponent("corpus.jsonl")
+        let csv = proj.appendingPathComponent("eval.csv")
+        let log = proj.appendingPathComponent("server.log")
+        defer { for url in [jsonl, csv, log] { try? fm.removeItem(at: url) } }
+
+        let embedding = (0..<16).map { String(format: "%.3f", Double($0) / 17) }.joined(separator: ",")
+        fm.createFile(atPath: jsonl.path, contents: nil)
+        guard let out = FileHandle(forWritingAtPath: jsonl.path) else { return check(false, "a 20 MB JSON Lines file can be written") }
+        var written = 0, lines = 0
+        while written < 20 << 20 {
+            var chunk = ""
+            for _ in 0..<5000 {
+                let row = #"{"id":\#(lines),"text":"chunk \#(lines) of the corpus","embedding":[\#(embedding)],"meta":{"source":"doc-\#(lines % 50).md"}}"#
+                chunk += (lines == 2 ? #"{"id":2,"text":oops}"# : row) + "\n"
+                lines += 1
+            }
+            out.write(Data(chunk.utf8))
+            written += chunk.utf8.count
+        }
+        try? out.close()
+        let stamp = FileStamp(path: jsonl.path)
+        c.openFile(jsonl)
+        guard let pane = area.activeData else { return check(false, "a 20 MB .jsonl opens in the head view", area.activeName ?? "nothing") }
+        check(await wait(10) { pane.isSettled && pane.records.count == DataHead.pageSize }, "it reads the first 1,000 rows", pane.loadError ?? "\(pane.records.count)")
+        check(pane.columns == ["id", "text", "embedding", "meta"], "a column per top-level key, in the file’s order", pane.columns.joined(separator: ", "))
+        let titles = pane.grid.tableColumns.map(\.title)
+        let firstText = pane.records.first.map { pane.cellText($0, column: 1) }
+        check(firstText == "chunk 0 of the corpus" && pane.grid.numberOfRows == 1000 && titles == ["#", "id", "text", "embedding", "meta"],
+              "the grid shows them, strings without their quotes", titles.joined(separator: ", "))
+        let bad = pane.records[2]
+        check(bad.line == 3 && bad.error?.hasPrefix("Not valid JSON") == true && pane.records[3].error == nil, "the bad line is marked and the rest still read")
+        check(pane.rowsText.contains("of about"), "the row count gives an estimated total", pane.rowsText)
+
+        pane.loadMore()
+        check(await wait(10) { pane.isSettled && pane.records.count == 2 * DataHead.pageSize }, "Load More adds the next 1,000", "\(pane.records.count)")
+        let next = pane.records[1000]
+        check(pane.grid.numberOfRows == 2000 && next.line == 1001 && next.value(for: "id") == "1000", "in order, after the first")
+        check(await wait(15) { pane.lineCount != nil }, "the lines are counted in the background", pane.rowsText)
+        check(pane.estimatedTotal == lines, "and the estimate becomes the count", "\(pane.estimatedTotal ?? -1) of \(lines)")
+
+        pane.find("chunk 1500 ")
+        check(await wait(5) { pane.isSettled && pane.visible == [1500] }, "search finds a loaded row", pane.rowsText)
+        pane.grid.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        check(pane.exportJSON() == pane.records[1500].raw + "\n", "Copy As JSON copies the row as the file has it", pane.exportJSON())
+        let csvCopy = pane.exportCSV()
+        check(csvCopy.hasPrefix("id,text,embedding,meta\n1500,chunk 1500 of the corpus,\"[0.000,"), "Copy As CSV puts it under the keys", csvCopy)
+        check(pane.contextItem().lines == 1501...1501, "Send to Agent points at its line")
+        pane.find("")
+        pane.show(lines: true)
+        check(pane.grid.tableColumns.map(\.title) == ["#", "Text"] && pane.grid.numberOfRows == 2000, "Lines shows the records as the file has them")
+        await screenshot(c, suffix: "-data")
+        area.close(pane)
+        check(FileStamp(path: jsonl.path) == stamp, "reading leaves the file as it was")
+
+        // A CSV whose quoted fields hold newlines, commas and quotes, just over the 2 MB threshold.
+        var text = "id,question,answer\n"
+        var rows = 0
+        while text.utf8.count < DataPane.threshold + 100_000 {
+            text += "\(rows),\"What is \"\"RAG\"\" in row \(rows)?\nTwo lines.\",\"It retrieves, then generates.\"\n"
+            rows += 1
+        }
+        try? text.write(to: csv, atomically: true, encoding: .utf8)
+        c.openFile(csv)
+        guard let table = area.activeData, table.path == canonicalPath(csv.path) else {
+            return check(false, "a 2 MB .csv opens in the head view", area.activeName ?? "nothing")
+        }
+        check(await wait(10) { table.isSettled && table.records.count == DataHead.pageSize }, "it reads the CSV", table.loadError ?? "")
+        check(table.hasHeader && table.columns == ["id", "question", "answer"], "the header row names the columns", table.columns.joined(separator: ", "))
+        let row = table.records[1]
+        let question = table.cellText(row, column: 1)
+        check(question == "What is \"RAG\" in row 0?\nTwo lines." && row.fields[2] == "It retrieves, then generates." && row.line == 2,
+              "a quoted field keeps its newline, comma and quotes", row.fields.joined(separator: " | "))
+        check(table.records[2].line == 4 && table.grid.numberOfRows == 999, "the next row starts after it, and the header is not a row")
+        table.onOpenInEditor?(table.url)
+        let editor = area.activeEditor
+        check(editor?.document.path == canonicalPath(csv.path), "Open in Editor opens it in the editor, which can take it")
+        if let editor { area.close(editor) }
+        area.close(table)
+
+        // Too large for the editor: the head view, not another app.
+        fm.createFile(atPath: log.path, contents: nil)
+        if let out = FileHandle(forWritingAtPath: log.path) {
+            let block = Data(String(repeating: "2026-10-07 12:00:00 INFO request served in 12 ms\n", count: 20_000).utf8)
+            for _ in 0..<34 { out.write(block) }
+            try? out.close()
+        }
+        c.openFile(log)
+        let big = area.activeData
+        check(big?.path == canonicalPath(log.path) && big?.kind == .lines, "a 34 MB log the editor refuses opens in the head view", area.activeName ?? "nothing")
+        check(await wait(10) { big?.isSettled == true && big?.records.count == 1000 }, "with its first 1,000 lines")
+        check(big?.isTooLargeForEditor == true && big?.grid.tableColumns.map(\.title) == ["#", "Text"], "as lines, without Open in Editor")
+        if let big { area.close(big) }
     }
 
     private static func deletedFileChecks(_ c: TerminalWindowController, proj: URL) async {
