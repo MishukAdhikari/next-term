@@ -55,7 +55,7 @@ Add a stdio server that runs `nxtrm mcp`. `nxtrm` is on the `PATH` in Next Term�
 | `wait_for_tab` | Waits until the tab’s agent stops working, or its command finishes, then returns the state and the end of the screen. | No |
 | `list_projects` | The projects open in Next Term and the recently opened ones. | No |
 | `get_editor_selection` | The file in front in the editor, the selected text and its lines, unsaved edits included. | No |
-| `get_open_files` | The files open in each window, which one is in front, and which have unsaved changes. | No |
+| `get_open_files` | The files open in each window, which one is in front, and which have unsaved changes. A [preview tab](/docs/editor/#preview-tabs) is marked `preview`. | No |
 | `read_file` | A text file in an open project, as saved on disk: 400 lines by default from `offset`, up to 2,000 per call, with the total and where to read on. Files over 5 MB, binary files and secrets files are refused (see below). | No |
 | `find_in_files` | Searches an open project the way Find in Files does (text, or a regular expression with `regex`; `case_sensitive`, `whole_word`, and `glob` masks such as `*.ts, !*.min.js`). Each match comes with its file, line, column and the line’s text; 50 by default, up to 200. | No |
 | `git_status` | An open project’s branch, its upstream with commits ahead and behind, and each changed file: its state, whether it has staged and unstaged changes, and lines added and removed. | No |
