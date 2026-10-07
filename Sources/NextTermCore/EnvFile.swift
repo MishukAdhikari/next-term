@@ -10,9 +10,15 @@ struct EnvEntry: Equatable, Sendable {
 
 /// Reads `.env` files without running anything: no command substitution, no shell, and only `${NAME}`
 /// references to keys earlier in the same file (never the app's own environment).
-enum EnvFile {
+public enum EnvFile {
     /// Files larger than this are not env files anyone wrote by hand.
     static let maxSize = 512 * 1024
+
+    /// `.env`, `.env.*`, `*.env` and `.flaskenv`: the files whose values the editor can hide.
+    public static func isEnvFile(named name: String) -> Bool {
+        let lower = name.lowercased()
+        return lower.hasPrefix(".env.") || lower.hasSuffix(".env") || lower == ".flaskenv"
+    }
 
     /// The file's entries, or nil if it is missing, not a plain file, or too large.
     static func read(_ path: String) -> [EnvEntry]? {
@@ -57,6 +63,103 @@ enum EnvFile {
             entries.append(EnvEntry(key: key, value: value, line: number))
         }
         return entries
+    }
+
+    /// Where each value is, in UTF-16 offsets as NSString counts them: from the first character after
+    /// the `=` (and the blanks after it) to the value's end, quotes included. Keys, comment lines, a
+    /// ` # comment` after a value, and empty values are left out. A quoted value ends where `parse` ends
+    /// it, so one that goes on over several lines (a private key) is one range across them. Only the
+    /// key has to look like one (no blanks), and `KEY=#x` counts as a value, as some readers take it:
+    /// a line that might hold a secret is hidden rather than shown.
+    public static func valueRanges(in text: String) -> [NSRange] {
+        let u = Array(text.utf16)
+        let space: UInt16 = 0x20, tab: UInt16 = 0x09, newline: UInt16 = 0x0A, cr: UInt16 = 0x0D
+        let hash: UInt16 = 0x23, equals: UInt16 = 0x3D, backslash: UInt16 = 0x5C
+        let export = Array("export".utf16)
+        func isBlank(_ c: UInt16) -> Bool { c == space || c == tab }
+        /// Where the line from `start` ends: its line break, or the end of the text.
+        func lineEnd(from start: Int) -> Int {
+            var i = start
+            while i < u.count, u[i] != newline { i += 1 }
+            return i
+        }
+        /// The end of a line's text, without the CR of a CRLF.
+        func contentEnd(_ start: Int, _ end: Int) -> Int { end > start && u[end - 1] == cr ? end - 1 : end }
+        /// The closing quote in start..<end, as `parse` finds it: one with only blanks or a comment after it.
+        func closing(_ quote: UInt16, from start: Int, to end: Int) -> Int? {
+            var escaped = false
+            var i = start
+            while i < end {
+                let c = u[i]
+                if escaped {
+                    escaped = false
+                } else if c == backslash && quote == 0x22 {
+                    escaped = true
+                } else if c == quote {
+                    var after = i + 1
+                    while after < end, isBlank(u[after]) { after += 1 }
+                    if after == end || u[after] == hash { return i }
+                }
+                i += 1
+            }
+            return nil
+        }
+
+        var ranges: [NSRange] = []
+        var start = u.first == 0xFEFF ? 1 : 0 // a byte-order mark
+        while start <= u.count {
+            let end = lineEnd(from: start)
+            let content = contentEnd(start, end)
+            var next = end + 1
+            defer { start = next }
+            var i = start
+            while i < content, isBlank(u[i]) { i += 1 }
+            guard i < content, u[i] != hash else { continue }
+            // `export KEY=…`
+            if content - i > export.count, u[i..<i + export.count].elementsEqual(export), isBlank(u[i + export.count]) {
+                i += export.count
+                while i < content, isBlank(u[i]) { i += 1 }
+            }
+            guard let sign = u[i..<content].firstIndex(of: equals) else { continue }
+            var keyEnd = sign
+            while keyEnd > i, isBlank(u[keyEnd - 1]) { keyEnd -= 1 }
+            guard keyEnd > i, !u[i..<keyEnd].contains(where: isBlank) else { continue }
+            var value = sign + 1
+            while value < content, isBlank(u[value]) { value += 1 }
+            guard value < content else { continue }
+            let quote = u[value]
+            if quote == 0x22 || quote == 0x27 || quote == 0x60 { // " ' `
+                if let close = closing(quote, from: value + 1, to: content) {
+                    ranges.append(NSRange(location: value, length: close + 1 - value))
+                    continue
+                }
+                // On a later line, within 200 (as `parse` looks); those lines are part of the value.
+                var lineStart = end + 1
+                var found = false
+                for _ in 0..<200 where lineStart <= u.count {
+                    let laterEnd = lineEnd(from: lineStart)
+                    if let close = closing(quote, from: lineStart, to: contentEnd(lineStart, laterEnd)) {
+                        ranges.append(NSRange(location: value, length: close + 1 - value))
+                        next = laterEnd + 1
+                        found = true
+                        break
+                    }
+                    lineStart = laterEnd + 1
+                }
+                if found { continue }
+                // Never closed: the rest of the line is the value.
+                var last = content
+                while last > value, isBlank(u[last - 1]) { last -= 1 }
+                ranges.append(NSRange(location: value, length: last - value))
+                continue
+            }
+            // Unquoted: up to a `#` with a blank before it, without the blanks at the end.
+            var last = value
+            while last < content, !(u[last] == hash && isBlank(u[last - 1])) { last += 1 }
+            while last > value, isBlank(u[last - 1]) { last -= 1 }
+            if last > value { ranges.append(NSRange(location: value, length: last - value)) }
+        }
+        return ranges
     }
 
     /// The last value of each key.

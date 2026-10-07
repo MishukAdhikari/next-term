@@ -135,7 +135,7 @@ public struct MCPProjects: Sendable {
             if secretFolders.contains(folder) { return "is inside \(folder), a folder for keys and credentials" }
         }
         if name == ".git" { return "is git’s own data, which can hold credentials; git_status and get_diff show the changes" }
-        // .env.example is the committed template, as the IDE link has it (ClaudeIDEServer.isSensitive).
+        // .env.example is the committed template, as the IDE link has it (IDELink.isSensitive).
         if (name.hasPrefix(".env") && name != ".env.example") || name.hasSuffix(".env") {
             return "is an environment file, which usually holds secrets"
         }
