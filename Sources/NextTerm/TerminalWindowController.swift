@@ -622,6 +622,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let gitActions: [Selector] = [#selector(showBranches(_:)), #selector(gitFetch(_:)), #selector(gitUpdate(_:)), #selector(gitCommit(_:)),
                                       #selector(gitPush(_:)), #selector(gitNewBranch(_:))]
         if let action = item.action, gitActions.contains(action) { return gitFolder != nil }
+        if item.action == #selector(showGitLog(_:)) { return gitLogRoot != nil }
         if item.action == #selector(closeProject(_:)) { return project != nil }
         if item.action == #selector(openServedURL(_:)) { return activeTab?.servedURL != nil }
         if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil }
@@ -1428,9 +1429,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// ⌥⌘L: the commit history of the project's repository, in an editor tab.
     @objc func showGitLog(_ sender: Any?) {
-        guard let folder = sidebar.git.snapshot?.root ?? editorArea.activeGitLog?.root ?? editorArea.gitLogs.first?.root else { return NSSound.beep() }
+        guard let folder = gitLogRoot else { return NSSound.beep() }
         openGitLog(root: folder)
     }
+
+    /// The repository ⌥⌘L shows: the sidebar's, or that of a Git Log already open; nil outside one.
+    private var gitLogRoot: String? { sidebar.git.snapshot?.root ?? editorArea.activeGitLog?.root ?? editorArea.gitLogs.first?.root }
 
     /// The Git Log of the repository containing `root`, in front; nil outside a repository.
     @discardableResult

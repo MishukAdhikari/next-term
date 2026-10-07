@@ -596,6 +596,16 @@ enum SelfTest {
         check(app.controllers.count == windowsNow && fresh.project == proj.path && fresh.tabs.count == 1, "an untouched window is reused for the project")
         fresh.closeProject(nil)
         _ = await wait(3) { !app.controllers.contains { $0 === fresh } }
+        // Outside a repository Git Log is off, like the Git menu's other commands.
+        let plain = app.openWindow(directory: dir.path)
+        _ = await wait(20) { plain.tabs.first?.status.integrated == true }
+        plain.refresh()
+        let gitLogItem = NSMenuItem(title: "Git Log", action: #selector(TerminalWindowController.showGitLog(_:)), keyEquivalent: "")
+        let branchesItem = NSMenuItem(title: "Branches…", action: #selector(TerminalWindowController.showBranches(_:)), keyEquivalent: "")
+        check(!plain.validateMenuItem(gitLogItem) && !plain.validateMenuItem(branchesItem),
+              "outside a repository Git Log is off, like Branches", plain.sidebar.root?.path ?? "no sidebar root")
+        plain.window?.performClose(nil)
+        _ = await wait(3) { !app.controllers.contains { $0 === plain } }
         app.showWelcome(nil)
         check(NSApp.windows.contains { $0.title == "Welcome to Next Term" && $0.isVisible }, "the Welcome window lists recent projects")
         NSApp.windows.first { $0.title == "Welcome to Next Term" }?.close()
