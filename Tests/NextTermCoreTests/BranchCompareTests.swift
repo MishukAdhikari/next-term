@@ -93,8 +93,9 @@ import Testing
         ])
         let one = BranchCompare.fileDiffArguments(path: "new.txt", oldPath: "old.txt", branch: "refs/heads/x")
         #expect(one.prefix(6) == ["diff-tree", "-r", "-p", "--histogram", "-M", "--merge-base"])
-        #expect(Array(one.suffix(6)) == ["--end-of-options", "HEAD", "refs/heads/x", "--", "old.txt", "new.txt"])
-        #expect(one.contains("--src-prefix=a/") && one.contains("-U3") && one.contains("--no-ext-diff"))
+        let tail: [String] = Array(one.suffix(6))
+        #expect(tail == ["--end-of-options", "HEAD", "refs/heads/x", "--", "old.txt", "new.txt"])
+        #expect(["--src-prefix=a/", "-U3", "--no-ext-diff"].allSatisfy(one.contains))
         #expect(BranchCompare.fileDiffArguments(path: "a.txt", branch: "refs/heads/x").suffix(2) == ["--", "a.txt"])
         #expect(BranchCompare.workingTreeArguments(branch: "refs/heads/x") == ["diff-index", "-z", "-M", "--end-of-options", "refs/heads/x", "--"])
         // Paths are names, not patterns; reads never take a lock.
@@ -180,7 +181,8 @@ import Testing
         let renamed = try #require(BranchCompare.diff(of: "new.txt", oldPath: "old.txt", branch: "refs/heads/feat", in: work, git: git))
         #expect(renamed.oldPath == "old.txt" && renamed.newPath == "new.txt" && renamed.hunks.isEmpty)
         let changed = try #require(BranchCompare.diff(of: "a.txt", branch: "refs/heads/feat", in: work, git: git))
-        #expect(changed.hunks.flatMap(\.lines).filter { $0.kind == .added }.map(\.text) == ["fix"])
+        let addedOnBranch: [String] = changed.hunks.flatMap(\.lines).filter { $0.kind == .added }.map(\.text)
+        #expect(addedOnBranch == ["fix"])
 
         // The files on disk against the branch: main's own file, the branch's file missing, and the rename backwards.
         try write("a.txt", "on disk\n")
