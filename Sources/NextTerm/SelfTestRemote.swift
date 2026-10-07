@@ -90,7 +90,7 @@ extension SelfTest {
             NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
             RemoteMarkView.draw(link, tint: .gray, in: NSRect(origin: .zero, size: size))
             NSGraphicsContext.restoreGraphicsState()
-            return (0..<rep.pixelsWide * rep.pixelsHigh).map { i in
+            return (0..<rep.pixelsWide * rep.pixelsHigh).map { i -> Bool in
                 guard let pixel = rep.colorAt(x: i % rep.pixelsWide, y: i / rep.pixelsWide) else { return false }
                 let lightness = (pixel.redComponent + pixel.greenComponent + pixel.blueComponent) / 3
                 return pixel.alphaComponent > 0.5 && lightness < 0.9
@@ -98,7 +98,7 @@ extension SelfTest {
         }
         let links: [RemoteLink] = [.connected, .connecting, .disconnected, .ended]
         let shapes = links.map(shape)
-        let alike = links.indices.flatMap { i in
+        let alike = links.indices.flatMap { i -> [String] in
             links.indices.filter { $0 > i }.compactMap { j -> String? in
                 let differ = zip(shapes[i], shapes[j]).filter { $0 != $1 }.count
                 return differ >= 20 ? nil : "\(links[i].rawValue) and \(links[j].rawValue) (\(differ) pixels apart)"
