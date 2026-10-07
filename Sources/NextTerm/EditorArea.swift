@@ -24,6 +24,10 @@ final class EditorArea: NSView, TabBarViewDelegate {
     /// commit is noticed on its own).
     var periodicBaselineChecks = true
     private(set) var activeIndex = 0
+    /// The preview tab, if there is one: a file opened by a single click in the project sidebar, which the
+    /// next file clicked replaces in place. Editing it, double-clicking or dragging its tab, or opening the
+    /// file another way keeps it as an ordinary tab, so a preview never has unsaved changes.
+    private(set) weak var previewPane: NSView?
 
     var editors: [CodeEditorView] { panes.compactMap { $0 as? CodeEditorView } }
     var diffs: [DiffPane] { panes.compactMap { $0 as? DiffPane } }
@@ -93,16 +97,17 @@ final class EditorArea: NSView, TabBarViewDelegate {
     /// Opens a file (or shows it if open), optionally at a line. Binary files are not opened.
     /// A notebook opens read-only as cells, unless asked for as text or at a line (a search result points
     /// into its JSON). A data file over 2 MB, and any text file too large for the editor, opens in the
-    /// head view: its first rows, read-only.
+    /// head view: its first rows, read-only. `preview` (a single click in the sidebar) opens it in the
+    /// preview tab; opening a preview's file any other way keeps it.
     @discardableResult
-    func open(_ url: URL, line: Int? = nil, column: Int = 1, focus: Bool = true, asText: Bool = false) -> OpenResult {
+    func open(_ url: URL, line: Int? = nil, column: Int = 1, focus: Bool = true, asText: Bool = false, preview: Bool = false) -> OpenResult {
         let path = canonicalPath(url.path)
-        if !asText, line == nil, Notebook.isNotebook(path) { return openNotebook(path, focus: focus) }
-        if !asText, DatabasePane.opens(path) { return openDatabase(path, focus: focus) }
-        if !asText, line == nil, DataPane.opens(path) { return openData(path, focus: focus) }
+        if !asText, line == nil, Notebook.isNotebook(path) { return openNotebook(path, focus: focus, preview: preview) }
+        if !asText, DatabasePane.opens(path) { return openDatabase(path, focus: focus, preview: preview) }
+        if !asText, line == nil, DataPane.opens(path) { return openData(path, focus: focus, preview: preview) }
         if let index = panes.firstIndex(where: { ($0 as? CodeEditorView)?.document.path == path }),
            let editor = panes[index] as? CodeEditorView {
-            select(index, focus: focus)
+            show(index, focus: focus, preview: preview)
             if let line { editor.textView.go(toLine: line, column: column) }
             return .opened
         }
@@ -113,13 +118,18 @@ final class EditorArea: NSView, TabBarViewDelegate {
             return .notText
         } catch EditorDocument.OpenError.tooLarge {
             // Its first rows instead of another app, when it is UTF-8 text (not a PDF with no NUL early on).
-            if !asText, DataHead.isUTF8Text(path) { return openData(path, focus: focus) }
+            if !asText, DataHead.isUTF8Text(path) { return openData(path, focus: focus, preview: preview) }
             return .tooLarge
         } catch {
             return .failed
         }
         let editor = CodeEditorView(document: document)
-        document.onChange = { [weak self] _ in self?.refresh() }
+        document.onChange = { [weak self, weak editor] document in
+            guard let self else { return }
+            // The first edit keeps a preview, before anything is saved: replacing one never loses work.
+            if document.isDirty, let editor, editor === self.previewPane { self.previewPane = nil }
+            self.refresh()
+        }
         editor.onSelectionChange = { [weak self] in
             guard let self else { return }
             self.delegate?.editorAreaSelectionChanged(self)
@@ -128,7 +138,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
             guard let self, let document else { return }
             self.onShowChanges?(document.url)
         }
-        insert(editor)
+        add(editor, preview: preview)
         select(activeIndex, focus: focus)
         container.layoutSubtreeIfNeeded()
         editor.textView.go(toLine: line ?? 1, column: line == nil ? 1 : column)
@@ -138,9 +148,9 @@ final class EditorArea: NSView, TabBarViewDelegate {
 
     /// A notebook's cells, read-only. Its size limit is the notebook reader's (50 MB), not the editor's:
     /// most of a big notebook is images and outputs, which it never lays out as text.
-    private func openNotebook(_ path: String, focus: Bool) -> OpenResult {
+    private func openNotebook(_ path: String, focus: Bool, preview: Bool) -> OpenResult {
         if let index = panes.firstIndex(where: { ($0 as? NotebookPane)?.path == path }) {
-            select(index, focus: focus)
+            show(index, focus: focus, preview: preview)
             return .opened
         }
         guard isRegularFile(path) else { return .notText } // a named pipe would block forever
@@ -149,41 +159,41 @@ final class EditorArea: NSView, TabBarViewDelegate {
         let pane = NotebookPane(url: URL(fileURLWithPath: path))
         pane.onTitleChange = { [weak self] in self?.refresh() }
         pane.onOpenAsJSON = { [weak self] url in self?.openAsText(url) }
-        insert(pane)
+        add(pane, preview: preview)
         select(activeIndex, focus: focus)
         return .opened
     }
 
     /// A SQLite file, read-only, in its own tab (or brought to the front if it is open).
     @discardableResult
-    func openDatabase(_ path: String, focus: Bool = true) -> OpenResult {
+    func openDatabase(_ path: String, focus: Bool = true, preview: Bool = false) -> OpenResult {
         let path = canonicalPath(path)
         if let index = panes.firstIndex(where: { ($0 as? DatabasePane)?.path == path }) {
-            select(index, focus: focus)
+            show(index, focus: focus, preview: preview)
             return .opened
         }
         guard Databases.isSQLiteFile(path) || DatabasePane.isEmptyFile(path) else { return .notText }
         let pane = DatabasePane(url: URL(fileURLWithPath: path))
         pane.onTitleChange = { [weak self] in self?.refresh() }
         pane.onSendToAgent = { [weak self] items in self?.onSendToAgent?(items) }
-        insert(pane)
+        add(pane, preview: preview)
         select(activeIndex, focus: focus)
         return .opened
     }
 
     /// A large data file's first rows, read-only, in its own tab (or brought to the front if it is open).
     @discardableResult
-    func openData(_ path: String, focus: Bool = true) -> OpenResult {
+    func openData(_ path: String, focus: Bool = true, preview: Bool = false) -> OpenResult {
         let path = canonicalPath(path)
         if let index = panes.firstIndex(where: { ($0 as? DataPane)?.path == path }) {
-            select(index, focus: focus)
+            show(index, focus: focus, preview: preview)
             return .opened
         }
         guard isRegularFile(path) else { return .notText } // a named pipe would block forever
         let pane = DataPane(url: URL(fileURLWithPath: path))
         pane.onTitleChange = { [weak self] in self?.refresh() }
         pane.onOpenInEditor = { [weak self] url in self?.openAsText(url) }
-        insert(pane)
+        add(pane, preview: preview)
         select(activeIndex, focus: focus)
         return .opened
     }
@@ -205,6 +215,14 @@ final class EditorArea: NSView, TabBarViewDelegate {
 
     /// Adds a tab next to the current one, filling the content area.
     private func insert(_ pane: NSView) {
+        fill(pane)
+        let insertAt = panes.isEmpty ? 0 : activeIndex + 1
+        panes.insert(pane, at: insertAt)
+        activeIndex = insertAt
+        if panes.count == 1 { delegate?.editorAreaDidChangeDocuments(self) }
+    }
+
+    private func fill(_ pane: NSView) {
         pane.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(pane)
         NSLayoutConstraint.activate([
@@ -213,10 +231,35 @@ final class EditorArea: NSView, TabBarViewDelegate {
             pane.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             pane.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
-        let insertAt = panes.isEmpty ? 0 : activeIndex + 1
-        panes.insert(pane, at: insertAt)
-        activeIndex = insertAt
-        if panes.count == 1 { delegate?.editorAreaDidChangeDocuments(self) }
+    }
+
+    /// A new tab. A preview takes the place of the one before it, at the same position in the tab bar;
+    /// anything else goes next to the current tab.
+    private func add(_ pane: NSView, preview: Bool) {
+        if preview, let old = previewPane, (old as? CodeEditorView)?.document.isDirty != true,
+           let index = panes.firstIndex(where: { $0 === old }) {
+            // Not through remove(): closing the only tab would hide the editor area on the way.
+            fill(pane)
+            panes[index] = pane
+            activeIndex = index
+            discard(old)
+        } else {
+            insert(pane)
+        }
+        if preview { previewPane = pane }
+    }
+
+    /// Brings an open tab to the front. Opening a preview's file any way but a single click keeps it.
+    private func show(_ index: Int, focus: Bool, preview: Bool) {
+        if !preview, panes[index] === previewPane { previewPane = nil }
+        select(index, focus: focus)
+    }
+
+    /// The preview becomes an ordinary tab (its tab was double-clicked, or single clicks were turned off).
+    func keepPreview() {
+        guard previewPane != nil else { return }
+        previewPane = nil
+        refresh()
     }
 
     func select(_ index: Int, focus: Bool = true) {
@@ -343,10 +386,8 @@ final class EditorArea: NSView, TabBarViewDelegate {
         guard let index = panes.firstIndex(where: { $0 === pane }) else { return }
         (pane as? DiffPane)?.decide(false) // closing an undecided proposal rejects it
         let hadFocus = (window?.firstResponder as? NSView)?.isDescendant(of: pane) == true
-        pane.removeFromSuperview()
-        if let editor = pane as? CodeEditorView {
-            editor.document.storage.layoutManagers.forEach { editor.document.storage.removeLayoutManager($0) }
-        }
+        if pane === previewPane { previewPane = nil }
+        discard(pane)
         panes.remove(at: index)
         if panes.isEmpty {
             refresh()
@@ -361,6 +402,14 @@ final class EditorArea: NSView, TabBarViewDelegate {
     /// Closes every editor without asking (the window is closing and the user already chose).
     func closeAll() {
         for pane in panes { remove(pane) }
+    }
+
+    /// Takes a closed tab's view away, and its editor's layout off the document's text.
+    private func discard(_ pane: NSView) {
+        pane.removeFromSuperview()
+        if let editor = pane as? CodeEditorView {
+            editor.document.storage.layoutManagers.forEach { editor.document.storage.removeLayoutManager($0) }
+        }
     }
 
     // MARK: saving
@@ -457,7 +506,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
             let name = url.lastPathComponent
             return (names[name]?.count ?? 0) > 1 ? name + " — " + url.deletingLastPathComponent().lastPathComponent : name
         }
-        let items = panes.map { pane -> TabBarItem in
+        var items = panes.map { pane -> TabBarItem in
             if let diff = pane as? DiffPane {
                 return TabBarItem(title: diff.title, state: .idle, tooltip: diff.tooltip, accessibilityStatus: "changes",
                                   icon: FileIcons.icon(for: URL(fileURLWithPath: diff.absolutePath), size: 16), modified: false)
@@ -485,6 +534,11 @@ final class EditorArea: NSView, TabBarViewDelegate {
             let icon = FileIcons.icon(for: Notebook.isNotebook(document.path) ? document.url.deletingPathExtension().appendingPathExtension("json") : document.url, size: 16)
             return TabBarItem(title: title(document.url), state: .idle, tooltip: RecentProjects.abbreviate(document.path),
                               accessibilityStatus: status, icon: icon, modified: document.isDirty)
+        }
+        if let preview = previewPane, let index = panes.firstIndex(where: { $0 === preview }) {
+            items[index].preview = true
+            items[index].tooltip += "\nPreview: the next file you click takes this tab. Edit the file or double-click the tab to keep it."
+            items[index].accessibilityStatus += ", preview"
         }
         tabBar.update(items: items, selectedIndex: activeIndex)
         let conflict = activeEditor?.document.conflict
@@ -525,6 +579,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
 
     func tabBar(_ bar: TabBarView, didMove from: Int, to: Int) {
         guard panes.indices.contains(from), panes.indices.contains(to) else { return }
+        if panes[from] === previewPane { previewPane = nil } // a preview dragged into place is kept
         let active = activePane
         panes.insert(panes.remove(at: from), at: to)
         activeIndex = active.flatMap { a in panes.firstIndex { $0 === a } } ?? 0
@@ -534,6 +589,11 @@ final class EditorArea: NSView, TabBarViewDelegate {
     func tabBar(_ bar: TabBarView, didRename index: Int, to title: String?) {}
     func tabBarDidEndEditing(_ bar: TabBarView) {}
     func tabBarDidRequestNewTab(_ bar: TabBarView) {}
+
+    /// Double-clicking a preview's tab keeps it.
+    func tabBar(_ bar: TabBarView, didDoubleClick index: Int) {
+        if let pane = panes[safe: index], pane === previewPane { keepPreview() }
+    }
 }
 
 /// "This file changed on disk" with what to do about it.

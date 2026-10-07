@@ -1535,6 +1535,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func tabBarDidRequestNewTab(_ bar: TabBarView) { newTab(nil) }
+    func tabBar(_ bar: TabBarView, didDoubleClick index: Int) {} // terminal tabs rename instead
 
     // MARK: TerminalTabDelegate
 
