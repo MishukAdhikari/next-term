@@ -291,6 +291,30 @@ import Testing
         #expect(diff?.isNew == true && diff?.hunks.first?.added == 1)
     }
 
+    /// A name stored decomposed, as a git that did not compose names (an old one on HFS+) added it, is
+    /// found too, and its diff is its lines: composed, it would match nothing.
+    @Test func aPathStoredDecomposedIsFound() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        repo.sh(["config", "core.precomposeUnicode", "false"])
+        // Foundation names the file decomposed, and git without the setting stores it as it reads it.
+        try repo.write("école.txt", "a\n")
+        let sha = repo.commit("Add")
+        try repo.write("other.txt", "b\n")
+        repo.commit("Other")
+        let stored = repo.sh(["-c", "core.quotepath=off", "ls-tree", "--name-only", sha])
+        try #require(stored.unicodeScalars.contains { $0.value == 0x301 }, "stored decomposed: \(stored)")
+        let path = try #require(CommitLog.details(of: sha, in: repo.work, git: repo.git)?.files.first?.path)
+        for setting in ["false", "true"] {
+            repo.sh(["config", "core.precomposeUnicode", setting])
+            for name in [path, "école.txt"] {
+                #expect(CommitLog.page(CommitQuery(paths: [name]), in: repo.work, git: repo.git)?.map(\.sha) == [sha], "\(setting)")
+                let diff = CommitLog.diff(of: name, commit: sha, parent: nil, in: repo.work, git: repo.git)
+                #expect(diff?.isNew == true && diff?.hunks.first?.added == 1, "\(setting)")
+            }
+        }
+    }
+
     /// In a partial clone, reading a commit's files downloads nothing: they are listed without counts.
     @Test func aPartialCloneIsNotFetchedFrom() throws {
         let repo = try #require(ScratchRepo())

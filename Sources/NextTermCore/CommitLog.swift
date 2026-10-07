@@ -369,6 +369,18 @@ public enum CommitLog {
          "-c", "core.precomposeUnicode=true"]
     }
 
+    /// Runs git on `paths` composed, then, when a path beyond ASCII matched nothing, as stored: a name
+    /// a git that did not compose names added (an old one on HFS+) is stored decomposed, and composed it
+    /// matches nothing. The later `-c` wins.
+    private static func run(_ git: String, _ args: [String], paths: [String], in root: String, timeout: TimeInterval,
+                            environment: [String: String] = [:]) -> Data? {
+        guard let data = GitRunner.run(git, base(root) + args, timeout: timeout, environment: environment) else { return nil }
+        let beyondASCII = paths.contains { path in path.unicodeScalars.contains { !$0.isASCII } }
+        guard data.isEmpty, beyondASCII else { return data }
+        let stored = base(root) + ["-c", "core.precomposeUnicode=false"] + args
+        return GitRunner.run(git, stored, timeout: timeout, environment: environment) ?? data
+    }
+
     /// Every commit the query lists, in order, as ids; nil when git fails (not a repository, a bad
     /// revision). A query whose text is a hash prefix of a commit lists that commit alone. One walk of
     /// the history, however long: pages then read their commits by id, so none walks it again.
@@ -376,8 +388,8 @@ public enum CommitLog {
         if let prefix = query.hashPrefix, let sha = resolve(prefix, in: root, git: git) { return CommitOrder(ids: [sha]) }
         // HEAD only when there is a commit: on an unborn branch, naming it is an error.
         let hasHead = query.scope != .all || resolve("HEAD", in: root, git: git) != nil
-        guard let data = GitRunner.run(git, base(root) + ["rev-list"] + query.arguments(includeHead: hasHead), timeout: timeout,
-                                       environment: query.environment) else {
+        guard let data = run(git, ["rev-list"] + query.arguments(includeHead: hasHead), paths: query.paths, in: root, timeout: timeout,
+                             environment: query.environment) else {
             // A repository without a single commit has nothing to list.
             return hasHead || query.scope != .all ? nil : CommitOrder(ids: [])
         }
@@ -524,7 +536,7 @@ public enum CommitLog {
                        "--src-prefix=a/", "--dst-prefix=b/"]
         let against = parent.map { ["--end-of-options", $0, commit] } ?? ["--root", "--end-of-options", commit]
         let paths = [oldPath, path].compactMap { $0 }
-        guard let data = GitRunner.run(git, base(root) + ["diff-tree", "-r", "--no-commit-id"] + options + against + ["--"] + paths, timeout: 15) else { return nil }
+        guard let data = run(git, ["diff-tree", "-r", "--no-commit-id"] + options + against + ["--"] + paths, paths: paths, in: root, timeout: 15) else { return nil }
         let files = UnifiedDiff.parse(String(decoding: data, as: UTF8.self))
         let new = files.first { $0.newPath == path }, old = files.first { $0.oldPath == path }
         // A file that became a link (or a link that became a file) is two patches, the old one deleted
