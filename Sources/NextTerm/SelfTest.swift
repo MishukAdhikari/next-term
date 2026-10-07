@@ -489,6 +489,7 @@ enum SelfTest {
         await updateChecks(c)
         await platformLinkChecks(c)
         await branchChecks(c, proj: proj)
+        await gitLogChecks(c, proj: proj)
         await ragColorChecks(c, proj: proj)
         await importChecks(c, proj: proj)
 
@@ -1140,6 +1141,114 @@ enum SelfTest {
         for name in ["feat/a", "fix/b", "claude/try", "feat/new-idea"] { run("branch", "-D", name) }
         run("rm", "-q", "conf.txt")
         run("commit", "-qm", "branch checks done")
+        c.sidebar.git.refresh()
+    }
+
+    /// The Git Log: commits newest first with graph lanes, filters by author and text, a commit's changed
+    /// files, a file's diff in that commit, showCommit selecting a commit, one branch's history, and the
+    /// way in from the branch popup and the Git menu.
+    private static func gitLogChecks(_ c: TerminalWindowController, proj: URL) async {
+        guard let git = GitRunner.locateGit() else { return }
+        @discardableResult func run(_ args: [String], author: String = "T") -> String {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: git)
+            p.arguments = ["-C", proj.path, "-c", "user.name=\(author)", "-c", "user.email=\(author.lowercased().replacingOccurrences(of: " ", with: "."))@t",
+                           "-c", "commit.gpgsign=false"] + args
+            let out = Pipe()
+            p.standardOutput = out
+            p.standardError = FileHandle.nullDevice
+            p.standardInput = FileHandle.nullDevice
+            try? p.run()
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        func items(_ menu: NSMenu) -> [NSMenuItem] { menu.items.flatMap { [$0] + ($0.submenu.map(items) ?? []) } }
+        let menu = items(NSApp.mainMenu ?? NSMenu())
+        let logItem = menu.first { $0.action == #selector(TerminalWindowController.showGitLog(_:)) }
+        check(logItem?.title == "Git Log" && logItem?.keyEquivalent == "l" && logItem?.keyEquivalentModifierMask == [.command, .option]
+              && menu.contains { $0.title == "Git Commands" && $0.action == #selector(TerminalWindowController.showGitCommands(_:)) },
+              "Git › Git Log is ⌥⌘L, and the commands Next Term ran are Git › Git Commands", logItem?.title ?? "no Git Log item")
+
+        // A side branch with a commit by someone else, merged back: two lanes and a merge.
+        let start = run(["rev-parse", "--abbrev-ref", "HEAD"])
+        run(["switch", "-qc", "log/side"])
+        try? "side\n".write(to: proj.appendingPathComponent("log-side.txt"), atomically: true, encoding: .utf8)
+        run(["add", "log-side.txt"])
+        run(["commit", "-qm", "Side work for the log"], author: "Ann Log")
+        let side = run(["rev-parse", "HEAD"])
+        run(["switch", "-q", start])
+        try? "main\n".write(to: proj.appendingPathComponent("log-main.txt"), atomically: true, encoding: .utf8)
+        run(["add", "log-main.txt"])
+        run(["commit", "-qm", "Main work for the log"])
+        run(["merge", "-q", "--no-ff", "--no-edit", "log/side"])
+        let merge = run(["rev-parse", "HEAD"])
+        c.sidebar.git.refresh()
+        _ = await wait(5) { c.sidebar.git.snapshot?.head.map { merge.hasPrefix($0) } == true }
+
+        c.showGitLog(nil)
+        guard let log = c.editorArea.activeGitLog else { return check(false, "⌥⌘L opens the Git Log in an editor tab") }
+        check(log.title == "Git Log" && canonicalPath(log.root) == canonicalPath(proj.path), "⌥⌘L opens the Git Log of the project in an editor tab")
+        check(await wait(10) { !log.isLoading && log.commits.count >= 4 }, "it lists the commits", "\(log.commits.count) commits, \(log.failure ?? "")")
+        check(log.commits.first?.sha == merge && log.rows.first?.isMerge == true, "newest first, the merge marked as one",
+              log.commits.prefix(3).map(\.subject).joined(separator: " | "))
+        check((log.rows.map(\.width).max() ?? 0) >= 2 && log.rows.count == log.commits.count, "the graph gives the side branch a lane of its own",
+              log.rows.prefix(4).map { "\($0.column)/\($0.width)" }.joined(separator: " "))
+        log.table.layoutSubtreeIfNeeded()
+        let graphCell = log.table.view(atColumn: 0, row: 0, makeIfNecessary: true) as? GitGraphView
+        let subjectCell = log.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? GitSubjectView
+        check(graphCell?.row?.isMerge == true && subjectCell?.accessibilityLabel()?.contains(start) == true,
+              "rows draw the graph, and the subject with its branch badge", subjectCell?.accessibilityLabel() ?? "no subject cell")
+        await screenshot(c, suffix: "git-log")
+
+        // Filters.
+        log.apply { $0.author = "ann log" }
+        check(await wait(8) { !log.isLoading && log.commits.map(\.sha) == [side] }, "the author filter finds the side commit (ignoring case)",
+              log.commits.map(\.subject).joined(separator: " | "))
+        log.apply { $0.author = ""; $0.text = "MAIN WORK" }
+        check(await wait(8) { !log.isLoading && log.commits.map(\.subject) == ["Main work for the log"] }, "the text filter searches messages, ignoring case",
+              log.commits.map(\.subject).joined(separator: " | "))
+        log.apply { $0.text = String(side.prefix(8)) }
+        check(await wait(8) { !log.isLoading && log.commits.map(\.sha) == [side] }, "a hash prefix finds its commit")
+        log.apply { $0.text = "" }
+        _ = await wait(8) { !log.isLoading && log.commits.count >= 4 }
+
+        // Details, and a changed file's diff in that commit.
+        log.select(sha: side)
+        check(await wait(5) { log.selectedCommit?.sha == side }, "a commit can be selected")
+        check(await wait(8) { log.details.fileNames == ["log-side.txt"] }, "the details list its changed files", log.details.fileNames.joined(separator: ", "))
+        check(log.details.text.contains("Ann Log") && log.details.text.contains(side) && log.details.text.contains("Side work for the log"),
+              "and show its message, author and full hash", log.details.text)
+        log.details.openFile(at: 0)
+        let diffTitle = "log-side.txt @ " + side.prefix(7)
+        check(await wait(8) { c.editorArea.activeDiff?.title == diffTitle && (c.editorArea.activeDiff?.changedLineCount ?? 0) > 0 },
+              "a changed file opens as its diff in that commit", c.editorArea.activeDiff?.title ?? "no diff in front")
+        if let diff = c.editorArea.activeDiff { c.editorArea.close(diff) }
+
+        // showCommit, with a filter that hides the commit: the filter goes, the commit is selected.
+        log.apply { $0.text = "nothing in this repository says this" }
+        _ = await wait(8) { !log.isLoading }
+        log.table.deselectAll(nil)
+        c.showCommit(sha: side, root: proj.appendingPathComponent("src").path)
+        check(await wait(10) { c.editorArea.activeGitLog === log && log.selectedCommit?.sha == side && log.query.text.isEmpty },
+              "showCommit opens the log at that commit", log.selectedCommit?.subject ?? "nothing selected")
+
+        // One branch's history, from the tree or the branch popup.
+        log.show(ref: "refs/heads/log/side")
+        check(await wait(8) { !log.isLoading && log.commits.first?.sha == side && !log.commits.contains { $0.sha == merge } },
+              "one branch shows its own history", log.commits.map(\.subject).joined(separator: " | "))
+        check(await wait(5) { log.refs.rowTitles.contains { $0.trimmingCharacters(in: .whitespaces) == "side" } }, "the branch tree lists branches in folders",
+              log.refs.rowTitles.joined(separator: " | "))
+        c.showBranches(nil)
+        check(await wait(5) { c.branchPopup.isVisible && c.branchPopup.rowTitles.contains("Git Log") }, "the branch popup has a Git Log row",
+              c.branchPopup.rowTitles.prefix(8).joined(separator: " | "))
+        c.branchPopup.close()
+
+        // Back as it was.
+        c.editorArea.close(log)
+        run(["branch", "-D", "log/side"])
+        run(["rm", "-q", "log-side.txt", "log-main.txt"])
+        run(["commit", "-qm", "git log checks done"])
         c.sidebar.git.refresh()
     }
 

@@ -244,7 +244,7 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.refs.update(model: model, tags: tags)
-                if self.signature == nil { self.signature = signature }
+                self.signature = signature ?? self.signature
                 if self.watcher == nil, let common = model?.commonDir { self.watch(common) }
             }
         }
