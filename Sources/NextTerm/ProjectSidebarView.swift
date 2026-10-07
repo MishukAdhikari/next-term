@@ -17,7 +17,12 @@ protocol ProjectSidebarDelegate: AnyObject {
     func sidebar(_ sidebar: ProjectSidebarView, sendToAgent urls: [(url: URL, isFolder: Bool)])
     /// Show a file's changes side by side.
     func sidebar(_ sidebar: ProjectSidebarView, showChanges url: URL)
+    /// A Databases row's Open or hand-off.
+    func sidebar(_ sidebar: ProjectSidebarView, database: DetectedDatabase, perform action: DatabaseAction)
 }
+
+/// What a Databases row can do beyond copying and revealing.
+enum DatabaseAction { case open, tablePlus, terminal, vercel }
 
 /// Outline view with the keys a file tree needs: Return renames (as in Finder), ⌘⌫ moves to the Trash,
 /// ⌘↓ opens.
@@ -62,6 +67,15 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// a deleted folder open across refreshes.
     private var deletedCache: [String: DeletedEntry] = [:]
     private var lastDeleted: Set<String> = []
+
+    /// "Databases" at the top of the tree: what the project's own files name (see Databases.scan).
+    let databasesGroup = DatabasesGroup()
+    private(set) var databaseScan = DatabaseScan()
+    private var databaseItems: [String: DatabaseItem] = [:]
+    private var databaseScanToken = 0
+    private var databaseScanQueued = false
+    /// Projects whose Databases group you closed: it stays closed for them.
+    private var collapsedDatabaseRoots: Set<String> = []
 
     /// Trees of recently shown roots, so switching between tabs in different projects keeps
     /// what was expanded and where you had scrolled.
@@ -142,8 +156,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// The tooltip for the row under the pointer (NSViewToolTipOwner).
     @objc func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
         let row = outline.row(at: point)
-        guard row >= 0, outline.visibleRect.contains(point),
-              let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? FileCellView else { return "" }
+        guard row >= 0, outline.visibleRect.contains(point) else { return "" }
+        if let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? DatabaseCellView { return cell.tipText }
+        guard let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? FileCellView else { return "" }
         return cell.tipText
     }
 
@@ -175,6 +190,77 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         watcher = DirectoryWatcher(path: canonical) { [weak self] paths in self?.filesChanged(paths) }
         gitDirWatcher = nil
         git.watch(canonical)
+        showDatabases(DatabaseScan())
+        scanDatabases()
+    }
+
+    // MARK: databases
+
+    /// Reads the project's files for databases, off the main thread.
+    func scanDatabases() {
+        guard let root else { return }
+        let path = root.path
+        databaseScanToken += 1
+        let token = databaseScanToken
+        DispatchQueue.global(qos: .utility).async {
+            let scan = Databases.scan(root: path)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, token == self.databaseScanToken, self.root?.path == path else { return }
+                self.showDatabases(scan)
+            }
+        }
+    }
+
+    /// Something changed near the top of the project (an env file, a config, a SQLite file): scan again
+    /// soon. Changes in dependency and build folders are ignored.
+    private func scheduleDatabaseScan(for paths: [String]) {
+        guard let root, !databaseScanQueued else { return }
+        let ignored = ["/node_modules/", "/vendor/", "/.git/", "/.next/", "/build/", "/dist/", "/.build/", "/storage/framework/"]
+        let relevant = paths.contains { raw in
+            let path = raw.hasSuffix("/") ? raw : raw + "/"
+            guard path == root.path + "/" || path.hasPrefix(root.path + "/") else { return false }
+            let rest = path.dropFirst(root.path.count)
+            return !ignored.contains { rest.contains($0) } && rest.split(separator: "/").count <= 3
+        }
+        guard relevant else { return }
+        databaseScanQueued = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            self?.databaseScanQueued = false
+            self?.scanDatabases()
+        }
+    }
+
+    private func showDatabases(_ scan: DatabaseScan) {
+        guard scan != databaseScan else { return }
+        let hadRows = !databasesGroup.items.isEmpty
+        databaseScan = scan
+        databasesGroup.vercelProject = scan.vercelProject
+        databasesGroup.items = scan.databases.map { db in
+            let item = databaseItems[db.id] ?? DatabaseItem(db)
+            item.database = db
+            return item
+        }
+        databaseItems = Dictionary(databasesGroup.items.map { ($0.database.id, $0) }, uniquingKeysWith: { a, _ in a })
+        guard let root else { return }
+        rowCache[ObjectIdentifier(root)] = nil
+        rowCache[ObjectIdentifier(databasesGroup)] = nil
+        let hasRows = !databasesGroup.items.isEmpty
+        if hadRows != hasRows {
+            outline.reloadItem(root, reloadChildren: true)
+        } else if hasRows {
+            outline.reloadItem(databasesGroup, reloadChildren: true)
+        }
+        if !hadRows, hasRows, !collapsedDatabaseRoots.contains(root.path), outline.isItemExpanded(root) {
+            outline.expandItem(databasesGroup)
+        }
+        updateToolTips()
+    }
+
+    /// The row of a database, for the self-test.
+    func databaseRow(_ id: String) -> Int? {
+        guard let item = databaseItems[id] else { return nil }
+        let row = outline.row(forItem: item)
+        return row >= 0 ? row : nil
     }
 
     private func saveCurrentTree() {
@@ -280,12 +366,14 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             if let node = root.node(at: path), node.isLoaded { refresh(node) }
         }
         git.refreshSoon()
+        scheduleDatabaseScan(for: paths)
     }
 
     func reloadAll() {
         guard let root else { return }
         refreshLoadedFolders(of: root)
         git.refresh()
+        scanDatabases()
     }
 
     // MARK: git
@@ -353,6 +441,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
                 }.map(\.item)
             }
             if let hidden = hiddenRows[id] { rows.append(hidden) }
+            if node === root, !databasesGroup.items.isEmpty { rows.insert(databasesGroup, at: 0) }
+        } else if item === databasesGroup {
+            rows = databasesGroup.items
         } else if let entry = item as? DeletedEntry, entry.isDirectory, let snapshot = git.snapshot {
             rows = snapshot.deletedEntries(in: entry.relative, existing: []).map {
                 deletedEntry(in: entry.relative, $0.name, isDirectory: $0.isDirectory, gitRoot: snapshot.root, realFolder: entry.realFolder)
@@ -397,11 +488,12 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
-        (item as? FileNode)?.isDirectory ?? (item as? DeletedEntry)?.isDirectory ?? false
+        if item is DatabasesGroup { return true }
+        return (item as? FileNode)?.isDirectory ?? (item as? DeletedEntry)?.isDirectory ?? false
     }
 
     func outlineView(_ outlineView: NSOutlineView, shouldExpandItem item: Any) -> Bool {
-        if item is DeletedEntry { return true }
+        if item is DeletedEntry || item is DatabasesGroup { return true }
         guard let node = item as? FileNode else { return false }
         if node.isLoaded { return true }
         load(node) { [weak self] in self?.outline.expandItem(node) }
@@ -416,6 +508,12 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     private func refreshIcon(of notification: Notification) {
         guard let item = notification.userInfo?["NSObject"] else { return }
+        if item is DatabasesGroup, let root {
+            // Remember a group you closed, for this project (not one that closed with its parent).
+            if notification.name == NSOutlineView.itemDidCollapseNotification, outline.isItemExpanded(root) { collapsedDatabaseRoots.insert(root.path) }
+            if notification.name == NSOutlineView.itemDidExpandNotification { collapsedDatabaseRoots.remove(root.path) }
+            return
+        }
         let row = outline.row(forItem: item)
         guard row >= 0, let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? FileCellView else { return }
         if let node = item as? FileNode {
@@ -426,6 +524,22 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
+        if item is DatabasesGroup || item is DatabaseItem {
+            let id = NSUserInterfaceItemIdentifier("database")
+            let cell = outlineView.makeView(withIdentifier: id, owner: self) as? DatabaseCellView ?? DatabaseCellView()
+            cell.identifier = id
+            if let database = item as? DatabaseItem {
+                cell.configure(database)
+                cell.onMenu = { [weak self, weak database] in
+                    guard let self, let database else { return NSMenu() }
+                    return self.databaseMenu(for: database.database)
+                }
+            } else {
+                cell.configureGroup(databasesGroup)
+                cell.onMenu = nil
+            }
+            return cell
+        }
         let id = NSUserInterfaceItemIdentifier("cell")
         let cell = outlineView.makeView(withIdentifier: id, owner: self) as? FileCellView ?? FileCellView()
         cell.identifier = id
@@ -443,10 +557,16 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat { 24 }
 
-    func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool { item is FileNode || item is DeletedEntry }
+    func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
+        item is FileNode || item is DeletedEntry || item is DatabaseItem
+    }
 
     @objc private func doubleClicked() {
         if let entry = outline.item(atRow: outline.clickedRow) as? DeletedEntry { return openDeleted(entry) }
+        if let item = outline.item(atRow: outline.clickedRow) as? DatabaseItem { return openDatabase(item.database) }
+        if outline.item(atRow: outline.clickedRow) is DatabasesGroup {
+            return outline.isItemExpanded(databasesGroup) ? outline.collapseItem(databasesGroup) : outline.expandItem(databasesGroup)
+        }
         guard let node = outline.item(atRow: outline.clickedRow) as? FileNode else { return }
         if node.isDirectory {
             outline.isItemExpanded(node) ? outline.collapseItem(node) : outline.expandItem(node)
@@ -458,6 +578,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     private func openSelected() {
         for node in selectedNodes where !node.isDirectory { delegate?.sidebar(self, openFile: node.url) }
         for entry in selectedDeleted where !entry.isDirectory { openDeleted(entry) }
+        for row in outline.selectedRowIndexes { if let item = outline.item(atRow: row) as? DatabaseItem { openDatabase(item.database) } }
     }
 
     /// A deleted file opens as what was removed; a deleted folder opens and closes.
@@ -499,6 +620,18 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        if let item = outline.item(atRow: outline.clickedRow) as? DatabaseItem {
+            let built = databaseMenu(for: item.database)
+            for entry in built.items {
+                built.removeItem(entry)
+                menu.addItem(entry)
+            }
+            return
+        }
+        if outline.item(atRow: outline.clickedRow) is DatabasesGroup {
+            add(menu, "Refresh Databases", #selector(refreshDatabasesFromMenu))
+            return
+        }
         if let entry = outline.item(atRow: outline.clickedRow) as? DeletedEntry {
             // Not on disk: nothing to open, rename or move; what it was is still in git.
             if !entry.isDirectory { add(menu, "Show What Was Deleted", #selector(showDeletedFromMenu)).representedObject = entry }
@@ -578,6 +711,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     @objc private func refreshFromMenu() { reloadAll() }
+    @objc private func refreshDatabasesFromMenu() { scanDatabases() }
 
     @objc private func openTab(_ sender: NSMenuItem) {
         if let folder = sender.representedObject as? String { delegate?.sidebar(self, openTabIn: folder) }

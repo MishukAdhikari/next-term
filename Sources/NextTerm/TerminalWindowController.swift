@@ -1188,6 +1188,21 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func sidebar(_ sidebar: ProjectSidebarView, showChanges url: URL) { showChanges(of: url) }
 
+    /// A Databases row's action. Hand-offs read the password from the project's file themselves.
+    func sidebar(_ sidebar: ProjectSidebarView, database: DetectedDatabase, perform action: DatabaseAction) {
+        guard let root = sidebar.root?.path else { return }
+        switch action {
+        case .open:
+            if let path = database.filePath { openFile(URL(fileURLWithPath: path)) }
+        case .tablePlus:
+            DatabaseHandOff.openInTablePlus(database, root: root, window: window)
+        case .terminal:
+            DatabaseHandOff.openInTerminal(database, root: root, controller: self)
+        case .vercel:
+            DatabaseHandOff.openInVercel(database, root: root, controller: self)
+        }
+    }
+
     func showChanges(of url: URL, base: GitRunner.DiffBase = .head) {
         let path = canonicalPath(url.path)
         let root = canonicalPath(ProjectRoot.find(from: (path as NSString).deletingLastPathComponent))

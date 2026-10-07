@@ -381,6 +381,25 @@ func visibleText(_ scan: DatabaseScan) -> String {
         #expect(DatabaseURL("https://example.com") == nil && DatabaseURL("not a url") == nil)
     }
 
+    // MARK: terminal hand-off
+
+    @Test func clientCommandsNeverCarryThePassword() throws {
+        let project = FixtureProject()
+        project.write(".env", Self.laravelEnv)
+        let mysql = try #require(project.scan().databases.first)
+        let line = DatabaseClientCommand.commandLine(for: mysql, program: "/opt/homebrew/bin/mysql", secretFile: "/tmp/x/a b.cnf")
+        #expect(line == "/opt/homebrew/bin/mysql '--defaults-extra-file=/tmp/x/a b.cnf' --host=127.0.0.1 --port=3306 --user=root shop")
+        #expect(!line.contains("s3cr"))
+        #expect(DatabaseClientCommand.secretFileContents(for: .mysql, password: #"a"b\c"#) == "[client]\npassword=\"a\\\"b\\\\c\"\n")
+
+        project.write(".env", "DATABASE_URL=postgres://app:pg:pass\\word@localhost:5433/app_dev\n")
+        let pg = try #require(project.scan().databases.first)
+        let args = DatabaseClientCommand.arguments(for: pg, program: "psql", secretFile: "/tmp/p.pgpass")
+        #expect(args == ["psql", "host='localhost' port='5433' dbname='app_dev' user='app' passfile='/tmp/p.pgpass'"])
+        #expect(!args.joined().contains("pass\\word"))
+        #expect(DatabaseClientCommand.secretFileContents(for: .postgres, password: #"pg:pass\word"#) == #"*:*:*:*:pg\:pass\\word"# + "\n")
+    }
+
     @Test func redactorCoversErrorText() {
         let text = DatabaseMask.redact("connection to postgres://app:Hunter2@db.example.com/app failed; retry with password=Hunter2&sslmode=require")
         #expect(!text.contains("Hunter2") && text.contains("postgres://app:•••@db.example.com/app") && text.contains("sslmode=require"))
