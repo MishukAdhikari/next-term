@@ -111,7 +111,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
         }
         let document: EditorDocument
         do {
-            document = try EditorDocument(url: URL(fileURLWithPath: path))
+            document = try EditorDocument(url: url) // it resolves links itself, and keeps the name it was opened by
         } catch EditorDocument.OpenError.notText {
             return .notText
         } catch EditorDocument.OpenError.tooLarge {
@@ -505,6 +505,8 @@ final class EditorArea: NSView, TabBarViewDelegate {
                 data.moved(to: URL(fileURLWithPath: new + data.path.dropFirst(old.count)))
             }
         }
+        // A new name can make a file a .env file, whose values may be hidden, or stop it being one.
+        editors.forEach { $0.textView.needsDisplay = true }
         refresh()
     }
 
@@ -566,6 +568,10 @@ final class EditorArea: NSView, TabBarViewDelegate {
 
     func applyWrap() {
         editors.forEach { $0.applyWrap() }
+    }
+
+    func applyEnvValuesSetting() {
+        editors.forEach { $0.applyEnvValuesSetting() }
     }
 
     /// Blame was turned on or off (View menu); `announce` says when the file in front has none. Only

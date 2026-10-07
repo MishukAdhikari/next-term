@@ -135,8 +135,9 @@ public struct MCPProjects: Sendable {
             if secretFolders.contains(folder) { return "is inside \(folder), a folder for keys and credentials" }
         }
         if name == ".git" { return "is git’s own data, which can hold credentials; git_status and get_diff show the changes" }
-        // .env.example is the committed template, as the IDE link has it (ClaudeIDEServer.isSensitive).
-        if (name.hasPrefix(".env") && name != ".env.example") || name.hasSuffix(".env") {
+        // Every env file the editor knows (.flaskenv too), and .envrc; .env.example is the committed
+        // template, as the IDE link has it (IDELink.isSensitive).
+        if name != ".env.example", name.hasPrefix(".env") || EnvFile.isEnvFile(named: name) {
             return "is an environment file, which usually holds secrets"
         }
         let ext = (name as NSString).pathExtension

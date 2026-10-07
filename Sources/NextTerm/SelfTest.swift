@@ -500,6 +500,7 @@ enum SelfTest {
         await branchCompareChecks(c)
         await backgroundFetchChecks(c)
         await ragColorChecks(c, proj: proj)
+        await envValueChecks(c, proj: proj)
         await importChecks(c, proj: proj)
 
         // The tree remembers what was expanded when you switch to a tab in another folder and back.
@@ -1467,6 +1468,244 @@ enum SelfTest {
                 check(found == hex, "RAG files: \(what) has its own colour", "\(file.name): \(word) is \(found)")
             }
             c.editorArea.close(editor)
+        }
+    }
+
+    /// Settings › Editor › Hide values in .env files: each value is drawn as bullets, on its row, while the
+    /// text stays as it is (copy, undo); the caret's line shows its value once you type in it, and only
+    /// that line of a private key; it hides again when the editor or its window loses the keyboard. View ›
+    /// Hide .env Values for one file, with a checkmark. A .env that links to a file elsewhere counts too.
+    private static func envValueChecks(_ c: TerminalWindowController, proj: URL) async {
+        guard let window = c.window, let app = AppDelegate.shared else { return }
+        let saved = app.hidesEnvValues
+        let folder = proj.appendingPathComponent("envmask")
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer {
+            app.hidesEnvValues = saved
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let long = String(repeating: "abcdefghij", count: 30) // wraps
+        var lines: [String] = ["# shared on screen", "API_KEY=sk-live-0123456789 # rotate monthly", "export DB_URL=\"postgres://u:p@h/db\"",
+                               "LONG=" + long, "EMPTY="]
+        lines.append(contentsOf: ["PEM=\"-----BEGIN KEY-----", "MIIabc", "-----END KEY-----\""]) // a private key, over three lines
+        let original = lines.joined(separator: "\n") + "\n"
+        let url = folder.appendingPathComponent(".env")
+        try? original.write(to: url, atomically: true, encoding: .utf8)
+        app.hidesEnvValues = true
+        c.openFile(url)
+        guard let editor = c.editorArea.activeEditor, editor.document.path.hasSuffix("envmask/.env") else { return check(false, "a .env file opens") }
+        let view = editor.textView
+        let doc = editor.document
+        _ = await wait(5) { doc.highlighter?.pendingLines == 0 }
+        window.makeFirstResponder(view)
+        let text = doc.text as NSString
+        let key = text.range(of: "API_KEY"), value = text.range(of: "sk-live-0123456789")
+        // The caret at the end of the line, away from the key and the value.
+        let lineEnd = NSMaxRange(text.range(of: "# rotate monthly"))
+        view.setSelectedRange(NSRange(location: lineEnd, length: 0))
+        func bullets(_ count: Int) -> String { String(repeating: "•", count: count) }
+        var hidden: [String] = [lines[0]]
+        hidden.append("API_KEY=" + bullets(18) + " # rotate monthly")
+        hidden.append("export DB_URL=" + bullets(21))
+        hidden.append("LONG=" + bullets(300))
+        hidden.append("EMPTY=")
+        hidden.append("PEM=" + bullets(20))
+        hidden.append(bullets(6))
+        hidden.append(bullets(18))
+        let drawn = lines.indices.map { editor.drawnText(line: $0) }
+        check(drawn == hidden, ".env values are drawn as bullets; keys, comments and the caret's line too until you type",
+              drawn.joined(separator: " | "))
+        check(doc.text == original && !doc.isDirty, "and the text itself is unchanged")
+        await screenshot(c, suffix: "env-hidden")
+
+        // What is really drawn over some characters on one row: the image, how many pixels are ink (unlike
+        // the row's background, its most common colour), and whether ink touches the row's top or bottom
+        // edge, as bullets drawn off their baseline would.
+        struct Drawn { var image: Data?; var ink = 0; var atEdge = false }
+        func pixels(_ characters: NSRange) -> Drawn {
+            guard let manager = view.layoutManager, let container = view.textContainer else { return Drawn() }
+            manager.ensureLayout(for: container)
+            let glyphs = manager.glyphRange(forCharacterRange: characters, actualCharacterRange: nil)
+            let row = manager.lineFragmentRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+            let bounds = manager.boundingRect(forGlyphRange: glyphs, in: container).intersection(row)
+                .offsetBy(dx: view.textContainerOrigin.x, dy: view.textContainerOrigin.y)
+            // Whole points inside the row, so no sliver of the next row (or of the caret line's band) comes in.
+            let left = bounds.minX.rounded(.up), top = bounds.minY.rounded(.up)
+            let right = bounds.maxX.rounded(.down), bottom = bounds.maxY.rounded(.down)
+            let rect = NSRect(x: left, y: top, width: right - left, height: bottom - top)
+            guard rect.width > 0, rect.height > 0, let rep = view.bitmapImageRepForCachingDisplay(in: rect) else { return Drawn() }
+            view.cacheDisplay(in: rect, to: rep)
+            var result = Drawn(image: rep.tiffRepresentation)
+            var samples = [Int](repeating: 0, count: max(rep.samplesPerPixel, 4))
+            func pixel(_ x: Int, _ y: Int) -> [Int] {
+                rep.getPixel(&samples, atX: x, y: y)
+                return Array(samples.prefix(rep.samplesPerPixel))
+            }
+            var counts: [[Int]: Int] = [:]
+            for y in 0..<rep.pixelsHigh {
+                for x in 0..<rep.pixelsWide { counts[pixel(x, y), default: 0] += 1 }
+            }
+            guard let paper = counts.max(by: { $0.value < $1.value })?.key else { return result }
+            for y in 0..<rep.pixelsHigh {
+                for x in 0..<rep.pixelsWide {
+                    var difference = 0
+                    for (sample, background) in zip(pixel(x, y), paper) { difference += abs(sample - background) }
+                    guard difference > 48 else { continue }
+                    result.ink += 1
+                    if y == 0 || y == rep.pixelsHigh - 1 { result.atEdge = true }
+                }
+            }
+            return result
+        }
+        /// The characters on a wrapped line's second row, or nil if it does not wrap.
+        func secondRow(_ characters: NSRange) -> NSRange? {
+            guard let manager = view.layoutManager else { return nil }
+            var fragments: [NSRange] = []
+            let glyphs = manager.glyphRange(forCharacterRange: characters, actualCharacterRange: nil)
+            manager.enumerateLineFragments(forGlyphRange: glyphs) { _, _, _, row, _ in fragments.append(row) }
+            guard fragments.count > 1 else { return nil }
+            return NSIntersectionRange(manager.characterRange(forGlyphRange: fragments[1], actualGlyphRange: nil), characters)
+        }
+        func rows() -> [NSRect] {
+            guard let manager = view.layoutManager, let container = view.textContainer else { return [] }
+            return (0..<doc.lines.count).map { line in
+                manager.boundingRect(forGlyphRange: manager.glyphRange(forCharacterRange: doc.lines.range(ofLine: line), actualCharacterRange: nil),
+                                     in: container)
+            }
+        }
+        let wrapped = secondRow(text.range(of: long))
+        if wrapped == nil { note("LONG did not wrap (soft wrap off?): its second row is not measured") }
+        let hiddenValue = pixels(value), hiddenKey = pixels(key), hiddenRows = rows()
+        let hiddenWrap = wrapped.map(pixels)
+        check(hiddenValue.ink > 0 && !hiddenValue.atEdge, "a hidden value's bullets are drawn, within its row",
+              "\(hiddenValue.ink) pixels of ink, at the edge: \(hiddenValue.atEdge)")
+        if let hiddenWrap {
+            check(hiddenWrap.ink > 0 && !hiddenWrap.atEdge, "and on the second row of a value that wraps",
+                  "\(hiddenWrap.ink) pixels of ink, at the edge: \(hiddenWrap.atEdge)")
+        }
+
+        // View › Hide .env Values: checked while this file's values are hidden.
+        var menuItem: NSMenuItem?
+        for top in NSApp.mainMenu?.items ?? [] where menuItem == nil {
+            menuItem = top.submenu?.items.first(where: { $0.action == #selector(TerminalWindowController.toggleEnvValues(_:)) })
+        }
+        check(menuItem?.title == "Hide .env Values", "View › Hide .env Values is in the menu", menuItem?.title ?? "missing")
+        let item = menuItem ?? NSMenuItem(title: "", action: #selector(TerminalWindowController.toggleEnvValues(_:)), keyEquivalent: "")
+        check(c.validateMenuItem(item) && item.state == .on, "and is checked for a .env file whose values are hidden")
+        c.toggleEnvValues(nil)
+        check(!editor.hidesEnvValues && editor.drawnText(line: 1) == lines[1] && editor.drawnText(line: 3) == lines[3],
+              "choosing it shows this file's values", editor.drawnText(line: 1))
+        let shownValue = pixels(value)
+        check(hiddenValue.image != nil && hiddenValue.image != shownValue.image, "a hidden value is drawn differently from its text")
+        if let wrapped, let hiddenWrap {
+            check(hiddenWrap.image != pixels(wrapped).image, "and so is the second row of one that wraps")
+        }
+        check(hiddenKey.image != nil && hiddenKey.image == pixels(key).image, "its key is drawn the same either way")
+        check(!hiddenRows.isEmpty && hiddenRows == rows(), "the rows are laid out the same, hidden or shown: only the drawing differs",
+              "\(hiddenRows.count) rows")
+        _ = c.validateMenuItem(item)
+        check(item.state == .off, "the menu item's checkmark then comes off")
+        c.toggleEnvValues(nil)
+        check(editor.drawnText(line: 1) == hidden[1], "choosing it again hides them again", editor.drawnText(line: 1))
+
+        // Copy takes the real text.
+        let clipboard = NSPasteboard.general.string(forType: .string)
+        view.setSelectedRange(value)
+        view.copy(nil)
+        check(NSPasteboard.general.string(forType: .string) == "sk-live-0123456789" && editor.drawnText(line: 1) == hidden[1],
+              "copying a hidden value copies the value; a selection shows nothing")
+        NSPasteboard.general.clearContents()
+        if let clipboard { NSPasteboard.general.setString(clipboard, forType: .string) }
+
+        // Typing on a line shows that line's value, and only that line's, while the window has the keyboard.
+        func press(_ characters: String, keyCode: UInt16) {
+            let time = ProcessInfo.processInfo.systemUptime
+            guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: time,
+                                               windowNumber: window.windowNumber, context: nil, characters: characters,
+                                               charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode) else { return }
+            view.keyDown(with: event)
+        }
+        window.makeKeyAndOrderFront(nil)
+        let keyed = window.isKeyWindow
+        if !keyed { note("the window does not have the keyboard (app not frontmost?): the lines typed in are only checked to stay hidden") }
+        view.setSelectedRange(NSRange(location: lineEnd, length: 0))
+        press("9", keyCode: 25)
+        check(view.caretPlacedByUser, "a key in the editor counts as typing there")
+        if doc.text == original {
+            note("the synthetic key typed nothing (app not frontmost?); typing it through insertText")
+            view.insertText("9", replacementRange: view.selectedRange())
+        }
+        let typed = editor.drawnText(line: 1)
+        if keyed {
+            check(typed == lines[1] + "9" && editor.drawnText(line: 2) == hidden[2],
+                  "the line you type in shows its value; the others stay hidden", "\(typed) | \(editor.drawnText(line: 2))")
+            _ = await wait(2) { doc.highlighter?.pendingLines == 0 } // the typed line coloured again
+            check(pixels(value).image == shownValue.image, "and it is drawn as plain text")
+        } else {
+            check(typed == hidden[1] + "9", "a window without the keyboard shows no value, even on the line typed in", typed)
+        }
+        doc.undoManager.undo()
+        check(doc.text == original, "undo works on the real text")
+
+        // A private key: only the caret's line of it shows.
+        let left = "\u{F702}" // NSLeftArrowFunctionKey
+        func pemLines() -> [String] { (5...7).map { editor.drawnText(line: $0) } }
+        let pemHidden = Array(hidden[5...7])
+        var pemShown = pemHidden
+        pemShown[1] = lines[6]
+        view.setSelectedRange(NSRange(location: NSMaxRange(text.range(of: "MIIabc")), length: 0))
+        press(left, keyCode: 123)
+        if keyed {
+            check(pemLines() == pemShown, "on one line of a value over several lines, only that line shows", pemLines().joined(separator: " | "))
+        }
+        window.makeFirstResponder(nil)
+        check(pemLines() == pemHidden, "when the editor loses the keyboard, that line hides again", pemLines().joined(separator: " | "))
+        window.makeFirstResponder(view)
+        check(pemLines() == pemHidden, "and stays hidden when it comes back, until you click or type")
+        if keyed {
+            press(left, keyCode: 123)
+            let before = pemLines()
+            // What a switch to another app, such as a screen-share app, does to the window.
+            NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
+            _ = await wait(1) { !view.caretPlacedByUser }
+            let after = pemLines()
+            check(before == pemShown && after == pemHidden && !view.caretPlacedByUser,
+                  "when the window loses the keyboard (another app, such as a screen share), that line hides too", "\(before) then \(after)")
+        }
+
+        // The setting off shows every value.
+        app.hidesEnvValues = false
+        let plain = lines.indices.map { editor.drawnText(line: $0) }
+        check(plain == lines, "turning the setting off shows every value", plain.joined(separator: " | "))
+        if doc.isDirty { doc.reload() }
+        c.editorArea.close(editor)
+
+        // A .env that links to a file elsewhere is a .env file by the name it was opened by, and the
+        // editor link shares nothing from it.
+        app.hidesEnvValues = true
+        let target = folder.appendingPathComponent("shared/app-secrets"), link = folder.appendingPathComponent("linked/.env")
+        try? FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? "DB_PASSWORD=hunter2\n".write(to: target, atomically: true, encoding: .utf8)
+        try? FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        c.openFile(link)
+        if let linked = c.editorArea.activeEditor, linked.document.name == "app-secrets" {
+            linked.textView.setSelectedRange(NSRange(location: 0, length: 11))
+            let linkedHidden = "DB_PASSWORD=" + bullets(7)
+            check(linked.isEnvFile && linked.drawnText(line: 0) == linkedHidden, "a .env that links to another file hides its values",
+                  linked.drawnText(line: 0))
+            let gemini = c.openFilesForGemini().contains { ($0["path"] as? String) == linked.document.path }
+            check(c.currentSelectionForClaude()["filePath"] == nil && !gemini, "and the editor link shares nothing from it")
+            c.editorArea.close(linked)
+        } else {
+            check(false, "a .env that links to another file opens", c.editorArea.activeEditor?.document.name ?? "nothing")
+        }
+
+        // A file that is not a .env file has nothing to hide.
+        c.openFile(proj.appendingPathComponent("src/app.txt"))
+        if let other = c.editorArea.activeEditor, other.document.name == "app.txt" {
+            check(!c.validateMenuItem(item), "the menu item is off for files that are not .env files")
+            c.editorArea.close(other)
         }
     }
 

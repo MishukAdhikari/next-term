@@ -363,11 +363,8 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
         ]
     }
 
-    static func isSensitive(_ path: String) -> Bool {
-        let name = (path as NSString).lastPathComponent.lowercased()
-        return name == ".env" || name.hasPrefix(".env.") && name != ".env.example" || name.hasSuffix(".pem") || name.hasSuffix(".key")
-            || name == "id_rsa" || name == "id_ed25519" || name == ".npmrc" || name == ".netrc"
-    }
+    /// .env files (and *.env, .flaskenv), keys and credentials files; the list is IDELink's.
+    static func isSensitive(_ path: String) -> Bool { IDELink.isSensitive(path) }
 
     /// Which tab a `claude` process runs in: walk its parents up to a tab's shell.
     static func tab(for pid: pid_t, among tabs: [TerminalTab]) -> TerminalTab? {

@@ -70,6 +70,18 @@ PHP files are coloured with the grammar that also understands the HTML around `<
 - **Font size** is shared with the terminal: <kbd>⌘+</kbd> bigger, <kbd>⌘-</kbd> smaller, <kbd>⌘0</kbd> back to 13 pt, anywhere from 8 to 32 pt. The font is JetBrains Mono if you have it installed, and SF Mono otherwise; **Settings › Editor › Font** chooses another monospaced font, and **Settings › Terminal › Font** the terminal’s.
 - **Soft wrap** (**View › Soft Wrap**, on by default) wraps long lines at the window’s edge. A wrapped line continues under its own indentation plus two columns, so a long statement still reads as one statement at its level. Line numbers stay on each line’s first row.
 
+## Hiding .env values
+
+When you share your screen or record it, the editor can draw the values in your environment files as dots. Turn on **Settings › Editor › Hide values in .env files** (off by default), or use **View › Hide .env Values** for the file in front.
+
+- **Which files:** `.env`, `.env.*` (such as `.env.local` or `.env.example`), `*.env` (such as `prod.env`) and `.flaskenv`, by the name you open them by, so a `.env` that links to a file elsewhere counts too.
+- **What is hidden:** everything after the first `=` on a `KEY=value` line, quotes included, and every line of a quoted value that runs over several lines, such as a private key. Keys, comments, and a `# comment` after a value stay visible.
+- **Only the drawing changes.** Copy, Find, save and undo work on the real values, and the file on disk stays as it is. Soft wrap, line numbers, blame and the change marks stay where they were.
+- **Typing is not blind.** Click or type in a line and it shows its value while the caret is on it; on a private key, only that one line of it. When the editor loses the keyboard, to another window or another app such as your screen-share app, the line hides again. A file you open, or come back to, shows no values until you click or type.
+- **One file:** **View › Hide .env Values** turns hiding on or off for the file in front, and has a checkmark while its values are hidden. Changing the setting applies it to every open file again.
+
+Only the editor hides them: the terminal, side-by-side diffs and Find in Files results show the values as they are.
+
 ## Files keep their format
 
 Saving writes the file back the way it was stored:

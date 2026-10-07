@@ -91,6 +91,7 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Annotate with Git Blame (who last changed each line, beside the numbers) | — |
 | Current Line Blame (a note after the caret line; off by default) | — |
 | Soft Wrap | — |
+| Hide .env Values (the file in front; checked while its values are hidden) | — |
 | Line Height › 1.0 to 2.0 | — |
 | Project Sidebar on the Right | — |
 | Bigger | <kbd>⌘+</kbd> (also <kbd>⌘=</kbd>) |

@@ -68,7 +68,39 @@ final class CodeTextView: NSTextView {
 
     override func resignFirstResponder() -> Bool {
         defer { needsDisplay = true }
-        return super.resignFirstResponder()
+        let resigned = super.resignFirstResponder()
+        if resigned { caretPlacedByUser = false }
+        return resigned
+    }
+
+    /// A click or a key in the text since it got the keyboard: a .env file's caret line then shows its
+    /// value (CodeEditorView.hiddenEnvValues).
+    var caretPlacedByUser = false {
+        didSet { if caretPlacedByUser != oldValue { needsDisplay = true } }
+    }
+
+    private var keyObserver: NSObjectProtocol?
+
+    /// The window keeps its first responder when another window or app takes the keyboard (a switch to
+    /// a screen-share app), so that counts as losing it too: the caret's line hides again.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let keyObserver { NotificationCenter.default.removeObserver(keyObserver) }
+        keyObserver = nil
+        guard let window else { return }
+        keyObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) { [weak self] _ in
+            self?.caretPlacedByUser = false
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        caretPlacedByUser = true
+        super.mouseDown(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        caretPlacedByUser = true
+        super.keyDown(with: event)
     }
 
     private var indentUnit: String { document?.indentUnit ?? "    " }
@@ -400,10 +432,12 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
     let textView: CodeTextView
     private let ruler: LineNumberRuler
     let spacing = LineSpacing()
+    /// A .env file's values, drawn hidden (EditorEnvValues.swift).
+    let envValues = EnvValueMask()
 
     init(document: EditorDocument) {
         self.document = document
-        let layoutManager = NSLayoutManager()
+        let layoutManager = CodeLayoutManager()
         layoutManager.allowsNonContiguousLayout = true
         layoutManager.delegate = spacing
         document.storage.addLayoutManager(layoutManager)
@@ -460,7 +494,11 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
             self?.restyleReplacedLines()
             self?.scheduleChangeMarks(after: 0)
         }
-        document.onLinesEdited = { [weak self] old, newLast in self?.shiftBlame(old, newLast) }
+        document.onLinesEdited = { [weak self] old, newLast in
+            self?.shiftBlame(old, newLast)
+            self?.envValues.textEdited()
+        }
+        layoutManager.hiddenRanges = { [weak self] in self?.hiddenEnvValues() ?? [] }
         ruler.blameSource = { [weak self] in self?.editedBlame }
         ruler.onBlameClick = { [weak self] sha, root in
             (self?.window?.windowController as? TerminalWindowController)?.showCommit(sha: sha, root: root)
