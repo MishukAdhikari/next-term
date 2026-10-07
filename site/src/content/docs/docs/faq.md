@@ -24,7 +24,7 @@ No. Next Term brings no model and no account. It runs the agent command-line too
 
 ## Which Macs and macOS versions are supported?
 
-macOS 13 Ventura or later, on Apple Silicon and Intel: the app is universal. The download is about 3 MB and the app takes about 8 MB.
+macOS 13 Ventura or later, on Apple Silicon and Intel: the app is universal. The download is about {{DOWNLOAD_SIZE}} and the app takes about {{INSTALLED_SIZE}}.
 
 ## How do I install it?
 

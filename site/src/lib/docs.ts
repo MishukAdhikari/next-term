@@ -1,4 +1,5 @@
 import { getCollection, type CollectionEntry } from 'astro:content';
+import { withFacts } from './facts';
 
 /** The documentation pages in reading order (the sidebar’s order in astro.config.mjs). */
 export const DOCS_ORDER = [
@@ -64,11 +65,11 @@ export function pageUrl(id: string, site: URL) {
 }
 
 /**
- * The Markdown of a page made readable as plain text for language models: inline HTML reduced to its
- * words, screenshots to their descriptions, and site links made absolute.
+ * The Markdown of a page made readable as plain text for language models: facts filled in, inline HTML
+ * reduced to its words, screenshots to their descriptions, and site links made absolute.
  */
 export function markdownForLlms(body: string, site: URL) {
-	return body
+	return withFacts(body)
 		.replace(/<span class="nt-soon">([^<]+)<\/span>\s*/g, '[$1] ')
 		.replace(/<span class="nt-mark[^"]*">([^<]+)<\/span>\s*/g, '$1 ')
 		.replace(/<kbd>([^<]+)<\/kbd>/g, '$1')

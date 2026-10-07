@@ -9,6 +9,7 @@ It fails (exit 1) on:
 - JSON-LD that does not parse, or a page missing the structured data it should have;
 - a page missing from the sitemap, or a sitemap entry with no page;
 - a missing IndexNow key file, or a canonical link on the not-found page;
+- a {{NAME}} fact from src/config.ts left unfilled on a page or in llms.txt or llms-full.txt;
 - any resource loaded from another origin (scripts, styles, fonts, images, frames);
 - a <title> over 60 characters, a meta description over 155, no or several <h1>, a missing lang,
   an image without alt text;
@@ -326,6 +327,11 @@ def main() -> int:
             parsed = urlparse(url)
             if parsed.netloc == SITE_HOST and target_for(parsed.path or "/") is None:
                 error(name, f"link {url} does not resolve")
+
+    # Facts a Markdown page writes as {{NAME}} (src/lib/facts.ts): none may reach a reader unfilled.
+    for file in html_files + [DIST / "llms.txt", DIST / "llms-full.txt"]:
+        for token in sorted(set(re.findall(r"\{\{[A-Z][A-Z_]*\}\}", file.read_text(encoding="utf-8")))):
+            error(page_url(file) if file.suffix == ".html" else file.name, f"{token} was not filled in")
 
     # The IndexNow key file: /<key>.txt holding exactly the key from src/config.ts.
     key = re.search(r"export const INDEXNOW_KEY = '([^']+)'", (ROOT / "src" / "config.ts").read_text(encoding="utf-8"))

@@ -1,3 +1,5 @@
+import { withFacts } from './facts';
+
 /** A `<script type="application/ld+json">` head entry. `<` is escaped so no value can end the script. */
 export function jsonLd(data: object) {
 	return {
@@ -20,7 +22,7 @@ export function plainText(markdown: string) {
 		.trim();
 }
 
-/** The questions (`## …?` or `### …?`) and their answers in a Markdown page. */
+/** The questions (`## …?` or `### …?`) and their answers in a Markdown page, its facts filled in. */
 export function faqItems(markdown: string) {
 	const items: { question: string; answer: string }[] = [];
 	let current: { question: string; lines: string[] } | undefined;
@@ -28,7 +30,7 @@ export function faqItems(markdown: string) {
 		if (current) items.push({ question: current.question, answer: plainText(current.lines.join('\n')) });
 		current = undefined;
 	};
-	for (const line of markdown.split('\n')) {
+	for (const line of withFacts(markdown).split('\n')) {
 		const question = /^#{2,3}\s+(.*\?)\s*$/.exec(line);
 		if (question) {
 			flush();

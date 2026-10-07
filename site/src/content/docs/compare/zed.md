@@ -43,7 +43,7 @@ Zed is an open-source code editor written in Rust, for macOS, Linux and Windows,
 - **You want agent status with nothing to configure.** Next Term shows working, done or waiting on the tab of 20 agents as soon as they start: Claude Code, Codex, Command Code and Gemini CLI read from their screen, the way you would, and the others from output timing. In Zed, a Terminal Thread notifies you when the program rings the terminal bell, and Claude Code has to be set to ring it.
 - **You want the question in the notification.** When an agent asks for permission, Next Term’s notification quotes it and takes you to the tab.
 - **You want one agent to run the others.** Next Term is an MCP server: an orchestrator can list every tab with its agent’s state, start agents, send prompts, wait and read their screens, across projects.
-- **You want a small native Mac app,** about 3 MB, with no account and no AI service attached.
+- **You want a small native Mac app,** about a {{DOWNLOAD_SIZE}} download, with no account and no AI service attached.
 
 ## Use both
 

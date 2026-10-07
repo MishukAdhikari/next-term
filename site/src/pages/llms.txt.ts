@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro';
-import { DOWNLOAD_DMG, MIN_MACOS, RELEASES_LATEST, REPO, SUMMARY, TAGLINE, VERSION } from '../config';
+import { DOWNLOAD_DMG, DOWNLOAD_SIZE, INSTALLED_SIZE, MIN_MACOS, RELEASES_LATEST, REPO, SUMMARY, TAGLINE, VERSION } from '../config';
 import { comparisonsInOrder, docsInOrder, pageUrl } from '../lib/docs';
 
 // /llms.txt in the llmstxt.org format: a summary, then the pages worth reading, with what each covers.
@@ -27,7 +27,7 @@ export const GET: APIRoute = async ({ site }) => {
 		'',
 		`> ${SUMMARY}`,
 		'',
-		`${TAGLINE}. Current version: ${VERSION}. Requires ${MIN_MACOS}, Apple Silicon or Intel (universal app, about 3 MB). Free and open source under the MIT licence. It brings no AI model of its own and needs no account: it runs the agent command-line tools the user installs (Claude Code, Codex, Gemini CLI, Qwen Code, Command Code, Junie, opencode and others).`,
+		`${TAGLINE}. Current version: ${VERSION}. Requires ${MIN_MACOS}, Apple Silicon or Intel (universal app: about ${DOWNLOAD_SIZE} to download, ${INSTALLED_SIZE} installed). Free and open source under the MIT licence. It brings no AI model of its own and needs no account: it runs the agent command-line tools the user installs (Claude Code, Codex, Gemini CLI, Qwen Code, Command Code, Junie, opencode and others).`,
 		'',
 		'Key facts:',
 		'',

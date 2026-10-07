@@ -9,6 +9,7 @@ import diffShot from '../assets/screenshots/diff.webp';
 import {
 	AUTHOR,
 	AUTHOR_URL,
+	DOWNLOAD_SIZE,
 	MIN_MACOS,
 	RELEASE_NOTES,
 	DOWNLOAD_DMG,
@@ -55,7 +56,7 @@ const head = [
 		softwareVersion: VERSION,
 		downloadUrl: DOWNLOAD_DMG,
 		releaseNotes: RELEASE_NOTES,
-		fileSize: '3MB',
+		fileSize: DOWNLOAD_SIZE.replace(' ', ''),
 		license: 'https://opensource.org/license/mit',
 		isAccessibleForFree: true,
 		offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
@@ -196,7 +197,7 @@ const faq = [
 			<span>Free and open source (MIT)</span>
 			<span>{MIN_MACOS}</span>
 			<span>Apple Silicon and Intel</span>
-			<span>3 MB download</span>
+			<span>{DOWNLOAD_SIZE} download</span>
 		</p>
 
 		<figure class="shot shot--hero">

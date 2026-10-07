@@ -27,7 +27,7 @@ JetBrains IDEs (IntelliJ IDEA, WebStorm, GoLand, PhpStorm, PyCharm, Rider, RubyM
 | Reviewing changes | ✓ Side-by-side diffs; stage, unstage or revert per hunk; the Git Log and blame | ✓ The IDE’s diff viewer; commit chosen chunks and lines |
 | Remote development | Partly: terminal tabs on your servers over ssh, kept running in tmux or herdr; the editor opens your Mac’s files | ✓ SSH, dev containers, WSL, JetBrains Gateway |
 | Real-time collaboration | — | Partly: Code With Me is being retired; its service ends in the first quarter of 2027 |
-| The app | Native Swift and AppKit, about a 3 MB download | Full IDEs |
+| The app | Native Swift and AppKit, about a {{DOWNLOAD_SIZE}} download | Full IDEs |
 
 ## Choose a JetBrains IDE if…
 
@@ -41,7 +41,7 @@ JetBrains IDEs (IntelliJ IDEA, WebStorm, GoLand, PhpStorm, PyCharm, Rider, RubyM
 - **You run Claude Code, Codex, Gemini CLI or other agents in a terminal** and want them side by side, each with its status on its tab and a notification that quotes its question.
 - **You use several IDEs, or none.** Next Term works next to any editor, and its agents work on any project folder.
 - **You want one agent to orchestrate the others** across projects, through Next Term’s MCP server.
-- **You want something small and free for the agents:** about 3 MB, MIT-licensed, no account and no subscription.
+- **You want something small and free for the agents:** about a {{DOWNLOAD_SIZE}} download, MIT-licensed, no account and no subscription.
 
 ## Use both
 
