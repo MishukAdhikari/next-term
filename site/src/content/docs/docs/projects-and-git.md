@@ -75,7 +75,7 @@ Click the branch name at the top of the sidebar, or press <kbd>⌥⌘B</kbd> (**
 - **Local**: the current branch first, then folders by prefix (`feat/`, `fix/`), and **Agent branches**, where branches agents make (`claude/…`, `codex/…`, `worktree-…`) stay out of your way. Each shows `↓` and `↑` against its upstream, `gone` when the upstream was deleted, and the worktree it is checked out in.
 - **Worktrees** and **Remote**, when there are any.
 
-<kbd>↩</kbd> checks the branch out; <kbd>→</kbd> or the › opens everything else: **New Branch from Here**, **Show History** (the [Git Log](#git-log) of that branch), **Rebase onto**, **Merge into**, **Push**, **Rename…**, **Delete…**, **Copy Name**. Typing a name that doesn’t exist offers **New Branch** with it, and a tag or commit offers to check it out.
+<kbd>↩</kbd> checks the branch out; <kbd>→</kbd>, the › or a right-click opens everything else: **New Branch from Here**, **Show History** (the [Git Log](#git-log) of that branch), **Compare with “main”** and **Show Diff with Working Tree** (see [Compare a branch](#compare-a-branch)), **Rebase onto**, **Merge into**, **Push**, **Rename…**, **Delete…**, **Copy Name**. Typing a name that doesn’t exist offers **New Branch** with it, and a tag or commit offers to check it out.
 
 **Nothing is lost, and nothing happens behind an agent’s back:**
 
@@ -88,6 +88,15 @@ Click the branch name at the top of the sidebar, or press <kbd>⌥⌘B</kbd> (**
 **Commit…** shows exactly what goes in (what you staged, or every change, with new files marked and anything that looks like a secret or is over 5 MB called out), with **Amend last commit**, **Commit and Push**, and **Let Agent Commit**. A commit can be undone until it is pushed.
 
 Every git command Next Term runs for you is in **Git › Git Commands**, exactly as it would be typed (the commit history is the [Git Log](#git-log)). Next Term never waits on a password prompt: when git needs your password, a key passphrase or a new host key, it says so and opens a terminal tab with the command ready.
+
+### Compare a branch
+
+Two items in a branch’s menu, local or remote, open a tab:
+
+- **Compare with “main”** (the branch you are on, or HEAD when detached) lists the commits only on that branch, then the commits only on yours, newest first, with how many in each heading (up to 500 are listed a side). A commit marked `=` has the same change on the other side, such as a cherry-pick. Below them are the files the branch changed since the two parted. Double-click a commit to see it in the [Git Log](#git-log), or a file for its diff, in a tab titled like `app.txt @ feat/x`.
+- **Show Diff with Working Tree** lists the files on disk that differ from that branch. Double-click one for its diff side by side, the branch’s version on the left and yours on the right, in a tab titled like `app.txt ↔ feat/x`. Files git doesn’t track aren’t compared.
+
+Right-click a commit for **Show in Git Log** and **Copy Hash**, or a file for **Show Diff** and **Copy Path**. Both tabs only read, and read again when a branch moves (yours or an agent’s) or, for the working tree, when a file changes.
 
 ## Git Log
 

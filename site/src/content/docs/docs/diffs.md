@@ -36,6 +36,8 @@ The switch at the top chooses what to compare:
 | Unstaged | The file on disk against the index | `file ↔ Index` |
 | Staged | The index against the last commit | `file ↔ HEAD` |
 
+A branch’s diffs open from the branch popup, read-only: `file @ feat/x` is what that branch changed since it parted from yours, and `file ↔ feat/x` is the file on disk against that branch. See [Compare a branch](/docs/projects-and-git/#compare-a-branch).
+
 ## Stage, unstage or revert one hunk
 
 Act on the current change (the hunk) with the buttons on the right:
