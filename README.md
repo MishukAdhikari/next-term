@@ -53,8 +53,10 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
   and the tab reattaches when it reconnects. Host keys are never accepted silently, nothing is installed on
   the server, and no password is stored. Agents get seven MCP tools to open tabs there and read the changes.
 - **`nxtrm`, like `code`.** `nxtrm .` opens the folder as a project, `nxtrm app/User.php:42` a
-  file at a line. It works in every Next Term tab from the first launch; Next Term > Install Command Line
-  Tool adds it to other terminals.
+  file at a line. It works in every Next Term tab from the first launch, and in other terminals too: the
+  first launch links it into a folder on your PATH that needs no password (`~/.local/bin`,
+  `/opt/homebrew/bin`), or, when there is none, offers to put it in `/usr/local/bin` with your password.
+  It never changes PATH or touches anyone else's `nxtrm`.
 - **Your layout.** The terminal below the editor (default), beside it on the right or left, or above it;
   the project sidebar on the left or right. From the ⋯ buttons or the View menu.
 - **Projects.** Open a folder as a project (⌘O): its window keeps the project in the sidebar, and new tabs
@@ -104,8 +106,9 @@ In one line, from the terminal:
 curl -fsSL https://next-term.mishuk.me/install.sh | bash
 ```
 
-It downloads the latest release, checks its SHA-256, the bundle and the signature, and copies it to
-Applications, with no `sudo` and no first-launch prompt ([the script](site/src/install.sh)). Or
+It downloads the latest release, checks its SHA-256, the bundle and the signature, copies it to
+Applications and links `nxtrm` into a folder on your PATH that you can write, with no `sudo` and no
+first-launch prompt ([the script](site/src/install.sh)). Or
 download `NextTerm-x.y.z.dmg` from [Releases](../../releases), open it, and drag **Next Term** to
 Applications. After that, Next Term updates itself (Next Term > Check for Updates).
 

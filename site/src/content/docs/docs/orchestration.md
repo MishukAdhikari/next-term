@@ -34,7 +34,7 @@ Agents you start after that see Next Term’s tools. The line under the setting 
 
 ### Any other MCP client
 
-Add a stdio server that runs `nxtrm mcp`. `nxtrm` is on the `PATH` in Next Term’s tabs and, once installed, in `/usr/local/bin` (see [The nxtrm command](/docs/command-line/)):
+Add a stdio server that runs `nxtrm mcp`. `nxtrm` is on the `PATH` in Next Term’s tabs and, once installed, in your other terminals (see [The nxtrm command](/docs/command-line/#installing-it)):
 
 ```json
 {

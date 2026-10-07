@@ -44,7 +44,7 @@ iTerm2 is a free, open-source (GPL v2) terminal for macOS with a long list of fe
 
 ## Use both
 
-- **Keep iTerm2 for tmux integration, scripting and everything else; open agent projects in Next Term.** `nxtrm .` in an iTerm2 tab opens that folder as a Next Term project; Next Term links the command into `/usr/local/bin` at launch, or asks once through **Next Term › Install Command Line Tool (nxtrm)…**.
+- **Keep iTerm2 for tmux integration, scripting and everything else; open agent projects in Next Term.** `nxtrm .` in an iTerm2 tab opens that folder as a Next Term project; Next Term links the command into a folder on your `PATH` at launch, or offers to install it with your password ([how](/docs/command-line/#installing-it)).
 - **Bring your profile over.** **Next Term › Import Settings and Shortcuts…** reads iTerm2’s default profile (its font, font size, colours and Option keys) and shows each change before it applies it.
 - **Agents started in iTerm2 can still use Next Term.** A `claude` started in iTerm2 inside a project open in Next Term can connect to Next Term with `/ide`, and any agent with Next Term’s MCP server registered can start other agents in Next Term tabs.
 
