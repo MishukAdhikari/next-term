@@ -82,4 +82,21 @@ import Testing
         mkfifo(pipe, 0o600)
         #expect(!SidebarClick.opensOnSingleClick(pipe), "a named pipe, which would block a read")
     }
+
+    /// The tree lists a link to a file as a file, and the editor opens what it points to.
+    @Test func aLinkIsJudgedByTheFileItPointsTo() throws {
+        let project = FixtureProject()
+        let text = Self.lines("let x = 1\n")
+        let big = Self.file(project, "big.log", head: text, size: 5 << 20)
+        let small = Self.file(project, "small.log", head: text, size: 4096)
+        let csv = Self.file(project, "rows.csv", head: Data("id,name\n".utf8) + Self.lines("1,a\n"), size: 10 << 20)
+        let fm = FileManager.default
+        try fm.createSymbolicLink(atPath: project.root + "/big-link.log", withDestinationPath: big)
+        try fm.createSymbolicLink(atPath: project.root + "/small-link.log", withDestinationPath: small)
+        try fm.createSymbolicLink(atPath: project.root + "/rows-link.csv", withDestinationPath: csv)
+
+        #expect(!SidebarClick.opensOnSingleClick(project.root + "/big-link.log"), "a link to a 5 MB text file")
+        #expect(SidebarClick.opensOnSingleClick(project.root + "/small-link.log"), "a link to a small text file")
+        #expect(SidebarClick.opensOnSingleClick(project.root + "/rows-link.csv"), "a link to a data file for the head view")
+    }
 }

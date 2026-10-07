@@ -64,8 +64,10 @@ public enum SidebarClick {
     /// Whether a single click may open the file: one the editor shows itself, up to 4 MB, or one that
     /// opens in a read-only viewer at any size (a SQLite file, a large data file in the head view).
     /// Anything else (images, binaries, bigger files) would mean reading it all or handing it to another
-    /// app, which a stray click must never do.
+    /// app, which a stray click must never do. A link is judged by the file it points to, which is what
+    /// the editor opens: the size of the link itself says nothing.
     public static func opensOnSingleClick(_ path: String) -> Bool {
+        let path = canonicalPath(path)
         guard isRegularFile(path) else { return false }
         if Databases.opensInViewer(path) || DataHead.opensInView(path) { return true }
         let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? Int.max
