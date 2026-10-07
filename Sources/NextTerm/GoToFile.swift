@@ -25,6 +25,13 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         let index: FuzzyIndex
         let complete: Bool
         init(index: FuzzyIndex, complete: Bool) { self.index = index; self.complete = complete }
+        /// Its paths as a set, made the first time a search asks (searches run one at a time, on `queue`).
+        private var members: Set<String>?
+        func contains(_ path: String) -> Bool {
+            let set = members ?? Set(index.paths)
+            members = set
+            return set.contains(path)
+        }
     }
     nonisolated(unsafe) private static var catalogs: [String: Catalog] = [:]
     private static let queue = DispatchQueue(label: "nextterm.go-to-file", qos: .userInitiated)
@@ -135,16 +142,13 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         let previous = last
         Self.queue.async { [weak self] in
             let index = catalog.index
-            let rows: [Row]
+            var rows: [Row]
             var matches: [FuzzyIndex.Match] = []
+            let opened = RecentFiles(recent, root: root, inCatalog: catalog.contains, isFile: isRegularFile)
+            var extraFound = 0
             if FuzzyIndex.normalize(query).isEmpty {
                 // Nothing typed: the files you opened lately, newest first.
-                let positions = Dictionary(index.paths.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
-                rows = recent.compactMap { path -> Row? in
-                    guard path.hasPrefix(root + "/") else { return nil }
-                    let relative = String(path.dropFirst(root.count + 1))
-                    return positions[relative] != nil ? Row(path: relative, positions: []) : nil
-                }
+                rows = opened.listed.map { Row(path: $0, positions: []) }
             } else {
                 var among: [Int]?
                 if let previous, previous.catalog === catalog, query.hasPrefix(previous.query), !previous.query.isEmpty {
@@ -160,8 +164,26 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                 let ranked = found.map { match in
                     boosted.contains(index.paths[match.index]) ? FuzzyIndex.Match(index: match.index, score: match.score + 12) : match
                 }
-                rows = index.sorted(ranked, limit: 200).map { Row(path: index.paths[$0.index], positions: index.positions(of: query, in: $0.index)) }
+                let best = index.sorted(ranked, limit: 200)
+                rows = best.map { Row(path: index.paths[$0.index], positions: index.positions(of: query, in: $0.index)) }
+                // The files you opened that the catalog leaves out, ranked among the rest as recent files.
+                let extra = FuzzyIndex(paths: opened.outside)
+                let extraBest = extra.sorted(extra.search(query) ?? [], limit: 200)
+                extraFound = extraBest.count
+                if !extraBest.isEmpty {
+                    var merged: [Row] = []
+                    var next = 0
+                    for match in extraBest {
+                        while next < best.count && best[next].score >= match.score + 12 {
+                            merged.append(rows[next])
+                            next += 1
+                        }
+                        merged.append(Row(path: extra.paths[match.index], positions: extra.positions(of: query, in: match.index)))
+                    }
+                    rows = Array((merged + rows[next...]).prefix(200))
+                }
             }
+            let extraCount = opened.outside.count
             DispatchQueue.main.async {
                 guard let self, self.generation == token else { return }
                 self.last = query.isEmpty ? nil : (query, catalog, matches)
@@ -171,12 +193,13 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                     self.table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
                     self.table.scrollRowToVisible(0)
                 }
-                let total = NumberFormatter.localizedString(from: NSNumber(value: index.paths.count), number: .decimal)
+                let total = NumberFormatter.localizedString(from: NSNumber(value: index.paths.count + extraCount), number: .decimal)
                 if query.isEmpty {
                     self.footer.stringValue = rows.isEmpty ? "\(total) files" : "Recently opened · \(total) files"
                 } else {
-                    let found = NumberFormatter.localizedString(from: NSNumber(value: matches.count), number: .decimal)
-                    self.footer.stringValue = "\(found) of \(total) files" + (catalog.complete ? "" : " (the first \(total) found)")
+                    let found = NumberFormatter.localizedString(from: NSNumber(value: matches.count + extraFound), number: .decimal)
+                    let listed = NumberFormatter.localizedString(from: NSNumber(value: index.paths.count), number: .decimal)
+                    self.footer.stringValue = "\(found) of \(total) files" + (catalog.complete ? "" : " (the first \(listed) found)")
                 }
             }
         }

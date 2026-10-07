@@ -162,6 +162,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         sidebar.header.onBranchClick = { [weak self] in self?.showBranches(nil) }
         sidebar.header.onSync = { [weak self] pull in pull ? self?.gitUpdate(nil) : self?.gitPush(nil) }
         sidebar.onHeadChange = { [weak self] in self?.editorArea.headMoved() }
+        // The collapse button's tooltip names ⌘J, or the key Settings gives it instead.
+        NotificationCenter.default.addObserver(self, selector: #selector(shortcutsChanged), name: KeyboardShortcuts.changed, object: nil)
         applyLayout() // the editor area starts hidden: nothing is open
         setSidebarVisible(AppDelegate.shared.sidebarVisible)
 
@@ -740,6 +742,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let gitActions: [Selector] = [#selector(showBranches(_:)), #selector(gitFetch(_:)), #selector(gitUpdate(_:)), #selector(gitCommit(_:)),
                                       #selector(gitPush(_:)), #selector(gitNewBranch(_:))]
         if let action = item.action, gitActions.contains(action) { return gitFolder != nil }
+        if item.action == #selector(showGitLog(_:)) { return gitLogRoot != nil }
         if item.action == #selector(closeProject(_:)) { return project != nil }
         if item.action == #selector(openServedURL(_:)) { return activeTab?.servedURL != nil }
         if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil }
@@ -748,9 +751,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(showChanges(_:)) {
             return editorArea.activePath != nil || sidebar.selection.contains { !$0.isFolder } || sidebar.selectedDeleted.contains { !$0.isDirectory }
         }
+        // On when the keyboard is where ⌥⌘K sends from, with something to send, even with no agent running:
+        // sending then says that none is.
         if item.action == #selector(sendToAgent(_:)) {
             let sendable = editorArea.activePath != nil && editorArea.activeDiff?.proposal == nil
-            return agentTab != nil && (sendable || !sidebar.selection.isEmpty)
+            let fromSidebar = window?.firstResponder === sidebar.outline && !sidebar.selection.isEmpty
+            return (isEditorFocused && sendable) || fromSidebar
         }
         if item.action == #selector(toggleEditorFocus(_:)) {
             item.title = isEditorFocused ? "Focus Terminal" : "Focus Editor"
@@ -846,6 +852,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             placeSidebarDivider(width: AppDelegate.shared.sidebarWidth)
             projectKey = nil
             updateProjectRoot()
+            // Files opened while it was hidden were not revealed: the one in front is now.
+            if let path = editorArea.activePath { sidebar.reveal(path) }
         } else {
             splitView.adjustSubviews()
         }
@@ -966,6 +974,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return view.isDescendant(of: terminalPane)
     }
 
+    @objc private func shortcutsChanged() { updateCollapseButton() }
+
     /// The arrow points where a click moves the tab bar: to the window's edge to collapse, back to expand.
     private func updateCollapseButton() {
         tabBar.onToggleCollapse = editorArea.isHidden ? nil : { [weak self] in self?.toggleTerminalCollapsed(nil) }
@@ -977,8 +987,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         case .right: toward = "right"
         }
         let away = ["down": "up", "up": "down", "left": "right", "right": "left"][toward]!
+        let words = terminalCollapsed ? "Expand the terminal" : "Collapse the terminal"
         tabBar.setCollapseButton(symbol: "chevron.\(terminalCollapsed ? away : toward)",
-                                 toolTip: terminalCollapsed ? "Expand the terminal (⌘J)" : "Collapse the terminal (⌘J)")
+                                 toolTip: KeyboardShortcuts.shared.hint(words, #selector(toggleTerminalCollapsed(_:))))
         updateUpdateButton()
         updateRail()
     }
@@ -1410,13 +1421,24 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         send(urls.map { ContextItem(path: $0.url.path, isFolder: $0.isFolder) })
     }
 
+    /// Why nothing was sent: no agent runs here, or the only ones run on a server (`agentTab` skips them).
+    func noAgentAlert() -> NSAlert {
+        let alert = NSAlert()
+        if tabs.contains(where: { $0.remote != nil && $0.status.running && $0.status.kind == .agent }) {
+            alert.messageText = "The agent in this window runs on a server"
+            alert.informativeText = "Send to Agent types this Mac’s paths, which mean nothing there. Start an agent in a tab on this Mac to send to it."
+        } else {
+            alert.messageText = "No agent is running in this window"
+            alert.informativeText = "Start one in a tab (claude, codex, gemini, junie…), then send again."
+        }
+        return alert
+    }
+
     /// Types references to `items` into the agent's prompt, in its own syntax, relative to its folder.
     /// Never presses Enter: you add the instruction.
     func send(_ items: [ContextItem]) {
         guard let tab = agentTab, let window else {
-            let alert = NSAlert()
-            alert.messageText = "No agent is running in this window"
-            alert.informativeText = "Start one in a tab (claude, codex, gemini, junie…), then send again."
+            let alert = noAgentAlert()
             if let window { alert.beginSheetModal(for: window) } else { alert.runModal() }
             return
         }
@@ -1661,9 +1683,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// ⌥⌘L: the commit history of the project's repository, in an editor tab.
     @objc func showGitLog(_ sender: Any?) {
-        guard let folder = sidebar.git.snapshot?.root ?? editorArea.activeGitLog?.root ?? editorArea.gitLogs.first?.root else { return NSSound.beep() }
+        guard let folder = gitLogRoot else { return NSSound.beep() }
         openGitLog(root: folder)
     }
+
+    /// The repository ⌥⌘L shows: the sidebar's, or that of a Git Log already open; nil outside one.
+    private var gitLogRoot: String? { sidebar.git.snapshot?.root ?? editorArea.activeGitLog?.root ?? editorArea.gitLogs.first?.root }
 
     /// The Git Log of the repository containing `root`, in front; nil outside a repository.
     @discardableResult

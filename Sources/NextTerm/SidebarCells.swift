@@ -25,6 +25,7 @@ final class SidebarHeaderView: NSView {
     /// Hides the sidebar (⌘B); the top bar then shows a button to bring it back.
     let hideButton = HoverButton()
     var inset: CGFloat = 70 { didSet { needsLayout = true } }
+    private var hideTip: ShortcutToolTip?
     var onRight = false {
         didSet {
             hideButton.image = NSImage(systemSymbolName: onRight ? "sidebar.right" : "sidebar.left", accessibilityDescription: "Hide Project Sidebar")?
@@ -48,7 +49,7 @@ final class SidebarHeaderView: NSView {
         hideButton.isBordered = false
         hideButton.contentTintColor = Theme.textDim
         hideButton.action = #selector(TerminalWindowController.toggleProjectSidebar(_:)) // up the responder chain
-        hideButton.toolTip = "Hide the project sidebar (⌘B)"
+        hideTip = ShortcutToolTip(hideButton, "Hide the project sidebar", #selector(TerminalWindowController.toggleProjectSidebar(_:)))
         hideButton.setAccessibilityLabel("Hide Project Sidebar")
         onRight = false
         chevron.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)?
@@ -80,6 +81,12 @@ final class SidebarHeaderView: NSView {
         return summary.cell?.expansionFrame(withFrame: summary.bounds, in: summary) != .zero
     }
 
+    /// Whether the counts are shown at all (for the self-test).
+    var summaryIsShown: Bool {
+        layoutSubtreeIfNeeded()
+        return !summary.isHidden
+    }
+
     // The whole header is a drag handle for the window, except its ⋯ button.
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard frame.contains(point) else { return nil }
@@ -96,8 +103,15 @@ final class SidebarHeaderView: NSView {
 
     /// The branch's icon, name and chevron, with a little room around them.
     var branchArea: NSRect {
-        guard !branchIcon.isHidden, onBranchClick != nil else { return .zero }
-        return branchIcon.frame.union(title.frame).union(chevron.frame).insetBy(dx: -5, dy: -4)
+        guard snapshot != nil, onBranchClick != nil else { return .zero }
+        let name = title.frame.union(chevron.frame)
+        return (branchIcon.isHidden ? name : branchIcon.frame.union(name)).insetBy(dx: -5, dy: -4)
+    }
+
+    /// Whether the branch glyph before the name is shown (for the self-test).
+    var branchGlyphIsShown: Bool {
+        layoutSubtreeIfNeeded()
+        return !branchIcon.isHidden
     }
 
     override func resetCursorRects() {
@@ -253,18 +267,22 @@ final class SidebarHeaderView: NSView {
         let summaryY = titleY + title.firstBaselineOffsetFromTop - summary.firstBaselineOffsetFromTop
         moreButton.frame = NSRect(x: bounds.width - 30, y: (h - 24) / 2, width: 26, height: 24)
         hideButton.frame = NSRect(x: bounds.width - 56, y: (h - 24) / 2, width: 26, height: 24)
-        // When room is short, the branch name keeps its own first, then the sync button shortens ("↓152"),
-        // then the line counts give way (they are in the tooltip, and on the tree's rows).
-        let nameStart = inset + 4 + (branchIcon.isHidden ? 0 : 18)
+        // When room is short, the branch name keeps its own first, then the line counts give way (they are
+        // in the tooltip, and on the tree's rows), then the branch glyph (the name and its chevron say it is
+        // a branch), and only then does the sync button lose its word ("↓152").
         let chevronWidth: CGFloat = chevron.isHidden ? 0 : 12
         // The cell's own size, not the text's: it needs a few points of margin, or even "dev" truncates to "…".
         let nameNeeded = ceil(title.cell?.cellSize.width ?? title.intrinsicContentSize.width + 4) + 1
+        var right = bounds.width - 60
+        let spareWithoutGlyph = right - (inset + 4) - nameNeeded - chevronWidth - 6 - 4
+        let glyphGoes = !syncButton.isHidden && syncButton.width(compact: false) > spareWithoutGlyph - 18
+        branchIcon.isHidden = snapshot == nil || glyphGoes
+        let nameStart = inset + 4 + (branchIcon.isHidden ? 0 : 18)
         let nameKept = nameStart + min(nameNeeded, 64) + chevronWidth + 6
         // The text cell needs about 4 pt of its own margin beyond the text, or it truncates.
         let summaryText = summary.attributedStringValue.length > 0 ? ceil(summary.intrinsicContentSize.width) + 6 : 0
-        var right = bounds.width - 60
         if !syncButton.isHidden {
-            let spare = right - nameStart - nameNeeded - chevronWidth - 6 - summaryText - 4
+            let spare = right - nameStart - nameNeeded - chevronWidth - 6 - 4
             syncButton.compact = syncButton.width(compact: false) > spare
             let width = syncButton.width(compact: syncButton.compact)
             syncButton.frame = NSRect(x: right - width, y: (h - SyncButton.height) / 2, width: width, height: SyncButton.height)
@@ -272,6 +290,7 @@ final class SidebarHeaderView: NSView {
         }
         var summaryWidth = min(summaryText, max(0, right - nameKept))
         if summaryWidth < 28 { summaryWidth = 0 } // an ellipsis alone says nothing
+        if !syncButton.isHidden && syncButton.isShortened { summaryWidth = 0 } // the counts went before the word did
         summary.isHidden = summaryWidth == 0
         summary.frame = NSRect(x: right - summaryWidth, y: summaryY, width: summaryWidth, height: summaryHeight)
         var x = inset + 4
@@ -332,6 +351,8 @@ final class SyncButton: NSButton {
     }
 
     var shownTitle: String { compact ? short : full }
+    /// It shows "↓152" for "Pull 152": its word is gone.
+    var isShortened: Bool { compact && short != full }
 
     private func label(_ text: String) -> NSAttributedString {
         NSAttributedString(string: text, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold),
@@ -662,7 +683,9 @@ final class FileCellView: NSTableCellView {
             .font: NSFont.systemFont(ofSize: 12, weight: .regular), .foregroundColor: Theme.textDim,
             .paragraphStyle: Typography.paragraph(.byTruncatingTail),
         ])
-        toolTip = "This folder is too large to list in full."
+        // Shown by the sidebar like every row's (see ProjectSidebarView.updateToolTips): a tooltip of the
+        // cell's own would stay with it when a file's row reuses the cell.
+        tipText = "This folder is too large to list in full."
         // Cells are reused: replace the previous file's label, or VoiceOver reads it here.
         setAccessibilityLabel(more + " not shown")
     }

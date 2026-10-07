@@ -18,8 +18,11 @@ public enum AgentActivity: Equatable, Sendable {
 /// The hints are data, checked against the installed agents' own strings (Claude Code 2.1, Codex 0.154,
 /// Command Code 1.5x, Gemini CLI).
 public enum AgentScreen {
-    /// Only the last lines matter: agents draw their status and prompts at the bottom.
-    public static let scannedLines = 24
+    /// The lines a host passes: the bottom of the screen. Hints and prompts count only in the last
+    /// `promptLines` of them; Claude Code's question form is taller, and its question may sit higher.
+    public static let scannedLines = 40
+    /// Agents draw their status and prompts at the bottom: one further up is history.
+    static let promptLines = 24
 
     /// "✻ Pondering… (12s · ↓ 1.2k tokens · esc to interrupt)", "Working (5s • esc to interrupt)",
     /// Gemini's "(esc to cancel, 12s)".
@@ -28,9 +31,10 @@ public enum AgentScreen {
         #"\(esc to cancel,\s*\d+\s*s\)"#,
     ].map { try! NSRegularExpression(pattern: $0, options: [.caseInsensitive]) }
 
-    /// A question a person has to answer.
+    /// A question a person has to answer. "Ready to submit your answers?" ends Claude Code's form when
+    /// it asks more than one question.
     static let question = try! NSRegularExpression(
-        pattern: #"^[\s│|>❯›*•·]*((?:Do you want to|Would you like to|Allow|Approve)\b[^?\n]{0,200}\?)"#,
+        pattern: #"^[\s│|>❯›*•·]*((?:Do you want to|Would you like to|Allow|Approve|Ready to submit your answers)\b[^?\n]{0,200}\?)"#,
         options: [.caseInsensitive, .anchorsMatchLines])
 
     /// Choices drawn under such a question.
@@ -40,20 +44,87 @@ public enum AgentScreen {
         #"No, and tell \w+ what to do differently"#,
         #"Enter to select"#,
         #"\(y/n\)|\[y/N\]|\[Y/n\]"#,
+        #"^[\s│|>❯›]*1\.\s*Submit answers$"#,
     ].map { try! NSRegularExpression(pattern: $0, options: [.caseInsensitive, .anchorsMatchLines]) }
 
+    /// Claude Code's question form (its AskUserQuestion tool): the question and the options are the
+    /// model's own words, so the form is known by its own rows under the options instead: "Chat about
+    /// this", or the "Type something." row for an answer of your own, and the "Enter to select" hint.
+    static let formRow = try! NSRegularExpression(pattern: #"^(?:\d{1,2}\.\s+)?(?:Chat about this|(?:\[.\]\s+)?Type something\.?)$"#)
+    static let formHint = "Enter to select"
+    /// An option of the form, at the left edge (a preview box beside the list can hold numbered lines too).
+    static let formOption = try! NSRegularExpression(pattern: #"^\s{0,3}(?:[❯›>]\s+)?(\d{1,2})\.\s+(\S.*)$"#)
+    /// What the form says when its question has scrolled out of reach.
+    static let formFallback = "Choose one of the options"
+
     public static func activity(screenLines lines: [String]) -> AgentActivity {
-        let bottom = lines.suffix(scannedLines)
-        let text = bottom.joined(separator: "\n")
-        let range = NSRange(location: 0, length: (text as NSString).length)
+        let bottom = Array(lines.suffix(scannedLines))
         // A question with its choices on screen wins: the agent is blocked on you.
-        if let match = question.firstMatch(in: text, range: range),
-           choices.contains(where: { $0.firstMatch(in: text, range: range) != nil }) {
-            let asked = (text as NSString).substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespaces)
-            return .asking(String(asked.prefix(200)))
-        }
+        if let asked = form(in: bottom)?.question ?? prompt(in: bottom)?.question { return .asking(asked) }
+        let text = bottom.suffix(promptLines).joined(separator: "\n")
+        let range = NSRange(location: 0, length: (text as NSString).length)
         if working.contains(where: { $0.firstMatch(in: text, range: range) != nil }) { return .working }
         return .idle
+    }
+
+    /// A question with fixed words ("Do you want to…?") and its choices, in the last `promptLines`
+    /// of `lines`: the question and the row it is on.
+    static func prompt(in lines: [String]) -> (row: Int, question: String)? {
+        let start = max(0, lines.count - promptLines)
+        let text = lines[start...].joined(separator: "\n")
+        guard choices.contains(where: { matches($0, text) }) else { return nil }
+        for row in start..<lines.count {
+            let line = lines[row]
+            let ns = line as NSString
+            guard let match = question.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) else { continue }
+            let asked = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespaces)
+            return (row, String(asked.prefix(200)))
+        }
+        return nil
+    }
+
+    /// Claude Code's question form, its own rows in the last `promptLines` of `lines`: the question
+    /// above its options (a long one wraps, drawn with a "│" gutter) and the row of option 1. The row
+    /// is nil when the options reach above `lines`.
+    static func form(in lines: [String]) -> (row: Int?, question: String)? {
+        let start = max(0, lines.count - promptLines)
+        // Its own rows sit just over its hint, with no other list between: the same rows in the transcript,
+        // with another picker's hint further down, are not the form.
+        guard let mark = lines[start...].lastIndex(where: { matches(formRow, splitCursor(inner($0)).rest) }),
+              let hint = lines[mark...].firstIndex(where: { $0.contains(formHint) }), hint - mark <= 4,
+              !lines[mark..<hint].dropFirst().contains(where: { formOptionLabel($0) != nil }) else { return nil }
+        // Up from the form's own rows, the options count down to 1.
+        var expected: Int?
+        var first: Int?
+        var row = mark - 1
+        while row >= 0, first == nil {
+            if let (number, _) = formOptionLabel(lines[row]) {
+                guard expected == nil || number == expected else { return (nil, formFallback) }
+                if number == 1 { first = row }
+                expected = number - 1
+            }
+            row -= 1
+        }
+        guard let first else { return (nil, formFallback) }
+        var above = first - 1
+        while above >= 0, inner(lines[above]).isEmpty { above -= 1 }
+        var words: [String] = []
+        while above >= 0, !isEdge(inner(lines[above])) {
+            words.insert(inner(lines[above]), at: 0)
+            above -= 1
+        }
+        let asked = words.joined(separator: " ")
+        return (first, asked.isEmpty ? formFallback : String(asked.prefix(200)))
+    }
+
+    /// The number and label of a form's option row, without a preview drawn beside it.
+    static func formOptionLabel(_ line: String) -> (Int, String)? {
+        let ns = line as NSString
+        guard let match = formOption.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)),
+              let number = Int(ns.substring(with: match.range(at: 1))) else { return nil }
+        var label = ns.substring(with: match.range(at: 2))
+        if let gap = label.range(of: "   ") { label = String(label[..<gap.lowerBound]) }
+        return (number, label.trimmingCharacters(in: .whitespaces))
     }
 }
 
@@ -157,9 +228,12 @@ extension AgentScreen {
     /// The menu under the question an agent is asking (the one `activity` reports), or nil if the
     /// screen shows none.
     public static func menu(screenLines lines: [String]) -> AgentMenu? {
-        guard case .asking(let asked) = activity(screenLines: lines) else { return nil }
         let bottom = Array(lines.suffix(scannedLines))
-        guard let row = bottom.firstIndex(where: { matches(question, $0) }) else { return nil }
+        if let asked = form(in: bottom) {
+            guard let first = asked.row else { return nil }
+            return formMenu(bottom, first: first, question: asked.question)
+        }
+        guard let (row, asked) = prompt(in: bottom) else { return nil }
         if matches(yesNo, bottom[row]) || (row + 1 < bottom.count && matches(yesNo, bottom[row + 1])) {
             return AgentMenu(question: asked, style: .yesNo, choices: ["Yes", "No"], highlighted: nil)
         }
@@ -203,6 +277,32 @@ extension AgentScreen {
         }
         guard choices.count >= 2 else { return nil }
         return AgentMenu(question: asked, style: .list, choices: choices, highlighted: highlighted)
+    }
+
+    /// The form's options, from option 1 down to its own rows. The row for an answer of your own
+    /// ("Type something.", or what was typed there) and "Chat about this" are not choices, but the
+    /// cursor can sit on them. Nil for a question that takes several answers (its options have
+    /// checkboxes): one choice and Return does not answer it.
+    private static func formMenu(_ lines: [String], first: Int, question: String) -> AgentMenu? {
+        var choices: [String] = []
+        var highlighted: Int?
+        var chatNumbered: Bool?
+        for line in lines[first...] {
+            let (cursor, rest) = splitCursor(inner(line))
+            if rest.hasSuffix("Chat about this"), matches(formRow, rest) {
+                let number = numberedLabel(rest)?.0
+                if cursor { highlighted = number.map { $0 - 1 } ?? choices.count }
+                chatNumbered = number != nil
+                break
+            }
+            guard let (number, label) = formOptionLabel(line), number == choices.count + 1 else { continue }
+            if cursor { highlighted = choices.count }
+            choices.append(label)
+        }
+        // Beside a preview there is no row of your own; otherwise it is the last numbered one.
+        if chatNumbered != false, !choices.isEmpty { choices.removeLast() }
+        guard choices.count >= 2, !choices.contains(where: { $0.hasPrefix("[") && $0.dropFirst(2).hasPrefix("]") }) else { return nil }
+        return AgentMenu(question: question, style: .list, choices: choices, highlighted: highlighted)
     }
 
     private static func matches(_ expression: NSRegularExpression, _ text: String) -> Bool {

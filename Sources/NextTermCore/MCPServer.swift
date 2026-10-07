@@ -129,7 +129,7 @@ public enum MCPServer {
              inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "add_host", title: "Add or update a remote host",
-             description: "Saves a server to connect to with the system ssh, which uses the user's keys, ssh agent and ~/.ssh/config; Next Term stores no password. destination is user@host or a Host alias from ~/.ssh/config. A host with the same name is updated. Nothing is installed or run on the host.",
+             description: "Saves a server to connect to with the system ssh, which uses the user's keys, ssh agent and ~/.ssh/config; Next Term stores no password. destination is user@host or a Host alias from ~/.ssh/config. For a host already saved under that name, only directory and keep change: destination and port must be the saved ones, and pointing it at another server takes remove_host, then add_host. Nothing is installed or run on the host.",
              inputSchema: #"{"type": "object", "properties": {"name": {"type": "string", "description": "Short name, such as web-1."}, "destination": {"type": "string", "description": "user@host, host, or an alias from ~/.ssh/config."}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}, "directory": {"type": "string", "description": "Default folder on the host: absolute, or starting with ~. Default ~."}, \#(keepSchema)}, "required": ["name", "destination"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: true, timeout: 15),
         Tool(name: "remove_host", title: "Remove a remote host",

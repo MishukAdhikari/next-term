@@ -14,7 +14,7 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 |---|---|
 | New tab (in the project, or the current tab’s folder) | <kbd>⌘T</kbd> |
 | Open a project | <kbd>⌘O</kbd> |
-| Go to File: any file in the project by name | <kbd>⌘P</kbd> |
+| Go to File: a file in the project by name | <kbd>⌘P</kbd> |
 | Split the tab right, or down | <kbd>⌘D</kbd>, <kbd>⇧⌘D</kbd> |
 | Move between panes | <kbd>⌥⌘←</kbd> <kbd>⌥⌘→</kbd> <kbd>⌥⌘↑</kbd> <kbd>⌥⌘↓</kbd> |
 | Send the selection to the agent in your tab | <kbd>⌥⌘K</kbd> |

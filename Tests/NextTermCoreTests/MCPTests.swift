@@ -52,6 +52,9 @@ import Testing
             #expect(hints(name)["destructiveHint"] as? Bool == true)
         }
         #expect(hints("list_hosts")["readOnlyHint"] as? Bool == true)
+        // A saved host is never re-pointed by add_host (RemoteMCP refuses it): the description says so.
+        let addHost = tools.first { $0["name"] as? String == "add_host" }?["description"] as? String ?? ""
+        #expect(addHost.contains("only directory and keep change") && addHost.contains("remove_host") && !addHost.contains("is updated"))
         // Every schema is a JSON object schema (the raw strings parse).
         #expect(tools.allSatisfy { ($0["inputSchema"] as? [String: Any])?["type"] as? String == "object" })
         #expect(tools.allSatisfy { (($0["_meta"] as? [String: Any])?["anthropic/alwaysLoad"] as? Bool) == true })

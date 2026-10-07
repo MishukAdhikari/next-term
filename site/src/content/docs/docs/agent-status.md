@@ -26,7 +26,7 @@ The spinner is reserved for AI agents. It runs while the agent says it is workin
 
 ## Decisions come to you
 
-When an agent asks for permission (“Do you want to make this edit to `User.php`?”), the tab turns amber and a notification names the agent and quotes the question. Click it to land on that tab, in that window. This happens even while you are in Next Term, as long as that tab is not the one on screen.
+When an agent asks for permission (“Do you want to make this edit to `User.php`?”), or Claude Code asks you to pick one of its options (“Which approach should I take?”), the tab turns amber and a notification names the agent and quotes the question. Click it to land on that tab, in that window. This happens even while you are in Next Term, as long as that tab is not the one on screen.
 
 Answer the question in the terminal as usual; the amber mark clears once the question goes away.
 
@@ -57,6 +57,7 @@ AI agents such as `claude`, `codex`, `commandcode` and `gemini` stay in the fore
 
 - **“esc to interrupt”** (or Gemini’s “esc to cancel”) means the agent is working.
 - **A question with choices** (“Do you want to…? 1. Yes …”) means it is waiting on you.
+- **Claude Code’s own question form** means the same, whatever the question says: under its numbered options come “Chat about this” and “Enter to select”.
 - **Anything else** means it is idle, waiting for your next prompt.
 
 Reading the screen keeps the mark in step with the agent: the spinner stops the moment Claude or Codex stops, even if the agent keeps redrawing a clock or a status line. These hints are checked against Claude Code, Codex, Command Code and Gemini CLI. Any other agent, Junie, opencode or Qwen Code for example, goes by output timing until its screen shows one of them: printing means working, and 2.5 seconds of silence means done, so an idle agent that keeps redrawing can keep the spinner going. The table in [Agents and the IDE link](/docs/agents/#what-each-agent-gets) shows which is which.

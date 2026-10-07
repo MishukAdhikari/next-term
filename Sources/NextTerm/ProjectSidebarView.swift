@@ -90,6 +90,8 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     private var lastHead: String?
     private var hiddenRows: [ObjectIdentifier: HiddenEntries] = [:]
     private var loading: Set<ObjectIdentifier> = []
+    /// What else waits for a folder being read: it runs once the folder is in.
+    private var waitingForLoad: [ObjectIdentifier: [() -> Void]] = [:]
     /// Each folder's rows (its entries on disk, the deleted ones in their place, "… N more"), built once
     /// per change. The folder is kept with them, so its identifier cannot be reused while cached.
     private var rowCache: [ObjectIdentifier: (owner: AnyObject, rows: [AnyObject])] = [:]
@@ -346,14 +348,18 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         }
     }
 
-    /// Reads a folder off the main thread, then installs it and updates the outline.
+    /// Reads a folder off the main thread, then installs it and updates the outline. A second call while
+    /// it is being read waits for the same read (a reveal right after the tree changed root).
     private func load(_ node: FileNode, then completion: (() -> Void)? = nil) {
         if node.isLoaded {
             completion?()
             return
         }
         let id = ObjectIdentifier(node)
-        guard !loading.contains(id) else { return }
+        guard !loading.contains(id) else {
+            if let completion { waitingForLoad[id, default: []].append(completion) }
+            return
+        }
         loading.insert(id)
         let url = node.url
         DispatchQueue.global(qos: .userInitiated).async {
@@ -361,12 +367,14 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.loading.remove(id)
+                let waiting = self.waitingForLoad.removeValue(forKey: id) ?? []
                 node.install(listing)
                 self.syncHiddenRow(for: node)
                 self.rowCache[id] = nil
                 guard self.isShowing(node) else { return }
                 self.outline.reloadItem(node, reloadChildren: true)
                 completion?()
+                waiting.forEach { $0() }
             }
         }
     }

@@ -85,6 +85,8 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
     private let field = NSTextField()
     private let table = NSTableView()
     private let footer = NSTextField(labelWithString: "")
+    /// The rows' tooltips, through one area over the rows in view (set up in build()).
+    private(set) var rowToolTips: RowToolTips?
     private(set) var model: BranchModel?
     private(set) var items: [Item] = []
     private var openFolders: Set<String> = []
@@ -201,6 +203,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
             table.scrollRowToVisible(index)
         }
+        rowToolTips?.update()
         updateFooter()
     }
 
@@ -616,6 +619,9 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
+        rowToolTips = RowToolTips(table, in: scroll) { [weak self] row in
+            (self?.table.view(atColumn: 0, row: row, makeIfNecessary: false) as? BranchCell)?.tipText ?? ""
+        }
 
         footer.font = .systemFont(ofSize: 11)
         footer.textColor = Theme.textDim
@@ -754,6 +760,8 @@ final class BranchCell: NSTableCellView {
 
     private var leading: NSLayoutConstraint!
     private var shown: (BranchPopupController.Item, BranchModel?)?
+    /// The row's tooltip, shown by the popup for rows in view (see RowToolTips).
+    private(set) var tipText = ""
 
     override var backgroundStyle: NSView.BackgroundStyle {
         didSet { if let shown, backgroundStyle != oldValue { show(shown.0, model: shown.1) } }
@@ -775,7 +783,7 @@ final class BranchCell: NSTableCellView {
         detail.stringValue = ""
         icon.isHidden = false
         leading.constant = 14
-        toolTip = nil
+        tipText = ""
         switch item {
         case let .header(text):
             icon.isHidden = true
@@ -827,12 +835,12 @@ final class BranchCell: NSTableCellView {
                 if !sync.isEmpty { tip += ": " + sync.joined(separator: ", ") }
             }
             if let worktree = ref.worktree { tip += ". Checked out in \(RecentProjects.abbreviate(worktree))" }
-            toolTip = tip + "."
+            tipText = tip + "."
         case let .worktree(w):
             symbol(w.lockReason != nil ? "lock" : "folder")
             title.stringValue = (w.path as NSString).lastPathComponent
             detail.stringValue = (w.branch ?? "detached @" + String((w.head ?? "").prefix(7))) + (w.isPrunable ? "  missing" : "")
-            toolTip = RecentProjects.abbreviate(w.path) + (w.lockReason.map { "\nLocked" + ($0.isEmpty ? "" : ": \($0)") } ?? "")
+            tipText = RecentProjects.abbreviate(w.path) + (w.lockReason.map { "\nLocked" + ($0.isEmpty ? "" : ": \($0)") } ?? "")
         case let .create(name):
             symbol("plus", Theme.accent)
             title.attributedStringValue = NSAttributedString(string: "New Branch “\(name)”", attributes: [.font: font, .foregroundColor: Theme.text])

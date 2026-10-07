@@ -7,6 +7,7 @@ import NextTermCore
 final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate,
                                      NSSearchFieldDelegate {
     private let search = NSSearchField()
+    private var openTip: ShortcutToolTip?
     private let projectsTable = NSTableView()
     private let sessionsTable = NSTableView()
     private let projectName = NSTextField(labelWithString: "")
@@ -81,7 +82,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         let projectsScroll = Self.scroll(projectsTable)
         let open = NSButton(title: "Open…", target: NSApp.delegate, action: #selector(AppDelegate.openProjectPanel(_:)))
         open.bezelStyle = .rounded
-        open.toolTip = "Open a folder as a project (⌘O)"
+        openTip = ShortcutToolTip(open, "Open a folder as a project", #selector(AppDelegate.openProjectPanel(_:)))
         let terminal = NSButton(title: "New Terminal", target: self, action: #selector(newTerminal))
         terminal.bezelStyle = .rounded
         for view in [icon, name, versionLabel, search, projectsLabel, projectsScroll, open, terminal] as [NSView] {

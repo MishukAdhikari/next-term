@@ -68,6 +68,202 @@ import Testing
     }
 }
 
+/// Claude Code's question form (its AskUserQuestion tool), as Claude Code 2.1.280 draws it: each screen
+/// was read from the real CLI in a pty, its model answered by a stand-in API.
+@Suite struct ClaudeQuestionFormTests {
+    static let form = [
+        "❯ Ask me which approach to take",
+        "────────────────────────────────────────────────────────────────────────────────────────────────────",
+        " ☐ Approach",
+        "",
+        "Which approach should I take for the parser?",
+        "",
+        "❯ 1. Rewrite it",
+        "     Start over with a cleaner design",
+        "  2. Patch the bug",
+        "     Smallest change that fixes the crash",
+        "  3. Leave it",
+        "     Ship as is and file an issue",
+        "  4. Type something.",
+        "────────────────────────────────────────────────────────────────────────────────────────────────────",
+        "  5. Chat about this",
+        "",
+        "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ]
+
+    @Test func theModelsQuestionIsADecision() throws {
+        #expect(AgentScreen.activity(screenLines: Self.form) == .asking("Which approach should I take for the parser?"))
+        let menu = try #require(AgentScreen.menu(screenLines: Self.form))
+        #expect(menu.question == "Which approach should I take for the parser?")
+        // The model's options only: the row for an answer of your own and "Chat about this" are not choices.
+        #expect(menu.choices == ["Rewrite it", "Patch the bug", "Leave it"])
+        #expect(menu.highlighted == 0 && menu.keys(toPick: 1) == ["down", "enter"])
+        // The cursor on the row of your own: the arrows still count from there.
+        var other = Self.form
+        other[6] = "  1. Rewrite it"
+        other[12] = "❯ 4. Type something."
+        let moved = try #require(AgentScreen.menu(screenLines: other))
+        #expect(moved.highlighted == 3 && moved.keys(toPick: 0) == ["up", "up", "up", "enter"])
+        // Below a long transcript: the form is still read in full.
+        #expect(AgentScreen.activity(screenLines: Array(repeating: "output", count: 60) + Self.form) == .asking("Which approach should I take for the parser?"))
+    }
+
+    @Test func aLongQuestionWrapsWithAGutter() throws {
+        let narrow = [
+            "────────────────────────────────────────────────────────",
+            " ☐ Deploy",
+            "",
+            "│ How should the website deploy when a release is tagged",
+            "│ on the main branch of the repository?",
+            "",
+            "  1. On every tag",
+            "     A workflow builds the site and pushes it to the",
+            "     server whenever a release tag is created",
+            "  2. By hand",
+            "     Run the deploy script yourself",
+            "  3. Nightly",
+            "     A scheduled job",
+            "  4. Never",
+            "     Keep it as it is",
+            "❯ 5. ab", // typed into the row of your own: its placeholder is gone
+            "────────────────────────────────────────────────────────",
+            "  6. Chat about this",
+            "",
+            "Enter to select · ↑/↓ to navigate · ctrl+g to edit in",
+            "Vim · Esc to cancel",
+        ]
+        let asked = "How should the website deploy when a release is tagged on the main branch of the repository?"
+        #expect(AgentScreen.activity(screenLines: narrow) == .asking(asked))
+        let menu = try #require(AgentScreen.menu(screenLines: narrow))
+        #expect(menu.choices == ["On every tag", "By hand", "Nightly", "Never"] && menu.highlighted == 4)
+        // The options reach above what the host passed: still a decision, but no choices to pick.
+        let cut = Array(narrow.suffix(14))
+        #expect(AgentScreen.activity(screenLines: cut) == .asking(AgentScreen.formFallback))
+        #expect(AgentScreen.menu(screenLines: cut) == nil)
+    }
+
+    @Test func previewsBesideTheOptions() throws {
+        let preview = [
+            " ☐ Layout",
+            "",
+            "Which layout do you prefer for the settings page?",
+            "",
+            "  1. Sidebar                      ┌──────────────────────────────────────────┐",
+            "❯ 2. Tabs                         │ [General] [Keys]                         │",
+            "                                  │  1. Font: Menlo                          │",
+            "                                  │  Size: 13                                │",
+            "                                  └──────────────────────────────────────────┘",
+            "",
+            "                                  Notes: press n to add notes",
+            "",
+            "────────────────────────────────────────────────────────────────────────────────────────────────────",
+            "  Chat about this",
+            "",
+            "Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel",
+        ]
+        #expect(AgentScreen.activity(screenLines: preview) == .asking("Which layout do you prefer for the settings page?"))
+        let menu = try #require(AgentScreen.menu(screenLines: preview))
+        // No row of your own beside a preview; the numbered line inside the preview is not an option.
+        #expect(menu.choices == ["Sidebar", "Tabs"] && menu.highlighted == 1)
+    }
+
+    @Test func severalQuestionsAndSeveralAnswers() throws {
+        let first = [
+            "←  ☐ Next  ☐ Scope  ✔ Submit  →",
+            "",
+            "What should I build next?",
+            "",
+            "❯ 1. Remote tabs",
+            "     Terminal tabs on your servers over SSH",
+            "  2. Import",
+            "     Settings and shortcuts from other apps",
+            "  3. Type something.",
+            "────────────────────────────────────────────────────────────────────────────────────────────────────",
+            "  4. Chat about this",
+            "",
+            "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
+        ]
+        #expect(AgentScreen.activity(screenLines: first) == .asking("What should I build next?"))
+        #expect(try #require(AgentScreen.menu(screenLines: first)).choices == ["Remote tabs", "Import"])
+        let several = [
+            "←  ☐ Next  ☐ Scope  ✔ Submit  →",
+            "",
+            "Which parts should the release include?",
+            "",
+            "❯ 1. [ ] Docs",
+            "         The site pages",
+            "  2. [ ] Notes",
+            "         Release notes",
+            "  3. [ ] Screenshots",
+            "         New images",
+            "  4. [ ] Type something",
+            "     Submit",
+            "────────────────────────────────────────────────────────────────────────────────────────────────────",
+            "  5. Chat about this",
+            "",
+            "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
+        ]
+        // A decision, but one choice and Return does not answer it: no menu to answer with.
+        #expect(AgentScreen.activity(screenLines: several) == .asking("Which parts should the release include?"))
+        #expect(AgentScreen.menu(screenLines: several) == nil)
+        let review = [
+            "←  ☐ Next  ☐ Scope  ✔ Submit  →",
+            "",
+            "Review your answers",
+            "",
+            "⚠ You have not answered all questions",
+            "",
+            "Ready to submit your answers?",
+            "",
+            "❯ 1. Submit answers",
+            "  2. Cancel",
+        ]
+        #expect(AgentScreen.activity(screenLines: review) == .asking("Ready to submit your answers?"))
+        let menu = try #require(AgentScreen.menu(screenLines: review))
+        #expect(menu.choices == ["Submit answers", "Cancel"] && menu.highlighted == 0)
+    }
+
+    @Test func numberedListsInTheAgentsOutputAreNotQuestions() {
+        let answered = [
+            "⏺ User answered Claude's questions:",
+            "  ⎿  · How should the website deploy when a release is",
+            "     tagged on the main branch of the repository? → ab",
+            "",
+            "⏺ OK",
+            "",
+            "✻ Churned for 0s · done 6:18 PM",
+            "",
+            "────────────────────────────────────────────────────────",
+            "❯",
+            "────────────────────────────────────────────────────────",
+            "  ⏸ manual mode on · ? for shortcuts · ← for agents",
+        ]
+        #expect(AgentScreen.activity(screenLines: answered) == .idle)
+        let prose = [
+            "⏺ Which approach should I take for the parser?",
+            "",
+            "  1. Rewrite it",
+            "  2. Patch the bug",
+            "  3. Type something.",
+            "  4. Chat about this",
+            "",
+            "────────────────────────────────────────────────────────",
+            "❯",
+            "────────────────────────────────────────────────────────",
+            "  ? for shortcuts",
+        ]
+        #expect(AgentScreen.activity(screenLines: prose) == .idle)
+        #expect(AgentScreen.menu(screenLines: prose) == nil)
+        // Another picker with the same hint, not a question to the user from the model.
+        let picker = ["Select model", "", "❯ 1. Default (recommended)", "  2. Opus", "", "Enter to select · Esc to exit"]
+        #expect(AgentScreen.activity(screenLines: picker) == .idle)
+        // Such a list in the transcript with that picker open under it: the hint is the picker's, not the list's.
+        let both = Array(prose.dropLast(3)) + picker
+        #expect(AgentScreen.activity(screenLines: both) == .idle)
+        #expect(AgentScreen.menu(screenLines: both) == nil)
+    }
+}
+
 @Suite struct AgentSyncTests {
     @Test func screenDecidesOnceItHasSpoken() {
         var s = TabStatus()

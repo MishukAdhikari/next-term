@@ -475,6 +475,13 @@ enum SelfTest {
         let tipAbove = c.sidebar.view(c.sidebar.outline, stringForToolTip: 0, point: above, userData: nil)
         check(tipInside.hasPrefix(proj.path) && tipAbove.isEmpty, "row tooltips show the row's path, and never outside the visible rows",
               "inside \(tipInside.debugDescription), above \(tipAbove.debugDescription)")
+        // A cell reused for a file's row after a folder's "… N more items" row keeps none of that row's tooltip.
+        let reused = FileCellView()
+        reused.configureHidden(HiddenEntries(count: 12))
+        let hiddenTip = reused.tipText
+        if let root = c.sidebar.root { reused.configure(node: root, isRoot: false, expanded: false, change: nil, lines: nil) }
+        check(hiddenTip == "This folder is too large to list in full." && reused.toolTip == nil && reused.tipText.hasPrefix(proj.path),
+              "a reused row's tooltip is its own: “… more items” leaves nothing behind", "\(reused.toolTip ?? "nil") / \(reused.tipText)")
 
         // File operations, each undone with ⌘Z.
         let undo = window.undoManager
@@ -601,6 +608,16 @@ enum SelfTest {
         check(app.controllers.count == windowsNow && fresh.project == proj.path && fresh.tabs.count == 1, "an untouched window is reused for the project")
         fresh.closeProject(nil)
         _ = await wait(3) { !app.controllers.contains { $0 === fresh } }
+        // Outside a repository Git Log is off, like the Git menu's other commands.
+        let plain = app.openWindow(directory: dir.path)
+        _ = await wait(20) { plain.tabs.first?.status.integrated == true }
+        plain.refresh()
+        let gitLogItem = NSMenuItem(title: "Git Log", action: #selector(TerminalWindowController.showGitLog(_:)), keyEquivalent: "")
+        let branchesItem = NSMenuItem(title: "Branches…", action: #selector(TerminalWindowController.showBranches(_:)), keyEquivalent: "")
+        check(!plain.validateMenuItem(gitLogItem) && !plain.validateMenuItem(branchesItem),
+              "outside a repository Git Log is off, like Branches", plain.sidebar.root?.path ?? "no sidebar root")
+        plain.window?.performClose(nil)
+        _ = await wait(3) { !app.controllers.contains { $0 === plain } }
         app.showWelcome(nil)
         check(NSApp.windows.contains { $0.title == "Welcome to Next Term" && $0.isVisible }, "the Welcome window lists recent projects")
         NSApp.windows.first { $0.title == "Welcome to Next Term" }?.close()
@@ -840,13 +857,28 @@ enum SelfTest {
         header.layoutSubtreeIfNeeded()
         check(header.syncText == "↓152 ↑3", "both ways shows both counts", header.syncText)
         header.onSync = onSync
-        // Narrow (this window's sidebar, with the window buttons beside the branch): the name stays whole.
+        // Narrow, with the window buttons beside the branch: the name stays whole, then the line counts give
+        // way before “Pull” does, then the branch glyph, and only a sidebar too narrow for the word without
+        // them shows “↓152”.
         fake.ahead = 0
         header.show(fake)
-        layOut(width: frame.width)
-        let clear = !header.syncButton.frame.intersects(header.hideButton.frame) && header.syncButton.frame.minX > 0
-        check(header.syncText == "↓152" && !header.titleIsTruncated && clear,
-              "in a narrow sidebar it shortens to “↓152” and the branch name stays whole", "\(header.syncText) \(header.syncButton.frame) width \(frame.width)")
+        let inset = header.inset
+        header.inset = 70
+        func clear() -> Bool { !header.syncButton.frame.intersects(header.hideButton.frame) && header.syncButton.frame.minX > 0 }
+        func state() -> String {
+            "\(header.syncText), counts shown \(header.summaryIsShown), glyph shown \(header.branchGlyphIsShown), \(header.syncButton.frame)"
+        }
+        layOut(width: 300)
+        check(header.syncText == "Pull 152" && !header.summaryIsShown && header.branchGlyphIsShown && !header.titleIsTruncated && clear(),
+              "in a narrow sidebar the line counts give way first: “Pull 152” keeps its word and the branch name stays whole", state())
+        layOut(width: ProjectSidebarView.defaultWidth)
+        let named = header.branchArea.contains(NSPoint(x: 70 + 4 + 2, y: header.bounds.midY))
+        check(header.syncText == "Pull 152" && !header.summaryIsShown && !header.branchGlyphIsShown && !header.titleIsTruncated && clear() && named,
+              "at the default width the branch glyph gives way too: still “Pull 152”, and a click on the whole name opens the branches", state())
+        layOut(width: 266)
+        check(header.syncText == "↓152" && !header.summaryIsShown && !header.branchGlyphIsShown && !header.titleIsTruncated && clear(),
+              "narrower still, it shortens to “↓152” and the branch name stays whole", state())
+        header.inset = inset
         // A fetch running here: the sync arrow spins, and a click does nothing until it ends.
         fake.behind = 0
         header.show(fake)
@@ -1940,6 +1972,20 @@ enum SelfTest {
               "it starts with the git actions", rows.prefix(6).joined(separator: " | "))
         check(rows.contains("▸ feat/ 1") && rows.contains("▸ fix/ 1") && rows.contains("▸ Agent branches 1") && rows.contains("✓ \(start)"),
               "branches sit in folders by prefix, agents' branches together, the current one first", rows.joined(separator: " | "))
+        // Row tooltips come from the popup, for rows in view only, as in the sidebar: none on the row views.
+        let list = popup.tableView
+        list.layoutSubtreeIfNeeded()
+        if let row = rows.firstIndex(of: "✓ \(start)"), let tips = popup.rowToolTips {
+            let rect = list.rect(ofRow: row)
+            let tip = tips.view(list, stringForToolTip: 0, point: NSPoint(x: rect.midX, y: rect.midY), userData: nil)
+            let outside = tips.view(list, stringForToolTip: 0, point: NSPoint(x: rect.midX, y: list.visibleRect.minY - 10), userData: nil)
+            let own = (0..<list.numberOfRows).compactMap { list.view(atColumn: 0, row: $0, makeIfNecessary: false)?.toolTip }
+            check(tip.hasPrefix(start) && outside.isEmpty && own.isEmpty, "the popup's row tooltips are the popup's, for rows in view only",
+                  "\(tip.debugDescription), outside \(outside.debugDescription), on rows \(own)")
+        } else {
+            check(false, "the popup's row tooltips: row ✓ \(start) not listed, or no tooltip area",
+                  "tooltip area \(popup.rowToolTips != nil): " + rows.joined(separator: " | "))
+        }
         popup.toggleFolder("local:fix")
         check(popup.rowTitles.contains("b"), "a folder opens to its branches", popup.rowTitles.joined(separator: " | "))
         await screenshot(popup.panelWindow, suffix: "branches")
@@ -2178,6 +2224,20 @@ enum SelfTest {
         }
         check(await wait(8) { log.query.scope == .ref("refs/heads/log/side") && !log.isLoading && log.commits.first?.sha == side },
               "selecting a branch in the tree shows its history", "\(log.query.scope), " + log.refs.rowTitles.joined(separator: " | "))
+        // Its rows' tooltips come from the tree, for rows in view only, as in the sidebar: none on the row views.
+        let tree = log.refs.outline
+        tree.layoutSubtreeIfNeeded()
+        if let row = log.refs.rowTitles.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "side" }), let tips = log.refs.rowToolTips {
+            let rect = tree.rect(ofRow: row)
+            let tip = tips.view(tree, stringForToolTip: 0, point: NSPoint(x: rect.midX, y: rect.midY), userData: nil)
+            let outside = tips.view(tree, stringForToolTip: 0, point: NSPoint(x: rect.midX, y: tree.visibleRect.minY - 10), userData: nil)
+            let own = (0..<tree.numberOfRows).compactMap { tree.view(atColumn: 0, row: $0, makeIfNecessary: false)?.toolTip }
+            check(tip == "refs/heads/log/side" && outside.isEmpty && own.isEmpty, "the branch tree's tooltips are the tree's, for rows in view only",
+                  "\(tip.debugDescription), outside \(outside.debugDescription), on rows \(own)")
+        } else {
+            check(false, "the branch tree's tooltips: row side not listed, or no tooltip area",
+                  "tooltip area \(log.refs.rowToolTips != nil): " + log.refs.rowTitles.joined(separator: " | "))
+        }
         c.showBranches(nil)
         check(await wait(5) { c.branchPopup.isVisible && c.branchPopup.rowTitles.contains("Git Log") }, "the branch popup has a Git Log row",
               c.branchPopup.rowTitles.prefix(8).joined(separator: " | "))
@@ -3291,6 +3351,14 @@ enum SelfTest {
                 c.revealInSidebar(nil)
                 check(await wait(5) { c.sidebar.selection.contains { canonicalPath($0.url.path) == mainPath } },
                       "the reveal button finds it again after its folder was closed")
+                // Hidden and shown again (⌘B twice): the file in front is revealed.
+                c.sidebar.outline.collapseItem(src)
+                c.sidebar.outline.deselectAll(nil)
+                c.toggleProjectSidebar(nil)
+                c.toggleProjectSidebar(nil)
+                let revealed = await wait(5) { c.sidebar.selection.contains { canonicalPath($0.url.path) == mainPath } }
+                check(c.isSidebarVisible && revealed, "showing the sidebar again reveals the file in front",
+                      c.sidebar.selection.map(\.url.lastPathComponent).joined(separator: ","))
             }
         } else {
             note("sidebar root is \(c.sidebar.root?.path ?? "none"), not the test project: reveal not checked here")
@@ -3299,6 +3367,27 @@ enum SelfTest {
         check(await wait(5) { finder.shownPaths.first == "src/main.php" }, "with nothing typed, recently opened files come first",
               finder.shownPaths.prefix(3).joined(separator: ", "))
         finder.close()
+        // A file git ignores (.env here) is left out, until you open it: then it is listed with the recent files.
+        let exclude = proj.appendingPathComponent(".git/info/exclude")
+        let excluded = try? String(contentsOf: exclude, encoding: .utf8)
+        try? ((excluded ?? "") + "\n.env\n").write(to: exclude, atomically: true, encoding: .utf8)
+        let env = proj.appendingPathComponent(".env")
+        try? "APP_NAME=selftest\n".write(to: env, atomically: true, encoding: .utf8)
+        finder.show(root: proj.path, recent: c.recentFiles, over: window)
+        finder.query = "env"
+        await pause(1)
+        check(!finder.shownPaths.contains(".env"), "⌘P leaves out a file git ignores", finder.shownPaths.prefix(3).joined(separator: ", "))
+        finder.close()
+        c.openFile(env)
+        finder.show(root: proj.path, recent: c.recentFiles, over: window)
+        check(await wait(5) { finder.shownPaths.first == ".env" }, "once opened, it comes first with nothing typed",
+              finder.shownPaths.prefix(3).joined(separator: ", "))
+        finder.query = "env"
+        check(await wait(5) { finder.shownPaths.first == ".env" }, "and its name finds it", finder.shownPaths.prefix(3).joined(separator: ", "))
+        finder.close()
+        if let editor = c.editorArea.editors.first(where: { $0.document.path == canonicalPath(env.path) }) { c.editorArea.close(editor) }
+        try? FileManager.default.removeItem(at: env)
+        if let excluded { try? excluded.write(to: exclude, atomically: true, encoding: .utf8) } else { try? FileManager.default.removeItem(at: exclude) }
         // Selected text starts the search, as for Find.
         c.openFile(proj.appendingPathComponent("docs/user-guide.md"))
         if let editor = c.editorArea.activeEditor, editor.document.path.hasSuffix("user-guide.md") {
@@ -3563,6 +3652,26 @@ enum SelfTest {
         window.makeKeyAndOrderFront(nil)
         try? FileManager.default.removeItem(at: proj.appendingPathComponent("a-greet.md"))
         try? FileManager.default.removeItem(at: proj.appendingPathComponent("src/z.php"))
+
+        // With no agent running, ⌥⌘K stays on in the editor and says why nothing was sent; with the keyboard in
+        // the terminal, where it sends nothing, it is off.
+        if c.agentTab == nil {
+            c.openFile(proj.appendingPathComponent("src/main.php"))
+            if let sendFrom = area.activeEditor { window.makeFirstResponder(sendFrom.textView) }
+            let sendItem = NSMenuItem(title: "Send to Agent", action: #selector(TerminalWindowController.sendToAgent(_:)), keyEquivalent: "")
+            check(c.isEditorFocused && c.validateMenuItem(sendItem), "Send to Agent stays on in the editor with no agent running",
+                  "editor focused \(c.isEditorFocused)")
+            c.sendToAgent(nil)
+            func texts(_ view: NSView) -> [String] { view.subviews.flatMap { ($0 as? NSTextField).map { [$0.stringValue] } ?? texts($0) } }
+            check(await wait(2) { window.attachedSheet?.contentView.map(texts)?.contains("No agent is running in this window") == true },
+                  "and sending says no agent is running", window.attachedSheet?.contentView.map(texts)?.joined(separator: " | ") ?? "no sheet")
+            if let sheet = window.attachedSheet { window.endSheet(sheet) }
+            _ = await wait(2) { window.attachedSheet == nil }
+            window.makeFirstResponder(tab.view)
+            check(!c.isEditorFocused && !c.validateMenuItem(sendItem), "and off with the keyboard in the terminal, where it would only beep")
+        } else {
+            check(false, "Send to Agent with no agent: an agent tab was still running", c.agentTab?.status.program ?? "")
+        }
 
         // Send to Agent: an "agent" (cat under the name claude, so the tty echoes what it is given) in a tab.
         let fakeBin = proj.deletingLastPathComponent().appendingPathComponent("fake-agent-bin")
@@ -3830,6 +3939,7 @@ enum SelfTest {
         shortcuts.set(KeyChord(key: "t", command: true, control: true), for: "newTab:")
         check(newTabItem?.keyEquivalent == "t" && newTabItem?.keyEquivalentModifierMask == [.command, .control],
               "a new shortcut goes straight into the menu", newTabItem.map { "\($0.keyEquivalentModifierMask.rawValue)" } ?? "")
+        check(c.tabBar.newTabToolTip == "New tab (⌃⌘T)", "and into the tooltip that names it", c.tabBar.newTabToolTip ?? "none")
         check(shortcuts.bindings.owner(of: KeyChord(key: "f", command: true), defaults: shortcuts.defaults, except: "newTab:") == "performFindPanelAction:#1",
               "a shortcut already in use is found, so it can be moved deliberately")
         if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0, windowNumber: 0,
@@ -3844,6 +3954,9 @@ enum SelfTest {
         NSApp.windows.first { $0.title == "Settings" }?.close()
         shortcuts.resetAll()
         check(newTabItem?.keyEquivalentModifierMask == .command && shortcuts.chord(for: "clearBuffer:")?.display == "⌘K", "Restore All Defaults")
+        let sidebarKey = shortcuts.chord(for: "toggleProjectSidebar:")?.display ?? "none"
+        check(c.tabBar.newTabToolTip == "New tab (⌘T)" && c.sidebar.header.hideButton.toolTip == "Hide the project sidebar (\(sidebarKey))",
+              "tooltips that name a key follow it back", "\(c.tabBar.newTabToolTip ?? "none") | \(c.sidebar.header.hideButton.toolTip ?? "none")")
         UserDefaults.standard.set(savedBindings, forKey: "keyBindings")
         shortcuts.apply()
 
@@ -4425,6 +4538,63 @@ enum SelfTest {
             _ = await tool("close_tab", ["tab_id": askerID, "force": true])
         } else {
             check(false, "MCP: new_tab starts the stand-in agent", asking.text)
+        }
+
+        // Claude Code's own question form (AskUserQuestion), drawn as Claude Code 2.1 draws it: the model's
+        // question and options, then rows of its own. A decision too, answered the same way.
+        try? """
+        #!/bin/zsh
+        labels=("Rewrite it" "Patch the bug" "Leave it")
+        sel=1
+        draw() {
+          printf '\\033[2J\\033[H'
+          print -r -- ' ☐ Approach'
+          print -r -- ''
+          print -r -- 'Which approach should I take for the parser?'
+          print -r -- ''
+          for i in 1 2 3; do
+            if (( i == sel )); then print -r -- "❯ $i. ${labels[$i]}"; else print -r -- "  $i. ${labels[$i]}"; fi
+            print -r -- '     What that means'
+          done
+          print -r -- '  4. Type something.'
+          print -r -- '────────────────────────────────────────'
+          print -r -- '  5. Chat about this'
+          print -r -- ''
+          print -r -- 'Enter to select · ↑/↓ to navigate · Esc to cancel'
+        }
+        printf '\\342\\234\\273 Pondering\\342\\200\\246 (2s \\302\\267 esc to interrupt)\\n'; sleep 1
+        draw
+        while read -rsk1 key; do
+          if [[ $key == $'\\e' ]]; then
+            read -rsk2 rest
+            [[ $rest == '[B' ]] && (( sel < 3 )) && (( sel += 1 ))
+            [[ $rest == '[A' ]] && (( sel > 1 )) && (( sel -= 1 ))
+            draw
+          elif [[ $key == $'\\r' || $key == $'\\n' ]]; then
+            break
+          fi
+        done
+        printf '\\033[2J\\033[Hpicked %s\\n' "$sel"
+        while true; do sleep 1; done
+        """.write(to: asker, atomically: true, encoding: .utf8)
+        chmod(asker.path, 0o755)
+        let form = await tool("new_tab", ["directory": proj.path, "command": "PATH=\(agentBin.path):$PATH claude", "title": "form"])
+        let formID = form.json?["id"] as? String ?? ""
+        if let formTab = AppDelegate.shared.controllers.flatMap(\.tabs).first(where: { $0.id.uuidString.lowercased() == formID }) {
+            check(await wait(10) { formTab.status.question == "Which approach should I take for the parser?" },
+                  "Claude Code's question form is a decision, with the model's question",
+                  formTab.status.question ?? formTab.screenTail(8).joined(separator: " | "))
+            let read = await tool("read_tab", ["tab_id": formID, "lines": 20])
+            let questionID = read.json?["question_id"] as? String ?? ""
+            check(read.json?["choices"] as? [String] == ["Rewrite it", "Patch the bug", "Leave it"],
+                  "MCP: its choices are the model's options, without the form's own rows", read.text.prefix(400).description)
+            let answered = await tool("answer_agent", ["tab_id": formID, "question_id": questionID, "answer": "Patch the bug"])
+            check(!answered.isError && answered.json?["answered"] as? String == "Patch the bug", "MCP: answer_agent answers the form", answered.text)
+            check(await wait(5) { formTab.screenTail(10).contains { $0.contains("picked 2") } },
+                  "MCP: the form got option 2", formTab.screenTail(6).joined(separator: " | "))
+            _ = await tool("close_tab", ["tab_id": formID, "force": true])
+        } else {
+            check(false, "MCP: new_tab starts the stand-in question form", form.text)
         }
         try? FileManager.default.removeItem(at: agentBin)
 
