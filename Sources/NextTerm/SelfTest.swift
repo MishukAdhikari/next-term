@@ -26,10 +26,23 @@ enum SelfTest {
     static func check(_ ok: Bool, _ name: String, _ detail: @autoclosure () -> String = "") {
         if !ok { failures += 1 }
         let d = detail()
-        lines.append("\(ok ? "PASS" : "FAIL") \(name)\(ok || d.isEmpty ? "" : " — \(d)")")
+        record("\(ok ? "PASS" : "FAIL") \(name)\(ok || d.isEmpty ? "" : " — \(d)")")
     }
 
-    static func note(_ text: String) { lines.append("NOTE \(text)") }
+    static func note(_ text: String) { record("NOTE \(text)") }
+
+    /// Each line goes into the report as it happens, so a run stopped part-way (the script's time limit)
+    /// still says how far it got and what failed; the last line, ALL PASSED or N FAILED, comes at the end.
+    private static func record(_ line: String) {
+        lines.append(line)
+        guard let handle = reportHandle else { return }
+        handle.write(Data((line + "\n").utf8))
+    }
+
+    private static let reportHandle: FileHandle? = {
+        guard let path = reportPath, FileManager.default.createFile(atPath: path, contents: nil) else { return nil }
+        return FileHandle(forWritingAtPath: path)
+    }()
 
     static func wait(_ seconds: Double = 10, _ condition: () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(seconds)
@@ -4645,9 +4658,9 @@ enum SelfTest {
 
     private static func finish() {
         ClaudeIDEServer.shared.stop() // remove the test run's lock file
-        lines.append(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
+        record(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
+        try? reportHandle?.close()
         let report = lines.joined(separator: "\n") + "\n"
-        if let path = reportPath { try? report.write(toFile: path, atomically: true, encoding: .utf8) }
         print(report, terminator: "")
         exit(failures == 0 ? 0 : 1)
     }
