@@ -315,8 +315,10 @@ public enum DataHead {
         var current = [0, 0, 0]
         var inQuotes = false
         var lines = 0
-        // Every comma read sits between two digits, as decimal commas do ("1,5").
+        // Every comma in the lines counted sits between two digits, as decimal commas do ("1,5"). Decided
+        // line by line: the sample can end partway through a line, and that one is not counted.
         var decimalCommas = true
+        var lineDecimal = true
         let bytes = Array(head)
         for i in bytes.indices {
             let byte = bytes[i]
@@ -327,12 +329,14 @@ public enum DataHead {
             if inQuotes { continue }
             if byte == 0x0A {
                 for k in 0..<3 { counts[k].append(current[k]) }
+                if !lineDecimal { decimalCommas = false }
                 current = [0, 0, 0]
+                lineDecimal = true
                 lines += 1
                 if lines == 20 { break }
             } else if let k = candidates.firstIndex(of: byte) {
                 current[k] += 1
-                if byte == 0x2C, !isDecimalComma(bytes, at: i) { decimalCommas = false }
+                if byte == 0x2C, !isDecimalComma(bytes, at: i) { lineDecimal = false }
             }
         }
         if lines == 0 { for k in 0..<3 { counts[k].append(current[k]) } } // one line, no newline yet

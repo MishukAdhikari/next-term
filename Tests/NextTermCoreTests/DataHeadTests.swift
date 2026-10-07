@@ -111,6 +111,20 @@ import Testing
         #expect(all[6000].line == 12_000 && all.last?.line == 15_001)
     }
 
+    /// Semicolon rows of decimal commas with no header, so wide that the 64 KB the separator is found in
+    /// ends partway through one, right after a decimal comma.
+    @Test func wideRowsWithDecimalCommas() throws {
+        let row = (0..<820).map { "\($0 % 13),\($0 % 10)" }.joined(separator: ";")
+        let text = String(repeating: row + "\n", count: 20)
+        let bytes = Array(text.utf8)
+        try #require(bytes.count > DataHead.headLength && bytes[DataHead.headLength - 1] == 0x2C)
+        let project = FixtureProject()
+        project.write("wide.csv", text)
+        let page = try DataHead.page(at: project.root + "/wide.csv", kind: .delimited)
+        #expect(page.delimiter == 0x3B && page.records.count == 20 && page.records[0].fields.count == 820)
+        withExtendedLifetime(project) {}
+    }
+
     @Test func delimitersAndHeaders() {
         #expect(DataHead.detectDelimiter(Array("a,b,c\n1,2,3\n".utf8), fallback: 0x09) == 0x2C)
         #expect(DataHead.detectDelimiter(Array("a\tb\tc\n1\t2,5\t3\n".utf8), fallback: 0x2C) == 0x09)
@@ -127,6 +141,9 @@ import Testing
         #expect(DataHead.detectDelimiter(Array("1,a;b\n2,c;d\n3,e;f\n".utf8), fallback: 0x2C) == 0x2C)
         #expect(DataHead.detectDelimiter(Array("1,5,a;b\n2,5,c;d\n".utf8), fallback: 0x2C) == 0x2C)
         #expect(DataHead.detectDelimiter(Array("1,5;\"a, b\"\n2,5;\"c, d\"\n".utf8), fallback: 0x2C) == 0x3B) // quoted ones do not count
+        // The sample ends partway through a line: its commas are not counted, so they say nothing either.
+        #expect(DataHead.detectDelimiter(Array("1,5;2,3\n4,5;6,7\n8,".utf8), fallback: 0x2C) == 0x3B)
+        #expect(DataHead.detectDelimiter(Array("1,5;2,3\n4,5;6,7\nab, c".utf8), fallback: 0x2C) == 0x3B)
         #expect(DataHead.looksLikeHeader([["id", "score"], ["1", "0.5"], ["2", "0.7"]]))
         #expect(DataHead.looksLikeHeader([["", "question", "answer"], ["0", "Why?", "Because."]]))
         #expect(!DataHead.looksLikeHeader([["1", "0.5"], ["2", "0.7"]]))
