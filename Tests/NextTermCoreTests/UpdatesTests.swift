@@ -75,10 +75,4 @@ import Testing
         #expect(ReleaseInfo.fromLatestRedirect(URL(string: "https://github.com/xMishukAdhikari/next-term/releases/tag/v9.0.0")!, repository: "MishukAdhikari/next-term") == nil)
         #expect(ReleaseInfo.fromLatestRedirect(URL(string: "https://evil.example/MishukAdhikari/next-term/releases/tag/v9.0.0")!, repository: "MishukAdhikari/next-term") == nil)
     }
-
-    @Test func checksumLines() {
-        let hex = String(repeating: "ab", count: 32)
-        #expect(ReleaseInfo.checksum(fromShasumLine: "\(hex)  NextTerm-0.1.1.dmg\n") == hex)
-        #expect(ReleaseInfo.checksum(fromShasumLine: "nothex  x") == nil)
-    }
 }

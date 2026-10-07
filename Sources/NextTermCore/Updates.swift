@@ -127,10 +127,4 @@ public struct ReleaseInfo: Equatable, Sendable {
         return ReleaseInfo(version: version, tag: tag, pageURL: finalURL, dmgURL: URL(string: base),
                            checksumURL: URL(string: base + ".sha256"), notes: "")
     }
-
-    /// The hex SHA-256 from a `shasum -a 256` line ("<hex>  NextTerm-0.1.1.dmg").
-    public static func checksum(fromShasumLine text: String) -> String? {
-        let hex = text.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).first.map(String.init)?.lowercased() ?? ""
-        return hex.count == 64 && hex.allSatisfy(\.isHexDigit) ? hex : nil
-    }
 }

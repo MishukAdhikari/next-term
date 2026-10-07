@@ -20,6 +20,35 @@ public enum ReleaseSignature {
         case notFor(file: String)
         /// The download is not the file whose checksum was signed.
         case mismatch
+        /// The release has no `.sha256` for its disk image.
+        case noChecksum
+    }
+
+    /// GitHub answered with neither the file nor "not found".
+    public struct Unavailable: Error, Equatable {
+        public let status: Int
+    }
+
+    /// The SHA-256 the release key signed for the release's disk image, read from its `.sha256` and
+    /// `.sha256.sig`, or nil while the signature is not up (it is uploaded a few minutes after the
+    /// release is published). Anything install.sh refuses throws a `Refusal`.
+    public static func signedChecksum(of release: ReleaseInfo, key: String = publicKey) async throws -> String? {
+        guard let checksumURL = release.checksumURL, let signatureURL = release.signatureURL,
+              let checksum = try await fetch(checksumURL) else { throw Refusal.noChecksum }
+        guard let signature = try await fetch(signatureURL) else { return nil }
+        return try signedChecksum(checksum, signature: signature, for: release.dmgName, key: key)
+    }
+
+    /// A small file of a release; nil when it is not there (yet).
+    static func fetch(_ url: URL) async throws -> Data? {
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let http = response as? HTTPURLResponse, http.statusCode != 200 else { return data }
+            if http.statusCode == 404 { return nil }
+            throw Unavailable(status: http.statusCode)
+        } catch let error as URLError where error.code == .fileDoesNotExist {
+            return nil // a local test feed's
+        }
     }
 
     /// The SHA-256 the release key signed for `file`: `checksum` is the release's `.sha256`, `signature`

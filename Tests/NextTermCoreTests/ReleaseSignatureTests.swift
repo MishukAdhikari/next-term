@@ -69,6 +69,36 @@ import Testing
         }
     }
 
+    /// What the updater does with a release: its `.sha256` and `.sha256.sig`, fetched next to the disk image.
+    @Test func aReleaseIsCheckedFromItsFiles() async throws {
+        let folder = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let key = try makeKey(in: folder, named: "key")
+        func release(_ tag: String, _ files: [String: Data]) throws -> ReleaseInfo {
+            let dir = folder.appendingPathComponent(tag)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            for (name, data) in files { try data.write(to: dir.appendingPathComponent(name)) }
+            let dmg = dir.appendingPathComponent("NextTerm-\(tag.dropFirst()).dmg")
+            return ReleaseInfo(version: try #require(AppVersion(tag)), tag: tag, pageURL: dir, dmgURL: dmg,
+                               checksumURL: URL(fileURLWithPath: dmg.path + ".sha256"), notes: "")
+        }
+        let checksum = Data("\(hex)  NextTerm-0.9.0.dmg\n".utf8)
+        let signature = try sign(checksum, with: folder.appendingPathComponent("key"), in: folder)
+        let signed = try release("v0.9.0", ["NextTerm-0.9.0.dmg.sha256": checksum, "NextTerm-0.9.0.dmg.sha256.sig": signature])
+        #expect(try await ReleaseSignature.signedChecksum(of: signed, key: key) == hex)
+        await #expect(throws: ReleaseSignature.Refusal.notSigned) { try await ReleaseSignature.signedChecksum(of: signed) }
+        // Not signed yet: nothing to refuse, nothing to install.
+        let unsigned = try release("v0.9.1", ["NextTerm-0.9.1.dmg.sha256": Data("\(hex)  NextTerm-0.9.1.dmg\n".utf8)])
+        #expect(try await ReleaseSignature.signedChecksum(of: unsigned, key: key) == nil)
+        // 0.9.0's signed checksum in another release.
+        let moved = try release("v0.9.2", ["NextTerm-0.9.2.dmg.sha256": checksum, "NextTerm-0.9.2.dmg.sha256.sig": signature])
+        await #expect(throws: ReleaseSignature.Refusal.notFor(file: "NextTerm-0.9.2.dmg")) {
+            try await ReleaseSignature.signedChecksum(of: moved, key: key)
+        }
+        let empty = try release("v0.9.3", [:])
+        await #expect(throws: ReleaseSignature.Refusal.noChecksum) { try await ReleaseSignature.signedChecksum(of: empty, key: key) }
+    }
+
     /// v0.8.0 as published: its checksum and the signature sign-release.sh uploaded, which the embedded key verifies.
     @Test func thePublishedReleaseVerifies() throws {
         let sha = "38deaa5853126a58bb292b17051d06b71120051fc0f41fadd3165886c3369e9b"

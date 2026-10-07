@@ -5,8 +5,9 @@ import NextTermCore
 /// Updates from GitHub Releases: checks once a day (and on demand). A new version opens the
 /// update window with its release notes (Skip This Version, Remind Me Later, Install and Relaunch), and
 /// a blue Update button stays at the top right of each window until it is installed or skipped. One
-/// click downloads the new DMG, checks it against the release's SHA-256, puts the new app in place of
-/// this one when Next Term quits, and starts it again.
+/// click downloads the new DMG, checks it as the installer (site/src/install.sh) does (the release's
+/// SHA-256 signed with the Next Term release key, and the download matching it), puts the new app in
+/// place of this one when Next Term quits, and starts it again.
 ///
 /// Only the latest-release endpoint is contacted, with no identifying data beyond the version in the
 /// User-Agent. Downloads are accepted only over https from GitHub.
@@ -242,31 +243,55 @@ final class Updater {
 
     // MARK: download, verify, stage
 
-    private func download(_ release: ReleaseInfo) {
-        guard let dmgURL = release.dmgURL, let checksumURL = release.checksumURL, !downloading else { return }
-        downloading = true
-        progress = UpdateProgressWindow(title: "Downloading Next Term \(release.version)…")
-        progress?.show()
+    /// A release whose checksum is not signed yet (each is signed a few minutes after it is published):
+    /// the install that was asked for is tried again, quietly, every `signatureRetry` for `signatureWait`.
+    private var awaitingSignature: (tag: String, since: Date, timer: Timer)?
+    static let signatureRetry: TimeInterval = 10 * 60
+    static let signatureWait: TimeInterval = 2 * 60 * 60
+    /// Published longer ago than this and still not signed: refused, not waited for.
+    static let signingDelay: TimeInterval = 24 * 60 * 60
+    /// A download, or the signature check before it, is under way.
+    private var installing = false
+
+    private func download(_ release: ReleaseInfo, quietly: Bool = false) {
+        guard let dmgURL = release.dmgURL, release.checksumURL != nil, !installing else { return }
+        let waitingSince = awaitingSignature?.tag == release.tag ? awaitingSignature?.since : nil
+        awaitingSignature?.timer.invalidate()
+        awaitingSignature = nil
+        installing = true
+        if !quietly { showProgress(release) }
         Task {
             do {
-                let expected = try await fetchChecksum(checksumURL)
+                // The checksum and its signature first: nothing big is downloaded for a release that is not signed yet.
+                guard let expected = try await ReleaseSignature.signedChecksum(of: release) else {
+                    installing = false
+                    hideProgress()
+                    return waitForSignature(release, since: waitingSince ?? Date(), quietly: quietly)
+                }
+                if quietly { showProgress(release) }
                 let dmg = try await fetch(dmgURL)
                 progress?.message = "Checking the download…"
                 let actual = try await Task.detached { try Self.sha256(of: dmg) }.value
-                guard actual == expected else { throw UpdateError("The download does not match its published checksum, so it was not installed.") }
+                guard actual == expected else {
+                    try? FileManager.default.removeItem(at: dmg)
+                    throw ReleaseSignature.Refusal.mismatch
+                }
                 progress?.message = "Preparing…"
                 let version = release.version
                 let app = try await Task.detached { try Self.stage(dmg: dmg, version: version) }.value
                 staged = (app, release.version)
-                downloading = false
-                progress?.close()
-                progress = nil
+                installing = false
+                hideProgress()
                 relaunchPrompt(release.version)
             } catch {
-                downloading = false
-                progress?.close()
-                progress = nil
-                let message = (error as? UpdateError)?.text ?? error.localizedDescription
+                let beforeDownload = quietly && progress == nil
+                installing = false
+                hideProgress()
+                if let refusal = error as? ReleaseSignature.Refusal { return refuse(release, Self.text(of: refusal)) }
+                // A quiet try that could not reach GitHub: the next one may.
+                if beforeDownload { return waitForSignature(release, since: waitingSince ?? Date(), quietly: true) }
+                var message = (error as? UpdateError)?.text ?? error.localizedDescription
+                if let failure = error as? ReleaseSignature.Unavailable { message = "GitHub did not answer (HTTP \(failure.status))." }
                 let alert = NSAlert()
                 alert.alertStyle = .warning
                 alert.messageText = "Next Term \(release.version) was not installed"
@@ -278,15 +303,67 @@ final class Updater {
         }
     }
 
-    struct UpdateError: Error { let text: String; init(_ text: String) { self.text = text } }
-
-    private func fetchChecksum(_ url: URL) async throws -> String {
-        let (data, _) = try await URLSession.shared.data(from: url)
-        guard let text = String(data: data, encoding: .utf8), let hex = ReleaseInfo.checksum(fromShasumLine: text) else {
-            throw UpdateError("The release has no usable checksum.")
-        }
-        return hex
+    private func showProgress(_ release: ReleaseInfo) {
+        downloading = true
+        progress = UpdateProgressWindow(title: "Downloading Next Term \(release.version)…")
+        progress?.show()
     }
+
+    private func hideProgress() {
+        downloading = false
+        progress?.close()
+        progress = nil
+    }
+
+    /// No signature yet. One published in the last day is about to be signed: say so (once) and try
+    /// again every 10 minutes without a word, for two hours. One published before that is refused.
+    /// Each try fetches only the checksum and its signature.
+    private func waitForSignature(_ release: ReleaseInfo, since: Date, quietly: Bool) {
+        let now = Date()
+        let recent = release.published.map { now.timeIntervalSince($0) < Self.signingDelay } ?? true
+        guard recent else {
+            return refuse(release, "The release has no signature from the Next Term release key, so it was not installed.")
+        }
+        guard now.timeIntervalSince(since) < Self.signatureWait else {
+            return refuse(release, "The release is still not signed with the Next Term release key, so it was not installed. Try again later.")
+        }
+        let timer = Timer(timeInterval: Self.signatureRetry, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                // Skipped, put off or replaced by a newer version since: no more tries.
+                guard self.available?.tag == release.tag, release.tag != self.skippedTag, !self.snoozed(release), self.staged == nil else {
+                    self.awaitingSignature = nil
+                    return
+                }
+                self.download(release, quietly: true)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        awaitingSignature = (release.tag, since, timer)
+        if quietly { return }
+        tell("Next Term \(release.version) is not signed yet",
+             "Each release is signed with the Next Term release key a few minutes after it is published, and only a signed one is installed. Next Term checks again every 10 minutes for the next two hours, and downloads it once it is signed.")
+    }
+
+    private static func text(of refusal: ReleaseSignature.Refusal) -> String {
+        switch refusal {
+        case .notSigned: return "Its checksum is not signed with the Next Term release key, so it was not installed."
+        case .notFor(let file): return "The signed checksum is not for \(file), so it was not installed."
+        case .mismatch: return "The download does not match its signed checksum, so it was not installed."
+        case .noChecksum: return "The release has no checksum for its disk image, so it was not installed."
+        }
+    }
+
+    /// A release the release-key check refuses. Its page offers the same files, so it is not suggested.
+    private func refuse(_ release: ReleaseInfo, _ text: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Next Term \(release.version) was not installed"
+        alert.informativeText = text
+        alert.runModal()
+    }
+
+    struct UpdateError: Error { let text: String; init(_ text: String) { self.text = text } }
 
     private func fetch(_ url: URL) async throws -> URL {
         let (file, response) = try await URLSession.shared.download(from: url, delegate: progress)
