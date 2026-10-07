@@ -38,14 +38,13 @@ public enum CommandLineLink {
         target.hasSuffix("/Contents/Resources/bin/" + CommandLineOpen.toolName)
     }
 
-    /// The folders of a PATH value, as the shell searches them: absolute ones only, `~` expanded, without
-    /// a trailing slash, each once.
-    public static func folders(_ path: [String], home: String) -> [String] {
+    /// The folders of a PATH value, as the shell searches them: absolute ones only, without a trailing
+    /// slash, each once. A `~` there stays as it is: zsh and `env` look for a folder named "~".
+    public static func folders(_ path: [String]) -> [String] {
         var seen = Set<String>()
         var folders: [String] = []
         for entry in path {
             var folder = entry
-            if folder == "~" || folder.hasPrefix("~/") { folder = home + String(folder.dropFirst()) }
             while folder.count > 1 && folder.hasSuffix("/") { folder.removeLast() }
             guard folder.hasPrefix("/"), seen.insert(folder).inserted else { continue }
             folders.append(folder)
@@ -62,7 +61,7 @@ public enum CommandLineLink {
                             isWritable: (String) -> Bool, entry: (String) -> Entry) -> Plan {
         let allowed = Set(commandFolders(home: home))
         var free: String?
-        for folder in folders(path, home: home) {
+        for folder in folders(path) {
             let candidate = folder + "/" + CommandLineOpen.toolName
             // A Next Term's own bin folder, on PATH because the app was started from one of its tabs.
             if isOurs(candidate) { continue }

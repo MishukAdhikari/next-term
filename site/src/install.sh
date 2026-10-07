@@ -234,9 +234,8 @@ PROCESSES
         local folders=() folder link target free=""
         IFS=: read -r -a folders <<<"${PATH:-}" || true
         for folder in ${folders[@]+"${folders[@]}"}; do
-            case "${folder}" in "~") folder="${HOME}" ;; "~/"*) folder="${HOME}/${folder#"~/"}" ;; esac
             while [ "${#folder}" -gt 1 ] && [ "${folder%/}" != "${folder}" ]; do folder="${folder%/}"; done
-            case "${folder}" in /*) ;; *) continue ;; esac # relative to wherever a command runs
+            case "${folder}" in /*) ;; *) continue ;; esac # relative to wherever a command runs; zsh takes a ~ literally
             link="${folder}/nxtrm"
             case "${link}" in */Contents/Resources/bin/nxtrm) continue ;; esac # a Next Term's own folder
             if [ -L "${link}" ]; then

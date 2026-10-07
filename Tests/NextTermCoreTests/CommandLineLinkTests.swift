@@ -41,10 +41,10 @@ import Testing
     }
 
     @Test func pathSpellings() {
-        #expect(plan(["~/.local/bin"], writable: ["/Users/ada/.local/bin"]) == .link("/Users/ada/.local/bin/nxtrm"))
+        // `export PATH="~/.local/bin:$PATH"`: zsh never finds a command there (bash does), so no link goes there.
+        #expect(plan(["~/.local/bin"], writable: ["/Users/ada/.local/bin"]) == .unavailable)
         #expect(plan(["/opt/homebrew/bin/"], writable: ["/opt/homebrew/bin"]) == .link("/opt/homebrew/bin/nxtrm"))
-        #expect(CommandLineLink.folders(["/usr/bin", "", "bin", "/usr/bin/", "~", "~/bin", "/"], home: home)
-                == ["/usr/bin", "/Users/ada", "/Users/ada/bin", "/"])
+        #expect(CommandLineLink.folders(["/usr/bin", "", "bin", "/usr/bin/", "~", "~/bin", "/"]) == ["/usr/bin", "/"])
     }
 
     @Test func aLinkToThisAppIsKeptWhereverItIs() {
