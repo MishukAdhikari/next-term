@@ -57,6 +57,12 @@ final class SidebarHeaderView: NSView {
 
     override var isFlipped: Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
+    /// Whether the branch name is cut short (for the self-test).
+    var titleIsTruncated: Bool {
+        layoutSubtreeIfNeeded()
+        return title.cell?.expansionFrame(withFrame: title.bounds, in: title) != .zero
+    }
+
     /// Whether the counts are cut short (for the self-test).
     var summaryIsTruncated: Bool {
         layoutSubtreeIfNeeded()
@@ -170,7 +176,9 @@ final class SidebarHeaderView: NSView {
         }
         // The name as wide as it is (the chevron right after it), up to the counts.
         let room = max(0, summary.frame.minX - x - 6 - (chevron.isHidden ? 0 : 12))
-        title.frame = NSRect(x: x, y: titleY, width: min(room, ceil(title.intrinsicContentSize.width) + 2), height: titleHeight)
+        // The cell's own size, not the text's: it needs a few points of margin, or even "dev" truncates to "…".
+        let needed = ceil(title.cell?.cellSize.width ?? title.intrinsicContentSize.width + 4) + 1
+        title.frame = NSRect(x: x, y: titleY, width: min(room, needed), height: titleHeight)
         chevron.frame = NSRect(x: title.frame.maxX + 2, y: (h - 10) / 2, width: 10, height: 10)
         window?.invalidateCursorRects(for: self)
     }

@@ -385,6 +385,7 @@ enum SelfTest {
             check(snap?.change(at: "AGENTS.md", isDirectory: false) == .untracked, "a new file is untracked")
             check(SidebarHeaderView.describe(snap!).contains("Branch main"), "the header tooltip describes it", SidebarHeaderView.describe(snap!))
             check(!c.sidebar.header.summaryIsTruncated, "the header shows its counts in full")
+            check(!c.sidebar.header.titleIsTruncated, "and the branch name in full (a short one never becomes “…”)")
             if let src = c.sidebar.root?.children?.first(where: { $0.name == "src" }) {
                 let row = c.sidebar.outline.row(forItem: src)
                 let cell = c.sidebar.outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? FileCellView
@@ -727,6 +728,12 @@ enum SelfTest {
               && item("saveAllDocuments:")?.keyEquivalentModifierMask == .command && item("indentSelection:")?.keyEquivalent == "",
               "JetBrains keys: Go to File ⇧⌘O, Save All ⌘S, Indent has no key")
         check(item("goToLine:")?.keyEquivalentModifierMask == [.command, .control], "your own shortcut changes stay on top of a preset")
+        // ⌘P still opens Go to File under JetBrains keys, until a command takes ⌘P; then it's that command's.
+        check(shortcuts.goToFileAliasActive, "with JetBrains keys, ⌘P still opens Go to File")
+        shortcuts.set(KeyChord(key: "p", command: true), for: "goToLine:")
+        check(!shortcuts.goToFileAliasActive && item("goToLine:")?.keyEquivalent == "p", "a command given ⌘P gets it; Go to File keeps ⇧⌘O")
+        shortcuts.set(KeyChord(key: "l", command: true, control: true), for: "goToLine:")
+        check(shortcuts.goToFileAliasActive, "and ⌘P goes back to Go to File when that command gives it up")
         // ⌘K leaves the editor alone under a preset.
         c.openFile(proj.appendingPathComponent("gutter.txt"))
         if let editor = c.editorArea.activeEditor, let clear = item("clearBuffer:") {
@@ -735,8 +742,9 @@ enum SelfTest {
             c.editorArea.close(editor)
         }
         shortcuts.preset = .nextTerm
-        check(item("replaceInFiles:")?.keyEquivalent == "r" && item("goToFile:")?.keyEquivalentModifierMask == .command,
-              "back to Next Term's keys")
+        check(item("replaceInFiles:")?.keyEquivalent == "r" && item("goToFile:")?.keyEquivalentModifierMask == .command
+              && !shortcuts.goToFileAliasActive,
+              "back to Next Term's keys (⌘P is Go to File's own key again, no alias)")
 
         // Every command an imported shortcut can land on is a real menu command.
         let ids = Set(shortcuts.commands.map(\.id))

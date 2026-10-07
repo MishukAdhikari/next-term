@@ -593,7 +593,9 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         var lines = preset.overrides.keys.sorted().map { id -> String in
             let from = shortcuts.commands.first { $0.id == id }?.defaultChord?.display ?? "no key"
             let to = preset.overrides[id]!?.display ?? "no key"
-            return "\(shortcuts.title(of: id))   \(from) → \(to)"
+            // ⌘P keeps opening Go to File unless something else takes it (see KeyboardShortcuts.goToFileAlias).
+            let alsoP = id == "goToFile:" && to != KeyboardShortcuts.goToFileKey.display ? " (⌘P still works)" : ""
+            return "\(shortcuts.title(of: id))   \(from) → \(to)\(alsoP)"
         }
         if preset.clearsOnlyInTerminal { lines.append("⌘K clears only while a terminal has the keyboard") }
         lines.append("Your own shortcut changes stay as they are")

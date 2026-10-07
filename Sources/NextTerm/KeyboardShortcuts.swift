@@ -50,6 +50,12 @@ final class KeyboardShortcuts {
     /// command can take them.
     private(set) var aliases: [KeyChord: String] = [:]
 
+    /// ⌘P, Next Term's Go to File key, as a second key for it when a shortcut set moves Go to File
+    /// (the JetBrains set puts it on ⇧⌘O). It gives way to any command that has ⌘P.
+    static let goToFileAlias = NSUserInterfaceItemIdentifier("goToFileAlias")
+    static let goToFileKey = KeyChord(key: "p", command: true)
+    private weak var goToFileAliasItem: NSMenuItem?
+
     /// Records the menus' commands and their default shortcuts, then applies the user's.
     func capture(_ menu: NSMenu) {
         commands = []
@@ -62,6 +68,10 @@ final class KeyboardShortcuts {
         for item in menu.items {
             if let submenu = item.submenu {
                 walk(submenu, path: path + [item.title])
+                continue
+            }
+            if item.identifier == Self.goToFileAlias {
+                goToFileAliasItem = item
                 continue
             }
             if item.isHidden, item.allowsKeyEquivalentWhenHidden, let id = Self.id(of: item), let chord = Self.chord(of: item) {
@@ -142,7 +152,15 @@ final class KeyboardShortcuts {
             if let saved = chord, !saved.isUsable { chord = base }
             Self.set(chord, on: item)
         }
+        // ⌘P stays Go to File while no command has it.
+        if let alias = goToFileAliasItem {
+            let taken = commands.contains { $0.item.flatMap(Self.chord(of:)) == Self.goToFileKey }
+            Self.set(taken ? nil : Self.goToFileKey, on: alias)
+        }
     }
+
+    /// Whether ⌘P opens Go to File through the alias now (for the self-test and the import preview).
+    var goToFileAliasActive: Bool { goToFileAliasItem.flatMap(Self.chord(of:)) == Self.goToFileKey }
 
     func set(_ chord: KeyChord?, for id: String) {
         var bindings = self.bindings

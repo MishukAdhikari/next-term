@@ -28,7 +28,7 @@ Choose an app and the preview lists what it would bring, each item a checkbox wi
 | Command | Next Term | VS Code | JetBrains (macOS) |
 |---|---|---|---|
 | New Window | <kbd>⌘N</kbd> | <kbd>⇧⌘N</kbd> | <kbd>⌘N</kbd> |
-| Go to File | <kbd>⌘P</kbd> | <kbd>⌘P</kbd> | <kbd>⇧⌘O</kbd> |
+| Go to File | <kbd>⌘P</kbd> | <kbd>⌘P</kbd> | <kbd>⇧⌘O</kbd>, and <kbd>⌘P</kbd> still works |
 | Save | <kbd>⌘S</kbd> | <kbd>⌘S</kbd> | <kbd>⌥⌘S</kbd> |
 | Save All | <kbd>⌥⌘S</kbd> | <kbd>⌥⌘S</kbd> | <kbd>⌘S</kbd> |
 | Split Right | <kbd>⌘D</kbd> | <kbd>⌘&#92;</kbd> | <kbd>⌘&#92;</kbd> |

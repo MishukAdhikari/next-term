@@ -864,6 +864,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         shell.addItem(.separator())
         item(shell, "Open Project…", #selector(openProjectPanel(_:)), "o", target: self)
         item(shell, "Go to File…", #selector(TerminalWindowController.goToFile(_:)), "p")
+        // ⌘P keeps opening Go to File when a shortcut set moves it (JetBrains: ⇧⌘O), unless a command takes ⌘P.
+        let goToFileAlias = item(shell, "Go to File…", #selector(TerminalWindowController.goToFile(_:)), "")
+        goToFileAlias.isHidden = true
+        goToFileAlias.allowsKeyEquivalentWhenHidden = true
+        goToFileAlias.identifier = KeyboardShortcuts.goToFileAlias
         item(shell, "Resume Agent Session…", #selector(TerminalWindowController.resumeSession(_:)), "o", [.command, .option])
         item(shell, "Open Served URL", #selector(TerminalWindowController.openServedURL(_:)), "")
         let recentMenu = NSMenu(title: "Open Recent")
