@@ -734,7 +734,10 @@ enum SelfTest {
         // ⌘P still opens Go to File under JetBrains keys, until a command takes ⌘P; then it's that command's.
         check(shortcuts.goToFileAliasActive, "with JetBrains keys, ⌘P still opens Go to File")
         shortcuts.set(KeyChord(key: "p", command: true), for: "goToLine:")
-        check(!shortcuts.goToFileAliasActive && item("goToLine:")?.keyEquivalent == "p", "a command given ⌘P gets it; Go to File keeps ⇧⌘O")
+        let lineItem = item("goToLine:")
+        check(!shortcuts.goToFileAliasActive && lineItem?.keyEquivalent == "p" && lineItem?.keyEquivalentModifierMask == .command,
+              "a command given ⌘P gets it; Go to File keeps ⇧⌘O",
+              "alias active: \(shortcuts.goToFileAliasActive), Go to Line: “\(lineItem?.keyEquivalent ?? "nil")” \(lineItem?.keyEquivalentModifierMask.rawValue ?? 0), Go to File: “\(item("goToFile:")?.keyEquivalent ?? "nil")”")
         shortcuts.set(KeyChord(key: "l", command: true, control: true), for: "goToLine:")
         check(shortcuts.goToFileAliasActive, "and ⌘P goes back to Go to File when that command gives it up")
         // ⌘K leaves the editor alone under a preset.
