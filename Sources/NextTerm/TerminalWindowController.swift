@@ -73,6 +73,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private var opensWelcome = false
     /// The sheet asking to save before the last tab takes the window is up: it alone decides.
     private var askingToSave = false
+    /// When this window last had the keyboard, so a Dock click brings back the one used last.
+    private(set) var lastKey = Date.distantPast
     private(set) lazy var finder: FindInFilesController = {
         let controller = FindInFilesController()
         controller.delegate = self
@@ -1611,6 +1613,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
+        lastKey = Date()
         refreshVisibility()
         refresh()
         if let view = activeTab?.view, window?.firstResponder !== view, !(window?.firstResponder is NSTextView) {

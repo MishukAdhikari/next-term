@@ -487,10 +487,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        // Clicking the Dock icon with no windows open: back to the last project, else a terminal.
-        if !flag, welcome?.window?.isVisible != true {
-            if let path = recent.existing().first { openWindow(directory: path, project: path) } else { newWindow(nil) }
+        guard !flag, welcome?.window?.isVisible != true else { return true }
+        // Windows open but none visible (every one minimized): the one used last comes back, and nothing else
+        // (no second window for its project, nor AppKit's own reopen on top).
+        if let last = controllers.max(by: { $0.lastKey < $1.lastKey }), let window = last.window {
+            if window.isMiniaturized { window.deminiaturize(nil) } else { window.makeKeyAndOrderFront(nil) }
+            return false
         }
+        // No windows open: back to the last project, else a terminal.
+        if let path = recent.existing().first { openWindow(directory: path, project: path) } else { newWindow(nil) }
         return true
     }
 
