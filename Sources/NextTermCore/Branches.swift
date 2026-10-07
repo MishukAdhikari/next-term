@@ -42,6 +42,8 @@ public struct BranchRef: Equatable, Sendable {
     /// The name without its remote ("feat/login" for "origin/feat/login").
     public var shortName: String { isRemote ? String(name.split(separator: "/", maxSplits: 1).last ?? "") : name }
     public var shortSHA: String { String(sha.prefix(7)) }
+    /// "refs/heads/feat/login", "refs/remotes/origin/feat/login": never mistaken for a tag or a file.
+    public var fullName: String { (isRemote ? "refs/remotes/" : "refs/heads/") + name }
 }
 
 public struct Worktree: Equatable, Sendable {

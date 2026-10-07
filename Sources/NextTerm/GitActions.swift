@@ -169,6 +169,20 @@ struct GitActions {
         controller.addTab(directory: path)
     }
 
+    // MARK: comparing
+
+    /// Compare with Current: the commits only on `ref` and only on what is checked out, then the files
+    /// `ref` changed, in an editor tab. Only reads (GitRunner, never GitWriter).
+    func compare(_ ref: BranchRef) {
+        controller?.openBranchComparison(root: root, branch: ref.fullName, mode: .compare, current: model?.current)
+    }
+
+    /// Show Diff with Working Tree: the files on disk that differ from `ref`, in an editor tab, each
+    /// opening side by side (the branch's version left, the disk's right). Only reads.
+    func diffWithWorkingTree(_ ref: BranchRef) {
+        controller?.openBranchComparison(root: root, branch: ref.fullName, mode: .workingTree, current: model?.current)
+    }
+
     // MARK: branches
 
     func askNewBranch(base: BranchRef?) {

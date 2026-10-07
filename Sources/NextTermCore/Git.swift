@@ -338,22 +338,27 @@ public enum GitRunner {
     }
 
     /// What a diff compares.
-    public enum DiffBase: Sendable {
+    public enum DiffBase: Equatable, Sendable {
         /// Working tree against HEAD: staged and unstaged changes together.
         case head
         /// Staged changes: index against HEAD.
         case staged
         /// Unstaged changes: working tree against the index.
         case unstaged
+        /// Working tree against a branch or commit ("refs/heads/main"): Show Diff with Working Tree.
+        case ref(String)
     }
 
     /// The diff of one file, or nil if it has none. Untracked files diff against nothing.
-    /// `context` lines around each change (a large number gives the whole file).
+    /// `context` lines around each change (a large number gives the whole file). Against a ref,
+    /// `oldPath` is where a file renamed since then was, so the rename is seen as one, and nil means
+    /// git failed (the branch is gone): the same file as there is an empty diff.
     public static func diff(of relativePath: String, in root: String, git: String, base: DiffBase = .head,
-                            context: Int = 3, untracked: Bool = false) -> FileDiff? {
+                            context: Int = 3, untracked: Bool = false, oldPath: String? = nil) -> FileDiff? {
         // Plumbing (diff-index, diff-files) so reading a diff never rewrites .git/index; see snapshot().
+        // Paths are file names, never patterns: "[id].tsx" must not match "i.tsx" too.
         let options = ["--no-color", "--no-ext-diff", "--no-textconv", "-M", "--histogram", "-p", "--full-index", "-U\(context)"]
-        let prefix = ["-C", root, "--no-optional-locks", "-c", "core.quotepath=off", "-c", "diff.autoRefreshIndex=false"]
+        let prefix = ["-C", root, "--no-optional-locks", "--literal-pathspecs", "-c", "core.quotepath=off", "-c", "diff.autoRefreshIndex=false"]
         let args: [String]
         if untracked {
             // Porcelain here, so pin the a/ b/ prefixes: a user's diff.noprefix would otherwise change them.
@@ -363,26 +368,34 @@ public enum GitRunner {
             case .head: args = prefix + ["diff-index"] + options + ["HEAD", "--", relativePath]
             case .staged: args = prefix + ["diff-index", "--cached"] + options + ["HEAD", "--", relativePath]
             case .unstaged: args = prefix + ["diff-files"] + options + ["--", relativePath]
+            case let .ref(name):
+                let paths = [oldPath, relativePath].compactMap { $0 }
+                args = prefix + ["diff-index"] + options + ["--end-of-options", name, "--"] + paths
             }
         }
         // `diff --no-index` exits 1 when the files differ, which is the expected case here.
         guard let data = run(git, args, timeout: 15, acceptedStatus: untracked ? [0, 1] : [0]),
               let text = String(data: data, encoding: .utf8) else { return nil }
-        return UnifiedDiff.parse(text).first
+        let files = UnifiedDiff.parse(text)
+        // Two paths give two patches when git doesn't pair them: the one for this path.
+        guard case .ref = base, !untracked else { return files.first }
+        return CommitLog.file(at: relativePath, in: files)
     }
 
-    /// The diffs of the tracked files under `paths` (the whole work tree when empty), from one git run.
+    /// The diffs of the tracked files under `paths` (names, not patterns; the whole work tree when empty), from one git run.
     /// Before the first commit, `head` and `staged` compare with nothing. Untracked files are not
     /// included: `diff(of:untracked:)` gives theirs.
     public static func diffs(in root: String, git: String, base: DiffBase = .head, paths: [String] = [],
                              context: Int = 3) -> [FileDiff]? {
         let options = ["--no-color", "--no-ext-diff", "--no-textconv", "-M", "--histogram", "-p", "--full-index", "-U\(context)"]
-        let prefix = ["-C", root, "--no-optional-locks", "-c", "core.quotepath=off", "-c", "diff.autoRefreshIndex=false"]
+        let prefix = ["-C", root, "--no-optional-locks", "--literal-pathspecs", "-c", "core.quotepath=off", "-c", "diff.autoRefreshIndex=false"]
         let pathspec = ["--"] + paths
         let args: [String]
         switch base {
         case .unstaged:
             args = prefix + ["diff-files"] + options + pathspec
+        case let .ref(name):
+            args = prefix + ["diff-index"] + options + ["--end-of-options", name] + pathspec
         case .head, .staged:
             let hasHead = run(git, ["-C", root, "rev-parse", "--verify", "-q", "HEAD"], timeout: 10) != nil
             guard let tree = hasHead ? "HEAD" : emptyTree(git: git, root: root) else { return nil }

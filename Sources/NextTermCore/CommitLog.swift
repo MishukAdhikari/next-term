@@ -537,7 +537,12 @@ public enum CommitLog {
         let against = parent.map { ["--end-of-options", $0, commit] } ?? ["--root", "--end-of-options", commit]
         let paths = [oldPath, path].compactMap { $0 }
         guard let data = run(git, ["diff-tree", "-r", "--no-commit-id"] + options + against + ["--"] + paths, paths: paths, in: root, timeout: 15) else { return nil }
-        let files = UnifiedDiff.parse(String(decoding: data, as: UTF8.self))
+        return file(at: path, in: UnifiedDiff.parse(String(decoding: data, as: UTF8.self)))
+    }
+
+    /// The patch for `path` among a diff's: the one that ends at it, else the one that starts from it.
+    /// An empty diff when there is none.
+    static func file(at path: String, in files: [FileDiff]) -> FileDiff {
         let new = files.first { $0.newPath == path }, old = files.first { $0.oldPath == path }
         // A file that became a link (or a link that became a file) is two patches, the old one deleted
         // and the new one added: both halves, as one change to the path.
