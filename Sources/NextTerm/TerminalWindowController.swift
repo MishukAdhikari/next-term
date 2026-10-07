@@ -1129,6 +1129,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             send([ContextItem(path: notebook.path)]) // the agent reads the notebook itself
         } else if let database = editorArea.activeDatabase {
             send([database.contextItem()]) // the table, and the selected rows when they are few
+        } else if let data = editorArea.activeData {
+            send([data.contextItem()]) // the file, at the selected rows' lines
         }
     }
 
@@ -1182,8 +1184,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// ⌥⌘G: the changes of the file being edited, or the file selected in the sidebar, side by side.
     @objc func showChanges(_ sender: Any?) {
         let fromEditor = isEditorFocused || window?.firstResponder !== sidebar.outline
-        // A database file has no lines to compare.
-        if fromEditor, editorArea.activeDatabase != nil { return NSSound.beep() }
+        // A database file has no lines to compare, and one too large for the editor is too large to compare.
+        if fromEditor, editorArea.activeDatabase != nil || editorArea.activeData?.isTooLargeForEditor == true { return NSSound.beep() }
         if let path = editorArea.activePath, fromEditor {
             return showChanges(of: URL(fileURLWithPath: path))
         }

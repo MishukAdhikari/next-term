@@ -17,7 +17,8 @@ final class EditorArea: NSView, TabBarViewDelegate {
     private let container = NSView()
     private let banner = EditorBanner()
     private var bannerHeight: NSLayoutConstraint!
-    /// Tabs in order: files being edited (CodeEditorView), diffs (DiffPane) and notebooks (NotebookPane).
+    /// Tabs in order: files being edited (CodeEditorView), diffs (DiffPane), notebooks (NotebookPane),
+    /// SQLite files (DatabasePane) and large data files (DataPane).
     private(set) var panes: [NSView] = []
     private(set) var activeIndex = 0
 
@@ -25,16 +26,18 @@ final class EditorArea: NSView, TabBarViewDelegate {
     var diffs: [DiffPane] { panes.compactMap { $0 as? DiffPane } }
     var notebooks: [NotebookPane] { panes.compactMap { $0 as? NotebookPane } }
     var databases: [DatabasePane] { panes.compactMap { $0 as? DatabasePane } }
+    var dataFiles: [DataPane] { panes.compactMap { $0 as? DataPane } }
     var activePane: NSView? { panes[safe: activeIndex] }
     var activeEditor: CodeEditorView? { activePane as? CodeEditorView }
     var activeDiff: DiffPane? { activePane as? DiffPane }
     var activeNotebook: NotebookPane? { activePane as? NotebookPane }
     var activeDatabase: DatabasePane? { activePane as? DatabasePane }
+    var activeData: DataPane? { activePane as? DataPane }
     /// Send to Agent was clicked in a SQLite viewer.
     var onSendToAgent: (([ContextItem]) -> Void)?
-    /// The file in front: the one being edited, or the notebook or database being read.
-    var activePath: String? { activeEditor?.document.path ?? activeNotebook?.path ?? activeDatabase?.path }
-    var activeName: String? { activeEditor?.document.name ?? activeNotebook?.name ?? activeDatabase?.name }
+    /// The file in front: the one being edited, or the notebook, database or data file being read.
+    var activePath: String? { activeEditor?.document.path ?? activeNotebook?.path ?? activeDatabase?.path ?? activeData?.path }
+    var activeName: String? { activeEditor?.document.name ?? activeNotebook?.name ?? activeDatabase?.name ?? activeData?.name }
     /// Where its text is, for a selection to search for.
     var activeTextView: NSTextView? { activeEditor?.textView ?? activeNotebook?.textView }
     var documents: [EditorDocument] { editors.map(\.document) }
@@ -82,14 +85,16 @@ final class EditorArea: NSView, TabBarViewDelegate {
 
     enum OpenResult { case opened, notText, tooLarge, failed }
 
-    /// Opens a file (or shows it if open), optionally at a line. Binary and huge files are not opened.
+    /// Opens a file (or shows it if open), optionally at a line. Binary files are not opened.
     /// A notebook opens read-only as cells, unless asked for as text or at a line (a search result points
-    /// into its JSON).
+    /// into its JSON). A data file over 2 MB, and any text file too large for the editor, opens in the
+    /// head view: its first rows, read-only.
     @discardableResult
     func open(_ url: URL, line: Int? = nil, column: Int = 1, focus: Bool = true, asText: Bool = false) -> OpenResult {
         let path = canonicalPath(url.path)
         if !asText, line == nil, Notebook.isNotebook(path) { return openNotebook(path, focus: focus) }
         if !asText, DatabasePane.opens(path) { return openDatabase(path, focus: focus) }
+        if !asText, line == nil, DataPane.opens(path) { return openData(path, focus: focus) }
         if let index = panes.firstIndex(where: { ($0 as? CodeEditorView)?.document.path == path }),
            let editor = panes[index] as? CodeEditorView {
             select(index, focus: focus)
@@ -102,6 +107,8 @@ final class EditorArea: NSView, TabBarViewDelegate {
         } catch EditorDocument.OpenError.notText {
             return .notText
         } catch EditorDocument.OpenError.tooLarge {
+            // Its first rows instead of another app, when it is text.
+            if !asText, DataHead.isText(path) { return openData(path, focus: focus) }
             return .tooLarge
         } catch {
             return .failed
@@ -159,7 +166,24 @@ final class EditorArea: NSView, TabBarViewDelegate {
         return .opened
     }
 
-    /// Open as JSON, from a notebook: its file in the editor, beside it.
+    /// A large data file's first rows, read-only, in its own tab (or brought to the front if it is open).
+    @discardableResult
+    func openData(_ path: String, focus: Bool = true) -> OpenResult {
+        let path = canonicalPath(path)
+        if let index = panes.firstIndex(where: { ($0 as? DataPane)?.path == path }) {
+            select(index, focus: focus)
+            return .opened
+        }
+        guard isRegularFile(path) else { return .notText } // a named pipe would block forever
+        let pane = DataPane(url: URL(fileURLWithPath: path))
+        pane.onTitleChange = { [weak self] in self?.refresh() }
+        pane.onOpenInEditor = { [weak self] url in self?.openAsText(url) }
+        insert(pane)
+        select(activeIndex, focus: focus)
+        return .opened
+    }
+
+    /// Open as JSON, from a notebook, or Open in Editor, from a data file: its file in the editor, beside it.
     func openAsText(_ url: URL) {
         switch open(url, asText: true) {
         case .opened:
@@ -203,6 +227,8 @@ final class EditorArea: NSView, TabBarViewDelegate {
             window?.makeFirstResponder(notebook.textView)
         } else if let database = panes[index] as? DatabasePane, focus {
             window?.makeFirstResponder(database.focusView)
+        } else if let data = panes[index] as? DataPane, focus {
+            window?.makeFirstResponder(data.focusView)
         }
         refresh()
         delegate?.editorAreaSelectionChanged(self)
@@ -338,6 +364,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
         for diff in diffs { diff.refreshIfChanged() }
         for notebook in notebooks { notebook.refreshIfChanged() }
         for database in databases { database.refreshIfChanged() }
+        for data in dataFiles { data.refreshIfChanged() }
         // The file being edited against the last commit: a commit (yours or an agent's) moves the marks.
         checks += 1
         if checks % 5 == 0 { activeEditor?.refreshBaseline() }
@@ -374,6 +401,13 @@ final class EditorArea: NSView, TabBarViewDelegate {
                 database.moved(to: URL(fileURLWithPath: new + database.path.dropFirst(old.count)))
             }
         }
+        for data in dataFiles {
+            if data.path == old {
+                data.moved(to: URL(fileURLWithPath: new))
+            } else if data.path.hasPrefix(old + "/") {
+                data.moved(to: URL(fileURLWithPath: new + data.path.dropFirst(old.count)))
+            }
+        }
         refresh()
     }
 
@@ -381,7 +415,8 @@ final class EditorArea: NSView, TabBarViewDelegate {
 
     func refresh() {
         // Same name twice: add the folder, as editors do (a notebook open as JSON too is the same file).
-        let names = Dictionary(grouping: Set(documents.map(\.path) + notebooks.map(\.path)), by: { ($0 as NSString).lastPathComponent })
+        let paths = Set(documents.map(\.path) + notebooks.map(\.path) + dataFiles.map(\.path))
+        let names = Dictionary(grouping: paths, by: { ($0 as NSString).lastPathComponent })
         func title(_ url: URL) -> String {
             let name = url.lastPathComponent
             return (names[name]?.count ?? 0) > 1 ? name + " — " + url.deletingLastPathComponent().lastPathComponent : name
@@ -398,6 +433,10 @@ final class EditorArea: NSView, TabBarViewDelegate {
             if let database = pane as? DatabasePane {
                 return TabBarItem(title: database.name, state: .idle, tooltip: RecentProjects.abbreviate(database.path) + " (SQLite, read-only)",
                                   accessibilityStatus: "database, read-only", icon: FileIcons.icon(for: database.url, size: 16), modified: false)
+            }
+            if let data = pane as? DataPane {
+                return TabBarItem(title: title(data.url), state: .idle, tooltip: RecentProjects.abbreviate(data.path) + " (first rows, read-only)",
+                                  accessibilityStatus: "data file, read-only", icon: FileIcons.icon(for: data.url, size: 16), modified: false)
             }
             let document = (pane as! CodeEditorView).document
             let status = document.isDirty ? "unsaved changes" : "saved"
