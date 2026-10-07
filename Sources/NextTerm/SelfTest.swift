@@ -1367,7 +1367,17 @@ enum SelfTest {
             check(await wait(5) { diff?.sideTexts.0.contains("2\n") == true && diff?.sideTexts.1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true },
                   "with the old lines on the left and nothing on the right", "\(diff?.sideTexts.0.count ?? -1) | \(diff?.sideTexts.1.count ?? -1)")
             check(diff?.contextItem()?.note == "deleted", "and Send to Agent from it says the file is gone", diff?.contextItem()?.note ?? "no note")
-            if let diff { c.editorArea.close(diff) }
+            if let diff {
+                // A removed line, selected on the old side: no file has it any more, so it goes along as code.
+                let old = diff.oldSideView
+                c.window?.makeFirstResponder(old)
+                old.setSelectedRange((old.string as NSString).range(of: "2\n"))
+                let item = diff.contextItem()
+                check(item?.code == "2" && item?.note == "deleted" && item?.lines == nil, "and the removed lines selected on the old side as code",
+                      "\(String(describing: item))")
+                old.setSelectedRange(NSRange(location: 0, length: 0))
+                c.editorArea.close(diff)
+            }
         }
 
         // Back as committed: the rows go, and the file's own row returns.

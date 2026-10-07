@@ -371,12 +371,27 @@ final class DiffPane: NSView {
     /// What Send to Agent gives the agent: the file, at the new side's lines in the selection (the rows line
     /// up, so a selection on the old side picks the same rows), or the whole file with nothing selected.
     /// A staged or committed version is not the file on disk, so the note says which it is and its lines go
-    /// along as code. Nil for an agent's proposal: that agent is waiting for your answer in its terminal.
+    /// along as code; so do removed lines, selected on the old side alone. Nil for an agent's proposal (that
+    /// agent is waiting for your answer in its terminal), and for removed lines too many to paste.
     func contextItem() -> ContextItem? {
         guard proposal == nil else { return nil }
         var item = ContextItem(path: absolutePath)
         let language = EditorLanguage.id(forFileName: (path as NSString).lastPathComponent) ?? "text"
-        let numbered = selectedRows().filter { right.number(at: $0) != nil }
+        let selected = selectedRows().filter { rows[$0].kind != .hunkHeader }
+        let numbered = selected.filter { right.number(at: $0) != nil }
+        if numbered.isEmpty, !selected.isEmpty {
+            // Only removed lines: the file no longer has them, so they are the code.
+            let removed = code(of: selected, on: left)
+            guard !removed.isEmpty, !AgentPrompt.isTooLargeToInline(removed) else { return nil }
+            if let commit {
+                item.note = "lines removed in commit \(commit.sha.prefix(7))"
+            } else {
+                item.note = FileManager.default.fileExists(atPath: absolutePath) ? "lines removed" : "deleted"
+            }
+            item.code = removed
+            item.language = language
+            return item
+        }
         let lines = numbered.compactMap { right.number(at: $0) }
         if let first = lines.first, let last = lines.last { item.lines = first...last }
         if let commit {
@@ -409,6 +424,9 @@ final class DiffPane: NSView {
         }
         return lines.joined(separator: "\n")
     }
+
+    /// For the self-test: the old side, to select removed lines in.
+    var oldSideView: NSTextView { left.textView }
 
     /// The rows under the selection on the side that has the keyboard (else the new side).
     private func selectedRows() -> [Int] {
