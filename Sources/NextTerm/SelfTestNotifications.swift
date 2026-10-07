@@ -48,6 +48,7 @@ extension SelfTest {
         // An agent that finished, in a tab you are not looking at, with Next Term in front.
         let title = Typography.shortened(back.title, to: 80)
         let place = Typography.shortened(c.placeName(of: back), to: 60)
+        app.lastSoundAt = .distantPast
         let done = posted(agent("claude", after: 60), active: true)
         check(done?.content.body == "claude is waiting for you" && done?.content.title == title,
               "notifications: an agent finishing in a background tab notifies while Next Term is in front",
@@ -57,6 +58,10 @@ extension SelfTest {
         let audible = done?.content.sound != nil
         check(done?.content.subtitle == subtitle && audible && opens == back.id.uuidString,
               "naming the window's project, with a sound, and clicking it opens the tab", done?.content.subtitle ?? "nothing posted")
+        check(done?.content.threadIdentifier == c.placeName(of: back), "stacked with the window's others in Notification Center",
+              done?.content.threadIdentifier ?? "nothing posted")
+        let next = posted(agent("goose", after: 60), active: true)
+        check(next != nil && next?.content.sound == nil, "another within 3 seconds comes without a sound, so tabs finishing together make one")
         check(posted(agent("claude", after: 60), active: true) == nil, "the same notification from a tab is held back for 10 seconds")
         defaults.set(false, forKey: NotificationSettings.Key.agentFinished)
         check(posted(agent("codex", after: 60), active: true) == nil && posted(agent("codex", after: 60), active: false) == nil,

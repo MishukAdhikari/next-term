@@ -11,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var lastBadge = -1
     /// Last notification per tab, to rate-limit noisy programs.
     private var lastNotified: [UUID: (at: Date, key: String)] = [:]
+    /// When a notification last played its sound: tabs finishing together make one sound, not one each.
+    var lastSoundAt = Date.distantPast
 
     var fontSize: CGFloat {
         get {
@@ -881,7 +883,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let key = content.title + "\u{0}" + content.body
         if let last = lastNotified[tab.id], Date().timeIntervalSince(last.at) < 10, last.key == key { return }
         lastNotified[tab.id] = (Date(), key)
-        content.sound = settings.sound ? .default : nil
+        let audible = settings.sound && Date().timeIntervalSince(lastSoundAt) >= 3
+        content.sound = audible ? .default : nil
+        if audible { lastSoundAt = Date() }
+        // A window's notifications stack together in Notification Center.
+        content.threadIdentifier = controller.placeName(of: tab)
         content.userInfo = ["tab": tab.id.uuidString]
         deliver(UNNotificationRequest(identifier: tab.id.uuidString, content: content, trigger: nil))
     }
