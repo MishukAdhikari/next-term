@@ -1902,6 +1902,11 @@ enum SelfTest {
             button.performClick(nil)
             return true
         }
+        /// The text of the sheet over the window: an alert's title and message.
+        func sheetText() -> String {
+            func fields(_ view: NSView) -> [NSTextField] { view.subviews.flatMap { ($0 as? NSTextField).map { [$0] } ?? fields($0) } }
+            return window.attachedSheet?.contentView.map(fields)?.map(\.stringValue).joined(separator: "\n") ?? ""
+        }
         let start = run("rev-parse", "--abbrev-ref", "HEAD")
         let conf = proj.appendingPathComponent("conf.txt")
         try? "1\n2\n3\n4\nmain\n".write(to: conf, atomically: true, encoding: .utf8)
@@ -1973,6 +1978,51 @@ enum SelfTest {
             sheet.pressCommit()
             check(await wait(8) { run("log", "-1", "--format=%s") == "Change the first line" }, "and commits it", run("log", "-1", "--format=%s"))
         }
+
+        // Force push, after a rejected push: it lists what it would discard and replaces exactly that, and
+        // it is refused for the branch the remote's HEAD names.
+        let bare = proj.deletingLastPathComponent().appendingPathComponent("force-remote.git")
+        let theirs = proj.deletingLastPathComponent().appendingPathComponent("force-theirs")
+        run("init", "-q", "--bare", bare.path)
+        run("switch", "-q", "-c", "feat/force")
+        run("remote", "add", "st", bare.path)
+        run("push", "-q", "-u", "st", "feat/force")
+        run("clone", "-q", "-b", "feat/force", bare.path, theirs.path)
+        func diverge(_ n: Int) {
+            run("-C", theirs.path, "commit", "--allow-empty", "-qm", "theirs \(n)")
+            run("-C", theirs.path, "push", "-q", "origin", "feat/force")
+            run("fetch", "-q", "st")
+            run("commit", "--allow-empty", "-qm", "mine \(n)")
+        }
+        diverge(1)
+        popup.reload()
+        _ = await wait(5) { popup.model?.currentRef?.upstream == "st/feat/force" }
+        GitToast.dismiss()
+        actions.push()
+        let pushed = await press("Push")
+        let offered = await press("Force Push…")
+        check(pushed && offered, "a rejected push offers Force Push…", sheetText())
+        let listed = await wait(5) { sheetText().contains("theirs 1") }
+        check(listed, "Force Push… lists the commits it would discard", sheetText())
+        _ = await press("Force Push")
+        check(await wait(10) { run("-C", bare.path, "rev-parse", "feat/force") == run("rev-parse", "HEAD") },
+              "and replaces them with yours", GitToast.text ?? "no notice")
+        run("remote", "set-head", "st", "feat/force")
+        diverge(2)
+        popup.reload()
+        _ = await wait(5) { popup.model?.remoteHeads["st"] == "feat/force" }
+        actions.push()
+        let pushedAgain = await press("Push")
+        let offeredAgain = await press("Force Push…")
+        let refused = await wait(5) { sheetText().contains("Force push to feat/force is off") }
+        check(pushedAgain && offeredAgain && refused, "force push is refused for the branch the remote's HEAD names", sheetText())
+        _ = await press("OK")
+        check(run("-C", bare.path, "log", "-1", "--format=%s", "feat/force") == "theirs 2", "and the remote keeps its commits")
+        run("switch", "-q", start)
+        run("branch", "-D", "feat/force")
+        run("remote", "remove", "st")
+        try? FileManager.default.removeItem(at: bare)
+        try? FileManager.default.removeItem(at: theirs)
 
         // Back as it was.
         GitToast.dismiss()

@@ -419,28 +419,36 @@ struct GitActions {
             return GitPrompt.ask("Force push to \(target) is off", info: "\(target) is shared: update first, or push to a branch of your own.", buttons: ["OK"], over: window) { _ in }
         }
         let headKnown = model?.remoteHeads[remote] != nil
-        run("Commits force push would discard", [["rev-parse", "--verify", "--quiet", "refs/remotes/\(remote)/\(target)"],
-                                                 ["log", "--format=%h %s", "--max-count=12", "\(ref.name)..\(remote)/\(target)"]]) { result in
-            let lines = result.output.split(separator: "\n").map(String.init)
-            guard result.ok, let sha = lines.first, sha.count >= 40 else { return failed("Could not read \(remote)/\(target)", result, retry: nil) }
-            let discarded = lines.dropFirst().joined(separator: "\n")
-            var info = discarded.isEmpty ? "(none known locally)" : discarded
-            if !headKnown {
-                info += "\n\n\(remote)/HEAD isn’t set here, so Next Term can’t tell whether \(target) is \(remote)’s default branch."
-            }
-            GitPrompt.ask("Force push discards these commits on \(remote)/\(target)", info: info,
-                          buttons: ["Force Push", "Cancel"], destructive: 0, style: .warning, over: window) { choice in
-                guard choice == 0 else { return }
-                let args = ["push", "--porcelain", "--force-with-lease=refs/heads/\(target):\(sha)", remote, "refs/heads/\(ref.name):refs/heads/\(target)"]
-                run("Force push \(ref.name)", [args], activity: .pushing) { pushed in
-                    if pushed.ok { return toast("Force-pushed \(ref.name) to \(remote)/\(target)") }
-                    if pushed.failure == .leaseFailed {
-                        return GitPrompt.ask("\(remote)/\(target) changed since you looked", info: "Nothing was overwritten. Fetch, look at the new commits, and try again.",
-                                             buttons: ["Fetch", "OK"], over: window) { choice in if choice == 0 { fetch() } }
-                    }
-                    failed("Force push failed", pushed, retry: args)
+        // Two runs: a run hands back only its last command's output, and the lease needs the sha.
+        run("Commits force push would discard", [["rev-parse", "--verify", "--quiet", "refs/remotes/\(remote)/\(target)"]]) { tip in
+            let sha = tip.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard tip.ok, sha.count >= 40 else { return failed("Could not read \(remote)/\(target)", tip, retry: nil) }
+            run("Commits force push would discard", [["log", "--format=%h %s", "--max-count=12", "\(ref.name)..\(sha)"]]) { log in
+                guard log.ok else { return failed("Could not read \(remote)/\(target)", log, retry: nil) }
+                let discarded = log.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                var info = discarded.isEmpty ? "(none known locally)" : discarded
+                if !headKnown {
+                    info += "\n\n\(remote)/HEAD isn’t set here, so Next Term can’t tell whether \(target) is \(remote)’s default branch."
+                }
+                GitPrompt.ask("Force push discards these commits on \(remote)/\(target)", info: info,
+                              buttons: ["Force Push", "Cancel"], destructive: 0, style: .warning, over: window) { choice in
+                    guard choice == 0 else { return }
+                    forcePush(ref, remote: remote, target: target, lease: sha)
                 }
             }
+        }
+    }
+
+    /// The push itself, leased on the commit the prompt showed: if the remote moved since, nothing is replaced.
+    private func forcePush(_ ref: BranchRef, remote: String, target: String, lease sha: String) {
+        let args = ["push", "--porcelain", "--force-with-lease=refs/heads/\(target):\(sha)", remote, "refs/heads/\(ref.name):refs/heads/\(target)"]
+        run("Force push \(ref.name)", [args], activity: .pushing) { pushed in
+            if pushed.ok { return toast("Force-pushed \(ref.name) to \(remote)/\(target)") }
+            if pushed.failure == .leaseFailed {
+                return GitPrompt.ask("\(remote)/\(target) changed since you looked", info: "Nothing was overwritten. Fetch, look at the new commits, and try again.",
+                                     buttons: ["Fetch", "OK"], over: window) { choice in if choice == 0 { fetch() } }
+            }
+            failed("Force push failed", pushed, retry: args)
         }
     }
 
