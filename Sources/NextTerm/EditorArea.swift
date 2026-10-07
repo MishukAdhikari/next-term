@@ -2,8 +2,9 @@ import AppKit
 import NextTermCore
 
 protocol EditorAreaDelegate: AnyObject {
-    /// The last editor closed (hide the area) or the first opened (show it).
-    func editorAreaDidChangeDocuments(_ area: EditorArea)
+    /// The area showed (its first tab opened) or hid (its last one closed): it does that itself, and the
+    /// window makes room for it or gives the room back.
+    func editorAreaDidShowOrHide(_ area: EditorArea)
     /// The selection moved, or another file came to the front.
     func editorAreaSelectionChanged(_ area: EditorArea)
 }
@@ -49,8 +50,17 @@ final class EditorArea: NSView, TabBarViewDelegate {
     var dirtyDocuments: [EditorDocument] { documents.filter(\.isDirty) }
     var isEmpty: Bool { panes.isEmpty }
 
+    /// Shown exactly while a tab is open, whoever sets it. A split view shows a hidden pane by itself when
+    /// its divider is dragged, and an editor area with no tabs must never show: an empty space beside the
+    /// terminal, with a bar that has nothing in it.
+    override var isHidden: Bool {
+        get { super.isHidden }
+        set { super.isHidden = panes.isEmpty }
+    }
+
     override init(frame: NSRect) {
         super.init(frame: frame)
+        isHidden = true // nothing open yet
         wantsLayer = true
         layer?.backgroundColor = Theme.background.cgColor
         tabBar.allowsNewTab = false
@@ -216,7 +226,16 @@ final class EditorArea: NSView, TabBarViewDelegate {
         let insertAt = panes.isEmpty ? 0 : activeIndex + 1
         panes.insert(pane, at: insertAt)
         activeIndex = insertAt
-        if panes.count == 1 { delegate?.editorAreaDidChangeDocuments(self) }
+        tabsChanged()
+    }
+
+    /// Every tab opened or closed ends here: the bar gets one tab per pane, then the area shows while there
+    /// is one and hides when there is none, telling the delegate when that changes.
+    private func tabsChanged() {
+        refresh()
+        let wasHidden = isHidden
+        isHidden = panes.isEmpty
+        if isHidden != wasHidden { delegate?.editorAreaDidShowOrHide(self) }
     }
 
     func select(_ index: Int, focus: Bool = true) {
@@ -348,13 +367,12 @@ final class EditorArea: NSView, TabBarViewDelegate {
             editor.document.storage.layoutManagers.forEach { editor.document.storage.removeLayoutManager($0) }
         }
         panes.remove(at: index)
+        if index <= activeIndex { activeIndex = max(0, activeIndex - 1) }
+        tabsChanged()
         if panes.isEmpty {
-            refresh()
-            delegate?.editorAreaDidChangeDocuments(self)
             delegate?.editorAreaSelectionChanged(self)
             return
         }
-        if index <= activeIndex { activeIndex = max(0, activeIndex - 1) }
         select(activeIndex, focus: hadFocus)
     }
 

@@ -151,8 +151,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         sidebar.header.onBranchClick = { [weak self] in self?.showBranches(nil) }
         sidebar.header.onSync = { [weak self] pull in pull ? self?.gitUpdate(nil) : self?.gitPush(nil) }
         sidebar.onHeadChange = { [weak self] in self?.editorArea.headMoved() }
-        editorArea.isHidden = true
-        applyLayout()
+        applyLayout() // the editor area starts hidden: nothing is open
         setSidebarVisible(AppDelegate.shared.sidebarVisible)
 
         let ticker = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
@@ -845,17 +844,42 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return sidebarOnRight ? splitView.bounds.width - 160 : min(640, splitView.bounds.width - 320)
     }
 
-    /// A one-pixel divider is hard to hit: grab it anywhere within 3 points either side.
+    /// A one-pixel divider is hard to hit: grab it anywhere within 3 points either side. One beside a hidden
+    /// pane (the editor with nothing open, a hidden sidebar) can't be grabbed at all: it ran down the work
+    /// area's edge, 3 points from the sidebar's own divider, and a press there that moved a point had AppKit
+    /// show the pane by itself, empty.
     func splitView(_ splitView: NSSplitView, effectiveRect proposedEffectiveRect: NSRect, forDrawnRect drawnRect: NSRect,
                    ofDividerAt dividerIndex: Int) -> NSRect {
-        splitView.isVertical ? drawnRect.insetBy(dx: -3, dy: 0) : drawnRect.insetBy(dx: 0, dy: -3)
+        SplitDivider.grabArea(drawn: drawnRect, sideBySide: splitView.isVertical, hidden: isDividerHidden(splitView, dividerIndex))
     }
+
+    /// Nor is it drawn: the pane beside it reaches the edge (the terminal fills the work area).
+    func splitView(_ splitView: NSSplitView, shouldHideDividerAt dividerIndex: Int) -> Bool {
+        isDividerHidden(splitView, dividerIndex)
+    }
+
+    private func isDividerHidden(_ splitView: NSSplitView, _ index: Int) -> Bool {
+        SplitDivider.isHidden(at: index, panesHidden: splitView.arrangedSubviews.map(\.isHidden))
+    }
+
+    /// Set while the terminal is being given the whole work area back, so that resize is left alone.
+    private var refittingTerminal = false
 
     func splitViewDidResizeSubviews(_ notification: Notification) {
         if (notification.object as? NSSplitView) === workSplit {
-            // Remember the split the user dragged to (not the one a window resize produces).
             let length = workSplit.isVertical ? workSplit.bounds.width : workSplit.bounds.height
-            if !editorArea.isHidden, length > 200, NSApp.currentEvent?.type == .leftMouseDragged {
+            if editorArea.isHidden {
+                // Nothing open: the terminal has the whole work area, whatever moved the divider. Never
+                // remembered as the editor's share.
+                if !refittingTerminal, terminalLength < length - 0.5 {
+                    refittingTerminal = true
+                    workSplit.adjustSubviews()
+                    refittingTerminal = false
+                }
+                return
+            }
+            // Remember the split the user dragged to (not the one a window resize produces).
+            if length > 200, NSApp.currentEvent?.type == .leftMouseDragged {
                 // Dragging a collapsed terminal open unfolds it; the size it is dragged to is remembered as usual.
                 if terminalCollapsed, terminalLength > collapsedLength + 8 {
                     terminalCollapsed = false
@@ -1002,9 +1026,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return view.isDescendant(of: editorArea)
     }
 
-    func editorAreaDidChangeDocuments(_ area: EditorArea) {
+    func editorAreaDidShowOrHide(_ area: EditorArea) {
         followActiveFile()
-        setEditorVisible(!area.isEmpty)
+        editorShownOrHidden()
     }
 
     // MARK: Claude Code sees the selection
@@ -1067,9 +1091,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                                                start: position(range.location), end: position(NSMaxRange(range)))
     }
 
-    private func setEditorVisible(_ visible: Bool) {
-        guard editorArea.isHidden == visible else { return }
-        editorArea.isHidden = !visible
+    /// The editor area showed or hid (it does that itself, as its first tab opens or its last closes): the
+    /// terminal makes room for it or takes the whole work area back, and the bars along the top follow.
+    private func editorShownOrHidden() {
+        let visible = !editorArea.isHidden
         if !visible { terminalCollapsed = false } // nothing to collapse beside
         updateCollapseButton()
         workSplit.adjustSubviews()
