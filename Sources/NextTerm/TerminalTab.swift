@@ -642,12 +642,18 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         }
     }
 
-    /// A remote tab says where it runs right under its name; a state that is only the connection's is
-    /// said there once.
+    /// The state in words, unless it is only the connection's ("Connecting", "Disconnected"): a remote tab's
+    /// mark says that, and the tooltip and VoiceOver say it once, in its words.
+    var ownStateDescription: String? {
+        guard let remoteLink, remoteLink != .connected, remoteLink != .ended else { return stateDescription }
+        return nil
+    }
+
+    /// A remote tab says where it runs right under its name.
     var tooltip: String {
         var lines = [title]
         if let remoteMark { lines.append(remoteMark.summary) }
-        if remoteLink == nil || remoteLink == .connected || remoteLink == .ended { lines.append(stateDescription) }
+        if let ownStateDescription { lines.append(ownStateDescription) }
         if status.running && !status.command.isEmpty { lines.append(String(status.command.prefix(300))) }
         lines.append(remote == nil ? directory : "Folder on the host: \(directory)")
         if let servedURL { lines.append("Serving \(servedURL.absoluteString)") }

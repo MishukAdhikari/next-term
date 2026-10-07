@@ -221,6 +221,10 @@ extension SelfTest {
         check(down.link == .disconnected && down.spoken.contains("Remote: selftest (nt@selftest.invalid), disconnected")
               && c.sidebar.remoteNote.shown?.link == .disconnected,
               "remote: and on its server mark (and the sidebar's)", "\(down.link?.rawValue ?? "no mark") / \(down.spoken)")
+        // The title's note and the remote part: not a third time as the tab's state.
+        let saidTimes = down.spoken.lowercased().components(separatedBy: "disconnected").count - 1
+        check(saidTimes == 2 && !plain.tooltip.contains("\nDisconnected"), "remote: VoiceOver and the tooltip say the connection once, not as the state too",
+              down.spoken + " / " + plain.tooltip.replacingOccurrences(of: "\n", with: " | "))
         check(MCPControl.canType(plain) == false, "remote MCP: nothing is typed into a disconnected tab")
         master.start()
         plain.view.send(txt: "\r")

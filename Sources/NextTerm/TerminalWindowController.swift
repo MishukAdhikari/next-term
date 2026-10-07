@@ -465,7 +465,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             let tab = group.focused
             guard group.isSplit else {
                 return TabBarItem(title: tab.title, truncation: tab.titleTruncation, state: tab.status.state, tooltip: tab.tooltip,
-                                  accessibilityStatus: tab.stateDescription, shortcut: shortcuts[index], remote: tab.remoteMark,
+                                  accessibilityStatus: tab.ownStateDescription ?? "", shortcut: shortcuts[index], remote: tab.remoteMark,
                                   shorterTitles: tab.shorterTitles)
             }
             // A split tab: named by the pane with the keyboard, marked by the pane that most needs you.

@@ -547,7 +547,10 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         remoteMark.isHidden = newItem.remote == nil
         item = newItem
         selected = isSelected
-        setAccessibilityLabel(([newItem.title, newItem.accessibilityStatus] + [newItem.remote?.summary].compactMap { $0 }).joined(separator: ", "))
+        // "web-1: app (connecting), Remote: web-1 (deploy@203.0.113.5), connecting": a state that is only
+        // the connection's comes once, in the remote part.
+        let spoken = [newItem.title, newItem.accessibilityStatus, newItem.remote?.summary ?? ""]
+        setAccessibilityLabel(spoken.filter { !$0.isEmpty }.joined(separator: ", "))
         setAccessibilityValue(isSelected)
         refresh()
     }
