@@ -1500,7 +1500,10 @@ enum SelfTest {
         // The popup: actions first, branches in folders, agents' branches in their own folder.
         c.showBranches(nil)
         let popup = c.branchPopup
-        check(await wait(5) { popup.isVisible && popup.model?.current == start }, "⌥⌘B opens the branch popup", popup.rowTitles.joined(separator: " | "))
+        // Read afresh: an earlier check may have opened it here, and it shows what it read then until the
+        // new read is in.
+        check(await wait(5) { popup.isVisible && popup.model?.current == start && popup.model?.local("claude/try") != nil },
+              "⌥⌘B opens the branch popup", popup.rowTitles.joined(separator: " | "))
         let rows = popup.rowTitles
         check(["Update Project", "Commit…", "Push…", "New Branch…", "Checkout Tag or Revision…"].allSatisfy(rows.contains),
               "it starts with the git actions", rows.prefix(6).joined(separator: " | "))
