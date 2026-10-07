@@ -114,4 +114,96 @@ import Testing
         s.commandFinished(exitCode: 1, at: 20)
         #expect(s.state == .failed) // still told how it ended
     }
+
+    @Test func eachNewQuestionGetsANewNumber() {
+        var s = TabStatus()
+        s.commandStarted("claude", at: 0)
+        s.observe(agentScreen: .asking("Do you want to make this edit to a.ts?"), at: 1)
+        #expect(s.questionSerial == 1)
+        s.observe(agentScreen: .asking("Do you want to make this edit to a.ts?"), at: 2) // the same one, still on screen
+        #expect(s.questionSerial == 1)
+        s.observe(agentScreen: .working, at: 3)
+        s.observe(agentScreen: .asking("Do you want to make this edit to a.ts?"), at: 4) // same words, a new question
+        #expect(s.questionSerial == 2)
+        let tab = "4F1C"
+        let first = AgentScreen.questionID(tab: tab, serial: 1, question: "Q?")
+        #expect(first.hasPrefix("q_") && first.count == 18)
+        #expect(first == AgentScreen.questionID(tab: tab.lowercased(), serial: 1, question: "Q?")) // stable
+        #expect(first != AgentScreen.questionID(tab: tab, serial: 2, question: "Q?"))
+        #expect(first != AgentScreen.questionID(tab: "other", serial: 1, question: "Q?"))
+        #expect(first != AgentScreen.questionID(tab: tab, serial: 1, question: "R?"))
+    }
+}
+
+@Suite struct AgentMenuTests {
+    let claude = [
+        "╭──────────────────────────────────────────────────────────────╮",
+        "│ Edit file                                                    │",
+        "│ Do you want to make this edit to login.ts?                   │",
+        "│ ❯ 1. Yes                                                     │",
+        "│   2. Yes, and don't ask again this session (shift+tab)       │",
+        "│   3. No, and tell Claude what to do differently (esc)        │",
+        "╰──────────────────────────────────────────────────────────────╯",
+    ]
+
+    @Test func claudeCodesListAndItsKeys() throws {
+        let menu = try #require(AgentScreen.menu(screenLines: claude))
+        #expect(menu.question == "Do you want to make this edit to login.ts?")
+        #expect(menu.style == .list && menu.highlighted == 0)
+        #expect(menu.choices == ["Yes", "Yes, and don't ask again this session", "No, and tell Claude what to do differently"])
+        // Arrows to the choice, then Return: never the digit, which some agents take as the answer by itself.
+        #expect(menu.keys(toPick: 0) == ["enter"])
+        #expect(menu.keys(toPick: 2) == ["down", "down", "enter"])
+        #expect(menu.keys(toPick: 3) == nil)
+        // The cursor moved to "No": back up from there.
+        var moved = claude
+        moved[3] = "│   1. Yes                                                     │"
+        moved[5] = "│ ❯ 3. No, and tell Claude what to do differently (esc)        │"
+        #expect(try #require(AgentScreen.menu(screenLines: moved)).keys(toPick: 0) == ["up", "up", "enter"])
+    }
+
+    @Test func codexGeminiAndCommandCode() throws {
+        let codex = try #require(AgentScreen.menu(screenLines: [
+            "  Would you like to run the following command?",
+            "  $ npm test",
+            "› 1. Yes, proceed (y)",
+            "  2. Yes, and don't ask again for commands that start with `npm` (a)",
+            "  3. No, and tell Codex what to do differently (esc)",
+        ]))
+        #expect(codex.choices == ["Yes, proceed", "Yes, and don't ask again for commands that start with `npm`", "No, and tell Codex what to do differently"])
+        #expect(codex.highlighted == 0)
+        // Unnumbered, the cursor on the second line: the line above it is a choice too.
+        let cc = try #require(AgentScreen.menu(screenLines: ["Do you want to run npm install?", "  Yes", "❯ No", "↑↓ navigate · Enter to select · Esc to cancel"]))
+        #expect(cc.choices == ["Yes", "No"] && cc.highlighted == 1)
+        #expect(cc.keys(toPick: 0) == ["up", "enter"])
+        // No cursor drawn: where the arrows start is unknown, so no keys.
+        let bare = try #require(AgentScreen.menu(screenLines: ["Do you want to proceed?", "1. Yes", "2. No"]))
+        #expect(bare.highlighted == nil && bare.keys(toPick: 1) == nil)
+    }
+
+    @Test func yesNoPrompts() throws {
+        let menu = try #require(AgentScreen.menu(screenLines: ["Do you want to overwrite config.json? (y/n)"]))
+        #expect(menu.style == .yesNo && menu.choices == ["Yes", "No"])
+        #expect(menu.keys(toPick: 0) == ["y", "enter"] && menu.keys(toPick: 1) == ["n", "enter"])
+        #expect(menu.index(choice: nil, answer: "n") == .success(1))
+        #expect(menu.index(choice: nil, answer: "Yes") == .success(0))
+    }
+
+    @Test func answersByNumberOrWords() throws {
+        let menu = try #require(AgentScreen.menu(screenLines: claude))
+        #expect(menu.index(choice: 3, answer: nil) == .success(2))
+        #expect(menu.index(choice: nil, answer: "2") == .success(1))
+        #expect(menu.index(choice: nil, answer: "yes") == .success(0)) // exact wins over the longer "Yes, and…"
+        #expect(menu.index(choice: nil, answer: "No") == .success(2)) // the only choice starting so
+        #expect(menu.index(choice: nil, answer: "Yes, and don’t") == .success(1)) // curly apostrophe
+        guard case .failure(let range) = menu.index(choice: 4, answer: nil) else { Issue.record("4 of 3"); return }
+        #expect(range.text.contains("1 to 3"))
+        guard case .failure = menu.index(choice: nil, answer: "maybe") else { Issue.record("not a choice"); return }
+        guard case .failure = menu.index(choice: nil, answer: nil) else { Issue.record("nothing given"); return }
+    }
+
+    @Test func noMenuWithoutAQuestion() {
+        #expect(AgentScreen.menu(screenLines: ["⏺ Done.", "> "]) == nil)
+        #expect(AgentScreen.menu(screenLines: ["Do you want to refactor the parser next?", "> "]) == nil)
+    }
 }

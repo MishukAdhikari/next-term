@@ -42,6 +42,9 @@ public struct TabStatus {
     public private(set) var unseen: TabState?
     /// The question an agent is waiting on you to answer, read from its screen.
     public private(set) var question: String?
+    /// Counts the questions asked in this tab: a new question (even with the same words) gets a new
+    /// number, so an answer meant for one never lands on the next (see MCPServer.questionID).
+    public private(set) var questionSerial = 0
     /// The agent's own screen has shown its working or question hint during this run, so the screen is
     /// trusted over output timing (an idle agent may keep redrawing a status line).
     public private(set) var screenSynced = false
@@ -181,6 +184,7 @@ public struct TabStatus {
             if busy { busy = false }
             guard question != asked else { return }
             question = asked
+            questionSerial += 1
             askedAt = now
             markQuestion(asked)
         case .idle:

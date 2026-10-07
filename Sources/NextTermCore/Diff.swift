@@ -167,7 +167,20 @@ public enum UnifiedDiff {
         // Make sure ---/+++ are there (they are absent for some headers).
         if !out.contains(where: { $0.hasPrefix("--- ") }) { out.append("--- " + (file.oldPath.map { "a/" + $0 } ?? "/dev/null")) }
         if !out.contains(where: { $0.hasPrefix("+++ ") }) { out.append("+++ " + (file.newPath.map { "b/" + $0 } ?? "/dev/null")) }
-        out.append("@@ -\(hunk.oldStart),\(hunk.oldCount) +\(hunk.newStart),\(hunk.newCount) @@" + (hunk.section.isEmpty ? "" : " " + hunk.section))
+        out += lines(of: hunk)
+        return out.joined(separator: "\n") + "\n"
+    }
+
+    /// A file's diff as unified diff text, as git prints it, without the "index" line (blob ids say
+    /// nothing to a reader).
+    public static func render(_ file: FileDiff) -> String {
+        let out = file.header.filter { !$0.hasPrefix("index ") } + file.hunks.flatMap(lines(of:))
+        return out.joined(separator: "\n") + "\n"
+    }
+
+    /// A hunk's "@@" line and its lines.
+    static func lines(of hunk: DiffHunk) -> [String] {
+        var out = ["@@ -\(hunk.oldStart),\(hunk.oldCount) +\(hunk.newStart),\(hunk.newCount) @@" + (hunk.section.isEmpty ? "" : " " + hunk.section)]
         let lastOld = hunk.lines.lastIndex { $0.kind != .added }
         let lastNew = hunk.lines.lastIndex { $0.kind != .removed }
         for (i, line) in hunk.lines.enumerated() {
@@ -182,7 +195,7 @@ public enum UnifiedDiff {
             let newEnds = hunk.newMissingNewline && i == lastNew && line.kind != .removed
             if oldEnds || newEnds { out.append("\\ No newline at end of file") }
         }
-        return out.joined(separator: "\n") + "\n"
+        return out
     }
 }
 

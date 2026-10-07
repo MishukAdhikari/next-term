@@ -389,14 +389,18 @@ public enum AgentSessions {
         return line.count > 200 ? String(line.prefix(199)) + "…" : line
     }
 
-    static let secretPatterns = [
+    static let secretPatterns = tokenPatterns + [
+        #"(?i)(password|passwd|token|secret|api[_-]?key)\s*[=:]\s*\S+"#, #"\b[A-Fa-f0-9]{32,}\b"#, #"\b[A-Za-z0-9+/]{40,}={0,2}"#,
+    ]
+
+    /// Credentials with a known shape. MCP output redaction (MCPRedaction) hides these too.
+    static let tokenPatterns = [
         #"sk-ant-[A-Za-z0-9_\-]{8,}"#, #"sk-[A-Za-z0-9_\-]{16,}"#, #"(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}"#,
         #"github_pat_[A-Za-z0-9_]{20,}"#, #"xox[abpr]-[A-Za-z0-9\-]{10,}"#, #"AKIA[0-9A-Z]{16}"#, #"AIza[0-9A-Za-z_\-]{30,}"#,
         #"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}"#, #"-----BEGIN [A-Z ]*PRIVATE KEY-----"#,
         // Keys RAG and agent projects carry: LangSmith, Hugging Face, Groq, Tavily, Replicate, xAI, Pinecone.
         #"lsv2_(pt|sk)_[A-Za-z0-9_]{16,}"#, #"hf_[A-Za-z0-9]{30,}"#, #"gsk_[A-Za-z0-9]{20,}"#, #"tvly-[A-Za-z0-9_\-]{16,}"#,
         #"r8_[A-Za-z0-9]{20,}"#, #"xai-[A-Za-z0-9]{20,}"#, #"pcsk_[A-Za-z0-9_]{20,}"#,
-        #"(?i)(password|passwd|token|secret|api[_-]?key)\s*[=:]\s*\S+"#, #"\b[A-Fa-f0-9]{32,}\b"#, #"\b[A-Za-z0-9+/]{40,}={0,2}"#,
     ]
 
     public static func redact(_ text: String) -> String {

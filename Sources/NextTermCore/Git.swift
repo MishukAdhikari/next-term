@@ -37,6 +37,11 @@ public struct GitSnapshot: Sendable {
     public var behind = 0
     public var files: [String: GitChange] = [:]
     public var fileStats: [String: LineStats] = [:]
+    /// git's two-letter status of each tracked change: staged (index) then unstaged (work tree), "." for
+    /// none, as in "M." (staged only) or ".M" (unstaged only).
+    public var codes: [String: String] = [:]
+    /// A renamed or copied file's original path.
+    public var renamedFrom: [String: String] = [:]
     /// Untracked or ignored folders git reports as a whole ("node_modules/").
     public var wholeFolders: [String: GitChange] = [:]
     /// Strongest change below each folder (ignored entries do not count).
@@ -117,18 +122,22 @@ public struct GitSnapshot: Sendable {
                 let f = record.split(separator: " ", maxSplits: 8, omittingEmptySubsequences: false)
                 guard f.count == 9 else { continue }
                 snapshot.files[String(f[8])] = ordinaryChange(String(f[1]))
+                snapshot.codes[String(f[8])] = String(f[1])
             case "2":
                 // 2 XY sub mH mI mW hH hI Xscore path NUL origPath
                 let f = record.split(separator: " ", maxSplits: 9, omittingEmptySubsequences: false)
                 guard f.count == 10 else { continue }
                 let xy = String(f[1])
                 snapshot.files[String(f[9])] = xy.contains("C") ? .added : .renamed
+                snapshot.codes[String(f[9])] = xy
+                if i < records.count { snapshot.renamedFrom[String(f[9])] = records[i] }
                 i += 1 // the original path
             case "u":
                 // u XY sub m1 m2 m3 mW h1 h2 h3 path
                 let f = record.split(separator: " ", maxSplits: 10, omittingEmptySubsequences: false)
                 guard f.count == 11 else { continue }
                 snapshot.files[String(f[10])] = .conflicted
+                snapshot.codes[String(f[10])] = String(f[1])
             case "?", "!":
                 guard record.count > 2 else { continue }
                 let path = String(record.dropFirst(2))
@@ -332,6 +341,27 @@ public enum GitRunner {
         guard let data = run(git, args, timeout: 15, acceptedStatus: untracked ? [0, 1] : [0]),
               let text = String(data: data, encoding: .utf8) else { return nil }
         return UnifiedDiff.parse(text).first
+    }
+
+    /// The diffs of the tracked files under `paths` (the whole work tree when empty), from one git run.
+    /// Before the first commit, `head` and `staged` compare with nothing. Untracked files are not
+    /// included: `diff(of:untracked:)` gives theirs.
+    public static func diffs(in root: String, git: String, base: DiffBase = .head, paths: [String] = [],
+                             context: Int = 3) -> [FileDiff]? {
+        let options = ["--no-color", "--no-ext-diff", "--no-textconv", "-M", "--histogram", "-p", "--full-index", "-U\(context)"]
+        let prefix = ["-C", root, "--no-optional-locks", "-c", "core.quotepath=off", "-c", "diff.autoRefreshIndex=false"]
+        let pathspec = ["--"] + paths
+        let args: [String]
+        switch base {
+        case .unstaged:
+            args = prefix + ["diff-files"] + options + pathspec
+        case .head, .staged:
+            let hasHead = run(git, ["-C", root, "rev-parse", "--verify", "-q", "HEAD"], timeout: 10) != nil
+            guard let tree = hasHead ? "HEAD" : emptyTree(git: git, root: root) else { return nil }
+            args = prefix + ["diff-index"] + (base == .staged ? ["--cached"] : []) + options + [tree] + pathspec
+        }
+        guard let data = run(git, args, timeout: 20), let text = String(data: data, encoding: .utf8) else { return nil }
+        return UnifiedDiff.parse(text)
     }
 
     /// Applies a patch: to the index (`cached`, i.e. stage it) or to the working tree, forwards or
