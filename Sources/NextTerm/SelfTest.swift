@@ -748,8 +748,16 @@ enum SelfTest {
         check(putBack, "nxtrm: the menu command puts it back, and launches keep it", "\(CommandLineTool.entry(at: awayLink))")
 
         let none = CommandLineTool.plan(for: script, path: [own, "/usr/bin", "/bin"], home: home)
-        check(none == .unavailable && CommandLineTool.entry(at: own + "/nxtrm") == .nothing,
-              "nxtrm: with no writable command folder on PATH, nothing is written", "\(none)")
+        let unwritten = !CommandLineTool.link(own + "/nxtrm", to: script) && CommandLineTool.entry(at: own + "/nxtrm") == .nothing
+        check(none == .unavailable && unwritten, "nxtrm: with no writable command folder on PATH, nothing is written", "\(none)")
+
+        // The PATH a launch decides on, from the login shell (5 s at most, so not on the main thread), and the
+        // menu command's fallback when the shell does not answer.
+        let shellPath = await Task.detached { LoginShell.shellPath }.value
+        check(shellPath.contains("/usr/bin"), "nxtrm: the login shell's PATH is read", shellPath.joined(separator: ":"))
+        let standard = CommandLineTool.standardPath
+        check(standard.contains("/usr/bin") && standard.allSatisfy { $0.hasPrefix("/") }, "nxtrm: the PATH from /etc/paths is read",
+              standard.joined(separator: ":"))
         // The offer waits, however long, for a project window that is key with nothing in front of it.
         if let window = c.window {
             let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 120), styleMask: [.titled], backing: .buffered, defer: true)
