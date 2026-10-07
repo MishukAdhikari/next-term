@@ -18,6 +18,8 @@ enum ImportSources {
         planner(app, usesUSKeyboard) ?? ImportPlan(preset: app.preset)
     }
 
+    static let noneFound = "No settings from VS Code, Cursor, a JetBrains IDE, Zed, iTerm2, Ghostty, Warp or a changed Terminal profile were found on this Mac."
+
     /// Each family's reader (NextTermCore/Import*.swift). The self-test can swap these for its own.
     nonisolated(unsafe) static var detectors: [() -> [DetectedApp]] = [
         { ImportVSCode.detect() }, { ImportJetBrains.detect() }, { ImportZed.detect() }, { ImportITerm2.detect() },
@@ -257,7 +259,7 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         let selected = firstRun || apps.isEmpty ? keep : radios[1]
         selected.state = .on
         if apps.isEmpty {
-            rows.append(Self.wrapping("No VS Code, Cursor, JetBrains IDE, Zed or iTerm2 settings were found on this Mac.", secondary: true))
+            rows.append(Self.wrapping(ImportSources.noneFound, secondary: true))
         }
         rows += radios.dropFirst() + [keep]
         rows.append(Self.wrapping("Reads files on this Mac only. Never changes the other app. Nothing leaves your Mac.", secondary: true, size: 11))
@@ -725,7 +727,8 @@ final class ImportSettingsView: NSView {
         appsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         let apps = ImportSources.detect()
         if apps.isEmpty {
-            let none = NSTextField(labelWithString: "No VS Code, Cursor, JetBrains IDE, Zed or iTerm2 settings found on this Mac.")
+            let none = NSTextField(wrappingLabelWithString: ImportSources.noneFound)
+            none.preferredMaxLayoutWidth = 520
             none.textColor = .secondaryLabelColor
             appsStack.addArrangedSubview(none)
         }
