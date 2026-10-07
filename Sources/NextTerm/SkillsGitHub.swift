@@ -172,18 +172,24 @@ enum SkillsGitHub {
         defer { try? manager.removeItem(at: archive) }
         try await save(url, to: archive)
 
-        // What the skills would unpack to, before anything is unpacked.
-        let listing = try await tar(["-tvzf", archive.path], timeout: 30)
-        let lines = listing.split(separator: "\n").map(String.init)
-        guard let top = lines.first.flatMap(entryName)?.split(separator: "/").first.map(String.init) else {
+        // The folder tar puts everything in.
+        let listing = try await tar(["-tzf", archive.path], timeout: 30)
+        guard let top = listing.split(separator: "\n").first?.split(separator: "/").first.map(String.init), !top.isEmpty else {
             throw Failure(message: "The downloaded files could not be read.")
         }
         let wanted = paths.contains("") ? [top] : paths.map { top + "/" + $0 }
+        // Only the skill folders, by patterns in a file (see tarPatternList). Counted with the same
+        // patterns tar unpacks with, one entry per line: names can't be compared here, since tar writes
+        // the ones it can't print in this locale as escapes.
+        let patterns = scratch.appendingPathComponent("patterns")
+        try SkillTreeListing.tarPatternList(wanted).write(to: patterns)
+        defer { try? manager.removeItem(at: patterns) }
+        let select = ["--null", "-T", patterns.path]
+        let selected = try await tar(["-tvzf", archive.path] + select, timeout: 30, missingIsFine: true)
         var bytes = 0, count = 0
-        for line in lines {
-            guard let name = entryName(line), wanted.contains(where: { name == $0 || name.hasPrefix($0 + "/") }) else { continue }
+        for line in selected.split(separator: "\n") {
             count += 1
-            bytes += entrySize(line)
+            bytes += entrySize(String(line))
         }
         guard count <= maxEntries else { throw Failure(message: "The skill holds too many files (\(count)) to review.") }
         guard bytes <= maxUnpacked else { throw Failure(message: "The skill is too large to review (\(bytes / 1_000_000) MB unpacked).") }
@@ -191,12 +197,11 @@ enum SkillsGitHub {
         let unpacked = scratch.appendingPathComponent("files", isDirectory: true)
         try manager.createDirectory(at: unpacked, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         // bsdtar keeps paths inside the folder (it refuses ".." and absolute paths), does not write
-        // through links, and does not restore owners. Only the skill folders are unpacked.
-        // Patterns that match only these folders (a name may hold *, ? or [).
-        let include = wanted.map(SkillTreeListing.tarLiteral).flatMap { ["--include", $0, "--include", $0 + "/*"] }
-        _ = try await tar(["-xzf", archive.path, "-C", unpacked.path, "--no-same-owner"] + include, timeout: 60)
+        // through links, and does not restore owners.
+        _ = try await tar(["-xzf", archive.path, "-C", unpacked.path, "--no-same-owner"] + select, timeout: 60, missingIsFine: true)
         let folder = unpacked.appendingPathComponent(top, isDirectory: true)
-        guard manager.fileExists(atPath: folder.path) else { throw Failure(message: "The downloaded files could not be unpacked.") }
+        let missing = paths.contains { !manager.fileExists(atPath: folder.appendingPathComponent($0).path) }
+        guard manager.fileExists(atPath: folder.path), !missing else { throw Failure(message: "The downloaded files could not be unpacked.") }
         return folder
     }
 
@@ -240,33 +245,36 @@ enum SkillsGitHub {
         return fields.count > 4 ? Int(fields[4]) ?? 0 : 0
     }
 
-    /// A `tar -tv` line's name (after the date; a link's " -> target" dropped).
-    static func entryName(_ line: String) -> String? {
-        let fields = line.split(separator: " ", maxSplits: 8, omittingEmptySubsequences: true)
-        guard fields.count == 9 else { return nil }
-        var name = String(fields[8])
-        if line.hasPrefix("l"), let arrow = name.range(of: " -> ") { name = String(name[..<arrow.lowerBound]) }
-        while name.hasSuffix("/") { name.removeLast() }
-        return name
-    }
-
     /// Runs /usr/bin/tar off the main thread, stopping it after `timeout` seconds (a crafted archive can
-    /// take long to read).
-    private static func tar(_ arguments: [String], timeout: TimeInterval) async throws -> String {
+    /// take long to read). `missingIsFine`: patterns that matched nothing are not a failure.
+    private static func tar(_ arguments: [String], timeout: TimeInterval, missingIsFine: Bool = false) async throws -> String {
         let result = await Task.detached { () -> String? in
+            let manager = FileManager.default
+            // Complaints go to a file: a pipe left unread could fill up and stop tar.
+            let errors = manager.temporaryDirectory.appendingPathComponent("nextterm-tar-\(UUID().uuidString)")
+            guard manager.createFile(atPath: errors.path, contents: nil, attributes: [.posixPermissions: 0o600]),
+                  let errorHandle = try? FileHandle(forWritingTo: errors) else { return nil }
+            defer { try? manager.removeItem(at: errors) }
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
             process.arguments = arguments
             let out = Pipe()
             process.standardOutput = out
-            process.standardError = FileHandle.nullDevice
+            process.standardError = errorHandle
             guard (try? process.run()) != nil else { return nil }
             let deadline = DispatchWorkItem { if process.isRunning { process.terminate() } }
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: deadline)
             let data = out.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
             deadline.cancel()
-            guard process.terminationReason == .exit, process.terminationStatus == 0 else { return nil }
+            try? errorHandle.close()
+            guard process.terminationReason == .exit else { return nil }
+            if process.terminationStatus != 0 {
+                guard missingIsFine, process.terminationStatus == 1 else { return nil }
+                let size = (try? manager.attributesOfItem(atPath: errors.path))?[.size] as? Int
+                guard let size, size <= 1_000_000, let text = try? String(contentsOf: errors, encoding: .utf8),
+                      SkillTreeListing.tarErrorsAreOnlyMissingNames(text) else { return nil }
+            }
             return String(decoding: data, as: UTF8.self)
         }.value
         guard let result else { throw Failure(message: "The downloaded files could not be unpacked.") }

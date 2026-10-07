@@ -70,7 +70,7 @@ public enum SkillInstall {
     /// The plan for putting the reviewed folder `staged` in place as `name`. `sameSource`: the lock file
     /// (or Next Term's record) says the shared copy came from the source being installed. `projects`:
     /// project folders open in Next Term, whose skills are never touched but are named.
-    public static func plan(name: String, staged: String, inventory: SkillInventory, linkForClaude: Bool,
+    public static func plan(name: String, staged: String, staging: String, inventory: SkillInventory, linkForClaude: Bool,
                             sameSource: Bool, projects: [String] = []) -> SkillInstallPlan {
         let home = inventory.home
         let sharedRoot = inventory.root(.shared) ?? SkillRoot(kind: .shared, path: (home as NSString).appendingPathComponent(".agents/skills"))
@@ -97,8 +97,12 @@ public enum SkillInstall {
         }
         replaced = replaced.sorted { $0.root.kind.order < $1.root.kind.order }
 
-        var steps = replaced.map { SkillStep.trash($0.path) } + stray.map { SkillStep.trash($0) }
-        steps.append(.copy(from: staged, to: shared))
+        // Copied to `staging` (a folder of Next Term's own) first: the slow step runs while the old copy
+        // is still in place, so a quit or crash part-way leaves the skill as it was, and the new copy
+        // only takes its place once complete.
+        var steps: [SkillStep] = [.copy(from: staged, to: staging)]
+        steps += replaced.map { SkillStep.trash($0.path) } + stray.map { SkillStep.trash($0) }
+        steps.append(.move(from: staging, to: shared))
         var agents = sharedRoot.readers
         if let claudeRoot {
             let wantsLink = linkForClaude || keptLink != nil

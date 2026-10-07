@@ -13,6 +13,9 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
     private var selected = 0
     /// Called once: the names installed, or nil when the user cancelled.
     private let done: ([String]?) -> Void
+    /// Set for an agent's request: a download that is gone is reported to it as a failure, not as the
+    /// user declining.
+    var onDownloadGone: ((String) -> Void)?
     /// For an update: the installed copy, to show what changed.
     private let installedFolders: [String: String]
 
@@ -333,9 +336,15 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
             case .failure(let failure):
                 // The download is gone (it no longer matched the commit): this review is over.
                 guard FileManager.default.fileExists(atPath: fetched.scratch.path) else {
-                    let parent = window?.sheetParent ?? NSApp.keyWindow
-                    finish(nil)
-                    if let parent { SkillsSettingsView.tell(failure.message, in: parent) }
+                    // Told over the window this sheet is on, never over the review itself, which closes here.
+                    let parent = window?.sheetParent
+                    if let window, let parent { parent.endSheet(window) } else { window?.close() }
+                    if let onDownloadGone {
+                        onDownloadGone(failure.message)
+                    } else {
+                        done(nil)
+                        if let parent { SkillsSettingsView.tell(failure.message, in: parent) }
+                    }
                     return
                 }
                 // The skill folders changed since the review: redraw it from the disk as it is now.

@@ -212,11 +212,12 @@ public enum SkillTreeListing {
                 skillFolders.append((path as NSString).deletingLastPathComponent)
             }
         }
-        let found = Set(skillFolders.filter(isPlainPath))
-            .filter { prefix.isEmpty || $0 == prefix || $0.hasPrefix(prefix + "/") }
-            .compactMap { folder in folders[folder].map { SkillFolder(path: folder, tree: $0) } }
-            .sorted { $0.path < $1.path }
-        return (found, json["truncated"] as? Bool ?? false)
+        // Split up: as one chain this is slow for the Swift 6.1 type checker.
+        let plain = Set(skillFolders.filter(isPlainPath))
+        let wanted = plain.filter { prefix.isEmpty || $0 == prefix || $0.hasPrefix(prefix + "/") }
+        let found: [SkillFolder] = wanted.compactMap { folder in folders[folder].map { SkillFolder(path: folder, tree: $0) } }
+        let truncated = json["truncated"] as? Bool ?? false
+        return (found.sorted { $0.path < $1.path }, truncated)
     }
 
     /// tar reads `--include` as a pattern: a folder named with `*`, `?`, `[` or a backslash would match
@@ -234,6 +235,35 @@ public enum SkillTreeListing {
             out.append(character)
         }
         return out
+    }
+
+    /// Folders as a `tar --null -T` list: each folder and everything in it, written both as given and
+    /// decomposed. tar compares a pattern with a name as the archive stores it, which is as committed,
+    /// or decomposed when it comes from a pax header; only one of the two is in the archive. Raw bytes
+    /// in a file, because arguments would reach tar decomposed.
+    public static func tarPatternList(_ folders: [String]) -> Data {
+        // By bytes: Swift's String equality would treat the two spellings as one.
+        var seen = Set<[UInt8]>()
+        var out = Data()
+        for folder in folders {
+            for form in [folder, folder.decomposedStringWithCanonicalMapping] {
+                let literal = tarLiteral(form)
+                for pattern in [literal, literal + "/*"] where seen.insert(Array(pattern.utf8)).inserted {
+                    out.append(contentsOf: Array(pattern.utf8))
+                    out.append(0)
+                }
+            }
+        }
+        return out
+    }
+
+    /// Whether tar's complaints are only about patterns that matched nothing (the spelling not in the
+    /// archive): "tar: <name>: Not found in archive", then a closing line.
+    public static func tarErrorsAreOnlyMissingNames(_ text: String) -> Bool {
+        let lines = text.split(whereSeparator: \.isNewline).map(String.init)
+        return lines.allSatisfy { line in
+            line.hasSuffix(": Not found in archive") || line == "tar: Error exit delayed from previous errors."
+        }
     }
 
     /// Whether GitHub's compare answer (`compare/<sha>...<default branch>`) shows the commit on the

@@ -539,6 +539,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             if alert.runModal() != .alertFirstButtonReturn { return .terminateCancel }
         }
         isTerminating = true
+        if SkillsStore.running > 0 {
+            // A skill change is part-way: it finishes, and records its Undo, before Next Term quits.
+            SkillsStore.afterChanges { NSApp.reply(toApplicationShouldTerminate: true) }
+            return .terminateLater
+        }
         return .terminateNow
     }
 

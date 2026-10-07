@@ -40,6 +40,10 @@ public struct SkillChanges: Sendable {
                 self.previous = previous
                 self.left = left
             }
+
+            /// Moved to the Trash, but the Trash did not say where: only the Finder's Put Back can bring
+            /// it back, so it is never kept for Undo.
+            var isLost: Bool { kind == .trashed && other == nil }
         }
         public var title: String
         public var entries: [Entry]
@@ -57,7 +61,7 @@ public struct SkillChanges: Sendable {
     /// Moves an item to the Trash and says where it went.
     public let trash: @Sendable (String) throws -> String
 
-    public init(undoFile: String, trash: @escaping @Sendable (String) throws -> String = SkillChanges.systemTrash) {
+    public init(undoFile: String, trash: @escaping @Sendable (String) throws -> String = { try SkillChanges.systemTrash($0) }) {
         self.undoFile = undoFile
         self.trash = trash
     }
@@ -90,8 +94,13 @@ public struct SkillChanges: Sendable {
         guard let data = FileManager.default.contents(atPath: undoFile) else { return [] }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        if let list = try? decoder.decode([Change].self, from: data) { return list }
-        return (try? decoder.decode(Change.self, from: data)).map { [$0] } ?? []
+        let list = (try? decoder.decode([Change].self, from: data)) ?? (try? decoder.decode(Change.self, from: data)).map { [$0] } ?? []
+        // A record from before lost entries were left out: they would block Undo for good.
+        return list.compactMap { change in
+            var kept = change
+            kept.entries.removeAll { $0.isLost }
+            return kept.entries.isEmpty ? nil : kept
+        }
     }
 
     /// The change Undo would reverse next.
@@ -297,9 +306,11 @@ public struct SkillChanges: Sendable {
     // MARK: doing
 
     /// Carries out the steps in order, after checking them all. On a failure, what was done so far is
-    /// put back; the message says whether that worked. On success, the change becomes the one Undo
-    /// reverses.
-    public func apply(_ steps: [SkillStep], title: String) -> Result<Void, Failure> {
+    /// put back; the message says whether that worked. `verify` runs once every step is done and, by
+    /// saying what is wrong, has the change put back the same way (an install that doesn't match what
+    /// was reviewed). On success, the change becomes the one Undo reverses, unless it changed nothing
+    /// (a second removal planned before the first ran), when the earlier one stays.
+    public func apply(_ steps: [SkillStep], title: String, verify: (() -> String?)? = nil) -> Result<Void, Failure> {
         if let problem = preflight(steps) { return .failure(Failure(message: problem + " Nothing was changed.")) }
         var change = Change(title: title)
         let manager = FileManager.default
@@ -355,12 +366,15 @@ public struct SkillChanges: Sendable {
                     case .success(let new): updated = new
                     case .failure: throw Failure(message: "\(SkillStep.short(path)) is in a format Next Term does not know.")
                     }
+                    let after = SkillLock.rawItem(updated, name: name)
+                    guard after != before else { continue } // already as wanted: nothing to write or undo
                     try manager.createDirectory(atPath: (real as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
                     try updated.write(toFile: real, atomically: true, encoding: .utf8)
-                    change.entries.append(.init(kind: .editedLock, path: real, other: name, previous: before, left: SkillLock.rawItem(updated, name: name)))
+                    change.entries.append(.init(kind: .editedLock, path: real, other: name, previous: before, left: after))
                 case .recordEntry(let path, let name, let record):
                     var records = SkillRecord.decodeList(manager.contents(atPath: path))
                     let before = records.first { $0.name == name }?.raw()
+                    guard record?.raw() != before else { continue } // already as wanted
                     records.removeAll { $0.name == name }
                     if let record { records.append(record) }
                     try manager.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
@@ -369,20 +383,28 @@ public struct SkillChanges: Sendable {
                 }
             } catch {
                 let message = (error as? Failure)?.message ?? error.localizedDescription
-                let left = reverse(change.entries, rollback: true)
-                if left.problems.isEmpty {
-                    // The disk is as it was: the earlier change's Undo stays as it is.
-                    return .failure(Failure(message: "\(step.summary) failed: \(message) Nothing was changed."))
-                }
-                // What could not be put back stays recorded, above the earlier change, so Undo can finish
-                // this one once the cause is fixed and then still reverse the earlier one.
-                store(changes + [Change(title: title, entries: left.remaining)])
-                return .failure(Failure(message: "\(step.summary) failed: \(message) Next Term could not put back \(left.problems.joined(separator: ", ")). "
-                                        + "Earlier versions are in the Trash, and Undo can try again."))
+                return putBack(change, title: title, problem: "\(step.summary) failed: \(message)")
             }
         }
-        store([change])
+        if let problem = verify?() { return putBack(change, title: title, problem: problem) }
+        if !change.entries.isEmpty { store([change]) }
         return .success(())
+    }
+
+    /// Puts back what a change that stopped part-way did, and says how that went.
+    func putBack(_ change: Change, title: String, problem: String) -> Result<Void, Failure> {
+        let left = reverse(change.entries, rollback: true)
+        var message = problem
+        for path in left.lost { message += " To put \(path) back, use Put Back on it in the Finder's Trash." }
+        if left.problems.isEmpty {
+            // The disk is as it was: the earlier change's Undo stays as it is.
+            return .failure(Failure(message: message + (left.lost.isEmpty ? " Nothing was changed." : " Nothing else was changed.")))
+        }
+        // What could not be put back stays recorded, above the earlier change, so Undo can finish this
+        // one once the cause is fixed and then still reverse the earlier one.
+        store(changes + [Change(title: title, entries: left.remaining)])
+        let problems = left.problems.joined(separator: ", ")
+        return .failure(Failure(message: message + " Next Term could not put back \(problems). Earlier versions are in the Trash, and Undo can try again."))
     }
 
     // MARK: undoing
@@ -393,7 +415,7 @@ public struct SkillChanges: Sendable {
     public func undoBlocker(_ change: Change) -> String? {
         var expected: [String: String?] = [:]
         var edits: [String: Change.Entry] = [:]
-        for entry in change.entries {
+        for entry in change.entries where !entry.isLost {
             switch entry.kind {
             case .trashed, .removedLink: expected[entry.path] = .some(nil)
             case .created: expected[entry.path] = .some(entry.left)
@@ -422,16 +444,22 @@ public struct SkillChanges: Sendable {
             if now != entry.left { return "\(name) in \(SkillStep.short(entry.path)) has changed since “\(change.title)”." }
         }
         for entry in change.entries where entry.kind == .trashed {
-            guard let trashed = entry.other, Self.exists(trashed) else { return "The Trash no longer holds \(SkillStep.short(entry.path))." }
+            guard let trashed = entry.other else { continue }
+            guard Self.exists(trashed) else { return "The Trash no longer holds \(SkillStep.short(entry.path))." }
         }
         return nil
     }
 
     /// Reverses the last change: what was made goes to the Trash, what was trashed comes back, links
     /// are remade, entries get their old values. Refused, with nothing touched, if anything changed
-    /// since. If it stops part-way, what is left stays recorded, so Undo can finish later.
-    public func undo() -> Result<Void, Failure> {
+    /// since, or if the last change is no longer the one the user confirmed (`expected`: another change
+    /// landed in between). If it stops part-way, what is left stays recorded, so Undo can finish later.
+    public func undo(expecting expected: Change? = nil) -> Result<Void, Failure> {
         guard let change = lastChange else { return .failure(Failure(message: "There is nothing to undo.")) }
+        if let expected, change != expected {
+            let now = change.title == expected.title ? "a later “\(change.title)”" : "“\(change.title)”"
+            return .failure(Failure(message: "The last change is now \(now), not the one you confirmed. Nothing was undone."))
+        }
         if let blocker = undoBlocker(change) {
             return .failure(Failure(message: blocker + " Undo would overwrite that, so nothing was changed."))
         }
@@ -458,12 +486,18 @@ public struct SkillChanges: Sendable {
     }
 
     /// Reverses entries, newest first, and stops at the first that fails: `remaining` is that one and
-    /// everything before it (still undoable later), `problems` says what failed. A rollback (the same
-    /// change, moments after) deletes what it made itself; Undo moves it to the Trash.
-    func reverse(_ entries: [Change.Entry], rollback: Bool) -> (remaining: [Change.Entry], problems: [String]) {
+    /// everything before it (still undoable later), `problems` says what failed. An item the Trash took
+    /// without saying where is skipped and listed in `lost`. A rollback (the same change, moments
+    /// after) deletes what it made itself; Undo moves it to the Trash.
+    func reverse(_ entries: [Change.Entry], rollback: Bool) -> (remaining: [Change.Entry], problems: [String], lost: [String]) {
         let manager = FileManager.default
+        var lost: [String] = []
         for index in entries.indices.reversed() {
             let entry = entries[index]
+            if entry.isLost {
+                lost.append(SkillStep.short(entry.path))
+                continue
+            }
             do {
                 switch entry.kind {
                 case .created:
@@ -486,7 +520,7 @@ public struct SkillChanges: Sendable {
                         try manager.moveItem(atPath: entry.path, toPath: from)
                     }
                 case .trashed:
-                    guard let trashed = entry.other else { throw Failure(message: "where it went is unknown") }
+                    guard let trashed = entry.other else { break }
                     // Something in the way (a half-made copy): it goes to the Trash first.
                     if Self.exists(entry.path) { _ = try trash(entry.path) }
                     guard Self.exists(trashed) else { throw Failure(message: "not in the Trash") }
@@ -509,9 +543,11 @@ public struct SkillChanges: Sendable {
                     try SkillRecord.encodeList(records).write(to: URL(fileURLWithPath: entry.path), options: .atomic)
                 }
             } catch {
-                return (Array(entries[...index]), [SkillStep.short(entry.path)])
+                let earlier = entries[...index]
+                lost += earlier.filter { $0.isLost }.map { SkillStep.short($0.path) }
+                return (earlier.filter { !$0.isLost }, [SkillStep.short(entry.path)], lost)
             }
         }
-        return ([], [])
+        return ([], [], lost)
     }
 }

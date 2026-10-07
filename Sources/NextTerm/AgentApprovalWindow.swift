@@ -132,6 +132,14 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
         window?.standardWindowButton(.closeButton)?.isEnabled = !busy
     }
 
+    /// The approved action has started and can't be stopped: Decline would only tell the agent
+    /// something untrue, so it is held too.
+    func setCommitted(_ committed: Bool) {
+        setBusy(committed)
+        declineButton.isEnabled = !committed
+        stopButton?.isEnabled = !committed
+    }
+
     @objc private func approve() { onApprove(self) }
 
     @objc private func decline() { answer(stopAsking: false) }

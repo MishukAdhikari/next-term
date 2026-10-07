@@ -224,6 +224,14 @@ enum SkillsMCP {
                         resolve(request, ["status": "declined"])
                     }
                 }
+                sheet.onDownloadGone = { message in
+                    resolve(request, ["status": "failed", "note": message])
+                    let alert = NSAlert()
+                    alert.alertStyle = .warning
+                    alert.messageText = "The skills were not changed"
+                    alert.informativeText = message
+                    alert.runModal()
+                }
                 request.review = sheet
                 approval.finish()
                 // Like the request, the review never takes the keyboard on its own: the user clicks into it.
@@ -259,13 +267,15 @@ enum SkillsMCP {
                                                      window.setBusy(false)
                                                      return
                                                  }
+                                                 // From here the removal happens (it may wait for another change first).
+                                                 window.setCommitted(true)
                                                  switch await SkillsStore.apply(steps, title: "Remove \(name)") {
                                                  case .success:
                                                      resolve(request, ["status": "removed", "skill": name])
                                                      window.finish()
                                                  case .failure(let failure):
                                                      window.setStatus(failure.message, problem: true)
-                                                     window.setBusy(false)
+                                                     window.setCommitted(false)
                                                  }
                                              }
                                          },

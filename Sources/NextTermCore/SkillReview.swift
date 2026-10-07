@@ -101,13 +101,19 @@ public struct SkillReview: Sendable {
             }
             // Files too large to read here whole are flagged rather than read.
             let readable = size <= maxReadSize
-            let data = readable ? (manager.contents(atPath: full) ?? Data()) : (FileHandle(forReadingAtPath: full)?.readData(ofLength: 4) ?? Data())
+            let data = readable ? (manager.contents(atPath: full) ?? Data()) : (FileHandle(forReadingAtPath: full)?.readData(ofLength: 16) ?? Data())
             let executable = info.st_mode & 0o111 != 0
-            let binary = isBinaryProgram(data)
+            // A program has zero bytes right after its magic number; four magic bytes in front of text
+            // (which a shell still runs, line by line) don't make one.
+            let looksBinary = isBinaryProgram(data)
+            let binary = looksBinary && data.prefix(16).dropFirst(4).contains(0)
             let script = scriptExtensions.contains(ext) || data.starts(with: Data("#!".utf8))
             files.append(File(path: relative, size: size, executable: executable, script: script, binary: binary, linkTarget: nil))
             if binary { flags.append(Flag(level: .warning, file: relative, text: "A compiled program.")) }
             else if executable { executables.append(relative) }
+            if looksBinary, !binary {
+                flags.append(Flag(level: .warning, file: relative, text: "Starts like a compiled program but is text: it is shown below."))
+            }
             if !readable {
                 flags.append(Flag(level: .warning, file: relative, text: "A large file (\(size / 1_000_000) MB): too large to check here."))
                 continue
@@ -129,10 +135,13 @@ public struct SkillReview: Sendable {
             let listed = executables.sorted().prefix(5).joined(separator: ", ") + (executables.count > 5 ? ", …" : "")
             flags.append(Flag(level: .note, file: "", text: "\(executables.count) executable file\(executables.count == 1 ? "" : "s"): \(listed)."))
         }
-        let licenseFile = ["LICENSE", "LICENSE.txt", "LICENSE.md", "COPYING"].lazy
-            .compactMap { try? String(contentsOfFile: (folder as NSString).appendingPathComponent($0), encoding: .utf8) }
-            .compactMap { $0.split(separator: "\n").lazy.map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } }
-            .first.map { String($0.prefix(100)) }
+        // The license file's first line. Step by step: as one chain this is slow for Swift 6.1's type checker.
+        var licenseFile: String?
+        for name in ["LICENSE", "LICENSE.txt", "LICENSE.md", "COPYING"] where licenseFile == nil {
+            guard let text = try? String(contentsOfFile: (folder as NSString).appendingPathComponent(name), encoding: .utf8) else { continue }
+            let lines = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            if let first = lines.first(where: { !$0.isEmpty }) { licenseFile = String(first.prefix(100)) }
+        }
         return SkillReview(name: folderName, frontMatter: front, skillText: skillText, files: files.sorted { $0.path < $1.path },
                            flags: flags.sorted { $0.level > $1.level }, capabilities: capabilities(front: front, skillText: skillText, files: files),
                            urls: urls.sorted(), licenseFile: licenseFile)
@@ -225,17 +234,24 @@ public struct SkillReview: Sendable {
     /// Characters that draw as nothing, or reorder what is drawn: Unicode Tags (invisible ASCII),
     /// zero-width characters, direction overrides, the variation selectors' supplement (which can carry
     /// hidden bytes), and invisible fillers.
+    static let hiddenRanges: [ClosedRange<UInt32>] = [
+        0xE0000...0xE007F, 0x200B...0x200F, 0x2060...0x2064, 0xFEFF...0xFEFF, 0x202A...0x202E, 0x2066...0x2069,
+        0xE0100...0xE01EF, 0x00AD...0x00AD, 0x034F...0x034F, 0x115F...0x1160, 0x180B...0x180F, 0x3164...0x3164,
+        0xFFA0...0xFFA0, 0x061C...0x061C, 0xFE00...0xFE0D, 0xFFF9...0xFFFB, 0x1D173...0x1D17A,
+    ]
+
+    /// The ranges above, and anything else Unicode says is drawn as nothing (the rest of the tag block,
+    /// for one, can carry a hidden byte per character). U+FE0E and U+FE0F are left to hiddenMask.
     static func isHidden(_ scalar: Unicode.Scalar) -> Bool {
         let v = scalar.value
-        return (0xE0000...0xE007F).contains(v) || (0x200B...0x200F).contains(v) || (0x2060...0x2064).contains(v)
-            || v == 0xFEFF || (0x202A...0x202E).contains(v) || (0x2066...0x2069).contains(v)
-            || (0xE0100...0xE01EF).contains(v) || v == 0x00AD || v == 0x034F || v == 0x115F || v == 0x1160
-            || (0x180B...0x180F).contains(v) || v == 0x3164 || v == 0xFFA0 || v == 0x061C
-            || (0xFE00...0xFE0D).contains(v) || (0xFFF9...0xFFFB).contains(v) || (0x1D173...0x1D17A).contains(v)
+        if hiddenRanges.contains(where: { $0.contains(v) }) { return true }
+        guard v != 0xFE0E, v != 0xFE0F else { return false }
+        return scalar.properties.isDefaultIgnorableCodePoint
     }
 
     /// Which scalars are hidden. Only U+FE0E and U+FE0F (text or emoji style) are ordinary, and only
-    /// right after an emoji; the other variation selectors are hidden everywhere.
+    /// right after an emoji, or in a keycap (1️⃣) after a digit, # or *; the other variation selectors
+    /// are hidden everywhere.
     static func hiddenMask(_ scalars: [Unicode.Scalar]) -> [Bool] {
         scalars.indices.map { index in
             let scalar = scalars[index]
@@ -243,9 +259,15 @@ public struct SkillReview: Sendable {
             guard scalar.value == 0xFE0E || scalar.value == 0xFE0F else { return false }
             guard index > 0 else { return true }
             let previous = scalars[index - 1]
+            if keycapBases.contains(previous) {
+                let next = index + 1 < scalars.count ? scalars[index + 1].value : 0
+                return next != 0x20E3
+            }
             return (0xFE00...0xFE0F).contains(previous.value) || !previous.properties.isEmoji
         }
     }
+
+    static let keycapBases = Set("0123456789#*".unicodeScalars)
 
     static func hiddenKind(_ scalar: Unicode.Scalar) -> String {
         let v = scalar.value
@@ -254,7 +276,8 @@ public struct SkillReview: Sendable {
         if (0xFFF9...0xFFFB).contains(v) || (0x1D173...0x1D17A).contains(v) { return "invisible format characters" }
         if (0xE0100...0xE01EF).contains(v) || (0xFE00...0xFE0F).contains(v) || (0x180B...0x180F).contains(v) { return "variation selectors" }
         if v == 0x00AD || v == 0x034F || v == 0x115F || v == 0x1160 || v == 0x3164 || v == 0xFFA0 { return "invisible fillers" }
-        return "zero-width"
+        if (0x200B...0x200F).contains(v) || (0x2060...0x2064).contains(v) || v == 0xFEFF { return "zero-width" }
+        return "invisible format characters"
     }
 
     /// The text with every hidden character written out, so the user sees it: ⟦U+200B⟧.

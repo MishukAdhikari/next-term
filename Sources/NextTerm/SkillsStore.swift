@@ -42,24 +42,49 @@ enum SkillsStore {
     /// Changes run one at a time, off the main thread: copying, checking and hashing a large skill
     /// takes seconds, and the window must keep answering meanwhile.
     private static let queue = DispatchQueue(label: "NextTerm.skill-changes")
+    /// Posted when a change starts or ends, so views turn off (or back on) what would start another.
+    static let busyChanged = Notification.Name("NextTermSkillsBusyChanged")
 
-    private static func run(_ work: @escaping @Sendable (SkillChanges) -> Result<Void, Failure>) async -> Result<Void, Failure> {
+    /// Changes asked for and not finished yet. Quitting waits until it is 0: a change cut off part-way
+    /// would leave a half-made skill and no Undo.
+    @MainActor private(set) static var running = 0
+    @MainActor private static var whenIdle: [() -> Void] = []
+
+    /// Runs `body` once no change is running (now, if none is).
+    @MainActor static func afterChanges(_ body: @escaping () -> Void) {
+        if running == 0 { body() } else { whenIdle.append(body) }
+    }
+
+    /// Queued from the main actor, so changes run in the order they were asked for.
+    @MainActor private static func run(_ work: @escaping @Sendable (SkillChanges) -> Result<Void, Failure>) async -> Result<Void, Failure> {
         let engine = changes
+        running += 1
+        NotificationCenter.default.post(name: busyChanged, object: nil)
         let result = await withCheckedContinuation { (done: CheckedContinuation<Result<Void, Failure>, Never>) in
             queue.async { done.resume(returning: work(engine)) }
         }
-        await MainActor.run { notify() } // the views listening are AppKit views
+        running -= 1
+        notify()
+        NotificationCenter.default.post(name: busyChanged, object: nil)
+        if running == 0 {
+            let waiting = whenIdle
+            whenIdle = []
+            waiting.forEach { $0() }
+        }
         return result
     }
 
+    /// `verify` runs right after the last step, in the same turn on the queue: a problem it names puts
+    /// the change back before anything else can run.
     @discardableResult
-    static func apply(_ steps: [SkillStep], title: String) async -> Result<Void, Failure> {
-        await run { $0.apply(steps, title: title) }
+    @MainActor static func apply(_ steps: [SkillStep], title: String, verify: (@Sendable () -> String?)? = nil) async -> Result<Void, Failure> {
+        await run { $0.apply(steps, title: title, verify: verify) }
     }
 
+    /// `expected`: the change the user confirmed; if another one landed since, nothing is undone.
     @discardableResult
-    static func undo() async -> Result<Void, Failure> {
-        await run { $0.undo() }
+    @MainActor static func undo(expecting expected: SkillChanges.Change? = nil) async -> Result<Void, Failure> {
+        await run { $0.undo(expecting: expected) }
     }
 
     private static func notify() {

@@ -52,8 +52,16 @@ extension SelfTest {
         // Unify, keeping Claude Code's version.
         guard let winner = sync?.copies.first(where: { $0.root.kind == .claude }) else { return check(false, "skills: the Claude copy is found") }
         let steps = SkillUnify.plan(sync!, winner: winner, in: inventory)
+        // While it runs, Settings offers nothing that would start another change (Undo would reverse
+        // whatever is on top by then), and quitting waits for it to finish.
+        let seen = WhileRunning()
+        let watcher = seen.watch { _ in !view.undoButton.isEnabled && !view.unifyButton.isEnabled }
         let applied = await SkillsStore.apply(steps, title: "Unify release-notes")
+        NotificationCenter.default.removeObserver(watcher)
         if case .failure(let failure) = applied { check(false, "skills: Unify applies", failure.message) }
+        check(seen.held == true && !seen.quitRanEarly && seen.quitWaited,
+              "skills: while a change runs, Settings holds Unify and Undo, and quitting waits for it",
+              "held=\(String(describing: seen.held)) early=\(seen.quitRanEarly) waited=\(seen.quitWaited)")
         let after = SkillsStore.inventory().rows.first { $0.name == "release-notes" }
         check(read(".agents/skills/release-notes/SKILL.md")?.contains("claude version") == true && isLink(".claude/skills/release-notes"),
               "skills: Unify leaves one shared copy with the chosen version, linked for Claude Code")
@@ -148,10 +156,16 @@ extension SelfTest {
         // Remove: the user approves; the shared copy and the Claude Code link go, and Undo brings them back.
         let removal = await ask("remove_skill", ["name": "notes-helper"])
         try? await Task.sleep(nanoseconds: 300_000_000)
-        SkillsMCP.open?.window?.approveButton.performClick(nil)
+        let removeWindow = SkillsMCP.open?.window
+        // Once the removal is under way it can't be stopped, so Decline (which would say it was) is held.
+        let seen = SelfTest.WhileRunning()
+        let watcher = seen.watch { _ in removeWindow?.declineButton.isEnabled == false && removeWindow?.stopButton?.isEnabled == false }
+        removeWindow?.approveButton.performClick(nil)
         let removed = await ask("remove_skill", ["request_id": removal["request_id"] as? String ?? ""])
+        NotificationCenter.default.removeObserver(watcher)
         check(removed["status"] as? String == "removed" && !manager.fileExists(atPath: shared),
               "skills mcp: a removal the user approves goes through, and the agent hears so", "\(removal) \(removed)")
+        check(seen.held == true, "skills mcp: once the removal runs, Decline is held", "\(String(describing: seen.held))")
         _ = await SkillsStore.undo()
         check(manager.fileExists(atPath: shared + "/SKILL.md"), "skills mcp: Undo puts the removed skill back")
 
@@ -281,5 +295,24 @@ extension SelfTest {
 
         let window = SkillsWindowController()
         check(window.window?.title == "Skills" && SkillFeatured.list.count >= 10, "skills: Window › Skills opens with the Featured list")
+    }
+
+    /// Looks at the window the moment a skill change starts (and asks to quit then), for checks that
+    /// hold only while it runs.
+    final class WhileRunning {
+        var held: Bool?
+        var quitWaited = false
+        var quitRanEarly = false
+
+        func watch(_ test: @escaping (WhileRunning) -> Bool) -> NSObjectProtocol {
+            NotificationCenter.default.addObserver(forName: SkillsStore.busyChanged, object: nil, queue: nil) { [self] _ in
+                MainActor.assumeIsolated {
+                    guard SkillsStore.running > 0, held == nil else { return }
+                    held = test(self)
+                    SkillsStore.afterChanges { self.quitWaited = true }
+                    quitRanEarly = quitWaited
+                }
+            }
+        }
     }
 }

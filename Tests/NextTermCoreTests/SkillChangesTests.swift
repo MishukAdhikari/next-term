@@ -290,6 +290,140 @@ import Testing
         }
         guard case .failure(let failure) = vague.apply([.trash(shared)], title: "Remove notes") else { Issue.record("should fail"); return }
         #expect(!failure.message.contains("Nothing was changed"))
-        #expect(failure.message.contains("could not put back"))
+        #expect(failure.message.contains("Put Back"))
+    }
+}
+
+@Suite struct SkillChangesRoundThreeTests {
+    let home: String
+    let trash: String
+    let engine: SkillChanges
+
+    init() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nt-changes3-\(UUID().uuidString)").path
+        home = root + "/home"
+        trash = root + "/trash"
+        try FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
+        engine = SkillChanges(undoFile: root + "/undo.json", trash: SkillChanges.folderTrash(trash))
+    }
+
+    func skill(_ path: String, body: String = "Body") throws -> String {
+        let folder = (home as NSString).appendingPathComponent(path)
+        try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        let name = (path as NSString).lastPathComponent
+        try "---\nname: \(name)\ndescription: The \(name) skill.\n---\n\(body)\n".write(toFile: folder + "/SKILL.md", atomically: true, encoding: .utf8)
+        return folder
+    }
+
+    func succeeded(_ result: Result<Void, SkillChanges.Failure>) -> Bool {
+        if case .failure(let failure) = result { Issue.record("\(failure.message)"); return false }
+        return true
+    }
+
+    func entry() -> SkillLock.Entry {
+        SkillLock.Entry(source: "example/skills", sourceUrl: "https://github.com/example/skills.git", skillPath: "skills/first/SKILL.md",
+                        skillFolderHash: "aaaa", installedAt: Date(), updatedAt: Date())
+    }
+
+    /// A Trash that moves the item but does not say where: the change below keeps its Undo, and nothing
+    /// that Undo could never reverse is recorded.
+    @Test func aTrashWithoutALocationKeepsTheEarlierUndo() throws {
+        let first = try skill(".agents/skills/first")
+        try #require(succeeded(engine.apply([.trash(first)], title: "Remove first")))
+        let other = try skill(".codex/skills/other")
+        let elsewhere = home + "/somewhere-in-the-trash"
+        let vague = SkillChanges(undoFile: engine.undoFile) { path in
+            try FileManager.default.moveItem(atPath: path, toPath: elsewhere)
+            throw SkillChanges.Failure(message: "\(SkillStep.short(path)) went to the Trash, but macOS did not say where.")
+        }
+        guard case .failure(let failure) = vague.apply([.trash(other)], title: "Move other to the Trash") else {
+            Issue.record("should fail"); return
+        }
+        #expect(failure.message.contains("Put Back"))
+        #expect(!failure.message.contains("Undo can try again"))
+        #expect(engine.lastChange?.title == "Remove first")
+        try #require(succeeded(engine.undo()))
+        #expect(FileManager.default.fileExists(atPath: first + "/SKILL.md"))
+    }
+
+    /// An undo record written before this fix, holding a Trash move with no known location, doesn't
+    /// block the change below it.
+    @Test func anOldRecordWithAnUnknownTrashPlaceIsSkipped() throws {
+        let first = try skill(".agents/skills/first")
+        try #require(succeeded(engine.apply([.trash(first)], title: "Remove first")))
+        var list = engine.changes
+        list.append(SkillChanges.Change(title: "Move x to the Trash", entries: [.init(kind: .trashed, path: home + "/.codex/skills/x", other: nil)]))
+        engine.store(list)
+        #expect(engine.lastChange?.title == "Remove first")
+        try #require(succeeded(engine.undo()))
+        #expect(FileManager.default.fileExists(atPath: first + "/SKILL.md"))
+    }
+
+    /// Two removals of the same skill, both planned before either ran: the second finds nothing to do,
+    /// and the first one's Undo still brings the skill and its lock entry back.
+    @Test func aChangeThatDoesNothingKeepsTheEarlierUndo() throws {
+        let first = try skill(".agents/skills/first")
+        let lock = home + "/.agents/.skill-lock.json"
+        guard case .success(let text) = SkillLock.updated(nil, name: "first", entry: entry()) else { Issue.record("lock"); return }
+        try text.write(toFile: lock, atomically: true, encoding: .utf8)
+        let removal: [SkillStep] = [.trash(first), .lockEntry(path: lock, name: "first", entry: nil)]
+        try #require(succeeded(engine.apply(removal, title: "Remove first")))
+        try #require(succeeded(engine.apply(removal, title: "Remove first")))
+        #expect(engine.changes.count == 1)
+        #expect(engine.lastChange?.entries.count == 2)
+        try #require(succeeded(engine.undo()))
+        #expect(FileManager.default.fileExists(atPath: first + "/SKILL.md"))
+        #expect(SkillLock.rawItem(try String(contentsOfFile: lock, encoding: .utf8), name: "first") != nil)
+    }
+
+    /// Undo reverses the change the user confirmed, or nothing: another change that landed in between
+    /// (from another window, or an agent) is not reversed in its place.
+    @Test func undoReversesOnlyTheChangeConfirmed() throws {
+        let alpha = try skill(".agents/skills/alpha")
+        try #require(succeeded(engine.apply([.link(at: home + "/.claude/skills/alpha", to: alpha)], title: "Link alpha")))
+        let shown = try #require(engine.lastChange)
+        let beta = try skill(".agents/skills/beta")
+        try #require(succeeded(engine.apply([.trash(beta)], title: "Remove beta")))
+        guard case .failure(let failure) = engine.undo(expecting: shown) else { Issue.record("should refuse"); return }
+        #expect(failure.message.contains("Remove beta") && failure.message.contains("Nothing was undone"))
+        #expect(!FileManager.default.fileExists(atPath: beta))
+        #expect(SkillChanges.isLink(home + "/.claude/skills/alpha"))
+        try #require(succeeded(engine.undo(expecting: engine.lastChange)))
+        #expect(FileManager.default.fileExists(atPath: beta + "/SKILL.md"))
+    }
+
+    /// A check after the last step that finds a problem puts this change back (even what was edited
+    /// since it was made), keeps the earlier change's Undo, and says so.
+    @Test func aFailedCheckPutsBackOnlyThisChange() throws {
+        let other = try skill(".codex/skills/other")
+        try #require(succeeded(engine.apply([.trash(other)], title: "Remove other")))
+        let old = try skill(".agents/skills/demo", body: "version 1")
+        let staged = try skill("staged/demo", body: "version 2")
+        let shared = home + "/.agents/skills/demo"
+        let steps: [SkillStep] = [.trash(old), .copy(from: staged, to: shared), .link(at: home + "/.claude/skills/demo", to: shared)]
+        let result = engine.apply(steps, title: "Update demo") {
+            // Changed between the copy and the check: what the check exists to catch.
+            try? "tampered".write(toFile: shared + "/extra.txt", atomically: true, encoding: .utf8)
+            return "The installed files did not match the reviewed commit."
+        }
+        guard case .failure(let failure) = result else { Issue.record("should fail"); return }
+        #expect(failure.message == "The installed files did not match the reviewed commit. Nothing was changed.")
+        #expect(try String(contentsOfFile: shared + "/SKILL.md", encoding: .utf8).contains("version 1"))
+        #expect(!FileManager.default.fileExists(atPath: shared + "/extra.txt"))
+        #expect(!SkillChanges.exists(home + "/.claude/skills/demo"))
+        #expect(engine.lastChange?.title == "Remove other")
+        // A check that passes records the change as usual.
+        try #require(succeeded(engine.apply(steps, title: "Update demo") { nil }))
+        #expect(engine.lastChange?.title == "Update demo")
+    }
+
+    /// The same for a hand-made skill moved to the Trash twice: the record is not deleted.
+    @Test func aTrashOfSomethingAlreadyGoneKeepsTheRecord() throws {
+        let notes = try skill(".claude/skills/notes")
+        try #require(succeeded(engine.apply([.trash(notes)], title: "Move notes to the Trash")))
+        try #require(succeeded(engine.apply([.trash(notes)], title: "Move notes to the Trash")))
+        #expect(engine.lastChange?.title == "Move notes to the Trash")
+        try #require(succeeded(engine.undo()))
+        #expect(FileManager.default.fileExists(atPath: notes + "/SKILL.md"))
     }
 }

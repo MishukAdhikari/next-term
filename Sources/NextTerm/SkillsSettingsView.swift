@@ -8,10 +8,10 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     private let table = NSTableView()
     private let filter = NSPopUpButton()
     private let summary = NSTextField(labelWithString: "")
-    private let unifyButton = NSButton(title: "Unify…", target: nil, action: nil)
+    let unifyButton = NSButton(title: "Unify…", target: nil, action: nil)
     private let openButton = NSButton(title: "Open SKILL.md", target: nil, action: nil)
     private let revealButton = NSButton(title: "Show in Finder", target: nil, action: nil)
-    private let undoButton = NSButton(title: "Undo", target: nil, action: nil)
+    let undoButton = NSButton(title: "Undo", target: nil, action: nil)
     private let linkButton = NSButton(title: "Link for Claude Code", target: nil, action: nil)
     private let updateButton = NSButton(title: "Update…", target: nil, action: nil)
     private let removeButton = NSButton(title: "Remove…", target: nil, action: nil)
@@ -33,6 +33,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         build()
         NotificationCenter.default.addObserver(self, selector: #selector(reloadFromNotification), name: SkillsStore.changed, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(reloadFromNotification), name: SkillsInstaller.updatesChanged, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(busyChanged), name: SkillsStore.busyChanged, object: nil)
     }
 
     /// Shown (or Settings brought back): read the folders again, since agents and `npx skills` change them.
@@ -276,21 +277,27 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     /// The selected skill has a copy in the shared folder (what Install puts there, and Remove takes).
     private var sharedCopy: SkillCopy? { selectedRow?.copies.first { $0.root.kind == .shared && !$0.broken } }
 
+    @objc private func busyChanged() { updateButtons() }
+
     private func updateButtons() {
         let row = selectedRow
         let personal = showsPersonal
-        unifyButton.isEnabled = personal && (row.map { !$0.isUnified && !$0.distinctCopies.isEmpty } ?? false)
+        // While a change runs, nothing that would start another: the view is about to change, and Undo
+        // would reverse whatever is on top by then.
+        let idle = SkillsStore.running == 0
+        unifyButton.isEnabled = idle && personal && (row.map { !$0.isUnified && !$0.distinctCopies.isEmpty } ?? false)
         let claudeRoot = inventory?.root(.claude)
-        linkButton.isEnabled = personal && sharedCopy != nil && claudeRoot != nil && row?.copies.contains { $0.root.kind == .claude } == false
-        removeButton.isEnabled = personal && sharedCopy != nil
+        let claudeHasIt = row?.copies.contains { $0.root.kind == .claude } != false
+        linkButton.isEnabled = idle && personal && sharedCopy != nil && claudeRoot != nil && !claudeHasIt
+        removeButton.isEnabled = idle && personal && sharedCopy != nil
         // A skill neither Next Term nor npx skills installed is only moved to the Trash.
         removeButton.title = row.map { SkillsInstaller.tracksInstall($0.name) } == false ? "Move to Trash…" : "Remove…"
-        if let row, case .available = SkillsInstaller.updates[row.name] { updateButton.isEnabled = personal } else { updateButton.isEnabled = false }
+        if let row, case .available = SkillsInstaller.updates[row.name] { updateButton.isEnabled = idle && personal } else { updateButton.isEnabled = false }
         checkButton.isEnabled = personal
         openButton.isEnabled = row?.distinctCopies.isEmpty == false
         revealButton.isEnabled = row != nil
         let last = SkillsStore.lastChange
-        undoButton.isEnabled = last != nil
+        undoButton.isEnabled = idle && last != nil
         undoButton.toolTip = last.map { "Undo “\($0.title)”" }
     }
 
@@ -399,7 +406,8 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { response in
             guard response == .alertFirstButtonReturn else { return }
-            Task { if case .failure(let failure) = await SkillsStore.undo() { Self.tell(failure.message, in: window) } }
+            // Only the change named here: if another landed meanwhile, nothing is undone.
+            Task { if case .failure(let failure) = await SkillsStore.undo(expecting: last) { Self.tell(failure.message, in: window) } }
         }
     }
 

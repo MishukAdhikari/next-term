@@ -177,15 +177,18 @@ enum SkillsInstaller {
     }
 
     static func plan(_ candidate: Candidate, fetched: Fetched, linkForClaude: Bool, inventory: SkillInventory? = nil) -> SkillInstallPlan {
-        SkillInstall.plan(name: candidate.name, staged: candidate.folder, inventory: inventory ?? fetched.inventory, linkForClaude: linkForClaude,
-                          sameSource: sameSource(candidate, fetched: fetched), projects: fetched.projects)
+        // The copy is made in the download's own folder first, then moved into place.
+        let staging = fetched.scratch.appendingPathComponent("ready", isDirectory: true).appendingPathComponent(candidate.name).path
+        return SkillInstall.plan(name: candidate.name, staged: candidate.folder, staging: staging, inventory: inventory ?? fetched.inventory,
+                                 linkForClaude: linkForClaude, sameSource: sameSource(candidate, fetched: fetched), projects: fetched.projects)
     }
 
     /// Puts the chosen skills in place, with their lock entries and records, as one change for Undo.
     /// It installs only what the review showed: if the skill folders changed since, nothing happens and
     /// the review is redrawn. The downloaded files are checked against the commit right before they are
-    /// copied, and the installed copy again after. The download is removed once installed; after a
-    /// failure it stays, so Install can be tried again.
+    /// copied, and the installed copy again after, as part of the same change: a mismatch puts it all
+    /// back before anything else can run. The download is removed once installed; after a failure it
+    /// stays, so Install can be tried again.
     static func install(_ chosen: [Candidate], fetched: Fetched, linkForClaude: Bool) async -> Result<String, SkillsStore.Failure> {
         let inventory = await SkillsStore.scan()
         for candidate in chosen {
@@ -232,15 +235,13 @@ enum SkillsInstaller {
             return .failure(SkillsStore.Failure(message: "The downloaded files changed after the review. Nothing was installed; fetch it again to review it."))
         }
         let title = chosen.count == 1 ? "Install \(chosen[0].name)" : "Install \(chosen.count) skills"
-        if case .failure(let failure) = await SkillsStore.apply(steps, title: title) { return .failure(failure) }
         // And what was written is what was reviewed.
         let sharedRoot = (SkillsStore.home as NSString).appendingPathComponent(".agents/skills")
         let written = chosen.map { ((sharedRoot as NSString).appendingPathComponent($0.name), $0.found.tree) }
-        let same = await Task.detached { written.allSatisfy { GitHash.folder($0.0) == $0.1 } }.value
-        guard same else {
-            _ = await SkillsStore.undo()
-            return .failure(SkillsStore.Failure(message: "The installed files did not match the reviewed commit, so the install was undone."))
+        let applied = await SkillsStore.apply(steps, title: title) {
+            written.allSatisfy { GitHash.folder($0.0) == $0.1 } ? nil : "The installed files did not match the reviewed commit."
         }
+        if case .failure(let failure) = applied { return .failure(failure) }
         fetched.discard()
         return .success(notes.joined(separator: " "))
     }
