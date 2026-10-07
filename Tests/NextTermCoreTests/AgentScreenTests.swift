@@ -306,6 +306,21 @@ import Testing
         #expect(s.takeNotice() == nil)
     }
 
+    @Test func aLongTurnWithStrayFramesIsOneNotice() {
+        // A minute of work, looked at four times a second, with a frame missing the hint every 6 seconds.
+        var s = TabStatus()
+        s.commandStarted("claude", at: 0)
+        var notices: [TabNotice] = []
+        for step in 0...260 {
+            let t = Double(step) * 0.25
+            let stray = step % 24 == 0 && step > 0 && t < 60
+            s.observe(agentScreen: t >= 60 || stray ? .idle : .working, at: t)
+            s.tick(at: t)
+            if let notice = s.takeNotice() { notices.append(notice) }
+        }
+        #expect(notices.count == 1 && notices.first?.duration == 60, "\(notices.map(\.duration))")
+    }
+
     @Test func aStopHeldBackGivesWayToWhatCameAfter() {
         var s = TabStatus()
         s.commandStarted("claude", at: 0)
