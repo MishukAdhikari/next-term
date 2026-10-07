@@ -209,6 +209,7 @@ extension SelfTest {
         tab.view.send(txt: "\u{15}")
         let shown = c.activeTab
         c.show(tab)
+        defer { if let shown { c.show(shown) } }
         guard let window = c.window, window.makeFirstResponder(tab.view),
               let space = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                                            windowNumber: window.windowNumber, context: nil, characters: " ", charactersIgnoringModifiers: " ",
@@ -220,7 +221,6 @@ extension SelfTest {
         window.sendEvent(space)
         check(!MCPControl.isDriven(tab), "a key you press in a tab an agent drives makes it yours again")
         tab.view.send(txt: "\u{15}") // the space typed at its prompt
-        if let shown { c.show(shown) }
     }
 
     /// The Settings tab: its controls show the defaults, and each one changes what is saved.
