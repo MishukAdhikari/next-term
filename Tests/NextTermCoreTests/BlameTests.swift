@@ -187,4 +187,61 @@ import Testing
         let a = try #require(edited.blame.commits["a"]), b = try #require(edited.blame.commits["b"])
         #expect(edited.recency(of: a) == 0 && edited.recency(of: b) == 1)
     }
+
+    /// Settings in the user's git config that change what blame reads, or stop it.
+    @Test func blameIgnoresConfigThatWouldChangeIt() throws {
+        guard let repo = try ScratchRepo() else { return }
+        defer { repo.remove() }
+        try repo.write("f.txt", "one\ntwo\n")
+        try repo.commit("Ann", "First")
+        // A list of commits to skip that this repository lacks (set globally, as GitHub suggests).
+        try repo.git("config", "blame.ignoreRevsFile", ".missing-ignore-revs")
+        guard case .annotated(let blame) = GitRunner.blame(of: repo.path + "/f.txt", git: repo.gitPath) else {
+            return #expect(Bool(false), "a missing blame.ignoreRevsFile still gives a blame")
+        }
+        #expect(blame.lines.count == 2)
+        // A textconv filter is not run: the lines are the file's own.
+        try repo.write(".gitattributes", "*.txt diff=upper\n")
+        try repo.git("config", "diff.upper.textconv", "sh -c 'echo EXTRA; tr a-z A-Z < \"$0\"'")
+        try repo.commit("Bob", "Attributes")
+        guard case .annotated(let plain) = GitRunner.blame(of: repo.path + "/f.txt", git: repo.gitPath) else { return #expect(Bool(false)) }
+        #expect(plain.lines.count == 2)
+    }
+}
+
+/// A repository in a temporary folder, for tests that run git.
+struct ScratchRepo {
+    let path: String
+    let gitPath: String
+
+    init?(_ initArguments: [String] = []) throws {
+        guard let git = GitRunner.locateGit() else { return nil }
+        gitPath = git
+        path = canonicalPath(FileManager.default.temporaryDirectory.path) + "/nt-blame-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        try self.git(["init", "-q"] + initArguments)
+    }
+
+    func remove() { try? FileManager.default.removeItem(atPath: path) }
+
+    func write(_ name: String, _ text: String) throws { try text.write(toFile: path + "/" + name, atomically: true, encoding: .utf8) }
+
+    func git(_ args: String...) throws { try git(args) }
+
+    func git(_ args: [String]) throws {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: gitPath)
+        p.arguments = ["-C", path, "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main"] + args
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        try p.run()
+        p.waitUntilExit()
+        #expect(p.terminationStatus == 0, "git \(args.joined(separator: " "))")
+    }
+
+    /// Commits everything as `author`.
+    func commit(_ author: String, _ message: String) throws {
+        try git("add", "-A")
+        try git("-c", "user.name=\(author)", "-c", "user.email=\(author.lowercased())@example.com", "commit", "-qm", message)
+    }
 }

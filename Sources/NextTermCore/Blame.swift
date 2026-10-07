@@ -169,8 +169,16 @@ extension GitRunner {
             return .notCommitted(root: root)
         }
         guard size <= maxSize else { return .tooLarge }
-        let revision = workingTree ? [] : [head]
-        guard let data = run(git, prefix + ["blame", "--porcelain", "-M"] + revision + ["--", name], timeout: timeout) else { return .failed }
+        // The file's own lines: no textconv filter from the user's config (headText runs none either).
+        let base = prefix + ["blame", "--porcelain", "-M", "--no-textconv"]
+        let target = (workingTree ? [] : [head]) + ["--", name]
+        let started = Date()
+        var data = run(git, base + target, timeout: timeout)
+        if data == nil, Date().timeIntervalSince(started) < timeout {
+            // A blame.ignoreRevsFile in the user's config that this repository lacks makes git fail.
+            data = run(git, base + ["--no-ignore-revs-file"] + target, timeout: timeout)
+        }
+        guard let data else { return .failed }
         guard var blame = Blame.parse(data) else { return .binary }
         blame.root = root
         blame.head = head
