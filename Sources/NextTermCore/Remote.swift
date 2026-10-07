@@ -38,6 +38,51 @@ public enum KeepMode: String, Codable, Sendable, CaseIterable {
     }
 }
 
+/// Where a remote tab's connection stands: the dot on its server mark, and the note in its title.
+public enum RemoteLink: String, Sendable, CaseIterable {
+    case connected
+    case connecting
+    /// Another tab is logging in to the same host; this one goes once that login is through.
+    case waiting
+    /// ssh is asking in this tab: a password, a passphrase, a host key.
+    case logIn = "log in"
+    case disconnected
+
+    /// A tab whose ssh has ended for good is not connected either.
+    public init(exited: Bool, disconnected: Bool, waiting: Bool, loginPrompt: Bool, connected: Bool) {
+        if exited || disconnected {
+            self = .disconnected
+        } else if waiting {
+            self = .waiting
+        } else if loginPrompt {
+            self = .logIn
+        } else {
+            self = connected ? .connected : .connecting
+        }
+    }
+
+    /// The tab title's note, "(connecting)": nothing while the connection is simply up.
+    public var titleNote: String? { self == .connected ? nil : rawValue }
+
+    /// For the tooltip and VoiceOver: "Remote: web-1 (deploy@203.0.113.5), connected".
+    public var phrase: String {
+        switch self {
+        case .connected, .connecting, .disconnected: return rawValue
+        case .waiting: return "waiting for another tab’s login"
+        case .logIn: return "waiting for you to log in"
+        }
+    }
+
+    /// The dot: filled when up, a ring while on its way, barred when lost.
+    public var isOnItsWay: Bool { self == .connecting || self == .waiting || self == .logIn }
+
+    /// A split tab shows its weakest pane: lost, then on its way, then up.
+    public static func weakest(_ links: [RemoteLink]) -> RemoteLink? {
+        if links.contains(.disconnected) { return .disconnected }
+        return links.first { $0.isOnItsWay } ?? links.first
+    }
+}
+
 /// A server the user connects to.
 public struct RemoteHost: Codable, Equatable, Sendable {
     /// Stable id (saved tabs and MCP refer to it).

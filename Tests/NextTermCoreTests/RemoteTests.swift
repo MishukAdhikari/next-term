@@ -410,3 +410,32 @@ import Testing
         #expect(changes.stat.contains("a.txt"))
     }
 }
+
+@Suite struct RemoteLinkTests {
+    @Test func aLostOrEndedConnectionWinsOverEverythingElse() {
+        #expect(RemoteLink(exited: false, disconnected: true, waiting: false, loginPrompt: true, connected: false) == .disconnected)
+        #expect(RemoteLink(exited: true, disconnected: false, waiting: false, loginPrompt: false, connected: true) == .disconnected)
+    }
+
+    @Test func onItsWayUntilTheHostProvesTheLogin() {
+        #expect(RemoteLink(exited: false, disconnected: false, waiting: true, loginPrompt: false, connected: false) == .waiting)
+        #expect(RemoteLink(exited: false, disconnected: false, waiting: false, loginPrompt: true, connected: false) == .logIn)
+        #expect(RemoteLink(exited: false, disconnected: false, waiting: false, loginPrompt: false, connected: false) == .connecting)
+        #expect(RemoteLink(exited: false, disconnected: false, waiting: false, loginPrompt: false, connected: true) == .connected)
+        #expect(RemoteLink.allCases.filter(\.isOnItsWay) == [.connecting, .waiting, .logIn])
+    }
+
+    @Test func titleNotesAndPhrases() {
+        // The title keeps the notes the docs name; a connection that is simply up adds none.
+        #expect(RemoteLink.allCases.map(\.titleNote) == [nil, "connecting", "waiting", "log in", "disconnected"])
+        #expect(RemoteLink.logIn.phrase == "waiting for you to log in")
+        #expect(RemoteLink.connected.phrase == "connected")
+    }
+
+    @Test func aSplitTabShowsItsWeakestPane() {
+        #expect(RemoteLink.weakest([.connected, .disconnected, .connecting]) == .disconnected)
+        #expect(RemoteLink.weakest([.connected, .logIn]) == .logIn)
+        #expect(RemoteLink.weakest([.connected, .connected]) == .connected)
+        #expect(RemoteLink.weakest([]) == nil)
+    }
+}
