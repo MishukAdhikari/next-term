@@ -33,6 +33,7 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Check for Updates… | — |
 | Check for Updates Automatically | — |
 | Install Command Line Tool (nxtrm)… | — |
+| Import Settings and Shortcuts… (from another editor or terminal) | — |
 | Hide Next Term | <kbd>⌘H</kbd> |
 | Hide Others | <kbd>⌥⌘H</kbd> |
 | Quit Next Term | <kbd>⌘Q</kbd> |
@@ -87,6 +88,7 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Hide or Show Project Sidebar | <kbd>⌘B</kbd> |
 | Focus Editor or Focus Terminal | <kbd>⌃&#96;</kbd> |
 | Collapse Terminal or Expand Terminal | <kbd>⌘J</kbd> |
+| Show File in Project Sidebar (the file in front in the editor) | — |
 | Terminal Position › Bottom, Right, Left, Top | — |
 | Show Changes | <kbd>⌥⌘G</kbd> |
 | Annotate with Git Blame (who last changed each line, beside the numbers) | — |
