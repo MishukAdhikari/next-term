@@ -205,6 +205,8 @@ extension SelfTest {
         let up = shownMark()
         check(up.link == .connected && up.spoken.contains("Remote: selftest (nt@selftest.invalid), connected"),
               "remote: once connected, the tab's mark and its spoken label say so", "\(up.link?.rawValue ?? "no mark") / \(up.spoken)")
+        check(plain.paneSummary == "\(plain.title): \(plain.stateDescription)", "remote: and a split tab's line for the pane gives its state",
+              plain.paneSummary)
         // The window title names the host once: "selftest: app — …", or "sleep — on selftest — …" (below).
         let windowTitle = c.window?.title ?? ""
         check(!c.sidebar.remoteNote.isHidden && c.sidebar.remoteNote.shown?.host == "selftest"
@@ -254,6 +256,8 @@ extension SelfTest {
         let saidTimes = down.spoken.lowercased().components(separatedBy: "disconnected").count - 1
         check(saidTimes == 2 && !plain.tooltip.contains("\nDisconnected"), "remote: VoiceOver and the tooltip say the connection once, not as the state too",
               down.spoken + " / " + plain.tooltip.replacingOccurrences(of: "\n", with: " | "))
+        // A split tab lists its panes the same way: "selftest: app (disconnected)", not ": Disconnected" after it.
+        check(plain.paneSummary == plain.title, "remote: a split tab's line for the pane says the connection once", plain.paneSummary)
         check(MCPControl.canType(plain) == false, "remote MCP: nothing is typed into a disconnected tab")
         master.start()
         plain.view.send(txt: "\r")

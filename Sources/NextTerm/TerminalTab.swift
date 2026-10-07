@@ -657,6 +657,15 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         return nil
     }
 
+    /// This pane in a split tab's tooltip and VoiceOver label: "zsh: Idle", or for a pane on a server whose
+    /// connection is not up, its connection once: "web-1: app (connecting)" (the note says it), "claude:
+    /// disconnected".
+    var paneSummary: String {
+        if let ownStateDescription { return "\(title): \(ownStateDescription)" }
+        if remoteName?.note != nil { return title }
+        return remoteLink.map { "\(title): \($0.phrase)" } ?? title
+    }
+
     /// A remote tab says where it runs right under its name.
     var tooltip: String {
         var lines = [title]

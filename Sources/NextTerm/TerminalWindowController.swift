@@ -469,7 +469,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                                   shorterTitles: tab.shorterTitles, editableTitle: tab.editableTitle)
             }
             // A split tab: named by the pane with the keyboard, marked by the pane that most needs you.
-            let lines = group.panes.map { "\($0.title): \($0.stateDescription)" }
+            let lines = group.panes.map(\.paneSummary)
             let mark = group.remoteMark
             let others = "  +\(group.panes.count - 1)"
             return TabBarItem(title: tab.title + others, truncation: tab.titleTruncation,
