@@ -1994,6 +1994,22 @@ enum SelfTest {
         c.closeTab(nil)
         check(!c.validateMenuItem(closeItem) && c.groups.count == tabCount && c.terminalRailed,
               "folded to the rail, ⌘W outside the editor closes no terminal tab out of sight", "\(tabCount) → \(c.groups.count) tabs")
+        // More tabs than the rail has room for: its last place is "+N" for the rest.
+        let realMarks = rail.marks
+        let extraTabs = (0..<Int(rail.bounds.height / 24)).map { _ in NSObject() }
+        rail.update(marks: realMarks + extraTabs.map {
+            TerminalRail.Mark(id: ObjectIdentifier($0), state: .idle, toolTip: "zsh", label: "zsh, Idle", selected: false)
+        })
+        rail.layoutSubtreeIfNeeded()
+        let shownMarks = rail.markButtons.filter { !$0.isHidden }
+        let more = rail.overflowButton
+        let lastShown = shownMarks.map(\.frame.maxY).max() ?? 0
+        check(shownMarks.count < rail.marks.count && !more.isHidden && more.title == "+\(rail.marks.count - shownMarks.count)"
+              && more.frame.minY >= lastShown && more.frame.maxY <= rail.bounds.height,
+              "more tabs than the rail has room for: its last place is +N for the rest", "\(shownMarks.count) of \(rail.marks.count), \(more.title)")
+        c.refresh()
+        window.layoutIfNeeded()
+        check(rail.marks.count == c.groups.count && more.isHidden, "and with room for them all it goes", more.title)
 
         // The tab in front fails while folded: nobody sees it, so its mark says so and the rail pulses a few times
         // (with motion, whatever Reduce Motion is on this Mac).
@@ -2037,6 +2053,23 @@ enum SelfTest {
         window.layoutIfNeeded()
         check(!c.terminalCollapsed && rail.isHidden && abs(pane.frame.width - width) < 2, "⌘J brings the folded terminal back at its size",
               "\(width) → \(pane.frame.width)")
+        // Pressing the rail itself: a click on it below the arrow, or VoiceOver's Expand terminal button.
+        c.toggleTerminalCollapsed(nil)
+        window.layoutIfNeeded()
+        let onRail = rail.convert(NSPoint(x: rail.bounds.midX, y: rail.bounds.maxY - 8), to: nil)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            guard let event = NSEvent.mouseEvent(with: type, location: onRail, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                                 context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { continue }
+            if type == .leftMouseDown { rail.mouseDown(with: event) } else { rail.mouseUp(with: event) }
+        }
+        window.layoutIfNeeded()
+        check(!c.terminalCollapsed && rail.isHidden && abs(pane.frame.width - width) < 2, "a click on the rail brings the terminal back at its size",
+              "\(width) → \(pane.frame.width)")
+        c.toggleTerminalCollapsed(nil)
+        let pressed = expandButton?.accessibilityPerformPress() == true
+        window.layoutIfNeeded()
+        check(pressed && !c.terminalCollapsed && abs(pane.frame.width - width) < 2, "and so does VoiceOver's Expand terminal button",
+              "\(width) → \(pane.frame.width)")
         c.toggleTerminalCollapsed(nil)
         c.cycleTab(by: 1)
         check(!c.terminalCollapsed && rail.isHidden, "switching tabs from the keyboard opens the rail")
@@ -2050,6 +2083,17 @@ enum SelfTest {
         check(c.terminalRailed && !rail.pointsLeft && railFrame.maxX <= editorFrame.minX + 1 && abs(railFrame.width - TerminalRail.width) < 2,
               "with the terminal on the left, the rail is at the left edge", "rail \(railFrame.integral)")
         await screenshot(c, suffix: "-rail-left")
+        // At the window's top-left corner (the sidebar hidden) the traffic lights keep their strip: a press there
+        // moves the window, as on the tab bars; the arrow and the marks come below it.
+        let sidebarShown = c.isSidebarVisible
+        c.setSidebarVisible(false)
+        window.layoutIfNeeded()
+        let firstMark = rail.markButtons.first { !$0.isHidden }
+        check(rail.topInset == TabBarView.height && rail.isTitleBar(NSPoint(x: 12, y: rail.topInset - 4))
+              && !rail.isTitleBar(NSPoint(x: 12, y: rail.topInset + 4)) && (firstMark?.frame.minY ?? 0) >= rail.topInset + TabBarView.height,
+              "under the traffic lights the rail's top strip is title bar, with the arrow and the marks below it",
+              "inset \(rail.topInset), first mark at \(firstMark?.frame.minY ?? -1)")
+        c.setSidebarVisible(sidebarShown)
         c.toggleTerminalCollapsed(nil)
 
         // Above or below the editor, folding is as it was: down to the tab bar.

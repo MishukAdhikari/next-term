@@ -251,6 +251,8 @@ final class TerminalRail: NSView {
     func clickMark(_ index: Int) { markViews[safe: index]?.performClick(nil) }
     /// The marks' buttons as VoiceOver finds them.
     var markButtons: [NSButton] { markViews }
+    /// For the self-test: the "+3" in the last place.
+    var overflowButton: NSButton { moreButton }
 }
 
 /// The rail's arrow for VoiceOver: a button of its own beside the tabs' buttons, which a click anywhere on
