@@ -10,11 +10,114 @@ import NextTermCore
 /// NEXTTERM_TEST_TMUX), on a tmux socket folder of the test's own: the user's sessions are never touched.
 extension SelfTest {
     static func remoteChecks(_ c: TerminalWindowController) async {
+        remoteTabBarChecks()
+        remoteMarkShapeChecks()
+        remoteFilesNoteChecks()
         #if DEBUG
         await remoteChecksWithStandInSSH(c)
         #else
         note("remote: checks need a debug build (the stand-in ssh is debug-only)")
         #endif
+    }
+
+    /// Remote tabs in a tab bar of their own, offscreen, with made-up items: what a tab too narrow for its
+    /// whole title keeps, and the ⌘N hints in a narrow bar.
+    private static func remoteTabBarChecks() {
+        func mark(_ link: RemoteLink) -> RemoteMark { RemoteMark(host: "web-1", destination: "deploy@203.0.113.5", link: link) }
+        let items = [
+            TabBarItem(title: "next-term", state: .idle, tooltip: "", accessibilityStatus: "Idle", shortcut: "⌘1"),
+            TabBarItem(title: "web-1: app (connecting)", state: .idle, tooltip: "", accessibilityStatus: "", shortcut: "⌘2",
+                       remote: mark(.connecting), shorterTitles: ["app (connecting)", "app"]),
+            TabBarItem(title: "web-1: app (disconnected)", state: .idle, tooltip: "", accessibilityStatus: "", shortcut: "⌘3",
+                       remote: mark(.disconnected), shorterTitles: ["app (disconnected)", "app"]),
+            TabBarItem(title: "claude", state: .done, tooltip: "", accessibilityStatus: "Done", shortcut: "⌘4"),
+        ]
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: TabBarView.height), styleMask: [.borderless],
+                              backing: .buffered, defer: true)
+        func bar(width: CGFloat, with others: [TabBarItem]? = nil, selected: Int = 0) -> TabBarView {
+            let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: width, height: TabBarView.height))
+            bar.leadingInset = 12
+            window.setContentSize(bar.frame.size)
+            window.contentView = bar
+            bar.update(items: others ?? items, selectedIndex: selected)
+            bar.layoutSubtreeIfNeeded()
+            return bar
+        }
+        // The widest tabs (220 pt) have no room for "web-1: app (connecting)" next to the server mark: the
+        // host goes, the note stays (the only words for the dot's colour).
+        let wide = bar(width: 2000)
+        let wideTitles = items.indices.map { wide.shownTitle(at: $0) ?? "" }
+        check(wideTitles == ["next-term", "app (connecting)", "app (disconnected)", "claude"],
+              "remote tabs: a title that does not fit drops the host first and keeps the connection's note", "\(wideTitles)")
+        let narrow = bar(width: 12 + 36 + 24 + TabBarView.minTabWidth * CGFloat(items.count))
+        check(narrow.shownTitle(at: 1) == "app" && narrow.shownTitle(at: 2) == "app", "remote tabs: and the narrowest shows the folder alone",
+              "\(items.indices.map { narrow.shownTitle(at: $0) ?? "" })")
+        // A remote tab's title starts after its server mark, so it has less room for "⌘2" than a local tab:
+        // the bar makes one choice for all of them, or the numbering looks broken.
+        let uneven = stride(from: TabBarView.minTabWidth, through: 140, by: 2).filter { tabWidth in
+            let tabs = bar(width: 12 + 36 + 24 + tabWidth * CGFloat(items.count))
+            return Set((1..<items.count).map { tabs.shownShortcut(at: $0) == nil }).count > 1 // the unselected ones
+        }
+        check(uneven.isEmpty, "remote tabs: in a narrow bar, local and remote tabs show their ⌘N alike", "they differ at tab widths \(uneven)")
+        // Selecting a tab (or pointing at it, which shows its × the same way) does not change its words: the
+        // tab you look at says what it says among the others.
+        let connected = TabBarItem(title: "web-1: app", state: .idle, tooltip: "", accessibilityStatus: "", shortcut: "⌘5",
+                                   remote: mark(.connected), shorterTitles: ["app"])
+        let all = items + [connected]
+        let changing = stride(from: TabBarView.minTabWidth, through: TabBarView.maxTabWidth, by: 2).flatMap { tabWidth -> [String] in
+            let width = 12 + 36 + 24 + tabWidth * CGFloat(all.count)
+            let unselected = bar(width: width, with: all)
+            let shown = (1..<all.count).map { unselected.shownTitle(at: $0) ?? "" }
+            return (1..<all.count).compactMap { index -> String? in
+                let selected = bar(width: width, with: all, selected: index).shownTitle(at: index) ?? ""
+                return selected == shown[index - 1] ? nil : "\(Int(tabWidth)) pt: \(shown[index - 1]) / \(selected)"
+            }
+        }
+        check(changing.isEmpty, "remote tabs: a selected tab keeps the words it has unselected", changing.prefix(4).joined(separator: ", "))
+        window.contentView = nil
+    }
+
+    /// The server marks read without colour: drawn into a bitmap and taken as ink or not (white is a cut,
+    /// like the bar), each connection's mark has a shape of its own. A few pixels at the edges always differ.
+    private static func remoteMarkShapeChecks() {
+        let size = RemoteMarkView.size
+        func shape(_ link: RemoteLink) -> [Bool] {
+            guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width) * 3, pixelsHigh: Int(size.height) * 3,
+                                             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                             colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return [] }
+            rep.size = size
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            RemoteMarkView.draw(link, tint: .gray, in: NSRect(origin: .zero, size: size))
+            NSGraphicsContext.restoreGraphicsState()
+            return (0..<rep.pixelsWide * rep.pixelsHigh).map { i -> Bool in
+                guard let pixel = rep.colorAt(x: i % rep.pixelsWide, y: i / rep.pixelsWide) else { return false }
+                let lightness = (pixel.redComponent + pixel.greenComponent + pixel.blueComponent) / 3
+                return pixel.alphaComponent > 0.5 && lightness < 0.9
+            }
+        }
+        let links: [RemoteLink] = [.connected, .connecting, .disconnected, .ended]
+        let shapes = links.map(shape)
+        let alike = links.indices.flatMap { i -> [String] in
+            links.indices.filter { $0 > i }.compactMap { j -> String? in
+                let differ = zip(shapes[i], shapes[j]).filter { $0 != $1 }.count
+                return differ >= 20 ? nil : "\(links[i].rawValue) and \(links[j].rawValue) (\(differ) pixels apart)"
+            }
+        }
+        check(!shapes[0].isEmpty && alike.isEmpty, "remote tabs: each connection's server mark has a shape of its own, not only a colour",
+              alike.joined(separator: ", "))
+    }
+
+    /// The sidebar's line while a remote tab is active: VoiceOver reads its sentence, not that and then its
+    /// parts ("Files on this Mac", "web-1") again after it.
+    private static func remoteFilesNoteChecks() {
+        let note = RemoteFilesNote(frame: NSRect(x: 0, y: 0, width: 280, height: RemoteFilesNote.height))
+        note.show(RemoteMark(host: "web-1", destination: "deploy@203.0.113.5", link: .connected))
+        note.layoutSubtreeIfNeeded()
+        let parts = (note.accessibilityChildren() ?? []).map { "\(type(of: $0))" }
+        check(note.accessibilityLabel()?.hasSuffix("runs on web-1 (deploy@203.0.113.5), connected.") == true && parts.isEmpty,
+              "remote tabs: VoiceOver reads the sidebar's line about this Mac's files once, not its parts after it",
+              "\(note.accessibilityLabel() ?? "no label") / parts: \(parts)")
     }
 
     #if DEBUG
@@ -136,13 +239,45 @@ extension SelfTest {
         // A plain remote shell: ssh in the tab's pty, the host's prompt, status from the host.
         let plain = c.addRemoteTab(RemoteTab(host: host))
         check(!plain.remoteConnected && plain.title.hasPrefix("selftest: "), "remote: a new tab is named after its host and counts as connecting", plain.title)
+        // Its tab: the server mark, with the connection's state on it, in words for VoiceOver too.
+        func shownMark(_ tab: TerminalTab? = nil) -> (link: RemoteLink?, spoken: String) {
+            c.refresh()
+            let index = c.groups.firstIndex { $0.contains(tab ?? plain) } ?? -1
+            return (c.tabBar.shownRemoteLink(at: index), c.tabBar.spokenLabel(at: index) ?? "")
+        }
+        let early = shownMark()
+        check(plain.remoteConnected || early.link?.isOnItsWay == true, "remote: the tab's server mark shows the connection on its way",
+              "\(early.link?.rawValue ?? "no mark") / \(early.spoken)")
         check(await wait(20) { plain.remoteConnected }, "remote: the host proves this tab's own login (its connection token)")
+        let up = shownMark()
+        check(up.link == .connected && up.spoken.contains("Remote: selftest (nt@selftest.invalid), connected"),
+              "remote: once connected, the tab's mark and its spoken label say so", "\(up.link?.rawValue ?? "no mark") / \(up.spoken)")
+        check(plain.paneSummary == "\(plain.title): \(plain.stateDescription)", "remote: and a split tab's line for the pane gives its state",
+              plain.paneSummary)
+        // The window title names the host once: "selftest: app — …", or "sleep — on selftest — …" (below).
+        // It names the editor's file while that has the keyboard, so the tab takes it first.
+        c.window?.makeFirstResponder(plain.view)
+        c.refresh()
+        check(c.activeTab === plain && !c.isEditorFocused, "remote: the new remote tab has the keyboard",
+              "\(c.activeTab?.title ?? "no tab") / \(c.window?.firstResponder.map { "\(type(of: $0))" } ?? "nothing")")
+        let windowTitle = c.window?.title ?? ""
+        check(!c.sidebar.remoteNote.isHidden && c.sidebar.remoteNote.shown?.host == "selftest"
+              && windowTitle.hasPrefix("selftest: ") != windowTitle.contains("— on selftest —"),
+              "remote: the sidebar says its files are this Mac's, and the window title names the host once",
+              "\(c.sidebar.remoteNote.shown?.host ?? "no note") / \(windowTitle)")
+        let local = c.groups.firstIndex { $0.focused.remote == nil }
+        check(local.map { c.tabBar.shownRemoteLink(at: $0) == nil && !(c.tabBar.spokenLabel(at: $0) ?? "").contains("Remote") } ?? true,
+              "remote: a tab on this Mac has no server mark")
         check(await wait(20) { plain.remoteReady }, "remote: the host reports the tab's shell at its prompt",
               plain.screenTail(6).joined(separator: " | "))
         check(!plain.view.opensFiles, "remote: ⌘-click does not open this Mac's files from a remote tab")
         plain.view.send(txt: "sleep 4\r")
         check(await wait(8) { plain.status.running && plain.status.program == "sleep" }, "remote: what runs in front on the host is seen",
               "\(plain.status.running) \(plain.status.program)")
+        c.window?.makeFirstResponder(plain.view)
+        c.refresh()
+        check(c.activeTab === plain && c.window?.title.contains(" — on selftest — ") == true,
+              "remote: while a program runs, the window title says on which host", c.window?.title ?? "")
         check(await wait(10) { !plain.status.running }, "remote: and when it ends")
         plain.view.send(txt: "sleep 60 &\r")
         check(await wait(8) { plain.closeWarning?.contains("sleep") == true }, "remote: closing warns about the shell's background jobs on the host",
@@ -160,6 +295,33 @@ extension SelfTest {
         check(await wait(10) { plain.disconnected }, "remote: a dropped connection keeps the tab, marked disconnected")
         check(plain.screenTail(4).joined().contains("Return opens a new shell") && plain.title.contains("(disconnected)"),
               "remote: and says so, in the tab and its title", plain.title + " / " + plain.screenTail(4).joined(separator: " | "))
+        check(plain.shorterTitles.first?.hasSuffix(" (disconnected)") == true && plain.shorterTitles.first?.hasPrefix("selftest") == false,
+              "remote: a tab too narrow for its title drops the host before the note", "\(plain.shorterTitles)")
+        let down = shownMark()
+        check(down.link == .disconnected && down.spoken.contains("Remote: selftest (nt@selftest.invalid), disconnected")
+              && c.sidebar.remoteNote.shown?.link == .disconnected,
+              "remote: and on its server mark (and the sidebar's)", "\(down.link?.rawValue ?? "no mark") / \(down.spoken)")
+        let plainItem = c.groups.firstIndex { $0.contains(plain) }.flatMap { c.tabBar.items[safe: $0] }
+        check(plainItem?.editableTitle == plain.title.replacingOccurrences(of: " (disconnected)", with: ""),
+              "remote: renaming it starts from its name without the note (which would stay in the name)",
+              "\(plainItem?.editableTitle ?? "no item") / \(plain.title)")
+        // The title's note and the remote part: not a third time as the tab's state.
+        let saidTimes = down.spoken.lowercased().components(separatedBy: "disconnected").count - 1
+        check(saidTimes == 2 && !plain.tooltip.contains("\nDisconnected"), "remote: VoiceOver and the tooltip say the connection once, not as the state too",
+              down.spoken + " / " + plain.tooltip.replacingOccurrences(of: "\n", with: " | "))
+        // A split tab lists its panes the same way: "selftest: app (disconnected)", not ": Disconnected" after it.
+        check(plain.paneSummary == plain.title, "remote: a split tab's line for the pane says the connection once", plain.paneSummary)
+        // Split, VoiceOver hears the title, the other pane's line and the remote part: "disconnected" twice,
+        // not a third time in the line for the pane the title is named after.
+        if let beside = c.split(vertical: true, from: plain, directory: project.path, focus: false) {
+            let split = shownMark()
+            let splitTimes = split.spoken.lowercased().components(separatedBy: "disconnected").count - 1
+            check(splitTimes == 2 && split.spoken.contains("+1"), "remote: a split tab says the connection once besides its title too",
+                  split.spoken)
+            c.remove(beside)
+        } else {
+            check(false, "remote: a split beside a remote tab opens")
+        }
         check(MCPControl.canType(plain) == false, "remote MCP: nothing is typed into a disconnected tab")
         master.start()
         plain.view.send(txt: "\r")
@@ -171,6 +333,10 @@ extension SelfTest {
         exiting.view.send(txt: "exit 255\r")
         check(await wait(10) { exiting.exited }, "remote: a shell that exits 255 ends its tab like any shell (not 'connection lost')",
               exiting.screenTail(4).joined(separator: " | "))
+        let endedMark = shownMark(exiting)
+        check(endedMark.link == .ended && !endedMark.spoken.lowercased().contains("disconnected") && !exiting.title.contains("("),
+              "remote: its server mark says the shell ended, not that the connection dropped (Return would not reconnect it)",
+              "\(endedMark.link?.rawValue ?? "no mark") / \(exiting.title) / \(endedMark.spoken)")
         c.remove(exiting)
 
         // MCP: hosts and remote tabs, as an orchestrating agent sees them.

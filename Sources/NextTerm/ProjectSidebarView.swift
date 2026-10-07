@@ -52,6 +52,8 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     private(set) var root: FileNode?
     let header = SidebarHeaderView()
+    /// "Files on this Mac", while the active tab runs on a server.
+    let remoteNote = RemoteFilesNote()
     private let scrollView = NSScrollView()
     let outline = SidebarOutlineView()
     private var watcher: DirectoryWatcher?
@@ -130,6 +132,8 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         scrollView.contentView.drawsBackground = false
 
         addSubview(header)
+        remoteNote.isHidden = true
+        addSubview(remoteNote)
         addSubview(scrollView)
         // Row tooltips through one area over the visible rows. Tooltips set on the row views themselves
         // stay live for rows scrolled out of sight, so hovering the header showed some hidden row's path.
@@ -149,8 +153,18 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         super.layout()
         header.inset = headerInset
         header.frame = NSRect(x: 0, y: 0, width: bounds.width, height: TabBarView.height)
-        scrollView.frame = NSRect(x: 0, y: TabBarView.height, width: bounds.width, height: max(0, bounds.height - TabBarView.height))
+        let top = TabBarView.height + (remoteNote.isHidden ? 0 : RemoteFilesNote.height)
+        remoteNote.frame = NSRect(x: 0, y: TabBarView.height, width: bounds.width, height: RemoteFilesNote.height)
+        scrollView.frame = NSRect(x: 0, y: top, width: bounds.width, height: max(0, bounds.height - top))
         updateToolTips()
+    }
+
+    /// The active tab's server, if it runs on one: the tree then says its files are this Mac's.
+    func showRemote(_ mark: RemoteMark?) {
+        if let mark { remoteNote.show(mark) }
+        guard remoteNote.isHidden != (mark == nil) else { return }
+        remoteNote.isHidden = mark == nil
+        needsLayout = true
     }
 
     @objc private func updateToolTips() {

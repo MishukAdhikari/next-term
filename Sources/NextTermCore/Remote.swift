@@ -38,6 +38,84 @@ public enum KeepMode: String, Codable, Sendable, CaseIterable {
     }
 }
 
+/// Where a remote tab's connection stands: the dot on its server mark, and the note in its title.
+public enum RemoteLink: String, Sendable, CaseIterable {
+    case connected
+    case connecting
+    /// Another tab is logging in to the same host; this one goes once that login is through.
+    case waiting
+    /// ssh is asking in this tab: a password, a passphrase, a host key.
+    case logIn = "log in"
+    /// The connection dropped or could not be made: Return connects again.
+    case disconnected
+    /// The shell on the host ended (`exit 1`) and the tab stays to show why: nothing to reconnect.
+    case ended
+
+    public init(exited: Bool, disconnected: Bool, waiting: Bool, loginPrompt: Bool, connected: Bool) {
+        if exited {
+            self = .ended
+        } else if disconnected {
+            self = .disconnected
+        } else if waiting {
+            self = .waiting
+        } else if loginPrompt {
+            self = .logIn
+        } else {
+            self = connected ? .connected : .connecting
+        }
+    }
+
+    /// The tab title's note, "(connecting)": nothing while the connection is simply up, or once the shell
+    /// ended (the tab says why on its screen, and its status mark is the failure's).
+    public var titleNote: String? { self == .connected || self == .ended ? nil : rawValue }
+
+    /// For the tooltip and VoiceOver: "Remote: web-1 (deploy@203.0.113.5), connected".
+    public var phrase: String {
+        switch self {
+        case .connected, .connecting, .disconnected, .ended: return rawValue
+        case .waiting: return "waiting for another tab’s login"
+        case .logIn: return "waiting for you to log in"
+        }
+    }
+
+    /// The dot: filled when up, a ring while on its way, barred when lost or ended.
+    public var isOnItsWay: Bool { self == .connecting || self == .waiting || self == .logIn }
+
+    /// A split tab shows its weakest pane: lost (Return brings it back), ended, then on its way, the login
+    /// that waits for you first.
+    public static func weakest(_ links: [RemoteLink]) -> RemoteLink? {
+        for link in [RemoteLink.disconnected, .ended, .logIn, .connecting, .waiting] where links.contains(link) { return link }
+        return links.first
+    }
+}
+
+/// A remote tab's host and connection, as its tab, the sidebar and the overflow menu show them.
+public struct RemoteMark: Equatable, Sendable {
+    public var host: String
+    public var destination: String
+    public var link: RemoteLink
+
+    public init(host: String, destination: String, link: RemoteLink) {
+        self.host = host
+        self.destination = destination
+        self.link = link
+    }
+
+    /// "web-1 (deploy@203.0.113.5)", or "web-1" alone when the destination is an ssh alias of that name.
+    public var place: String { destination == host ? host : "\(host) (\(destination))" }
+
+    /// "Remote: web-1 (deploy@203.0.113.5), connected"
+    public var summary: String { "Remote: \(place), \(link.phrase)" }
+
+    /// A split tab's mark: its weakest pane's, so a pane that lost its connection is not hidden, and the
+    /// host named is the one whose connection it shows (the focused pane's, when that one is as weak).
+    public static func split(focused: RemoteMark?, panes: [RemoteMark]) -> RemoteMark? {
+        guard let weakest = RemoteLink.weakest(panes.map(\.link)) else { return nil }
+        if let focused, focused.link == weakest { return focused }
+        return panes.first { $0.link == weakest }
+    }
+}
+
 /// A server the user connects to.
 public struct RemoteHost: Codable, Equatable, Sendable {
     /// Stable id (saved tabs and MCP refer to it).

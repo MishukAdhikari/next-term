@@ -465,16 +465,24 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             let tab = group.focused
             guard group.isSplit else {
                 return TabBarItem(title: tab.title, truncation: tab.titleTruncation, state: tab.status.state, tooltip: tab.tooltip,
-                                  accessibilityStatus: tab.stateDescription, shortcut: shortcuts[index])
+                                  accessibilityStatus: tab.ownStateDescription ?? "", shortcut: shortcuts[index], remote: tab.remoteMark,
+                                  shorterTitles: tab.shorterTitles, editableTitle: tab.editableTitle)
             }
             // A split tab: named by the pane with the keyboard, marked by the pane that most needs you.
-            let lines = group.panes.map { "\($0.title): \($0.stateDescription)" }
-            return TabBarItem(title: tab.title + "  +\(group.panes.count - 1)", truncation: tab.titleTruncation,
+            let lines = group.panes.map(\.paneSummary)
+            // VoiceOver reads the title first: the keyboard pane's line goes when it is only that title
+            // ("web-1: app (connecting)"), or the connection would be said three times.
+            let spoken = group.panes.filter { $0 !== tab || $0.paneSummary != $0.title }.map(\.paneSummary)
+            let mark = group.remoteMark
+            let others = "  +\(group.panes.count - 1)"
+            return TabBarItem(title: tab.title + others, truncation: tab.titleTruncation,
                               state: Self.mostUrgent(group.panes.map(\.status.state)),
-                              tooltip: lines.joined(separator: "\n"), accessibilityStatus: lines.joined(separator: "; "),
-                              shortcut: shortcuts[index])
+                              tooltip: ([mark?.summary].compactMap { $0 } + lines).joined(separator: "\n"),
+                              accessibilityStatus: spoken.joined(separator: "; "), shortcut: shortcuts[index], remote: mark,
+                              shorterTitles: tab.shorterTitles.map { $0 + others }, editableTitle: tab.editableTitle)
         }
         tabBar.update(items: items, selectedIndex: activeIndex)
+        sidebar.showRemote(activeTab?.remoteMark) // the pane with the keyboard: the tree follows it
         announceBackgroundChanges()
         updateTitle()
         AppDelegate.shared.updateBadge()
@@ -487,11 +495,16 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return order.first { states.contains($0) } ?? .idle
     }
 
-    /// "Alertable.php — xCloud" while editing, "zsh — xCloud" in the terminal.
+    /// "Alertable.php — xCloud" while editing, "zsh — xCloud" in the terminal, "claude — on web-1 — xCloud"
+    /// in a remote tab (the Window menu, Mission Control and VoiceOver say where it runs), but "web-1: app —
+    /// xCloud" when the tab's name says it already.
     func updateTitle() {
         let name = project.map { ($0 as NSString).lastPathComponent }
         let focus = isEditorFocused ? editorArea.activeName : activeTab?.title
-        window?.title = [focus, name, "Next Term"].compactMap { $0 }.joined(separator: " — ")
+        let host = isEditorFocused ? nil : activeTab?.remote.flatMap { remote -> String? in
+            focus?.hasPrefix(remote.host.name + ": ") == true ? nil : "on \(remote.host.name)"
+        }
+        window?.title = [focus, host, name, "Next Term"].compactMap { $0 }.joined(separator: " — ")
     }
 
     /// Tells VoiceOver users when a background tab finishes, fails or asks for attention: the dots are

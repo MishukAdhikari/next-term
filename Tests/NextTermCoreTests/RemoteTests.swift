@@ -410,3 +410,61 @@ import Testing
         #expect(changes.stat.contains("a.txt"))
     }
 }
+
+@Suite struct RemoteLinkTests {
+    @Test func aLostConnectionWinsOverEverythingElse() {
+        #expect(RemoteLink(exited: false, disconnected: true, waiting: false, loginPrompt: true, connected: false) == .disconnected)
+    }
+
+    @Test func aShellThatEndedIsNotADroppedConnection() {
+        // `exit 1` on the host: the tab stays to show why, but Return has nothing to reconnect.
+        #expect(RemoteLink(exited: true, disconnected: false, waiting: false, loginPrompt: false, connected: true) == .ended)
+        #expect(RemoteLink(exited: true, disconnected: true, waiting: false, loginPrompt: false, connected: false) == .ended)
+        #expect(RemoteLink.ended.titleNote == nil && RemoteLink.ended.phrase == "ended" && !RemoteLink.ended.isOnItsWay)
+    }
+
+    @Test func onItsWayUntilTheHostProvesTheLogin() {
+        #expect(RemoteLink(exited: false, disconnected: false, waiting: true, loginPrompt: false, connected: false) == .waiting)
+        #expect(RemoteLink(exited: false, disconnected: false, waiting: false, loginPrompt: true, connected: false) == .logIn)
+        #expect(RemoteLink(exited: false, disconnected: false, waiting: false, loginPrompt: false, connected: false) == .connecting)
+        #expect(RemoteLink(exited: false, disconnected: false, waiting: false, loginPrompt: false, connected: true) == .connected)
+        #expect(RemoteLink.allCases.filter(\.isOnItsWay) == [.connecting, .waiting, .logIn])
+    }
+
+    @Test func titleNotesAndPhrases() {
+        // The title keeps the notes the docs name; a connection that is simply up adds none.
+        #expect(RemoteLink.allCases.map(\.titleNote) == [nil, "connecting", "waiting", "log in", "disconnected", nil])
+        #expect(RemoteLink.logIn.phrase == "waiting for you to log in")
+        #expect(RemoteLink.connected.phrase == "connected")
+    }
+
+    @Test func aSplitTabShowsItsWeakestPane() {
+        #expect(RemoteLink.weakest([.connected, .disconnected, .connecting]) == .disconnected)
+        #expect(RemoteLink.weakest([.ended, .disconnected]) == .disconnected) // the one Return brings back
+        #expect(RemoteLink.weakest([.connected, .ended, .logIn]) == .ended)
+        #expect(RemoteLink.weakest([.connected, .logIn]) == .logIn)
+        // A login waiting for you outranks a pane that is only on its way, whatever the pane order.
+        #expect(RemoteLink.weakest([.connecting, .logIn]) == .logIn)
+        #expect(RemoteLink.weakest([.waiting, .connecting]) == .connecting)
+        #expect(RemoteLink.weakest([.connected, .connected]) == .connected)
+        #expect(RemoteLink.weakest([]) == nil)
+    }
+
+    @Test func aSplitTabNamesTheHostWhoseConnectionItShows() {
+        let web1 = RemoteMark(host: "web-1", destination: "deploy@web-1", link: .connected)
+        let web2 = RemoteMark(host: "web-2", destination: "deploy@web-2", link: .disconnected)
+        #expect(RemoteMark.split(focused: web1, panes: [web1, web2]) == web2)
+        #expect(RemoteMark.split(focused: web1, panes: [web1, web2])?.summary == "Remote: web-2 (deploy@web-2), disconnected")
+        // As weak as the other panes: the focused pane's own host.
+        let web2Up = RemoteMark(host: "web-2", destination: "deploy@web-2", link: .connected)
+        #expect(RemoteMark.split(focused: web2Up, panes: [web1, web2Up]) == web2Up)
+        // The focused pane is on this Mac.
+        #expect(RemoteMark.split(focused: nil, panes: [web2]) == web2)
+        #expect(RemoteMark.split(focused: nil, panes: []) == nil)
+    }
+
+    @Test func aHostAliasNamedLikeTheHostIsSaidOnce() {
+        #expect(RemoteMark(host: "web-1", destination: "web-1", link: .connected).summary == "Remote: web-1, connected")
+        #expect(RemoteMark(host: "web-1", destination: "deploy@web-1", link: .connected).place == "web-1 (deploy@web-1)")
+    }
+}

@@ -559,15 +559,21 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         return "\(program) keeps running on \(remote.host.name), in tmux session \(remote.session). Reopen it from Shell › New Remote Tab… (Sessions on this host)."
     }
 
-    /// Where a remote tab's connection stands, when it is not simply up: for the title and list_tabs.
-    var connectionNote: String? {
-        guard remote != nil, !exited else { return nil }
-        if disconnected { return "disconnected" }
-        if waitingForConnection { return "waiting" }
-        if loginPrompt { return "log in" }
-        if !remoteConnected { return "connecting" }
-        return nil
+    /// Where a remote tab's connection stands (nil: a tab on this Mac).
+    var remoteLink: RemoteLink? {
+        guard remote != nil else { return nil }
+        return RemoteLink(exited: exited, disconnected: disconnected, waiting: waitingForConnection, loginPrompt: loginPrompt,
+                          connected: remoteConnected)
     }
+
+    /// The server mark its tab shows (nil: a tab on this Mac).
+    var remoteMark: RemoteMark? {
+        guard let remote, let remoteLink else { return nil }
+        return RemoteMark(host: remote.host.name, destination: remote.host.destination, link: remoteLink)
+    }
+
+    /// Where a remote tab's connection stands, when it is not simply up: for the title and list_tabs.
+    var connectionNote: String? { remoteLink?.titleNote }
 
     /// A folder or program name keeps both ends, like Finder; a title a program sets is prose and gives
     /// way at the end.
@@ -579,26 +585,56 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     /// The tab's name, and " · :5173" while it serves (state, so also after a name the user gave it).
     var title: String {
-        baseTitle + (servedURL.map(ServedURL.suffix) ?? "")
+        baseTitle + servedSuffix
     }
+
+    /// Shorter forms of the title, for a tab too narrow for "web-1: app (connecting)": without the host
+    /// ("app (connecting)": the server mark says it is on one), then without the note ("app": the mark's
+    /// dot says it). Only a remote tab named after its folder has them.
+    var shorterTitles: [String] {
+        guard let remoteName else { return [] }
+        let folder = remoteName.folder
+        let shorter = remoteName.note.map { [folder + " (\($0))", folder] } ?? [folder]
+        return shorter.map { $0 + servedSuffix }
+    }
+
+    /// What the rename field starts with: the name alone. Not a remote tab's connection note, which would
+    /// stay in the name ("(connecting)" long after it connected), nor the served port, which the title adds
+    /// to any name.
+    var editableTitle: String {
+        guard let remoteName else { return baseTitle }
+        return remoteName.host + ": " + remoteName.folder
+    }
+
+    private var servedSuffix: String { servedURL.map(ServedURL.suffix) ?? "" }
 
     private var baseTitle: String {
         if let userTitle, !userTitle.isEmpty { return userTitle }
         // While a program runs, its own title (Claude Code names the task) or its name.
         // At the prompt, the folder: shell themes set titles like "user@host: ~/dir" there, which say less.
-        if status.running {
-            if let programTitle, !programTitle.trimmingCharacters(in: .whitespaces).isEmpty { return String(programTitle.prefix(200)) }
-            if !status.program.isEmpty { return status.program }
-        }
-        if let remote {
-            let last = (directory as NSString).lastPathComponent
-            let name = remote.host.name + ": " + (directory == "~" || last.isEmpty ? directory : last)
-            return connectionNote.map { name + " (\($0))" } ?? name
+        if let programName { return programName }
+        if let remoteName {
+            let name = remoteName.host + ": " + remoteName.folder
+            return remoteName.note.map { name + " (\($0))" } ?? name
         }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         if directory == home { return "~" }
         let last = (directory as NSString).lastPathComponent
         return last.isEmpty ? directory : last
+    }
+
+    private var programName: String? {
+        guard status.running else { return nil }
+        if let programTitle, !programTitle.trimmingCharacters(in: .whitespaces).isEmpty { return String(programTitle.prefix(200)) }
+        return status.program.isEmpty ? nil : status.program
+    }
+
+    /// A remote tab at its prompt is named after its host and folder, with the connection's note: "web-1",
+    /// "app", "connecting". nil while a name of its own shows (the user's, a program's).
+    private var remoteName: (host: String, folder: String, note: String?)? {
+        guard let remote, userTitle?.isEmpty != false, programName == nil else { return nil }
+        let last = (directory as NSString).lastPathComponent
+        return (remote.host.name, directory == "~" || last.isEmpty ? directory : last, connectionNote)
     }
 
     var stateDescription: String {
@@ -614,12 +650,31 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         }
     }
 
+    /// The state in words, unless it is only the connection's ("Connecting", "Disconnected"): a remote tab's
+    /// mark says that, and the tooltip and VoiceOver say it once, in its words.
+    var ownStateDescription: String? {
+        guard let remoteLink, remoteLink != .connected, remoteLink != .ended else { return stateDescription }
+        return nil
+    }
+
+    /// This pane in a split tab's tooltip and VoiceOver label: "zsh: Idle", or for a pane on a server whose
+    /// connection is not up, its connection once: "web-1: app (connecting)" (the note says it), "claude:
+    /// disconnected".
+    var paneSummary: String {
+        if let ownStateDescription { return "\(title): \(ownStateDescription)" }
+        if remoteName?.note != nil { return title }
+        return remoteLink.map { "\(title): \($0.phrase)" } ?? title
+    }
+
+    /// A remote tab says where it runs right under its name.
     var tooltip: String {
-        var lines = [title, stateDescription]
+        var lines = [title]
+        if let remoteMark { lines.append(remoteMark.summary) }
+        if let ownStateDescription { lines.append(ownStateDescription) }
         if status.running && !status.command.isEmpty { lines.append(String(status.command.prefix(300))) }
-        lines.append(directory)
+        lines.append(remote == nil ? directory : "Folder on the host: \(directory)")
         if let servedURL { lines.append("Serving \(servedURL.absoluteString)") }
-        if let remote { lines.append("On \(remote.host.name) (\(remote.host.destination)), sessions kept: \(remote.keep.label)") }
+        if let remote { lines.append("Sessions kept: \(remote.keep.label)") }
         return lines.joined(separator: "\n")
     }
 
