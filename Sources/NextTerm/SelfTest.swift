@@ -55,6 +55,9 @@ enum SelfTest {
     }
 
     private static func runAll() async {
+        // The notifications checked along the way (a decision, below) come as they do by default.
+        let restoreNotificationSettings = defaultNotificationSettings()
+        defer { restoreNotificationSettings() }
         guard let c = AppDelegate.shared.controllers.first, let window = c.window else {
             check(false, "a window opens at launch")
             return

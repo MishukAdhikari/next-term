@@ -6,17 +6,25 @@ import UserNotifications
 /// each setting, and the Settings tab's controls. Posts are captured (AppDelegate.testNotifications), so
 /// nothing reaches Notification Center.
 extension SelfTest {
-    static func notificationChecks(_ c: TerminalWindowController) async {
-        guard let app = AppDelegate.shared else { return }
+    /// Settings › Notifications back to its defaults, whatever is saved (a run stopped halfway, by selftest.sh's
+    /// 10 minutes, leaves its choices behind). Call what it returns to put the saved ones back.
+    static func defaultNotificationSettings() -> () -> Void {
         let defaults = UserDefaults.standard
         let keys = NotificationSettings.Key.all
         let saved = keys.map { defaults.object(forKey: $0) }
-        defer {
+        keys.forEach(defaults.removeObject(forKey:))
+        return {
             for (key, value) in zip(keys, saved) {
                 if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
             }
         }
-        keys.forEach(defaults.removeObject(forKey:))
+    }
+
+    static func notificationChecks(_ c: TerminalWindowController) async {
+        guard let app = AppDelegate.shared else { return }
+        let defaults = UserDefaults.standard
+        let restore = defaultNotificationSettings()
+        defer { restore() }
 
         // A tab in the background: never the one on screen.
         let back = c.addTab(directory: nil, select: false)
