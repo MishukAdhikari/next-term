@@ -179,6 +179,7 @@ import Testing
         // Details: the whole message, files with status and counts; a merge against its first parent.
         let renamed = try #require(CommitLog.details(of: rename, in: work, git: git))
         #expect(renamed.message == "Rename a to b\n\nKeeps the lines, adds one." && renamed.body == "Keeps the lines, adds one.")
+        #expect(CommitLog.message(of: rename, in: work, git: git) == renamed.message)
         #expect(renamed.commit.subject == "Rename a to b" && renamed.commit.refs.contains { $0.name == "feat" })
         #expect(renamed.files == [ChangedFile(path: "b.txt", oldPath: "a.txt", status: .renamed, added: 1, removed: 0)])
         #expect(CommitLog.details(of: merge, in: work, git: git)?.files.map(\.path) == ["b.txt"])
@@ -257,6 +258,41 @@ import Testing
         #expect(CommitLog.details(of: two, in: repo.work, git: repo.git)?.isCounted == true)
     }
 
+    /// A treeless clone has no trees to list a commit's files from: it downloads the two it compares,
+    /// and none of the files in them. Without the remote, the files are not known, which is not "none".
+    @Test func aTreelessCloneFetchesOnlyTrees() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        try FileManager.default.createDirectory(atPath: repo.work + "/d/e", withIntermediateDirectories: true)
+        try repo.write("d/e/a.txt", "one\n")
+        repo.commit("One")
+        try repo.write("d/e/a.txt", "two\n")
+        let two = repo.commit("Two")
+        let blobs = ["\(two):d/e/a.txt", "\(two)~1:d/e/a.txt"].map { repo.sh(["rev-parse", $0]) }
+        let clone = repo.work + "-treeless"
+        defer { try? FileManager.default.removeItem(atPath: clone) }
+        repo.sh(["config", "uploadpack.allowFilter", "true"])
+        repo.sh(["clone", "-q", "--filter=tree:0", "--no-checkout", "file://" + repo.work, clone])
+        let local = ScratchRepo(existing: clone, git: repo.git)
+        try #require(local.sh(["cat-file", "-t", two]) == "commit")
+        let missing = { (id: String) in local.status(["cat-file", "-e", id], environment: ["GIT_NO_LAZY_FETCH": "1"]) != 0 }
+        // The message alone (Copy Message) downloads nothing.
+        #expect(CommitLog.message(of: two, in: clone, git: repo.git) == "Two" && missing(two + "^{tree}"))
+        let details = try #require(CommitLog.details(of: two, in: clone, git: repo.git))
+        #expect(details.files == [ChangedFile(path: "d/e/a.txt", status: .modified)] && !details.isCounted && details.isListed)
+        // The trees came, the files' contents did not.
+        #expect(!missing(two + "^{tree}") && blobs.allSatisfy(missing))
+
+        // Another commit, with the remote gone: its trees cannot come, so its files are not listed.
+        let again = ScratchRepo(existing: repo.work + "-treeless-2", git: repo.git)
+        defer { again.remove() }
+        repo.sh(["clone", "-q", "--filter=tree:0", "--no-checkout", "file://" + repo.work, again.work])
+        again.sh(["remote", "set-url", "origin", "file://" + repo.work + "-gone"])
+        let unknown = try #require(CommitLog.details(of: two, in: again.work, git: repo.git))
+        #expect(unknown.files.isEmpty && !unknown.isListed)
+        #expect(CommitLog.details(of: two, in: repo.work, git: repo.git)?.isListed == true)
+    }
+
     /// A file that became a link shows both sides; an added empty file is new, with nothing in it.
     @Test func aTypeChangeAndAnEmptyFile() throws {
         let repo = try #require(ScratchRepo())
@@ -290,23 +326,39 @@ struct ScratchRepo {
         sh(["init", "-q"])
     }
 
+    /// A repository already there (a clone), or to be made there.
+    init(existing work: String, git: String) {
+        self.git = git
+        self.work = work
+    }
+
     func remove() { try? FileManager.default.removeItem(atPath: work) }
 
     @discardableResult func sh(_ args: [String], name: String = "T", email: String = "t@t") -> String {
+        run(args, name: name, email: email).output
+    }
+
+    /// The exit status alone.
+    func status(_ args: [String], environment: [String: String] = [:]) -> Int32 { run(args, environment: environment).status }
+
+    private func run(_ args: [String], name: String = "T", email: String = "t@t", environment: [String: String] = [:]) -> (output: String, status: Int32) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: git)
         p.arguments = ["-C", work, "-c", "user.name=\(name)", "-c", "user.email=\(email)", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false",
                        "-c", "tag.gpgsign=false"] + args
+        if !environment.isEmpty { p.environment = ProcessInfo.processInfo.environment.merging(environment) { $1 } }
         let out = FileManager.default.temporaryDirectory.appendingPathComponent("nt-log-out-\(UUID().uuidString)")
         FileManager.default.createFile(atPath: out.path, contents: nil)
         defer { try? FileManager.default.removeItem(at: out) }
         let handle = try? FileHandle(forWritingTo: out)
         p.standardOutput = handle
         p.standardError = FileHandle.nullDevice
-        try? p.run()
+        p.standardInput = FileHandle.nullDevice
+        do { try p.run() } catch { return ("", -1) }
         p.waitUntilExit()
         try? handle?.close()
-        return ((try? String(contentsOf: out, encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let output = ((try? String(contentsOf: out, encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return (output, p.terminationStatus)
     }
 
     func write(_ path: String, _ text: String) throws {

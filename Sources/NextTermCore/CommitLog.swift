@@ -275,6 +275,8 @@ public struct CommitDetails: Equatable, Sendable {
     public var truncated = false
     /// The files' lines were counted (not in a partial clone without their contents).
     public var isCounted = true
+    /// The files were listed: not when git could not read the commit's trees (a treeless clone, offline).
+    public var isListed = true
 
     public init(commit: Commit, message: String, files: [ChangedFile] = [], truncated: Bool = false) {
         self.commit = commit
@@ -406,18 +408,30 @@ public enum CommitLog {
         // The first commit is compared with nothing (--root, an option, so before --end-of-options).
         let against = commit.parents.first.map { ["--end-of-options", $0, commit.sha] } ?? ["--root", "--end-of-options", commit.sha]
         // Counting lines and finding renames read the files. In a partial clone, those not downloaded
-        // stay so (reading a commit must not fetch); the files are then listed without counts.
+        // stay so (reading a commit must not fetch them); the files are then listed without counts.
         let noFetch = ["GIT_NO_LAZY_FETCH": "1"]
         let options = ["diff-tree", "-r", "--no-commit-id", "--raw", "-z", "--no-ext-diff", "--no-textconv"]
+        let listing = base(root) + options + against + ["--"]
         if let changes = GitRunner.run(git, base(root) + options + ["-M", "--numstat"] + against + ["--"], timeout: 30, environment: noFetch) {
             details.files = parseChanges(changes)
-        } else if let changes = GitRunner.run(git, base(root) + options + against + ["--"], timeout: 30, environment: noFetch) {
+        } else if let changes = GitRunner.run(git, listing, timeout: 30, environment: noFetch) ?? GitRunner.run(git, listing, timeout: 30) {
+            // The second run is for a treeless clone: listing the files needs the two trees, which git
+            // then downloads (trees only, never the files in them).
             details.files = parseChanges(changes)
             details.isCounted = false
+        } else {
+            details.isListed = false
         }
         details.truncated = details.files.count > fileLimit
         details.files = Array(details.files.prefix(fileLimit))
         return details
+    }
+
+    /// A commit's whole message alone, without reading its files (which a treeless clone would download).
+    public static func message(of sha: String, in root: String, git: String) -> String? {
+        let args = ["log", "--no-color", "--encoding=UTF-8", "--format=%B", "--max-count=1", "--end-of-options", sha, "--"]
+        guard let data = GitRunner.run(git, base(root) + args, timeout: 15) else { return nil }
+        return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// `diff-tree --raw --numstat -z`: the raw records (":100644 100644 a b M NUL path NUL", a rename

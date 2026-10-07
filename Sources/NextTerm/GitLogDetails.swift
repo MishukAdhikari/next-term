@@ -209,7 +209,9 @@ final class GitLogDetailsView: NSView, NSTextViewDelegate, NSTableViewDataSource
         if details.truncated {
             header.append(NSAttributedString(string: " · the first \(details.files.count.formatted()) shown", attributes: [.font: NSFont.systemFont(ofSize: 11.5), .foregroundColor: Theme.textDim]))
         }
-        if totals.files == 0 { header.setAttributedString(NSAttributedString(string: "No files changed", attributes: [.font: NSFont.systemFont(ofSize: 11.5), .foregroundColor: Theme.textDim])) }
+        // Git could not read the commit's trees (a treeless clone, offline): not the same as no files.
+        let none = details.isListed ? "No files changed" : "Could not list the files"
+        if totals.files == 0 { header.setAttributedString(NSAttributedString(string: none, attributes: [.font: NSFont.systemFont(ofSize: 11.5), .foregroundColor: Theme.textDim])) }
         filesHeader.attributedStringValue = Typography.truncating(header, .byTruncatingTail)
     }
 
