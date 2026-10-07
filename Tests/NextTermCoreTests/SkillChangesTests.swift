@@ -122,18 +122,23 @@ import Testing
     @Test func aFailedRollbackIsKeptForUndo() throws {
         let claude = try skill(".claude/skills/notes", body: "claude")
         let shared = try skill(".agents/skills/notes", body: "shared")
-        var refuse = true
+        let trashFolder = trash
         let flaky = SkillChanges(undoFile: engine.undoFile) { path in
-            // The second step's trash fails; so does the rollback's first put-away.
-            if refuse, path.hasSuffix("/.claude/skills/notes") || path.contains("staging") { throw SkillChanges.Failure(message: "busy") }
-            return try SkillChanges.folderTrash(trash)(path)
+            // The last step fails, and the Trash has just turned read-only, so the shared copy can't
+            // come back out of it either.
+            if path.hasSuffix("/.claude/skills/notes") {
+                chmod(trashFolder, 0o555)
+                throw SkillChanges.Failure(message: "busy")
+            }
+            return try SkillChanges.folderTrash(trashFolder)(path)
         }
+        defer { chmod(trashFolder, 0o755) }
         let staging = home + "/staging/notes"
         let result = flaky.apply([.copy(from: claude, to: staging), .trash(shared), .move(from: staging, to: shared), .trash(claude)], title: "Unify notes")
         guard case .failure(let failure) = result else { Issue.record("should fail"); return }
         #expect(failure.message.contains("could not put back") && !failure.message.contains("Nothing was changed"))
         #expect(flaky.lastChange != nil)
-        refuse = false
+        chmod(trashFolder, 0o755)
         try #require(ok(flaky.undo()))
         #expect(read(".agents/skills/notes/SKILL.md")?.contains("shared") == true)
         #expect(read(".claude/skills/notes/SKILL.md")?.contains("claude") == true)
@@ -197,5 +202,94 @@ import Testing
         #expect(SkillRecord.decodeList(FileManager.default.contents(atPath: file)).map(\.name) == ["a", "b"])
         try #require(ok(engine.undo()))
         #expect(SkillRecord.decodeList(FileManager.default.contents(atPath: file)).map(\.name) == ["a"])
+    }
+}
+
+/// Cases from the second verification round, each reproduced first.
+@Suite struct SkillChangesRoundTwoTests {
+    let home: String
+    let trash: String
+    let engine: SkillChanges
+
+    init() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nt-changes2-\(UUID().uuidString)").path
+        home = root + "/home"
+        trash = root + "/trash"
+        try FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
+        engine = SkillChanges(undoFile: root + "/undo.json", trash: SkillChanges.folderTrash(trash))
+    }
+
+    func skill(_ path: String, body: String = "Body") throws -> String {
+        let folder = (home as NSString).appendingPathComponent(path)
+        try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        let name = (path as NSString).lastPathComponent
+        try "---\nname: \(name)\ndescription: The \(name) skill.\n---\n\(body)\n".write(toFile: folder + "/SKILL.md", atomically: true, encoding: .utf8)
+        return folder
+    }
+
+    func succeeded(_ result: Result<Void, SkillChanges.Failure>) -> Bool {
+        if case .failure(let failure) = result { Issue.record("\(failure.message)"); return false }
+        return true
+    }
+
+    /// A later change that fails and rolls back cleanly must not erase the earlier change's Undo.
+    @Test func aCleanRollbackKeepsTheEarlierUndo() throws {
+        let first = try skill(".agents/skills/first")
+        try #require(succeeded(engine.apply([.trash(first)], title: "Remove first")))
+        let second = try skill(".claude/skills/second")
+        let trashFolder = trash
+        let failing = SkillChanges(undoFile: engine.undoFile) { path in
+            // Only the step itself fails; putting back what was done works.
+            if path.hasSuffix("/.claude/skills/second") { throw SkillChanges.Failure(message: "the Trash refused") }
+            return try SkillChanges.folderTrash(trashFolder)(path)
+        }
+        guard case .failure(let failure) = failing.apply([.copy(from: second, to: home + "/.agents/skills/second"), .trash(second)], title: "Unify second") else {
+            Issue.record("should fail"); return
+        }
+        #expect(failure.message.hasSuffix("Nothing was changed."))
+        #expect(engine.lastChange?.title == "Remove first")
+        try #require(succeeded(engine.undo()))
+        #expect(FileManager.default.fileExists(atPath: first + "/SKILL.md"))
+    }
+
+    /// A shared entry that links to the developer's own folder: Claude's link goes to the shared entry,
+    /// not through it, so Remove still finds and removes it.
+    @Test func claudesLinkPointsAtTheSharedEntryEvenWhenThatIsALink() throws {
+        let own = try skill("Code/my-skills/x")
+        try FileManager.default.createDirectory(atPath: home + "/.agents/skills", withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: home + "/.claude/skills", withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: home + "/.agents/skills/x", withDestinationPath: own)
+        try #require(succeeded(engine.apply([.link(at: home + "/.claude/skills/x", to: home + "/.agents/skills/x")], title: "Link x")))
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: home + "/.claude/skills/x") == "../../.agents/skills/x")
+        let removal = SkillInstall.removal(name: "x", inventory: SkillInventory.scan(home: home))
+        #expect(removal.contains(.trash(home + "/.claude/skills/x")))
+    }
+
+    /// A lock file that links to a dotfiles copy not checked out yet: the reason given is the missing
+    /// target, not "read-only".
+    @Test func aDanglingLockLinkSaysWhatIsMissing() throws {
+        try FileManager.default.createDirectory(atPath: home + "/.agents", withIntermediateDirectories: true)
+        let lock = home + "/.agents/.skill-lock.json"
+        try FileManager.default.createSymbolicLink(atPath: lock, withDestinationPath: "../dotfiles/skill-lock.json")
+        #expect(SkillLock.isDanglingLink(lock))
+        let entry = SkillLock.Entry(source: "a/b", sourceUrl: "u", skillPath: "SKILL.md", skillFolderHash: "h", installedAt: Date(), updatedAt: Date())
+        guard case .failure(let failure) = engine.apply([.lockEntry(path: lock, name: "x", entry: entry)], title: "Install x") else {
+            Issue.record("should refuse"); return
+        }
+        #expect(failure.message.contains("missing") && !failure.message.contains("read-only"))
+        #expect(SkillChanges.isLink(lock))
+    }
+
+    /// The Trash moved the item but did not say where: the message must not claim nothing changed.
+    @Test func aTrashWithoutALocationIsReportedHonestly() throws {
+        let shared = try skill(".agents/skills/notes", body: "the user's shared version")
+        let elsewhere = home + "/somewhere-in-the-trash"
+        let vague = SkillChanges(undoFile: engine.undoFile) { path in
+            try FileManager.default.moveItem(atPath: path, toPath: elsewhere)
+            throw SkillChanges.Failure(message: "went to the Trash, but macOS did not say where")
+        }
+        guard case .failure(let failure) = vague.apply([.trash(shared)], title: "Remove notes") else { Issue.record("should fail"); return }
+        #expect(!failure.message.contains("Nothing was changed"))
+        #expect(failure.message.contains("could not put back"))
     }
 }

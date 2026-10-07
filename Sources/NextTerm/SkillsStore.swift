@@ -39,18 +39,27 @@ enum SkillsStore {
     /// The change Undo would reverse, if any (it survives quitting).
     static var lastChange: SkillChanges.Change? { changes.lastChange }
 
-    @discardableResult
-    static func apply(_ steps: [SkillStep], title: String) -> Result<Void, Failure> {
-        let result = changes.apply(steps, title: title)
-        notify()
+    /// Changes run one at a time, off the main thread: copying, checking and hashing a large skill
+    /// takes seconds, and the window must keep answering meanwhile.
+    private static let queue = DispatchQueue(label: "NextTerm.skill-changes")
+
+    private static func run(_ work: @escaping @Sendable (SkillChanges) -> Result<Void, Failure>) async -> Result<Void, Failure> {
+        let engine = changes
+        let result = await withCheckedContinuation { (done: CheckedContinuation<Result<Void, Failure>, Never>) in
+            queue.async { done.resume(returning: work(engine)) }
+        }
+        await MainActor.run { notify() } // the views listening are AppKit views
         return result
     }
 
     @discardableResult
-    static func undo() -> Result<Void, Failure> {
-        let result = changes.undo()
-        notify()
-        return result
+    static func apply(_ steps: [SkillStep], title: String) async -> Result<Void, Failure> {
+        await run { $0.apply(steps, title: title) }
+    }
+
+    @discardableResult
+    static func undo() async -> Result<Void, Failure> {
+        await run { $0.undo() }
     }
 
     private static func notify() {

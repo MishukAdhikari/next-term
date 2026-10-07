@@ -11,7 +11,7 @@ import Foundation
 ///   left to put back is kept for Undo, which can then finish the job.
 /// - Undo first checks that everything the change left is still exactly as it left it (an exact
 ///   fingerprint that leaves nothing out), and refuses, changing nothing, when it isn't.
-public struct SkillChanges {
+public struct SkillChanges: Sendable {
     public struct Failure: Error, Equatable, Sendable {
         public let message: String
         public init(message: String) { self.message = message }
@@ -55,9 +55,9 @@ public struct SkillChanges {
     /// Where the change Undo would reverse is kept (it survives quitting).
     public let undoFile: String
     /// Moves an item to the Trash and says where it went.
-    public let trash: (String) throws -> String
+    public let trash: @Sendable (String) throws -> String
 
-    public init(undoFile: String, trash: @escaping (String) throws -> String = SkillChanges.systemTrash) {
+    public init(undoFile: String, trash: @escaping @Sendable (String) throws -> String = SkillChanges.systemTrash) {
         self.undoFile = undoFile
         self.trash = trash
     }
@@ -73,7 +73,7 @@ public struct SkillChanges {
     }
 
     /// A folder standing in for the Trash (tests, and the self-test's own home).
-    public static func folderTrash(_ folder: String) -> (String) throws -> String {
+    public static func folderTrash(_ folder: String) -> @Sendable (String) throws -> String {
         { path in
             try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
             let target = (folder as NSString).appendingPathComponent(UUID().uuidString + "-" + (path as NSString).lastPathComponent)
@@ -84,21 +84,28 @@ public struct SkillChanges {
 
     // MARK: the record
 
-    public var lastChange: Change? {
-        guard let data = FileManager.default.contents(atPath: undoFile) else { return nil }
+    /// The changes Undo can still reverse, oldest first. Normally one; when putting back a failed change
+    /// itself failed, what is left of it sits on top of the change before it, so neither is lost.
+    var changes: [Change] {
+        guard let data = FileManager.default.contents(atPath: undoFile) else { return [] }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return try? decoder.decode(Change.self, from: data)
+        if let list = try? decoder.decode([Change].self, from: data) { return list }
+        return (try? decoder.decode(Change.self, from: data)).map { [$0] } ?? []
     }
 
-    func remember(_ change: Change?) {
-        guard let change, !change.entries.isEmpty else {
+    /// The change Undo would reverse next.
+    public var lastChange: Change? { changes.last }
+
+    func store(_ list: [Change]) {
+        let kept = list.filter { !$0.entries.isEmpty }
+        guard !kept.isEmpty else {
             try? FileManager.default.removeItem(atPath: undoFile)
             return
         }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(change) else { return }
+        guard let data = try? encoder.encode(kept) else { return }
         try? FileManager.default.createDirectory(atPath: (undoFile as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
         try? data.write(to: URL(fileURLWithPath: undoFile), options: .atomic)
     }
@@ -159,6 +166,7 @@ public struct SkillChanges {
             if isLocked(info) { return "\(short) is locked (Finder's Lock). Unlock it first." }
             switch info.st_mode & S_IFMT {
             case S_IFDIR where info.st_mode & S_IWUSR == 0: return "\(short) is a read-only folder. Make it writable first."
+            case S_IFDIR where info.st_mode & (S_IRUSR | S_IXUSR) != (S_IRUSR | S_IXUSR): return "\(short) is a folder that can't be read."
             case S_IFREG where access(full, R_OK) != 0: return "\(short) can't be read."
             default: continue
             }
@@ -196,6 +204,9 @@ public struct SkillChanges {
                 made.insert(at)
             case .lockEntry(let path, _, _), .recordEntry(let path, _, _):
                 let real = Self.resolvedFile(path)
+                if real != path, !FileManager.default.fileExists(atPath: (real as NSString).deletingLastPathComponent) {
+                    return "\(SkillStep.short(path)) links to \(SkillStep.short(real)), which is missing."
+                }
                 if Self.exists(real), access(real, W_OK) != 0 { return "\(SkillStep.short(path)) is read-only." }
                 if !Self.exists(real), !Self.canCreate(in: real) { return "The folder for \(SkillStep.short(path)) is read-only." }
             }
@@ -242,10 +253,17 @@ public struct SkillChanges {
     }
 
     /// A file path with a link resolved (a lock file kept in a dotfiles folder): writes go to the real file.
+    /// A link to a file that doesn't exist yet resolves to where it points.
     static func resolvedFile(_ path: String) -> String {
-        guard isLink(path), let real = realpath(path, nil) else { return path }
-        defer { free(real) }
-        return String(cString: real)
+        guard isLink(path) else { return path }
+        if let real = realpath(path, nil) {
+            defer { free(real) }
+            return String(cString: real)
+        }
+        guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: path) else { return path }
+        if destination.hasPrefix("/") { return (destination as NSString).standardizingPath }
+        let folder = realPath((path as NSString).deletingLastPathComponent)
+        return ((folder as NSString).appendingPathComponent(destination) as NSString).standardizingPath
     }
 
     /// The real path of a folder, or of the nearest one above it that exists, plus the rest.
@@ -264,7 +282,9 @@ public struct SkillChanges {
     /// link to a dotfiles folder counts), or absolute when they share nothing below the root.
     static func linkTarget(at: String, to: String) -> String {
         let from = realPath((at as NSString).deletingLastPathComponent)
-        let target = realPath(to)
+        // The folder holding `to`, not `to` itself: a link to the shared entry must stay a link to it,
+        // even when that entry is itself a link (to the developer's own folder).
+        let target = (realPath((to as NSString).deletingLastPathComponent) as NSString).appendingPathComponent((to as NSString).lastPathComponent)
         let fromParts = from.split(separator: "/")
         let targetParts = target.split(separator: "/")
         var common = 0
@@ -294,8 +314,14 @@ public struct SkillChanges {
                         guard unlink(path) == 0 else { throw Failure(message: "Could not remove the link \(SkillStep.short(path)).") }
                         change.entries.append(.init(kind: .removedLink, path: path, other: target))
                     } else {
-                        let trashed = try trash(path)
-                        change.entries.append(.init(kind: .trashed, path: path, other: trashed))
+                        do {
+                            change.entries.append(.init(kind: .trashed, path: path, other: try trash(path)))
+                        } catch where !Self.exists(path) {
+                            // It left its place (into the Trash) but where is unknown: recorded, so putting
+                            // back reports it rather than claiming nothing changed.
+                            change.entries.append(.init(kind: .trashed, path: path, other: nil))
+                            throw error
+                        }
                     }
                 case .copy(let from, let to):
                     guard !Self.exists(to) else { throw Failure(message: "\(SkillStep.short(to)) is already there.") }
@@ -343,18 +369,19 @@ public struct SkillChanges {
                 }
             } catch {
                 let message = (error as? Failure)?.message ?? error.localizedDescription
-                let left = reverse(change.entries)
+                let left = reverse(change.entries, rollback: true)
                 if left.problems.isEmpty {
-                    remember(nil)
+                    // The disk is as it was: the earlier change's Undo stays as it is.
                     return .failure(Failure(message: "\(step.summary) failed: \(message) Nothing was changed."))
                 }
-                // What could not be put back stays recorded, so Undo can finish once the cause is fixed.
-                remember(Change(title: title, entries: left.remaining))
+                // What could not be put back stays recorded, above the earlier change, so Undo can finish
+                // this one once the cause is fixed and then still reverse the earlier one.
+                store(changes + [Change(title: title, entries: left.remaining)])
                 return .failure(Failure(message: "\(step.summary) failed: \(message) Next Term could not put back \(left.problems.joined(separator: ", ")). "
                                         + "Earlier versions are in the Trash, and Undo can try again."))
             }
         }
-        remember(change)
+        store([change])
         return .success(())
     }
 
@@ -408,18 +435,32 @@ public struct SkillChanges {
         if let blocker = undoBlocker(change) {
             return .failure(Failure(message: blocker + " Undo would overwrite that, so nothing was changed."))
         }
-        let left = reverse(change.entries)
+        let left = reverse(change.entries, rollback: false)
+        var list = changes
+        if !list.isEmpty { list.removeLast() }
         if left.problems.isEmpty {
-            remember(nil)
+            store(list)
             return .success(())
         }
-        remember(Change(title: change.title, entries: left.remaining, date: change.date))
+        store(list + [Change(title: change.title, entries: left.remaining, date: change.date)])
         return .failure(Failure(message: "Could not put back \(left.problems.joined(separator: ", ")). Undo can try again."))
     }
 
+    /// Makes a tree this change made removable again: a copy keeps its source's folder modes, and a
+    /// folder without write or search permission can't be emptied.
+    static func makeRemovable(_ path: String) {
+        var info = stat()
+        guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { return }
+        chmod(path, (info.st_mode & 0o7777) | S_IRWXU)
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? [] {
+            makeRemovable((path as NSString).appendingPathComponent(name))
+        }
+    }
+
     /// Reverses entries, newest first, and stops at the first that fails: `remaining` is that one and
-    /// everything before it (still undoable later), `problems` says what failed.
-    func reverse(_ entries: [Change.Entry]) -> (remaining: [Change.Entry], problems: [String]) {
+    /// everything before it (still undoable later), `problems` says what failed. A rollback (the same
+    /// change, moments after) deletes what it made itself; Undo moves it to the Trash.
+    func reverse(_ entries: [Change.Entry], rollback: Bool) -> (remaining: [Change.Entry], problems: [String]) {
         let manager = FileManager.default
         for index in entries.indices.reversed() {
             let entry = entries[index]
@@ -429,7 +470,14 @@ public struct SkillChanges {
                     if Self.isLink(entry.path) {
                         guard unlink(entry.path) == 0 else { throw Failure(message: "unlink") }
                     } else if Self.exists(entry.path) {
-                        _ = try trash(entry.path)
+                        if rollback {
+                            Self.makeRemovable(entry.path)
+                            try manager.removeItem(atPath: entry.path)
+                        } else {
+                            do { _ = try trash(entry.path) } catch where !Self.exists(entry.path) {
+                                // Put away, though the Trash did not say where: done.
+                            }
+                        }
                     }
                 case .moved:
                     guard let from = entry.other else { break }
@@ -441,6 +489,7 @@ public struct SkillChanges {
                     guard let trashed = entry.other else { throw Failure(message: "where it went is unknown") }
                     // Something in the way (a half-made copy): it goes to the Trash first.
                     if Self.exists(entry.path) { _ = try trash(entry.path) }
+                    guard Self.exists(trashed) else { throw Failure(message: "not in the Trash") }
                     try manager.createDirectory(atPath: (entry.path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
                     try manager.moveItem(atPath: trashed, toPath: entry.path)
                 case .removedLink:

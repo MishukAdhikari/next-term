@@ -212,11 +212,28 @@ public enum SkillTreeListing {
                 skillFolders.append((path as NSString).deletingLastPathComponent)
             }
         }
-        let found = Set(skillFolders)
+        let found = Set(skillFolders.filter(isPlainPath))
             .filter { prefix.isEmpty || $0 == prefix || $0.hasPrefix(prefix + "/") }
             .compactMap { folder in folders[folder].map { SkillFolder(path: folder, tree: $0) } }
             .sorted { $0.path < $1.path }
         return (found, json["truncated"] as? Bool ?? false)
+    }
+
+    /// tar reads `--include` as a pattern: a folder named with `*`, `?`, `[` or a backslash would match
+    /// other folders (and dodge the unpack budget), so such folders, and names with control characters,
+    /// are left out of what can be installed.
+    static func isPlainPath(_ path: String) -> Bool {
+        !path.unicodeScalars.contains { "*?[]\\".unicodeScalars.contains($0) || $0.value < 0x20 || $0.value == 0x7F }
+    }
+
+    /// A path as a tar pattern that matches only itself: the pattern characters escaped.
+    public static func tarLiteral(_ path: String) -> String {
+        var out = ""
+        for character in path {
+            if "\\*?[]".contains(character) { out.append("\\") }
+            out.append(character)
+        }
+        return out
     }
 
     /// Whether GitHub's compare answer (`compare/<sha>...<default branch>`) shows the commit on the

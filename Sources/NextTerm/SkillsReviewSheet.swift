@@ -8,7 +8,7 @@ import NextTermCore
 /// typing meant for somewhere else never installs anything.
 @MainActor
 final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
-    private let fetched: SkillsInstaller.Fetched
+    private var fetched: SkillsInstaller.Fetched
     private var ticked: Set<Int>
     private var selected = 0
     /// Called once: the names installed, or nil when the user cancelled.
@@ -305,9 +305,8 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
         guard let handle = FileHandle(forReadingAtPath: path) else { return textView.string = "" }
         let data = (try? handle.read(upToCount: 400_001)) ?? Data()
         try? handle.close()
-        let isText = String(data: data.prefix(400_000), encoding: .utf8) != nil
-        // Scripts are shown even when not valid UTF-8 (with replacement characters): they are what runs.
-        guard isText || file?.script == true || file?.executable == true else { return textView.string = "Not text: it can't be shown here." }
+        // Every file that isn't a program is shown, as text, even when not valid UTF-8 (with replacement
+        // characters): SKILL.md and the scripts are what the agent follows and runs.
         let text = String(decoding: data.prefix(400_000), as: UTF8.self)
         textView.string = SkillReview.revealHidden(text) + (data.count > 400_000 ? "\n… (the rest is not shown)" : "")
     }
@@ -332,6 +331,18 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
                 finish(chosen.map(\.name))
                 if !note.isEmpty, let parent = window?.sheetParent ?? NSApp.keyWindow { SkillsSettingsView.tell(note, in: parent, title: "Installed") }
             case .failure(let failure):
+                // The download is gone (it no longer matched the commit): this review is over.
+                guard FileManager.default.fileExists(atPath: fetched.scratch.path) else {
+                    let parent = window?.sheetParent ?? NSApp.keyWindow
+                    finish(nil)
+                    if let parent { SkillsSettingsView.tell(failure.message, in: parent) }
+                    return
+                }
+                // The skill folders changed since the review: redraw it from the disk as it is now.
+                if failure.message.hasPrefix("Your skill folders changed") {
+                    fetched = fetched.with(inventory: await SkillsStore.scan())
+                    show(selected)
+                }
                 // The download is kept after a failure, so Install can be tried again once the cause is fixed.
                 updateInstallButton()
                 if let window { SkillsSettingsView.tell(failure.message, in: window) }

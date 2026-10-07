@@ -43,3 +43,16 @@ import Testing
         #expect(!SkillTreeListing.commitIsOnBranch(compareStatus: nil))
     }
 }
+
+@Suite struct SkillTreeListingRoundTwoTests {
+    /// A folder named with a wildcard would be read by tar as a pattern: such folders are left out.
+    @Test func foldersWithPatternCharactersAreLeftOut() throws {
+        let data = Data(#"{"tree": [{"path": "skills/*", "type": "tree", "sha": "t1"}, {"path": "skills/*/SKILL.md", "type": "blob", "sha": "b"}, {"path": "skills/ok", "type": "tree", "sha": "t2"}, {"path": "skills/ok/SKILL.md", "type": "blob", "sha": "c"}]}"#.utf8)
+        #expect(try #require(SkillTreeListing.parse(data, rootTree: "r", prefix: "")).skills.map(\.path) == ["skills/ok"])
+    }
+
+    @Test func tarPatternsAreLiteral() {
+        #expect(SkillTreeListing.tarLiteral("top/skills/a*b?[c]\\d") == "top/skills/a\\*b\\?\\[c\\]\\\\d")
+        #expect(SkillTreeListing.tarLiteral("top/skills/plain") == "top/skills/plain")
+    }
+}

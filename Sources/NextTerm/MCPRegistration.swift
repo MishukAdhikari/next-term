@@ -102,7 +102,8 @@ enum LoginShell {
     /// tcsh (fish and csh reject `${VAR:-}`, and fish's "$PATH" is a list joined by spaces).
     private static let probed: (path: [String], sshAuthSock: String?, xdgStateHome: String?) = {
         defer { isProbed = true }
-        let marker = "__NEXTTERM_ENV__"
+        // A marker no variable's value can contain: unpredictable, made fresh for this probe.
+        let marker = "__NT_" + UUID().uuidString.replacingOccurrences(of: "-", with: "") + "__"
         // XDG_STATE_HOME is read on its own (printenv between markers): a newline inside another
         // variable's value could otherwise fake a line of env's output.
         let command = "/usr/bin/printf %s \(marker); /usr/bin/env; /usr/bin/printf %s \(marker); /usr/bin/printenv XDG_STATE_HOME; /usr/bin/printf %s \(marker)"

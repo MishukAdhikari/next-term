@@ -117,7 +117,7 @@ public struct SkillReview: Sendable {
             guard !binary else { continue }
             // Checked even when not valid UTF-8 (one bad byte must not hide a script's lines from the checks).
             let text = String(decoding: data, as: UTF8.self)
-            if String(data: data, encoding: .utf8) == nil, script || executable {
+            if String(data: data, encoding: .utf8) == nil {
                 flags.append(Flag(level: .warning, file: relative, text: "Not valid UTF-8: shown with replacement characters."))
             }
             flags += textFlags(text, file: relative, readByAgents: readByAgentsExtensions.contains(ext))
@@ -230,16 +230,17 @@ public struct SkillReview: Sendable {
         return (0xE0000...0xE007F).contains(v) || (0x200B...0x200F).contains(v) || (0x2060...0x2064).contains(v)
             || v == 0xFEFF || (0x202A...0x202E).contains(v) || (0x2066...0x2069).contains(v)
             || (0xE0100...0xE01EF).contains(v) || v == 0x00AD || v == 0x034F || v == 0x115F || v == 0x1160
-            || (0x180B...0x180F).contains(v) || v == 0x3164 || v == 0xFFA0
+            || (0x180B...0x180F).contains(v) || v == 0x3164 || v == 0xFFA0 || v == 0x061C
+            || (0xFE00...0xFE0D).contains(v) || (0xFFF9...0xFFFB).contains(v) || (0x1D173...0x1D17A).contains(v)
     }
 
-    /// Which scalars are hidden. A variation selector (U+FE00–FE0F) is ordinary right after an emoji
-    /// (it picks the emoji's style); anywhere else, or doubled, it is hidden.
+    /// Which scalars are hidden. Only U+FE0E and U+FE0F (text or emoji style) are ordinary, and only
+    /// right after an emoji; the other variation selectors are hidden everywhere.
     static func hiddenMask(_ scalars: [Unicode.Scalar]) -> [Bool] {
         scalars.indices.map { index in
             let scalar = scalars[index]
             if isHidden(scalar) { return true }
-            guard (0xFE00...0xFE0F).contains(scalar.value) else { return false }
+            guard scalar.value == 0xFE0E || scalar.value == 0xFE0F else { return false }
             guard index > 0 else { return true }
             let previous = scalars[index - 1]
             return (0xFE00...0xFE0F).contains(previous.value) || !previous.properties.isEmoji
@@ -249,7 +250,8 @@ public struct SkillReview: Sendable {
     static func hiddenKind(_ scalar: Unicode.Scalar) -> String {
         let v = scalar.value
         if (0xE0000...0xE007F).contains(v) { return "invisible tag letters" }
-        if (0x202A...0x202E).contains(v) || (0x2066...0x2069).contains(v) { return "direction overrides" }
+        if (0x202A...0x202E).contains(v) || (0x2066...0x2069).contains(v) || v == 0x061C { return "direction overrides" }
+        if (0xFFF9...0xFFFB).contains(v) || (0x1D173...0x1D17A).contains(v) { return "invisible format characters" }
         if (0xE0100...0xE01EF).contains(v) || (0xFE00...0xFE0F).contains(v) || (0x180B...0x180F).contains(v) { return "variation selectors" }
         if v == 0x00AD || v == 0x034F || v == 0x115F || v == 0x1160 || v == 0x3164 || v == 0xFFA0 { return "invisible fillers" }
         return "zero-width"

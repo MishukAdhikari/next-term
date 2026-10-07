@@ -52,7 +52,7 @@ extension SelfTest {
         // Unify, keeping Claude Code's version.
         guard let winner = sync?.copies.first(where: { $0.root.kind == .claude }) else { return check(false, "skills: the Claude copy is found") }
         let steps = SkillUnify.plan(sync!, winner: winner, in: inventory)
-        let applied = SkillsStore.apply(steps, title: "Unify release-notes")
+        let applied = await SkillsStore.apply(steps, title: "Unify release-notes")
         if case .failure(let failure) = applied { check(false, "skills: Unify applies", failure.message) }
         let after = SkillsStore.inventory().rows.first { $0.name == "release-notes" }
         check(read(".agents/skills/release-notes/SKILL.md")?.contains("claude version") == true && isLink(".claude/skills/release-notes"),
@@ -64,7 +64,7 @@ extension SelfTest {
         check(SkillsStore.lastChange?.title == "Unify release-notes", "skills: the change is remembered for Undo")
 
         // Undo puts every copy back as it was.
-        if case .failure(let failure) = SkillsStore.undo() { check(false, "skills: Undo applies", failure.message) }
+        if case .failure(let failure) = await SkillsStore.undo() { check(false, "skills: Undo applies", failure.message) }
         check(read(".claude/skills/release-notes/SKILL.md")?.contains("claude version") == true && !isLink(".claude/skills/release-notes")
               && read(".codex/skills/release-notes/SKILL.md")?.contains("codex version") == true
               && read(".commandcode/skills/release-notes/SKILL.md")?.contains("command code version") == true
@@ -152,8 +152,21 @@ extension SelfTest {
         let removed = await ask("remove_skill", ["request_id": removal["request_id"] as? String ?? ""])
         check(removed["status"] as? String == "removed" && !manager.fileExists(atPath: shared),
               "skills mcp: a removal the user approves goes through, and the agent hears so", "\(removal) \(removed)")
-        _ = SkillsStore.undo()
+        _ = await SkillsStore.undo()
         check(manager.fileExists(atPath: shared + "/SKILL.md"), "skills mcp: Undo puts the removed skill back")
+
+        // Decline pressed while the removal is being worked out again: the agent hears "declined" and
+        // nothing is removed.
+        SkillsMCP.quietUntil = [:]
+        let raced = await ask("remove_skill", ["name": "notes-helper"])
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        let window = SkillsMCP.open?.window
+        window?.approveButton.performClick(nil)
+        window?.declineButton.performClick(nil)
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        let racedAnswer = await ask("remove_skill", ["request_id": raced["request_id"] as? String ?? ""])
+        check(racedAnswer["status"] as? String == "declined" && manager.fileExists(atPath: shared + "/SKILL.md"),
+              "skills mcp: a Decline during the removal's re-check removes nothing", "\(racedAnswer)")
     }
 
     /// Installing from a download, without the network: a commit's files as GitHub would send them.
@@ -216,7 +229,7 @@ extension SelfTest {
               "skills: the lock file of npx skills gets the entry (other entries kept), and Next Term records the commit")
         check(!manager.fileExists(atPath: fetched.scratch.path), "skills: the download is removed after installing")
 
-        if case .failure(let failure) = SkillsStore.undo() { check(false, "skills: Undo of the install applies", failure.message) }
+        if case .failure(let failure) = await SkillsStore.undo() { check(false, "skills: Undo of the install applies", failure.message) }
         let lockAfter = try? String(contentsOfFile: lockPath, encoding: .utf8)
         check(!exists(".agents/skills/demo-skill") && !exists(".claude/skills/demo-skill") && read(".commandcode/skills/demo-skill/SKILL.md")?.contains("hand-made") == true
               && SkillLock.rawItem(lockAfter, name: "demo-skill") == nil && SkillLock.rawItem(lockAfter, name: "other") == SkillLock.rawItem(lockBefore, name: "other")
@@ -227,7 +240,7 @@ extension SelfTest {
         let (again, _) = download()
         _ = await SkillsInstaller.install(again.candidates, fetched: again, linkForClaude: false)
         try? "edited\n".write(toFile: (home as NSString).appendingPathComponent(".agents/skills/demo-skill/SKILL.md"), atomically: true, encoding: .utf8)
-        let refused = SkillsStore.undo()
+        let refused = await SkillsStore.undo()
         var refusedMessage = ""
         if case .failure(let failure) = refused { refusedMessage = failure.message }
         check(refusedMessage.contains("changed since") && read(".agents/skills/demo-skill/SKILL.md") == "edited\n",
@@ -240,6 +253,31 @@ extension SelfTest {
         check(recheck.first?.installable == false && recheck.first?.refusal?.contains("differ from the commit") == true,
               "skills: files that differ from the commit's tree are refused")
         tampered.discard()
+
+        // The skill folders change while the review is open: Install refuses rather than doing what
+        // the review never showed (a copy appearing in Codex's folder would be moved to the Trash).
+        try? manager.removeItem(atPath: (home as NSString).appendingPathComponent(".agents/skills/demo-skill"))
+        try? manager.removeItem(atPath: (home as NSString).appendingPathComponent(".claude/skills/demo-skill"))
+        let (drift, _) = download()
+        let codexCopy = (home as NSString).appendingPathComponent(".codex/skills/demo-skill")
+        try? manager.createDirectory(atPath: codexCopy, withIntermediateDirectories: true)
+        try? "---\nname: demo-skill\ndescription: Mine.\n---\ncodex\n".write(toFile: codexCopy + "/SKILL.md", atomically: true, encoding: .utf8)
+        var driftMessage = ""
+        if case .failure(let failure) = await SkillsInstaller.install(drift.candidates, fetched: drift, linkForClaude: false) { driftMessage = failure.message }
+        check(driftMessage.contains("changed since the review") && manager.fileExists(atPath: codexCopy + "/SKILL.md"),
+              "skills: Install refuses when the skill folders changed since the review", driftMessage)
+        drift.discard()
+        try? manager.removeItem(atPath: codexCopy)
+
+        // A download that no longer matches its commit ends the review: no Install button left on files that are gone.
+        let (gone, goneFolder) = download()
+        var answered: [String]?? = .none
+        let goneSheet = SkillsReviewSheet(fetched: gone) { names in answered = .some(names) }
+        try? "changed\n".write(toFile: goneFolder + "/SKILL.md", atomically: true, encoding: .utf8)
+        goneSheet.installButton.performClick(nil)
+        _ = await wait(10) { answered != nil }
+        check(answered == .some(nil) && !manager.fileExists(atPath: gone.scratch.path),
+              "skills: a review whose download changed ends instead of offering Install again", "\(String(describing: answered))")
 
         let window = SkillsWindowController()
         check(window.window?.title == "Skills" && SkillFeatured.list.count >= 10, "skills: Window › Skills opens with the Featured list")

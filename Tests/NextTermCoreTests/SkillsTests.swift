@@ -270,3 +270,47 @@ import Testing
         #expect(try row("tidy").health == .drifted)
     }
 }
+
+@Suite struct SkillHashRoundTwoTests {
+    /// Two clones with the same files but different history are not the same copy.
+    @Test func clonesWithDifferentHistoryDiffer() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nt-hash2-\(UUID().uuidString)").path
+        for (name, ref) in [("a", "1111"), ("b", "2222")] {
+            let folder = root + "/" + name
+            try FileManager.default.createDirectory(atPath: folder + "/.git/refs/heads", withIntermediateDirectories: true)
+            try "same".write(toFile: folder + "/SKILL.md", atomically: true, encoding: .utf8)
+            try "ref: refs/heads/main\n".write(toFile: folder + "/.git/HEAD", atomically: true, encoding: .utf8)
+            try ref.write(toFile: folder + "/.git/refs/heads/main", atomically: true, encoding: .utf8)
+        }
+        #expect(SkillHash.folder(root + "/a") != SkillHash.folder(root + "/b"))
+    }
+
+    /// What the installed copy is compared with leaves out caches Python writes when the skill runs.
+    @Test func runningASkillIsNotAnEdit() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("nt-edit-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: folder + "/scripts", withIntermediateDirectories: true)
+        try "print(1)\n".write(toFile: folder + "/scripts/helper.py", atomically: true, encoding: .utf8)
+        let before = SkillEdits.installedHash(folder)
+        try FileManager.default.createDirectory(atPath: folder + "/scripts/__pycache__", withIntermediateDirectories: true)
+        try "cache".write(toFile: folder + "/scripts/__pycache__/helper.cpython-314.pyc", atomically: true, encoding: .utf8)
+        #expect(SkillEdits.installedHash(folder) == before)
+    }
+
+    /// npx skills leaves out metadata.json and caches: compared blob by blob, an untouched copy is not edited.
+    @Test func npxCopiesCompareBlobByBlob() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("nt-npx-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: folder + "/rules", withIntermediateDirectories: true)
+        try "skill".write(toFile: folder + "/SKILL.md", atomically: true, encoding: .utf8)
+        try "rule".write(toFile: folder + "/rules/a.md", atomically: true, encoding: .utf8)
+        let tree: [String: SkillEdits.Blob] = [
+            "SKILL.md": .init(sha: GitHash.blob(Data("skill".utf8)), link: false),
+            "rules/a.md": .init(sha: GitHash.blob(Data("rule".utf8)), link: false),
+            "metadata.json": .init(sha: "x", link: false),
+        ]
+        #expect(SkillEdits.differs(folder, from: tree) == false)
+        try "edited".write(toFile: folder + "/rules/a.md", atomically: true, encoding: .utf8)
+        #expect(SkillEdits.differs(folder, from: tree) == true)
+        // A tree with a link can't be compared (npx copies what links point to): no verdict.
+        #expect(SkillEdits.differs(folder, from: ["l": .init(sha: "s", link: true)]) == nil)
+    }
+}

@@ -125,3 +125,34 @@ import Testing
         #expect(!SkillReview.textFlags("npx -y some-tool run", file: "x").isEmpty)
     }
 }
+
+@Suite struct SkillReviewRoundTwoTests {
+    func folder(_ files: [String: Data]) throws -> String {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nt-review2-\(UUID().uuidString)/demo").path
+        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        for (path, content) in files {
+            let full = (root as NSString).appendingPathComponent(path)
+            try FileManager.default.createDirectory(atPath: (full as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+            try content.write(to: URL(fileURLWithPath: full))
+        }
+        return root
+    }
+
+    /// One invalid byte in SKILL.md (not a script) must still be flagged.
+    @Test func invalidUTF8InAnyTextFileIsFlagged() throws {
+        var skill = Data("---\nname: demo\ndescription: D.\n---\nNotes ".utf8)
+        skill.append(0xFF)
+        skill.append(Data(" here.\n".utf8))
+        let review = SkillReview.review(folder: try folder(["SKILL.md": skill]), folderName: "demo")
+        #expect(review.flags.contains { $0.file == "SKILL.md" && $0.text.contains("Not valid UTF-8") })
+    }
+
+    /// Variation selectors other than the emoji/text pair, and the Arabic letter mark, are hidden.
+    @Test func moreHiddenCharactersAreWrittenOut() {
+        #expect(!SkillReview.textFlags("version 1\u{FE06}2\u{FE08}", file: "SKILL.md").isEmpty)
+        #expect(!SkillReview.textFlags("\u{1F600}\u{FE01}", file: "SKILL.md").isEmpty)
+        #expect(!SkillReview.textFlags("abc\u{061C}def", file: "SKILL.md").isEmpty)
+        #expect(SkillReview.revealHidden("ok ❤\u{FE0F}") == "ok ❤\u{FE0F}")
+        #expect(SkillReview.revealHidden("1\u{FE0F}\u{20E3}") == "1\u{FE0F}\u{20E3}")
+    }
+}

@@ -130,6 +130,21 @@ enum SkillsGitHub {
         return false
     }
 
+    /// Every file in a tree (a skill folder's, by its hash), with its blob hash and whether it is a link;
+    /// nil when GitHub can't say (offline, gone, cut short).
+    static func treeBlobs(owner: String, repo: String, tree: String) async -> [String: SkillEdits.Blob]? {
+        let source = SkillSource(owner: owner, repo: repo)
+        guard tree.count == 40, tree.allSatisfy(\.isHexDigit), let url = try? api(source, "git/trees/\(tree)?recursive=1"),
+              let data = try? await get(url), let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              json["truncated"] as? Bool != true, let entries = json["tree"] as? [[String: Any]] else { return nil }
+        var blobs: [String: SkillEdits.Blob] = [:]
+        for entry in entries where entry["type"] as? String == "blob" {
+            guard let path = entry["path"] as? String, let sha = entry["sha"] as? String else { continue }
+            blobs[path] = SkillEdits.Blob(sha: sha, link: entry["mode"] as? String == "120000")
+        }
+        return blobs
+    }
+
     static func info(owner: String, repo: String) async -> RepoInfo? {
         let source = SkillSource(owner: owner, repo: repo)
         guard let url = try? api(source, ""), let data = try? await get(url),
@@ -177,7 +192,8 @@ enum SkillsGitHub {
         try manager.createDirectory(at: unpacked, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         // bsdtar keeps paths inside the folder (it refuses ".." and absolute paths), does not write
         // through links, and does not restore owners. Only the skill folders are unpacked.
-        let include = wanted.flatMap { ["--include", $0, "--include", $0 + "/*"] }
+        // Patterns that match only these folders (a name may hold *, ? or [).
+        let include = wanted.map(SkillTreeListing.tarLiteral).flatMap { ["--include", $0, "--include", $0 + "/*"] }
         _ = try await tar(["-xzf", archive.path, "-C", unpacked.path, "--no-same-owner"] + include, timeout: 60)
         let folder = unpacked.appendingPathComponent(top, isDirectory: true)
         guard manager.fileExists(atPath: folder.path) else { throw Failure(message: "The downloaded files could not be unpacked.") }

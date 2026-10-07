@@ -249,15 +249,17 @@ enum SkillsMCP {
                                                details: lines.joined(separator: "\n"), approveTitle: "Remove", stopTitle: "Decline and Stop Asking"),
                                          approve: { window in
                                              window.setBusy(true)
-                                             Task {
+                                             request.task = Task {
                                                  // Worked out again now: what the user saw must still be what happens.
                                                  let (steps, _, _) = await SkillsInstaller.removal(name)
+                                                 // Declined meanwhile: the agent was told so, and nothing is removed.
+                                                 guard request.answer == nil, !Task.isCancelled else { return }
                                                  guard steps == shown else {
                                                      window.setStatus("The skill changed since this request opened. Nothing was removed.", problem: true)
                                                      window.setBusy(false)
                                                      return
                                                  }
-                                                 switch SkillsStore.apply(steps, title: "Remove \(name)") {
+                                                 switch await SkillsStore.apply(steps, title: "Remove \(name)") {
                                                  case .success:
                                                      resolve(request, ["status": "removed", "skill": name])
                                                      window.finish()

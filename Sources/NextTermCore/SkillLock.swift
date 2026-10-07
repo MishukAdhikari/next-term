@@ -16,6 +16,13 @@ public enum SkillLock {
         return (home as NSString).appendingPathComponent(".agents/.skill-lock.json")
     }
 
+    /// A link to a file that isn't there (a dotfiles copy not checked out yet): Next Term leaves it alone.
+    public static func isDanglingLink(_ path: String) -> Bool {
+        var info = stat()
+        guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFLNK else { return false }
+        return stat(path, &info) != 0
+    }
+
     public struct Entry: Equatable, Sendable {
         public var source: String
         /// "github", "local", "git"…; nil when the entry doesn't say.

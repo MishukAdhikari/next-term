@@ -270,11 +270,33 @@ public enum SkillHash {
             entries.append((relative, mode & 0o111 != 0, fileDigest(full) ?? "unreadable"))
         }
         var hasher = SHA256()
-        if manager.fileExists(atPath: (path as NSString).appendingPathComponent(".git")) { hasher.update(data: Data("git clone\0".utf8)) }
+        if let state = gitState(path) { hasher.update(data: Data(("git\0" + state + "\0").utf8)) }
         for (relative, executable, digest) in entries.sorted(by: { $0.0 < $1.0 }) {
             hasher.update(data: Data("\(relative)\0\(executable ? 1 : 0)\0\(digest)\0".utf8))
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// What defines a clone's history: HEAD, packed refs and every ref (a worktree's .git file instead),
+    /// so two clones of the same files at different commits or branches never count as identical.
+    static func gitState(_ path: String) -> String? {
+        let git = (path as NSString).appendingPathComponent(".git")
+        var isFolder: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: git, isDirectory: &isFolder) else { return nil }
+        guard isFolder.boolValue else { return "file:" + (fileDigest(git) ?? "unreadable") }
+        var lines: [String] = []
+        for name in ["HEAD", "packed-refs"] {
+            if let digest = fileDigest((git as NSString).appendingPathComponent(name)) { lines.append(name + "=" + digest) }
+        }
+        let refs = (git as NSString).appendingPathComponent("refs")
+        let walker = FileManager.default.enumerator(atPath: refs)
+        while let relative = walker?.nextObject() as? String {
+            let full = (refs as NSString).appendingPathComponent(relative)
+            var folder: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: full, isDirectory: &folder), !folder.boolValue else { continue }
+            lines.append("refs/" + relative + "=" + (fileDigest(full) ?? "unreadable"))
+        }
+        return lines.sorted().joined(separator: "\n")
     }
 
     /// SHA-256 of a file's content, read 1 MB at a time; nil when it can't be read.

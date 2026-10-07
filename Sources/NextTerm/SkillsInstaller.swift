@@ -36,6 +36,12 @@ enum SkillsInstaller {
         let projects: [String]
 
         func discard() { try? FileManager.default.removeItem(at: scratch) }
+
+        /// The same review, planned against the skill folders as they are now.
+        func with(inventory: SkillInventory) -> Fetched {
+            Fetched(resolved: resolved, info: info, scratch: scratch, candidates: candidates, lockPath: lockPath, inventory: inventory,
+                    editedSinceInstall: editedSinceInstall, projects: projects)
+        }
     }
 
     static var downloads: URL { SkillsStore.supportFolder.appendingPathComponent("skill-downloads", isDirectory: true) }
@@ -82,7 +88,7 @@ enum SkillsInstaller {
             let lockPath = await lock
             let records = records()
             let names = candidates.map(\.name)
-            let edited = await Task.detached { editedSinceInstall(names, inventory: inventory, lockPath: lockPath, records: records) }.value
+            let edited = await editedSinceInstall(names, inventory: inventory, lockPath: lockPath, records: records)
             return Fetched(resolved: resolved, info: await info, scratch: scratch, candidates: candidates, lockPath: lockPath,
                            inventory: inventory, editedSinceInstall: edited, projects: openProjects)
         } catch {
@@ -125,22 +131,24 @@ enum SkillsInstaller {
         }
     }
 
-    /// Installed skills of these names whose files differ from what was installed (from Next Term's
-    /// record, or the lock file's tree hash for a skill in a folder of its repository).
-    nonisolated static func editedSinceInstall(_ names: [String], inventory: SkillInventory, lockPath: String, records: [SkillRecord]) -> Set<String> {
+    /// Installed skills of these names whose files differ from what was installed. For Next Term's own
+    /// installs, the installed copy's tree hash (without caches Python writes when it runs) against the
+    /// recorded tree. For `npx skills` installs, file by file against the tree GitHub lists for the
+    /// recorded hash, leaving out what the CLI doesn't copy. Anything that can't be told is not a warning.
+    nonisolated static func editedSinceInstall(_ names: [String], inventory: SkillInventory, lockPath: String, records: [SkillRecord]) async -> Set<String> {
         let lock = (try? SkillLock.entries(at: lockPath).get()) ?? [:]
         var edited = Set<String>()
         for name in names {
             guard let shared = inventory.rows.first(where: { $0.name == name })?.copies.first(where: { $0.root.kind == .shared && !$0.broken }) else { continue }
-            let expected: String?
             if let record = records.first(where: { $0.name == name }) {
-                expected = record.contentHash.isEmpty ? record.tree : record.contentHash
-            } else if let entry = lock[name], entry.skillPath != "SKILL.md" {
-                expected = entry.skillFolderHash
-            } else {
-                expected = nil // a skill at a repository's root is recorded by commit: nothing to compare with
+                let expected = record.contentHash.isEmpty ? record.tree : record.contentHash
+                if SkillEdits.installedHash(shared.realPath) != expected { edited.insert(name) }
+                continue
             }
-            if let expected, GitHash.folder(shared.realPath, ignoring: [".DS_Store"]) != expected { edited.insert(name) }
+            guard let entry = lock[name], entry.sourceType == nil || entry.sourceType == "github" else { continue }
+            let parts = entry.source.split(separator: "/").map(String.init)
+            guard parts.count == 2, let blobs = await SkillsGitHub.treeBlobs(owner: parts[0], repo: parts[1], tree: entry.skillFolderHash) else { continue }
+            if SkillEdits.differs(shared.realPath, from: blobs) == true { edited.insert(name) }
         }
         return edited
     }
@@ -174,24 +182,28 @@ enum SkillsInstaller {
     }
 
     /// Puts the chosen skills in place, with their lock entries and records, as one change for Undo.
-    /// The downloaded files are checked against the commit again first (they sat on disk during the
-    /// review). The download is removed once installed; after a failure it stays, so Install can be tried again.
+    /// It installs only what the review showed: if the skill folders changed since, nothing happens and
+    /// the review is redrawn. The downloaded files are checked against the commit right before they are
+    /// copied, and the installed copy again after. The download is removed once installed; after a
+    /// failure it stays, so Install can be tried again.
     static func install(_ chosen: [Candidate], fetched: Fetched, linkForClaude: Bool) async -> Result<String, SkillsStore.Failure> {
-        let folders = chosen.map { ($0.folder, $0.found.tree) }
-        let intact = await Task.detached { folders.allSatisfy { GitHash.folder($0.0) == $0.1 } }.value
-        guard intact else {
-            fetched.discard()
-            return .failure(SkillsStore.Failure(message: "The downloaded files changed after the review. Nothing was installed; fetch it again to review it."))
-        }
         let inventory = await SkillsStore.scan()
+        for candidate in chosen {
+            let shown = plan(candidate, fetched: fetched, linkForClaude: linkForClaude)
+            let now = plan(candidate, fetched: fetched, linkForClaude: linkForClaude, inventory: inventory)
+            guard shown.steps == now.steps, shown.existing == now.existing else {
+                return .failure(SkillsStore.Failure(message: "Your skill folders changed since the review (\(candidate.name)). Nothing was installed; look at the review again."))
+            }
+        }
         let source = fetched.resolved.source
-        let now = Date()
+        let date = Date()
         var steps: [SkillStep] = []
         var notes: [String] = []
-        let lockKnown: Bool
-        switch SkillLock.entries(at: fetched.lockPath) {
-        case .success: lockKnown = true
-        case .failure:
+        var lockKnown = true
+        if SkillLock.isDanglingLink(fetched.lockPath) {
+            lockKnown = false
+            notes.append("The lock file of npx skills is a link to a missing file, so it was left alone.")
+        } else if case .failure = SkillLock.entries(at: fetched.lockPath) {
             lockKnown = false
             notes.append("The lock file of npx skills is in a format Next Term does not know, so it was left alone.")
         }
@@ -204,21 +216,33 @@ enum SkillsInstaller {
                 let entry = SkillLock.Entry(source: source.shortName, sourceUrl: source.repositoryURL.absoluteString + ".git",
                                             skillPath: candidate.found.skillPath, skillFolderHash: hash,
                                             ref: fetched.resolved.namedRef ? source.ref : nil,
-                                            installedAt: plan.existing == .update ? nil : now, updatedAt: now)
+                                            installedAt: plan.existing == .update ? nil : date, updatedAt: date)
                 steps.append(.lockEntry(path: fetched.lockPath, name: candidate.name, entry: entry))
             }
             let record = SkillRecord(name: candidate.name, owner: source.owner, repo: source.repo, path: candidate.found.path,
                                      ref: fetched.resolved.namedRef ? source.ref : nil, commit: fetched.resolved.commit, tree: candidate.found.tree,
-                                     contentHash: candidate.found.tree, installedAt: now, linkedForClaude: plan.agents.contains(.claudeCode))
+                                     contentHash: candidate.found.tree, installedAt: date, linkedForClaude: plan.agents.contains(.claudeCode))
             steps.append(.recordEntry(path: recordsFile, name: candidate.name, record: record))
         }
-        let title = chosen.count == 1 ? "Install \(chosen[0].name)" : "Install \(chosen.count) skills"
-        switch SkillsStore.apply(steps, title: title) {
-        case .success:
+        // The files sat on disk during the review: checked against the commit right before copying.
+        let folders = chosen.map { ($0.folder, $0.found.tree) }
+        let intact = await Task.detached { folders.allSatisfy { GitHash.folder($0.0) == $0.1 } }.value
+        guard intact else {
             fetched.discard()
-            return .success(notes.joined(separator: " "))
-        case .failure(let failure): return .failure(failure)
+            return .failure(SkillsStore.Failure(message: "The downloaded files changed after the review. Nothing was installed; fetch it again to review it."))
         }
+        let title = chosen.count == 1 ? "Install \(chosen[0].name)" : "Install \(chosen.count) skills"
+        if case .failure(let failure) = await SkillsStore.apply(steps, title: title) { return .failure(failure) }
+        // And what was written is what was reviewed.
+        let sharedRoot = (SkillsStore.home as NSString).appendingPathComponent(".agents/skills")
+        let written = chosen.map { ((sharedRoot as NSString).appendingPathComponent($0.name), $0.found.tree) }
+        let same = await Task.detached { written.allSatisfy { GitHash.folder($0.0) == $0.1 } }.value
+        guard same else {
+            _ = await SkillsStore.undo()
+            return .failure(SkillsStore.Failure(message: "The installed files did not match the reviewed commit, so the install was undone."))
+        }
+        fetched.discard()
+        return .success(notes.joined(separator: " "))
     }
 
     // MARK: removing

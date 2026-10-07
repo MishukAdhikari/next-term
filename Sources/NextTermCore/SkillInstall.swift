@@ -39,18 +39,32 @@ public enum SkillInstall {
         "statusline", "terminal-setup", "todos", "upgrade", "usage", "vim",
     ]
 
-    /// Where a symlink points, as an absolute path, without following any further links.
+    /// `.` and `..` worked out from the text alone. (NSString's standardizingPath follows links for `..`,
+    /// which would turn a link to the shared entry into a link to wherever that entry points.)
+    static func lexical(_ path: String) -> String {
+        var parts: [Substring] = []
+        for part in path.split(separator: "/") {
+            if part == "." { continue }
+            if part == ".." { if !parts.isEmpty { parts.removeLast() }; continue }
+            parts.append(part)
+        }
+        return "/" + parts.joined(separator: "/")
+    }
+
+    /// Where a symlink points, as an absolute path, without following any further links. Relative
+    /// targets count from the folder the link really sits in.
     static func linkDestination(_ path: String) -> String? {
         guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: path) else { return nil }
-        let folder = (path as NSString).deletingLastPathComponent
-        let absolute = destination.hasPrefix("/") ? destination : (folder as NSString).appendingPathComponent(destination)
-        return (absolute as NSString).standardizingPath
+        if destination.hasPrefix("/") { return lexical(destination) }
+        let folder = SkillChanges.realPath((path as NSString).deletingLastPathComponent)
+        return lexical((folder as NSString).appendingPathComponent(destination))
     }
 
     /// Whether an agent folder's entry is a link to the shared folder's entry for that name.
     static func linksToShared(_ copy: SkillCopy, sharedRoot: SkillRoot) -> Bool {
         guard copy.isLink, let destination = linkDestination(copy.path) else { return false }
-        return [sharedRoot.path, sharedRoot.realPath].contains { (($0 as NSString).appendingPathComponent(copy.name) as NSString).standardizingPath == destination }
+        let candidates = [sharedRoot.path, sharedRoot.realPath, SkillChanges.realPath(sharedRoot.path)]
+        return candidates.contains { lexical(($0 as NSString).appendingPathComponent(copy.name)) == destination }
     }
 
     /// The plan for putting the reviewed folder `staged` in place as `name`. `sameSource`: the lock file

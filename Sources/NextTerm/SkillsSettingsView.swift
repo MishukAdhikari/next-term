@@ -58,6 +58,10 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
 
         filter.addItems(withTitles: ["All skills", "Needs attention"])
         filter.menu?.delegate = self
+        // A long project name must not widen Settings: the popup truncates, the open menu shows it all.
+        filter.widthAnchor.constraint(lessThanOrEqualToConstant: 240).isActive = true
+        filter.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        (filter.cell as? NSPopUpButtonCell)?.lineBreakMode = .byTruncatingMiddle
         filter.target = self
         filter.action = #selector(filterChanged)
 
@@ -189,6 +193,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
             let title = names.filter { $0 == name }.count > 1 ? "Project: \(name) (\(SkillStep.short(path)))" : "Project: " + name
             let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             item.representedObject = path
+            item.toolTip = path
             menu.addItem(item)
             if path == project { filter.select(item) }
         }
@@ -312,7 +317,9 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         guard showsPersonal, let row = selectedRow, let inventory, let claudeRoot = inventory.root(.claude), let sharedRoot = inventory.root(.shared), let window else { return }
         let at = (claudeRoot.path as NSString).appendingPathComponent(row.name)
         let to = (sharedRoot.path as NSString).appendingPathComponent(row.name)
-        if case .failure(let failure) = SkillsStore.apply([.link(at: at, to: to)], title: "Link \(row.name) for Claude Code") { Self.tell(failure.message, in: window) }
+        Task {
+            if case .failure(let failure) = await SkillsStore.apply([.link(at: at, to: to)], title: "Link \(row.name) for Claude Code") { Self.tell(failure.message, in: window) }
+        }
     }
 
     /// An update: the new commit is fetched and reviewed like an install, with what changed.
@@ -365,7 +372,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
                 Task {
                     let (steps, _, _) = await SkillsInstaller.removal(row.name)
                     guard steps == shown else { return Self.tell("“\(row.name)” changed since you looked. Look again before removing it.", in: window) }
-                    if case .failure(let failure) = SkillsStore.apply(steps, title: "Remove \(row.name)") { Self.tell(failure.message, in: window) }
+                    if case .failure(let failure) = await SkillsStore.apply(steps, title: "Remove \(row.name)") { Self.tell(failure.message, in: window) }
                 }
             }
         }
@@ -392,7 +399,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { response in
             guard response == .alertFirstButtonReturn else { return }
-            if case .failure(let failure) = SkillsStore.undo() { Self.tell(failure.message, in: window) }
+            Task { if case .failure(let failure) = await SkillsStore.undo() { Self.tell(failure.message, in: window) } }
         }
     }
 
@@ -403,7 +410,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         let sheet = SkillsUnifySheet(row: row, inventory: inventory)
         sheet.begin(over: window) { steps in
             guard let steps else { return }
-            if case .failure(let failure) = SkillsStore.apply(steps, title: "Unify \(row.name)") { Self.tell(failure.message, in: window) }
+            Task { if case .failure(let failure) = await SkillsStore.apply(steps, title: "Unify \(row.name)") { Self.tell(failure.message, in: window) } }
         }
     }
 
