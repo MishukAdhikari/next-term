@@ -848,7 +848,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func post(_ notice: TabNotice, tab: TerminalTab, in controller: TerminalWindowController, appActive: Bool? = nil) {
         let settings = NotificationSettings(defaults: .standard)
         let active = appActive ?? NSApp.isActive
-        guard settings.shouldNotify(notice, appActive: active, tabVisible: controller.isOnScreen(tab)) else { return }
+        let visible = controller.isOnScreen(tab)
+        guard settings.shouldNotify(notice, appActive: active, tabVisible: visible, drivenByAgent: MCPControl.isDriven(tab)) else { return }
         let program = Typography.shortened(notice.program, to: 60)
         let title = Typography.shortened(tab.title, to: 80)
         // Which project the tab is in (or its folder), unless its title says it already.

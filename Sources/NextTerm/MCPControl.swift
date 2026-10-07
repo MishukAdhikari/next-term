@@ -164,12 +164,29 @@ enum MCPControl {
     }
     private static var lastSent: [UUID: Sent] = [:]
 
+    /// Tabs an agent drives over MCP: opened with new_tab, or given input with send_to_tab, press_keys or
+    /// answer_agent, until you type in one yourself. That agent waits for their work (wait_for_tab), so while
+    /// you are in Next Term their agents finishing is its news, not yours (NotificationSettings.shouldNotify).
+    static var driven: Set<UUID> = []
+
+    static func isDriven(_ tab: TerminalTab) -> Bool { driven.contains(tab.id) }
+
+    /// You pressed a key in the tab, or pasted into it: what happens there is yours again.
+    static func typedByUser(_ tab: TerminalTab) { driven.remove(tab.id) }
+
+    /// The tab closed.
+    static func forget(_ tab: TerminalTab) {
+        driven.remove(tab.id)
+        lastSent[tab.id] = nil
+    }
+
     private static func isBusy(_ tab: TerminalTab) -> Bool {
         !tab.exited && (tab.status.state == .working || (tab.status.running && tab.status.kind != .agent))
     }
 
     /// Input went in: watch for the work it starts (a command can start and end between two looks).
     private static func sent(to tab: TerminalTab) {
+        driven.insert(tab.id)
         lastSent[tab.id] = Sent(at: TerminalTab.now, commands: tab.status.commandsStarted)
         func look(_ count: Int) {
             guard var sent = lastSent[tab.id], !sent.sawWork else { return }
@@ -427,6 +444,7 @@ enum MCPControl {
                 tab = controller.addTab(directory: directory, select: false)
             }
         }
+        driven.insert(tab.id)
         if let title = arguments["title"] as? String, !title.isEmpty { tab.userTitle = String(title.prefix(100)) }
         controller.refresh()
         let answer = { reply(ok(["id": tab.id.uuidString.lowercased(), "directory": tab.directory, "project": (controller.project as Any?) ?? NSNull()])) }

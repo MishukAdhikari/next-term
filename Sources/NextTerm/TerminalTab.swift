@@ -8,6 +8,9 @@ final class NextTermView: LocalProcessTerminalView {
 
     var onOutput: (() -> Void)?
     var onInput: (() -> Void)?
+    /// A key you pressed in the view (TerminalWindow.sendEvent) or a paste: you, not Next Term or an agent
+    /// over MCP, which send text without either.
+    var onKeyboard: (() -> Void)?
     var onBell: (() -> Void)?
     /// Only beep for the tab the user is looking at; background tabs show a dot instead.
     var beepAllowed = true
@@ -46,6 +49,7 @@ final class NextTermView: LocalProcessTerminalView {
     /// run the rest as typed input.
     override func paste(_ sender: Any) {
         guard acceptsInput, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
+        onKeyboard?()
         let kept = String(text.unicodeScalars.filter { $0 == "\t" || $0 == "\n" || $0 == "\r" || !ShellQuote.isControl($0) })
         let lines = kept.replacingOccurrences(of: "\r\n", with: "\r").replacingOccurrences(of: "\n", with: "\r")
         send(txt: getTerminal().bracketedPasteMode ? "\u{1b}[200~" + lines + "\u{1b}[201~" : lines)
@@ -261,6 +265,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
         view.onOutput = { [weak self] in self?.status.output(at: Self.now) }
         view.onInput = { [weak self] in self?.status.input(at: Self.now) }
+        view.onKeyboard = { [weak self] in if let self { MCPControl.typedByUser(self) } }
         view.onBell = { [weak self] in self?.attention() }
         view.linkBaseDirectory = { [weak self] in self?.liveDirectory ?? NSHomeDirectory() }
         view.opensFiles = remote == nil
@@ -358,6 +363,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         execWatcher = nil
         reconnectWork?.cancel()
         reconnectWork = nil
+        MCPControl.forget(self)
         guard !exited else { return }
         exited = true
         RemoteConnection.doneConnecting(self)

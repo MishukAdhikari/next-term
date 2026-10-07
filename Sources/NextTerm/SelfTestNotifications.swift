@@ -63,6 +63,15 @@ extension SelfTest {
               "with “When an agent finishes” off, it does not, in Next Term or from another app")
         defaults.removeObject(forKey: NotificationSettings.Key.agentFinished)
 
+        // A tab another agent drives over MCP: in Next Term its agent finishing is that agent's news, not yours.
+        MCPControl.driven.insert(back.id)
+        check(posted(agent("opencode", after: 60), active: true) == nil, "an agent finishing in a tab another agent drives does not notify in Next Term")
+        let drivenAway = posted(agent("opencode", after: 60), active: false)
+        check(drivenAway?.content.body == "opencode is waiting for you", "but does from another app", drivenAway?.content.body ?? "nothing posted")
+        check(posted(decision("opencode"), active: true) != nil, "and its decisions notify in Next Term too")
+        await keyPressChecks(c, back)
+        check(posted(agent("amp", after: 60), active: true) != nil, "once you have typed in it, its agent finishing notifies you again")
+
         // A decision, whatever the threshold; off, none.
         let asked = posted(decision("claude"), active: true)
         check(asked?.content.title == "claude needs your decision" && asked?.content.body == "Do you want to make this edit to notes.md?",
@@ -114,6 +123,27 @@ extension SelfTest {
         }
 
         await settingsChecks(app)
+    }
+
+    /// A key you press in a tab an agent drives makes it yours again; text sent to it does not.
+    private static func keyPressChecks(_ c: TerminalWindowController, _ tab: TerminalTab) async {
+        tab.view.send(txt: " ")
+        check(MCPControl.isDriven(tab), "text sent to a tab is not you typing in it")
+        tab.view.send(txt: "\u{15}")
+        let shown = c.activeTab
+        c.show(tab)
+        guard let window = c.window, window.makeFirstResponder(tab.view),
+              let space = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                           windowNumber: window.windowNumber, context: nil, characters: " ", charactersIgnoringModifiers: " ",
+                                           isARepeat: false, keyCode: 49) else {
+            note("notifications: a key press in a driven tab skipped, its terminal could not take the keyboard")
+            MCPControl.typedByUser(tab)
+            return
+        }
+        window.sendEvent(space)
+        check(!MCPControl.isDriven(tab), "a key you press in a tab an agent drives makes it yours again")
+        tab.view.send(txt: "\u{15}") // the space typed at its prompt
+        if let shown { c.show(shown) }
     }
 
     /// The Settings tab: its controls show the defaults, and each one changes what is saved.

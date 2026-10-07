@@ -162,6 +162,7 @@ enum RemoteMCP {
                 NSApp.activate(ignoringOtherApps: true)
             }
         }
+        MCPControl.driven.insert(tab.id)
         if let title = arguments["title"] as? String, !title.isEmpty { tab.userTitle = String(title.prefix(100)) }
         controller.refresh()
         let answer: [String: Any] = ["id": tab.id.uuidString.lowercased(), "host": found.name, "directory": directory,

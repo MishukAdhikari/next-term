@@ -4391,6 +4391,7 @@ enum SelfTest {
         let worker = AppDelegate.shared.controllers.flatMap(\.tabs).first { $0.id.uuidString.lowercased() == workerID }
         check(!started.isError && worker?.title == "worker", "MCP: new_tab opens a titled tab in the project", started.text)
         guard let worker else { return }
+        check(MCPControl.isDriven(worker), "MCP: an agent drives the tab it opened (in Next Term, its agent finishing is not your news)")
         if let holder = AppDelegate.shared.controllers.first(where: { $0.tabs.contains { $0 === worker } }), holder.tabs.count > 1 {
             check(holder.activeTab !== worker && (holder !== owner || holder.activeTab === frontBefore),
                   "MCP: and leaves the tab you are on in front")
@@ -4604,6 +4605,7 @@ enum SelfTest {
 
         let closed = await tool("close_tab", ["tab_id": workerID])
         check(!closed.isError && !AppDelegate.shared.controllers.flatMap(\.tabs).contains { $0 === worker }, "MCP: close_tab closes an idle tab", closed.text)
+        check(!MCPControl.isDriven(worker), "MCP: and forgets that an agent drove it")
         if let editor = c.editorArea.editors.first(where: { $0.document.path == canonicalPath(file.path) }) { c.editorArea.close(editor) }
         try? FileManager.default.removeItem(at: file)
     }

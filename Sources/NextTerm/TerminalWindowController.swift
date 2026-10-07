@@ -19,6 +19,8 @@ final class TerminalWindow: NSWindow {
             onControlTab?(event.modifierFlags.contains(.shift))
             return
         }
+        // A key pressed in a terminal: you are at that tab yourself (SwiftTerm's keyDown cannot be overridden).
+        if event.type == .keyDown, let terminal = firstResponder as? NextTermView { terminal.onKeyboard?() }
         super.sendEvent(event)
     }
 }
