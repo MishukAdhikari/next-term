@@ -1966,6 +1966,9 @@ enum SelfTest {
             let own = (0..<list.numberOfRows).compactMap { list.view(atColumn: 0, row: $0, makeIfNecessary: false)?.toolTip }
             check(tip.hasPrefix(start) && outside.isEmpty && own.isEmpty, "the popup's row tooltips are the popup's, for rows in view only",
                   "\(tip.debugDescription), outside \(outside.debugDescription), on rows \(own)")
+        } else {
+            check(false, "the popup's row tooltips: row ✓ \(start) not listed, or no tooltip area",
+                  "tooltip area \(popup.rowToolTips != nil): " + rows.joined(separator: " | "))
         }
         popup.toggleFolder("local:fix")
         check(popup.rowTitles.contains("b"), "a folder opens to its branches", popup.rowTitles.joined(separator: " | "))
@@ -2144,6 +2147,9 @@ enum SelfTest {
             let own = (0..<tree.numberOfRows).compactMap { tree.view(atColumn: 0, row: $0, makeIfNecessary: false)?.toolTip }
             check(tip == "refs/heads/log/side" && outside.isEmpty && own.isEmpty, "the branch tree's tooltips are the tree's, for rows in view only",
                   "\(tip.debugDescription), outside \(outside.debugDescription), on rows \(own)")
+        } else {
+            check(false, "the branch tree's tooltips: row side not listed, or no tooltip area",
+                  "tooltip area \(log.refs.rowToolTips != nil): " + log.refs.rowTitles.joined(separator: " | "))
         }
         c.showBranches(nil)
         check(await wait(5) { c.branchPopup.isVisible && c.branchPopup.rowTitles.contains("Git Log") }, "the branch popup has a Git Log row",
