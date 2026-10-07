@@ -31,6 +31,8 @@ final class NotificationSettingsView: NSView {
         commands.target = self
         commands.action = #selector(commandsChanged)
         commands.toolTip = "A build, a test run, a script: anything that is not an agent."
+        // VoiceOver reads the popups on their own, without the label beside them.
+        commands.setAccessibilityLabel("When a command finishes or fails")
         for choice in WorkThreshold.allCases {
             threshold.addItem(withTitle: choice.title)
             threshold.lastItem?.representedObject = choice.rawValue
@@ -38,6 +40,7 @@ final class NotificationSettingsView: NSView {
         threshold.target = self
         threshold.action = #selector(thresholdChanged)
         threshold.toolTip = "For an agent or a command that finished. A decision, a bell or a program’s notification always counts."
+        threshold.setAccessibilityLabel("Only for work that took at least")
         permission.textColor = .secondaryLabelColor
         permission.font = .systemFont(ofSize: 11)
         permission.preferredMaxLayoutWidth = 400
