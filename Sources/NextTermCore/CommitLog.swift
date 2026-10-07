@@ -384,7 +384,18 @@ public enum CommitLog {
         guard let data = GitRunner.run(git, ["-C", root, "--no-optional-locks", "--literal-pathspecs", "-c", "core.quotepath=off", "diff-tree", "-r", "--no-commit-id"]
                                        + options + against + ["--"] + paths, timeout: 15) else { return nil }
         let files = UnifiedDiff.parse(String(decoding: data, as: UTF8.self))
-        return files.first { $0.newPath == path || $0.oldPath == path } ?? files.first ?? FileDiff()
+        let new = files.first { $0.newPath == path }, old = files.first { $0.oldPath == path }
+        // A file that became a link (or a link that became a file) is two patches, the old one deleted
+        // and the new one added: both halves, as one change to the path.
+        if var both = new, let old, both.isNew, old.isDeleted {
+            both.oldPath = old.oldPath
+            both.oldBlob = old.oldBlob
+            both.isBinary = both.isBinary || old.isBinary
+            both.hunks = old.hunks + both.hunks
+            both.header = old.header + both.header
+            return both
+        }
+        return new ?? old ?? files.first ?? FileDiff()
     }
 
     /// Every ref and where HEAD points, as one string: when it changes, the log is out of date. Two

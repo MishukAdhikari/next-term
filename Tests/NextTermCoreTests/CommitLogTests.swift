@@ -239,6 +239,25 @@ import Testing
         #expect(!details.isCounted && packs() == before)
         #expect(CommitLog.details(of: two, in: repo.work, git: repo.git)?.isCounted == true)
     }
+
+    /// A file that became a link shows both sides; an added empty file is new, with nothing in it.
+    @Test func aTypeChangeAndAnEmptyFile() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        try repo.write("link", "was a file\n")
+        let first = repo.commit("A file")
+        try FileManager.default.removeItem(atPath: repo.work + "/link")
+        try FileManager.default.createSymbolicLink(atPath: repo.work + "/link", withDestinationPath: "target")
+        try repo.write("empty.txt", "")
+        let second = repo.commit("A link, and an empty file")
+        let details = try #require(CommitLog.details(of: second, in: repo.work, git: repo.git))
+        #expect(details.files.map(\.path) == ["empty.txt", "link"] && details.files.map(\.status) == [.added, .typeChanged])
+        let link = try #require(CommitLog.diff(of: "link", commit: second, parent: first, in: repo.work, git: repo.git))
+        #expect(link.oldPath == "link" && link.newPath == "link" && !link.isNew && !link.isDeleted)
+        #expect(link.hunks.flatMap(\.lines).map(\.text) == ["was a file", "target"])
+        let empty = try #require(CommitLog.diff(of: "empty.txt", commit: second, parent: first, in: repo.work, git: repo.git))
+        #expect(empty.isNew && empty.newPath == "empty.txt" && empty.hunks.isEmpty)
+    }
 }
 
 /// A repository in a temporary folder, removed with `remove()`.

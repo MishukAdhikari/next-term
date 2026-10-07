@@ -325,6 +325,10 @@ final class DiffPane: NSView {
             message.stringValue = "This is a binary file: its contents cannot be compared line by line."
         } else if empty, proposal != nil {
             message.stringValue = "The proposed version is the same as the file."
+        } else if empty, commit != nil, let diff, diff.newPath != nil, diff.oldPath == nil {
+            message.stringValue = "This commit added the file, empty."
+        } else if empty, commit != nil, let diff, diff.oldPath != nil, diff.newPath == nil {
+            message.stringValue = "This commit deleted the file, which was empty."
         } else if empty, commit != nil {
             message.stringValue = "This commit changed the file’s name or mode, not its lines."
         } else if empty {
