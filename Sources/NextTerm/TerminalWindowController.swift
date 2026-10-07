@@ -1298,14 +1298,40 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// ⌥⌘B, or a click on the branch at the top of the sidebar.
     @objc func showBranches(_ sender: Any?) {
-        guard let window, let folder = gitFolder else { return NSSound.beep() }
+        guard let anchor = branchPopupAnchor, let folder = gitFolder else { return NSSound.beep() }
         if branchPopup.isVisible { return branchPopup.close() }
+        branchPopup.show(for: self, directory: folder, snapshot: sidebar.git.snapshot, anchor: anchor)
+    }
+
+    /// Under the branch name at the top of the sidebar, or near the window's top left without it.
+    private var branchPopupAnchor: NSRect? {
+        guard let window else { return nil }
         var anchor = NSRect(x: window.frame.minX + 80, y: window.frame.maxY - 44, width: 1, height: 1)
         if isSidebarVisible {
             anchor = window.convertToScreen(sidebar.header.convert(sidebar.header.bounds, to: nil))
             anchor.origin.x += sidebar.headerInset - 4
         }
-        branchPopup.show(for: self, directory: folder, snapshot: sidebar.git.snapshot, anchor: anchor)
+        return anchor
+    }
+
+    /// The branch popup for the repository at `root` (a Git Log's), searching for `query`.
+    func showBranches(at root: String, query: String) {
+        guard let anchor = branchPopupAnchor else { return }
+        branchPopup.show(for: self, directory: root, snapshot: snapshot(of: root), anchor: anchor)
+        branchPopup.query = query
+    }
+
+    /// GitActions for the repository at `root` (a Git Log's), with the branch popup's model read fresh.
+    func withGit(at root: String, _ body: @escaping (GitActions) -> Void) {
+        branchPopup.prepare(for: self, directory: root, snapshot: snapshot(of: root)) { [weak self] in
+            guard let self else { return }
+            body(GitActions(self.branchPopup))
+        }
+    }
+
+    /// The sidebar's git state, when it is of the repository at `root`.
+    private func snapshot(of root: String) -> GitSnapshot? {
+        sidebar.git.snapshot.flatMap { canonicalPath($0.root) == canonicalPath(root) ? $0 : nil }
     }
 
     private func withGit(_ body: @escaping (GitActions) -> Void) {

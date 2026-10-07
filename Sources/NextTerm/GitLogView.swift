@@ -616,14 +616,71 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
 
     // MARK: menu
 
+    /// Right-click on a commit: copy it, branch from it, check it out (GitActions, so an agent working
+    /// here is asked about first), or find it in the branch popup.
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         guard let commit = commits[safe: table.clickedRow] else { return }
-        buildMenu(menu, commit)
+        fill(menu, for: commit)
     }
 
-    /// Filled in by the commit actions (copy, branch, checkout).
-    var buildMenu: (NSMenu, Commit) -> Void = { _, _ in }
+    func fill(_ menu: NSMenu, for commit: Commit) {
+        menu.addBlock("Copy Hash") { [weak self] in self?.copy(commit.sha, saying: commit.shortSHA) }
+        menu.addBlock("Copy Message") { [weak self] in self?.copyMessage(of: commit) }
+        menu.addItem(.separator())
+        menu.addBlock("New Branch from Here…") { [weak self] in
+            self?.withActions { actions, _ in actions.askNewBranch(atCommit: commit.sha, subject: commit.subject) }
+        }
+        // Its branches can be checked out as branches; the commit itself, detached.
+        let branches = commit.refs.filter { ($0.kind == .branch && !$0.isCurrent) || $0.kind == .remote }
+        for ref in branches.prefix(6) {
+            menu.addBlock("Checkout “\(ref.name)”") { [weak self] in
+                self?.withActions { actions, model in
+                    let branch = ref.kind == .branch ? model?.local(ref.name) : model?.remotes.first { $0.name == ref.name }
+                    guard let branch else { return NSSound.beep() }
+                    if !branch.isRemote, let elsewhere = model?.otherWorktree(of: branch) { return actions.openWorktree(elsewhere) }
+                    actions.checkout(branch)
+                }
+            }
+        }
+        menu.addBlock("Checkout…") { [weak self] in
+            self?.withActions { actions, _ in actions.askCheckout(commit: commit.sha, subject: commit.subject) }
+        }
+        menu.addItem(.separator())
+        menu.addBlock("Show in Branch Popup") { [weak self] in
+            guard let self, let controller = self.window?.windowController as? TerminalWindowController else { return }
+            let branch = commit.refs.first { $0.kind == .branch } ?? commit.refs.first { $0.kind == .remote }
+            controller.showBranches(at: self.root, query: branch?.name ?? commit.shortSHA)
+        }
+    }
+
+    /// ⌘C: the selected commit's hash.
+    @objc func copy(_ sender: Any?) {
+        guard let commit = selectedCommit else { return NSSound.beep() }
+        copy(commit.sha, saying: commit.shortSHA)
+    }
+
+    private func copy(_ text: String, saying shown: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        GitToast.show("Copied \(shown)", in: window)
+    }
+
+    private func copyMessage(of commit: Commit) {
+        if let details = details.details, details.commit.sha == commit.sha { return copy(details.message, saying: "the message") }
+        guard let git = Self.git else { return }
+        let root = self.root
+        Self.queue.async { [weak self] in
+            let message = CommitLog.details(of: commit.sha, in: root, git: git, fileLimit: 0)?.message ?? commit.subject
+            DispatchQueue.main.async { self?.copy(message, saying: "the message") }
+        }
+    }
+
+    /// GitActions for this repository, with the branches read fresh.
+    private func withActions(_ body: @escaping (GitActions, BranchModel?) -> Void) {
+        guard let controller = window?.windowController as? TerminalWindowController else { return NSSound.beep() }
+        controller.withGit(at: root) { actions in body(actions, controller.branchPopup.model) }
+    }
 }
 
 /// The commit table: ↩ opens the selected commit's details.

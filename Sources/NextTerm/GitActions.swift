@@ -182,6 +182,23 @@ struct GitActions {
 
     func newBranch(from ref: BranchRef) { askNewBranch(base: ref) }
 
+    /// New Branch from Here… on a commit in the Git Log: made there, and switched to.
+    func askNewBranch(atCommit sha: String, subject: String) {
+        let existing = Set(model?.locals.map(\.name) ?? [])
+        GitPrompt.text("New Branch", info: "From commit \(sha.prefix(7)), “\(Typography.shortened(subject, to: 60))”. Next Term switches to it.",
+                       placeholder: "feat/my-change", button: "Create", over: window, check: { BranchName.problem($0, existing: existing) }) { name in
+            if let name { createBranch(name, base: BranchRef(name: sha, isRemote: false, sha: sha), switching: true) }
+        }
+    }
+
+    /// Checkout… on a commit in the Git Log: says first that it leaves you detached.
+    func askCheckout(commit sha: String, subject: String) {
+        GitPrompt.ask("Check out \(sha.prefix(7))?", info: "“\(Typography.shortened(subject, to: 80))”. You’ll be on it detached: New Branch… keeps work made there.",
+                      buttons: ["Checkout", "Cancel"], over: window) { choice in
+            if choice == 0 { checkoutRevision(sha) }
+        }
+    }
+
     func createBranch(_ name: String, base: BranchRef?, switching: Bool) {
         // A branch made from a remote one with another name doesn't track it (feat/x from origin/main).
         let noTrack = base.map { $0.isRemote && $0.shortName != name } ?? false
