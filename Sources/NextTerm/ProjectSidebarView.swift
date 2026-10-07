@@ -76,6 +76,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     private var databaseScanQueued = false
     /// Projects whose Databases group you closed: it stays closed for them.
     private var collapsedDatabaseRoots: Set<String> = []
+    private var expandDatabasesWithRoot = false
 
     /// Trees of recently shown roots, so switching between tabs in different projects keeps
     /// what was expanded and where you had scrolled.
@@ -250,8 +251,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         } else if hasRows {
             outline.reloadItem(databasesGroup, reloadChildren: true)
         }
-        if !hadRows, hasRows, !collapsedDatabaseRoots.contains(root.path), outline.isItemExpanded(root) {
-            outline.expandItem(databasesGroup)
+        if !hadRows, hasRows, !collapsedDatabaseRoots.contains(root.path) {
+            // The scan can finish before the project's own folder is listed and opened: open it then.
+            if outline.isItemExpanded(root) { outline.expandItem(databasesGroup) } else { expandDatabasesWithRoot = true }
         }
         updateToolTips()
     }
@@ -513,6 +515,10 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             if notification.name == NSOutlineView.itemDidCollapseNotification, outline.isItemExpanded(root) { collapsedDatabaseRoots.insert(root.path) }
             if notification.name == NSOutlineView.itemDidExpandNotification { collapsedDatabaseRoots.remove(root.path) }
             return
+        }
+        if item as AnyObject === root, notification.name == NSOutlineView.itemDidExpandNotification, expandDatabasesWithRoot {
+            expandDatabasesWithRoot = false
+            if !databasesGroup.items.isEmpty { outline.expandItem(databasesGroup) }
         }
         let row = outline.row(forItem: item)
         guard row >= 0, let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? FileCellView else { return }
