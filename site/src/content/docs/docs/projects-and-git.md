@@ -1,6 +1,6 @@
 ---
 title: Projects and git
-description: "Projects that reopen at launch, and git at a glance: coloured files, +12 −3 line counts, branch and ahead/behind, and file operations with undo."
+description: "Projects that reopen at launch, and git at a glance: coloured files, +12 −3 line counts, branch and ahead/behind, file operations with undo, and the databases a project’s files name."
 ---
 
 A project is a folder that a window is about. Its files stay in the sidebar, new tabs start in it, and Next Term brings it back the next time you launch. The sidebar is also where you see, at a glance, what your agents have changed.
@@ -107,6 +107,29 @@ Rename selects the name without its extension, as Finder does. Open files follow
 ### The right-click menu
 
 **Open**, **Show Changes** (for a changed file), **Open in New Tab** (**Open Folder in New Tab** for a file), **Open as Project**, **Reveal in Finder**, **New File**, **New Folder**, **Rename…**, **Move to Trash**, **Send to Agent**, **Insert Path in Terminal**, **Copy Path**, **Copy Relative Path** and **Refresh**. With several rows selected, the menu acts on all of them.
+
+## Databases
+
+When a project’s own files name a database, a **Databases** group sits at the top of its tree. Next Term finds them offline, by reading text files: it never runs the project’s code, and nothing connects until you choose a hand-off.
+
+- **What it reads:** Laravel’s `DB_*` keys and `DB_URL` (Herd projects included), `DATABASE_URL` and its family (`NEON2_DATABASE_URL`, `*_UNPOOLED`, `POSTGRES_URL_NON_POOLING`, `MYSQL_URL`, `MONGODB_URI`, `TURSO_DATABASE_URL`) and libpq’s `PG*` keys, in `.env`, `.env.local`, `.env.development` and `.env.development.local`. Also Prisma’s datasource and `prisma.config.ts`, `drizzle.config.*`, `supabase/config.toml`, `.vercel/project.json`, and SQLite files, by their header, three folders deep and outside `node_modules` and `vendor`. `.env.example` only shows the shape of a connection, when nothing else names one.
+- **Each row** shows the engine, the database’s name, the file it came from, and a badge for Vercel, Neon, Supabase or Herd. Pooled and direct URLs to the same Neon or Supabase database are one row; hand-offs use the direct one.
+- **Local or remote comes from the host, never from the file’s name.** Loopback, sockets and `*.test` hosts are local (dim), Docker and OrbStack hosts are development, and anything else is remote (amber) and treated as production. A `.env.local` that `vercel env pull` wrote can hold the production URL, and it is tagged that way.
+- **Passwords are masked everywhere:** in the tooltip (`mysql://root:•••@127.0.0.1:3306/shop`), the accessibility labels and the menus.
+
+Right-click a row, or use its ⋯ button:
+
+- **Open** a SQLite file in the read-only viewer (below).
+- **Open in TablePlus**, when it is installed. Next Term hands the connection to TablePlus itself, never to whichever app claims `mysql://`. For a remote host it asks first, and names the host.
+- **Open mysql in New Tab** or **Open psql in New Tab**, for local and development connections only. The password goes in a temporary file only you can read, the command names that file, and the file is deleted once the client starts. It is never in the command line or the tab’s environment.
+- **Open in Vercel**, when the `vercel` CLI is installed: the provider’s dashboard, through Vercel’s sign-in.
+- **Copy Connection Name** (the name, never the connection) and **Reveal Source File**.
+
+### The SQLite viewer
+
+A `.sqlite`, `.sqlite3` or `.db` file opens in a tab of its own: tables and views on the left, 1,000 rows a page on the right, and the row count. Select rows and use **Copy As** for CSV, JSON or Markdown (<kbd>⌘C</kbd> copies CSV), or **Send to Agent** (<kbd>⌥⌘K</kbd>) to type the file, the table and the selected rows into the agent’s prompt. The file is opened read-only and only read; no `-wal` or `-shm` file appears beside it.
+
+**What it never does:** run project code or `vercel env pull`, write to an env file or a database, keep a password, put one in a command line, a log or the clipboard, or listen on a port.
 
 ## File icons
 
