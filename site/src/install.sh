@@ -25,6 +25,9 @@ nt_previous=""
 nt_destination=""
 
 nt_cleanup() {
+    # Runs to the end whatever happens: a second Ctrl-C or one failed step must not strand the rest.
+    trap '' INT TERM HUP
+    set +e
     if [ -n "${nt_mount:-}" ] && [ -d "${nt_mount}" ]; then hdiutil detach "${nt_mount}" -quiet -force >/dev/null 2>&1 || true; fi
     if [ -n "${nt_work:-}" ]; then rm -rf "${nt_work}"; fi
     # Stopped halfway through (Ctrl-C): the copy goes, and the old app comes back if it was moved aside.
@@ -68,7 +71,7 @@ main() {
     major="$(sw_vers -productVersion | cut -d. -f1)"
     [ "${major:-0}" -ge 13 ] 2>/dev/null || fail "it needs macOS 13 or later (this Mac has $(sw_vers -productVersion))."
     local tool
-    for tool in curl shasum hdiutil ditto codesign ssh-keygen /usr/libexec/PlistBuddy; do
+    for tool in curl shasum hdiutil ditto codesign ssh-keygen /usr/libexec/PlistBuddy /usr/sbin/lsof; do
         command -v "${tool}" >/dev/null 2>&1 || fail "${tool} is missing."
     done
 
@@ -86,7 +89,21 @@ main() {
     fi
     local pattern='^[0-9]+(\.[0-9]+){1,3}(-[A-Za-z0-9.]+)?$'
     [[ ${version} =~ ${pattern} ]] || fail "“${version}” isn’t a version number."
-    nt_older() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | head -1)" = "$1" ]; }
+    if [ -z "${pinned}" ]; then
+        case "${version}" in *-*) fail "GitHub’s latest is the pre-release ${version}; set NEXTTERM_VERSION=${version} to install it." ;; esac
+    fi
+    # True when $1 comes before $2. A pre-release (0.8.0-rc1) comes before its release (0.8.0).
+    nt_older() {
+        [ "$1" != "$2" ] || return 1
+        local a="${1%%-*}" b="${2%%-*}"
+        if [ "${a}" = "${b}" ]; then
+            case "$1" in *-*) ;; *) return 1 ;; esac
+            case "$2" in *-*) ;; *) return 0 ;; esac
+            [ "$(printf '%s\n%s\n' "$1" "$2" | LC_ALL=C sort | head -1)" = "$1" ]
+            return
+        fi
+        [ "$(printf '%s\n%s\n' "${a}" "${b}" | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | head -1)" = "${a}" ]
+    }
     if [ -z "${pinned}" ] && nt_older "${version}" "${min_version}"; then
         fail "GitHub says the latest release is ${version}, older than ${min_version}; refusing a rollback."
     fi
@@ -95,6 +112,10 @@ main() {
 
     local target="${NEXTTERM_DIR:-/Applications}"
     if [ -z "${NEXTTERM_DIR:-}" ] && ! [ -w /Applications ]; then target="${HOME}/Applications"; fi
+    case "${target}" in /*) ;; *) target="${PWD}/${target}" ;; esac # the folder walk below needs an absolute path
+    if ! [ -d "${target}" ]; then
+        case "/${target}/" in */../*) fail "give NEXTTERM_DIR without “..”." ;; esac
+    fi
     if ! [ -d "${target}" ]; then
         # The outermost folder this run creates, so a failure can take them all away again.
         local top="${target%/}"
@@ -109,22 +130,25 @@ main() {
 
     # A running Next Term holds your terminals and agents: never replace it from under them. Every
     # process's executable is compared by file identity, so any spelling of the folder is caught.
-    local processes executable
-    processes="$(ps -axo comm=)"
-    while IFS= read -r executable; do
-        case "${executable}" in
-            *"/${app_name}/Contents/MacOS/NextTerm")
-                if [ "${executable}" -ef "${destination}/Contents/MacOS/NextTerm" ]; then
-                    fail "Next Term is running from ${target}. Use Next Term › Check for Updates…, or quit it and run this again."
-                fi ;;
-        esac
-    done <<PROCESSES
+    nt_refuse_if_running() {
+        local processes executable
+        processes="$(ps -axo comm=)"
+        while IFS= read -r executable; do
+            case "${executable}" in
+                /*"/${app_name}/Contents/MacOS/NextTerm") # a relative argv[0] is relative to that process's folder, not ours
+                    if [ "${executable}" -ef "${destination}/Contents/MacOS/NextTerm" ]; then
+                        fail "Next Term is running from ${target}. Use Next Term › Check for Updates…, or quit it and run this again."
+                    fi ;;
+            esac
+        done <<PROCESSES
 ${processes}
 PROCESSES
-    # ps shows argv[0] as typed (./NextTerm, a symlink, exec -a); lsof finds the executable itself.
-    if [ -e "${destination}/Contents/MacOS/NextTerm" ] && lsof -t -- "${destination}/Contents/MacOS/NextTerm" >/dev/null 2>&1; then
-        fail "Next Term is running from ${target}. Use Next Term › Check for Updates…, or quit it and run this again."
-    fi
+        # ps shows argv[0] as typed (./NextTerm, a symlink, exec -a); lsof finds the executable itself.
+        if [ -e "${destination}/Contents/MacOS/NextTerm" ] && /usr/sbin/lsof -t -- "${destination}/Contents/MacOS/NextTerm" >/dev/null 2>&1; then
+            fail "Next Term is running from ${target}. Use Next Term › Check for Updates…, or quit it and run this again."
+        fi
+    }
+    nt_refuse_if_running
 
     # One install into a folder at a time. nt_lock is set only once the lock is ours.
     local lock="${target}/.Next Term.install.lock"
@@ -181,6 +205,7 @@ PROCESSES
     nt_staged="$(mktemp -d "${target}/.Next Term.installing.XXXXXX")" || fail "can’t write to ${target}."
     ditto "${source}" "${nt_staged}/${app_name}" || fail "the app could not be copied to ${target}."
     codesign --verify --deep --strict "${nt_staged}/${app_name}" 2>/dev/null || fail "the copied app does not verify."
+    nt_refuse_if_running # again: it may have been opened during the download
     trap '' INT TERM HUP # the two renames are not split by a keystroke
     if [ -e "${destination}" ]; then
         nt_previous="$(mktemp -d "${target}/.Next Term.previous.XXXXXX")" || fail "can’t write to ${target}."

@@ -25,15 +25,25 @@ sum="${dmg}.sha256"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-uploaders="$(gh api "repos/${repo}/releases/tags/${tag}" --jq '.assets[] | .name + " " + .uploader.login')"
+# What is checked is what is signed: each asset is fetched by its id, and the ids are checked again just
+# before the signature goes up (a re-uploaded asset gets a new id).
+assets() { gh api "repos/${repo}/releases/tags/${tag}" --jq '.assets[] | [.name, (.id|tostring), .uploader.login] | join(" ")'; }
+listing="$(assets)"
+ids=()
 for name in "$dmg" "$sum"; do
-    grep -qxF "${name} github-actions[bot]" <<<"$uploaders" \
-        || { echo "${name} was not uploaded by the release workflow; not signing." >&2; exit 1; }
+    line="$(grep -E "^${name//./\\.} " <<<"$listing" || true)"
+    [ -n "$line" ] || { echo "${tag} has no ${name}." >&2; exit 1; }
+    read -r _ id uploader <<<"$line"
+    [ "$uploader" = "github-actions[bot]" ] || { echo "${name} was not uploaded by the release workflow; not signing." >&2; exit 1; }
+    gh api -H 'Accept: application/octet-stream' "repos/${repo}/releases/assets/${id}" > "$work/$name"
+    ids+=("$name $id")
 done
-
-gh release download "$tag" --pattern "$dmg" --pattern "$sum" --dir "$work" --clobber
 actual="$(shasum -a 256 "$work/$dmg" | awk '{ print $1 }')"
 [ "$(cat "$work/$sum")" = "${actual}  ${dmg}" ] || { echo "${sum} does not match ${dmg}; not signing." >&2; exit 1; }
 ssh-keygen -q -Y sign -f "$key" -n next-term-release "$work/$sum"
+now="$(assets)"
+for pair in "${ids[@]}"; do
+    grep -qE "^${pair//./\\.} " <<<"$now" || { echo "The release changed while it was being signed; not uploading." >&2; exit 1; }
+done
 gh release upload "$tag" "$work/$sum.sig" --clobber
 echo "Signed ${sum}: ${actual}"
