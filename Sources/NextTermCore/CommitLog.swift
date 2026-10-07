@@ -148,6 +148,9 @@ public struct CommitOrder: Equatable, Sendable {
 
 /// What the log lists.
 public struct CommitQuery: Equatable, Sendable {
+    /// "today", typed in any case with spaces around it.
+    static func isToday(_ text: String) -> Bool { text.trimmingCharacters(in: .whitespaces).lowercased() == "today" }
+
     public enum Scope: Equatable, Sendable {
         /// Every local and remote branch, every tag, and HEAD.
         case all
@@ -227,13 +230,14 @@ public struct CommitQuery: Equatable, Sendable {
         if !text.isEmpty { args.append("--grep=" + (regex ? text : escape(text))) }
         // git matches the author against "Name <email> time zone".
         if !author.isEmpty { args.append("--author=" + (exact ? "^" + escape(author) + " <" : escape(author))) }
-        // git knows no "today": it takes it for now, as it does any word it does not know, and since
-        // now lists nothing. Since today is since midnight (until today, until now, is right as it is).
+        // git knows no "today", and versions differ on what they make of it (now, or the start of the
+        // day), so it is never passed on: since today is since midnight, and until today is until now.
         if let since, !since.isEmpty {
-            let today = since.trimmingCharacters(in: .whitespaces).lowercased() == "today"
-            args.append("--since=" + (today ? "midnight" : since))
+            args.append("--since=" + (Self.isToday(since) ? "midnight" : since))
         }
-        if let until, !until.isEmpty { args.append("--until=" + until) }
+        if let until, !until.isEmpty {
+            args.append("--until=" + (Self.isToday(until) ? "now" : until))
+        }
         // Limited to paths, parents are rewritten to the nearest listed ancestors, so lines still join.
         if !paths.isEmpty { args.append("--parents") }
         switch scope {

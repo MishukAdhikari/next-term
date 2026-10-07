@@ -208,7 +208,7 @@ import Testing
     /// and until today is until now.
     @Test func sinceTodayIsSinceMidnight() throws {
         #expect(CommitQuery(since: " Today").arguments(includeHead: true).contains("--since=midnight"))
-        #expect(CommitQuery(until: "today").arguments(includeHead: true).contains("--until=today"))
+        #expect(CommitQuery(until: "Today ").arguments(includeHead: true).contains("--until=now"))
         let repo = try #require(ScratchRepo())
         defer { repo.remove() }
         try repo.write("a.txt", "a\n")
