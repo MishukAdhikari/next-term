@@ -67,7 +67,7 @@ PHP files are coloured with the grammar that also understands the HTML around `<
 ## Line height, font size and soft wrap
 
 - **Line height** is a multiple of the font’s own line height: **View › Line Height** offers 1.0, 1.15, 1.25, 1.35 (the default), 1.5, 1.75 and 2.0, and **Settings › Editor** has a slider in steps of 0.05. Every line gets the same height, with the text centred in it.
-- **Font size** is shared with the terminal: <kbd>⌘+</kbd> bigger, <kbd>⌘-</kbd> smaller, <kbd>⌘0</kbd> back to 13 pt, anywhere from 8 to 32 pt. The font is JetBrains Mono if you have it installed, and SF Mono otherwise.
+- **Font size** is shared with the terminal: <kbd>⌘+</kbd> bigger, <kbd>⌘-</kbd> smaller, <kbd>⌘0</kbd> back to 13 pt, anywhere from 8 to 32 pt. The font is JetBrains Mono if you have it installed, and SF Mono otherwise; **Settings › Editor › Font** chooses another monospaced font, and **Settings › Terminal › Font** the terminal’s.
 - **Soft wrap** (**View › Soft Wrap**, on by default) wraps long lines at the window’s edge. A wrapped line continues under its own indentation plus two columns, so a long statement still reads as one statement at its level. Line numbers stay on each line’s first row.
 
 ## Files keep their format
