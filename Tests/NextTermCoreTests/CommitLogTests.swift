@@ -204,6 +204,29 @@ import Testing
         #expect(CommitLog.resolve("v1", in: work, git: git) == one && CommitLog.resolve("nope", in: work, git: git) == nil)
     }
 
+    /// git takes "today" for now, as it takes any word it does not know: since today is since midnight,
+    /// and until today is until now.
+    @Test func sinceTodayIsSinceMidnight() throws {
+        #expect(CommitQuery(since: " Today").arguments(includeHead: true).contains("--since=midnight"))
+        #expect(CommitQuery(until: "today").arguments(includeHead: true).contains("--until=today"))
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        try repo.write("a.txt", "a\n")
+        repo.sh(["add", "-A"])
+        let earlier = "\(Int(Date().timeIntervalSince1970) - 2 * 86_400) +0000"
+        repo.sh(["commit", "-qm", "Two days ago"], environment: ["GIT_COMMITTER_DATE": earlier, "GIT_AUTHOR_DATE": earlier])
+        // Half a minute ago, so not in the same second as the query (which git's "now" would include).
+        let recent = "\(Int(Date().timeIntervalSince1970) - 30) +0000"
+        try repo.write("b.txt", "b\n")
+        repo.sh(["add", "-A"])
+        repo.sh(["commit", "-qm", "Today"], environment: ["GIT_COMMITTER_DATE": recent, "GIT_AUTHOR_DATE": recent])
+        let today = repo.sh(["rev-parse", "HEAD"])
+        // Just after midnight, half a minute ago was yesterday.
+        guard Date().timeIntervalSince(Calendar.current.startOfDay(for: Date())) > 120 else { return }
+        #expect(CommitLog.page(CommitQuery(since: "Today"), in: repo.work, git: repo.git)?.map(\.sha) == [today])
+        #expect(CommitLog.page(CommitQuery(until: "today"), in: repo.work, git: repo.git)?.count == 2)
+    }
+
     /// Paths are file names: brackets, stars and a leading colon are not pattern syntax.
     @Test func pathsAreFileNames() throws {
         let repo = try #require(ScratchRepo())
@@ -334,8 +357,8 @@ struct ScratchRepo {
 
     func remove() { try? FileManager.default.removeItem(atPath: work) }
 
-    @discardableResult func sh(_ args: [String], name: String = "T", email: String = "t@t") -> String {
-        run(args, name: name, email: email).output
+    @discardableResult func sh(_ args: [String], name: String = "T", email: String = "t@t", environment: [String: String] = [:]) -> String {
+        run(args, name: name, email: email, environment: environment).output
     }
 
     /// The exit status alone.

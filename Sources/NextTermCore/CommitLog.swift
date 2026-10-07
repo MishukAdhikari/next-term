@@ -227,7 +227,12 @@ public struct CommitQuery: Equatable, Sendable {
         if !text.isEmpty { args.append("--grep=" + (regex ? text : escape(text))) }
         // git matches the author against "Name <email> time zone".
         if !author.isEmpty { args.append("--author=" + (exact ? "^" + escape(author) + " <" : escape(author))) }
-        if let since, !since.isEmpty { args.append("--since=" + since) }
+        // git knows no "today": it takes it for now, as it does any word it does not know, and since
+        // now lists nothing. Since today is since midnight (until today, until now, is right as it is).
+        if let since, !since.isEmpty {
+            let today = since.trimmingCharacters(in: .whitespaces).lowercased() == "today"
+            args.append("--since=" + (today ? "midnight" : since))
+        }
         if let until, !until.isEmpty { args.append("--until=" + until) }
         // Limited to paths, parents are rewritten to the nearest listed ancestors, so lines still join.
         if !paths.isEmpty { args.append("--parents") }

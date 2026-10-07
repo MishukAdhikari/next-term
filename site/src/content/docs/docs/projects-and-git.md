@@ -102,7 +102,7 @@ Every git command Next Term runs for you is in **Git › Git Commands**, exactly
 | Text or hash | Commits whose message contains the text, in any case. Turn on `.*` for a regular expression. A hash (6 characters or more) shows that commit. |
 | Branch | All branches, HEAD, or one branch or tag. |
 | Author | A name from the list, that person only (**Me** is your `user.name`), or with **Other…** part of a name or an email address. |
-| Date | The last 24 hours, 7 days, 30 days or 12 months, or since or until a date (`2025-01-31`, or words git understands, such as “2 weeks ago”). |
+| Date | The last 24 hours, 7 days, 30 days or 12 months, or since or until a date (`2025-01-31`, “today”, which starts at midnight, or words git understands, such as “2 weeks ago”). |
 | Paths | Commits that changed these files or folders: chosen, typed, or the ones selected in the sidebar. |
 
 Right-click a commit for **Copy Hash**, **Copy Message**, **New Branch from Here…**, **Checkout…** (of the commit, detached, or of a branch that points at it) and **Show in Branch Popup**. Checking out and branching go through the same steps as in the branch popup, so an agent working in the folder is asked about first.
