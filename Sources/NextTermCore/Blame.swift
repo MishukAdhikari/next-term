@@ -54,8 +54,13 @@ public struct Blame: Equatable, Sendable {
 
     public init() {}
 
-    /// git's name for changes not committed yet.
-    static let zeroSHA = String(repeating: "0", count: 40)
+    /// git's name for changes not committed yet: all zeros (40 of them, or 64 with SHA-256).
+    static func isNotCommitted(_ sha: String) -> Bool { sha.allSatisfy { $0 == "0" } }
+
+    /// A commit's name: 40 hex digits, or 64 in a SHA-256 repository.
+    static func isObjectName<S: StringProtocol>(_ text: S) -> Bool {
+        (text.count == 40 || text.count == 64) && text.allSatisfy(\.isHexDigit)
+    }
 
     public func commit(_ line: Line) -> Commit? { line.sha.flatMap { commits[$0] } }
 
@@ -71,7 +76,7 @@ public struct Blame: Equatable, Sendable {
             if record.first == 0x09 { // the line's text
                 if record.contains(0) { return nil }
                 if let entry = current {
-                    let sha = entry.sha == zeroSHA ? nil : entry.sha
+                    let sha = isNotCommitted(entry.sha) ? nil : entry.sha
                     placed.append((entry.final, Line(sha: sha, originalLine: sha == nil ? 0 : entry.original)))
                 }
                 current = nil
@@ -80,7 +85,7 @@ public struct Blame: Equatable, Sendable {
             let text = String(decoding: record, as: UTF8.self)
             if current == nil {
                 let fields = text.split(separator: " ")
-                guard fields.count >= 3, fields[0].count == 40, let original = Int(fields[1]), let final = Int(fields[2]) else { continue }
+                guard fields.count >= 3, isObjectName(fields[0]), let original = Int(fields[1]), let final = Int(fields[2]) else { continue }
                 // One string per commit, shared by all of its lines.
                 let key = String(fields[0])
                 let sha = details.index(forKey: key).map { details.keys[$0] } ?? key
@@ -100,7 +105,7 @@ public struct Blame: Equatable, Sendable {
             default: break
             }
         }
-        for (sha, d) in details where sha != zeroSHA {
+        for (sha, d) in details where !isNotCommitted(sha) {
             blame.commits[sha] = Commit(sha: sha, author: d.author, authorMail: d.mail, authorTime: Date(timeIntervalSince1970: d.time),
                                         summary: d.summary, path: d.path)
         }
@@ -180,6 +185,7 @@ extension GitRunner {
         }
         guard let data else { return .failed }
         guard var blame = Blame.parse(data) else { return .binary }
+        guard !blame.lines.isEmpty || data.isEmpty else { return .failed } // output in a shape not understood
         blame.root = root
         blame.head = head
         return .annotated(blame)

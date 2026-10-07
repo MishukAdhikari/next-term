@@ -48,6 +48,10 @@ import Testing
         #expect(first.authorTime == Date(timeIntervalSince1970: 1_700_000_000))
         #expect(blame.commit(blame.lines[3])?.summary == "Second")
         #expect(Blame.parse(Data("\(ann) 1 1 1\nauthor A\n\tx\0y\n".utf8)) == nil) // binary
+        // SHA-256 names, and its 64 zeros for a line not committed.
+        let long = String(repeating: "ab", count: 32), zeros = String(repeating: "0", count: 64)
+        let sha256 = try #require(Blame.parse(Data("\(long) 1 1 1\nauthor Ann\n\ta\n\(zeros) 2 2 1\nauthor Not Committed Yet\n\tb\n".utf8)))
+        #expect(sha256.lines.map(\.sha) == [long, nil] && sha256.commits.keys.sorted() == [long])
     }
 
     @Test func compactAges() {
@@ -206,6 +210,21 @@ import Testing
         try repo.commit("Bob", "Attributes")
         guard case .annotated(let plain) = GitRunner.blame(of: repo.path + "/f.txt", git: repo.gitPath) else { return #expect(Bool(false)) }
         #expect(plain.lines.count == 2)
+    }
+    /// A repository with SHA-256 object names: 64-character hashes, and 64 zeros for lines not committed.
+    @Test func blameOfASHA256Repository() throws {
+        guard let repo = try ScratchRepo(["--object-format=sha256"]) else { return }
+        defer { repo.remove() }
+        try repo.write("f.txt", "one\ntwo\n")
+        try repo.commit("Ann", "First")
+        guard case .annotated(let blame) = GitRunner.blame(of: repo.path + "/f.txt", git: repo.gitPath) else { return #expect(Bool(false)) }
+        #expect(blame.head.count == 64 && blame.lines.count == 2)
+        #expect(blame.lines.allSatisfy { blame.commit($0)?.author == "Ann" })
+        try repo.write("f.txt", "one\nTWO\n")
+        guard case .annotated(let disk) = GitRunner.blame(of: repo.path + "/f.txt", git: repo.gitPath, workingTree: true) else {
+            return #expect(Bool(false))
+        }
+        #expect(disk.lines.map(\.isCommitted) == [true, false] && disk.commits.count == 1)
     }
 }
 
