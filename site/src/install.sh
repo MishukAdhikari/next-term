@@ -223,6 +223,15 @@ PROCESSES
 
     say "Installed Next Term ${found_version} in ${destination}"
 
+    # True when the link target $1 is Next Term's: the script inside a copy of it that is Next Term by its
+    # bundle identifier, or that has moved or gone since.
+    nt_is_ours() {
+        case "$1" in /*.app/Contents/Resources/bin/nxtrm) ;; *) return 1 ;; esac
+        local app="${1%/Contents/Resources/bin/nxtrm}"
+        [ -e "${app}" ] || return 0
+        [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${app}/Contents/Info.plist" 2>/dev/null || true)" = "${bundle_id}" ]
+    }
+
     # nxtrm for other terminals (Next Term's own tabs always have it), the way the app links it at launch.
     # PATH is walked as the shell walks it, and its first nxtrm decides: a link to this copy stays, Next
     # Term's link to another copy is repointed where it is (or, needing sudo, only a folder ahead of it
@@ -237,28 +246,27 @@ PROCESSES
             while [ "${#folder}" -gt 1 ] && [ "${folder%/}" != "${folder}" ]; do folder="${folder%/}"; done
             case "${folder}" in /*) ;; *) continue ;; esac # relative to wherever a command runs; zsh takes a ~ literally
             link="${folder}/nxtrm"
-            case "${link}" in */Contents/Resources/bin/nxtrm) continue ;; esac # a Next Term's own folder
+            case "${link}" in */*.app/Contents/Resources/bin/nxtrm) continue ;; esac # a Next Term's own folder
             if [ -L "${link}" ]; then
                 target="$(/usr/bin/readlink "${link}")" || target=""
                 if [ "${target}" = "${script}" ]; then
                     say "nxtrm is on your PATH: ${link}"
                     return 0
                 fi
-                case "${target}" in
-                    */Contents/Resources/bin/nxtrm)
-                        if ! [ -w "${folder}" ]; then
-                            [ -n "${free}" ] && break # a folder ahead of it on PATH takes the link
-                            [ -e "${link}" ] || continue # to a copy that is gone: the shell passes over it too
-                            say "${link} opens another copy of Next Term, and changing it needs your password: Next Term offers to when it opens."
-                            return 0
-                        fi
-                        if /bin/ln -sfh "${script}" "${link}"; then
-                            say "Pointed ${link} at this copy: nxtrm opens Next Term from any terminal."
-                        else
-                            say "Could not point ${link} at this copy."
-                        fi
-                        return 0 ;;
-                esac
+                if nt_is_ours "${target}"; then
+                    if ! [ -w "${folder}" ]; then
+                        [ -n "${free}" ] && break # a folder ahead of it on PATH takes the link
+                        [ -e "${link}" ] || continue # to a copy that is gone: the shell passes over it too
+                        say "${link} opens another copy of Next Term, and changing it needs your password: Next Term offers to when it opens."
+                        return 0
+                    fi
+                    if /bin/ln -sfh "${script}" "${link}"; then
+                        say "Pointed ${link} at this copy: nxtrm opens Next Term from any terminal."
+                    else
+                        say "Could not point ${link} at this copy."
+                    fi
+                    return 0
+                fi
             fi
             if [ -L "${link}" ] || [ -e "${link}" ]; then
                 say "Left ${link} as it is: that nxtrm isn’t Next Term’s."

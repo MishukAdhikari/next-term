@@ -33,9 +33,15 @@ public enum CommandLineLink {
         [home + "/.local/bin", home + "/bin", "/opt/homebrew/bin", "/usr/local/bin"]
     }
 
-    /// A link Next Term made, to some copy of the app: `…/Contents/Resources/bin/nxtrm`.
+    /// Where the script is inside the app.
+    public static let bundledPath = "/Contents/Resources/bin/" + CommandLineOpen.toolName
+
+    public static let bundleIdentifier = "me.mishuk.nextterm"
+
+    /// A link Next Term made, by its target: the script inside some copy of the app,
+    /// `/….app/Contents/Resources/bin/nxtrm`. The app also checks that a copy still there is Next Term.
     public static func isOurs(_ target: String) -> Bool {
-        target.hasSuffix("/Contents/Resources/bin/" + CommandLineOpen.toolName)
+        target.hasPrefix("/") && target.hasSuffix(".app" + bundledPath)
     }
 
     /// The folders of a PATH value, as the shell searches them: absolute ones only, without a trailing
@@ -56,9 +62,11 @@ public enum CommandLineLink {
     /// Next Term's link to another copy (repointed when its folder is writable; else only a folder ahead of
     /// it on PATH will do, or the password route), or anyone else's (left alone, and not shadowed by one of
     /// ours). Next Term's link to a copy that is gone is passed over, as the shell passes over it, unless it
-    /// can be repointed. With none, the first command folder that `isWritable` takes it.
+    /// can be repointed. With none, the first command folder that `isWritable` takes it. `isOurs` tells a
+    /// link Next Term made by its target.
     public static func plan(path: [String], home: String, script: String,
-                            isWritable: (String) -> Bool, entry: (String) -> Entry) -> Plan {
+                            isWritable: (String) -> Bool, entry: (String) -> Entry,
+                            isOurs: (String) -> Bool = CommandLineLink.isOurs) -> Plan {
         let allowed = Set(commandFolders(home: home))
         var free: String?
         for folder in folders(path) {

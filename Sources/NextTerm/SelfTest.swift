@@ -638,11 +638,12 @@ enum SelfTest {
         try? FileManager.default.removeItem(at: dir)
     }
 
-    /// A stand-in Next Term.app with only its `nxtrm` script: the script's path.
-    private static func fakeApp(_ app: String) -> String {
-        let script = app + "/Contents/Resources/bin/nxtrm"
+    /// A stand-in app with only its `nxtrm` script and bundle identifier: the script's path.
+    private static func fakeApp(_ app: String, identifier: String = CommandLineLink.bundleIdentifier) -> String {
+        let script = app + CommandLineLink.bundledPath
         try? FileManager.default.createDirectory(atPath: (script as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: script, contents: Data("#!/bin/sh\n".utf8), attributes: [.posixPermissions: 0o755])
+        NSDictionary(dictionary: ["CFBundleIdentifier": identifier]).write(toFile: app + "/Contents/Info.plist", atomically: true)
         return script
     }
 
@@ -691,6 +692,15 @@ enum SelfTest {
         let overwritten = CommandLineTool.link(tools + "/nxtrm", to: moved)
         check(taken == .taken(tools + "/nxtrm") && !overwritten && CommandLineTool.entry(at: tools + "/nxtrm") == .file,
               "nxtrm: someone else's comes first on PATH and is left alone", "\(taken)")
+
+        // Laid out like Next Term, but another app: someone else's.
+        let other = fakeApp(home + "/Other.app", identifier: "com.example.other")
+        try? fm.removeItem(atPath: tools + "/nxtrm")
+        try? fm.createSymbolicLink(atPath: tools + "/nxtrm", withDestinationPath: other)
+        let lookalike = CommandLineTool.plan(for: moved, path: path, home: home)
+        let replaced = CommandLineTool.link(tools + "/nxtrm", to: moved)
+        check(lookalike == .taken(tools + "/nxtrm") && !replaced && CommandLineTool.entry(at: tools + "/nxtrm") == .link(other),
+              "nxtrm: a link into another app laid out like Next Term is someone else's", "\(lookalike)")
 
         let none = CommandLineTool.plan(for: script, path: [own, "/usr/bin", "/bin"], home: home)
         check(none == .unavailable && CommandLineTool.entry(at: own + "/nxtrm") == .nothing,

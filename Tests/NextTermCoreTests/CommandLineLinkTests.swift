@@ -7,9 +7,10 @@ import Testing
     let stock = ["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
 
     /// The plan for a PATH, with these folders writable and these entries in them.
-    func plan(_ path: [String], writable: Set<String> = [], entries: [String: CommandLineLink.Entry] = [:]) -> CommandLineLink.Plan {
+    func plan(_ path: [String], writable: Set<String> = [], entries: [String: CommandLineLink.Entry] = [:],
+              isOurs: @escaping (String) -> Bool = CommandLineLink.isOurs) -> CommandLineLink.Plan {
         CommandLineLink.plan(path: path, home: home, script: script,
-                             isWritable: { writable.contains($0) }, entry: { entries[$0] ?? .nothing })
+                             isWritable: { writable.contains($0) }, entry: { entries[$0] ?? .nothing }, isOurs: isOurs)
     }
 
     @Test func aStockMacHasNoFolderWithoutAPassword() {
@@ -101,6 +102,21 @@ import Testing
         #expect(CommandLineLink.isOurs("/Volumes/Next Term/Next Term.app/Contents/Resources/bin/nxtrm"))
         #expect(!CommandLineLink.isOurs("/opt/tools/nxtrm"))
         #expect(!CommandLineLink.isOurs("/Applications/Next Term.app/Contents/Resources/bin/nxtrm-old"))
+        // Only inside an app, and never a relative link: Next Term makes neither.
+        #expect(!CommandLineLink.isOurs("/opt/tools/Contents/Resources/bin/nxtrm"))
+        #expect(!CommandLineLink.isOurs("../Applications/Next Term.app/Contents/Resources/bin/nxtrm"))
+    }
+
+    @Test func aLinkIntoAnotherAppLaidOutLikeNextTermIsSomeoneElses() {
+        let other = "/Applications/Other.app/Contents/Resources/bin/nxtrm"
+        let path = ["/Users/ada/.local/bin", "/opt/homebrew/bin"] + stock
+        let writable: Set = ["/Users/ada/.local/bin", "/opt/homebrew/bin"]
+        // The app tells them apart by bundle identifier.
+        let isNextTerm = { (target: String) in CommandLineLink.isOurs(target) && !target.hasPrefix("/Applications/Other.app/") }
+        #expect(plan(path, writable: writable, entries: ["/opt/homebrew/bin/nxtrm": .link(other)], isOurs: isNextTerm) == .taken("/opt/homebrew/bin/nxtrm"))
+        // Its own bin folder on PATH is not skipped as Next Term's.
+        #expect(plan(["/Applications/Other.app/Contents/Resources/bin"] + path, writable: writable, entries: [other: .file], isOurs: isNextTerm)
+                == .taken(other))
     }
 
     @Test func theOfferComesOncePerVersionUntilDeclined() {

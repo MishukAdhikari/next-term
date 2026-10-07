@@ -92,7 +92,19 @@ enum CommandLineTool {
     /// Where `nxtrm` goes for other terminals (CommandLineLink.plan). Reading the login shell's PATH can
     /// take seconds the first time: call it off the main thread.
     static func plan(for script: String, path: [String]? = nil, home: String = NSHomeDirectory()) -> CommandLineLink.Plan {
-        CommandLineLink.plan(path: path ?? searchPath, home: home, script: script, isWritable: isWritableFolder, entry: entry(at:))
+        CommandLineLink.plan(path: path ?? searchPath, home: home, script: script, isWritable: isWritableFolder, entry: entry(at:),
+                             isOurs: isOurs)
+    }
+
+    /// A link Next Term made: into a copy of the app (CommandLineLink.isOurs) that, while it is there, is
+    /// Next Term by its bundle identifier. One into a copy that has moved or gone still is.
+    static func isOurs(_ target: String) -> Bool {
+        guard CommandLineLink.isOurs(target) else { return false }
+        let app = String(target.dropLast(CommandLineLink.bundledPath.count))
+        guard FileManager.default.fileExists(atPath: app) else { return true }
+        let info = NSDictionary(contentsOfFile: app + "/Contents/Info.plist")
+        guard let identifier = info?["CFBundleIdentifier"] as? String else { return false }
+        return identifier == CommandLineLink.bundleIdentifier || identifier == Bundle.main.bundleIdentifier
     }
 
     /// The login shell's PATH; when it could not be read, the one macOS gives every login shell
@@ -131,7 +143,7 @@ enum CommandLineTool {
             return false
         case .link(let target), .brokenLink(let target):
             if target == script { return true }
-            guard CommandLineLink.isOurs(target) else { return false }
+            guard isOurs(target) else { return false }
             try? FileManager.default.removeItem(atPath: path)
         case .nothing:
             break
@@ -241,7 +253,7 @@ enum CommandLineTool {
         case .unavailable:
             break
         }
-        if let current = installedTarget, !CommandLineLink.isOurs(current) {
+        if let current = installedTarget, !isOurs(current) {
             return tell("Another “\(name)” is installed", "\(installPath) is not Next Term’s; remove it first.", style: .warning, in: window)
         }
         let directory = (installPath as NSString).deletingLastPathComponent
