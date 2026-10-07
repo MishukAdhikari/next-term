@@ -212,7 +212,7 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | Send to Agent | ⌥⌘K |
 | Indent / Outdent | ⌘] / ⌘[ (Tab / ⇧Tab on selected lines) |
 | Between editor and terminal | ⌃` |
-| Keyboard Shortcuts (change any of these) | ⌘, |
+| Keyboard Shortcuts (change any menu shortcut) | ⌘, |
 
 In the sidebar: Return renames, ⌘⌫ moves to the Trash, ⌘↓ or double-click opens (or one click: Settings ›
 Editor › Open files with a single click). Right-click for Open in New Tab, Open as Project, Reveal in Finder,

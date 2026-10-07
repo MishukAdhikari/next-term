@@ -1,6 +1,6 @@
 ---
 title: Keyboard shortcuts
-description: "Every default keyboard shortcut in Next Term, menu by menu, and how to change any of them in Settings › Keyboard Shortcuts."
+description: "Every default keyboard shortcut in Next Term, menu by menu, and how to change any menu command’s shortcut in Settings › Keyboard Shortcuts."
 head:
   - tag: title
     content: Keyboard shortcuts for Next Term on macOS
