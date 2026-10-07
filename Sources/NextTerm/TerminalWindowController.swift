@@ -103,6 +103,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         window.onControlTab = { [weak self] backwards in self?.cycleTab(by: backwards ? -1 : 1) }
         window.onFirstResponderChange = { [weak self] responder in
             guard let self, let view = responder as? NextTermView, let tab = self.tabs.first(where: { $0.view === view }) else { return }
+            if self.terminalRailed { self.expandTerminal() } // typing into a terminal behind the rail: it opens
             self.paneFocused(tab)
         }
 
@@ -128,9 +129,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             tabBar.heightAnchor.constraint(equalToConstant: TabBarView.height),
             container.topAnchor.constraint(equalTo: tabBar.bottomAnchor),
             container.leadingAnchor.constraint(equalTo: terminalPane.leadingAnchor),
-            container.trailingAnchor.constraint(equalTo: terminalPane.trailingAnchor),
+            containerTrailing,
             container.bottomAnchor.constraint(equalTo: terminalPane.bottomAnchor),
         ])
+        installRail()
         workSplit.isVertical = false
         workSplit.dividerStyle = .thin
         workSplit.delegate = self
@@ -305,13 +307,16 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         group.layout()
     }
 
-    func select(_ index: Int) {
+    /// `unfold` false: the tab comes forward without opening a terminal folded to its rail (the tab in
+    /// front closed by itself), and the keyboard stays where it is.
+    func select(_ index: Int, unfold: Bool = true) {
         guard groups.indices.contains(index) else { return }
         activeIndex = index
         let group = groups[index]
         group.focused.lastSelected = Date()
         for (i, other) in groups.enumerated() { other.view.isHidden = i != index }
-        window?.makeFirstResponder(group.focused.view)
+        // A terminal taking the keyboard opens the rail (see onFirstResponderChange).
+        if unfold || !terminalRailed { window?.makeFirstResponder(group.focused.view) }
         refreshVisibility()
         refresh()
     }
@@ -392,7 +397,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             return
         }
         if index == activeIndex {
-            select(max(0, index - 1)) // the left neighbour
+            select(max(0, index - 1), unfold: false) // the left neighbour
         } else {
             // A background tab went away: keep the current one, and keep focus where it is.
             if index < activeIndex { activeIndex -= 1 }
@@ -432,7 +437,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func refreshVisibility() {
-        let visible = userCanSeeActiveTab
+        // Folded to its rail, no terminal is on screen: what happens in the tab in front is news too.
+        let visible = userCanSeeActiveTab && !terminalRailed
         for (i, group) in groups.enumerated() {
             for tab in group.panes {
                 // Every pane of the selected tab is on screen (unless another fills the tab).
@@ -475,6 +481,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                               shortcut: shortcuts[index])
         }
         tabBar.update(items: items, selectedIndex: activeIndex)
+        updateRailMarks(items)
         announceBackgroundChanges()
         updateTitle()
         AppDelegate.shared.updateBadge()
@@ -500,7 +507,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         for (i, tab) in groups.enumerated().flatMap({ index, group in group.panes.map { (index, $0) } }) {
             let state = tab.status.state
             defer { announcedStates[tab.id] = state }
-            guard i != activeIndex, announcedStates[tab.id] != state, [.done, .failed, .attention].contains(state) else { continue }
+            guard i != activeIndex || terminalRailed, announcedStates[tab.id] != state, [.done, .failed, .attention].contains(state) else { continue }
             NSAccessibility.post(element: window as Any, notification: .announcementRequested, userInfo: [
                 .announcement: "\(tab.title): \(tab.stateDescription)",
                 .priority: NSAccessibilityPriorityLevel.high.rawValue,
@@ -728,13 +735,18 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         sidebar.headerInset = sidebarTopLeft && !isFullScreen ? 70 : 8
         let corner = sidebarTopLeft ? 8 : lights
         let editorShown = !editorArea.isHidden
+        // Folded to its rail on the left, the terminal has no bar: the editor's, just after the rail, has the corner.
+        let railedLeft = terminalRailed && terminalFirst
         // Which bar starts at the work area's top-left corner, and which bars run along its top edge.
-        let terminalAtCorner = !editorShown || terminalFirst
+        let terminalAtCorner = !editorShown || (terminalFirst && !railedLeft)
         let terminalAtTop = !editorShown || terminalPosition != .bottom
         let editorAtTop = terminalPosition != .top
         tabBar.leadingInset = terminalAtCorner ? corner : 8
         tabBar.dragsWindow = terminalAtTop
-        editorArea.tabBar.leadingInset = terminalAtCorner ? 8 : corner
+        let afterRail = max(8, corner - TerminalRail.width - workSplit.dividerThickness)
+        editorArea.tabBar.leadingInset = terminalAtCorner ? 8 : (railedLeft ? afterRail : corner)
+        // The rail itself under the traffic lights: its arrow goes below them.
+        terminalRail.topInset = railedLeft && corner > 8 ? TabBarView.height : 0
         editorArea.tabBar.dragsWindow = editorAtTop
         // The sidebar hidden: the bar at the top-left corner offers it back.
         tabBar.showsSidebarButton = !isSidebarVisible && terminalAtCorner
@@ -781,10 +793,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     // MARK: collapsing the terminal
 
-    /// The terminal folded down to its tab bar (beside the editor: a narrow strip), from the button
-    /// before its ⋯ or ⌘J. Dragging the divider works as always and unfolds it.
+    /// The terminal folded down to its tab bar (beside the editor: to the rail), from the button before
+    /// its ⋯ or ⌘J. Dragging the divider works as always and unfolds it.
     private(set) var terminalCollapsed = false
-    private var collapsedLength: CGFloat { workSplit.isVertical ? 120 : TabBarView.height }
+    private var collapsedLength: CGFloat { workSplit.isVertical ? TerminalRail.width : TabBarView.height }
     private var terminalLength: CGFloat { workSplit.isVertical ? terminalPane.frame.width : terminalPane.frame.height }
     /// The smallest the terminal may get: its tab bar while collapsed, else the usual minimum.
     private var terminalMinimum: CGFloat { terminalCollapsed ? collapsedLength : workMinimum }
@@ -798,9 +810,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         guard !editorArea.isHidden, !terminalCollapsed else { return }
         terminalCollapsed = true
         workSplit.layoutSubtreeIfNeeded()
+        containerWidth.constant = container.frame.width // what the terminals keep behind the rail
         let length = workSplit.isVertical ? workSplit.bounds.width : workSplit.bounds.height
         workSplit.setPosition(terminalFirst ? collapsedLength : length - collapsedLength - workSplit.dividerThickness, ofDividerAt: 0)
         if isTerminalFocused, let view = editorArea.activeTextView { window?.makeFirstResponder(view) }
+        // Behind the rail nothing of the terminal shows to type into: whatever the editor has in front takes the keyboard.
+        if isTerminalFocused, terminalRailed { editorArea.select(editorArea.activeIndex) }
         updateCollapseButton()
     }
 
@@ -830,6 +845,63 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         tabBar.setCollapseButton(symbol: "chevron.\(terminalCollapsed ? away : toward)",
                                  toolTip: terminalCollapsed ? "Expand the terminal (⌘J)" : "Collapse the terminal (⌘J)")
         updateUpdateButton()
+        updateRail()
+    }
+
+    // MARK: the rail
+
+    /// The terminal folded beside the editor: a slim bar at the window's edge with each tab's mark.
+    let terminalRail = TerminalRail(frame: NSRect(x: 0, y: 0, width: TerminalRail.width, height: 600))
+    var terminalRailed: Bool { terminalCollapsed && workSplit.isVertical }
+    /// Behind the rail the terminals keep the width they had: squeezed to it they would wrap every line,
+    /// and an agent's screen could no longer be read for its status.
+    private lazy var containerTrailing = container.trailingAnchor.constraint(equalTo: terminalPane.trailingAnchor)
+    private lazy var containerWidth = container.widthAnchor.constraint(equalToConstant: workMinimum)
+
+    private func installRail() {
+        terminalRail.isHidden = true
+        terminalRail.translatesAutoresizingMaskIntoConstraints = false
+        terminalPane.addSubview(terminalRail) // over the tab bar and the terminals
+        NSLayoutConstraint.activate([
+            terminalRail.topAnchor.constraint(equalTo: terminalPane.topAnchor),
+            terminalRail.leadingAnchor.constraint(equalTo: terminalPane.leadingAnchor),
+            terminalRail.trailingAnchor.constraint(equalTo: terminalPane.trailingAnchor),
+            terminalRail.bottomAnchor.constraint(equalTo: terminalPane.bottomAnchor),
+        ])
+        terminalRail.onExpand = { [weak self] in self?.expandTerminal() }
+        terminalRail.onSelect = { [weak self] index in self?.select(index) }
+    }
+
+    /// The tab bar's tabs as the rail's marks: the same state, the title and state as the tooltip.
+    private func updateRailMarks(_ items: [TabBarItem]) {
+        var marks: [TerminalRail.Mark] = []
+        for (index, (group, item)) in zip(groups, items).enumerated() {
+            let status = group.isSplit ? item.tooltip : item.accessibilityStatus // a split tab: its panes, line by line
+            marks.append(TerminalRail.Mark(id: ObjectIdentifier(group), state: item.state, toolTip: item.title + "\n" + status,
+                                           label: "\(item.title), \(item.accessibilityStatus)", selected: index == activeIndex))
+        }
+        terminalRail.update(marks: marks)
+    }
+
+    /// Shows the rail in place of the tab bar and terminals while folded beside the editor, and back.
+    private func updateRail() {
+        let railed = terminalRailed
+        guard terminalRail.isHidden == railed else { return }
+        if railed {
+            containerTrailing.isActive = false
+            containerWidth.isActive = true
+        } else {
+            containerWidth.isActive = false
+            containerTrailing.isActive = true
+            terminalRail.stopPulse()
+        }
+        terminalRail.pointsLeft = terminalPosition == .right
+        terminalRail.isHidden = !railed
+        tabBar.isHidden = railed
+        container.isHidden = railed
+        updateInsets()
+        refreshVisibility()
+        refresh()
     }
 
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {
@@ -1479,7 +1551,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     func windowDidBecomeKey(_ notification: Notification) {
         refreshVisibility()
         refresh()
-        if let view = activeTab?.view, window?.firstResponder !== view, !(window?.firstResponder is NSTextView) {
+        if let view = activeTab?.view, window?.firstResponder !== view, !(window?.firstResponder is NSTextView), !terminalRailed {
             window?.makeFirstResponder(view)
         }
     }
