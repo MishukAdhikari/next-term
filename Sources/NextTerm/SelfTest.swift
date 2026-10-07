@@ -2,6 +2,7 @@ import AppKit
 import SwiftTerm
 import Network
 import NextTermCore
+import SQLite3
 
 /// End-to-end check of the real app: real shells, real tabs, real status changes.
 /// Run with `NextTerm --self-test <report-path>`; writes PASS/FAIL lines and quits.
@@ -486,6 +487,7 @@ enum SelfTest {
         await gutterAndCollapseChecks(c, proj: proj)
         await deletedFileChecks(c, proj: proj)
         await notebookChecks(c, proj: proj)
+        await databaseChecks(c, proj: proj)
         await updateChecks(c)
         await platformLinkChecks(c)
         await branchChecks(c, proj: proj)
@@ -885,6 +887,120 @@ enum SelfTest {
         if let large { area.close(large) }
         try? FileManager.default.removeItem(at: big)
         try? FileManager.default.removeItem(at: proj.appendingPathComponent("renamed.ipynb"))
+    }
+
+    /// A Laravel-style .env and a SQLite file: the Databases group lists both, masked; no password reaches
+    /// a row, tooltip, accessibility label, menu or the clipboard; a remote host gets no terminal hand-off;
+    /// the viewer reads the file's tables and first rows and leaves the folder as it was.
+    private static func databaseChecks(_ c: TerminalWindowController, proj: URL) async {
+        let fm = FileManager.default
+        let secret = "Selftest-Secret-9f3"
+        let env = proj.appendingPathComponent(".env")
+        let folder = proj.appendingPathComponent("database")
+        let file = folder.appendingPathComponent("app.sqlite")
+        try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        var handle: OpaquePointer?
+        sqlite3_open(file.path, &handle)
+        sqlite3_exec(handle, """
+            CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);
+            INSERT INTO users (name, email) VALUES ('Ada', 'ada@example.com'), ('Grace', 'grace@example.com'), ('Linus', NULL);
+            CREATE TABLE migrations (id INTEGER PRIMARY KEY, migration TEXT);
+            """, nil, nil, nil)
+        sqlite3_close(handle)
+        try? """
+            APP_NAME=Shop
+            APP_URL=http://shop.test
+            DB_CONNECTION=mysql
+            DB_HOST=127.0.0.1
+            DB_PORT=3306
+            DB_DATABASE=shop
+            DB_USERNAME=root
+            DB_PASSWORD="\(secret)"
+            ANALYTICS_DATABASE_URL=postgres://reader:\(secret)@analytics.example.com:5432/stats?sslmode=require
+            """.write(to: env, atomically: true, encoding: .utf8)
+        defer {
+            try? fm.removeItem(at: env)
+            try? fm.removeItem(at: folder)
+        }
+        let sidebar = c.sidebar
+        let group = sidebar.databasesGroup
+        check(await wait(10) { group.items.count == 3 }, "the Databases group lists the .env's databases and the SQLite file",
+              group.items.map(\.database.name).joined(separator: ", "))
+        check(sidebar.outline.item(atRow: 1) is DatabasesGroup && sidebar.outline.isItemExpanded(group), "at the top of the project tree, open")
+        guard let mysql = group.items.first(where: { $0.database.engine == .mysql })?.database,
+              let remote = group.items.first(where: { $0.database.engine == .postgres })?.database,
+              let sqlite = group.items.first(where: { $0.database.engine == .sqlite })?.database else { return check(false, "MySQL, Postgres and SQLite rows") }
+        check(mysql.masked == "mysql://root:•••@127.0.0.1:3306/shop" && mysql.environment == .local, "the MySQL row is local and masked", mysql.masked)
+        check(remote.environment == .remote && remote.masked.contains("reader:•••@analytics.example.com"), "a remote host is tagged remote", remote.masked)
+
+        // Every string the rows show, say or offer, and the clipboard after Copy Connection Name.
+        sidebar.outline.layoutSubtreeIfNeeded()
+        var shown: [String] = []
+        for row in 0..<sidebar.outline.numberOfRows {
+            let item = sidebar.outline.item(atRow: row)
+            guard item is DatabaseItem || item is DatabasesGroup,
+                  let cell = sidebar.outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? DatabaseCellView else { continue }
+            shown += [cell.tipText, cell.accessibilityLabel() ?? "", cell.nameText, cell.badge.text]
+            let rect = sidebar.outline.rect(ofRow: row)
+            shown.append(sidebar.view(sidebar.outline, stringForToolTip: 0, point: NSPoint(x: rect.midX, y: rect.midY), userData: nil))
+            if let db = (item as? DatabaseItem)?.database { shown += sidebar.databaseMenu(for: db).items.map(\.title) }
+        }
+        shown += [DatabaseHandOff.confirmation(for: remote).title, DatabaseHandOff.confirmation(for: remote).detail, String(describing: sidebar.databaseScan)]
+        let saved = NSPasteboard.general.string(forType: .string)
+        let copyItem = sidebar.databaseMenu(for: mysql).items.first { $0.title == "Copy Connection Name" }
+        if let copyItem { sidebar.copyDatabaseName(copyItem) }
+        let copied = NSPasteboard.general.string(forType: .string) ?? ""
+        NSPasteboard.general.clearContents()
+        if let saved { NSPasteboard.general.setString(saved, forType: .string) }
+        check(copied == "shop", "Copy Connection Name copies the name", copied)
+        let mysqlTip = DatabaseText.tooltip(mysql)
+        check(mysqlTip.contains("mysql://root:•••@127.0.0.1:3306/shop") && shown.contains(mysqlTip), "the tooltip shows the connection masked")
+        let leaks = shown.filter { $0.contains(secret) }
+        check(!shown.isEmpty && leaks.isEmpty, "no password in a row, tooltip, accessibility label or menu", leaks.first ?? "")
+        let remoteMenu = sidebar.databaseMenu(for: remote).items.map(\.title)
+        check(!remoteMenu.contains { $0.hasPrefix("Open psql") || $0.hasPrefix("Open mysql") }, "a remote row has no terminal hand-off", remoteMenu.joined(separator: ", "))
+        if DatabaseHandOff.tablePlus != nil {
+            check(remoteMenu.contains("Open in TablePlus…") && DatabaseHandOff.confirmation(for: remote).title.contains("analytics.example.com"),
+                  "TablePlus asks first for a remote host, naming it")
+        }
+        let command = DatabaseClientCommand.commandLine(for: mysql, program: "mysql", secretFile: "/tmp/handoff.cnf")
+        check(!command.contains(secret) && command.contains("--defaults-extra-file="), "the mysql hand-off names a file, never the password", command)
+        if let written = try? HandOffFile.write("[client]\npassword=\"x\"\n", suffix: ".cnf") {
+            let mode = (try? fm.attributesOfItem(atPath: written.path)[.posixPermissions] as? Int) ?? 0
+            let folderMode = (try? fm.attributesOfItem(atPath: HandOffFile.folder.path)[.posixPermissions] as? Int) ?? 0
+            check(mode == 0o600 && folderMode == 0o700, "the hand-off's password file is 0600 in a 0700 folder", String(mode, radix: 8) + " " + String(folderMode, radix: 8))
+            unlink(written.path)
+        } else {
+            check(false, "the hand-off's password file can be written")
+        }
+        await screenshot(c, suffix: "-databases")
+
+        // The viewer: read-only, its tables and first rows, nothing new beside the file.
+        let before = (try? fm.contentsOfDirectory(atPath: folder.path))?.sorted() ?? []
+        let stamp = FileStamp(path: file.path)
+        c.sidebar(sidebar, database: sqlite, perform: .open)
+        guard let pane = c.editorArea.activeDatabase else { return check(false, "Open shows the SQLite file in the viewer", c.editorArea.activeName ?? "nothing") }
+        check(await wait(5) { pane.isSettled && pane.page != nil }, "the viewer reads the file", pane.loadError ?? "")
+        check(pane.tables.map(\.name) == ["migrations", "users"], "it lists the tables", pane.tables.map(\.name).joined(separator: ", "))
+        pane.select(table: "users")
+        check(await wait(5) { pane.isSettled && pane.page?.table == "users" }, "a table opens on its first page")
+        check(pane.total == 3 && pane.page?.columns == ["id", "name", "email"] && pane.page?.rows.first?[1] == .text("Ada", truncated: false)
+              && pane.page?.rows.last?[2] == .null, "with its row count and first rows", "\(pane.total ?? -1) \(pane.page?.rows.count ?? -1)")
+        check(pane.grid.numberOfRows == 3 && pane.grid.tableColumns.map(\.title) == ["id", "name", "email"], "the grid shows them")
+        pane.grid.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+        check(pane.export(TableExport.csv) == "id,name,email\n2,Grace,grace@example.com\n", "Copy As CSV takes the selected rows", pane.export(TableExport.csv))
+        let item = pane.contextItem()
+        check(item.path == canonicalPath(file.path) && item.note?.contains("table “users”") == true && item.code?.contains("| 2 | Grace |") == true,
+              "Send to Agent names the file and table, with the selected row", item.note ?? "")
+        check(c.agentText([item], for: "claude").contains("Grace"), "and types it into the agent's prompt")
+        await screenshot(c, suffix: "-sqlite")
+        check((try? fm.contentsOfDirectory(atPath: folder.path))?.sorted() == before && FileStamp(path: file.path) == stamp,
+              "reading leaves the file and its folder as they were")
+        c.editorArea.close(pane)
+
+        try? fm.removeItem(at: env)
+        try? fm.removeItem(at: folder)
+        check(await wait(10) { group.items.isEmpty && !(sidebar.outline.item(atRow: 1) is DatabasesGroup) }, "the group goes when the files do")
     }
 
     private static func deletedFileChecks(_ c: TerminalWindowController, proj: URL) async {
