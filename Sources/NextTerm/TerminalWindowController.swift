@@ -433,7 +433,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// The window's last tab is closing, and the window with it, while files in its editor are unsaved:
     /// Save, Don't Save or Cancel, as closing the window asks, and what closing stops is said too. `close`
     /// runs on Save or Don't Save. Cancel keeps the window and a shell in it: a fresh one in place of a
-    /// tab whose shell has ended (`exit`).
+    /// tab whose shell ended by itself (`exit`, Ctrl-D). One that failed stays as it was, with its reason.
     private func askToSave(closing: [TerminalTab], kept: String = "", then close: @escaping () -> Void) {
         guard let window, !askingToSave else { return }
         let busy = closing.filter { $0.closeWarning != nil }
@@ -454,7 +454,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             let saved = response == .alertFirstButtonReturn && self.editorArea.saveAll()
             if saved || response == .alertThirdButtonReturn { return close() }
             // Cancel, or a file that could not be saved.
-            guard let last = closing.first, closing.allSatisfy(\.exited) else { return }
+            guard let last = closing.first, closing.allSatisfy(\.endedByItself) else { return }
             self.addTab(directory: self.project ?? (last.remote == nil ? last.directory : nil))
             for tab in closing { self.remove(tab) }
         }

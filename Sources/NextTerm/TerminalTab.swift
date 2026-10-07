@@ -238,6 +238,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private var programTitle: String?
     private(set) var directory: String
     private(set) var exited = false
+    /// The shell ended by itself (`exit`, Ctrl-D), so the tab goes. A shell that failed or was killed has
+    /// `exited` too, but its tab stays to show why.
+    private(set) var endedByItself = false
     weak var delegate: TerminalTabDelegate?
     /// Fires when the shell process execs something else (`exec zsh`, `omz reload`).
     private var execWatcher: DispatchSourceProcess?
@@ -767,6 +770,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         execWatcher?.cancel()
         execWatcher = nil
         guard let waitStatus, waitStatus != 0 else {
+            endedByItself = true
             delegate?.tabDidExit(self) // `exit`, Ctrl-D: the tab goes away, like any terminal
             return
         }
