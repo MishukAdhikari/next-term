@@ -52,7 +52,12 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     let centre = NSView()
     /// The selected commit in full.
     let details: GitLogDetailsView
+    /// Branches and tags, to show one.
+    let refs = GitLogRefsView(frame: .zero)
     private var placedDividers = false
+    private var watcher: DirectoryWatcher?
+    private var signature: String?
+    private var pendingCheck: DispatchWorkItem?
 
     init(root: String) {
         self.root = root
@@ -63,6 +68,7 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         build()
         updateFilterTitles()
         reload(keepSelection: false)
+        readRefs()
         let root = self.root
         Self.queue.async { [weak self] in
             let me = Self.git.flatMap { CommitLog.userName(in: root, git: $0) }
@@ -220,7 +226,60 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
 
     @objc private func searchChanged() { apply { $0.text = searchField.stringValue } }
     @objc private func regexChanged() { apply { $0.regex = regexButton.state == .on } }
-    @objc private func refreshClicked() { reload() }
+    @objc private func refreshClicked() {
+        reload()
+        readRefs()
+    }
+
+    // MARK: following the repository
+
+    /// Reads the branches and tags for the tree, and starts watching the repository.
+    private func readRefs() {
+        guard let git = Self.git else { return }
+        let root = self.root
+        Self.queue.async { [weak self] in
+            let model = BranchModel.read(at: root, git: git)
+            let tags = CommitLog.tags(in: root, git: git)
+            let signature = CommitLog.refsSignature(in: root, git: git)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.refs.update(model: model, tags: tags)
+                if self.signature == nil { self.signature = signature }
+                if self.watcher == nil, let common = model?.commonDir { self.watch(common) }
+            }
+        }
+    }
+
+    /// A commit, checkout, fetch or rebase (yours or an agent's, in any worktree) changes the folder git
+    /// keeps refs in; when the refs did change, the log reads again, keeping the selection.
+    private func watch(_ commonDir: String) {
+        let objects = canonicalPath(commonDir) + "/objects"
+        watcher = DirectoryWatcher(path: commonDir) { [weak self] paths in
+            guard paths.contains(where: { !canonicalPath($0).hasPrefix(objects) }) else { return }
+            self?.checkSoon()
+        }
+    }
+
+    private func checkSoon() {
+        pendingCheck?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.checkRefs() }
+        pendingCheck = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+
+    private func checkRefs() {
+        guard let git = Self.git else { return }
+        let root = self.root
+        Self.queue.async { [weak self] in
+            let now = CommitLog.refsSignature(in: root, git: git)
+            DispatchQueue.main.async {
+                guard let self, let now, now != self.signature else { return }
+                self.signature = now
+                self.reload()
+                self.readRefs()
+            }
+        }
+    }
 
     static func scopeTitle(_ scope: CommitQuery.Scope) -> String {
         switch scope {
@@ -233,6 +292,7 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
 
     private func updateFilterTitles() {
         branchButton.set(Self.scopeTitle(query.scope), active: query.scope != .all)
+        if case let .ref(name) = query.scope { refs.select(ref: name) } else { refs.select(ref: nil) }
         authorButton.set(query.author.isEmpty ? "Author" : "Author: " + query.author, active: !query.author.isEmpty)
         let date: String
         switch (query.since, query.until) {
@@ -470,13 +530,17 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
 
         split.isVertical = true
         split.dividerStyle = .thin
+        split.addArrangedSubview(refs)
         split.addArrangedSubview(centre)
         split.addArrangedSubview(details)
+        refs.widthAnchor.constraint(greaterThanOrEqualToConstant: 140).isActive = true
         centre.widthAnchor.constraint(greaterThanOrEqualToConstant: 320).isActive = true
         details.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
         // The commits take what the window gives or takes; the sides keep their width.
-        split.setHoldingPriority(.init(200), forSubviewAt: 0)
-        split.setHoldingPriority(.init(260), forSubviewAt: 1)
+        split.setHoldingPriority(.init(260), forSubviewAt: 0)
+        split.setHoldingPriority(.init(200), forSubviewAt: 1)
+        split.setHoldingPriority(.init(260), forSubviewAt: 2)
+        refs.onSelect = { [weak self] ref in self?.show(ref: ref) }
         table.onReturn = { [weak self] in self?.details.focusFiles() }
         details.onSelectCommit = { [weak self] sha in self?.select(sha: sha) }
         details.onOpenFile = { [weak self] file, shown in
@@ -500,11 +564,12 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
 
     override func layout() {
         super.layout()
-        // The details get a third of the width (at most 380), the first time there is room.
-        if !placedDividers, split.bounds.width > 700 {
+        // The tree 210 wide, the details a third of the width (at most 380), the first time there is room.
+        if !placedDividers, split.bounds.width > 800 {
             placedDividers = true
             let width = split.bounds.width
-            split.setPosition(width - min(380, round(width / 3)), ofDividerAt: split.arrangedSubviews.count - 2)
+            split.setPosition(210, ofDividerAt: 0)
+            split.setPosition(width - min(380, round(width / 3)), ofDividerAt: 1)
         }
     }
 

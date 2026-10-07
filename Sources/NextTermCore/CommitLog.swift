@@ -339,6 +339,15 @@ public enum CommitLog {
         return files.first { $0.newPath == path || $0.oldPath == path } ?? files.first ?? FileDiff()
     }
 
+    /// Every ref and where HEAD points, as one string: when it changes, the log is out of date. Two
+    /// quick reads, for after the repository's folder changed (most changes there are not to refs).
+    public static func refsSignature(in root: String, git: String) -> String? {
+        let base = ["-C", root, "--no-optional-locks"]
+        guard let refs = GitRunner.run(git, base + ["show-ref", "--head"], timeout: 10, acceptedStatus: [0, 1]) else { return nil }
+        let head = GitRunner.run(git, base + ["rev-parse", "--symbolic-full-name", "HEAD"], timeout: 10, acceptedStatus: [0, 128]) ?? Data()
+        return String(decoding: head + refs, as: UTF8.self)
+    }
+
     /// Tag names, newest first.
     public static func tags(in root: String, git: String) -> [String] {
         guard let data = GitRunner.run(git, ["-C", root, "--no-optional-locks", "for-each-ref", "--sort=-creatordate", "--format=%(refname)", "refs/tags"],

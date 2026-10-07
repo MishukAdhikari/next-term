@@ -162,6 +162,12 @@ import Testing
         #expect(added.isNew && added.hunks.first?.added == 20)
 
         #expect(CommitLog.tags(in: work, git: git) == ["v1"])
+        // The refs' signature changes with a branch switch at the same commit, and not otherwise.
+        sh(["branch", "same"])
+        let signature = CommitLog.refsSignature(in: work, git: git)
+        #expect(signature != nil && CommitLog.refsSignature(in: work, git: git) == signature)
+        sh(["switch", "-q", "same"])
+        #expect(CommitLog.refsSignature(in: work, git: git) != signature)
         #expect(CommitLog.resolve("v1", in: work, git: git) == one && CommitLog.resolve("nope", in: work, git: git) == nil)
     }
 }
