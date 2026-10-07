@@ -6,7 +6,7 @@ head:
     content: Keyboard shortcuts for Next Term on macOS
 ---
 
-These are the defaults. Every menu command’s shortcut can be changed, removed or given one it does not have: see [Change any shortcut](#change-any-shortcut). Shortcuts are written the way macOS menus show them: <kbd>⌃</kbd> Control, <kbd>⌥</kbd> Option, <kbd>⇧</kbd> Shift, <kbd>⌘</kbd> Command.
+These are the defaults. Every menu command’s shortcut can be changed, removed or given one it does not have: see [Change any menu shortcut](#change-any-menu-shortcut). Shortcuts are written the way macOS menus show them: <kbd>⌃</kbd> Control, <kbd>⌥</kbd> Option, <kbd>⇧</kbd> Shift, <kbd>⌘</kbd> Command.
 
 ## The ones you will use most
 
@@ -23,7 +23,7 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Find in Files, Replace in Files | <kbd>⇧⌘F</kbd>, <kbd>⇧⌘R</kbd> |
 | Between the editor and the terminal | <kbd>⌃&#96;</kbd> |
 | Project sidebar | <kbd>⌘B</kbd> |
-| Settings, including every shortcut | <kbd>⌘,</kbd> |
+| Settings, including every menu shortcut | <kbd>⌘,</kbd> |
 
 ## Next Term menu
 
@@ -149,7 +149,7 @@ These are fixed.
 | Agent’s proposed edit | Accept | <kbd>⌘↩︎</kbd> |
 | Go to File | Open at a line | Type `name:42` |
 
-## Change any shortcut
+## Change any menu shortcut
 
 Open **Next Term › Settings…** (<kbd>⌘,</kbd>) and choose **Keyboard Shortcuts**. Every menu command is listed with where it lives in the menus.
 
