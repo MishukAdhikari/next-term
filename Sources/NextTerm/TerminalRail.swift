@@ -65,10 +65,10 @@ final class TerminalRail: NSView {
         moreButton.isHidden = true
         addSubview(moreButton)
         toolTip = "Expand the terminal (⌘J)"
+        // A group, not a button: VoiceOver does not go into a button, and the tabs' buttons are in here.
         setAccessibilityElement(true)
-        setAccessibilityRole(.button)
-        setAccessibilityLabel("Expand terminal")
-        setAccessibilityHelp("Brings the terminal back at its size (⌘J). The tabs follow, one button each.")
+        setAccessibilityRole(.group)
+        setAccessibilityLabel("Terminal, folded")
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -226,12 +226,21 @@ final class TerminalRail: NSView {
         if inside { onExpand?() }
     }
 
-    override func accessibilityPerformPress() -> Bool {
-        onExpand?()
-        return true
+    // MARK: VoiceOver
+
+    /// The arrow at the top as VoiceOver finds it: the Expand terminal button, then each tab's.
+    private lazy var expandElement = RailExpandElement(rail: self)
+    /// The arrow's place along the top, under the traffic lights' strip when there is one.
+    fileprivate var arrowRect: NSRect { NSRect(x: 0, y: topInset, width: bounds.width, height: TabBarView.height) }
+
+    override func accessibilityChildren() -> [Any]? {
+        var buttons: [NSView] = markViews.filter { !$0.isHidden }
+        if !moreButton.isHidden { buttons.append(moreButton) }
+        // A button view is not what VoiceOver reads (its cell is): the unignored ones stand in for them.
+        return [expandElement] + NSAccessibility.unignoredChildren(from: buttons)
     }
 
-    @objc private func expandClicked() { onExpand?() }
+    @objc fileprivate func expandClicked() { onExpand?() }
 
     @objc private func markClicked(_ sender: NSButton) {
         guard let index = markViews.firstIndex(where: { $0 === sender }) else { return }
@@ -242,6 +251,31 @@ final class TerminalRail: NSView {
     func clickMark(_ index: Int) { markViews[safe: index]?.performClick(nil) }
     /// The marks' buttons as VoiceOver finds them.
     var markButtons: [NSButton] { markViews }
+}
+
+/// The rail's arrow for VoiceOver: a button of its own beside the tabs' buttons, which a click anywhere on
+/// the rail stands in for with the mouse.
+private final class RailExpandElement: NSAccessibilityElement {
+    private weak var rail: TerminalRail?
+
+    init(rail: TerminalRail) {
+        self.rail = rail
+        super.init()
+    }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .button }
+    override func accessibilityLabel() -> String? { "Expand terminal" }
+    override func accessibilityHelp() -> String? { "Brings the terminal back at its size (⌘J)." }
+    override func accessibilityParent() -> Any? { rail }
+    override func accessibilityFrame() -> NSRect {
+        guard let rail else { return .zero }
+        return NSAccessibility.screenRect(fromView: rail, rect: rail.arrowRect)
+    }
+    override func accessibilityPerformPress() -> Bool {
+        rail?.expandClicked()
+        return rail != nil
+    }
 }
 
 /// One tab on the rail: its status mark, the selected tab's on a darker place, as in the tab bar.
@@ -312,6 +346,13 @@ private final class RailMarkButton: NSButton {
     /// Clicks on the mark itself are the button's.
     override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
 
-    // The mark is drawn, not a picture VoiceOver should stop on: the button says the tab and its state.
+    // VoiceOver reads the button itself (not its cell, as for other buttons), the tab and its state: the mark
+    // inside is drawn, not a picture to stop on.
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .button }
     override func accessibilityChildren() -> [Any]? { nil }
+    override func accessibilityPerformPress() -> Bool {
+        performClick(nil)
+        return true
+    }
 }

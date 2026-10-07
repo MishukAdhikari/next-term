@@ -1975,10 +1975,15 @@ enum SelfTest {
         check(rail.marks.count == c.groups.count && rail.marks.map(\.state) == states && rail.marks[safe: c.activeIndex]?.selected == true,
               "the rail has a mark for each tab, in order, as the tab bar has them", "\(rail.marks.map(\.state)) vs \(states)")
         let backIndex = c.groups.firstIndex { $0.contains(back) } ?? 0
-        let backLabel = rail.markButtons[safe: backIndex]?.accessibilityLabel() ?? ""
-        check(rail.accessibilityRole() == .button && rail.accessibilityLabel() == "Expand terminal"
-              && rail.markButtons[safe: backIndex]?.accessibilityRole() == .button && backLabel.hasPrefix(back.title),
-              "VoiceOver: the rail is an Expand terminal button, each mark a button with its tab", backLabel)
+        let backButton = rail.markButtons[safe: backIndex]
+        let backLabel = backButton?.accessibilityLabel() ?? ""
+        // VoiceOver goes into a group, not into a button: the arrow and the marks are buttons side by side in it.
+        let railChildren = rail.accessibilityChildren() ?? []
+        let expandButton = railChildren.lazy.compactMap { $0 as? NSAccessibilityElement }.first { $0.accessibilityLabel() == "Expand terminal" }
+        check(rail.accessibilityRole() == .group && expandButton?.accessibilityRole() == .button
+              && railChildren.contains { ($0 as? NSButton) === backButton } && backButton?.isAccessibilityElement() == true
+              && backButton?.accessibilityRole() == .button && backLabel.hasPrefix(back.title),
+              "VoiceOver: the folded terminal is a group, an Expand terminal button and a button for each tab", backLabel)
         check(rail.markButtons[safe: backIndex]?.toolTip == back.title + "\n" + back.stateDescription, "a mark's tooltip is its tab's title and state",
               rail.markButtons[safe: backIndex]?.toolTip ?? "none")
         await screenshot(c, suffix: "-rail")
