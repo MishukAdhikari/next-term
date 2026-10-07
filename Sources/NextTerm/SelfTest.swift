@@ -1987,6 +1987,13 @@ enum SelfTest {
         check(rail.markButtons[safe: backIndex]?.toolTip == back.title + "\n" + back.stateDescription, "a mark's tooltip is its tab's title and state",
               rail.markButtons[safe: backIndex]?.toolTip ?? "none")
         await screenshot(c, suffix: "-rail")
+        // ⌘W with the keyboard outside the editor (in the sidebar): the tab in front is folded away, so nothing closes.
+        window.makeFirstResponder(c.sidebar.outline)
+        let tabCount = c.groups.count
+        let closeItem = NSMenuItem(title: "Close Tab", action: #selector(TerminalWindowController.closeTab(_:)), keyEquivalent: "w")
+        c.closeTab(nil)
+        check(!c.validateMenuItem(closeItem) && c.groups.count == tabCount && c.terminalRailed,
+              "folded to the rail, ⌘W outside the editor closes no terminal tab out of sight", "\(tabCount) → \(c.groups.count) tabs")
 
         // The tab in front fails while folded: nobody sees it, so its mark says so and the rail pulses a few times
         // (with motion, whatever Reduce Motion is on this Mac).

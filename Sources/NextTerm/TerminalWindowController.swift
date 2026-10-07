@@ -631,6 +631,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         if item.action == #selector(closeTab(_:)) {
             item.title = !isEditorFocused && activeGroup?.isSplit == true ? "Close Pane" : "Close Tab"
+            return isEditorFocused || !terminalRailed
         }
         let paneActions: [Selector] = [#selector(selectPaneLeft(_:)), #selector(selectPaneRight(_:)), #selector(selectPaneAbove(_:)),
                                        #selector(selectPaneBelow(_:)), #selector(selectNextPane(_:)), #selector(selectPreviousPane(_:)),
@@ -1387,6 +1388,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// ⌘W closes what has the keyboard: the file being edited, or the terminal tab.
     @objc func closeTab(_ sender: Any?) {
         if isEditorFocused { return editorArea.closeActive() }
+        if terminalRailed { return NSSound.beep() } // its tabs are folded away: nothing on screen to close
         if let tab = activeTab { requestClose(tab) }
     }
 
