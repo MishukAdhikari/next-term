@@ -127,6 +127,9 @@ enum LoginShell {
     /// SSH_AUTH_SOCK as the user's shell sets it (nil: the shell leaves launchd's in place).
     static var sshAuthSock: String? { probed.sshAuthSock }
 
+    /// PATH exactly as the login shell sets it, nothing added (empty: the probe failed).
+    static var shellPath: [String] { probed.path }
+
     /// PATH from an interactive login shell (5 s at most), plus the usual install folders.
     static let path: [String] = {
         let home = NSHomeDirectory()

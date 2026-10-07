@@ -6,8 +6,10 @@
 # It downloads the disk image and its SHA-256, checks that the checksum is signed with the Next Term
 # release key (below; the key never leaves the maintainer's Mac, so a release changed on GitHub is
 # refused) and that the download matches it, checks the app's bundle and signature are intact, and
-# copies it to /Applications (or ~/Applications when /Applications isn't writable). It never uses sudo,
-# never replaces a Next Term that is running, and changes nothing else.
+# copies it to /Applications (or ~/Applications when /Applications isn't writable). It never uses sudo
+# and never replaces a Next Term that is running. Besides the app it adds only the nxtrm command, as a
+# link in the first folder on your PATH meant for commands that you can write (~/.local/bin, ~/bin,
+# /opt/homebrew/bin, /usr/local/bin); it never changes PATH or touches anyone else's nxtrm.
 #
 #     NEXTTERM_VERSION=0.7.0    a particular version instead of the latest
 #     NEXTTERM_DIR=~/Apps       another folder
@@ -220,6 +222,72 @@ PROCESSES
     nt_done=1
 
     say "Installed Next Term ${found_version} in ${destination}"
+
+    # True when the link target $1 is Next Term's: the script inside a copy of it that is Next Term by its
+    # bundle identifier, or that has moved or gone since.
+    nt_is_ours() {
+        case "$1" in /*.app/Contents/Resources/bin/nxtrm) ;; *) return 1 ;; esac
+        local app="${1%/Contents/Resources/bin/nxtrm}"
+        [ -e "${app}" ] || return 0
+        [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${app}/Contents/Info.plist" 2>/dev/null || true)" = "${bundle_id}" ]
+    }
+
+    # nxtrm for other terminals (Next Term's own tabs always have it), the way the app links it at launch.
+    # PATH is walked as the shell walks it, and its first nxtrm decides: a link to this copy stays, Next
+    # Term's link to another copy is repointed where it is (or, needing sudo, only a folder ahead of it
+    # will do), anyone else's is left alone. With none, the first folder meant for commands that is
+    # writable without sudo gets the link.
+    nt_link_command() {
+        local script="${destination}/Contents/Resources/bin/nxtrm"
+        [ -x "${script}" ] || return 0
+        case "${destination}" in # as the app does: the link would break whenever that disk is ejected
+            /Volumes/*) say "nxtrm was not linked: ${target} is on another disk."; return 0 ;;
+        esac
+        local folders=() folder link target free=""
+        IFS=: read -r -a folders <<<"${PATH:-}" || true
+        for folder in ${folders[@]+"${folders[@]}"}; do
+            while [ "${#folder}" -gt 1 ] && [ "${folder%/}" != "${folder}" ]; do folder="${folder%/}"; done
+            case "${folder}" in /*) ;; *) continue ;; esac # relative to wherever a command runs; zsh takes a ~ literally
+            link="${folder}/nxtrm"
+            case "${link}" in */*.app/Contents/Resources/bin/nxtrm) continue ;; esac # a Next Term's own folder
+            if [ -L "${link}" ]; then
+                target="$(/usr/bin/readlink "${link}")" || target=""
+                if [ "${target}" = "${script}" ]; then
+                    say "nxtrm is on your PATH: ${link}"
+                    return 0
+                fi
+                if nt_is_ours "${target}"; then
+                    if ! [ -w "${folder}" ]; then
+                        [ -n "${free}" ] && break # a folder ahead of it on PATH takes the link
+                        [ -e "${link}" ] || continue # to a copy that is gone: the shell passes over it too
+                        say "${link} opens another copy of Next Term, and changing it needs your password: Next Term offers to when it opens."
+                        return 0
+                    fi
+                    if /bin/ln -sfh "${script}" "${link}"; then
+                        say "Pointed ${link} at this copy: nxtrm opens Next Term from any terminal."
+                    else
+                        say "Could not point ${link} at this copy."
+                    fi
+                    return 0
+                fi
+            fi
+            if [ -L "${link}" ] || [ -e "${link}" ]; then
+                say "Left ${link} as it is: that nxtrm isn’t Next Term’s."
+                return 0
+            fi
+            if [ -z "${free}" ] && [ -d "${folder}" ] && [ -w "${folder}" ]; then
+                case "${folder}" in "${HOME}/.local/bin" | "${HOME}/bin" | /opt/homebrew/bin | /usr/local/bin) free="${link}" ;; esac
+            fi
+        done
+        if [ -n "${free}" ] && /bin/ln -s "${script}" "${free}"; then
+            say "Linked ${free}: nxtrm . opens a folder in Next Term from any terminal."
+            return 0
+        fi
+        say "For nxtrm in other terminals, open Next Term: no folder on your PATH takes it without sudo, so it offers"
+        say "to link /usr/local/bin/nxtrm with your password (later: Next Term › Install Command Line Tool (nxtrm)…)."
+    }
+    nt_link_command
+
     say "Open it from ${target}, or run: open -a \"${destination}\""
 }
 

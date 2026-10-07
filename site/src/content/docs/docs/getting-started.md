@@ -20,7 +20,7 @@ Next Term is one app: a terminal with tabs, a code editor above it, and a projec
 curl -fsSL https://next-term.mishuk.me/install.sh | bash
 ```
 
-It downloads the latest release from GitHub, checks that its SHA-256 checksum is signed with the Next Term release key and that the download matches it, checks that the app inside is Next Term with an intact signature, and copies it to **Applications** (or `~/Applications` when you can’t write to Applications). Nothing else changes: no `sudo`, and a Next Term that is running is never replaced (use **Check for Updates** in it instead). Because the download comes through `curl` rather than a browser, macOS doesn’t ask you to allow the first launch. [Read the script](https://github.com/MishukAdhikari/next-term/blob/main/site/src/install.sh) before you run it, if you like; it is short.
+It downloads the latest release from GitHub, checks that its SHA-256 checksum is signed with the Next Term release key and that the download matches it, checks that the app inside is Next Term with an intact signature, and copies it to **Applications** (or `~/Applications` when you can’t write to Applications). When a folder already on your `PATH` takes the [`nxtrm` command](/docs/command-line/#installing-it) without a password, such as `~/.local/bin` or `/opt/homebrew/bin`, it links it there too, so `nxtrm .` works in any terminal; otherwise Next Term offers it when it opens. Nothing else changes: no `sudo`, no change to your `PATH`, and a Next Term that is running is never replaced (use **Check for Updates** in it instead). Because the download comes through `curl` rather than a browser, macOS doesn’t ask you to allow the first launch. [Read the script](https://github.com/MishukAdhikari/next-term/blob/main/site/src/install.sh) before you run it, if you like; it is short.
 
 `NEXTTERM_VERSION=0.7.0` installs a particular version, and `NEXTTERM_DIR=~/Apps` another folder, for example `curl -fsSL https://next-term.mishuk.me/install.sh | NEXTTERM_DIR=~/Apps bash`.
 
@@ -60,6 +60,8 @@ If you cancel, you get a plain terminal in your home folder. You can open a proj
 If Next Term finds an editor or terminal it can read settings from, such as VS Code, Cursor, a JetBrains IDE, Zed, iTerm2, Ghostty or Terminal, it asks **Coming from another app?** Choose one to see exactly what it would bring over (your shortcuts, fonts, terminal colours and recent projects), or keep Next Term’s own. You can do it later from **Next Term › Import Settings and Shortcuts…**. See [Switching to Next Term](/docs/switching/).
 
 macOS also asks whether Next Term may send notifications. Allow them: that is how an agent waiting on your decision reaches you while you are in another tab or app.
+
+Next Term also adds the `nxtrm` command for your other terminals, in a folder on your `PATH` that needs no password. When there is no such folder, as on a Mac without Homebrew, it asks first: **Install the “nxtrm” command?** **Install…** asks for your administrator password, **Not Now** asks again after the next update, and **Don’t Ask Again** never does. See [Installing it](/docs/command-line/#installing-it).
 
 ## Run two agents side by side
 

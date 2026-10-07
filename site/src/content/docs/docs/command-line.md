@@ -40,8 +40,27 @@ If Next Term is not running, `nxtrm` starts it with your request instead of reop
 
 **In Next Term tabs, `nxtrm` works from the first launch**: it is on the `PATH` of every tab.
 
-**For other terminals**, Next Term links `/usr/local/bin/nxtrm` to the copy inside the app at launch when that needs no password. Otherwise use **Next Term › Install Command Line Tool (nxtrm)…**, which asks for an administrator password once, as other editors do for their commands.
+**For other terminals**, Next Term adds it at launch when it can do so without a password. It reads your `PATH` from your login shell, as your other terminals get it, and links `nxtrm` to the copy inside the app in the first of these folders on it that you can write:
 
-- Next Term only ever replaces a link it made itself; it never touches someone else’s `nxtrm`.
+- `~/.local/bin` or `~/bin`, when your shell puts them on `PATH`
+- `/opt/homebrew/bin`, Homebrew’s folder on Apple silicon
+- `/usr/local/bin`, when Homebrew has made it yours
+
+Your `PATH` order decides between them. Next Term never adds a folder to `PATH` or edits your shell’s startup files, and never adds a link to any other folder on `PATH`, such as a version manager’s. If your shell takes more than 5 seconds to start, that launch does nothing, and a later one decides.
+
+A `PATH` entry that starts with `~` doesn’t count, because zsh never looks there: the quotes in `export PATH="~/.local/bin:$PATH"` keep the `~`, so write `$HOME/.local/bin` instead.
+
+**When none of them will do**, as on a Mac without Homebrew, where `/usr/local/bin` belongs to the system, the first launch asks **Install the “nxtrm” command?** on the first project window, once you are past the folder chooser, Import or the Welcome window.
+
+- **Install…** links `/usr/local/bin/nxtrm` and asks for your administrator password once, as other editors do for their commands. If your `PATH` leaves out `/usr/local/bin`, it says so.
+- **Not Now** asks again after the next update.
+- **Don’t Ask Again** stops asking.
+
+**Next Term › Install Command Line Tool (nxtrm)…** does the same at any time. It also uses a folder that needs no password when there is one.
+
+**The one-line installer** links it the same way, right after it installs the app, and says where. If no folder qualifies, it tells you that Next Term will offer it.
+
+- Next Term only ever replaces a link it made itself. It never touches someone else’s `nxtrm`, and when another `nxtrm` comes first on your `PATH`, it adds none of its own.
 - It links only a copy in a permanent place such as Applications. A copy running from the disk image would leave the link pointing at nothing once the image is ejected, so Next Term asks you to move it first.
-- If you move the app, the next launch points the link at the new place, when it can do so without a password.
+- If you move the app, or open another copy, that launch points `nxtrm` at it. When Next Term’s link still opens the other copy and needs a password to change, it asks, as above, rather than add a link later on `PATH` that the shell would never reach.
+- The link is the only file it adds. Delete it to remove the command from your other terminals: Next Term leaves it out from then on, and **Next Term › Install Command Line Tool (nxtrm)…** puts it back.

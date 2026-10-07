@@ -313,6 +313,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             SelfTest.run()
             return
         }
+        // `nxtrm` in other terminals: linked where that needs no password, else offered once with one.
         CommandLineTool.registerQuietly()
         MainActor.assumeIsolated { Updater.shared.start() }
         // `nxtrm` started us: open what it asked for, not the last session.

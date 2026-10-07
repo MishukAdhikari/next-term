@@ -641,6 +641,147 @@ enum SelfTest {
         try? FileManager.default.removeItem(at: dir)
     }
 
+    /// A stand-in app with only its `nxtrm` script and bundle identifier: the script's path.
+    private static func fakeApp(_ app: String, identifier: String = CommandLineLink.bundleIdentifier) -> String {
+        let script = app + CommandLineLink.bundledPath
+        try? FileManager.default.createDirectory(atPath: (script as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: script, contents: Data("#!/bin/sh\n".utf8), attributes: [.posixPermissions: 0o755])
+        NSDictionary(dictionary: ["CFBundleIdentifier": identifier]).write(toFile: app + "/Contents/Info.plist", atomically: true)
+        return script
+    }
+
+    /// `nxtrm` for other terminals, on real folders: the first command folder on PATH that is writable
+    /// takes the link, which is kept, repointed when the app moves, and never put over someone else's.
+    private static func commandLineLinkChecks(_ c: TerminalWindowController) async {
+        let fm = FileManager.default
+        let home = (canonicalPath(NSTemporaryDirectory()) as NSString).appendingPathComponent("nt-nxtrm-\(getpid())")
+        let local = home + "/.local/bin", own = home + "/bin", tools = home + "/tools"
+        let locked = home + "/locked", gone = home + "/gone"
+        defer {
+            for folder in [own, locked, gone] { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder) }
+            try? fm.removeItem(atPath: home)
+        }
+        for folder in [local, own, tools, locked, gone] { try? fm.createDirectory(atPath: folder, withIntermediateDirectories: true) }
+        let script = fakeApp(home + "/Next Term.app")
+        let moved = fakeApp(home + "/Moved/Next Term.app")
+        // Links made with a password, as in a stock /usr/local/bin: to the first copy, and to one deleted since.
+        try? fm.createSymbolicLink(atPath: locked + "/nxtrm", withDestinationPath: script)
+        try? fm.createSymbolicLink(atPath: gone + "/nxtrm", withDestinationPath: home + "/Gone/Next Term.app/Contents/Resources/bin/nxtrm")
+        for folder in [own, locked, gone] { try? fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder) } // need a password
+        let path = [own, tools, local, "/usr/bin", "/bin"]
+
+        let behind = CommandLineTool.plan(for: moved, path: [locked, local, "/usr/bin"], home: home)
+        check(behind == .unavailable, "nxtrm: no link goes behind one to another copy, which the shell would still run", "\(behind)")
+        let ahead = CommandLineTool.plan(for: moved, path: [local, locked, "/usr/bin"], home: home)
+        check(ahead == .link(local + "/nxtrm"), "nxtrm: a writable folder ahead of a link to another copy takes it", "\(ahead)")
+        let past = CommandLineTool.plan(for: moved, path: [gone, local, "/usr/bin"], home: home)
+        check(past == .link(local + "/nxtrm"), "nxtrm: a link to a copy that is gone is passed over, as the shell does", "\(past)")
+
+        let first = CommandLineTool.plan(for: script, path: path, home: home)
+        check(first == .link(local + "/nxtrm"), "nxtrm: the first writable command folder on PATH takes the link", "\(first)")
+        let linked = CommandLineTool.link(local + "/nxtrm", to: script)
+        let target = try? fm.destinationOfSymbolicLink(atPath: local + "/nxtrm")
+        check(linked && target == script, "nxtrm: the link points at the app", target ?? "no link")
+        let again = CommandLineTool.plan(for: script, path: path, home: home)
+        check(again == .linked(local + "/nxtrm"), "nxtrm: the next launch keeps it", "\(again)")
+
+        let repoint = CommandLineTool.plan(for: moved, path: path, home: home)
+        let repointed = CommandLineTool.link(local + "/nxtrm", to: moved)
+        let movedTarget = try? fm.destinationOfSymbolicLink(atPath: local + "/nxtrm")
+        check(repoint == .link(local + "/nxtrm") && repointed && movedTarget == moved, "nxtrm: a moved app repoints its own link", "\(repoint)")
+
+        fm.createFile(atPath: tools + "/nxtrm", contents: Data("#!/bin/sh\n".utf8))
+        let taken = CommandLineTool.plan(for: moved, path: path, home: home)
+        let overwritten = CommandLineTool.link(tools + "/nxtrm", to: moved)
+        check(taken == .taken(tools + "/nxtrm") && !overwritten && CommandLineTool.entry(at: tools + "/nxtrm") == .file,
+              "nxtrm: someone else's comes first on PATH and is left alone", "\(taken)")
+
+        // Laid out like Next Term, but another app: someone else's.
+        let other = fakeApp(home + "/Other.app", identifier: "com.example.other")
+        try? fm.removeItem(atPath: tools + "/nxtrm")
+        try? fm.createSymbolicLink(atPath: tools + "/nxtrm", withDestinationPath: other)
+        let lookalike = CommandLineTool.plan(for: moved, path: path, home: home)
+        let replaced = CommandLineTool.link(tools + "/nxtrm", to: moved)
+        check(lookalike == .taken(tools + "/nxtrm") && !replaced && CommandLineTool.entry(at: tools + "/nxtrm") == .link(other),
+              "nxtrm: a link into another app laid out like Next Term is someone else's", "\(lookalike)")
+
+        // The password route runs as root: it links only where nothing is, or over a link of Next Term's.
+        func sh(_ command: String) -> Int32 {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/sh")
+            p.arguments = ["-c", command]
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            guard (try? p.run()) != nil else { return -1 }
+            p.waitUntilExit()
+            return p.terminationStatus
+        }
+        let admin = home + "/admin/nxtrm"
+        try? fm.createDirectory(atPath: home + "/admin", withIntermediateDirectories: true)
+        fm.createFile(atPath: admin, contents: Data("#!/bin/sh\n".utf8))
+        let overFile = CommandLineTool.rootCommand(linking: admin, to: moved)
+        let overTheirs = CommandLineTool.rootCommand(linking: tools + "/nxtrm", to: moved)
+        let overOurs = CommandLineTool.rootCommand(linking: local + "/nxtrm", to: script) ?? ""
+        check(overFile == nil && overTheirs == nil && overOurs.contains(" -sfh "),
+              "nxtrm: the password route never replaces someone else's file or link", overOurs)
+        try? fm.removeItem(atPath: admin)
+        let fresh = CommandLineTool.rootCommand(linking: admin, to: moved) ?? "false"
+        fm.createFile(atPath: admin, contents: Data("#!/bin/sh\n".utf8)) // turns up before the command runs
+        let refused = sh(fresh) != 0 && CommandLineTool.entry(at: admin) == .file
+        try? fm.removeItem(atPath: admin)
+        let made = sh(fresh) == 0 && CommandLineTool.entry(at: admin) == .link(moved)
+        check(refused && made, "nxtrm: where nothing was, the password route links it, and replaces nothing that turned up since", fresh)
+
+        // A launch links it once: deleted, it stays deleted until the menu command puts it back.
+        let defaults = UserDefaults.standard
+        let savedLink = defaults.object(forKey: CommandLineTool.linkedKey)
+        defer { defaults.set(savedLink, forKey: CommandLineTool.linkedKey) }
+        defaults.removeObject(forKey: CommandLineTool.linkedKey)
+        let away = home + "/launch", awayLink = away + "/.local/bin/nxtrm"
+        try? fm.createDirectory(atPath: away + "/.local/bin", withIntermediateDirectories: true)
+        let launch = [away + "/.local/bin", "/usr/bin", "/bin"]
+        let launched = CommandLineTool.register(moved, path: launch, home: away)
+        let remembered = defaults.string(forKey: CommandLineTool.linkedKey)
+        check(launched == .link(awayLink) && CommandLineTool.entry(at: awayLink) == .link(moved) && remembered == awayLink,
+              "nxtrm: a launch links it in a free command folder, and remembers where", "\(launched), \(remembered ?? "nothing remembered")")
+        try? fm.removeItem(atPath: awayLink)
+        CommandLineTool.register(moved, path: launch, home: away)
+        check(CommandLineTool.entry(at: awayLink) == .nothing, "nxtrm: once deleted, the next launch leaves it out", "\(CommandLineTool.entry(at: awayLink))")
+        let putBack = CommandLineTool.link(awayLink, to: moved) && CommandLineTool.register(moved, path: launch, home: away) == .linked(awayLink)
+        check(putBack, "nxtrm: the menu command puts it back, and launches keep it", "\(CommandLineTool.entry(at: awayLink))")
+
+        let none = CommandLineTool.plan(for: script, path: [own, "/usr/bin", "/bin"], home: home)
+        let unwritten = !CommandLineTool.link(own + "/nxtrm", to: script) && CommandLineTool.entry(at: own + "/nxtrm") == .nothing
+        check(none == .unavailable && unwritten, "nxtrm: with no writable command folder on PATH, nothing is written", "\(none)")
+
+        // The PATH a launch decides on, from the login shell (5 s at most, so not on the main thread), and the
+        // menu command's fallback when the shell does not answer.
+        let shellPath = await Task.detached { LoginShell.shellPath }.value
+        check(shellPath.contains("/usr/bin"), "nxtrm: the login shell's PATH is read", shellPath.joined(separator: ":"))
+        let standard = CommandLineTool.standardPath
+        check(standard.contains("/usr/bin") && standard.allSatisfy { $0.hasPrefix("/") }, "nxtrm: the PATH from /etc/paths is read",
+              standard.joined(separator: ":"))
+        // The offer waits, however long, for a project window that is key with nothing in front of it.
+        if let window = c.window {
+            let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 120), styleMask: [.titled], backing: .buffered, defer: true)
+            let free = CommandLineTool.offerWindow(key: window, modal: nil) === window
+            let elsewhere = CommandLineTool.offerWindow(key: other, modal: nil) == nil && CommandLineTool.offerWindow(key: nil, modal: nil) == nil
+            let modal = CommandLineTool.offerWindow(key: window, modal: other) == nil
+            let focus = window.firstResponder
+            window.beginSheet(other, completionHandler: nil)
+            let sheet = await wait(2) { window.attachedSheet != nil } && CommandLineTool.offerWindow(key: window, modal: nil) == nil
+            window.endSheet(other)
+            _ = await wait(2) { window.attachedSheet == nil }
+            window.makeKeyAndOrderFront(nil)
+            if let focus { window.makeFirstResponder(focus) }
+            check(free && elsewhere && modal && sheet, "nxtrm: the first-launch offer goes on the key project window, with nothing in the way",
+                  "free \(free), elsewhere \(elsewhere), modal \(modal), sheet \(sheet)")
+        }
+        let buttons = CommandLineTool.offerAlert().buttons.map(\.title)
+        check(buttons == ["Install…", "Not Now", "Don’t Ask Again"], "nxtrm: the first-launch offer can be taken, put off or declined for good",
+              buttons.joined(separator: ", "))
+    }
+
     /// Agent sessions: listed per project on the Welcome window and in ⌥⌘O, resumed in a tab in their folder.
     /// The header's "Pull 152": the words, what a click does, the spinner while git talks to a remote, and
     /// what gives way in a narrow sidebar.
@@ -3069,6 +3210,7 @@ enum SelfTest {
             try? FileManager.default.removeItem(at: shellFile)
         }
         try? FileManager.default.removeItem(at: cliFile)
+        await commandLineLinkChecks(c)
 
         // What the editor cannot show does not open in it.
         let png = proj.appendingPathComponent("logo.png")
