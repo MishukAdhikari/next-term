@@ -40,9 +40,9 @@ public enum FetchFrequency: String, CaseIterable, Sendable {
 ///   those) and Next Term is the active app.
 /// - When the branch popup opens, if the last fetch is over `staleAfter` old.
 /// - Never while another fetch for the repository runs: one of its own, or yours in a tab.
-/// - Paused in Low Power Mode and on an expensive, constrained or missing network; and for a repository,
+/// - Paused in Low Power Mode and on an expensive, constrained or missing network; and for a remote,
 ///   after git said it needs a person (a password, a passphrase, a host key), until a fetch you start
-///   succeeds.
+///   works. The repository's other remotes go on.
 ///
 /// Repositories are named by their common git folder, so the worktrees of one share a schedule.
 public struct FetchSchedule: Sendable {
@@ -97,8 +97,6 @@ public struct FetchSchedule: Sendable {
         case inactive
         /// A fetch for the repository is under way, Next Term's or one in a tab.
         case running
-        /// Git asked for a password, a passphrase or a host key; a fetch you start turns it back on.
-        case needsPerson
         case lowPower
         /// Expensive, constrained, or none.
         case network
@@ -106,14 +104,12 @@ public struct FetchSchedule: Sendable {
         case recent
     }
 
-    /// How a background fetch ended.
+    /// How a background fetch of one remote ended.
     public enum Outcome: Equatable, Sendable {
         case fetched
-        /// No local branch tracks a remote: nothing to fetch, and nothing to try again until the interval.
-        case nothingToFetch
         /// Unreachable, timed out, or anything else that may pass by itself.
         case failed
-        /// It needs a password, a passphrase or a host key: stop until a fetch you start succeeds.
+        /// It needs a password, a passphrase or a host key: that remote waits until a fetch you start works.
         case needsPerson
     }
 
@@ -123,8 +119,8 @@ public struct FetchSchedule: Sendable {
         /// The last background attempt, whatever came of it.
         var tried: Date?
         var running = false
-        /// When git last said it needs a person.
-        var needsPersonSince: Date?
+        /// The remotes git said need a person, and when it last said so.
+        var needsPerson: [String: Date] = [:]
     }
 
     private var states: [String: State] = [:]
@@ -145,7 +141,6 @@ public struct FetchSchedule: Sendable {
             threshold = staleAfter
         }
         if state.running || otherFetchRunning { return .skip(.running) }
-        if let since = state.needsPersonSince, !(fetchedOnDisk.map { $0 > since } ?? false) { return .skip(.needsPerson) }
         if conditions.lowPowerMode { return .skip(.lowPower) }
         if conditions.expensiveNetwork || conditions.constrainedNetwork || conditions.offline { return .skip(.network) }
         if trigger == .timer && !active { return .skip(.inactive) }
@@ -156,31 +151,49 @@ public struct FetchSchedule: Sendable {
         return due ? .fetch : .skip(.recent)
     }
 
+    /// The remotes a background fetch of `repository` takes, of `remotes` (those local branches track):
+    /// all but the ones git said need a person, unless a fetch that worked in a terminal since then
+    /// (`fetchedOnDisk`, as in `decision`) says someone saw to it.
+    public func remotesToFetch(_ repository: String, from remotes: [String], fetchedOnDisk: Date? = nil) -> [String] {
+        let paused = states[repository]?.needsPerson ?? [:]
+        return remotes.filter { remote in
+            guard let since = paused[remote] else { return true }
+            return fetchedOnDisk.map { $0 > since } ?? false
+        }
+    }
+
     /// A background fetch of `repository` began.
     public mutating func started(_ repository: String, at now: Date) {
         states[repository, default: State()].running = true
         states[repository, default: State()].tried = now
     }
 
-    public mutating func finished(_ repository: String, at now: Date, _ outcome: Outcome) {
+    /// A background fetch of `repository` ended, with how each remote it fetched went: none when there was
+    /// nothing to fetch. One remote that answered makes it a fetch, whatever the others did; one that needs
+    /// a person waits by itself.
+    public mutating func finished(_ repository: String, at now: Date, _ outcomes: [String: Outcome]) {
         var state = states[repository] ?? State()
         state.running = false
-        switch outcome {
-        case .fetched:
-            state.fetched = now
-            state.needsPersonSince = nil
-        case .needsPerson:
-            state.needsPersonSince = now
-        case .nothingToFetch, .failed:
-            break
+        for (remote, outcome) in outcomes {
+            switch outcome {
+            case .fetched: state.needsPerson[remote] = nil
+            case .needsPerson: state.needsPerson[remote] = now
+            case .failed: break
+            }
         }
+        if outcomes.values.contains(.fetched) { state.fetched = now }
         states[repository] = state
     }
 
-    /// A fetch you started succeeded: it counts as the last fetch, and turns background fetch back on.
-    public mutating func fetchedByHand(_ repository: String, at now: Date) {
+    /// A fetch you started worked, of `remote` or (nil) of every remote: it counts as the last fetch, and
+    /// background fetch takes up the remotes it covered again.
+    public mutating func fetchedByHand(_ repository: String, remote: String? = nil, at now: Date) {
         states[repository, default: State()].fetched = now
-        states[repository, default: State()].needsPersonSince = nil
+        if let remote {
+            states[repository]?.needsPerson[remote] = nil
+        } else {
+            states[repository]?.needsPerson = [:]
+        }
     }
 
     /// When Next Term itself last fetched `repository`. A background fetch leaves FETCH_HEAD alone, so
@@ -189,8 +202,12 @@ public struct FetchSchedule: Sendable {
 
     public func isRunning(_ repository: String) -> Bool { states[repository]?.running ?? false }
 
-    /// Whether git's need of a person has paused `repository`.
-    public func isPausedForPerson(_ repository: String) -> Bool { states[repository]?.needsPersonSince != nil }
+    /// Whether git's need of a person has paused `remote` of `repository`, or (nil) any of its remotes.
+    public func isPausedForPerson(_ repository: String, remote: String? = nil) -> Bool {
+        let paused = states[repository]?.needsPerson ?? [:]
+        guard let remote else { return !paused.isEmpty }
+        return paused[remote] != nil
+    }
 
     // MARK: the commands
 

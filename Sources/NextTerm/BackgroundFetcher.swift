@@ -110,10 +110,10 @@ final class BackgroundFetcher {
         if mayFetch(repository) { consider(repository, root: ProjectRoot.find(from: directory), .popupOpened) }
     }
 
-    /// A fetch you started succeeded: it counts as the last one, and turns background fetch back on after
-    /// git needed a password.
-    func fetchedByHand(repository: String) {
-        schedule.fetchedByHand(canonicalPath(repository), at: Date())
+    /// A fetch you started worked, of `remote` or (nil) of every remote: it counts as the last one, and
+    /// background fetch takes up a remote it had left because git needed a password.
+    func fetchedByHand(repository: String, remote: String? = nil) {
+        schedule.fetchedByHand(canonicalPath(repository), remote: remote, at: Date())
     }
 
     /// When Next Term itself last fetched the repository `directory` is in.
@@ -149,27 +149,31 @@ final class BackgroundFetcher {
     }
 
     private func consider(_ repository: String, root: String, _ trigger: FetchSchedule.Trigger) {
+        let fetchedOnDisk = GitRunner.lastSuccessfulFetch(root: root)
         let decision = schedule.decision(for: repository, trigger, now: Date(), active: test != nil || NSApp.isActive,
-                                         fetchedOnDisk: GitRunner.lastSuccessfulFetch(root: root), otherFetchRunning: otherFetchRunning(repository))
+                                         fetchedOnDisk: fetchedOnDisk, otherFetchRunning: otherFetchRunning(repository))
         guard decision == .fetch, let git = GitWriter.git else { return }
         schedule.started(repository, at: Date())
         DispatchQueue.global(qos: .utility).async {
-            let remotes = FetchSchedule.trackedRemotes(at: root, git: git)
-            DispatchQueue.main.async { self.fetch(repository, root: root, remotes: remotes) }
+            let tracked = FetchSchedule.trackedRemotes(at: root, git: git)
+            DispatchQueue.main.async {
+                let remotes = self.schedule.remotesToFetch(repository, from: tracked, fetchedOnDisk: fetchedOnDisk)
+                self.fetch(repository, root: root, remotes: remotes)
+            }
         }
     }
 
     private func fetch(_ repository: String, root: String, remotes: [String]) {
-        guard !remotes.isEmpty else { return schedule.finished(repository, at: Date(), .nothingToFetch) }
+        guard !remotes.isEmpty else { return schedule.finished(repository, at: Date(), [:]) }
         GitWriter.shared.fetchInBackground(in: root, repository: repository, remotes: remotes) { [weak self] results in
             guard let self else { return }
-            let outcomes = results.map { FetchSchedule.outcome(status: $0.status, output: $0.output) }
-            // One remote that answered counts as a fetch; one that needs a password pauses the repository.
-            var outcome = FetchSchedule.Outcome.failed
-            if outcomes.contains(.fetched) { outcome = .fetched }
-            if outcomes.contains(.needsPerson) { outcome = .needsPerson }
-            self.schedule.finished(repository, at: Date(), outcome)
-            if outcomes.contains(.fetched) { NotificationCenter.default.post(name: Self.fetched, object: repository) }
+            // Each remote by itself: one that needs a password waits alone, and one that answered is a fetch.
+            var outcomes: [String: FetchSchedule.Outcome] = [:]
+            for (remote, result) in zip(remotes, results) {
+                outcomes[remote] = FetchSchedule.outcome(status: result.status, output: result.output)
+            }
+            self.schedule.finished(repository, at: Date(), outcomes)
+            if outcomes.values.contains(.fetched) { NotificationCenter.default.post(name: Self.fetched, object: repository) }
         }
     }
 }

@@ -8,10 +8,14 @@ import Testing
 
     func at(_ minutes: Double) -> Date { start.addingTimeInterval(minutes * 60) }
 
-    /// Fetches at `minutes`, as the app would: started, then fetched.
+    /// Fetches origin at `minutes`, as the app would: started, then fetched.
     func fetch(_ schedule: inout FetchSchedule, at minutes: Double, _ outcome: FetchSchedule.Outcome = .fetched) {
+        fetch(&schedule, at: minutes, ["origin": outcome])
+    }
+
+    func fetch(_ schedule: inout FetchSchedule, at minutes: Double, _ outcomes: [String: FetchSchedule.Outcome]) {
         schedule.started(repo, at: at(minutes))
-        schedule.finished(repo, at: at(minutes), outcome)
+        schedule.finished(repo, at: at(minutes), outcomes)
     }
 
     @Test func everyIntervalWhileActive() {
@@ -63,7 +67,7 @@ import Testing
         #expect(schedule.isRunning(repo))
         #expect(schedule.decision(for: repo, .timer, now: at(20), active: true) == .skip(.running))
         #expect(schedule.decision(for: repo, .popupOpened, now: at(20), active: true) == .skip(.running))
-        schedule.finished(repo, at: at(1), .fetched)
+        schedule.finished(repo, at: at(1), ["origin": .fetched])
         #expect(schedule.decision(for: repo, .timer, now: at(20), active: true, otherFetchRunning: true) == .skip(.running))
         #expect(schedule.decision(for: repo, .timer, now: at(20), active: true) == .fetch)
     }
@@ -74,7 +78,7 @@ import Testing
         #expect(schedule.lastFetch(of: repo) == nil)
         #expect(schedule.decision(for: repo, .timer, now: at(5), active: true) == .skip(.recent))
         #expect(schedule.decision(for: repo, .timer, now: at(10), active: true) == .fetch)
-        fetch(&schedule, at: 10, .nothingToFetch)
+        fetch(&schedule, at: 10, [:]) // no branch tracks a remote: nothing to fetch
         #expect(schedule.decision(for: repo, .timer, now: at(15), active: true) == .skip(.recent))
         #expect(!schedule.isPausedForPerson(repo))
     }
@@ -82,21 +86,50 @@ import Testing
     @Test func pausesAfterAnAuthenticationFailureUntilAFetchByHand() {
         var schedule = FetchSchedule()
         fetch(&schedule, at: 0, .needsPerson)
-        #expect(schedule.isPausedForPerson(repo))
-        #expect(schedule.decision(for: repo, .timer, now: at(60), active: true) == .skip(.needsPerson))
-        #expect(schedule.decision(for: repo, .popupOpened, now: at(60), active: true) == .skip(.needsPerson))
+        #expect(schedule.isPausedForPerson(repo) && schedule.isPausedForPerson(repo, remote: "origin"))
+        #expect(schedule.lastFetch(of: repo) == nil)
+        // The rounds go on (reading which remotes branches track is local), but origin is left out.
+        #expect(schedule.decision(for: repo, .timer, now: at(60), active: true) == .fetch)
+        #expect(schedule.remotesToFetch(repo, from: ["origin"]).isEmpty)
         // A fetch in a terminal that worked (a FETCH_HEAD with something in it, newer than the failure) resumes it.
-        #expect(schedule.decision(for: repo, .timer, now: at(60), active: true, fetchedOnDisk: at(30)) == .fetch)
-        #expect(schedule.decision(for: repo, .timer, now: at(60), active: true, fetchedOnDisk: at(-5)) == .skip(.needsPerson))
+        #expect(schedule.remotesToFetch(repo, from: ["origin"], fetchedOnDisk: at(30)) == ["origin"])
+        #expect(schedule.remotesToFetch(repo, from: ["origin"], fetchedOnDisk: at(-5)).isEmpty)
         // So does one started in Next Term.
         schedule.fetchedByHand(repo, at: at(61))
         #expect(!schedule.isPausedForPerson(repo) && schedule.lastFetch(of: repo) == at(61))
+        #expect(schedule.remotesToFetch(repo, from: ["origin"]) == ["origin"])
         #expect(schedule.decision(for: repo, .timer, now: at(65), active: true) == .skip(.recent))
         #expect(schedule.decision(for: repo, .timer, now: at(71), active: true) == .fetch)
         // A background fetch that works again ends the pause too.
         fetch(&schedule, at: 80, .needsPerson)
         fetch(&schedule, at: 81, .fetched)
         #expect(!schedule.isPausedForPerson(repo))
+    }
+
+    /// One remote that needs a password (a fork, an upstream) waits by itself: the others go on, and the
+    /// ones that answered count as a fetch.
+    @Test func aRemoteThatNeedsAPersonPausesOnlyItself() {
+        var schedule = FetchSchedule()
+        let remotes = ["origin", "upstream"]
+        #expect(schedule.remotesToFetch(repo, from: remotes) == remotes)
+        fetch(&schedule, at: 0, ["origin": .fetched, "upstream": .needsPerson])
+        #expect(schedule.lastFetch(of: repo) == at(0), "origin answered")
+        #expect(schedule.isPausedForPerson(repo, remote: "upstream") && !schedule.isPausedForPerson(repo, remote: "origin"))
+        #expect(schedule.decision(for: repo, .timer, now: at(10), active: true) == .fetch)
+        #expect(schedule.remotesToFetch(repo, from: remotes) == ["origin"])
+        // origin unreachable for a round: upstream still waits, and the last fetch stays where it was.
+        fetch(&schedule, at: 10, ["origin": .failed])
+        #expect(schedule.lastFetch(of: repo) == at(0) && schedule.remotesToFetch(repo, from: remotes) == ["origin"])
+        // A fetch in a terminal that worked since: upstream is tried once more.
+        #expect(schedule.remotesToFetch(repo, from: remotes, fetchedOnDisk: at(15)) == remotes)
+        // Update Project fetched origin: upstream still waits. Fetch (every remote) worked: nothing does.
+        schedule.fetchedByHand(repo, remote: "origin", at: at(20))
+        #expect(schedule.remotesToFetch(repo, from: remotes) == ["origin"])
+        schedule.fetchedByHand(repo, at: at(21))
+        #expect(!schedule.isPausedForPerson(repo) && schedule.remotesToFetch(repo, from: remotes) == remotes)
+        // Both need a person: nothing is fetched, and no fetch counts.
+        fetch(&schedule, at: 40, ["origin": .needsPerson, "upstream": .needsPerson])
+        #expect(schedule.lastFetch(of: repo) == at(21) && schedule.remotesToFetch(repo, from: remotes).isEmpty)
     }
 
     @Test func pausesInLowPowerModeAndOnCostlyNetworks() {
@@ -261,21 +294,20 @@ import Testing
         var schedule = FetchSchedule()
         let paused = Date().addingTimeInterval(-1)
         schedule.started(repo, at: paused)
-        schedule.finished(repo, at: paused, .needsPerson)
-        func decision() -> FetchSchedule.Decision {
-            schedule.decision(for: repo, .timer, now: Date().addingTimeInterval(3600), active: true,
-                              fetchedOnDisk: GitRunner.lastSuccessfulFetch(root: main))
+        schedule.finished(repo, at: paused, ["origin": .needsPerson])
+        func remotes() -> [String] {
+            schedule.remotesToFetch(repo, from: ["origin"], fetchedOnDisk: GitRunner.lastSuccessfulFetch(root: main))
         }
-        #expect(decision() == .skip(.needsPerson))
+        #expect(remotes().isEmpty)
         // A fetch in a tab that fails: git writes FETCH_HEAD all the same, empty.
         #expect(sh(["remote", "add", "gone", base + "/nowhere.git"], in: main))
         #expect(!sh(["fetch", "gone"], in: main))
         #expect(FileManager.default.fileExists(atPath: main + "/.git/FETCH_HEAD"))
-        #expect(decision() == .skip(.needsPerson))
+        #expect(remotes().isEmpty)
         // One that works, in the linked worktree, which has a FETCH_HEAD of its own.
         #expect(sh(["fetch", "-q", "origin"], in: linked))
         #expect(FileManager.default.fileExists(atPath: main + "/.git/worktrees/linked/FETCH_HEAD"))
-        #expect(decision() == .fetch)
+        #expect(remotes() == ["origin"])
         #expect(GitRunner.lastSuccessfulFetch(root: linked) != nil)
         #expect(GitRunner.lastSuccessfulFetch(root: linked) == GitRunner.lastSuccessfulFetch(root: main))
     }
