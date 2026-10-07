@@ -449,4 +449,17 @@ import Testing
         #expect(RemoteLink.weakest([.connected, .connected]) == .connected)
         #expect(RemoteLink.weakest([]) == nil)
     }
+
+    @Test func aSplitTabNamesTheHostWhoseConnectionItShows() {
+        let web1 = RemoteMark(host: "web-1", destination: "deploy@web-1", link: .connected)
+        let web2 = RemoteMark(host: "web-2", destination: "deploy@web-2", link: .disconnected)
+        #expect(RemoteMark.split(focused: web1, panes: [web1, web2]) == web2)
+        #expect(RemoteMark.split(focused: web1, panes: [web1, web2])?.summary == "Remote: web-2 (deploy@web-2), disconnected")
+        // As weak as the other panes: the focused pane's own host.
+        let web2Up = RemoteMark(host: "web-2", destination: "deploy@web-2", link: .connected)
+        #expect(RemoteMark.split(focused: web2Up, panes: [web1, web2Up]) == web2Up)
+        // The focused pane is on this Mac.
+        #expect(RemoteMark.split(focused: nil, panes: [web2]) == web2)
+        #expect(RemoteMark.split(focused: nil, panes: []) == nil)
+    }
 }

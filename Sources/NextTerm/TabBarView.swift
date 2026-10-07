@@ -18,16 +18,6 @@ struct TabBarItem: Equatable {
     var remote: RemoteMark? = nil
 }
 
-/// A remote tab's host and connection, as its tab, the sidebar and the overflow menu show them.
-struct RemoteMark: Equatable {
-    var host: String
-    var destination: String
-    var link: RemoteLink
-
-    /// "Remote: web-1 (deploy@203.0.113.5), connected"
-    var summary: String { "Remote: \(host) (\(destination)), \(link.phrase)" }
-}
-
 protocol TabBarViewDelegate: AnyObject {
     func tabBar(_ bar: TabBarView, didSelect index: Int)
     func tabBar(_ bar: TabBarView, didClose index: Int)

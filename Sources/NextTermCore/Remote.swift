@@ -89,6 +89,30 @@ public enum RemoteLink: String, Sendable, CaseIterable {
     }
 }
 
+/// A remote tab's host and connection, as its tab, the sidebar and the overflow menu show them.
+public struct RemoteMark: Equatable, Sendable {
+    public var host: String
+    public var destination: String
+    public var link: RemoteLink
+
+    public init(host: String, destination: String, link: RemoteLink) {
+        self.host = host
+        self.destination = destination
+        self.link = link
+    }
+
+    /// "Remote: web-1 (deploy@203.0.113.5), connected"
+    public var summary: String { "Remote: \(host) (\(destination)), \(link.phrase)" }
+
+    /// A split tab's mark: its weakest pane's, so a pane that lost its connection is not hidden, and the
+    /// host named is the one whose connection it shows (the focused pane's, when that one is as weak).
+    public static func split(focused: RemoteMark?, panes: [RemoteMark]) -> RemoteMark? {
+        guard let weakest = RemoteLink.weakest(panes.map(\.link)) else { return nil }
+        if let focused, focused.link == weakest { return focused }
+        return panes.first { $0.link == weakest }
+    }
+}
+
 /// A server the user connects to.
 public struct RemoteHost: Codable, Equatable, Sendable {
     /// Stable id (saved tabs and MCP refer to it).
