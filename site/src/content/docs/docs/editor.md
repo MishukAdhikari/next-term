@@ -33,13 +33,14 @@ One click opens only what the editor shows itself, up to 4 MB; large data files 
 
 ## Go to File
 
-Press <kbd>⌘P</kbd> and type: any file in the project, found by name or path as you type.
+Press <kbd>⌘P</kbd> and type: a file in the project, found by name or path as you type.
 
 - **Fuzzy:** the letters only need to appear in order, so `usrctl` finds `UserController.php`. The path counts too, so a folder name narrows the list.
 - **File names first:** a match in the file’s name ranks above a match somewhere in its path.
 - **At a line:** add the line number, as in `UserController.php:42`, and the file opens there.
 - **From a selection:** with text selected in the editor or the terminal, <kbd>⌘P</kbd> starts with it, as Find does. Select `app/Models/User.php:42` in a stack trace and press <kbd>⌘P</kbd>, then <kbd>↩</kbd>.
-- **Recently opened first:** with nothing typed, the list is the files you opened lately, newest first.
+- **Recently opened first:** with nothing typed, the list is the files you opened lately in the window, newest first.
+- **Which files:** in a git repository, the ones git lists: tracked files, and new ones it does not ignore. A file your `.gitignore` covers, such as `.env`, is left out until you open it another way (from the sidebar, or a path in the terminal); from then on it is in the list with the files you opened lately. Outside a repository, hidden folders and the usual dependency and build folders (`node_modules`, `vendor`, `build`, `dist` and the like) are left out, and a very large folder is listed only in part: up to 200,000 files, or what 5 seconds of looking finds.
 
 ## 112 languages
 
