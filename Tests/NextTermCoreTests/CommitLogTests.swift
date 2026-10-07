@@ -259,6 +259,38 @@ import Testing
         }
     }
 
+    /// Process hands git its arguments decomposed (“ü” as “u” and two dots), and git composes them again
+    /// only with core.precomposeUnicode, which a repository from elsewhere may not have. Text, names,
+    /// branches and paths beyond ASCII, stored composed as almost everything is, are found all the same.
+    @Test func composedTextIsFoundWithoutPrecomposeUnicode() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        // Made the way git elsewhere makes them: the message from a file, the name and the path composed.
+        repo.sh(["config", "core.precomposeUnicode", "true"])
+        try repo.write("école.txt", "a\n")
+        repo.sh(["add", "-A"])
+        try repo.write("message.txt", "Über alles\n")
+        repo.sh(["commit", "-q", "-F", "message.txt", "--author=Zoë Ärger <z@x>", "--", "école.txt"])
+        // A packed branch is found by its name's bytes (a loose one, by the file system's lookup).
+        repo.sh(["branch", "fünf"])
+        repo.sh(["pack-refs", "--all"])
+        try FileManager.default.removeItem(atPath: repo.work + "/message.txt")
+        let sha = repo.sh(["rev-parse", "HEAD"])
+        let reads: [[String]] = [["log", "-1", "--format=%an %s"], ["ls-tree", "--name-only", "HEAD"], ["for-each-ref", "--format=%(refname)", "refs/heads"]]
+        let stored = reads.map { repo.sh(["-c", "core.quotepath=off"] + $0) }.joined(separator: " ")
+        let marks = stored.unicodeScalars.filter { (0x300...0x36F).contains($0.value) }
+        try #require(marks.isEmpty && stored.contains("Zoë Ärger Über alles école.txt") && stored.contains("refs/heads/fünf"), "stored composed: \(stored)")
+        // As a repository made on Linux, or copied from there, has it.
+        repo.sh(["config", "core.precomposeUnicode", "false"])
+        let queries: [CommitQuery] = [CommitQuery(text: "über"), CommitQuery(text: "ÜBER", regex: true), CommitQuery(author: "zoë"), CommitQuery(author: "Zoë Ärger", exactAuthor: true),
+                       CommitQuery(paths: ["école.txt"]), CommitQuery(scope: .ref("refs/heads/fünf"))]
+        for query in queries {
+            #expect(CommitLog.page(query, in: repo.work, git: repo.git)?.map(\.sha) == [sha], "\(query)")
+        }
+        let diff = CommitLog.diff(of: "école.txt", commit: sha, parent: nil, in: repo.work, git: repo.git)
+        #expect(diff?.isNew == true && diff?.hunks.first?.added == 1)
+    }
+
     /// In a partial clone, reading a commit's files downloads nothing: they are listed without counts.
     @Test func aPartialCloneIsNotFetchedFrom() throws {
         let repo = try #require(ScratchRepo())

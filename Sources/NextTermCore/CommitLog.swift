@@ -328,9 +328,13 @@ public enum CommitLog {
         return commits
     }
 
-    /// Paths are file names, never patterns: `[1].txt` is that file, and `:weird.txt` too.
+    /// Paths are file names, never patterns: `[1].txt` is that file, and `:weird.txt` too. Process hands
+    /// git its arguments decomposed (“ü” as “u” and two dots); git composes them again, as the text,
+    /// names, branches and paths it stores almost always are, only with core.precomposeUnicode, which a
+    /// repository from elsewhere may not have. (Where git has no such setting, it ignores it.)
     private static func base(_ root: String) -> [String] {
-        ["-C", root, "--no-optional-locks", "--literal-pathspecs", "-c", "log.showSignature=false", "-c", "log.follow=false", "-c", "core.quotepath=off"]
+        ["-C", root, "--no-optional-locks", "--literal-pathspecs", "-c", "log.showSignature=false", "-c", "log.follow=false", "-c", "core.quotepath=off",
+         "-c", "core.precomposeUnicode=true"]
     }
 
     /// Every commit the query lists, in order, as ids; nil when git fails (not a repository, a bad
@@ -488,8 +492,7 @@ public enum CommitLog {
                        "--src-prefix=a/", "--dst-prefix=b/"]
         let against = parent.map { ["--end-of-options", $0, commit] } ?? ["--root", "--end-of-options", commit]
         let paths = [oldPath, path].compactMap { $0 }
-        guard let data = GitRunner.run(git, ["-C", root, "--no-optional-locks", "--literal-pathspecs", "-c", "core.quotepath=off", "diff-tree", "-r", "--no-commit-id"]
-                                       + options + against + ["--"] + paths, timeout: 15) else { return nil }
+        guard let data = GitRunner.run(git, base(root) + ["diff-tree", "-r", "--no-commit-id"] + options + against + ["--"] + paths, timeout: 15) else { return nil }
         let files = UnifiedDiff.parse(String(decoding: data, as: UTF8.self))
         let new = files.first { $0.newPath == path }, old = files.first { $0.oldPath == path }
         // A file that became a link (or a link that became a file) is two patches, the old one deleted
