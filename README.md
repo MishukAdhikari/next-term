@@ -72,7 +72,8 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
   folder). Open Recent, Close Project, and a Welcome window, like an IDE.
 - **Project sidebar with git.** The project as a live file tree: changed files and folders coloured, with
   `+12 −3` line counts like a pull request, and the branch and total changes at the top, with a **Pull 152**
-  button when the upstream has commits you don't.
+  button when the upstream has commits you don't (Next Term fetches every 10 minutes, so it appears
+  without a click).
   Files your agents create or change show up on their own.
 - **Databases.** A Databases group in the sidebar lists the databases a project's own files name (Laravel
   and Herd `DB_*` keys, `DATABASE_URL`, Prisma, Drizzle, Supabase, Vercel-linked projects, SQLite files),
@@ -233,11 +234,14 @@ closes; tabs that don't fit go behind the » button.
 - **The MCP server** listens on a Unix socket only you can open (0600, and each connection is checked to
   be yours), never on the network. Agents reach it through `nxtrm mcp`, which they start themselves.
   Tabs refuse input from their own agent, and a tab running something closes only when told to force it.
-- **Git:** the sidebar's git calls are read-only and use `--no-optional-locks`, so the sidebar never holds
-  the index lock while your own git commands run. The branch popup changes the repository only when you
-  ask (checkout, merge, rebase, commit, push, stash). It asks first when an agent is working in the folder,
-  puts changes a switch would overwrite in a named stash, and force-pushes only with a lease on the commits
-  it showed you, never to `main`, `master`, `release/*` or the default branch.
+- **Git:** the sidebar reads status with read-only calls and `--no-optional-locks`, so it never holds the
+  index lock while your own git commands run. On its own, Next Term only runs `git fetch`: every 10 minutes
+  while it is the active app, and as the branch popup opens if the last fetch is over 5 minutes old. That
+  updates remote-tracking branches and tags, never your branches, files or index, and Settings › Editor ›
+  Git turns it off. Everything else runs only when you ask: checkout, merge, rebase, commit, push, stash,
+  the sidebar's Pull and Push, and staging a hunk. Next Term asks first when an agent is working in the
+  folder, puts changes a switch would overwrite in a named stash, and force-pushes only with a lease on the
+  commits it showed you, never to `main`, `master`, `release/*` or the default branch `<remote>/HEAD` names.
 
 ## Build from source
 
