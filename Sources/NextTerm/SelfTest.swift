@@ -1366,6 +1366,7 @@ enum SelfTest {
             check(diff?.matches(root: canonicalPath(proj.path), path: "src/gone.txt") == true, "it opens as a diff of what was removed")
             check(await wait(5) { diff?.sideTexts.0.contains("2\n") == true && diff?.sideTexts.1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true },
                   "with the old lines on the left and nothing on the right", "\(diff?.sideTexts.0.count ?? -1) | \(diff?.sideTexts.1.count ?? -1)")
+            check(diff?.contextItem()?.note == "deleted", "and Send to Agent from it says the file is gone", diff?.contextItem()?.note ?? "no note")
             if let diff { c.editorArea.close(diff) }
         }
 
@@ -1650,6 +1651,8 @@ enum SelfTest {
         let diffTitle = "log-side.txt @ " + side.prefix(7)
         check(await wait(8) { c.editorArea.activeDiff?.title == diffTitle && (c.editorArea.activeDiff?.changedLineCount ?? 0) > 0 },
               "a changed file opens as its diff in that commit", c.editorArea.activeDiff?.title ?? "no diff in front")
+        let commitNote = c.editorArea.activeDiff?.contextItem()?.note
+        check(commitNote == "as of commit " + side.prefix(7), "Send to Agent from it names the commit", commitNote ?? "no note")
         if let diff = c.editorArea.activeDiff { c.editorArea.close(diff) }
 
         // showCommit, with a filter that hides the commit: the filter goes, the commit is selected.
@@ -2348,6 +2351,29 @@ enum SelfTest {
                   agentTab.screenTail(3).joined(separator: " | "))
             check(c.activeTab === agentTab && window.firstResponder === agentTab.view, "and the agent's tab takes the keyboard for the instruction")
         }
+        // From a diff: the selected lines of its new side (a file git doesn't know yet: every line is new).
+        let fresh = proj.appendingPathComponent("src/send-diff.txt")
+        if GitRunner.locateGit() != nil {
+            try? "one\ntwo\nthree\nfour\n".write(to: fresh, atomically: true, encoding: .utf8)
+            c.showChanges(of: fresh)
+            let freshDiff = area.activeDiff
+            _ = await wait(5) { freshDiff?.hunkCount == 1 }
+            if let freshDiff, let side = freshDiff.focusView as? NSTextView {
+                let text = side.string as NSString
+                let from = text.range(of: "two"), to = text.range(of: "three\n")
+                if from.location != NSNotFound, to.location != NSNotFound {
+                    side.setSelectedRange(NSRange(location: from.location, length: NSMaxRange(to) - from.location))
+                }
+                window.makeFirstResponder(side)
+                c.sendEditorSelection()
+                check(await wait(4) { agentTab.screenTail(4).joined().contains("@src/send-diff.txt#L2-3") },
+                      "Send to Agent from a diff types the new side's selected lines", agentTab.screenTail(3).joined(separator: " | "))
+                area.close(freshDiff)
+            } else {
+                check(false, "a new file opens as a diff", area.activeName ?? "nothing in front")
+            }
+            try? FileManager.default.removeItem(at: fresh)
+        }
         c.sidebar(c.sidebar, sendToAgent: [(proj.appendingPathComponent("src"), true)])
         check(await wait(4) { agentTab.screenTail(4).joined().contains("@src/") }, "a folder from the sidebar goes in as @src/")
         check(c.agentText([ContextItem(path: "app/User.php", lines: 10...12)], for: "codex") == "app/User.php:10-12",
@@ -2651,6 +2677,20 @@ enum SelfTest {
               "old on the left, new on the right, rows aligned")
         await screenshot(c, suffix: "-diff")
 
+        // Send to Agent from the diff: the file, at the new side's selected lines.
+        check(c.editorArea.activePath == file.path && diff.contextItem() == ContextItem(path: file.path),
+              "Send to Agent from a diff sends its file when nothing is selected", c.editorArea.activePath ?? "nothing in front")
+        if let side = diff.focusView as? NSTextView {
+            let text = side.string as NSString
+            let from = text.range(of: "line two"), to = text.range(of: "line 3\n")
+            if from.location != NSNotFound, to.location != NSNotFound {
+                side.setSelectedRange(NSRange(location: from.location, length: NSMaxRange(to) - from.location))
+            }
+            let item = diff.contextItem()
+            check(item == ContextItem(path: file.path, lines: 2...3), "and the new side's lines when some are selected", "\(String(describing: item))")
+            side.setSelectedRange(NSRange(location: 0, length: 0))
+        }
+
         // Stage one hunk; it moves to Staged. Unstage it again.
         diff.base = .unstaged
         _ = await wait(5) { diff.hunkCount == 2 }
@@ -2659,6 +2699,15 @@ enum SelfTest {
         diff.base = .staged
         check(await wait(5) { diff.hunkCount == 1 && diff.sideTexts.1.contains("line two") }, "Stage Hunk stages just that change",
               "\(diff.hunkCount) staged")
+        // The staged version is not the file on disk: Send to Agent says so and brings its lines along.
+        if let side = diff.focusView as? NSTextView {
+            let at = (side.string as NSString).range(of: "line two")
+            if at.location != NSNotFound { side.setSelectedRange(at) }
+            let item = diff.contextItem()
+            check(item?.lines == 2...2 && item?.note == "as staged" && item?.code == "line two",
+                  "from Staged, Send to Agent marks the lines as staged and sends them as code", "\(String(describing: item))")
+            side.setSelectedRange(NSRange(location: 0, length: 0))
+        }
         diff.go(toHunk: 0)
         diff.perform(.unstage)
         check(await wait(5) { diff.hunkCount == 0 }, "Unstage Hunk takes it back out")

@@ -366,6 +366,47 @@ final class DiffPane: NSView {
         right.show(rows, language: EditorLanguage.id(forFileName: (path as NSString).lastPathComponent))
     }
 
+    // MARK: send to agent
+
+    /// What Send to Agent gives the agent: the file, at the new side's lines in the selection (the rows line
+    /// up, so a selection on the old side picks the same rows), or the whole file with nothing selected.
+    /// A staged or committed version is not the file on disk, so the note says which it is and its lines go
+    /// along as code. Nil for an agent's proposal: that agent is waiting for your answer in its terminal.
+    func contextItem() -> ContextItem? {
+        guard proposal == nil else { return nil }
+        var item = ContextItem(path: absolutePath)
+        let numbered = selectedRows().filter { right.number(at: $0) != nil }
+        let lines = numbered.compactMap { right.number(at: $0) }
+        if let first = lines.first, let last = lines.last { item.lines = first...last }
+        if let commit {
+            item.note = "as of commit \(commit.sha.prefix(7))"
+        } else if base == .staged, item.lines != nil {
+            item.note = "as staged"
+        } else if !FileManager.default.fileExists(atPath: absolutePath) {
+            item.note = "deleted"
+        }
+        if commit != nil || base == .staged, item.lines != nil {
+            let code = numbered.compactMap { rows[$0].right?.text }.joined(separator: "\n")
+            if !AgentPrompt.isTooLargeToInline(code) {
+                item.code = code
+                item.language = EditorLanguage.id(forFileName: (path as NSString).lastPathComponent) ?? "text"
+            }
+        }
+        return item
+    }
+
+    /// The rows under the selection on the side that has the keyboard (else the new side).
+    private func selectedRows() -> [Int] {
+        let view = window?.firstResponder === left.textView ? left.textView : right.textView
+        let range = view.selectedRange()
+        guard range.length > 0 else { return [] }
+        let text = view.string as NSString
+        func row(at offset: Int) -> Int { text.substring(to: min(offset, text.length)).utf16.filter { $0 == 0x0A }.count }
+        // A selection ending at the start of a row does not include that row.
+        let first = row(at: range.location), last = row(at: max(range.location, NSMaxRange(range) - 1))
+        return Array(first...max(first, last)).filter { rows.indices.contains($0) }
+    }
+
     // MARK: hunks
 
     private func updateButtons() {

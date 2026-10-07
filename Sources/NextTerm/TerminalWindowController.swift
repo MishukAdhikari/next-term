@@ -617,7 +617,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(showChanges(_:)) {
             return editorArea.activePath != nil || sidebar.selection.contains { !$0.isFolder } || sidebar.selectedDeleted.contains { !$0.isDirectory }
         }
-        if item.action == #selector(sendToAgent(_:)) { return agentTab != nil && (editorArea.activePath != nil || !sidebar.selection.isEmpty) }
+        if item.action == #selector(sendToAgent(_:)) {
+            let sendable = editorArea.activePath != nil && editorArea.activeDiff?.proposal == nil
+            return agentTab != nil && (sendable || !sidebar.selection.isEmpty)
+        }
         if item.action == #selector(toggleEditorFocus(_:)) {
             item.title = isEditorFocused ? "Focus Terminal" : "Focus Editor"
             return editorArea.activeTextView != nil
@@ -1103,7 +1106,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
     }
 
-    /// The editor's selection as lines of its file (or the whole file when nothing is selected).
+    /// The editor's selection as lines of its file (or the whole file when nothing is selected), and the
+    /// same from a diff's new side.
     func sendEditorSelection() {
         if let editor = editorArea.activeEditor {
             let document = editor.document
@@ -1133,6 +1137,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             send([database.contextItem()]) // the table, and the selected rows when they are few
         } else if let data = editorArea.activeData {
             send([data.contextItem()]) // the file, at the selected rows' lines
+        } else if let diff = editorArea.activeDiff {
+            // The file, at the new side's selected lines; never into an agent's prompt while it waits on its proposal.
+            guard let item = diff.contextItem() else { return NSSound.beep() }
+            send([item])
         }
     }
 
