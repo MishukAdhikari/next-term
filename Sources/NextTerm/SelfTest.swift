@@ -2013,6 +2013,8 @@ enum SelfTest {
         run("push", "-q", "-u", "st", "feat/force")
         run("clone", "-q", "-b", "feat/force", bare.path, theirs.path)
         func diverge(_ n: Int) {
+            run("-C", theirs.path, "fetch", "-q", "origin")
+            run("-C", theirs.path, "reset", "-q", "--hard", "origin/feat/force")
             run("-C", theirs.path, "commit", "--allow-empty", "-qm", "theirs \(n)")
             run("-C", theirs.path, "push", "-q", "origin", "feat/force")
             run("fetch", "-q", "st")
