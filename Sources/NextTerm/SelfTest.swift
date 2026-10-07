@@ -1370,9 +1370,12 @@ enum SelfTest {
 
         // A commit while the file is open: blame follows at once, on the HEAD change (not the 5-second check).
         c.editorArea.save(editor.document)
+        await pause(0.5) // the save's own refresh reads the old HEAD
+        c.editorArea.periodicBaselineChecks = false
         commit("Cy Doe", "Third")
         check(await wait(3) { column(0).hasPrefix("Cy ") && column(2).hasPrefix("Cy ") && editor.changeMarks.isEmpty },
               "a commit re-annotates the open file at once", "\(column(0)) / \(column(1)) / \(column(2)) / \(column(3))")
+        c.editorArea.periodicBaselineChecks = true
         check(column(1).hasPrefix("Ann ") && column(3).hasPrefix("Bob "), "and the lines it did not change keep theirs",
               "\(column(1)) / \(column(3))")
 

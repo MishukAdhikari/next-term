@@ -57,6 +57,8 @@ public struct Blame: Equatable, Sendable {
     public var head = ""
     /// A shallow clone: its oldest commits stand for all of the history it does not have.
     public var isShallow = false
+    /// The commits the clone was cut off at (git's shallow file); a real root commit is not one of them.
+    public var shallowCommits: Set<String> = []
 
     public init() {}
 
@@ -72,7 +74,7 @@ public struct Blame: Equatable, Sendable {
 
     /// The oldest commit a shallow clone has: its lines come from it or from any commit before it, so
     /// its author and date say nothing about them.
-    public func isShallowBoundary(_ commit: Commit) -> Bool { isShallow && commit.isBoundary }
+    public func isShallowBoundary(_ commit: Commit) -> Bool { isShallow && commit.isBoundary && shallowCommits.contains(commit.sha) }
 
     /// Parses `git blame --porcelain`: per line a header (`sha original final [count]`), the commit's
     /// details the first time it appears, and the line itself after a tab. Nil for a binary file.
@@ -168,16 +170,25 @@ extension GitRunner {
         let prefix = ["-C", folder, "--no-optional-locks"]
         let quick: TimeInterval = 10
         // The root, whether the clone is shallow, and HEAD in one run; with no commit yet, only the root answers.
-        let parse = prefix + ["rev-parse", "--show-toplevel", "--is-shallow-repository", revision ?? "HEAD"]
-        guard let found = lines(run(git, parse, timeout: quick)), found.count == 3 else {
+        let parse = prefix + ["rev-parse", "--show-toplevel", "--is-shallow-repository", "--git-path", "shallow", revision ?? "HEAD"]
+        guard let found = lines(run(git, parse, timeout: quick)), found.count == 4 else {
             if let root = lines(run(git, prefix + ["rev-parse", "--show-toplevel"], timeout: quick))?.first { return .notCommitted(root: root) }
             return .notInRepository
         }
-        let (root, shallow, head) = (found[0], found[1] == "true", found[2])
+        let (root, shallow, head) = (found[0], found[1] == "true", found[3])
+        var cutOff: Set<String> = []
+        if shallow {
+            let file = found[2].hasPrefix("/") ? found[2] : (folder as NSString).appendingPathComponent(found[2])
+            cutOff = Set(((try? String(contentsOfFile: file, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init))
+        }
         let key = workingTree ? nil : path + "\0" + head
         if let key, let known = cache?[key] { return known }
-        let result = blame(name, prefix: prefix, root: root, head: head, shallow: shallow, git: git, workingTree: workingTree,
+        var result = blame(name, prefix: prefix, root: root, head: head, shallow: shallow, git: git, workingTree: workingTree,
                            maxSize: maxSize, timeout: timeout)
+        if case .annotated(var annotated) = result {
+            annotated.shallowCommits = cutOff
+            result = .annotated(annotated)
+        }
         if let key, result != .failed { cache?[key] = result }
         return result
     }

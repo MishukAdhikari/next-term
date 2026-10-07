@@ -19,6 +19,9 @@ final class EditorArea: NSView, TabBarViewDelegate {
     private var bannerHeight: NSLayoutConstraint!
     /// Tabs in order: files being edited (CodeEditorView), diffs (DiffPane) and notebooks (NotebookPane).
     private(set) var panes: [NSView] = []
+    /// The 5-second recheck of the open file's committed text (off in the self-test, to prove that a
+    /// commit is noticed on its own).
+    var periodicBaselineChecks = true
     private(set) var activeIndex = 0
 
     var editors: [CodeEditorView] { panes.compactMap { $0 as? CodeEditorView } }
@@ -316,7 +319,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
         for notebook in notebooks { notebook.refreshIfChanged() }
         // The file being edited against the last commit: a commit (yours or an agent's) moves the marks.
         checks += 1
-        if checks % 5 == 0 { activeEditor?.refreshBaseline() }
+        if periodicBaselineChecks, checks % 5 == 0 { activeEditor?.refreshBaseline() }
     }
 
     private var checks = 0
