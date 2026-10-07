@@ -53,6 +53,7 @@ import Testing
             ":000000 100644 \(zero) \(zero) A", "added.txt",
             ":100644 000000 \(a) \(zero) D", "gone.txt",
             ":120000 120000 \(a) \(zero) M", "link",
+            ":100644 100644 \(a) \(zero) M", "\"quoted\".txt",
             "",
         ]
         let changes = BranchCompare.parseRaw(Data(records.joined(separator: "\0").utf8))
@@ -64,10 +65,13 @@ import Testing
             ChangedFile(path: "added.txt", status: .added),
             ChangedFile(path: "gone.txt", status: .deleted),
             ChangedFile(path: "link", status: .modified),
+            ChangedFile(path: "\"quoted\".txt", status: .modified),
         ])
         #expect(changes[0] == BranchCompare.RawChange(file: changes[0].file, oldMode: "100644", newMode: "100644", oldID: a, newID: zero))
         // Only a plain file with the same mode and no id on disk may be unchanged: the rest are changes.
-        #expect(changes.map(\.mayBeUnchanged) == [true, false, false, false, false, false, false])
+        // A name hash-object would read as quoted is a change too.
+        let unsure: [Bool] = changes.map(\.mayBeUnchanged)
+        #expect(unsure == [true, false, false, false, false, false, false, false])
         #expect(BranchCompare.parseRaw(Data()).isEmpty)
         // Cut short: what is whole is kept.
         let short = ":100644 100644 \(a) \(b) M\0a.txt\0:100644 100644 \(a) \(a) R100\0old.txt"
@@ -312,5 +316,18 @@ import Testing
         repo.sh(["branch", "-D", "feat"])
         #expect(GitRunner.diff(of: "a1.txt", in: repo.work, git: repo.git, base: feat) == nil)
         #expect(GitRunner.diff(of: "same.txt", in: repo.work, git: repo.git, base: feat) == nil)
+    }
+
+    /// hash-object reads a path that starts with a double quote as C-quoted: "\"q\".txt" would hash the
+    /// file q. A changed file named like that is listed, even with a q beside it holding its old text.
+    @Test func aChangedFileNamedWithAQuoteIsListed() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        try repo.write("\"q\".txt", "one\n")
+        repo.commit("Base")
+        try repo.write("\"q\".txt", "two\n")
+        try repo.write("q", "one\n")
+        let files = try #require(BranchCompare.workingTreeFiles(against: "refs/heads/main", in: repo.work, git: repo.git))
+        #expect(files == [ChangedFile(path: "\"q\".txt", status: .modified)])
     }
 }

@@ -137,10 +137,11 @@ public enum BranchCompare {
         public let newID: String
 
         /// A plain file on disk that may be listed as modified only because git hasn't read it since it
-        /// was touched.
+        /// was touched. Not one hash-object can't be given a line at a time: a name with a newline, or
+        /// starting with a double quote (it would read the name as C-quoted, and hash another file).
         var mayBeUnchanged: Bool {
             guard file.status == .modified, oldMode == newMode, oldMode.hasPrefix("100") else { return false }
-            return newID.allSatisfy { $0 == "0" } && !file.path.contains("\n")
+            return newID.allSatisfy { $0 == "0" } && !file.path.contains("\n") && !file.path.hasPrefix("\"")
         }
     }
 
