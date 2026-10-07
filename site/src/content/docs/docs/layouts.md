@@ -49,7 +49,7 @@ The project sidebar sits on the **left** (the default) or the **right**.
 ## Sizes
 
 - **Drag the line between the editor and the terminal** to share the space. The line is easy to grab: anywhere within a few points of it works. Next Term remembers the split you chose.
-- **Fold the terminal away:** the arrow before the terminal’s **⋯** (or <kbd>⌘J</kbd>, **View › Collapse Terminal**) folds it down to its tab bar, so the editor gets the room; click it again, or drag the line, to bring it back at its size.
+- **Fold the terminal away:** the arrow before the terminal’s **⋯** (or <kbd>⌘J</kbd>, **View › Collapse Terminal**) folds it so the editor gets the room. Below or above the editor it folds down to its tab bar. Beside the editor it folds to a slim rail at the window’s edge: the arrow back at the top, and under it each tab’s mark (the spinner while an agent works, ✓ done, ✗ failed, ! needs you). When a tab finishes, fails or needs you while folded, the rail pulses a few times and then stays still with the mark showing (with **Reduce Motion** on, the mark just appears). Click a mark to open the terminal on that tab; click anywhere else on the rail, press <kbd>⌘J</kbd> or drag the line to bring it back at its size. Switching terminal tabs from the keyboard opens it too.
 - **Resizing the window** gives the change to the editor; the terminal keeps its size.
 - **Drag the sidebar’s edge** to make it wider or narrower.
 - **Hide the sidebar** with the sidebar icon in its header, next to its **⋯** (or <kbd>⌘B</kbd>). While it is hidden, the same icon sits just after the window’s traffic lights; click it to bring the sidebar back.
