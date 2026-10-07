@@ -235,6 +235,24 @@ import Testing
         withExtendedLifetime(project) {}
     }
 
+    /// Keys and values too long to fit in a String's own bytes each have an allocation of their own,
+    /// and a page counts it: a full page of such JSON lines costs about its 64 MB, not three times it.
+    @Test func longKeysCountTowardThePage() {
+        let pairs = (0..<2000).map { i -> String in
+            let n = String(format: "%06d", i)
+            return #""feature_name_\#(n)": "value_text_\#(n)""#
+        }
+        let line = Data(("{" + pairs.joined(separator: ", ") + "}\n").utf8)
+        let before = Self.footprint()
+        var scanner = RecordScanner(kind: .jsonLines, delimiter: 0x2C, start: .start, limit: .max)
+        while !scanner.isFull { autoreleasepool { scanner.feed(line) } } // as DataHead.page reads
+        let grew = Int64(Self.footprint()) - Int64(before)
+        let count = scanner.records.count
+        #expect(count > 100 && scanner.records[0].keys.count == 2000, "\(count) records")
+        #expect(grew < 128 << 20, "\(count) records, memory grew by \(grew >> 20) MB")
+        withExtendedLifetime(scanner) {}
+    }
+
     /// A log that grows still has what was read; a file written again in place (same inode, larger)
     /// does not. A last line with no line break yet is marked, so it can be read again once whole.
     @Test func growingAndRewrittenFiles() throws {

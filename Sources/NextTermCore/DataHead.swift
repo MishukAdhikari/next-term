@@ -833,7 +833,14 @@ struct RecordScanner {
 
     /// What a record's fields and keys cost beyond its text, which the page limit counts too.
     private static func overhead(_ record: DataRecord) -> Int {
-        (record.fields.count + record.keys.count) * MemoryLayout<String>.stride
+        record.fields.reduce(0) { $0 + cost($1) } + record.keys.reduce(0) { $0 + cost($1) }
+    }
+
+    /// A String's place in an array, and its own allocation when it has one: one over 15 UTF-8 bytes keeps
+    /// them on the heap, behind a 32-byte header.
+    private static func cost(_ string: String) -> Int {
+        let count = string.utf8.count
+        return MemoryLayout<String>.stride + (count > 15 ? count + 32 : 0)
     }
 
     /// Adds the record (a blank line is not one) and starts the next at `next`.
