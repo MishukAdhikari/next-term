@@ -18,6 +18,7 @@ enum SelfTest {
     static func run() {
         Task { @MainActor in
             await runAll()
+            await welcomeReopenChecks() // last: it closes every window
             finish()
         }
     }
@@ -643,6 +644,9 @@ enum SelfTest {
         await paneChecks(c)
 
         await sessionChecks(proj: proj)
+
+        await lastTabChecks()
+        await dockReopenChecks(c)
 
         // Font size.
         let size = AppDelegate.shared.fontSize

@@ -487,10 +487,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        // Clicking the Dock icon with no windows open: back to the last project, else a terminal.
-        if !flag, welcome?.window?.isVisible != true {
-            if let path = recent.existing().first { openWindow(directory: path, project: path) } else { newWindow(nil) }
+        guard !flag, welcome?.window?.isVisible != true else { return true }
+        // Windows open but none visible (every one minimized): the one used last comes back, and nothing else
+        // (no second window for its project, nor AppKit's own reopen on top).
+        if let last = controllers.max(by: { $0.lastKey < $1.lastKey }), let window = last.window {
+            if window.isMiniaturized { window.deminiaturize(nil) } else { window.makeKeyAndOrderFront(nil) }
+            return false
         }
+        // Only the Welcome window, minimized: it comes back (opening the last project would close it).
+        if let window = welcome?.window, window.isMiniaturized {
+            window.deminiaturize(nil)
+            return false
+        }
+        // No windows open: back to the last project, else a terminal.
+        if let path = recent.existing().first { openWindow(directory: path, project: path) } else { newWindow(nil) }
         return true
     }
 
@@ -554,15 +564,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     @discardableResult
     func openWindow(directory: String?, project: String? = nil) -> TerminalWindowController {
         let controller = TerminalWindowController(directory: directory, project: project)
-        controller.onClose = { [weak self] closed, closedProject in
+        controller.onClose = { [weak self] closed, welcome in
             // Defer: the window is still mid-close in this call.
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.controllers.removeAll { $0 === closed }
                 self.updateBadge()
                 self.projectsChanged()
-                // Closing the last project leaves the Welcome window, with recent projects, like an IDE.
-                if closedProject && self.controllers.isEmpty && !self.isTerminating { self.showWelcome(nil) }
+                // Closing the last project (or the last window's last tab) leaves the Welcome window, with
+                // recent projects, like an IDE.
+                if welcome && self.controllers.isEmpty && !self.isTerminating { self.showWelcome(nil) }
             }
         }
         welcome?.close()

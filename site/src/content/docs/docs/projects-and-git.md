@@ -13,7 +13,7 @@ A project is a folder that a window is about. Its files stay in the sidebar, new
 - **New tabs open in the project** by default. You can still `cd` anywhere.
 - **Reopen at launch:** Next Term reopens the project windows that were open when you quit. On the very first launch it asks for a folder.
 - **Open Recent** (in the Shell menu) lists your recent projects, with **Clear Menu**. The Dock icon’s menu lists them too, with **New Window**.
-- **Close Project** (in the Shell menu) closes the window, asking first if something is still running in it. When the last project closes, the **Welcome** window appears. Open it any time from **Window › Welcome to Next Term**.
+- **Close Project** (in the Shell menu) closes the window, asking first if something is still running in it. When the last project closes, or the last window goes with its last tab, the **Welcome** window appears. Open it any time from **Window › Welcome to Next Term**.
 
 ### The Welcome window and agent sessions
 

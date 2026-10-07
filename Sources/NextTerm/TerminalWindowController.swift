@@ -64,12 +64,21 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private var ticker: Timer?
     private var tickCount = 0
     private var closeConfirmed = false
-    /// Called when the window closes; the flag says it was a Close Project.
-    var onClose: ((TerminalWindowController, _ closedProject: Bool) -> Void)?
+    /// Called when the window closes; the flag says the Welcome window follows if no other window is left
+    /// (Close Project, or the last tab closed).
+    var onClose: ((TerminalWindowController, _ welcome: Bool) -> Void)?
     /// The project this window is for: the sidebar stays on it and new tabs open in it by default
     /// (you can still `cd` anywhere). nil: a plain terminal window whose sidebar follows the active tab.
     private(set) var project: String?
-    private var closingProject = false
+    private var opensWelcome = false
+    /// The sheet asking to save before the last tab takes the window is up: it alone decides.
+    private var askingToSave = false
+    /// Save or Don't Save was answered for closing this tab, then End Session: until its tmux session has
+    /// ended, the tab closes without asking again, unless a file was edited since (`edits`: the unsaved
+    /// files then, and their text).
+    private var saveAnswered: (tab: TerminalTab, edits: [(EditorDocument, String)])?
+    /// When this window last had the keyboard, so a Dock click brings back the one used last.
+    private(set) var lastKey = Date.distantPast
     private(set) lazy var finder: FindInFilesController = {
         let controller = FindInFilesController()
         controller.delegate = self
@@ -326,9 +335,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     /// Closes a tab, asking first if closing it would stop something: a running program, or a job
-    /// left suspended (Ctrl-Z) or in the background.
-    func requestClose(_ tab: TerminalTab) {
+    /// left suspended (Ctrl-Z) or in the background. The window's last tab takes the window with it, so
+    /// files unsaved in its editor are asked about first, in a sheet that also says what closing stops.
+    func requestClose(_ tab: TerminalTab) { requestClose(tab, saveAsked: false) }
+
+    private func requestClose(_ tab: TerminalTab, saveAsked: Bool) {
         guard tabs.contains(where: { $0 === tab }) else { return }
+        if !saveAsked, asksToSave(closing: tab) {
+            return askToSave(closing: [tab]) { [weak self] in self?.requestClose(tab, saveAsked: true) }
+        }
         if let note = tab.keptNote, let window, let remote = tab.remote {
             // A kept tmux tab: closing detaches, and what runs there goes on. Say so, and offer to end it.
             let alert = NSAlert()
@@ -339,23 +354,16 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             alert.addButton(withTitle: "End Session")
             alert.beginSheetModal(for: window) { [weak self] response in
                 switch response {
-                case .alertFirstButtonReturn: self?.remove(tab)
-                case .alertThirdButtonReturn:
-                    RemoteConnection.endSession(remote.host, session: remote.session) { problem in
-                        guard let problem else { self?.remove(tab); return }
-                        // Not ended: the tab stays, so the session is not left running out of sight.
-                        let failed = NSAlert()
-                        failed.messageText = "Could not end the session on \(remote.host.name)"
-                        failed.informativeText = problem
-                        failed.beginSheetModal(for: window)
-                    }
+                case .alertFirstButtonReturn: self?.remove(tab, saveAsked: saveAsked)
+                case .alertThirdButtonReturn: self?.endSession(closing: tab, remote: remote, saveAsked: saveAsked)
                 default: break
                 }
             }
             return
         }
-        guard let warning = tab.closeWarning, let window else {
-            remove(tab)
+        // Asked about saving: that sheet said what closing stops.
+        guard !saveAsked, let warning = tab.closeWarning, let window else {
+            remove(tab, saveAsked: saveAsked)
             return
         }
         let isPane = group(of: tab)?.isSplit == true
@@ -370,9 +378,34 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
     }
 
-    /// Closes a tab without asking (callers have asked, or were told to force it).
-    func remove(_ tab: TerminalTab) {
+    /// End Session on a kept tmux tab: the tab closes once the session has ended on the host. That can take
+    /// up to 15 s, and the editor is in use meanwhile: a file edited after Save or Don't Save is asked about.
+    private func endSession(closing tab: TerminalTab, remote: RemoteTab, saveAsked: Bool) {
+        if saveAsked { saveAnswered = (tab, editorArea.dirtyDocuments.map { ($0, $0.text) }) }
+        RemoteConnection.endSession(remote.host, session: remote.session) { [weak self] problem in
+            guard let self else { return }
+            defer { if self.saveAnswered?.tab === tab { self.saveAnswered = nil } }
+            guard let problem else { return self.remove(tab) }
+            // Not ended: the tab stays, so the session is not left running out of sight.
+            guard let window = self.window else { return }
+            let failed = NSAlert()
+            failed.messageText = "Could not end the session on \(remote.host.name)"
+            failed.informativeText = problem
+            failed.beginSheetModal(for: window)
+        }
+    }
+
+    /// Closes a tab without asking (callers have asked, or were told to force it). The exception is the
+    /// window's last tab while its editor has unsaved files: the window closes with it, so the user is
+    /// asked first, unless `saveAsked` says they were.
+    func remove(_ tab: TerminalTab, saveAsked: Bool = false) {
         guard let index = groups.firstIndex(where: { $0.contains(tab) }) else { return }
+        // The sheet asking to save is up: it decides whether the window goes (its Save and Don't Save close
+        // the tab once it is down), not a close that comes meanwhile (`exit`, End Session, an agent).
+        if askingToSave, closesWindow([tab]) { return }
+        if !saveAsked, asksToSave(closing: tab) {
+            return askToSave(closing: [tab]) { [weak self] in self?.remove(tab, saveAsked: true) }
+        }
         // A rename in progress refers to tabs by position: finish it while positions still hold.
         if window?.firstResponder is NSTextView, tabBar.isEditing { window?.makeFirstResponder(nil) }
         let group = groups[index]
@@ -391,7 +424,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         group.view.removeFromSuperview()
         groups.remove(at: index)
         if groups.isEmpty {
+            // The window goes with its last tab. As after Close Project, the Welcome window follows if no
+            // other window is left.
             closeConfirmed = true
+            opensWelcome = true
             window?.close()
             return
         }
@@ -402,6 +438,82 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             if index < activeIndex { activeIndex -= 1 }
             refresh()
         }
+    }
+
+    /// Closing `closing` takes the window's last terminal, and so the window.
+    private func closesWindow(_ closing: [TerminalTab]) -> Bool {
+        groups.count == 1 && groups[0].panes.allSatisfy { pane in closing.contains { $0 === pane } }
+    }
+
+    /// Closing `tab` would close the window while files in its editor are unsaved: the user is asked first
+    /// (or is being asked now).
+    func asksToSave(closing tab: TerminalTab) -> Bool {
+        guard closesWindow([tab]) else { return false }
+        if askingToSave { return true }
+        let dirty = editorArea.dirtyDocuments
+        guard !dirty.isEmpty else { return false }
+        // Answered before End Session: asked again only about a file edited since.
+        guard let answered = saveAnswered, answered.tab === tab else { return true }
+        return !dirty.allSatisfy { doc in answered.edits.contains { $0.0 === doc && $0.1 == doc.text } }
+    }
+
+    /// The window's last tab is closing, and the window with it, while files in its editor are unsaved:
+    /// Save, Don't Save or Cancel, as closing the window asks, and what closing stops is said too. `close`
+    /// runs on Save or Don't Save. Cancel keeps the window and a shell in it: a fresh one in place of a
+    /// tab whose shell ended by itself (`exit`, Ctrl-D). One that failed stays as it was, with its reason.
+    private func askToSave(closing: [TerminalTab], kept: String = "", then close: @escaping () -> Void) {
+        guard let window, !askingToSave else { return }
+        let busy = closing.filter { $0.closeWarning != nil }
+        var note = "Closing the window’s last tab closes the window."
+        if closing.allSatisfy(\.exited) {
+            note = "The shell in the window’s last tab has ended, so the window closes."
+        } else if !busy.isEmpty {
+            note = "Closing the window’s last tab closes the window and stops " + Self.stopList(busy)
+        }
+        let alert = saveAlert(editorArea.dirtyDocuments, note: note)
+        if !kept.isEmpty { alert.informativeText += "\n\n" + kept }
+        askingToSave = true
+        // Asked from elsewhere (an agent's close_tab, a shell ending in a window behind): the window comes
+        // forward so the question is seen, without taking the keyboard from the window in use.
+        if window.isMiniaturized { window.deminiaturize(nil) } else if !window.isKeyWindow { window.orderFront(nil) }
+        if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            self.askingToSave = false
+            // The window went meanwhile (Quit): nothing is left to decide.
+            guard closing.contains(where: { tab in self.tabs.contains { $0 === tab } }) else { return }
+            let saved = response == .alertFirstButtonReturn && self.editorArea.saveAll()
+            if saved || response == .alertThirdButtonReturn { return close() }
+            // Cancel, or a file that could not be saved.
+            guard let last = closing.first, closing.allSatisfy(\.endedByItself) else { return }
+            self.addTab(directory: self.project ?? (last.remote == nil ? last.directory : nil))
+            for tab in closing { self.remove(tab) }
+        }
+    }
+
+    /// "Save changes to “a.php” before closing?" with Save, Cancel and Don't Save: what every close that
+    /// would lose edits asks. `note` comes first: what else the close does.
+    private func saveAlert(_ dirty: [EditorDocument], note: String = "") -> NSAlert {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = dirty.count == 1 ? "Save changes to “\(dirty[0].name)” before closing?"
+            : "Save changes to \(dirty.count) files before closing?"
+        let lost = dirty.count == 1 ? "Your changes are lost if you don’t save them."
+            : "Your changes to \(Self.nameList(dirty.map(\.name))) are lost if you don’t save them."
+        alert.informativeText = note.isEmpty ? lost : note + " " + lost
+        alert.addButton(withTitle: dirty.count == 1 ? "Save" : "Save All")
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Don’t Save").keyEquivalent = "d"
+        return alert
+    }
+
+    /// "“a.php”, “b.ts” and “c.css”", or "“a.php”, “b.ts”, “c.css” and 2 more".
+    static func nameList(_ names: [String]) -> String {
+        let quoted = names.prefix(3).map { "“\($0)”" }
+        let rest = names.count - quoted.count
+        if rest > 0 { return quoted.joined(separator: ", ") + " and \(rest) more" }
+        guard let last = quoted.last, quoted.count > 1 else { return quoted.first ?? "" }
+        return quoted.dropLast().joined(separator: ", ") + " and " + last
     }
 
     /// Tabs whose closing would stop a program or a job.
@@ -619,9 +731,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// Close Project: closes the window (asking first if something is running in it).
     @objc func closeProject(_ sender: Any?) {
         guard project != nil, let window else { return NSSound.beep() }
-        closingProject = true
+        opensWelcome = true
         window.performClose(nil)
-        if window.isVisible && window.attachedSheet == nil { closingProject = false } // close was refused
+        if window.isVisible && window.attachedSheet == nil { opensWelcome = false } // close was refused
     }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
@@ -1600,23 +1712,16 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if closeConfirmed || AppDelegate.shared.isTerminating { return true }
         let dirty = editorArea.dirtyDocuments
         if !dirty.isEmpty && !editorsConfirmed {
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = dirty.count == 1 ? "Save changes to “\(dirty[0].name)” before closing?"
-                : "Save changes to \(dirty.count) files before closing?"
-            alert.informativeText = "Your changes are lost if you don’t save them."
-            alert.addButton(withTitle: dirty.count == 1 ? "Save" : "Save All")
-            alert.addButton(withTitle: "Cancel")
-            alert.addButton(withTitle: "Don’t Save").keyEquivalent = "d"
+            let alert = saveAlert(dirty)
             alert.beginSheetModal(for: sender) { [weak self] response in
                 guard let self else { return }
                 switch response {
                 case .alertFirstButtonReturn:
-                    guard self.editorArea.saveAll() else { return self.closingProject = false }
+                    guard self.editorArea.saveAll() else { return self.opensWelcome = false }
                 case .alertThirdButtonReturn:
                     break
                 default:
-                    self.closingProject = false
+                    self.opensWelcome = false
                     return
                 }
                 self.editorsConfirmed = true
@@ -1637,7 +1742,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         alert.beginSheetModal(for: sender) { [weak self] response in
             guard let self else { return }
             guard response == .alertFirstButtonReturn else {
-                self.closingProject = false
+                self.opensWelcome = false
                 return
             }
             self.closeConfirmed = true
@@ -1653,10 +1758,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         groups.removeAll()
         editorArea.closeAll()
         finder.close()
-        onClose?(self, closingProject)
+        onClose?(self, opensWelcome)
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
+        lastKey = Date()
         refreshVisibility()
         refresh()
         if let view = activeTab?.view, window?.firstResponder !== view, !(window?.firstResponder is NSTextView), !terminalRailed {
@@ -1676,10 +1782,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     func tabBar(_ bar: TabBarView, didClose index: Int) {
         guard let group = groups[safe: index] else { return }
         guard group.isSplit else { return requestClose(group.focused) }
-        // The tab's × closes all its panes, asking once if that stops anything.
+        // The tab's × closes all its panes, asking once if that stops anything (or, as the window's last
+        // tab with files unsaved, whether to save them: the window closes too).
         let busy = group.panes.filter { $0.closeWarning != nil }
         let kept = Self.keptList(group.panes)
-        guard !busy.isEmpty || !kept.isEmpty, let window else { return group.panes.forEach(remove) }
+        if closesWindow(group.panes), !editorArea.dirtyDocuments.isEmpty {
+            return askToSave(closing: group.panes, kept: kept) { [weak self] in group.panes.forEach { self?.remove($0, saveAsked: true) } }
+        }
+        guard !busy.isEmpty || !kept.isEmpty, let window else { return group.panes.forEach { remove($0) } }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Close this tab and its \(group.panes.count) panes?"
@@ -1726,7 +1836,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func tabDidExit(_ tab: TerminalTab) {
-        // The shell exited by itself (`exit`, Ctrl-D): the tab goes away, like any terminal.
+        // The shell exited by itself (`exit`, Ctrl-D): the tab goes away, like any terminal. As the window's
+        // last, with files unsaved, it asks first; Cancel puts a fresh shell in its place.
         remove(tab)
     }
 }

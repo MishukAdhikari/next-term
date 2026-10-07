@@ -663,40 +663,49 @@ enum MCPControl {
         if tab === caller { return reply(fail("That is your own tab.")) }
         let force = arguments["force"] as? Bool ?? false
         let id = tab.id.uuidString.lowercased()
-        func close() {
+        // The window's last tab, with files unsaved in its editor: closing it closes the window, so the user
+        // is asked first (Save, Don't Save or Cancel), and the answer says so without waiting for theirs.
+        func close(_ info: [String: Any]) -> MCPServer.CallResult {
+            let asks = controller.asksToSave(closing: tab)
             controller.remove(tab)
-            lastSent.removeValue(forKey: tab.id)
+            guard asks else {
+                lastSent.removeValue(forKey: tab.id)
+                return ok(info)
+            }
+            var answer: [String: Any] = ["id": id, "closed": false, "asking_user": "It is the last tab in its window and the editor there has unsaved files, so closing it closes the window: Next Term asks the user whether to save them. The tab closes if they choose Save or Don't Save; list_tabs shows whether it did."]
+            // Done already, whatever the user answers: force ended the tmux session, and what ran in it.
+            if let ended = info["session_ended"] {
+                answer["session_ended"] = ended
+                answer["note"] = "The tmux session has ended already, whatever the user answers."
+            }
+            return ok(answer)
         }
         // A tab kept on its host: closing only detaches, and what runs there goes on.
         if let remote = tab.remote, tab.isKept {
             if remote.keep == .herdr {
-                close()
-                return reply(ok(["id": id, "closed": true, "detached": true, "host": remote.host.name,
-                                 "note": "herdr keeps its agents running on the host; stop them in herdr. A new herdr tab shows them again."]))
+                return reply(close(["id": id, "closed": true, "detached": true, "host": remote.host.name,
+                                    "note": "herdr keeps its agents running on the host; stop them in herdr. A new herdr tab shows them again."]))
             }
             guard force else {
                 let program = tab.status.running ? tab.status.program : nil
-                close()
                 var info: [String: Any] = ["id": id, "closed": true, "detached": true, "host": remote.host.name, "session": remote.session]
                 if let program { info["still_running"] = program }
                 info["note"] = "The tmux session keeps running on the host: reattach with new_remote_tab (session), or end it with close_tab force."
-                return reply(ok(info))
+                return reply(close(info))
             }
             // force: end the tmux session first; the tab closes only once it has ended.
             RemoteConnection.endSession(remote.host, session: remote.session) { problem in
                 if let problem {
                     return reply(fail("Could not end tmux session \(remote.session) on \(remote.host.name), so the tab stays open: \(problem)"))
                 }
-                close()
-                reply(ok(["id": id, "closed": true, "session_ended": remote.session]))
+                reply(close(["id": id, "closed": true, "session_ended": remote.session]))
             }
             return
         }
         if let warning = tab.closeWarning, !force {
             return reply(fail("The tab is running \(warning); pass force: true to stop it and close the tab."))
         }
-        close()
-        reply(ok(["id": id, "closed": true]))
+        reply(close(["id": id, "closed": true]))
     }
 
     private static func openInEditor(_ arguments: [String: Any]) -> MCPServer.CallResult {
