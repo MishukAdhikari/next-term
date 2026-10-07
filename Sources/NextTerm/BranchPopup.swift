@@ -3,11 +3,12 @@ import NextTermCore
 
 /// The branch popup, from the branch name at the top of the project sidebar (or ⌥⌘B): one search over
 /// branches and git actions. Actions first (Update Project, Commit, Push, New Branch, Checkout Tag or
-/// Revision), then Recent, Local in folders by prefix (agents' branches together), Worktrees and Remote.
+/// Revision, Git Log), then Recent, Local in folders by prefix (agents' branches together), Worktrees
+/// and Remote.
 /// Return checks a branch out; → opens everything else that can be done with it.
 final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate {
     enum Action: CaseIterable {
-        case update, commit, push, newBranch, checkoutRevision, fetch, gitCommands
+        case update, commit, push, newBranch, checkoutRevision, gitLog, fetch, gitCommands
         case continueOperation, skipStep, abortOperation, resolveWithAgent
 
         var title: String {
@@ -17,6 +18,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             case .push: return "Push…"
             case .newBranch: return "New Branch…"
             case .checkoutRevision: return "Checkout Tag or Revision…"
+            case .gitLog: return "Git Log"
             case .fetch: return "Fetch"
             case .gitCommands: return "Git Commands"
             case .continueOperation: return "Continue"
@@ -33,6 +35,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             case .push: return "arrow.up.to.line"
             case .newBranch: return "plus"
             case .checkoutRevision: return "tag"
+            case .gitLog: return "point.3.connected.trianglepath.dotted"
             case .fetch: return "arrow.triangle.2.circlepath"
             case .gitCommands: return "list.bullet.rectangle"
             case .continueOperation: return "play"
@@ -50,6 +53,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             case .push: return "push publish upload"
             case .newBranch: return "branch create new"
             case .checkoutRevision: return "switch checkout tag revision commit detach"
+            case .gitLog: return "log history graph commits"
             case .fetch: return "fetch refresh"
             case .gitCommands: return "commands ran log"
             default: return ""
@@ -221,6 +225,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         rows.append(.action(.push, hint: pushHint, enabled: current != nil))
         rows.append(.action(.newBranch, hint: model.current == nil ? "from here" : "", enabled: true))
         rows.append(.action(.checkoutRevision, hint: "", enabled: true))
+        rows.append(.action(.gitLog, hint: "", enabled: true))
         return rows
     }
 
@@ -427,6 +432,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         case .newBranch: actions.askNewBranch(base: nil)
         case .checkoutRevision: actions.askRevision()
         case .fetch: actions.fetch()
+        case .gitLog: window?.openGitLog(root: model?.root ?? directory)
         case .gitCommands: GitCommandsWindowController.shared.present()
         case .continueOperation: actions.inProgress(["--continue"])
         case .skipStep: actions.inProgress(["--skip"])
@@ -453,6 +459,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         switch item {
         case let .branch(ref, _, _, _) where ref.isHead:
             add("New Branch from Here…") { actions.askNewBranch(base: nil) }
+            add("Show History") { self.showHistory(of: ref) }
             add("Update", enabled: ref.upstream != nil) { actions.updateProject() }
             add("Push…") { actions.push() }
             menu.addItem(.separator())
@@ -466,6 +473,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
                 add("Checkout") { actions.checkout(ref) }
             }
             add("New Branch from “\(ref.name)”…") { actions.newBranch(from: ref) }
+            add("Show History") { self.showHistory(of: ref) }
             menu.addItem(.separator())
             if let current {
                 add("Rebase “\(current)” onto “\(ref.name)”") { actions.rebase(onto: ref.name) }
@@ -481,6 +489,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         case let .branch(ref, _, _, _):
             add("Checkout") { actions.checkout(ref) }
             add("New Branch from “\(ref.name)”…") { actions.newBranch(from: ref) }
+            add("Show History") { self.showHistory(of: ref) }
             if let current {
                 menu.addItem(.separator())
                 add("Rebase “\(current)” onto “\(ref.name)”") { actions.rebase(onto: ref.name) }
@@ -498,6 +507,12 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         }
         let rect = table.rect(ofRow: row)
         menu.popUp(positioning: nil, at: NSPoint(x: rect.maxX - 24, y: rect.maxY), in: table)
+    }
+
+    /// The Git Log, showing one branch.
+    private func showHistory(of ref: BranchRef) {
+        guard let root = model?.root else { return }
+        window?.openGitLog(root: root)?.show(ref: (ref.isRemote ? "refs/remotes/" : "refs/heads/") + ref.name)
     }
 
     private func copy(_ text: String) {
