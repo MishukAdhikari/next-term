@@ -748,15 +748,10 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
 }
 
 extension DataPane {
-    static let extensions: Set<String> = ["jsonl", "ndjson", "csv", "tsv"]
     /// Below this the editor is better: it colours the file and opens it whole.
-    static let threshold = 2 * 1024 * 1024
+    static let threshold = DataHead.viewThreshold
 
-    /// What opens here rather than in the editor: a data file over 2 MB that the head view can read.
-    /// UTF-16 (some spreadsheet exports) goes to the editor, which reads it, or past its limit to its app.
-    static func opens(_ path: String) -> Bool {
-        guard extensions.contains((path as NSString).pathExtension.lowercased()), isRegularFile(path) else { return false }
-        let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
-        return size > threshold && DataHead.isText(path)
-    }
+    /// What opens here rather than in the editor (decided in NextTermCore, so the sidebar's single click
+    /// can ask too).
+    static func opens(_ path: String) -> Bool { DataHead.opensInView(path) }
 }

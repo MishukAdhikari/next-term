@@ -471,18 +471,10 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
 }
 
 extension DatabasePane {
-    static let extensions: Set<String> = ["sqlite", "sqlite3", "db", "db3"]
+    /// What the viewer opens (decided in NextTermCore, so the sidebar's single click can ask too).
+    static func opens(_ path: String) -> Bool { Databases.opensInViewer(path) }
 
-    /// What the viewer opens: a SQLite file by its header, or an empty one (Laravel makes database.sqlite
-    /// with `touch`).
-    static func opens(_ path: String) -> Bool {
-        guard extensions.contains((path as NSString).pathExtension.lowercased()) else { return false }
-        return Databases.isSQLiteFile(path) || isEmptyFile(path)
-    }
-
-    static func isEmptyFile(_ path: String) -> Bool {
-        isRegularFile(path) && ((try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? -1) == 0
-    }
+    static func isEmptyFile(_ path: String) -> Bool { Databases.isEmptyFile(path) }
 }
 
 /// The rows: ⌘C copies the selected ones as CSV.

@@ -214,6 +214,19 @@ public enum DataHead {
         }
     }
 
+    /// The data files the head view opens in place of the editor once they are over `viewThreshold`.
+    public static let viewExtensions: Set<String> = ["jsonl", "ndjson", "csv", "tsv"]
+    /// Below this the editor is better: it colours the file and opens it whole.
+    public static let viewThreshold = 2 * 1024 * 1024
+
+    /// What opens in the head view rather than the editor: a data file over 2 MB that it can read.
+    /// UTF-16 (some spreadsheet exports) goes to the editor, which reads it, or past its limit to its app.
+    public static func opensInView(_ path: String) -> Bool {
+        guard viewExtensions.contains((path as NSString).pathExtension.lowercased()), isRegularFile(path) else { return false }
+        let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+        return size > viewThreshold && isText(path)
+    }
+
     /// Whether the head view can read the file: no NUL byte early on and not UTF-16.
     public static func isText(_ path: String) -> Bool {
         guard isRegularFile(path), let handle = FileHandle(forReadingAtPath: path) else { return false }

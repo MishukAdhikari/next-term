@@ -42,6 +42,17 @@ public enum Databases {
         return header == Data("SQLite format 3\0".utf8)
     }
 
+    /// What the SQLite viewer opens: a SQLite file by its header, or an empty one (Laravel makes
+    /// database.sqlite with `touch`).
+    public static func opensInViewer(_ path: String) -> Bool {
+        guard sqliteExtensions.contains((path as NSString).pathExtension.lowercased()) else { return false }
+        return isSQLiteFile(path) || isEmptyFile(path)
+    }
+
+    public static func isEmptyFile(_ path: String) -> Bool {
+        isRegularFile(path) && ((try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? -1) == 0
+    }
+
     // MARK: context
 
     /// What the scan reads once per project.
@@ -237,10 +248,6 @@ public enum Databases {
         if !c.providers.contains(.supabase) { c.providers.insert(.supabase, at: 0) }
         c.tools.append("Supabase CLI")
         return [c]
-    }
-
-    private static func isEmptyFile(_ path: String) -> Bool {
-        isRegularFile(path) && ((try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? -1) == 0
     }
 
     static func relative(_ path: String, to root: String) -> String {
