@@ -74,7 +74,7 @@ PHP files are coloured with the grammar that also understands the HTML around `<
 
 When you share your screen or record it, the editor can draw the values in your environment files as dots. Turn on **Settings › Editor › Hide values in .env files** (off by default), or use **View › Hide .env Values** for the file in front.
 
-- **Which files:** `.env`, `.env.*` (such as `.env.local` or `.env.example`), `*.env` (such as `prod.env`) and `.flaskenv`.
+- **Which files:** `.env`, `.env.*` (such as `.env.local` or `.env.example`), `*.env` (such as `prod.env`) and `.flaskenv`, by the name you open them by, so a `.env` that links to a file elsewhere counts too.
 - **What is hidden:** everything after the first `=` on a `KEY=value` line, quotes included, and every line of a quoted value that runs over several lines, such as a private key. Keys, comments, and a `# comment` after a value stay visible.
 - **Only the drawing changes.** Copy, Find, save and undo work on the real values, and the file on disk stays as it is. Soft wrap, line numbers, blame and the change marks stay where they were.
 - **Typing is not blind.** Click or type in a line and it shows its value while the caret is on it; on a private key, only that one line of it. When the editor loses the keyboard, to another window or another app such as your screen-share app, the line hides again. A file you open, or come back to, shows no values until you click or type.

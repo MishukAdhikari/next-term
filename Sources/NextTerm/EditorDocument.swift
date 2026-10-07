@@ -38,8 +38,15 @@ final class EditorDocument: NSObject, NSTextStorageDelegate {
 
     var name: String { url.lastPathComponent }
     var path: String { url.path }
+    /// The name it was opened by. `url` is the file a link points to, so for a `.env` that links to a
+    /// file elsewhere this is the link's name, `.env`, and `name` is the other file's.
+    private(set) var openedName: String
+    /// A file that tends to hold secrets (IDELink.isSensitive), by its own name or the name it was
+    /// opened by: its text and selection never go to agents.
+    var holdsSecrets: Bool { IDELink.isSensitive(path) || IDELink.isSensitive(openedName) }
 
     init(url: URL) throws {
+        openedName = url.lastPathComponent
         self.url = URL(fileURLWithPath: canonicalPath(url.path))
         let data = try Self.read(self.url)
         guard let (text, format) = TextFile.decode(data) else { throw OpenError.notText }
@@ -211,6 +218,7 @@ final class EditorDocument: NSObject, NSTextStorageDelegate {
 
     /// The file was renamed or moved in the sidebar.
     func moved(to newURL: URL) {
+        openedName = newURL.lastPathComponent
         url = URL(fileURLWithPath: canonicalPath(newURL.path))
         stamp = FileStamp(path: url.path)
         onChange?(self)

@@ -352,7 +352,8 @@ enum MCPControl {
         ]
         // Files that tend to hold secrets (.env, keys, credentials) never share their text, as read_file
         // and the editor links have it.
-        if MCPProjects.secretReason(document.path) != nil || ClaudeIDEServer.isSensitive(document.path) {
+        let secret = MCPProjects.secretReason(document.path) ?? MCPProjects.secretReason(document.openedName)
+        if secret != nil || document.holdsSecrets {
             if range.length > 0 { info["withheld"] = "The selection is in a file that usually holds secrets, so its text isn't shared." }
         } else if range.length > 0 {
             let selected = text.substring(with: range)

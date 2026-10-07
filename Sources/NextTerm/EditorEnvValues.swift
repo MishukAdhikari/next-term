@@ -80,8 +80,9 @@ final class EnvValueMask {
 }
 
 extension CodeEditorView {
-    /// A .env, .env.*, *.env or .flaskenv file, by its name (a rename can change it).
-    var isEnvFile: Bool { EnvFile.isEnvFile(named: document.name) }
+    /// A .env, .env.*, *.env or .flaskenv file, by its name or the name it was opened by (a `.env`
+    /// that links to a file elsewhere). A rename can change it.
+    var isEnvFile: Bool { EnvFile.isEnvFile(named: document.name) || EnvFile.isEnvFile(named: document.openedName) }
 
     /// Whether this file's values are hidden now.
     var hidesEnvValues: Bool { isEnvFile && (envValues.choice ?? AppDelegate.shared?.hidesEnvValues == true) }

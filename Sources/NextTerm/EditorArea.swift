@@ -108,7 +108,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
         }
         let document: EditorDocument
         do {
-            document = try EditorDocument(url: URL(fileURLWithPath: path))
+            document = try EditorDocument(url: url) // it resolves links itself, and keeps the name it was opened by
         } catch EditorDocument.OpenError.notText {
             return .notText
         } catch EditorDocument.OpenError.tooLarge {

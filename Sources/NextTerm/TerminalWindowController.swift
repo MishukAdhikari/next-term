@@ -1037,7 +1037,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// selection, 1-based. Secret-holding files (.env) are left out.
     func openFilesForGemini() -> [[String: Any]] {
         let active = editorArea.activeEditor
-        let documents = editorArea.documents.filter { !ClaudeIDEServer.isSensitive($0.path) }
+        let documents = editorArea.documents.filter { !$0.holdsSecrets }
             .sorted { ($0 === active?.document ? 1 : 0, $0.lastFocused) > ($1 === active?.document ? 1 : 0, $1.lastFocused) }
         return documents.prefix(10).map { document in
             var file: [String: Any] = ["path": document.path, "timestamp": Int(document.lastFocused.timeIntervalSince1970 * 1000)]
@@ -1067,7 +1067,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             return (line, min(offset, text.length) - lines.starts[line])
         }
         let selected = range.length > 0 && NSMaxRange(range) <= text.length ? text.substring(with: range) : ""
-        return ClaudeIDEServer.selectionParams(path: editor.document.path, text: selected,
+        // A file that holds secrets, by its own name or its link's, is shared as no file at all.
+        let path = editor.document.holdsSecrets ? nil : editor.document.path
+        return ClaudeIDEServer.selectionParams(path: path, text: selected,
                                                start: position(range.location), end: position(NSMaxRange(range)))
     }
 
