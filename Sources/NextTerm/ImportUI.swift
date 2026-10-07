@@ -92,7 +92,7 @@ final class ImportCoordinator {
         let defaults = UserDefaults.standard
         var keys: [String] = []
         if choice.usePreset { keys.append("keymapPreset") }
-        keys += choice.settings.map(\.setting.key)
+        keys += choice.settings.flatMap(\.setting.keys)
         if !choice.shortcuts.isEmpty { keys.append("keyBindings") }
         if !choice.recentProjects.isEmpty { keys.append("recentProjects") }
         var before: [String: Snapshot.Value] = [:]
@@ -160,6 +160,9 @@ extension AppDelegate {
             }
         case .sidebarSide(let raw):
             if let side = SidebarSide(rawValue: raw), side != sidebarSide { toggleSidebarSide(nil) }
+        case .editorFontFamily(let family): setEditorFontFamily(family)
+        case .terminalFontFamily(let family): setTerminalFontFamily(family)
+        case .terminalPalette(let palette): setTerminalPalette(palette)
         }
     }
 
@@ -178,6 +181,14 @@ extension AppDelegate {
         case ("terminalPosition", nil): applyImported(.terminalPosition(TerminalPosition.bottom.rawValue))
         case ("sidebarSide", .string(let raw)?): applyImported(.sidebarSide(raw))
         case ("sidebarSide", nil): applyImported(.sidebarSide(SidebarSide.left.rawValue))
+        case ("editorFontFamily", .string(let family)?): setEditorFontFamily(family)
+        case ("editorFontFamily", nil): setEditorFontFamily(nil)
+        case ("terminalFontFamily", .string(let family)?): setTerminalFontFamily(family)
+        case ("terminalFontFamily", nil): setTerminalFontFamily(nil)
+        case ("terminalPalette", let value), ("customTerminalPalette", let value):
+            // The saved bytes exactly as they were (none: Next Term's colours), then every terminal repainted.
+            if case .data(let data)? = value { UserDefaults.standard.set(data, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+            for controller in controllers { for tab in controller.tabs { Theme.applyColours(to: tab.view) } }
         default: break
         }
     }
@@ -359,6 +370,7 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
                 box.state = planned.ticked ? .on : .off
                 settingBoxes.append((box, planned))
                 rows.append(box)
+                if case .terminalPalette(let palette) = planned.setting { rows.append(Self.swatches(palette)) }
                 let detail = planned.source + (planned.note.map { " — " + $0 } ?? "")
                 rows.append(Self.wrapping(detail, secondary: true, size: 11, indent: true))
             }
@@ -575,6 +587,23 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         return box
     }
 
+    /// The colours as they would look, under the checkbox's title.
+    private static func swatches(_ palette: TerminalPalette) -> NSView {
+        let swatches = PaletteSwatches()
+        swatches.colours = Theme.terminalColours(palette)
+        swatches.identifier = .init("swatches")
+        swatches.translatesAutoresizingMaskIntoConstraints = false
+        let box = NSView()
+        box.addSubview(swatches)
+        NSLayoutConstraint.activate([
+            swatches.topAnchor.constraint(equalTo: box.topAnchor, constant: 2),
+            swatches.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -2),
+            swatches.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 22),
+            box.trailingAnchor.constraint(equalTo: swatches.trailingAnchor),
+        ])
+        return box
+    }
+
     private static func used(_ date: Date?) -> String {
         guard let date else { return "" }
         let days = Int(Date().timeIntervalSince(date) / 86400)
@@ -614,6 +643,12 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         case .optionAsMeta(let on): return on ? "Use Option as Meta in the terminal" : "Option types special characters"
         case .terminalPosition(let raw): return "Terminal on the \(raw)"
         case .sidebarSide(let raw): return "Project sidebar on the \(raw)"
+        case .editorFontFamily(let family):
+            return "Editor font \(Preferences.editorFontFamily ?? Theme.defaultFontName) → \(family)"
+        case .terminalFontFamily(let family):
+            return "Terminal font \(Preferences.terminalFontFamily ?? Theme.defaultFontName) → \(family)"
+        case .terminalPalette(let palette):
+            return "Terminal colours from \(palette.name)"
         }
     }
 }
