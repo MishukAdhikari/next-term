@@ -817,6 +817,19 @@ enum SelfTest {
         shortcuts.preset = savedPreset
         app.setRecentProjects(fullList)
         try? FileManager.default.removeItem(at: extra)
+
+        // SF Mono, the font of most of Terminal's profiles, is the system's monospaced face; the font menus
+        // list it once their list, made in the background, is in.
+        let sfMono = Theme.font(family: FontCatalog.systemMonospacedFamily, size: 13)
+        let systemMono = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        check(sfMono.isFixedPitch && sfMono.fontName == systemMono.fontName,
+              "SF Mono, as an import brings it from Terminal, is the system's monospaced face", sfMono.fontName)
+        let fontMenu = FontFamilyPopup()
+        fontMenu.show(FontCatalog.systemMonospacedFamily)
+        let menuFilled = await wait { fontMenu.numberOfItems > 3 }
+        check(menuFilled && fontMenu.titleOfSelectedItem == "SF Mono" && fontMenu.itemTitles.contains("Menlo"),
+              "the font menus fill in from the background, with SF Mono chosen",
+              "\(fontMenu.numberOfItems) \(fontMenu.titleOfSelectedItem ?? "none")")
     }
 
     /// A deleted file keeps a row where it was (struck through, with its −N), so a folder's count always
