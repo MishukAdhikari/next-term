@@ -7,7 +7,7 @@ import NextTermCore
 /// Return checks a branch out; → opens everything else that can be done with it.
 final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate {
     enum Action: CaseIterable {
-        case update, commit, push, newBranch, checkoutRevision, fetch, gitLog
+        case update, commit, push, newBranch, checkoutRevision, fetch, gitCommands
         case continueOperation, skipStep, abortOperation, resolveWithAgent
 
         var title: String {
@@ -18,7 +18,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             case .newBranch: return "New Branch…"
             case .checkoutRevision: return "Checkout Tag or Revision…"
             case .fetch: return "Fetch"
-            case .gitLog: return "Show Git Log"
+            case .gitCommands: return "Git Commands"
             case .continueOperation: return "Continue"
             case .skipStep: return "Skip This Commit"
             case .abortOperation: return "Abort"
@@ -34,7 +34,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             case .newBranch: return "plus"
             case .checkoutRevision: return "tag"
             case .fetch: return "arrow.triangle.2.circlepath"
-            case .gitLog: return "list.bullet.rectangle"
+            case .gitCommands: return "list.bullet.rectangle"
             case .continueOperation: return "play"
             case .skipStep: return "forward"
             case .abortOperation: return "xmark.circle"
@@ -51,7 +51,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             case .newBranch: return "branch create new"
             case .checkoutRevision: return "switch checkout tag revision commit detach"
             case .fetch: return "fetch refresh"
-            case .gitLog: return "log history commands"
+            case .gitCommands: return "commands ran log"
             default: return ""
             }
         }
@@ -427,7 +427,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         case .newBranch: actions.askNewBranch(base: nil)
         case .checkoutRevision: actions.askRevision()
         case .fetch: actions.fetch()
-        case .gitLog: GitLogWindowController.shared.present()
+        case .gitCommands: GitCommandsWindowController.shared.present()
         case .continueOperation: actions.inProgress(["--continue"])
         case .skipStep: actions.inProgress(["--skip"])
         case .abortOperation: actions.inProgress(["--abort"])

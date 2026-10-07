@@ -85,7 +85,7 @@ Click the branch name at the top of the sidebar, or press <kbd>⌥⌘B</kbd> (**
 
 **Commit…** shows exactly what goes in (what you staged, or every change, with new files marked and anything that looks like a secret or is over 5 MB called out), with **Amend last commit**, **Commit and Push**, and **Let Agent Commit**. A commit can be undone until it is pushed.
 
-Every git command Next Term runs for you is in **Git › Show Git Log** (<kbd>⌥⌘L</kbd>), exactly as it would be typed. Next Term never waits on a password prompt: when git needs your password, a key passphrase or a new host key, it says so and opens a terminal tab with the command ready.
+Every git command Next Term runs for you is in **Git › Git Commands**, exactly as it would be typed. Next Term never waits on a password prompt: when git needs your password, a key passphrase or a new host key, it says so and opens a terminal tab with the command ready.
 
 ## File operations
 

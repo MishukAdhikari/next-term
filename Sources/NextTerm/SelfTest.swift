@@ -1105,8 +1105,8 @@ enum SelfTest {
         let after = (try? String(contentsOf: conf, encoding: .utf8)) ?? ""
         check(await wait(8) { ((try? String(contentsOf: conf, encoding: .utf8)) ?? "") == "one\n2\n3\n4\nfix\n" && !run("stash", "list").contains("Next Term: switching") },
               "with the change put back, and the stash gone", after.debugDescription + " | " + run("stash", "list"))
-        check(GitLog.shared.entries.contains { $0.command.hasPrefix("git stash push --include-untracked") } && GitLog.shared.entries.contains { $0.command == "git switch fix/b" },
-              "every command is in the Git Log as it would be typed")
+        check(GitCommandLog.shared.entries.contains { $0.command.hasPrefix("git stash push --include-untracked") } && GitCommandLog.shared.entries.contains { $0.command == "git switch fix/b" },
+              "every command is in Git Commands as it would be typed")
         run("checkout", "-q", "--", "conf.txt")
 
         // New branch from here; delete with Undo.

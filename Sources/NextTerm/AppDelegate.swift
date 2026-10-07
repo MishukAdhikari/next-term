@@ -955,7 +955,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(git, "Push…", #selector(TerminalWindowController.gitPush(_:)), "")
         item(git, "New Branch…", #selector(TerminalWindowController.gitNewBranch(_:)), "")
         git.addItem(.separator())
-        item(git, "Show Git Log", #selector(TerminalWindowController.showGitLog(_:)), "l", [.command, .option])
+        item(git, "Git Commands", #selector(TerminalWindowController.showGitCommands(_:)), "l", [.command, .option])
 
         let window = submenu(main, "Window")
         item(window, "Minimize", #selector(NSWindow.performMiniaturize(_:)), "m")

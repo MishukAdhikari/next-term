@@ -1321,7 +1321,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     @objc func gitCommit(_ sender: Any?) { withGit { $0.commit() } }
     @objc func gitPush(_ sender: Any?) { withGit { $0.push() } }
     @objc func gitNewBranch(_ sender: Any?) { withGit { $0.askNewBranch(base: nil) } }
-    @objc func showGitLog(_ sender: Any?) { GitLogWindowController.shared.present() }
+    @objc func showGitCommands(_ sender: Any?) { GitCommandsWindowController.shared.present() }
 
     @objc func selectTabByNumber(_ sender: NSMenuItem) {
         // ⌘1…⌘8 pick that tab; ⌘9 is always the last one, as in browsers.

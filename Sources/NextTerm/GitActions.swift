@@ -2,7 +2,7 @@ import AppKit
 import NextTermCore
 
 /// What the branch popup and the Git menu do. Each is a few git commands with fixed flags (run by
-/// GitWriter, so each is in the Git Log as it would be typed), with the rules from the design: never
+/// GitWriter, so each is in Git Commands as it would be typed), with the rules from the design: never
 /// change files under a working agent without asking, never discard (a stash is kept, by its id), say
 /// what an error means and offer a terminal when a person is needed.
 struct GitActions {
@@ -437,9 +437,9 @@ struct GitActions {
             try? FileManager.default.removeItem(at: folder)
             guard result.ok else {
                 if result.failure == .hookFailed {
-                    return GitPrompt.ask("A git hook stopped the commit", info: Self.tail(result.output), buttons: ["Open Terminal", "Show Git Log", "OK"], over: window) { choice in
+                    return GitPrompt.ask("A git hook stopped the commit", info: Self.tail(result.output), buttons: ["Open Terminal", "Show Git Commands", "OK"], over: window) { choice in
                         if choice == 0 { runInTerminal(["commit"]) }
-                        if choice == 1 { GitLogWindowController.shared.present() }
+                        if choice == 1 { GitCommandsWindowController.shared.present() }
                     }
                 }
                 return failed("Could not commit", result, retry: nil)
@@ -525,10 +525,10 @@ struct GitActions {
         default:
             person = retry != nil
         }
-        var buttons = ["OK", "Show Git Log"]
+        var buttons = ["OK", "Show Git Commands"]
         if person, retry != nil { buttons.append("Open Terminal") }
         GitPrompt.ask(title, info: info, buttons: buttons, style: .warning, over: window) { choice in
-            if choice == 1 { GitLogWindowController.shared.present() }
+            if choice == 1 { GitCommandsWindowController.shared.present() }
             if choice == 2, let retry { runInTerminal(retry) }
         }
     }

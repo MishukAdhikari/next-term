@@ -102,7 +102,7 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 |---|---|
 | Branches… (the branch popup) | <kbd>⌥⌘B</kbd> |
 | Fetch, Update Project, Commit…, Push…, New Branch… | — |
-| Show Git Log | <kbd>⌥⌘L</kbd> |
+| Git Commands (what Next Term ran) | <kbd>⌥⌘L</kbd> |
 
 In the branch popup: <kbd>↩</kbd> checks out, <kbd>→</kbd> opens the branch’s menu, <kbd>⌘R</kbd> fetches, <kbd>⌘↩</kbd> makes a new branch from the selected one, <kbd>⌘⌫</kbd> deletes it, <kbd>⌘C</kbd> copies its name.
 

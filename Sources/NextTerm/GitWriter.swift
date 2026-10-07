@@ -3,7 +3,7 @@ import NextTermCore
 
 /// Git commands that change things: switch, branch, fetch, merge, push, commit. One at a time per
 /// repository (worktrees share their refs), never waiting on a prompt (whatever needs a password or a
-/// passphrase fails at once and says so), and each one written to the Git Log as it would be typed.
+/// passphrase fails at once and says so), and each one written to Git Commands as it would be typed.
 /// Reads stay with GitRunner. Design: claudedocs/research_next-term-git-branches (8.8–8.11).
 final class GitWriter {
     static let shared = GitWriter()
@@ -30,9 +30,9 @@ final class GitWriter {
             for args in steps {
                 let started = Date()
                 last = Self.execute(git, ["-C", directory] + args)
-                let entry = GitLog.Entry(title: title, command: Self.commandLine(args), directory: directory, start: started,
+                let entry = GitCommandLog.Entry(title: title, command: Self.commandLine(args), directory: directory, start: started,
                                          duration: Date().timeIntervalSince(started), status: last.status, output: last.output)
-                DispatchQueue.main.async { GitLog.shared.add(entry) }
+                DispatchQueue.main.async { GitCommandLog.shared.add(entry) }
                 if !last.ok { break }
             }
             DispatchQueue.main.async { completion(last) }
@@ -98,8 +98,8 @@ final class GitWriter {
 
 /// Every git command Next Term ran for you, newest last: the exact command line, when, how long, how it
 /// ended, and what it printed. Kept in memory, the last 500.
-final class GitLog {
-    static let shared = GitLog()
+final class GitCommandLog {
+    static let shared = GitCommandLog()
 
     struct Entry {
         let title: String
@@ -133,9 +133,9 @@ final class GitLog {
     }
 }
 
-/// The Git Log window (⌥⌘L, or Show Git Log from an error).
-final class GitLogWindowController: NSWindowController {
-    static let shared = GitLogWindowController()
+/// The Git Commands window (Git › Git Commands, or Show Git Commands from an error).
+final class GitCommandsWindowController: NSWindowController {
+    static let shared = GitCommandsWindowController()
     private let textView: NSTextView
 
     private init() {
@@ -143,21 +143,21 @@ final class GitLogWindowController: NSWindowController {
         textView = scroll.documentView as! NSTextView
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 460), styleMask: [.titled, .closable, .resizable, .miniaturizable],
                               backing: .buffered, defer: false)
-        window.title = "Git Log"
+        window.title = "Git Commands"
         window.isReleasedWhenClosed = false
         window.contentView = scroll
         super.init(window: window)
         textView.isEditable = false
         textView.font = .monospacedSystemFont(ofSize: 11.5, weight: .regular)
         textView.textContainerInset = NSSize(width: 10, height: 10)
-        GitLog.shared.onChange = { [weak self] in self?.reload() }
+        GitCommandLog.shared.onChange = { [weak self] in self?.reload() }
         window.center()
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
     func reload() {
-        let text = GitLog.shared.text
+        let text = GitCommandLog.shared.text
         textView.string = text.isEmpty ? "Nothing yet: the git commands Next Term runs for you appear here, exactly as they would be typed." : text
         textView.scrollToEndOfDocument(nil)
     }
