@@ -276,7 +276,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
                 let fetched = try await SkillsInstaller.fetch(SkillSource(owner: item.source.owner, repo: item.source.repo, ref: item.source.ref, path: item.path))
                 let sheet = SkillsReviewSheet(fetched: fetched) { [weak self] installed in
                     self?.review = nil
-                    if installed { SkillsInstaller.updates[row.name] = .current }
+                    if installed != nil { SkillsInstaller.updates[row.name] = .current }
                 }
                 review = sheet
                 if let sheetWindow = sheet.window { window.beginSheet(sheetWindow, completionHandler: nil) }

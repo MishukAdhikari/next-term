@@ -198,7 +198,7 @@ final class SkillsWindowController: NSWindowController, NSTableViewDataSource, N
                 say("", problem: false)
                 let sheet = SkillsReviewSheet(fetched: fetched) { [weak self] installed in
                     self?.review = nil
-                    if installed { self?.say("Installed. Settings › Skills shows it, with Undo.", problem: false) }
+                    if installed != nil { self?.say("Installed. Settings › Skills shows it, with Undo.", problem: false) }
                 }
                 review = sheet
                 if let sheetWindow = sheet.window { window.beginSheet(sheetWindow, completionHandler: nil) }

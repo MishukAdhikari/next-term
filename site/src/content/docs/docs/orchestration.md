@@ -68,8 +68,11 @@ Add a stdio server that runs `nxtrm mcp`. `nxtrm` is on the `PATH` in Next Term�
 | `show_tab` | Brings a tab and its window to the front, for you to see. | Brings it forward |
 | `close_tab` | Closes a tab. A tab with something running is refused unless `force` is true, which stops it. The last tab in a window with unsaved files in its editor would close the window, so you are asked whether to save them first, and the answer says `closed: false`. | Yes: asks first |
 | `open_in_editor` | Opens a file in the editor, at a line and column if given. | Opens a file |
+| `list_skills` | Your personal agent skills, and what Claude Code, Codex and Command Code each do with each one (`loads`, `off`, `skipped` or `none`), where it came from, and whether an update was found. | No |
+| `install_skill` | Asks you to install a skill from a public GitHub `source`, with the agent’s `reason`. Nothing is fetched until you choose Fetch and Review in Next Term, and nothing is written until you install it from the review. See [Agents asking for skills](#agents-asking-for-skills). | Only if you say so |
+| `remove_skill` | Asks you to remove an installed skill by `name`; you see what goes and decide, and Undo puts it back. | Only if you say so |
 
-“Asks first” means the tool is marked as destructive in its MCP description, so agents that ask before risky actions ask you before using it. Every tool is marked honestly: the ten in this table that only read say so.
+“Asks first” means the tool is marked as destructive in its MCP description, so agents that ask before risky actions ask you before using it. Every tool is marked honestly: the eleven in this table that only read say so.
 
 Seven more tools work with your servers: `list_hosts`, `add_host`, `remove_host`, `check_host`, `new_remote_tab`, `host_sessions` and `host_changes`. They are described in [Remote tabs: for agents](/docs/remote/#for-agents-mcp). Of these, only `list_hosts` only reads; the others are marked so that your agent’s client asks you first.
 
@@ -78,6 +81,10 @@ Seven more tools work with your servers: `list_hosts`, `add_host`, `remove_host`
 `wait_for_tab` waits up to 50 seconds by default, because some clients give up on a tool after a minute; `timeout_seconds` raises it to 300. When it returns with `"timed_out": true`, the agent is still working: call it again to keep waiting. Input that a tool has just sent counts as work, so a wait right after `send_to_tab` waits for the job it started, however quickly it begins.
 
 The orchestrator is the one waiting, so a tab it opened with `new_tab` or gave input to does not notify you when its agent finishes while you are in Next Term; from another app, it does, and its decisions always do. Type in the tab yourself and it notifies you again like any other. See [Notifications and the Dock badge](/docs/agent-status/#notifications-and-the-dock-badge).
+
+### Agents asking for skills
+
+`install_skill` and `remove_skill` are requests, not actions. Each opens a small window naming the tab that asked, or saying the request came from outside Next Term’s tabs, with the agent’s reason shown as its own words. The window does not take the keyboard and has no Return button, so typing meant for a terminal never answers it. One request is open at a time: another one gets `busy`. A source you decline stays declined until Next Term quits. The call answers within about 50 seconds: `installed`, `removed`, `declined`, or `pending` with a `request_id` the agent passes again to keep waiting.
 
 ## An example: two projects, two agents
 

@@ -11,7 +11,8 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
     private let fetched: SkillsInstaller.Fetched
     private var ticked: Set<Int>
     private var selected = 0
-    private let done: (Bool) -> Void
+    /// Called once: the names installed, or nil when the user cancelled.
+    private let done: ([String]?) -> Void
     /// For an update: the installed copy, to show what changed.
     private let installedFolders: [String: String]
 
@@ -24,7 +25,7 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
     private(set) var installButton = NSButton(title: "Install", target: nil, action: nil)
     private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
 
-    init(fetched: SkillsInstaller.Fetched, done: @escaping (Bool) -> Void) {
+    init(fetched: SkillsInstaller.Fetched, done: @escaping ([String]?) -> Void) {
         self.fetched = fetched
         self.done = done
         ticked = fetched.candidates.count == 1 && fetched.candidates[0].installable ? [0] : []
@@ -303,7 +304,7 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
 
     @objc private func cancel() {
         fetched.discard()
-        finish(false)
+        finish(nil)
     }
 
     @objc private func install() {
@@ -311,14 +312,14 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
         guard !chosen.isEmpty, chosen.allSatisfy(\.installable) else { return }
         switch SkillsInstaller.install(chosen, fetched: fetched, linkForClaude: linkForClaude) {
         case .success(let note):
-            finish(true)
+            finish(chosen.map(\.name))
             if !note.isEmpty, let parent = window?.sheetParent ?? NSApp.keyWindow { SkillsSettingsView.tell(note, in: parent, title: "Installed") }
         case .failure(let failure):
             if let window { SkillsSettingsView.tell(failure.message, in: window) }
         }
     }
 
-    private func finish(_ installed: Bool) {
+    private func finish(_ installed: [String]?) {
         if let window, let parent = window.sheetParent { parent.endSheet(window) } else { window?.close() }
         done(installed)
     }

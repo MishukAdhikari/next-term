@@ -64,6 +64,74 @@ extension SelfTest {
         check(SkillsStore.lastChange == nil, "skills: and there is nothing left to undo")
 
         await installChecks(home: home)
+        await mcpChecks(home: home)
+    }
+
+    /// Agents asking through MCP: nothing happens without the user, one request at a time, a declined
+    /// source stays declined, and a slow decision comes back as pending with an id to ask again with.
+    static func mcpChecks(home: String) async {
+        let manager = FileManager.default
+        let savedWait = SkillsMCP.answerWithin
+        SkillsMCP.answerWithin = 1
+        defer {
+            SkillsMCP.answerWithin = savedWait
+            SkillsMCP.requests = [:]
+            SkillsMCP.declined = []
+            for entry in SkillsStore.lastChange?.entries ?? [] where entry.kind == .trashed {
+                if let trashed = entry.other { try? manager.removeItem(atPath: trashed) }
+            }
+            try? manager.removeItem(at: SkillsStore.supportFolder)
+        }
+        func ask(_ tool: String, _ arguments: [String: Any]) async -> [String: Any] {
+            await withCheckedContinuation { continuation in
+                SkillsMCP.call(tool, arguments, caller: nil) { result in
+                    let object = (try? JSONSerialization.jsonObject(with: Data(result.text.utf8))) as? [String: Any]
+                    continuation.resume(returning: object ?? ["error": result.text, "isError": result.isError])
+                }
+            }
+        }
+        // An installed skill: a shared copy, linked for Claude Code.
+        let shared = (home as NSString).appendingPathComponent(".agents/skills/notes-helper")
+        try? manager.createDirectory(atPath: shared, withIntermediateDirectories: true)
+        try? "---\nname: notes-helper\ndescription: Keeps notes.\n---\nBody\n".write(toFile: shared + "/SKILL.md", atomically: true, encoding: .utf8)
+        try? manager.createDirectory(atPath: (home as NSString).appendingPathComponent(".claude/skills"), withIntermediateDirectories: true)
+        try? manager.createSymbolicLink(atPath: (home as NSString).appendingPathComponent(".claude/skills/notes-helper"), withDestinationPath: "../../.agents/skills/notes-helper")
+
+        let listed = await ask("list_skills", [:])
+        let skills = listed["skills"] as? [[String: Any]] ?? []
+        let notes = skills.first { $0["name"] as? String == "notes-helper" }
+        check((notes?["agents"] as? [String: String])?["claude-code"] == "loads", "skills mcp: list_skills shows each skill and which agent loads it", "\(listed)")
+
+        let bad = await ask("install_skill", ["source": "https://gitlab.com/a/b"])
+        check(bad["isError"] as? Bool == true, "skills mcp: a source that is not GitHub is refused at once")
+
+        // The request waits for the user; the agent hears "pending" with an id, and nothing is fetched.
+        let first = await ask("install_skill", ["source": "example-org/skills/skills/demo", "reason": "The user asked for it."])
+        let request = SkillsMCP.open
+        check(first["status"] as? String == "pending" && first["request_id"] as? String == request?.id,
+              "skills mcp: an install request waits for the user, then answers pending with an id", "\(first)")
+        let approval = request?.window
+        check(approval?.approveButton.keyEquivalent.isEmpty == true && approval?.declineButton.keyEquivalent.isEmpty == true
+              && approval?.window?.isKeyWindow == false && approval?.window?.isVisible == true,
+              "skills mcp: the request window shows without taking the keyboard, and has no Return button")
+        let busy = await ask("install_skill", ["source": "example-org/other"])
+        check(busy["status"] as? String == "busy", "skills mcp: a second request while one is open is told the user is busy", "\(busy)")
+
+        approval?.declineButton.performClick(nil)
+        let answer = await ask("install_skill", ["request_id": first["request_id"] as? String ?? ""])
+        let again = await ask("install_skill", ["source": "example-org/skills/skills/demo"])
+        check(answer["status"] as? String == "declined" && again["status"] as? String == "declined" && SkillsMCP.open == nil,
+              "skills mcp: declining answers the agent, and the same request stays declined", "\(answer) \(again)")
+
+        // Remove: the user approves; the shared copy and the Claude Code link go, and Undo brings them back.
+        let removal = await ask("remove_skill", ["name": "notes-helper"])
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        SkillsMCP.open?.window?.approveButton.performClick(nil)
+        let removed = await ask("remove_skill", ["request_id": removal["request_id"] as? String ?? ""])
+        check(removed["status"] as? String == "removed" && !manager.fileExists(atPath: shared),
+              "skills mcp: a removal the user approves goes through, and the agent hears so", "\(removal) \(removed)")
+        _ = SkillsStore.undo()
+        check(manager.fileExists(atPath: shared + "/SKILL.md"), "skills mcp: Undo puts the removed skill back")
     }
 
     /// Installing from a download, without the network: a commit's files as GitHub would send them.

@@ -29,7 +29,9 @@ public enum MCPServer {
         read_file, find_in_files, git_status and get_diff read an open project's files and changes (what \
         an agent did). get_editor_selection returns what the user has selected in the editor. Servers (VPSes) the user \
         connected are in list_hosts: new_remote_tab opens a tab on one (then use it like any tab), \
-        host_sessions lists the sessions kept there, host_changes shows what changed in a git work tree there.
+        host_sessions lists the sessions kept there, host_changes shows what changed in a git work tree there. \
+        list_skills shows the user's agent skills and which agent loads each; install_skill and remove_skill \
+        ask the user, who reviews and decides in Next Term (nothing changes on your say alone).
         """
 
     // MARK: tools
@@ -152,6 +154,18 @@ public enum MCPServer {
              description: "What changed in a git work tree on a host (what its agents did): the branch, the changed files (git status; untracked files are listed), a diffstat, and the diff against HEAD, cut at max_bytes. It never takes git's index lock. Connects like check_host.",
              inputSchema: #"{"type": "object", "properties": {\#(hostRef), "directory": {"type": "string", "description": "Folder on the host. Default: the host's folder."}, "diff": {"type": "boolean", "description": "Include the diff. Default true."}, "max_bytes": {"type": "integer", "minimum": 1000, "maximum": 2000000, "description": "Longest diff to return. Default 200000."}}, "required": ["host"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: true, timeout: 60, openWorld: true),
+        Tool(name: "list_skills", title: "List agent skills",
+             description: "Lists the user's personal agent skills (~/.agents/skills, ~/.claude/skills, ~/.codex/skills, ~/.commandcode/skills): each skill's name and description, what Claude Code, Codex and Command Code each do with it (loads, off, skipped, none), where it came from when known, and whether an update was found.",
+             inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
+             readOnly: true, destructive: false, idempotent: true, timeout: 15),
+        Tool(name: "install_skill", title: "Ask to install a skill",
+             description: "Asks the user to install an agent skill from a public GitHub repository. Nothing is fetched or written on this request alone: the user sees it in Next Term, chooses to review the skill's files, and decides. Answers within about 50 seconds: installed (with the names), declined, busy (another request is waiting; ask later), or pending with a request_id: call again with only request_id to keep waiting. A source the user declined stays declined until Next Term quits.",
+             inputSchema: #"{"type": "object", "properties": {"source": {"type": "string", "description": "owner/repo, owner/repo/path/to/skill, or a github.com link to a repository, folder or SKILL.md."}, "reason": {"type": "string", "description": "Why, in a sentence; shown to the user as your words."}, "request_id": {"type": "string", "description": "A pending request's id, to keep waiting for the user's answer."}}, "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: false, timeout: 60, openWorld: true),
+        Tool(name: "remove_skill", title: "Ask to remove a skill",
+             description: "Asks the user to remove an installed skill (its copy in ~/.agents/skills and its Claude Code link); the user sees what goes and decides, and can undo it. Answers like install_skill: removed, declined, busy, or pending with a request_id to call again with.",
+             inputSchema: #"{"type": "object", "properties": {"name": {"type": "string", "description": "The skill's name, as list_skills gives it."}, "reason": {"type": "string", "description": "Why, in a sentence; shown to the user as your words."}, "request_id": {"type": "string", "description": "A pending request's id, to keep waiting for the user's answer."}}, "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: false, timeout: 60),
         Tool(name: "open_in_editor", title: "Open in the editor",
              description: "Opens a file in Next Term's editor, at a line and column if given (1-based).",
              inputSchema: #"{"type": "object", "properties": {"path": {"type": "string", "description": "Absolute file path."}, "line": {"type": "integer", "minimum": 1}, "column": {"type": "integer", "minimum": 1}}, "required": ["path"], "additionalProperties": false}"#,
