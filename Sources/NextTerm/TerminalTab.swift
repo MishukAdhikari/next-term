@@ -888,7 +888,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         }
         guard asking != loginPrompt else { return }
         loginPrompt = asking
-        if asking { status.bell() }
+        if asking { status.needsAttention() }
         delegate?.tabDidChange(self)
     }
 

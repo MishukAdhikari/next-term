@@ -15,6 +15,22 @@ public struct TabNotice: Equatable, Sendable {
     public let stillRunning: Bool
     /// An agent's question when it is blocked on a decision ("Do you want to make this edit to x?").
     public var question: String? = nil
+    /// How long the work took, for a finished command or an agent that stopped; infinite for a bell.
+    public var duration: TimeInterval = 0
+    /// The attention came from the program itself (a bell, OSC 9 or OSC 777), not from Next Term.
+    public var fromProgram = false
+
+    public init(state: TabState, command: String, program: String, kind: CommandKind, stillRunning: Bool,
+                question: String? = nil, duration: TimeInterval = 0, fromProgram: Bool = false) {
+        self.state = state
+        self.command = command
+        self.program = program
+        self.kind = kind
+        self.stillRunning = stillRunning
+        self.question = question
+        self.duration = duration
+        self.fromProgram = fromProgram
+    }
 }
 
 /// The per-tab status state machine. Pure logic, driven by events with explicit timestamps
@@ -24,7 +40,8 @@ public struct TabStatus {
     public static let echoWindow: TimeInterval = 0.2
     /// An agent silent for this long has stopped and is waiting for you.
     public static let quietAfter: TimeInterval = 2.5
-    /// Only notify for work that took at least this long.
+    /// Only notify for work that took at least this long: the shortest choice in Settings › Notifications,
+    /// which can ask for longer (NotificationSettings).
     public static let notifyAfter: TimeInterval = 5
 
     /// The user is looking at this tab (active tab of the key window).
@@ -219,9 +236,7 @@ public struct TabStatus {
         guard !visible else { return }
         unseen = .attention
         markedForQuestion = true
-        var notice = TabNotice(state: .attention, command: command, program: program, kind: kind, stillRunning: true)
-        notice.question = asked
-        pendingNotice = notice
+        pendingNotice = TabNotice(state: .attention, command: command, program: program, kind: kind, stillRunning: true, question: asked)
     }
 
     // MARK: activity
@@ -242,6 +257,12 @@ public struct TabStatus {
 
     /// BEL, or an OSC 9 / OSC 777 notification from the program.
     public mutating func bell() {
+        mark(.attention, duration: .infinity, fromProgram: true)
+    }
+
+    /// Next Term's own call to the tab, such as ssh asking for a password: attention like a bell, but not
+    /// the program's, so the setting for programs' bells leaves it alone.
+    public mutating func needsAttention() {
         mark(.attention, duration: .infinity)
     }
 
@@ -291,14 +312,15 @@ public struct TabStatus {
     }
 
     /// Something happened the user should know about. Ignored while they are looking at the tab.
-    private mutating func mark(_ newState: TabState, duration: TimeInterval) {
+    private mutating func mark(_ newState: TabState, duration: TimeInterval, fromProgram: Bool = false) {
         guard !visible else { return }
         let wasAttention = unseen == .attention
         if !wasAttention || newState == .attention { unseen = newState }
         // Attention notifies once until seen: a program ringing the bell in a loop is one notice, not 500.
         let notify = newState == .attention ? !wasAttention : duration >= Self.notifyAfter
         if notify {
-            pendingNotice = TabNotice(state: newState, command: command, program: program, kind: kind, stillRunning: running)
+            pendingNotice = TabNotice(state: newState, command: command, program: program, kind: kind, stillRunning: running,
+                                      duration: duration, fromProgram: fromProgram)
         }
     }
 }

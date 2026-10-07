@@ -70,7 +70,7 @@ import Testing
         #expect(s.running && s.state == .idle) // plain commands show no spinner
         s.commandFinished(exitCode: 0, at: 10)
         #expect(s.state == .done)
-        #expect(s.takeNotice() == TabNotice(state: .done, command: "make", program: "make", kind: .command, stillRunning: false))
+        #expect(s.takeNotice() == TabNotice(state: .done, command: "make", program: "make", kind: .command, stillRunning: false, duration: 10))
         #expect(s.takeNotice() == nil)
         s.setVisible(true)
         #expect(s.state == .idle)
@@ -121,7 +121,7 @@ import Testing
         #expect(s.state == .working)
         s.tick(at: 8 + TabStatus.quietAfter)
         #expect(s.state == .done)
-        #expect(s.takeNotice() == TabNotice(state: .done, command: "claude", program: "claude", kind: .agent, stillRunning: true))
+        #expect(s.takeNotice() == TabNotice(state: .done, command: "claude", program: "claude", kind: .agent, stillRunning: true, duration: 7))
         // Agent resumes: the stale done clears.
         s.output(at: 20)
         #expect(s.state == .working)
@@ -252,7 +252,8 @@ import Testing
     @Test func bellLoopNotifiesOnce() {
         var s = TabStatus()
         s.bell()
-        #expect(s.takeNotice()?.state == .attention)
+        let notice = s.takeNotice()
+        #expect(notice?.state == .attention && notice?.fromProgram == true && notice?.topic == .programAlert)
         for _ in 0..<500 { s.bell() }
         #expect(s.takeNotice() == nil)
         s.setVisible(true)
