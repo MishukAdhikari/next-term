@@ -41,6 +41,7 @@ export default defineConfig({
 			routeMiddleware: './src/routeData.ts',
 			components: {
 				Footer: './src/components/Footer.astro',
+				SiteTitle: './src/components/SiteTitle.astro',
 			},
 			expressiveCode: {
 				themes: [nextDark, 'github-light'],
