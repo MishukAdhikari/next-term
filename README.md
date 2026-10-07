@@ -211,8 +211,11 @@ closes; tabs that don't fit go behind the » button.
 - **The MCP server** listens on a Unix socket only you can open (0600, and each connection is checked to
   be yours), never on the network. Agents reach it through `nxtrm mcp`, which they start themselves.
   Tabs refuse input from their own agent, and a tab running something closes only when told to force it.
-- **Git** runs read-only with `--no-optional-locks`, so the sidebar never holds the index lock while your
-  own git commands run.
+- **Git:** the sidebar's git calls are read-only and use `--no-optional-locks`, so the sidebar never holds
+  the index lock while your own git commands run. The branch popup changes the repository only when you
+  ask (checkout, merge, rebase, commit, push, stash). It asks first when an agent is working in the folder,
+  puts changes a switch would overwrite in a named stash, and force-pushes only with a lease on the commits
+  it showed you, never to `main`, `master`, `release/*` or the default branch.
 
 ## Build from source
 
