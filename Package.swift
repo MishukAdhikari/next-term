@@ -16,7 +16,8 @@ let package = Package(
         .package(url: "https://github.com/swhitty/SwiftDraw.git", exact: "0.24.0"),
     ],
     targets: [
-        // Platform-neutral logic (tab status, command classification). No AppKit, so an iOS app can reuse it.
+        // Platform-neutral logic (tab status, command classification). No AppKit, but not ready for iOS as it
+        // is: Process (how Git.swift runs git) and homeDirectoryForCurrentUser are macOS-only.
         .target(name: "NextTermCore", linkerSettings: [.linkedLibrary("sqlite3")]),
         .executableTarget(
             name: "NextTerm",

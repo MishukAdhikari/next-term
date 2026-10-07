@@ -261,8 +261,9 @@ Tests/                  unit tests (swift-testing)
 scripts/                build, test and icon scripts
 ```
 
-`NextTermCore` has no AppKit dependency, so an iPad/iPhone app (SwiftTerm supports UIKit) or another
-front end can reuse it.
+`NextTermCore` has no AppKit dependency, so another front end can reuse it. An iPad or iPhone app
+(SwiftTerm supports UIKit) could reuse most of it, but not as it is: it runs git with Foundation's
+`Process` and finds the home folder with `homeDirectoryForCurrentUser`, and iOS has neither.
 
 ## Roadmap
 
