@@ -45,6 +45,7 @@ final class NotificationSettingsView: NSView {
         permission.font = .systemFont(ofSize: 11)
         permission.preferredMaxLayoutWidth = 400
         openSystemSettings.bezelStyle = .rounded
+        openSystemSettings.isHidden = true // until macOS says notifications are off
         openSystemSettings.target = self
         openSystemSettings.action = #selector(openNotificationSettings)
         sendTest.bezelStyle = .rounded
@@ -110,17 +111,19 @@ final class NotificationSettingsView: NSView {
     }
 
     private func refreshPermission() {
-        AppDelegate.shared?.notificationPermission { [weak self] status in
-            guard let self else { return }
-            switch status {
-            case .allowed: self.permission.stringValue = "macOS lets Next Term show notifications."
-            case .off: self.permission.stringValue = "Notifications for Next Term are off in System Settings."
-            case .notAsked: self.permission.stringValue = "macOS has not asked yet whether Next Term may notify you. Send Test Notification asks."
-            case .unavailable: self.permission.stringValue = "Only the installed app can show notifications."
-            }
-            self.openSystemSettings.isHidden = status != .off
-            self.sendTest.isEnabled = status != .unavailable
+        AppDelegate.shared?.notificationPermission { [weak self] status in self?.show(status) }
+    }
+
+    func show(_ status: AppDelegate.NotificationPermission) {
+        switch status {
+        case .allowed: permission.stringValue = "macOS lets Next Term show notifications."
+        case .quiet: permission.stringValue = "Allowed, but set to None in System Settings: they go to Notification Center without a banner."
+        case .off: permission.stringValue = "Notifications for Next Term are off in System Settings."
+        case .notAsked: permission.stringValue = "You haven’t answered macOS’s question yet. Send Test Notification asks again."
+        case .unavailable: permission.stringValue = "Only the installed app can show notifications."
         }
+        openSystemSettings.isHidden = status != .off && status != .quiet
+        sendTest.isEnabled = status != .unavailable
     }
 
     @objc private func checkboxChanged(_ sender: NSButton) {
@@ -145,12 +148,30 @@ final class NotificationSettingsView: NSView {
         UserDefaults.standard.set(seconds, forKey: NotificationSettings.Key.threshold)
     }
 
+    /// System Settings › Notifications at Next Term's own entry (without a bundle, the list of apps; a macOS
+    /// that ignores the id opens the list too).
+    static var notificationSettingsURL: URL? {
+        let pane = "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+        guard let id = Bundle.main.bundleIdentifier else { return URL(string: pane) }
+        return URL(string: pane + "?id=" + id)
+    }
+
     @objc private func openNotificationSettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") else { return }
+        guard let url = Self.notificationSettingsURL else { return }
         NSWorkspace.shared.open(url)
     }
 
     @objc private func sendTestNotification() {
-        AppDelegate.shared.sendTestNotification { [weak self] in self?.refreshPermission() }
+        AppDelegate.shared.sendTestNotification { [weak self] shown in self?.testNotificationSent(shown) }
+    }
+
+    /// What came of Send Test Notification: not shown means macOS has Next Term's notifications off.
+    func testNotificationSent(_ shown: Bool) {
+        guard shown else {
+            permission.stringValue = "macOS didn’t show it: notifications for Next Term are off."
+            openSystemSettings.isHidden = false
+            return
+        }
+        refreshPermission()
     }
 }

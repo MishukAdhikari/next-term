@@ -902,39 +902,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// Settings › Notifications › Send Test Notification: one like a tab's, with the sound as set. Asks macOS
-    /// first if it has not asked yet (once answered, asking again changes nothing).
-    func sendTestNotification(then done: @escaping () -> Void) {
+    /// first if it has not asked yet (once answered, asking again changes nothing). `done` says whether macOS
+    /// took it: false when Next Term's notifications are off.
+    func sendTestNotification(then done: @escaping (Bool) -> Void) {
         let content = UNMutableNotificationContent()
         content.title = "Next Term"
         content.body = "This is how Next Term tells you a tab needs you. Clicking a tab’s notification takes you to it."
         content.sound = NotificationSettings(defaults: .standard).sound ? .default : nil
         let request = UNNotificationRequest(identifier: "test", content: content, trigger: nil)
-        guard let center = notificationCenter, !SelfTest.isRequested else {
+        if SelfTest.isRequested {
             deliver(request)
-            return done()
+            return done(true)
         }
-        center.requestAuthorization(options: [.alert, .sound]) { _, _ in
-            center.add(request)
-            DispatchQueue.main.async(execute: done)
+        guard let center = notificationCenter else { return done(false) }
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            guard granted else { return DispatchQueue.main.async { done(false) } }
+            center.add(request) { error in
+                DispatchQueue.main.async { done(error == nil) }
+            }
         }
     }
 
     /// What macOS lets Next Term do (System Settings › Notifications), for Settings › Notifications.
     enum NotificationPermission {
         case allowed, off, notAsked
+        /// Allowed, with the alert style None: they go to Notification Center without a banner.
+        case quiet
         /// `swift run`: no app bundle, so no notifications.
         case unavailable
+
+        init(_ status: UNAuthorizationStatus, alertStyle: UNAlertStyle) {
+            switch status {
+            case .denied: self = .off
+            case .notDetermined: self = .notAsked
+            case .authorized, .provisional: self = alertStyle == .none ? .quiet : .allowed
+            default: self = .allowed
+            }
+        }
     }
 
     func notificationPermission(_ done: @escaping (NotificationPermission) -> Void) {
         guard let center = notificationCenter else { return done(.unavailable) }
         center.getNotificationSettings { settings in
-            let permission: NotificationPermission
-            switch settings.authorizationStatus {
-            case .denied: permission = .off
-            case .notDetermined: permission = .notAsked
-            default: permission = .allowed // authorized, provisional, ephemeral
-            }
+            let permission = NotificationPermission(settings.authorizationStatus, alertStyle: settings.alertStyle)
             DispatchQueue.main.async { done(permission) }
         }
     }

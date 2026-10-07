@@ -188,6 +188,7 @@ extension SelfTest {
               labels.joined(separator: " | "))
         NotificationSettings.Key.all.forEach(defaults.removeObject(forKey:))
         let view = NotificationSettingsView(frame: .zero)
+        check(view.openSystemSettings.isHidden, "Open Notification Settings… is hidden until macOS says notifications are off")
         let boxes = [view.decisions, view.agentFinished, view.programAlerts, view.sound]
         let allOn = boxes.allSatisfy { $0.state == .on }
         let choices = [view.commands.titleOfSelectedItem, view.threshold.titleOfSelectedItem]
@@ -222,5 +223,28 @@ extension SelfTest {
         let test = app.testNotifications.dropFirst(before).last
         check(test?.identifier == "test" && test?.content.sound == nil, "Send Test Notification sends one, with the sound as set",
               test?.identifier ?? "nothing posted")
+        permissionChecks(view)
+    }
+
+    /// What the line about macOS says for each answer it gives, and where its button goes. Not suspending, so
+    /// the view's own reading of macOS cannot land in between.
+    private static func permissionChecks(_ view: NotificationSettingsView) {
+        typealias Permission = AppDelegate.NotificationPermission
+        let read = [Permission(.authorized, alertStyle: .banner), Permission(.authorized, alertStyle: .alert),
+                    Permission(.authorized, alertStyle: .none), Permission(.denied, alertStyle: .banner), Permission(.notDetermined, alertStyle: .none)]
+        check(read == [.allowed, .allowed, .quiet, .off, .notAsked], "macOS’s answer is read: allowed, allowed but without banners, off, not answered",
+              "\(read)")
+        view.show(.quiet)
+        check(!view.openSystemSettings.isHidden && view.permission.stringValue.contains("set to None"),
+              "allowed with the style None says so, with Open Notification Settings…", view.permission.stringValue)
+        view.show(.allowed)
+        check(view.openSystemSettings.isHidden, "allowed, the button goes")
+        view.testNotificationSent(false)
+        check(!view.openSystemSettings.isHidden && view.permission.stringValue.hasPrefix("macOS didn’t show it"),
+              "a test notification macOS refuses says so, instead of nothing happening", view.permission.stringValue)
+        let pane = "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+        let own = Bundle.main.bundleIdentifier.map { pane + "?id=" + $0 } ?? pane
+        check(NotificationSettingsView.notificationSettingsURL?.absoluteString == own, "Open Notification Settings… goes to Next Term’s own entry",
+              NotificationSettingsView.notificationSettingsURL?.absoluteString ?? "none")
     }
 }
