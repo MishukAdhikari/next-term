@@ -35,7 +35,7 @@ The dots differ in shape as well as colour, so they read without colour too. The
 
 - **Hover over a tab** for where it runs, such as “Remote: web-1 (deploy@203.0.113.5), connected”. VoiceOver says the same.
 - **A tab too narrow for its whole title** drops “web-1: ” first, then the note, and shows “app”: the mark says the rest.
-- **A split tab** shows the weakest connection among its panes.
+- **A split tab** shows the weakest connection among its panes, and its tooltip names that pane’s server.
 - **The » menu** of tabs that do not fit shows the same marks.
 - **The project sidebar** stays on your Mac’s files while a remote tab is active (the tab’s folder is on the server). A line under its header says “Files on this Mac”, with the server and its name on the other side.
 - **The window title** names the host, as in “claude — on web-1 — Next Term” (or “web-1: app — Next Term”, where the tab’s name already says it), for the Window menu, Mission Control and VoiceOver.
