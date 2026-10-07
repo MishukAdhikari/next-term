@@ -3,9 +3,9 @@
 #
 #     scripts/sign-release.sh v0.8.0
 #
-# The installer (site/src/install.sh) installs only a disk image whose checksum this key signed, and
-# the signed text names the versioned file (NextTerm-0.8.0.dmg), so a signature can't be moved to
-# another release. The private key never goes to CI or the repository: it lives on the maintainer's
+# The installer (site/src/install.sh) and the app's updater install only a disk image whose checksum
+# this key signed, and the signed text names the versioned file (NextTerm-0.8.0.dmg), so a signature
+# can't be moved to another release. The private key never goes to CI or the repository: it lives on the maintainer's
 # Mac, in ~/.config/next-term/release-signing-key (override with NEXTTERM_RELEASE_KEY).
 #
 # It signs only what the release workflow uploaded (github-actions[bot]), never an asset a person's
