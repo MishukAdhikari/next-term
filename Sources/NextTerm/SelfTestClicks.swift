@@ -335,7 +335,7 @@ extension SelfTest {
         check(bigClicked && area.panes.count == count && area.activePath != canonicalPath(large.path), "a click on a text file over 4 MB selects it and opens nothing",
               "clicked \(bigClicked)")
         // A link to it, listed as a file: what counts is the size of the file it points to.
-        let linkRow = root.node(at: canonicalPath(folder.path) + "/large-link.log").map { outline.row(forItem: $0) } ?? -1
+        let linkRow = sidebarRow(c, folder.appendingPathComponent("large-link.log"))
         if linkRow >= 0 {
             outline.scrollRowToVisible(linkRow)
             let linkClicked = click(outline, at: namePoint(outline, linkRow)) && outline.selectedRowIndexes == IndexSet(integer: linkRow)
@@ -523,7 +523,7 @@ extension SelfTest {
         let outline = c.sidebar.outline
         area.closeAll()
         let renamed = files[0].deletingLastPathComponent().appendingPathComponent("a2.txt")
-        if let node = c.sidebar.root?.node(at: canonicalPath(files[0].path)) {
+        if let node = sidebarNode(c, files[0]) {
             c.sidebar.beginRename(node)
             if let field = window.firstResponder as? NSTextView { field.insertText("a2", replacementRange: field.selectedRange()) }
             let renaming = window.firstResponder is NSTextView
@@ -535,6 +535,8 @@ extension SelfTest {
             check(await wait(3) { fm.fileExists(atPath: renamed.path) }, "and the rename is kept")
             c.sidebar.rename(renamed, to: "a.txt")
             _ = await wait(3) { sidebarRow(c, files[0]) >= 0 }
+        } else {
+            check(false, "a click that ends a rename selects the file it was on and opens nothing", "a.txt is not in the tree")
         }
 
         // Off, from Settings, with a preview open: it stays, as an ordinary tab, and clicks select again.
@@ -620,8 +622,15 @@ extension SelfTest {
     }
 
     private static func sidebarRow(_ c: TerminalWindowController, _ url: URL) -> Int {
-        guard let node = c.sidebar.root?.node(at: canonicalPath(url.path)) else { return -1 }
+        guard let node = sidebarNode(c, url) else { return -1 }
         return c.sidebar.outline.row(forItem: node)
+    }
+
+    /// The tree's node for a file or a folder. `node(at:)` finds folders only: a file is found in its folder.
+    private static func sidebarNode(_ c: TerminalWindowController, _ url: URL) -> FileNode? {
+        let path = canonicalPath(url.path)
+        if let folder = c.sidebar.root?.node(at: path) { return folder }
+        return c.sidebar.root?.node(at: (path as NSString).deletingLastPathComponent)?.children?.first { $0.path == path }
     }
 
     /// On a row's name: past its disclosure arrow and its icon.
