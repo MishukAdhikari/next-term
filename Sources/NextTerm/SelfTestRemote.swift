@@ -255,9 +255,14 @@ extension SelfTest {
         check(plain.paneSummary == "\(plain.title): \(plain.stateDescription)", "remote: and a split tab's line for the pane gives its state",
               plain.paneSummary)
         // The window title names the host once: "selftest: app — …", or "sleep — on selftest — …" (below).
+        // It names the editor's file while that has the keyboard, so the tab takes it first.
+        c.window?.makeFirstResponder(plain.view)
+        c.refresh()
+        check(c.activeTab === plain && !c.isEditorFocused, "remote: the new remote tab has the keyboard",
+              "\(c.activeTab?.title ?? "no tab") / \(c.window?.firstResponder.map { "\(type(of: $0))" } ?? "nothing")")
         let windowTitle = c.window?.title ?? ""
         check(!c.sidebar.remoteNote.isHidden && c.sidebar.remoteNote.shown?.host == "selftest"
-              && (c.isEditorFocused || windowTitle.hasPrefix("selftest: ") != windowTitle.contains("— on selftest —")),
+              && windowTitle.hasPrefix("selftest: ") != windowTitle.contains("— on selftest —"),
               "remote: the sidebar says its files are this Mac's, and the window title names the host once",
               "\(c.sidebar.remoteNote.shown?.host ?? "no note") / \(windowTitle)")
         let local = c.groups.firstIndex { $0.focused.remote == nil }
@@ -269,8 +274,9 @@ extension SelfTest {
         plain.view.send(txt: "sleep 4\r")
         check(await wait(8) { plain.status.running && plain.status.program == "sleep" }, "remote: what runs in front on the host is seen",
               "\(plain.status.running) \(plain.status.program)")
+        c.window?.makeFirstResponder(plain.view)
         c.refresh()
-        check(c.isEditorFocused || c.activeTab !== plain || c.window?.title.contains(" — on selftest — ") == true,
+        check(c.activeTab === plain && c.window?.title.contains(" — on selftest — ") == true,
               "remote: while a program runs, the window title says on which host", c.window?.title ?? "")
         check(await wait(10) { !plain.status.running }, "remote: and when it ends")
         plain.view.send(txt: "sleep 60 &\r")
