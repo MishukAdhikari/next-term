@@ -42,7 +42,7 @@ LINK_HOSTS |= {
     "code.visualstudio.com", "docs.github.com", "code.claude.com",
     "www.jetbrains.com", "blog.jetbrains.com", "junie.jetbrains.com",
     "cursor.com", "devin.ai", "docs.devin.ai", "zed.dev",
-    "www.warp.dev", "docs.warp.dev", "iterm2.com", "ghostty.org",
+    "iterm2.com", "ghostty.org",
 }
 
 errors: list[str] = []

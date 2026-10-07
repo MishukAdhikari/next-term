@@ -110,7 +110,6 @@ export default defineConfig({
 						{ slug: 'compare/cursor' },
 						{ slug: 'compare/devin-desktop' },
 						{ slug: 'compare/zed' },
-						{ slug: 'compare/warp' },
 						{ slug: 'compare/iterm2' },
 						{ slug: 'compare/ghostty' },
 					],

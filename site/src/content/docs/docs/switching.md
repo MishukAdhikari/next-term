@@ -47,4 +47,4 @@ Two rules keep the terminal working the way your shell and agents expect: a set 
 
 ## Coming next
 
-<span class="nt-soon">Coming next</span> Font choice and terminal colours, Zed’s own key changes, and more terminals (Ghostty, Warp, Terminal.app).
+<span class="nt-soon">Coming next</span> Font choice and terminal colours, Zed’s own key changes, and more terminals (Ghostty, Terminal.app).

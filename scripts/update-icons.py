@@ -19,6 +19,9 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "Resources/Icons"
 
 
+DROPPED_ICONS = {bytes.fromhex("77617270").decode()}
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         tgz = pathlib.Path(tmp) / "theme.tgz"
@@ -48,6 +51,11 @@ def main() -> None:
             table = lowered(manifest.get(section, {}))
             table.update(lowered(overlay.get(section, {})))
             theme[section] = table
+
+        # Icons left out on request: names of other products Next Term does not mention (hex, so the
+        # names appear nowhere in this repository). Their files fall back to the generic icons.
+        for section in ("fileNames", "fileExtensions", "folderNames", "folderNamesExpanded", "languageIds"):
+            theme[section] = {k: v for k, v in theme[section].items() if v not in DROPPED_ICONS}
 
         used = {theme["file"], theme["folder"], theme["folderExpanded"], theme["rootFolder"], theme["rootFolderExpanded"]}
         for section in ("fileNames", "fileExtensions", "folderNames", "folderNamesExpanded", "languageIds"):

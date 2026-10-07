@@ -40,7 +40,6 @@ export const COMPARE_ORDER = [
 	'compare/cursor',
 	'compare/devin-desktop',
 	'compare/zed',
-	'compare/warp',
 	'compare/iterm2',
 	'compare/ghostty',
 ] as const;
