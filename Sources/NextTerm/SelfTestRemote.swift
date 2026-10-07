@@ -273,6 +273,17 @@ extension SelfTest {
               down.spoken + " / " + plain.tooltip.replacingOccurrences(of: "\n", with: " | "))
         // A split tab lists its panes the same way: "selftest: app (disconnected)", not ": Disconnected" after it.
         check(plain.paneSummary == plain.title, "remote: a split tab's line for the pane says the connection once", plain.paneSummary)
+        // Split, VoiceOver hears the title, the other pane's line and the remote part: "disconnected" twice,
+        // not a third time in the line for the pane the title is named after.
+        if let beside = c.split(vertical: true, from: plain, directory: project.path, focus: false) {
+            let split = shownMark()
+            let splitTimes = split.spoken.lowercased().components(separatedBy: "disconnected").count - 1
+            check(splitTimes == 2 && split.spoken.contains("+1"), "remote: a split tab says the connection once besides its title too",
+                  split.spoken)
+            c.remove(beside)
+        } else {
+            check(false, "remote: a split beside a remote tab opens")
+        }
         check(MCPControl.canType(plain) == false, "remote MCP: nothing is typed into a disconnected tab")
         master.start()
         plain.view.send(txt: "\r")

@@ -470,12 +470,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             }
             // A split tab: named by the pane with the keyboard, marked by the pane that most needs you.
             let lines = group.panes.map(\.paneSummary)
+            // VoiceOver reads the title first: the keyboard pane's line goes when it is only that title
+            // ("web-1: app (connecting)"), or the connection would be said three times.
+            let spoken = group.panes.filter { $0 !== tab || $0.paneSummary != $0.title }.map(\.paneSummary)
             let mark = group.remoteMark
             let others = "  +\(group.panes.count - 1)"
             return TabBarItem(title: tab.title + others, truncation: tab.titleTruncation,
                               state: Self.mostUrgent(group.panes.map(\.status.state)),
                               tooltip: ([mark?.summary].compactMap { $0 } + lines).joined(separator: "\n"),
-                              accessibilityStatus: lines.joined(separator: "; "), shortcut: shortcuts[index], remote: mark,
+                              accessibilityStatus: spoken.joined(separator: "; "), shortcut: shortcuts[index], remote: mark,
                               shorterTitles: tab.shorterTitles.map { $0 + others }, editableTitle: tab.editableTitle)
         }
         tabBar.update(items: items, selectedIndex: activeIndex)
