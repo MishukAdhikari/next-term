@@ -258,9 +258,15 @@ struct GitActions {
 
     // MARK: remotes
 
+    /// A fetch you started worked: background fetch counts it, and resumes if git had needed a password.
+    private func fetchedByHand() {
+        BackgroundFetcher.shared.fetchedByHand(repository: model?.commonDir ?? root)
+    }
+
     func fetch() {
         run("Fetch", [["fetch", "--all", "--prune"]], activity: .fetching) { result in
             guard result.ok else { return failed("Fetch failed", result, retry: ["fetch", "--all", "--prune"]) }
+            fetchedByHand()
             popup.reload {
                 let behind = popup.model?.currentRef?.behind ?? 0
                 toast(behind > 0 ? "Fetched: \(behind) new commit\(behind == 1 ? "" : "s") on the upstream" : "Fetched: up to date")
@@ -278,6 +284,7 @@ struct GitActions {
         }
         run("Update Project", [["fetch", remote]], activity: .pulling) { fetched in
             guard fetched.ok else { return failed("Could not fetch from \(remote)", fetched, retry: ["fetch", remote]) }
+            fetchedByHand()
             popup.reload {
                 guard let fresh = popup.model?.currentRef else { return }
                 guard fresh.behind > 0 else { return toast("Already up to date") }

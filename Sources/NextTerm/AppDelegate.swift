@@ -289,6 +289,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         NSApp.mainMenu = buildMenu()
         KeyboardShortcuts.shared.capture(NSApp.mainMenu!) // the menus as built are the defaults
         setUpNotifications()
+        // Fetches the open repositories now and then (Settings › Editor › Git); in the self-test, only its own.
+        BackgroundFetcher.shared.start()
         // Write the shell integration before the first shell starts. Without it tabs fall back to process polling.
         if AppSupport.zshIntegrationDirectory == nil { NSLog("Next Term: could not install zsh integration") }
         NSApp.activate(ignoringOtherApps: true)

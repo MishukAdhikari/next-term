@@ -18,6 +18,8 @@ final class SidebarHeaderView: NSView {
     var onSync: ((_ pull: Bool) -> Void)?
     private var snapshot: GitSnapshot?
     private var activity: GitWriter.Activity?
+    /// A background fetch runs in this work tree's repository.
+    private var fetchingInBackground = false
     /// ⋯: which side the sidebar is on, and hiding it.
     let moreButton = MoreButton(toolTip: "Project sidebar layout", menu: LayoutMenu.sidebar)
     /// Hides the sidebar (⌘B); the top bar then shows a button to bring it back.
@@ -144,11 +146,19 @@ final class SidebarHeaderView: NSView {
         needsLayout = true
     }
 
-    /// A fetch, pull or push started or ended in this work tree.
-    func show(activity: GitWriter.Activity?) {
-        guard activity != self.activity else { return }
+    /// A fetch, pull or push started or ended in this work tree, or a background fetch in its repository.
+    func show(activity: GitWriter.Activity?, fetchingInBackground: Bool = false) {
+        guard activity != self.activity || fetchingInBackground != self.fetchingInBackground else { return }
         self.activity = activity
+        self.fetchingInBackground = fetchingInBackground
         updateSyncButton()
+    }
+
+    /// When the counts are from: FETCH_HEAD's date, or Next Term's own last fetch (a background fetch
+    /// leaves FETCH_HEAD alone), whichever is newer.
+    private var lastFetch: Date? {
+        let own = snapshot.flatMap { BackgroundFetcher.shared.lastFetch(at: $0.root) }
+        return [snapshot?.lastFetch, own].compactMap { $0 }.max()
     }
 
     @objc private func syncClicked() {
@@ -158,7 +168,8 @@ final class SidebarHeaderView: NSView {
 
     /// "Pull 152" when the upstream has commits this branch doesn't, "Push 3" the other way, both counts
     /// when both; the commit glyph says they are commits. While git talks to the remote, a spinning sync
-    /// arrow, and "Fetching…" if there is no count to show.
+    /// arrow, and "Fetching…" if there is no count to show. A background fetch only spins a button that is
+    /// there already: it never makes one appear every ten minutes.
     private func updateSyncButton() {
         let behind = snapshot?.behind ?? 0, ahead = snapshot?.ahead ?? 0
         let branch = snapshot?.branch ?? "this branch"
@@ -183,13 +194,15 @@ final class SidebarHeaderView: NSView {
             full = ""; compact = ""; help = ""; spoken = ""
         }
         var tip = help
-        if let fetched = snapshot?.lastFetch, behind + ahead > 0 {
+        if let fetched = lastFetch, behind + ahead > 0 {
             tip += " Last fetched \(Self.relative.localizedString(for: fetched, relativeTo: Date()))."
         }
         if let activity {
             let doing = activity.rawValue + "…"
             syncButton.configure(full: full.isEmpty ? doing : full, compact: compact.isEmpty ? doing : compact,
                                  busy: true, toolTip: doing, accessibilityLabel: doing)
+        } else if fetchingInBackground && !full.isEmpty {
+            syncButton.configure(full: full, compact: compact, busy: true, toolTip: tip + " Fetching now…", accessibilityLabel: spoken)
         } else {
             syncButton.configure(full: full, compact: compact, busy: false, toolTip: tip, accessibilityLabel: spoken)
         }

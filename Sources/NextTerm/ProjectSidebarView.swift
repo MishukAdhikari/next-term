@@ -135,6 +135,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         // stay live for rows scrolled out of sight, so hovering the header showed some hidden row's path.
         scrollView.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(self, selector: #selector(gitActivityChanged), name: GitWriter.activityChanged, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(fetchedInBackground(_:)), name: BackgroundFetcher.fetched, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(updateToolTips), name: NSView.boundsDidChangeNotification,
                                                object: scrollView.contentView)
 
@@ -386,7 +387,14 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     /// A fetch, pull or push started or ended somewhere: the header spins while one runs here.
     @objc private func gitActivityChanged() {
-        header.show(activity: git.snapshot.flatMap { GitWriter.shared.activity(in: $0.root) })
+        guard let root = git.snapshot?.root else { return header.show(activity: nil) }
+        header.show(activity: GitWriter.shared.activity(in: root), fetchingInBackground: GitWriter.shared.isFetchingInBackground(in: root))
+    }
+
+    /// A background fetch of this repository worked: read git again, so "Pull 3" shows by itself.
+    @objc private func fetchedInBackground(_ notification: Notification) {
+        guard let root = git.snapshot?.root, notification.object as? String == GitWriter.repository(of: root) else { return }
+        git.refresh()
     }
 
     private func gitChanged(_ snapshot: GitSnapshot?) {
