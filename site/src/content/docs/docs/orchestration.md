@@ -66,7 +66,7 @@ Add a stdio server that runs `nxtrm mcp`. `nxtrm` is on the `PATH` in Next Term�
 | `press_keys` | Presses keys in order: `enter`, `escape`, `tab`, `shift+tab`, the arrows, `backspace`, `space`, `ctrl+c`, `ctrl+d`, or a single character such as `1` or `y`. For an agent’s menus and confirmations. | Yes: asks first |
 | `answer_agent` | Answers the question an agent is asking: give the tab, the `question_id` that came with the question, and the `choice` (its number) or `answer` (its words). It moves the agent’s own cursor to the choice with the arrow keys and presses Return, or types `y` or `n` for a y/n prompt. If the tab now asks something else, or nothing, it types nothing and says what is on screen. | Yes: asks first |
 | `show_tab` | Brings a tab and its window to the front, for you to see. | Brings it forward |
-| `close_tab` | Closes a tab. A tab with something running is refused unless `force` is true, which stops it. | Yes: asks first |
+| `close_tab` | Closes a tab. A tab with something running is refused unless `force` is true, which stops it. The last tab in a window with unsaved files in its editor would close the window, so you are asked whether to save them first, and the answer says `closed: false`. | Yes: asks first |
 | `open_in_editor` | Opens a file in the editor, at a line and column if given. | Opens a file |
 
 “Asks first” means the tool is marked as destructive in its MCP description, so agents that ask before risky actions ask you before using it. Every tool is marked honestly: the ten in this table that only read say so.
