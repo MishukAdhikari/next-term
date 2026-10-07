@@ -671,7 +671,9 @@ final class FileCellView: NSTableCellView {
             .font: NSFont.systemFont(ofSize: 12, weight: .regular), .foregroundColor: Theme.textDim,
             .paragraphStyle: Typography.paragraph(.byTruncatingTail),
         ])
-        toolTip = "This folder is too large to list in full."
+        // Shown by the sidebar like every row's (see ProjectSidebarView.updateToolTips): a tooltip of the
+        // cell's own would stay with it when a file's row reuses the cell.
+        tipText = "This folder is too large to list in full."
         // Cells are reused: replace the previous file's label, or VoiceOver reads it here.
         setAccessibilityLabel(more + " not shown")
     }

@@ -474,6 +474,13 @@ enum SelfTest {
         let tipAbove = c.sidebar.view(c.sidebar.outline, stringForToolTip: 0, point: above, userData: nil)
         check(tipInside.hasPrefix(proj.path) && tipAbove.isEmpty, "row tooltips show the row's path, and never outside the visible rows",
               "inside \(tipInside.debugDescription), above \(tipAbove.debugDescription)")
+        // A cell reused for a file's row after a folder's "… N more items" row keeps none of that row's tooltip.
+        let reused = FileCellView()
+        reused.configureHidden(HiddenEntries(count: 12))
+        let hiddenTip = reused.tipText
+        if let root = c.sidebar.root { reused.configure(node: root, isRoot: false, expanded: false, change: nil, lines: nil) }
+        check(hiddenTip == "This folder is too large to list in full." && reused.toolTip == nil && reused.tipText.hasPrefix(proj.path),
+              "a reused row's tooltip is its own: “… more items” leaves nothing behind", "\(reused.toolTip ?? "nil") / \(reused.tipText)")
 
         // File operations, each undone with ⌘Z.
         let undo = window.undoManager
