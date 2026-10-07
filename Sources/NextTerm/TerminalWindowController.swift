@@ -466,6 +466,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let alert = saveAlert(editorArea.dirtyDocuments, note: note)
         if !kept.isEmpty { alert.informativeText += "\n\n" + kept }
         askingToSave = true
+        // Asked from elsewhere (an agent's close_tab, a shell ending in a window behind): the window comes
+        // forward so the question is seen, without taking the keyboard from the window in use.
+        if window.isMiniaturized { window.deminiaturize(nil) } else if !window.isKeyWindow { window.orderFront(nil) }
+        if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
         alert.beginSheetModal(for: window) { [weak self] response in
             guard let self else { return }
             self.askingToSave = false
