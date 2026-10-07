@@ -46,6 +46,9 @@ final class TerminalRail: NSView {
     static var reducesMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     /// Tabs that became done, failed or needs-you while the rail showed (for the self-test).
     private(set) var changesNoticed = 0
+    /// The states each tab pulsed for since the rail showed: an agent that goes done, working, done again
+    /// (pauses in its output) pulses once, not every few seconds.
+    private var pulsedFor: [ObjectIdentifier: Set<TabState>] = [:]
     var isPulsing: Bool { glow.animation(forKey: "pulse") != nil }
 
     override init(frame: NSRect) {
@@ -72,13 +75,18 @@ final class TerminalRail: NSView {
     override var mouseDownCanMoveWindow: Bool { false }
 
     /// Called several times a second: only a change touches the views. A tab that turns done, failed or
-    /// needs-you while the rail shows makes it pulse a few times; then it stays still with the mark.
+    /// needs-you while the rail shows makes it pulse a few times, once for each state; then it stays still
+    /// with the mark.
     func update(marks newMarks: [Mark]) {
         guard newMarks != marks else { return }
         let before = Dictionary(marks.map { ($0.id, $0.state) }, uniquingKeysWith: { first, _ in first })
         let urgent: [TabState] = [.done, .failed, .attention]
-        let news = newMarks.filter { urgent.contains($0.state) && $0.state != (before[$0.id] ?? .idle) }
+        let news = newMarks.filter {
+            urgent.contains($0.state) && $0.state != (before[$0.id] ?? .idle) && pulsedFor[$0.id]?.contains($0.state) != true
+        }
         if newMarks.count != markViews.count {
+            let ids = Set(newMarks.map(\.id))
+            pulsedFor = pulsedFor.filter { ids.contains($0.key) } // a closed tab's id may come back for a new one
             markViews.forEach { $0.removeFromSuperview() }
             markViews = newMarks.indices.map { _ in
                 let view = RailMarkButton()
@@ -93,6 +101,7 @@ final class TerminalRail: NSView {
         marks = newMarks
         updateMoreButton()
         if !isHidden, let state = Self.urgency.first(where: news.map(\.state).contains) {
+            for mark in news { pulsedFor[mark.id, default: []].insert(mark.state) }
             changesNoticed += 1
             pulse(StatusGlyph.color(for: state))
         }
@@ -111,7 +120,11 @@ final class TerminalRail: NSView {
         glow.add(animation, forKey: "pulse")
     }
 
-    func stopPulse() { glow.removeAnimation(forKey: "pulse") }
+    /// The terminal opened: the next fold pulses afresh.
+    func stopPulse() {
+        glow.removeAnimation(forKey: "pulse")
+        pulsedFor = [:]
+    }
 
     // MARK: layout
 

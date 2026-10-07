@@ -2001,6 +2001,16 @@ enum SelfTest {
         back.view.send(txt: "sleep 0.3\r")
         check(await wait(5) { rail.marks[safe: backIndex]?.state == .done } && rail.changesNoticed > noticedBefore && !rail.isPulsing,
               "with Reduce Motion the mark appears and nothing moves", "pulsing \(rail.isPulsing)")
+        // Done, busy, done again (an agent pausing in its output): the rail pulsed for it once, and stays still.
+        let started = front.status.commandsStarted
+        front.view.send(txt: "sleep 0.3\r")
+        _ = await wait(5) { front.status.commandsStarted > started && rail.marks[safe: frontIndex]?.state == .done }
+        let noticedDone = rail.changesNoticed
+        front.view.send(txt: "sleep 1\r")
+        let busy = await wait(3) { rail.marks[safe: frontIndex]?.state != .done } // running, the mark clears
+        let doneAgain = await wait(5) { rail.marks[safe: frontIndex]?.state == .done }
+        check(busy && doneAgain && rail.changesNoticed == noticedDone, "a tab done again behind the rail does not pulse again",
+              "busy \(busy), done \(doneAgain), noticed \(rail.changesNoticed - noticedDone) more")
         TerminalRail.reducesMotion = reducesMotion
 
         // A click on a mark opens the terminal on that tab, at its size.
