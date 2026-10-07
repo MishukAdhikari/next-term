@@ -275,4 +275,32 @@ import Testing
         let added: [String] = diff.hunks.flatMap(\.lines).filter { $0.kind == .added }.map(\.text)
         #expect(added == ["f2"])
     }
+
+    /// A file's diff against a branch is that file's: "a[1].txt" is a name, not a pattern that also
+    /// matches "a1.txt" (Next.js and SvelteKit routes are named like it). The same file as on the branch
+    /// is an empty diff; a branch git can't read (deleted) is nil.
+    @Test func aFileDiffAgainstABranchIsThatFiles() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        try repo.write("a1.txt", "one\n")
+        try repo.write("a[1].txt", "bracket\n")
+        try repo.write("same.txt", "same\n")
+        repo.commit("Base")
+        repo.sh(["branch", "feat"])
+        try repo.write("a1.txt", "one changed\n")
+        try repo.write("a[1].txt", "bracket changed\n")
+        let feat = GitRunner.DiffBase.ref("refs/heads/feat")
+        for base in [feat, .head] {
+            let bracket = try #require(GitRunner.diff(of: "a[1].txt", in: repo.work, git: repo.git, base: base))
+            let added: [String] = bracket.hunks.flatMap(\.lines).filter { $0.kind == .added }.map(\.text)
+            #expect(bracket.newPath == "a[1].txt" && added == ["bracket changed"], "\(base)")
+            let all = GitRunner.diffs(in: repo.work, git: repo.git, base: base, paths: ["a[1].txt"])
+            #expect(all?.map(\.path) == ["a[1].txt"], "\(base)")
+        }
+        let same = try #require(GitRunner.diff(of: "same.txt", in: repo.work, git: repo.git, base: feat))
+        #expect(same.hunks.isEmpty && same.oldPath == nil && same.newPath == nil)
+        repo.sh(["branch", "-D", "feat"])
+        #expect(GitRunner.diff(of: "a1.txt", in: repo.work, git: repo.git, base: feat) == nil)
+        #expect(GitRunner.diff(of: "same.txt", in: repo.work, git: repo.git, base: feat) == nil)
+    }
 }
