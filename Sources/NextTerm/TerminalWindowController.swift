@@ -1181,7 +1181,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// ⌥⌘G: the changes of the file being edited, or the file selected in the sidebar, side by side.
     @objc func showChanges(_ sender: Any?) {
-        if let path = editorArea.activePath, isEditorFocused || window?.firstResponder !== sidebar.outline {
+        let fromEditor = isEditorFocused || window?.firstResponder !== sidebar.outline
+        // A database file has no lines to compare.
+        if fromEditor, editorArea.activeDatabase != nil { return NSSound.beep() }
+        if let path = editorArea.activePath, fromEditor {
             return showChanges(of: URL(fileURLWithPath: path))
         }
         if let file = sidebar.selection.first(where: { !$0.isFolder }) { return showChanges(of: file.url) }
