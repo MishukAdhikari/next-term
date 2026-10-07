@@ -94,7 +94,7 @@ Every one of them. Open **Settings** (<kbd>⌘,</kbd>) › **Keyboard Shortcuts*
 
 ## How do I update Next Term?
 
-It updates itself. Next Term checks GitHub Releases once a day, and **Next Term › Check for Updates…** checks at once. Updates are verified against the published SHA-256 before they replace anything. See [Updates](/docs/updates/).
+It updates itself. Next Term checks GitHub Releases once a day, and **Next Term › Check for Updates…** checks at once. Updates must be signed with the Next Term release key and match their checksum before they replace anything. See [Updates](/docs/updates/).
 
 ## Is there a Linux or Windows version?
 

@@ -66,7 +66,8 @@ final class Updater {
         set { UserDefaults.standard.set(newValue, forKey: "checkForUpdates") }
     }
 
-    /// For testing the whole flow against a local feed (`-updateFeedURL file:///…/feed.json`).
+    /// For testing the whole flow against a local feed (`-updateFeedURL file:///…/feed.json`). The release's
+    /// files must still be signed with the release key, e.g. a real release's DMG, .sha256 and .sig.
     private var feedURL: URL {
         UserDefaults.standard.string(forKey: "updateFeedURL").flatMap(URL.init(string:)) ?? Self.feed
     }
