@@ -104,9 +104,12 @@ extension LineNumberRuler: NSViewToolTipOwner {
     func setBlameToolTips(_ rects: [NSRect]) {
         guard rects != blameToolTipRects else { return }
         blameToolTipRects = rects
+        guard !blameToolTipsQueued else { return }
+        blameToolTipsQueued = true
         // Not while drawing: AppKit updates its tool tips outside the draw.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            self.blameToolTipsQueued = false
             self.removeAllToolTips()
             for rect in self.blameToolTipRects { self.addToolTip(rect, owner: self, userData: nil) }
         }

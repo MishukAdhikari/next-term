@@ -229,8 +229,10 @@ final class LineNumberRuler: NSRulerView {
     var blameSource: (() -> EditedBlame?)?
     /// A commit in the blame column was clicked: its hash and the repository's root.
     var onBlameClick: ((_ sha: String, _ root: String) -> Void)?
-    /// The blame column's hover areas, one per run of lines from a commit on screen.
+    /// The blame column's hover areas, one per run of lines from a commit on screen, and whether
+    /// installing them is already queued (once per turn of the run loop, however often it scrolls).
     var blameToolTipRects: [NSRect] = []
+    var blameToolTipsQueued = false
     static let added = NSColor(hex: 0x549159)
     static let modified = NSColor(hex: 0x375FAD)
     static let deleted = NSColor(hex: 0xC75450)
