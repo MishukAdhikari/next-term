@@ -22,6 +22,13 @@ final class RowToolTips: NSObject {
         center.addObserver(self, selector: #selector(update), name: NSView.frameDidChangeNotification, object: table)
     }
 
+    /// AppKit doesn't keep a tooltip's owner alive: a table that outlives this (its pane closing while
+    /// AppKit still holds the table for a display pass) would ask a freed object for its tooltip area.
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        table?.removeAllToolTips()
+    }
+
     @objc func update() {
         guard let table else { return }
         table.removeAllToolTips()
