@@ -38,7 +38,16 @@ extension SelfTest {
               "skills: Settings › Skills marks it as needing attention", SkillsSettingsView.stateText(sync!))
         check(SkillsSettingsView.cellText(inventory.rows.first { $0.name == "tidy-prose" }!, agent: .claudeCode).0 == "—",
               "skills: a shared skill without a link is not seen by Claude Code, and says so")
-        _ = view // built without errors on this home
+        // It fits the Settings window (620 pt) without widening it, laid out as Settings shows it: a tab.
+        let tabs = NSTabView()
+        let tab = NSTabViewItem(identifier: "skills")
+        tab.view = view
+        tabs.addTabViewItem(tab)
+        let probe = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 560), styleMask: [.titled], backing: .buffered, defer: true)
+        probe.contentView = tabs
+        probe.layoutIfNeeded()
+        check(probe.frame.width <= 621, "skills: Settings › Skills fits the Settings window's width", "\(probe.frame.width)")
+        tab.view = NSView() // the view goes on to the checks below on its own
 
         // Unify, keeping Claude Code's version.
         guard let winner = sync?.copies.first(where: { $0.root.kind == .claude }) else { return check(false, "skills: the Claude copy is found") }
@@ -77,10 +86,9 @@ extension SelfTest {
             SkillsMCP.answerWithin = savedWait
             SkillsMCP.requests = [:]
             SkillsMCP.declined = []
-            for entry in SkillsStore.lastChange?.entries ?? [] where entry.kind == .trashed {
-                if let trashed = entry.other { try? manager.removeItem(atPath: trashed) }
-            }
-            try? manager.removeItem(at: SkillsStore.supportFolder)
+            SkillsMCP.quietUntil = [:]
+            SkillsMCP.askedCount = [:]
+            try? manager.removeItem(at: SkillsStore.supportFolder) // its Trash folder too
         }
         func ask(_ tool: String, _ arguments: [String: Any]) async -> [String: Any] {
             await withCheckedContinuation { continuation in
@@ -96,6 +104,11 @@ extension SelfTest {
         try? "---\nname: notes-helper\ndescription: Keeps notes.\n---\nBody\n".write(toFile: shared + "/SKILL.md", atomically: true, encoding: .utf8)
         try? manager.createDirectory(atPath: (home as NSString).appendingPathComponent(".claude/skills"), withIntermediateDirectories: true)
         try? manager.createSymbolicLink(atPath: (home as NSString).appendingPathComponent(".claude/skills/notes-helper"), withDestinationPath: "../../.agents/skills/notes-helper")
+        // Installed by Next Term: only installed skills can be asked away.
+        let record = SkillRecord(name: "notes-helper", owner: "example-org", repo: "skills", path: "skills/notes-helper", ref: nil,
+                                 commit: String(repeating: "a", count: 40), tree: "t", contentHash: "t", installedAt: Date(), linkedForClaude: true)
+        try? manager.createDirectory(at: SkillsStore.supportFolder, withIntermediateDirectories: true)
+        try? SkillRecord.encodeList([record]).write(to: URL(fileURLWithPath: SkillsInstaller.recordsFile))
 
         let listed = await ask("list_skills", [:])
         let skills = listed["skills"] as? [[String: Any]] ?? []
@@ -122,6 +135,15 @@ extension SelfTest {
         let again = await ask("install_skill", ["source": "example-org/skills/skills/demo"])
         check(answer["status"] as? String == "declined" && again["status"] as? String == "declined" && SkillsMCP.open == nil,
               "skills mcp: declining answers the agent, and the same request stays declined", "\(answer) \(again)")
+        // Another branch of the same repository, or another request from the same asker: still declined.
+        let otherRef = await ask("install_skill", ["source": "https://github.com/example-org/skills/tree/v2/skills/demo"])
+        let otherSource = await ask("install_skill", ["source": "example-org/third"])
+        check(otherRef["status"] as? String == "declined" && otherSource["status"] as? String == "declined" && SkillsMCP.open == nil,
+              "skills mcp: after a decline the asker is told declined for a while, whatever it asks", "\(otherRef) \(otherSource)")
+        SkillsMCP.quietUntil = [:]
+
+        let handMade = await ask("remove_skill", ["name": "plain-notes"])
+        check(handMade["isError"] as? Bool == true, "skills mcp: a skill nobody installed can't be asked away")
 
         // Remove: the user approves; the shared copy and the Claude Code link go, and Undo brings them back.
         let removal = await ask("remove_skill", ["name": "notes-helper"])
@@ -137,13 +159,7 @@ extension SelfTest {
     /// Installing from a download, without the network: a commit's files as GitHub would send them.
     static func installChecks(home: String) async {
         let manager = FileManager.default
-        defer {
-            // What the last change moved to the Trash belongs to this test's home: empty it from the Trash.
-            for entry in SkillsStore.lastChange?.entries ?? [] where entry.kind == .trashed {
-                if let trashed = entry.other { try? manager.removeItem(atPath: trashed) }
-            }
-            try? manager.removeItem(at: SkillsStore.supportFolder)
-        }
+        defer { try? manager.removeItem(at: SkillsStore.supportFolder) } // its Trash folder too
         func read(_ path: String) -> String? { try? String(contentsOfFile: (home as NSString).appendingPathComponent(path), encoding: .utf8) }
         func exists(_ path: String) -> Bool {
             var info = stat()
@@ -162,7 +178,8 @@ extension SelfTest {
             let top = scratch.appendingPathComponent("files/skills-0123456").path
             let candidates = SkillsInstaller.check([found], top: top, repo: "skills")
             return (SkillsInstaller.Fetched(resolved: resolved, info: nil, scratch: scratch, candidates: candidates,
-                                            lockPath: SkillLock.path(home: home, environment: [:])), folder)
+                                            lockPath: SkillLock.path(home: home, environment: [:]), inventory: SkillsStore.inventory(),
+                                            editedSinceInstall: [], projects: []), folder)
         }
 
         // A hand-made copy of the name in Command Code's folder, and a lock file `npx skills` wrote.
@@ -187,7 +204,7 @@ extension SelfTest {
         check(sheet.textView.string.contains("Use it well."), "skills: the review sheet shows SKILL.md as written")
 
         guard let candidate else { return }
-        if case .failure(let failure) = SkillsInstaller.install([candidate], fetched: fetched, linkForClaude: true) {
+        if case .failure(let failure) = await SkillsInstaller.install([candidate], fetched: fetched, linkForClaude: true) {
             check(false, "skills: Install applies", failure.message)
         }
         let lock = (try? SkillLock.entries(at: lockPath).get()) ?? [:]
@@ -200,13 +217,15 @@ extension SelfTest {
         check(!manager.fileExists(atPath: fetched.scratch.path), "skills: the download is removed after installing")
 
         if case .failure(let failure) = SkillsStore.undo() { check(false, "skills: Undo of the install applies", failure.message) }
+        let lockAfter = try? String(contentsOfFile: lockPath, encoding: .utf8)
         check(!exists(".agents/skills/demo-skill") && !exists(".claude/skills/demo-skill") && read(".commandcode/skills/demo-skill/SKILL.md")?.contains("hand-made") == true
-              && (try? String(contentsOfFile: lockPath, encoding: .utf8)) == lockBefore && SkillsInstaller.records().isEmpty,
-              "skills: Undo removes the install and puts back the old copy and the lock file exactly")
+              && SkillLock.rawItem(lockAfter, name: "demo-skill") == nil && SkillLock.rawItem(lockAfter, name: "other") == SkillLock.rawItem(lockBefore, name: "other")
+              && SkillsInstaller.records().isEmpty,
+              "skills: Undo removes the install, its lock entry and record, and puts back the old copy")
 
         // Undo refuses when the installed skill was changed since: it would overwrite that.
         let (again, _) = download()
-        _ = SkillsInstaller.install(again.candidates, fetched: again, linkForClaude: false)
+        _ = await SkillsInstaller.install(again.candidates, fetched: again, linkForClaude: false)
         try? "edited\n".write(toFile: (home as NSString).appendingPathComponent(".agents/skills/demo-skill/SKILL.md"), atomically: true, encoding: .utf8)
         let refused = SkillsStore.undo()
         var refusedMessage = ""

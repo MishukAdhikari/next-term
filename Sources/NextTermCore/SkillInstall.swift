@@ -20,6 +20,8 @@ public struct SkillInstallPlan: Equatable, Sendable {
     public let replaced: [SkillCopy]
     /// A Claude Code link that already points at the shared copy: kept as it is.
     public let keptLink: SkillCopy?
+    /// Other links to the shared copy (`npx skills` makes them in ~/.commandcode/skills): kept too.
+    public let keptOtherLinks: [SkillCopy]
     /// Places Next Term never touches that also hold this name, and what that means for the agents.
     public let untouched: [String]
     /// Agents that will load the skill once installed.
@@ -45,7 +47,7 @@ public enum SkillInstall {
         return (absolute as NSString).standardizingPath
     }
 
-    /// Whether a Claude Code entry is a link to the shared folder's entry for that name.
+    /// Whether an agent folder's entry is a link to the shared folder's entry for that name.
     static func linksToShared(_ copy: SkillCopy, sharedRoot: SkillRoot) -> Bool {
         guard copy.isLink, let destination = linkDestination(copy.path) else { return false }
         return [sharedRoot.path, sharedRoot.realPath].contains { (($0 as NSString).appendingPathComponent(copy.name) as NSString).standardizingPath == destination }
@@ -64,15 +66,24 @@ public enum SkillInstall {
         let copies = row?.copies ?? []
 
         let keptLink = copies.first { $0.root.kind == .claude && linksToShared($0, sharedRoot: sharedRoot) }
-        let replaced = copies.filter { $0 != keptLink }
+        let keptOther = copies.filter { $0.root.kind != .claude && $0.root.kind != .shared && linksToShared($0, sharedRoot: sharedRoot) }
+        var replaced = copies.filter { $0 != keptLink && !keptOther.contains($0) }
         let sharedCopy = copies.first { $0.root.kind == .shared }
+        // Something the inventory leaves out (a stray file) at the place the skill goes is in the way too.
+        var stray: [String] = []
+        if sharedCopy == nil, SkillChanges.exists(shared) { stray.append(shared) }
+        if let claudeRoot, linkForClaude, keptLink == nil, !copies.contains(where: { $0.root.kind == .claude }) {
+            let at = (claudeRoot.path as NSString).appendingPathComponent(name)
+            if SkillChanges.exists(at) { stray.append(at) }
+        }
         var existing = SkillInstallPlan.Existing.none
-        if !replaced.isEmpty {
-            let onlyShared = replaced.allSatisfy { $0.root.kind == .shared }
+        if !replaced.isEmpty || !stray.isEmpty {
+            let onlyShared = replaced.allSatisfy { $0.root.kind == .shared } && stray.isEmpty
             existing = sameSource && sharedCopy != nil && onlyShared ? .update : .conflict
         }
+        replaced = replaced.sorted { $0.root.kind.order < $1.root.kind.order }
 
-        var steps = replaced.map { SkillStep.trash($0.path) }
+        var steps = replaced.map { SkillStep.trash($0.path) } + stray.map { SkillStep.trash($0) }
         steps.append(.copy(from: staged, to: shared))
         var agents = sharedRoot.readers
         if let claudeRoot {
@@ -103,16 +114,18 @@ public enum SkillInstall {
         if claudeCommands.contains(name), agents.contains(.claudeCode) {
             untouched.append("Claude Code has its own /\(name) command: this skill would take its place.")
         }
-        return SkillInstallPlan(name: name, existing: existing, replaced: replaced, keptLink: keptLink, untouched: untouched,
-                                agents: SkillAgent.allCases.filter(agents.contains), steps: steps)
+        if !stray.isEmpty { untouched.append("Something else is at \(stray.map(SkillStep.short).joined(separator: " and ")): it goes to the Trash.") }
+        return SkillInstallPlan(name: name, existing: existing, replaced: replaced, keptLink: keptLink, keptOtherLinks: keptOther,
+                                untouched: untouched, agents: SkillAgent.allCases.filter(agents.contains), steps: steps)
     }
 
-    /// Removing an installed skill: its shared copy and the Claude Code link to it. Copies of that name
-    /// elsewhere (made by hand, or in an agent's own folder) are not part of the install and stay.
+    /// Removing a skill's shared copy and every agent folder's link to it (Claude Code's, and the ones
+    /// `npx skills` makes in ~/.commandcode/skills), so no link is left pointing at nothing. Copies of
+    /// that name made by hand in an agent's own folder are not part of it and stay.
     public static func removal(name: String, inventory: SkillInventory) -> [SkillStep] {
         guard let sharedRoot = inventory.root(.shared), let row = inventory.rows.first(where: { $0.name == name }) else { return [] }
         var steps: [SkillStep] = []
-        for copy in row.copies where copy.root.kind == .claude && linksToShared(copy, sharedRoot: sharedRoot) {
+        for copy in row.copies where copy.root.kind != .shared && linksToShared(copy, sharedRoot: sharedRoot) {
             steps.append(.trash(copy.path))
         }
         if row.copies.contains(where: { $0.root.kind == .shared }) {

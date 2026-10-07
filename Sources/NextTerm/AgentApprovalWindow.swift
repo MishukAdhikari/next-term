@@ -20,18 +20,22 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
         var details: String
         var approveTitle: String
         var declineTitle = "Decline"
+        /// A third choice that declines and stops further requests from the same asker, or nil.
+        var stopTitle: String?
     }
 
     private let request: Request
     private let onApprove: (AgentApprovalWindow) -> Void
-    private let onDecline: () -> Void
+    private let onDecline: (_ stopAsking: Bool) -> Void
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let requesterLabel = NSTextField(wrappingLabelWithString: "")
     private(set) var approveButton: NSButton!
     private(set) var declineButton: NSButton!
+    private(set) var stopButton: NSButton?
     private var answered = false
 
-    init(_ request: Request, approve: @escaping (AgentApprovalWindow) -> Void, decline: @escaping () -> Void) {
+    /// `decline` is told whether the user also asked to stop further requests.
+    init(_ request: Request, approve: @escaping (AgentApprovalWindow) -> Void, decline: @escaping (_ stopAsking: Bool) -> Void) {
         self.request = request
         onApprove = approve
         onDecline = decline
@@ -71,11 +75,14 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
 
         declineButton = NSButton(title: request.declineTitle, target: self, action: #selector(decline))
         approveButton = NSButton(title: request.approveTitle, target: self, action: #selector(approve))
-        for button in [declineButton!, approveButton!] {
+        if let stopTitle = request.stopTitle { stopButton = NSButton(title: stopTitle, target: self, action: #selector(declineAndStop)) }
+        for button in [stopButton, declineButton, approveButton].compactMap({ $0 }) {
             button.bezelStyle = .rounded
             button.keyEquivalent = "" // no default button: see the type's comment
         }
-        let buttons = NSStackView(views: [NSView(), declineButton, approveButton])
+        // Only a click approves: never Return, nor Tab then Space with keyboard navigation on.
+        approveButton.refusesFirstResponder = true
+        let buttons = NSStackView(views: [stopButton, NSView(), declineButton, approveButton].compactMap { $0 })
         buttons.spacing = 8
         views.append(buttons)
 
@@ -119,18 +126,22 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
         requesterLabel.stringValue = "Asked by \(request.requester), which has gone since. What you decide still happens."
     }
 
-    /// Lets the user act again (after a failed attempt), or holds the buttons while something runs.
+    /// Holds approving (and the close button) while something runs; Decline stays, to stop it.
     func setBusy(_ busy: Bool) {
         approveButton.isEnabled = !busy
-        declineButton.isEnabled = !busy
+        window?.standardWindowButton(.closeButton)?.isEnabled = !busy
     }
 
     @objc private func approve() { onApprove(self) }
 
-    @objc private func decline() {
+    @objc private func decline() { answer(stopAsking: false) }
+
+    @objc private func declineAndStop() { answer(stopAsking: true) }
+
+    private func answer(stopAsking: Bool) {
         guard !answered else { return }
         answered = true
-        onDecline()
+        onDecline(stopAsking)
         close()
     }
 
@@ -144,7 +155,7 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         guard !answered else { return }
         answered = true
-        onDecline()
+        onDecline(false)
     }
 }
 

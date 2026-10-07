@@ -150,18 +150,18 @@ import Testing
         try skill(".commandcode/skills", "release-notes", body: "v2")
         let sync = try row("release-notes")
         let winner = try #require(sync.copies.first { $0.root.kind == .claude })
-        let steps = SkillUnify.plan(sync, winner: winner, in: SkillInventory.scan(home: home))
+        let staging = home + "/Library/Application Support/Next Term/skill-staging/release-notes-1"
+        let steps = SkillUnify.plan(sync, winner: winner, in: SkillInventory.scan(home: home), staging: staging)
         let shared = home + "/.agents/skills/release-notes"
-        #expect(steps.first == .copy(from: winner.realPath, to: shared + ".nextterm-unify"))
-        #expect(steps.contains(.copy(from: shared + ".nextterm-unify", to: shared)))
+        // The winner is copied aside (never into an agent folder, where a leftover would load as a
+        // skill), then moved into place, before anything is thrown away.
+        #expect(steps.first == .copy(from: winner.realPath, to: staging))
+        #expect(steps[1] == .move(from: staging, to: shared))
         #expect(steps.contains(.trash(home + "/.claude/skills/release-notes")))
         #expect(steps.contains(.link(at: home + "/.claude/skills/release-notes", to: shared)))
         #expect(steps.contains(.trash(home + "/.codex/skills/release-notes")))
         #expect(steps.contains(.trash(home + "/.commandcode/skills/release-notes")))
-        // The new shared copy is made before anything is thrown away.
-        let firstTrash = try #require(steps.firstIndex { if case .trash = $0 { return true }; return false })
-        #expect(steps.firstIndex(of: .copy(from: shared + ".nextterm-unify", to: shared))! < steps.firstIndex(of: .trash(home + "/.claude/skills/release-notes"))!)
-        #expect(firstTrash > 0)
+        #expect(!steps.contains { if case .trash(let path) = $0 { return path.contains("skill-staging") }; return false })
     }
 
     @Test func anAlreadySharedWinnerOnlyFixesTheOthers() throws {
@@ -251,5 +251,22 @@ import Testing
 
     @Test func linksAreRelativeLikeTheSkillsCLIMakesThem() {
         #expect(SkillUnify.relativeTarget(at: "/Users/me/.claude/skills/x", to: "/Users/me/.agents/skills/x") == "../../.agents/skills/x")
+    }
+
+    /// A skill with one copy has nothing to compare: its files are not read for a hash at all.
+    @Test func aSingleCopyIsNotHashed() throws {
+        try skill(".agents/skills", "solo", extra: ["big.txt": String(repeating: "x", count: 100_000)])
+        try skill(".claude/skills", "pair", body: "a")
+        try skill(".codex/skills", "pair", body: "b")
+        #expect(try row("solo").copies.allSatisfy { $0.contentHash == nil })
+        #expect(try row("pair").copies.allSatisfy { $0.contentHash != nil })
+    }
+
+    /// A git clone and the same files without history are not the same copy.
+    @Test func aGitCloneIsNotIdenticalToAPlainCopy() throws {
+        try skill(".claude/skills", "tidy")
+        try skill(".codex/skills", "tidy")
+        try FileManager.default.createDirectory(atPath: home + "/.claude/skills/tidy/.git", withIntermediateDirectories: true)
+        #expect(try row("tidy").health == .drifted)
     }
 }

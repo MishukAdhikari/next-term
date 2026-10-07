@@ -17,24 +17,34 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     private let removeButton = NSButton(title: "Remove…", target: nil, action: nil)
     private let checkButton = NSButton(title: "Check for Updates", target: nil, action: nil)
     private let browseButton = NSButton(title: "Browse Skills…", target: nil, action: nil)
-    private let checkOnOpen = NSButton(checkboxWithTitle: "Check for updates when the Skills window opens (at most once an hour)", target: nil, action: nil)
+    private let checkOnOpen = NSButton(checkboxWithTitle: "Check for updates when Window › Skills opens", target: nil, action: nil)
     private var inventory: SkillInventory?
     private var rows: [SkillRow] = []
-    /// The open projects the filter offers, after its two fixed choices.
-    private var projects: [String] = []
-    /// A project's skills are shown, read-only.
-    private var project: String? {
-        let index = filter.indexOfSelectedItem - 3
-        return projects.indices.contains(index) ? projects[index] : nil
-    }
+    /// The project whose skills are shown, read-only (nil: the personal skills). Kept by path, so a
+    /// project that closes can never be confused with another.
+    private var project: String?
     private var review: SkillsReviewSheet?
+    /// Counts reloads, so a slow scan never overwrites a newer one.
+    private var generation = 0
+    private var keyObserver: NSObjectProtocol?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         build()
-        reload()
         NotificationCenter.default.addObserver(self, selector: #selector(reloadFromNotification), name: SkillsStore.changed, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(reloadFromNotification), name: SkillsInstaller.updatesChanged, object: nil)
+    }
+
+    /// Shown (or Settings brought back): read the folders again, since agents and `npx skills` change them.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let keyObserver { NotificationCenter.default.removeObserver(keyObserver) }
+        keyObserver = nil
+        guard let window else { return }
+        keyObserver = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reload() }
+        }
+        reload()
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -73,6 +83,8 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
 
         summary.textColor = .secondaryLabelColor
         summary.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        summary.lineBreakMode = .byTruncatingTail
+        summary.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let actions: [(NSButton, Selector)] = [(unifyButton, #selector(unify)), (openButton, #selector(openSkill)), (revealButton, #selector(reveal)),
                                                (undoButton, #selector(undo)), (linkButton, #selector(linkForClaude)), (updateButton, #selector(update)),
                                                (removeButton, #selector(remove)), (checkButton, #selector(checkForUpdates)), (browseButton, #selector(browse))]
@@ -89,9 +101,9 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         top.spacing = 8
         let buttons = NSStackView(views: [unifyButton, linkButton, updateButton, removeButton, NSView(), undoButton])
         buttons.spacing = 8
-        let more = NSStackView(views: [openButton, revealButton, NSView(), checkOnOpen])
+        let more = NSStackView(views: [openButton, revealButton])
         more.spacing = 8
-        let stack = NSStackView(views: [intro, top, scroll, buttons, more])
+        let stack = NSStackView(views: [intro, top, scroll, buttons, more, checkOnOpen])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -116,20 +128,38 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
 
     @objc private func reloadFromNotification() { reload() }
 
+    /// Reads the folders off the main thread (it reads every SKILL.md, and hashes copies to compare),
+    /// only while the view is on screen.
     func reload() {
-        let inventory = project.map { SkillInventory.scan(home: $0) } ?? SkillsStore.inventory()
+        guard window != nil else { return }
+        generation += 1
+        let mine = generation
+        let home = project ?? SkillsStore.home
+        Task {
+            let inventory = await Task.detached { SkillInventory.scan(home: home) }.value
+            guard mine == generation else { return }
+            show(inventory)
+        }
+    }
+
+    private func show(_ inventory: SkillInventory) {
         self.inventory = inventory
         let needsAttention = filter.indexOfSelectedItem == 1
         rows = inventory.rows.filter { !needsAttention || Self.needsAttention($0) }
         let problems = inventory.rows.filter(Self.needsAttention).count
         if let project {
-            summary.stringValue = "\(inventory.rows.count) skills in \(SkillStep.short(project)) · shown as they are; Next Term never changes a project"
+            summary.stringValue = "\(inventory.rows.count) skills in \(SkillStep.short(project)), read-only"
+            summary.toolTip = "Shown as they are: Next Term never changes a project."
         } else {
             summary.stringValue = "\(inventory.rows.count) skills · \(problems) need attention"
+            summary.toolTip = nil
         }
         table.reloadData()
         updateButtons()
     }
+
+    /// The inventory shown is the personal one (not a project's): only then may anything be changed.
+    private var showsPersonal: Bool { project == nil && inventory?.home == SkillsStore.home }
 
     /// Copies that differ, duplicates an agent ignores, links to nothing, or a skill an agent skips.
     static func needsAttention(_ row: SkillRow) -> Bool {
@@ -140,17 +170,35 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         }
     }
 
-    @objc private func filterChanged() { reload() }
+    @objc private func filterChanged() {
+        project = filter.selectedItem?.representedObject as? String
+        inventory = nil
+        updateButtons()
+        reload()
+    }
 
-    /// The filter lists the projects open right now, each time it opens.
+    /// The filter lists the projects open right now, each time it opens (by path: two projects may
+    /// share a folder name). When the chosen one has closed, the filter goes back to all skills.
     func menuNeedsUpdate(_ menu: NSMenu) {
-        let chosen = project
-        while filter.numberOfItems > 2 { filter.removeItem(at: 2) }
-        projects = Array(Set(SkillsInstaller.openProjects)).sorted()
-        guard !projects.isEmpty else { return }
-        filter.menu?.addItem(.separator())
-        for path in projects { filter.addItem(withTitle: "Project: " + (path as NSString).lastPathComponent) }
-        if let chosen, let index = projects.firstIndex(of: chosen) { filter.selectItem(at: index + 3) }
+        while menu.numberOfItems > 2 { menu.removeItem(at: 2) }
+        let projects = Array(Set(SkillsInstaller.openProjects)).sorted()
+        if !projects.isEmpty { menu.addItem(.separator()) }
+        let names = projects.map { ($0 as NSString).lastPathComponent }
+        for path in projects {
+            let name = (path as NSString).lastPathComponent
+            let title = names.filter { $0 == name }.count > 1 ? "Project: \(name) (\(SkillStep.short(path)))" : "Project: " + name
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.representedObject = path
+            menu.addItem(item)
+            if path == project { filter.select(item) }
+        }
+        if let project, !projects.contains(project) {
+            self.project = nil
+            filter.selectItem(at: 0)
+            inventory = nil
+            updateButtons()
+            reload()
+        }
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
@@ -225,18 +273,20 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
 
     private func updateButtons() {
         let row = selectedRow
-        let personal = project == nil
+        let personal = showsPersonal
         unifyButton.isEnabled = personal && (row.map { !$0.isUnified && !$0.distinctCopies.isEmpty } ?? false)
         let claudeRoot = inventory?.root(.claude)
         linkButton.isEnabled = personal && sharedCopy != nil && claudeRoot != nil && row?.copies.contains { $0.root.kind == .claude } == false
         removeButton.isEnabled = personal && sharedCopy != nil
+        // A skill neither Next Term nor npx skills installed is only moved to the Trash.
+        removeButton.title = row.map { SkillsInstaller.tracksInstall($0.name) } == false ? "Move to Trash…" : "Remove…"
         if let row, case .available = SkillsInstaller.updates[row.name] { updateButton.isEnabled = personal } else { updateButton.isEnabled = false }
         checkButton.isEnabled = personal
         openButton.isEnabled = row?.distinctCopies.isEmpty == false
         revealButton.isEnabled = row != nil
         let last = SkillsStore.lastChange
         undoButton.isEnabled = last != nil
-        undoButton.title = last.map { "Undo \($0.title)" } ?? "Undo"
+        undoButton.toolTip = last.map { "Undo “\($0.title)”" }
     }
 
     // MARK: actions
@@ -259,7 +309,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
 
     /// Claude Code reads only ~/.claude/skills: a link there to the shared copy.
     @objc private func linkForClaude() {
-        guard let row = selectedRow, let inventory, let claudeRoot = inventory.root(.claude), let sharedRoot = inventory.root(.shared), let window else { return }
+        guard showsPersonal, let row = selectedRow, let inventory, let claudeRoot = inventory.root(.claude), let sharedRoot = inventory.root(.shared), let window else { return }
         let at = (claudeRoot.path as NSString).appendingPathComponent(row.name)
         let to = (sharedRoot.path as NSString).appendingPathComponent(row.name)
         if case .failure(let failure) = SkillsStore.apply([.link(at: at, to: to)], title: "Link \(row.name) for Claude Code") { Self.tell(failure.message, in: window) }
@@ -286,30 +336,37 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         }
     }
 
-    /// Remove: the shared copy, its Claude Code link, its lock entry and record, after the developer has
-    /// seen exactly that, and what the skill asked for that outlives it.
+    /// Remove: the shared copy, every agent folder's link to it, its lock entry and record, after the
+    /// developer has seen exactly that, and what the skill asked for that outlives it. The steps are
+    /// worked out again on confirming; if they changed meanwhile, nothing happens.
     @objc private func remove() {
-        guard let row = selectedRow, let window else { return }
+        guard showsPersonal, let row = selectedRow, let window else { return }
         Task {
-            let (steps, leftovers) = await SkillsInstaller.removal(row.name)
-            guard !steps.isEmpty else { return }
+            let (shown, leftovers, installed) = await SkillsInstaller.removal(row.name)
+            guard !shown.isEmpty else { return }
             let alert = NSAlert()
-            alert.messageText = "Remove “\(row.name)”?"
-            var lines = steps.map { "• " + $0.summary }
+            alert.messageText = installed ? "Remove “\(row.name)”?" : "Move “\(row.name)” to the Trash?"
+            var lines = shown.map { "• " + $0.summary }
             lines.append("")
+            if !installed { lines.append("Neither Next Term nor npx skills installed it: it was made by hand or copied here.") }
             lines.append("Agent sessions that are open now keep it until they restart.")
             lines += leftovers.map { "• " + $0 }
-            let others = row.copies.filter { $0.root.kind == .codex || $0.root.kind == .commandCode }
-            if !others.isEmpty { lines.append("Copies in \(others.map { SkillStep.short($0.path) }.joined(separator: ", ")) are not part of this install and stay.") }
+            let removed = Set(shown.compactMap { step -> String? in if case .trash(let path) = step { return path }; return nil })
+            let others = row.copies.filter { ($0.root.kind == .codex || $0.root.kind == .commandCode) && !removed.contains($0.path) }
+            if !others.isEmpty { lines.append("Copies in \(others.map { SkillStep.short($0.path) }.joined(separator: ", ")) are not part of it and stay.") }
             lines.append("Undo puts it back.")
             alert.informativeText = lines.joined(separator: "\n")
-            alert.addButton(withTitle: "Remove")
+            alert.addButton(withTitle: installed ? "Remove" : "Move to Trash")
             alert.addButton(withTitle: "Cancel")
             alert.buttons[0].keyEquivalent = ""
             alert.buttons[1].keyEquivalent = "\r"
             alert.beginSheetModal(for: window) { response in
                 guard response == .alertFirstButtonReturn else { return }
-                if case .failure(let failure) = SkillsStore.apply(steps, title: "Remove \(row.name)") { Self.tell(failure.message, in: window) }
+                Task {
+                    let (steps, _, _) = await SkillsInstaller.removal(row.name)
+                    guard steps == shown else { return Self.tell("“\(row.name)” changed since you looked. Look again before removing it.", in: window) }
+                    if case .failure(let failure) = SkillsStore.apply(steps, title: "Remove \(row.name)") { Self.tell(failure.message, in: window) }
+                }
             }
         }
     }
@@ -342,7 +399,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     /// Unify: one shared copy every agent sees. Shows the steps first; for copies that differ, the user
     /// picks the version that wins.
     @objc private func unify() {
-        guard let row = selectedRow, let inventory, let window else { return }
+        guard showsPersonal, let row = selectedRow, let inventory, let window else { return }
         let sheet = SkillsUnifySheet(row: row, inventory: inventory)
         sheet.begin(over: window) { steps in
             guard let steps else { return }
@@ -391,7 +448,8 @@ final class SkillsUnifySheet: NSObject {
         formatter.dateStyle = .medium
         for copy in copies {
             let problem = row.cannotWin(copy) == nil ? "" : " (breaks the standard)"
-            choice.addItem(withTitle: "\(copy.root.title) — changed \(formatter.string(from: Self.modified(copy)))\(problem)")
+            let git = copy.hasGit ? " (a git clone, with its history)" : ""
+            choice.addItem(withTitle: "\(copy.root.title) — changed \(formatter.string(from: Self.modified(copy)))\(git)\(problem)")
         }
         choice.selectItem(at: firstGood)
         choice.target = self
@@ -431,15 +489,19 @@ final class SkillsUnifySheet: NSObject {
             return
         }
         unifyButton?.isEnabled = true
-        // The staging folder is a detail: show "copy the winner to the shared folder" once.
-        var lines = SkillUnify.plan(row, winner: winner, in: inventory).compactMap { step -> String? in
+        // The staging copy is a detail: show "copy the winner to the shared folder" once.
+        let steps = SkillUnify.plan(row, winner: winner, in: inventory)
+        var placed: [String: String] = [:]
+        for step in steps { if case .move(let from, let to) = step { placed[from] = to } }
+        var lines = steps.compactMap { step -> String? in
             switch step {
-            case .copy(let from, let to) where to.hasSuffix(".nextterm-unify"):
-                return "Copy \(SkillStep.short(from)) to \(SkillStep.short(String(to.dropLast(".nextterm-unify".count))))"
-            case .copy(let from, _) where from.hasSuffix(".nextterm-unify"): return nil
-            case .trash(let path) where path.hasSuffix(".nextterm-unify"): return nil
+            case .copy(let from, let to) where placed[to] != nil: return "Copy \(SkillStep.short(from)) to \(SkillStep.short(placed[to]!))"
+            case .move: return nil
             default: return step.summary
             }
+        }
+        if row.copies.contains(where: { $0.hasGit && $0.realPath != winner.realPath }) {
+            lines.append("A copy that goes to the Trash is a git clone: its history goes with it (Undo puts it back)")
         }
         for agent in SkillUnify.switchesLost(row, in: inventory) {
             lines.append("\(agent.title) switches this skill off under its old name or place: after Unify it loads it again, until you switch it off there")

@@ -5,7 +5,7 @@ import NextTermCore
 /// GitHub source pasted in; every install goes through the review sheet. Managing what is installed
 /// (updates, removal, Unify, Undo) lives in Settings › Skills.
 @MainActor
-final class SkillsWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
+final class SkillsWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSWindowDelegate {
     static var shared: SkillsWindowController?
 
     /// Whether opening the window checks installed skills for updates (at most once an hour).
@@ -25,6 +25,8 @@ final class SkillsWindowController: NSWindowController, NSTableViewDataSource, N
     private var installedNames = Set<String>()
     private var busy = false
     private var review: SkillsReviewSheet?
+    /// The fetch running now: Cancel (or closing the window) stops it.
+    private var fetchTask: Task<Void, Never>?
 
     static func show() {
         if shared == nil { shared = SkillsWindowController() }
@@ -41,6 +43,7 @@ final class SkillsWindowController: NSWindowController, NSTableViewDataSource, N
         window.isReleasedWhenClosed = false
         window.center()
         super.init(window: window)
+        window.delegate = self
         build()
         NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: SkillsStore.changed, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: SkillsInstaller.updatesChanged, object: nil)
@@ -128,8 +131,14 @@ final class SkillsWindowController: NSWindowController, NSTableViewDataSource, N
         Task { await SkillsInstaller.checkForUpdates() }
     }
 
+    func windowWillClose(_ notification: Notification) { fetchTask?.cancel() }
+
+    /// The names installed in the agents' folders: a directory listing, not a full inventory scan.
     @objc private func refresh() {
-        installedNames = Set(SkillsStore.inventory().rows.map(\.name))
+        let home = SkillsStore.home
+        installedNames = Set([".agents/skills", ".claude/skills", ".codex/skills", ".commandcode/skills"].flatMap { folder in
+            ((try? FileManager.default.contentsOfDirectory(atPath: (home as NSString).appendingPathComponent(folder))) ?? []).filter { !$0.hasPrefix(".") }
+        })
         featured.reloadData()
         let count = SkillsInstaller.updates.values.filter { if case .available = $0 { return true }; return false }.count
         updatesBanner.stringValue = count == 0 ? "" : count == 1 ? "1 update available" : "\(count) updates available"
@@ -171,6 +180,7 @@ final class SkillsWindowController: NSWindowController, NSTableViewDataSource, N
     }
 
     @objc private func addFromGitHub() {
+        if busy { return cancelFetch() }
         let text = sourceField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         guard let source = SkillSource.parse(text) else {
@@ -183,18 +193,20 @@ final class SkillsWindowController: NSWindowController, NSTableViewDataSource, N
         guard !busy, let window else { return }
         busy = true
         spinner.startAnimation(nil)
-        addButton.isEnabled = false
+        addButton.title = "Cancel"
         reviewFeatured.isEnabled = false
         say("Fetching \(source.shortName)…", problem: false)
-        Task {
+        fetchTask = Task {
             defer {
                 busy = false
+                fetchTask = nil
                 spinner.stopAnimation(nil)
-                addButton.isEnabled = true
+                addButton.title = "Review…"
                 reviewFeatured.isEnabled = featured.selectedRow >= 0
             }
             do {
                 let fetched = try await SkillsInstaller.fetch(source, at: commit)
+                guard !Task.isCancelled, self.window?.isVisible == true else { return fetched.discard() }
                 say("", problem: false)
                 let sheet = SkillsReviewSheet(fetched: fetched) { [weak self] installed in
                     self?.review = nil
@@ -203,9 +215,15 @@ final class SkillsWindowController: NSWindowController, NSTableViewDataSource, N
                 review = sheet
                 if let sheetWindow = sheet.window { window.beginSheet(sheetWindow, completionHandler: nil) }
             } catch {
+                if Task.isCancelled { return say("Stopped.", problem: false) }
                 say((error as? SkillsGitHub.Failure)?.message ?? error.localizedDescription, problem: true)
             }
         }
+    }
+
+    private func cancelFetch() {
+        fetchTask?.cancel()
+        say("Stopping…", problem: false)
     }
 
     private func say(_ text: String, problem: Bool) {

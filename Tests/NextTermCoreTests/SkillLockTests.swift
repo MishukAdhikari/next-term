@@ -56,4 +56,20 @@ import Testing
         #expect(SkillLock.path(home: "/Users/me", environment: [:]) == "/Users/me/.agents/.skill-lock.json")
         #expect(SkillLock.path(home: "/Users/me", environment: ["XDG_STATE_HOME": "/s"]) == "/s/skills/.skill-lock.json")
     }
+
+    /// A date without fractions of a second still reads; an update without a date keeps the old one.
+    @Test func datesWithoutFractionsAndKeptInstallDates() throws {
+        let text = #"{"version": 3, "skills": {"x": {"source": "a/b", "installedAt": "2026-01-01T00:00:00Z", "ref": "v1", "sourceType": "github"}}}"#
+        let entry = try #require(try SkillLock.entries(at: { let p = FileManager.default.temporaryDirectory.appendingPathComponent("lock-\(UUID().uuidString).json").path
+            try text.write(toFile: p, atomically: true, encoding: .utf8); return p }()).get()["x"])
+        #expect(entry.installedAt != nil && entry.ref == "v1" && entry.sourceType == "github")
+        let updated = try SkillLock.updated(text, name: "x", entry: .init(source: "a/b", sourceUrl: "u", skillPath: "SKILL.md", skillFolderHash: "h",
+                                                                            installedAt: nil, updatedAt: Date())).get()
+        #expect(updated.contains("2026-01-01T00:00:00Z"))
+    }
+
+    @Test func aRelativeStateFolderIsIgnored() {
+        #expect(SkillLock.path(home: "/Users/me", environment: ["XDG_STATE_HOME": "relative/state"]) == "/Users/me/.agents/.skill-lock.json")
+        #expect(SkillLock.path(home: "/Users/me", environment: ["XDG_STATE_HOME": "~/.local/state"]) == "/Users/me/.agents/.skill-lock.json")
+    }
 }

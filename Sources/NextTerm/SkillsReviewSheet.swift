@@ -29,9 +29,9 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
         self.fetched = fetched
         self.done = done
         ticked = fetched.candidates.count == 1 && fetched.candidates[0].installable ? [0] : []
-        // An installed copy of the same name, for the changes view.
+        // An installed copy of the same name, for the changes view (from the inventory read with the fetch).
         var installed: [String: String] = [:]
-        let inventory = SkillsStore.inventory()
+        let inventory = fetched.inventory
         for candidate in fetched.candidates {
             if let copy = inventory.rows.first(where: { $0.name == candidate.name })?.copies.first(where: { $0.root.kind == .shared && !$0.broken }) {
                 installed[candidate.name] = copy.realPath
@@ -131,14 +131,14 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
         claudeLink.state = .on
         claudeLink.target = self
         claudeLink.action = #selector(linkChanged)
-        let inventory = SkillsStore.inventory()
         let claudeHere = FileManager.default.fileExists(atPath: (SkillsStore.home as NSString).appendingPathComponent(".claude"))
-        claudeLink.isHidden = inventory.root(.claude) == nil || !claudeHere
+        claudeLink.isHidden = fetched.inventory.root(.claude) == nil || !claudeHere
         if !claudeHere { claudeLink.state = .off }
         installButton.target = self
         installButton.action = #selector(install)
         installButton.bezelStyle = .rounded
         installButton.keyEquivalent = "" // never Return: see the type's comment
+        installButton.refusesFirstResponder = true // nor Tab and Space: only a click installs
         cancelButton.target = self
         cancelButton.action = #selector(cancel)
         cancelButton.bezelStyle = .rounded
@@ -229,7 +229,11 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
         lines.append("Every agent that reads ~/.agents/skills loads it; the only choice is Claude Code's link.")
         switch plan.existing {
         case .none: break
-        case .update: lines.append("Installed before from this source: this updates it.")
+        case .update:
+            lines.append("Installed before from this source: this updates it.")
+            if fetched.editedSinceInstall.contains(candidate.name) {
+                lines.append("⚠︎ You changed this skill since it was installed. Updating moves your version to the Trash; Undo puts it back.")
+            }
         case .conflict:
             let places = plan.replaced.map { SkillStep.short($0.path) + ($0.isLink ? " (a link)" : "") }.joined(separator: ", ")
             lines.append("⚠︎ “\(candidate.name)” is already here: \(places). Installing moves \(plan.replaced.count == 1 ? "it" : "them") to the Trash (links are only removed); Undo puts \(plan.replaced.count == 1 ? "it" : "them") back.")
@@ -284,9 +288,12 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
             // The changes view.
             let installed = installedFolders[candidate.name] ?? ""
             let folder = candidate.folder
+            let shown = selected
             textView.string = "Comparing…"
             Task {
                 let diff = await Task.detached { SkillsInstaller.changes(installed: installed, downloaded: folder) }.value
+                // The user may have picked another file or skill meanwhile.
+                guard selected == shown, fileChoice.selectedItem?.representedObject == nil else { return }
                 textView.string = diff.isEmpty ? "No changes: the installed copy has the same files." : SkillReview.revealHidden(diff)
             }
             return
@@ -295,8 +302,13 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
         let file = candidate.review.files.first { $0.path == relative }
         if let target = file?.linkTarget { return textView.string = "A link to \(target)." }
         if file?.binary == true { return textView.string = "A compiled program: it can't be shown as text." }
-        guard let data = FileManager.default.contents(atPath: path) else { return textView.string = "" }
-        guard let text = String(data: data.prefix(400_000), encoding: .utf8) else { return textView.string = "Not text: it can't be shown here." }
+        guard let handle = FileHandle(forReadingAtPath: path) else { return textView.string = "" }
+        let data = (try? handle.read(upToCount: 400_001)) ?? Data()
+        try? handle.close()
+        let isText = String(data: data.prefix(400_000), encoding: .utf8) != nil
+        // Scripts are shown even when not valid UTF-8 (with replacement characters): they are what runs.
+        guard isText || file?.script == true || file?.executable == true else { return textView.string = "Not text: it can't be shown here." }
+        let text = String(decoding: data.prefix(400_000), as: UTF8.self)
         textView.string = SkillReview.revealHidden(text) + (data.count > 400_000 ? "\n… (the rest is not shown)" : "")
     }
 
@@ -310,12 +322,20 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
     @objc private func install() {
         let chosen = ticked.sorted().map { fetched.candidates[$0] }
         guard !chosen.isEmpty, chosen.allSatisfy(\.installable) else { return }
-        switch SkillsInstaller.install(chosen, fetched: fetched, linkForClaude: linkForClaude) {
-        case .success(let note):
-            finish(chosen.map(\.name))
-            if !note.isEmpty, let parent = window?.sheetParent ?? NSApp.keyWindow { SkillsSettingsView.tell(note, in: parent, title: "Installed") }
-        case .failure(let failure):
-            if let window { SkillsSettingsView.tell(failure.message, in: window) }
+        installButton.isEnabled = false
+        cancelButton.isEnabled = false
+        Task {
+            let result = await SkillsInstaller.install(chosen, fetched: fetched, linkForClaude: linkForClaude)
+            cancelButton.isEnabled = true
+            switch result {
+            case .success(let note):
+                finish(chosen.map(\.name))
+                if !note.isEmpty, let parent = window?.sheetParent ?? NSApp.keyWindow { SkillsSettingsView.tell(note, in: parent, title: "Installed") }
+            case .failure(let failure):
+                // The download is kept after a failure, so Install can be tried again once the cause is fixed.
+                updateInstallButton()
+                if let window { SkillsSettingsView.tell(failure.message, in: window) }
+            }
         }
     }
 

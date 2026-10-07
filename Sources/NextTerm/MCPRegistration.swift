@@ -103,17 +103,23 @@ enum LoginShell {
     private static let probed: (path: [String], sshAuthSock: String?, xdgStateHome: String?) = {
         defer { isProbed = true }
         let marker = "__NEXTTERM_ENV__"
-        guard let output = capture(shell, ["-l", "-i", "-c", "/usr/bin/printf %s \(marker); /usr/bin/env; /usr/bin/printf %s \(marker)"], timeout: 5)
-        else { return ([], nil, nil) }
+        // XDG_STATE_HOME is read on its own (printenv between markers): a newline inside another
+        // variable's value could otherwise fake a line of env's output.
+        let command = "/usr/bin/printf %s \(marker); /usr/bin/env; /usr/bin/printf %s \(marker); /usr/bin/printenv XDG_STATE_HOME; /usr/bin/printf %s \(marker)"
+        guard let output = capture(shell, ["-l", "-i", "-c", command], timeout: 5) else { return ([], nil, nil) }
         let parts = output.components(separatedBy: marker)
         guard parts.count >= 3 else { return ([], nil, nil) }
         var path: [String] = []
         var socket: String?
-        var state: String?
         for line in parts[1].split(separator: "\n") {
             if line.hasPrefix("PATH=") { path = line.dropFirst(5).split(separator: ":").map(String.init) }
             if line.hasPrefix("SSH_AUTH_SOCK="), line.count > 14 { socket = String(line.dropFirst(14)) }
-            if line.hasPrefix("XDG_STATE_HOME="), line.count > 15 { state = String(line.dropFirst(15)) }
+        }
+        var state: String?
+        if parts.count >= 4 {
+            let value = parts[2].hasSuffix("\n") ? String(parts[2].dropLast()) : parts[2]
+            // Only an absolute path counts (the XDG rules; a relative one is ignored).
+            if value.hasPrefix("/"), !value.contains("\n") { state = value }
         }
         return (path, socket, state)
     }()

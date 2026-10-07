@@ -66,6 +66,26 @@ import Testing
         #expect(plan.untouched.contains { $0.contains("/usage") })
     }
 
+    /// Something the inventory leaves out (a stray file) at the target is a conflict, not a surprise.
+    @Test func aStrayFileAtTheTargetIsAConflict() throws {
+        try FileManager.default.createDirectory(atPath: home + "/.agents/skills", withIntermediateDirectories: true)
+        try "stray".write(toFile: home + "/.agents/skills/skill-creator", atomically: true, encoding: .utf8)
+        let plan = SkillInstall.plan(name: "skill-creator", staged: staged, inventory: SkillInventory.scan(home: home), linkForClaude: false, sameSource: false)
+        #expect(plan.existing == .conflict && plan.steps.first == .trash(home + "/.agents/skills/skill-creator"))
+    }
+
+    /// npx skills links a skill from ~/.commandcode/skills too: an update keeps that link.
+    @Test func npxLinksStayAnUpdate() throws {
+        try skill(".agents/skills", "skill-creator", body: "v1")
+        try FileManager.default.createDirectory(atPath: home + "/.commandcode/skills", withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: home + "/.commandcode/skills/skill-creator", withDestinationPath: "../../.agents/skills/skill-creator")
+        let plan = SkillInstall.plan(name: "skill-creator", staged: staged, inventory: SkillInventory.scan(home: home), linkForClaude: false, sameSource: true)
+        #expect(plan.existing == .update && plan.keptOtherLinks.count == 1)
+        #expect(!plan.steps.contains(.trash(home + "/.commandcode/skills/skill-creator")))
+        // Removing it takes that link too, so nothing is left pointing at nothing.
+        #expect(SkillInstall.removal(name: "skill-creator", inventory: SkillInventory.scan(home: home)).contains(.trash(home + "/.commandcode/skills/skill-creator")))
+    }
+
     @Test func removalTakesTheSharedCopyAndItsClaudeLinkOnly() throws {
         try skill(".agents/skills", "skill-creator")
         try FileManager.default.createSymbolicLink(atPath: home + "/.claude/skills/skill-creator", withDestinationPath: "../../.agents/skills/skill-creator")

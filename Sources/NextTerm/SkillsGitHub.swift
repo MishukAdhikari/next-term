@@ -1,11 +1,14 @@
 import Foundation
 import NextTermCore
 
-/// The few GitHub requests the Skills library makes, only after the user (or an approved agent request)
-/// asks: resolve a link to one commit, list the skills in it, read the repository's stars and licence,
-/// and download that commit's files. Only github.com hosts are accepted, after redirects too.
+/// The few GitHub requests the Skills library makes, only after the user acts: resolve a link to one
+/// commit (and prove that commit is the named repository's own), list the skills in it, read the
+/// repository's stars and licence, and download that commit's files. Only github.com hosts are
+/// accepted, after redirects too.
 enum SkillsGitHub {
     struct Failure: Error, Sendable { let message: String }
+
+    typealias Found = SkillFolder
 
     /// A source resolved to one commit, and the skills in it.
     struct Resolved: Sendable {
@@ -15,15 +18,8 @@ enum SkillsGitHub {
         let skills: [Found]
         /// GitHub cut the file list short (a huge repository): some skills may be missing.
         let truncated: Bool
-    }
-
-    struct Found: Equatable, Sendable {
-        /// The skill's folder in the repository ("" for the root).
-        let path: String
-        /// That folder's git tree hash at the commit.
-        let tree: String
-        /// SKILL.md's path (what the lock file records).
-        var skillPath: String { path.isEmpty ? "SKILL.md" : path + "/SKILL.md" }
+        /// The source named a branch or tag (updates can follow it), rather than a commit or nothing.
+        var namedRef = false
     }
 
     struct RepoInfo: Sendable {
@@ -31,113 +27,233 @@ enum SkillsGitHub {
         let license: String?
         let description: String?
         let archived: Bool
+        let defaultBranch: String?
     }
 
     static let allowedHosts: Set<String> = ["api.github.com", "codeload.github.com", "github.com"]
+    /// The most a download may be, compressed, and what its skills may unpack to.
+    static let maxDownload = 100_000_000
+    static let maxUnpacked = 200_000_000
+    static let maxEntries = 10_000
 
     private static var userAgent: String {
         "NextTerm/" + (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")
     }
 
-    private static func get(_ url: URL, accept: String = "application/vnd.github+json") async throws -> Data {
-        var request = URLRequest(url: url, timeoutInterval: 20)
-        request.setValue(accept, forHTTPHeaderField: "Accept")
+    private static func request(_ url: URL, timeout: TimeInterval = 20) -> URLRequest {
+        var request = URLRequest(url: url, timeoutInterval: timeout)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        return request
+    }
+
+    /// The answer's status and body; throws only when GitHub can't be reached or answers from elsewhere.
+    private static func fetch(_ url: URL) async throws -> (Int, Data, HTTPURLResponse) {
         let data: Data, response: URLResponse
-        do { (data, response) = try await URLSession.shared.data(for: request) } catch {
+        do { (data, response) = try await URLSession.shared.data(for: request(url)) } catch {
             throw Failure(message: "GitHub could not be reached: \(error.localizedDescription)")
         }
         guard let http = response as? HTTPURLResponse, let host = http.url?.host, allowedHosts.contains(host) else {
             throw Failure(message: "GitHub answered from an unexpected address.")
         }
-        switch http.statusCode {
+        return (http.statusCode, data, http)
+    }
+
+    private static func get(_ url: URL) async throws -> Data {
+        let (status, data, http) = try await fetch(url)
+        switch status {
         case 200: return data
         case 404: throw Failure(message: "Not found on GitHub. Next Term installs from public repositories only.")
         case 403, 429:
             if http.value(forHTTPHeaderField: "X-RateLimit-Remaining") == "0" {
                 throw Failure(message: "GitHub's limit for requests without an account is used up for this hour. Try again later.")
             }
-            throw Failure(message: "GitHub refused the request (\(http.statusCode)).")
-        default: throw Failure(message: "GitHub answered \(http.statusCode).")
+            throw Failure(message: "GitHub refused the request (\(status)).")
+        default: throw Failure(message: "GitHub answered \(status).")
         }
     }
 
-    private static func api(_ path: String) -> URL { URL(string: "https://api.github.com/repos/" + path)! }
+    /// An API address for a repository; owner and repo are checked, never trusted to build.
+    private static func api(_ source: SkillSource, _ tail: String) throws -> URL {
+        guard source.isValid, let url = URL(string: "https://api.github.com/repos/\(source.owner)/\(source.repo)" + (tail.isEmpty ? "" : "/" + tail)) else {
+            throw Failure(message: "That is not a GitHub repository Next Term can read.")
+        }
+        return url
+    }
 
-    /// The commit a source points to now, and every skill folder in it (under the source's path).
+    private static func encoded(_ ref: String) -> String {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "?#%")
+        return ref.addingPercentEncoding(withAllowedCharacters: allowed) ?? ref
+    }
+
+    /// The commit a source points to now, and every skill folder in it (under the source's path). A ref
+    /// must be one of the repository's own branches or tags, or a commit on its default branch: GitHub
+    /// also serves commits that exist only in a fork under the parent's name.
     static func resolve(_ source: SkillSource) async throws -> Resolved {
-        let ref = source.ref.flatMap { $0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) } ?? "HEAD"
-        let commitData = try await get(api("\(source.owner)/\(source.repo)/commits/\(ref)"))
+        let ref = source.ref.map(encoded) ?? "HEAD"
+        let commitData = try await get(try api(source, "commits/\(ref)"))
         guard let commitJSON = try? JSONSerialization.jsonObject(with: commitData) as? [String: Any],
               let sha = commitJSON["sha"] as? String, sha.count == 40,
               let commit = commitJSON["commit"] as? [String: Any],
               let rootTree = (commit["tree"] as? [String: Any])?["sha"] as? String else {
             throw Failure(message: "GitHub's answer about the commit could not be read.")
         }
-        let date = ((commit["committer"] as? [String: Any])?["date"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) }
-        let treeData = try await get(api("\(source.owner)/\(source.repo)/git/trees/\(sha)?recursive=1"))
-        guard let treeJSON = try? JSONSerialization.jsonObject(with: treeData) as? [String: Any],
-              let entries = treeJSON["tree"] as? [[String: Any]] else {
-            throw Failure(message: "GitHub's list of files could not be read.")
-        }
-        var folders: [String: String] = ["": rootTree]
-        var skillFolders: [String] = []
-        for entry in entries {
-            guard let path = entry["path"] as? String, let type = entry["type"] as? String else { continue }
-            if type == "tree", let hash = entry["sha"] as? String { folders[path] = hash }
-            if type == "blob", ["SKILL.md", "skill.md"].contains((path as NSString).lastPathComponent) {
-                skillFolders.append((path as NSString).deletingLastPathComponent)
+        var namedRef = false
+        if let given = source.ref {
+            namedRef = try await isBranchOrTag(source, given)
+            if !namedRef {
+                guard let branch = await info(owner: source.owner, repo: source.repo)?.defaultBranch else {
+                    throw Failure(message: "Next Term could not check that this commit belongs to \(source.shortName).")
+                }
+                let (status, data, _) = try await fetch(try api(source, "compare/\(sha)...\(encoded(branch))"))
+                let state = status == 200 ? (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["status"] as? String : nil
+                guard SkillTreeListing.commitIsOnBranch(compareStatus: state) else {
+                    throw Failure(message: "This commit is not on any branch or tag of \(source.shortName); it may come from a fork. Use the fork's own address, or a branch or tag.")
+                }
             }
         }
-        let prefix = source.path
-        let found = skillFolders
-            .filter { prefix.isEmpty || $0 == prefix || $0.hasPrefix(prefix + "/") }
-            .compactMap { folder in folders[folder].map { Found(path: folder, tree: $0) } }
-            .sorted { $0.path < $1.path }
-        return Resolved(source: source, commit: sha, date: date, skills: found, truncated: treeJSON["truncated"] as? Bool ?? false)
+        let date = ((commit["committer"] as? [String: Any])?["date"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) }
+        let treeData = try await get(try api(source, "git/trees/\(sha)?recursive=1"))
+        guard let listing = SkillTreeListing.parse(treeData, rootTree: rootTree, prefix: source.path) else {
+            throw Failure(message: "GitHub's list of files could not be read.")
+        }
+        return Resolved(source: source, commit: sha, date: date, skills: listing.skills, truncated: listing.truncated, namedRef: namedRef)
+    }
+
+    /// Whether `ref` names one of the repository's own branches or tags (those resolve only inside it).
+    private static func isBranchOrTag(_ source: SkillSource, _ ref: String) async throws -> Bool {
+        for kind in ["heads", "tags"] {
+            let (status, _, _) = try await fetch(try api(source, "git/ref/\(kind)/\(encoded(ref))"))
+            if status == 200 { return true }
+        }
+        return false
     }
 
     static func info(owner: String, repo: String) async -> RepoInfo? {
-        guard let data = try? await get(api("\(owner)/\(repo)")),
+        let source = SkillSource(owner: owner, repo: repo)
+        guard let url = try? api(source, ""), let data = try? await get(url),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         let license = (json["license"] as? [String: Any])?["spdx_id"] as? String
         return RepoInfo(stars: json["stargazers_count"] as? Int ?? 0, license: license == "NOASSERTION" ? nil : license,
-                        description: json["description"] as? String, archived: json["archived"] as? Bool ?? false)
+                        description: json["description"] as? String, archived: json["archived"] as? Bool ?? false,
+                        defaultBranch: json["default_branch"] as? String)
     }
 
-    /// Downloads the commit's files and unpacks them in a private folder. Returns the repository's
-    /// top folder there; the caller removes `scratch` when done.
-    static func download(owner: String, repo: String, commit: String, into scratch: URL) async throws -> URL {
-        let url = URL(string: "https://codeload.github.com/\(owner)/\(repo)/tar.gz/\(commit)")!
-        var request = URLRequest(url: url, timeoutInterval: 60)
-        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        let file: URL, response: URLResponse
-        do { (file, response) = try await URLSession.shared.download(for: request) } catch {
+    // MARK: downloading
+
+    /// Downloads the commit's files (at most `maxDownload` bytes), checks what the skills would unpack
+    /// to, and unpacks only the skill folders, in a private folder. Returns the repository's top folder
+    /// there; the caller removes `scratch` when done.
+    static func download(owner: String, repo: String, commit: String, paths: [String], into scratch: URL) async throws -> URL {
+        let source = SkillSource(owner: owner, repo: repo)
+        guard source.isValid, commit.count == 40, commit.allSatisfy(\.isHexDigit),
+              let url = URL(string: "https://codeload.github.com/\(owner)/\(repo)/tar.gz/\(commit)") else {
+            throw Failure(message: "That is not a GitHub commit Next Term can download.")
+        }
+        let manager = FileManager.default
+        try manager.createDirectory(at: scratch, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let archive = scratch.appendingPathComponent("source.tar.gz")
+        defer { try? manager.removeItem(at: archive) }
+        try await save(url, to: archive)
+
+        // What the skills would unpack to, before anything is unpacked.
+        let listing = try await tar(["-tvzf", archive.path], timeout: 30)
+        let lines = listing.split(separator: "\n").map(String.init)
+        guard let top = lines.first.flatMap(entryName)?.split(separator: "/").first.map(String.init) else {
+            throw Failure(message: "The downloaded files could not be read.")
+        }
+        let wanted = paths.contains("") ? [top] : paths.map { top + "/" + $0 }
+        var bytes = 0, count = 0
+        for line in lines {
+            guard let name = entryName(line), wanted.contains(where: { name == $0 || name.hasPrefix($0 + "/") }) else { continue }
+            count += 1
+            bytes += entrySize(line)
+        }
+        guard count <= maxEntries else { throw Failure(message: "The skill holds too many files (\(count)) to review.") }
+        guard bytes <= maxUnpacked else { throw Failure(message: "The skill is too large to review (\(bytes / 1_000_000) MB unpacked).") }
+
+        let unpacked = scratch.appendingPathComponent("files", isDirectory: true)
+        try manager.createDirectory(at: unpacked, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        // bsdtar keeps paths inside the folder (it refuses ".." and absolute paths), does not write
+        // through links, and does not restore owners. Only the skill folders are unpacked.
+        let include = wanted.flatMap { ["--include", $0, "--include", $0 + "/*"] }
+        _ = try await tar(["-xzf", archive.path, "-C", unpacked.path, "--no-same-owner"] + include, timeout: 60)
+        let folder = unpacked.appendingPathComponent(top, isDirectory: true)
+        guard manager.fileExists(atPath: folder.path) else { throw Failure(message: "The downloaded files could not be unpacked.") }
+        return folder
+    }
+
+    /// Streams the download to a file, stopping as soon as it passes `maxDownload`.
+    private static func save(_ url: URL, to file: URL) async throws {
+        let bytes: URLSession.AsyncBytes, response: URLResponse
+        do { (bytes, response) = try await URLSession.shared.bytes(for: request(url, timeout: 60)) } catch {
             throw Failure(message: "The download failed: \(error.localizedDescription)")
         }
         guard let http = response as? HTTPURLResponse, http.statusCode == 200, let host = http.url?.host, allowedHosts.contains(host) else {
             throw Failure(message: "GitHub did not send the files.")
         }
-        let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int) ?? 0
-        guard size <= 100_000_000 else { throw Failure(message: "The repository is too large to download (\(size / 1_000_000) MB).") }
-        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
-        let archive = scratch.appendingPathComponent("source.tar.gz")
-        try? FileManager.default.removeItem(at: archive)
-        try FileManager.default.moveItem(at: file, to: archive)
-        let unpacked = scratch.appendingPathComponent("files", isDirectory: true)
-        try FileManager.default.createDirectory(at: unpacked, withIntermediateDirectories: true)
-        // bsdtar keeps paths inside the folder (it refuses ".." and absolute paths) and does not restore owners.
-        let tar = Process()
-        tar.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-        tar.arguments = ["-xzf", archive.path, "-C", unpacked.path, "--no-same-owner"]
-        tar.standardOutput = FileHandle.nullDevice
-        tar.standardError = FileHandle.nullDevice
-        try tar.run()
-        tar.waitUntilExit()
-        guard tar.terminationStatus == 0,
-              let top = try? FileManager.default.contentsOfDirectory(at: unpacked, includingPropertiesForKeys: nil).first(where: { $0.hasDirectoryPath }) else {
-            throw Failure(message: "The downloaded files could not be unpacked.")
+        if response.expectedContentLength > maxDownload { throw Failure(message: "The repository is too large to download.") }
+        guard FileManager.default.createFile(atPath: file.path, contents: nil, attributes: [.posixPermissions: 0o600]),
+              let handle = try? FileHandle(forWritingTo: file) else { throw Failure(message: "The download could not be saved.") }
+        defer { try? handle.close() }
+        var buffer = Data()
+        buffer.reserveCapacity(1 << 20)
+        var total = 0
+        do {
+            for try await byte in bytes {
+                buffer.append(byte)
+                if buffer.count == 1 << 20 {
+                    total += buffer.count
+                    guard total <= maxDownload else { throw Failure(message: "The repository is too large to download (over \(maxDownload / 1_000_000) MB).") }
+                    try handle.write(contentsOf: buffer)
+                    buffer.removeAll(keepingCapacity: true)
+                }
+            }
+            try handle.write(contentsOf: buffer)
+        } catch let failure as Failure {
+            throw failure
+        } catch {
+            throw Failure(message: "The download failed: \(error.localizedDescription)")
         }
-        return top
+    }
+
+    /// A `tar -tv` line's size (the fifth field).
+    static func entrySize(_ line: String) -> Int {
+        let fields = line.split(separator: " ", omittingEmptySubsequences: true)
+        return fields.count > 4 ? Int(fields[4]) ?? 0 : 0
+    }
+
+    /// A `tar -tv` line's name (after the date; a link's " -> target" dropped).
+    static func entryName(_ line: String) -> String? {
+        let fields = line.split(separator: " ", maxSplits: 8, omittingEmptySubsequences: true)
+        guard fields.count == 9 else { return nil }
+        var name = String(fields[8])
+        if line.hasPrefix("l"), let arrow = name.range(of: " -> ") { name = String(name[..<arrow.lowerBound]) }
+        while name.hasSuffix("/") { name.removeLast() }
+        return name
+    }
+
+    /// Runs /usr/bin/tar off the main thread, stopping it after `timeout` seconds (a crafted archive can
+    /// take long to read).
+    private static func tar(_ arguments: [String], timeout: TimeInterval) async throws -> String {
+        let result = await Task.detached { () -> String? in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+            process.arguments = arguments
+            let out = Pipe()
+            process.standardOutput = out
+            process.standardError = FileHandle.nullDevice
+            guard (try? process.run()) != nil else { return nil }
+            let deadline = DispatchWorkItem { if process.isRunning { process.terminate() } }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: deadline)
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            deadline.cancel()
+            guard process.terminationReason == .exit, process.terminationStatus == 0 else { return nil }
+            return String(decoding: data, as: UTF8.self)
+        }.value
+        guard let result else { throw Failure(message: "The downloaded files could not be unpacked.") }
+        return result
     }
 }

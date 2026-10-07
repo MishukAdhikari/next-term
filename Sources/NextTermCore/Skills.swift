@@ -215,12 +215,15 @@ public struct SkillCopy: Equatable, Sendable {
     /// A link whose target is gone, or a folder without SKILL.md.
     public let broken: Bool
     public let frontMatter: SkillFrontMatter?
-    /// SHA-256 over the folder's files (see SkillHash.folder); nil when broken.
-    public let contentHash: String?
-    /// The folder holds files that run: scripts or executables.
-    public let hasScripts: Bool
+    /// SHA-256 over the folder's files (see SkillHash.folder), computed only when a name has more than
+    /// one copy to compare; nil otherwise, and when broken.
+    public var contentHash: String?
     /// The plugin the folder also is (.claude-plugin/plugin.json): Codex then lists it as plugin:name.
     public var pluginName: String?
+    /// The folder is a git clone (has .git): its history is part of what Unify would move.
+    public var hasGit: Bool { FileManager.default.fileExists(atPath: (realPath as NSString).appendingPathComponent(".git")) }
+    /// The folder holds files that run: scripts or executables (read when asked).
+    public var hasScripts: Bool { !broken && SkillHash.hasScripts(realPath) }
 
     public var name: String { (path as NSString).lastPathComponent }
 
@@ -236,15 +239,19 @@ public struct SkillCopy: Equatable, Sendable {
 
 /// Content hashes for skill folders.
 public enum SkillHash {
-    /// Files that do not make two copies of a skill different: caches and Finder's notes.
-    static let ignored: Set<String> = [".DS_Store", "__pycache__", ".git"]
+    /// What does not make two hand-made copies of a skill different: caches, Finder's notes, installed
+    /// packages. (Only for comparing local copies: what was installed is checked with GitHash, and
+    /// Undo with SkillChanges.fingerprint, which leave nothing out.)
+    static let ignored: Set<String> = [".DS_Store", "__pycache__", ".git", "node_modules", ".venv"]
 
-    /// SHA-256 over every file's path relative to the folder, its executable bit and its content, in
-    /// path order. Two folders with the same files hash the same wherever they are.
+    /// SHA-256 over every file's path relative to the folder, its executable bit and its content's
+    /// SHA-256, in path order. Two folders with the same files hash the same wherever they are. Files
+    /// are read in pieces, so a large one never sits in memory whole. A folder that is a git clone
+    /// hashes differently from the same files without history, so the two never count as identical.
     public static func folder(_ path: String) -> String? {
         let manager = FileManager.default
         guard let walker = manager.enumerator(atPath: path) else { return nil }
-        var entries: [(String, Bool, Data)] = []
+        var entries: [(String, Bool, String)] = []
         while let relative = walker.nextObject() as? String {
             let name = (relative as NSString).lastPathComponent
             if ignored.contains(name) {
@@ -255,17 +262,32 @@ public enum SkillHash {
             let full = (path as NSString).appendingPathComponent(relative)
             if type == .typeSymbolicLink {
                 let target = (try? manager.destinationOfSymbolicLink(atPath: full)) ?? ""
-                entries.append((relative, false, Data(("link:" + target).utf8)))
+                entries.append((relative, false, "link:" + target))
                 continue
             }
-            guard type == .typeRegular, let data = manager.contents(atPath: full) else { continue }
+            guard type == .typeRegular else { continue }
             let mode = (walker.fileAttributes?[.posixPermissions] as? NSNumber)?.intValue ?? 0
-            entries.append((relative, mode & 0o111 != 0, data))
+            entries.append((relative, mode & 0o111 != 0, fileDigest(full) ?? "unreadable"))
         }
         var hasher = SHA256()
-        for (relative, executable, data) in entries.sorted(by: { $0.0 < $1.0 }) {
-            hasher.update(data: Data("\(relative)\0\(executable ? 1 : 0)\0\(data.count)\0".utf8))
-            hasher.update(data: data)
+        if manager.fileExists(atPath: (path as NSString).appendingPathComponent(".git")) { hasher.update(data: Data("git clone\0".utf8)) }
+        for (relative, executable, digest) in entries.sorted(by: { $0.0 < $1.0 }) {
+            hasher.update(data: Data("\(relative)\0\(executable ? 1 : 0)\0\(digest)\0".utf8))
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// SHA-256 of a file's content, read 1 MB at a time; nil when it can't be read.
+    public static func fileDigest(_ path: String) -> String? {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while true {
+            // nil (or empty) is the end of the file; a throw is a read that failed.
+            let chunk: Data?
+            do { chunk = try handle.read(upToCount: 1 << 20) } catch { return nil }
+            guard let chunk, !chunk.isEmpty else { break }
+            hasher.update(data: chunk)
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
@@ -322,7 +344,11 @@ public struct SkillInventory: Sendable {
             for copy in scan(root) { copies[copy.name, default: []].append(copy) }
         }
         let rows = copies.map { name, list -> SkillRow in
-            let sorted = list.sorted { $0.root.kind.order < $1.root.kind.order }
+            var sorted = list.sorted { $0.root.kind.order < $1.root.kind.order }
+            // Content is compared only where there is something to compare: two or more real folders.
+            if Set(sorted.filter { !$0.broken }.map(\.realPath)).count > 1 {
+                for index in sorted.indices where !sorted[index].broken { sorted[index].contentHash = SkillHash.folder(sorted[index].realPath) }
+            }
             return SkillRow(name: name, copies: sorted, offKeys: switches.offKeys(name: name, copies: sorted))
         }
         return SkillInventory(home: home, roots: roots, rows: rows.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })
@@ -348,23 +374,21 @@ public struct SkillInventory: Sendable {
             let skillFile = ["SKILL.md", "skill.md"].map { (real as NSString).appendingPathComponent($0) }
                 .first { manager.fileExists(atPath: $0) }
             guard exists, isFolder.boolValue, let skillFile else {
-                return SkillCopy(root: root, path: path, realPath: real, isLink: isLink, broken: true,
-                                 frontMatter: nil, contentHash: nil, hasScripts: false)
+                return SkillCopy(root: root, path: path, realPath: real, isLink: isLink, broken: true, frontMatter: nil, contentHash: nil)
             }
             let text = (try? String(contentsOfFile: skillFile, encoding: .utf8)) ?? ""
             let plugin = (real as NSString).appendingPathComponent(".claude-plugin/plugin.json")
             let pluginName = FileManager.default.contents(atPath: plugin)
                 .flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }?["name"] as? String
             return SkillCopy(root: root, path: path, realPath: real, isLink: isLink, broken: false,
-                             frontMatter: SkillFrontMatter.parse(text), contentHash: SkillHash.folder(real),
-                             hasScripts: SkillHash.hasScripts(real), pluginName: pluginName)
+                             frontMatter: SkillFrontMatter.parse(text), contentHash: nil, pluginName: pluginName)
         }
     }
 }
 
 extension SkillRoot.Kind {
     /// Shared first, then Claude Code, Codex, Command Code.
-    var order: Int {
+    public var order: Int {
         switch self {
         case .shared: return 0
         case .claude: return 1
@@ -490,15 +514,24 @@ public enum SkillStep: Equatable, Sendable {
     case copy(from: String, to: String)
     /// Make a relative symlink at `at` pointing to `to`.
     case link(at: String, to: String)
-    /// Write a small text file (the lock file, Next Term's record of installs); Undo puts back what was there.
-    case write(path: String, text: String)
+    /// Move a folder Next Term made (a staging copy) into place.
+    case move(from: String, to: String)
+    /// Set (or, for nil, remove) one skill's entry in the lock file of `npx skills`, read and written
+    /// when the step runs, so entries added meanwhile stay.
+    case lockEntry(path: String, name: String, entry: SkillLock.Entry?)
+    /// Set (or remove) one skill in Next Term's own record of installs, the same way.
+    case recordEntry(path: String, name: String, record: SkillRecord?)
 
     public var summary: String {
         switch self {
         case .trash(let path): return "Move \(Self.short(path)) to the Trash"
         case .copy(let from, let to): return "Copy \(Self.short(from)) to \(Self.short(to))"
         case .link(let at, let to): return "Link \(Self.short(at)) to \(Self.short(to))"
-        case .write(let path, _): return "Update \(Self.short(path))"
+        case .move(let from, let to): return "Move \(Self.short(from)) to \(Self.short(to))"
+        case .lockEntry(let path, let name, let entry):
+            return entry == nil ? "Remove \(name) from \(Self.short(path))" : "Record \(name) in \(Self.short(path))"
+        case .recordEntry(_, let name, let record):
+            return record == nil ? "Forget that Next Term installed \(name)" : "Remember where \(name) came from"
         }
     }
 
@@ -518,7 +551,13 @@ public enum SkillUnify {
     /// folder outside the agent folders (the developer's own repository) stays where it is: the shared
     /// entry becomes a link to it. Folders linked as a whole (`~/.claude/skills` -> `~/.agents/skills`)
     /// are one folder (SkillInventory.roots), so nothing in them is moved or linked to itself.
-    public static func plan(_ row: SkillRow, winner: SkillCopy, in inventory: SkillInventory) -> [SkillStep] {
+    /// Where Unify stages a copy: Next Term's own folder, never an agent's (a leftover there would load as
+    /// a skill).
+    public static func stagingFolder(home: String, name: String) -> String {
+        (home as NSString).appendingPathComponent("Library/Application Support/Next Term/skill-staging/\(name)-\(UUID().uuidString.prefix(8))")
+    }
+
+    public static func plan(_ row: SkillRow, winner: SkillCopy, in inventory: SkillInventory, staging: String? = nil) -> [SkillStep] {
         guard let sharedRoot = inventory.root(.shared) else { return [] }
         let shared = (sharedRoot.path as NSString).appendingPathComponent(row.name)
         var steps: [SkillStep] = []
@@ -533,12 +572,12 @@ public enum SkillUnify {
                 if existingShared != nil { steps.append(.trash(shared)) }
                 steps.append(.link(at: shared, to: winner.realPath))
             } else {
-                // The winner's files become the shared copy; an older shared copy goes first.
-                let staging = shared + ".nextterm-unify"
+                // The winner's files are copied aside first, then the older shared copy goes, then the
+                // copy moves into place.
+                let staging = staging ?? stagingFolder(home: inventory.home, name: row.name)
                 steps.append(.copy(from: winner.realPath, to: staging))
                 if existingShared != nil { steps.append(.trash(shared)) }
-                steps.append(.copy(from: staging, to: shared))
-                steps.append(.trash(staging))
+                steps.append(.move(from: staging, to: shared))
             }
         }
         // Claude Code (when it had the skill, and its folder is not the shared one): a link to the shared copy.
