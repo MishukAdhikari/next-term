@@ -639,7 +639,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         if item.action == #selector(revealInSidebar(_:)) { return editorArea.activePath != nil }
         if item.action == #selector(toggleEnvValues(_:)) {
-            item.title = editorArea.activeEditor?.hidesEnvValues == true ? "Show .env Values" : "Hide .env Values"
+            item.state = editorArea.activeEditor?.hidesEnvValues == true ? .on : .off
             return editorArea.activeEditor?.isEnvFile == true
         }
         if item.action == #selector(toggleTerminalCollapsed(_:)) {
@@ -1267,7 +1267,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
     }
 
-    /// View › Hide .env Values or Show .env Values: the file in front only (Settings › Editor does all).
+    /// View › Hide .env Values, on or off for the file in front only (Settings › Editor does all).
     @objc func toggleEnvValues(_ sender: Any?) {
         guard let editor = editorArea.activeEditor, editor.isEnvFile else { return NSSound.beep() }
         editor.toggleEnvValues()

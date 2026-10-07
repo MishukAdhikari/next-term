@@ -87,8 +87,8 @@ extension CodeEditorView {
     /// Whether this file's values are hidden now.
     var hidesEnvValues: Bool { isEnvFile && (envValues.choice ?? AppDelegate.shared?.hidesEnvValues == true) }
 
-    /// View › Hide .env Values or Show .env Values, for this file. Hiding hides the caret's line too,
-    /// until you click or type in it.
+    /// View › Hide .env Values, on or off for this file. Hiding hides the caret's line too, until you
+    /// click or type in it.
     func toggleEnvValues() {
         envValues.choice = !hidesEnvValues
         if hidesEnvValues { textView.caretPlacedByUser = false }

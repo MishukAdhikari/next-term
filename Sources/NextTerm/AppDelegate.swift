@@ -974,7 +974,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(view, "Current Line Blame", #selector(toggleCurrentLineBlame(_:)), "", target: self)
         view.addItem(.separator())
         item(view, "Soft Wrap", #selector(toggleSoftWrap(_:)), "", target: self)
-        item(view, "Hide .env Values", #selector(TerminalWindowController.toggleEnvValues(_:)), "") // title follows the file
+        item(view, "Hide .env Values", #selector(TerminalWindowController.toggleEnvValues(_:)), "") // checked: the file in front
         let heights = NSMenu(title: "Line Height")
         for value in Self.lineHeights {
             let title = ["1.0", "1.15", "1.25", "1.35 (default)", "1.5", "1.75", "2.0"][Self.lineHeights.firstIndex(of: value) ?? 0]
