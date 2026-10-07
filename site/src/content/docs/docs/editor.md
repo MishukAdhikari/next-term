@@ -72,7 +72,7 @@ PHP files are coloured with the grammar that also understands the HTML around `<
 - **Auto-indent:** Return keeps the line’s indent. After an opening bracket it indents one more level, and between a pair of brackets it puts the closing one on its own line.
 - **Line numbers** run down the left, and the current line is highlighted.
 - **Plain text, as code needs it:** the editor never turns your quotes into curly ones.
-- **Unsaved files are never closed without asking.** Quitting, closing the window, and closing the window’s last terminal tab (which closes the window too, also when its shell exits) ask whether to save them first. **Cancel** keeps the window, with a fresh shell if the last one had exited.
+- **Unsaved files are never closed without asking.** Quitting, closing the window, and closing the window’s last terminal tab (which closes the window too, also when its shell exits) ask whether to save them first. **Cancel** keeps the window and its tab, or puts a fresh shell in place of a tab whose shell ended with `exit` or <kbd>⌃D</kbd>.
 
 ## Line height, font size and soft wrap
 
