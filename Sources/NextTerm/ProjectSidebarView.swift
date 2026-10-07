@@ -36,14 +36,23 @@ final class SidebarOutlineView: NSOutlineView {
     private(set) var mouseDownRow = -1
     /// A rename was going on when the last click went down: that click only ends it.
     private(set) var mouseDownWhileRenaming = false
+    /// The event that ended the last rename. The window can end one, taking the keyboard back, before
+    /// the click that did it reaches the outline.
+    var renameEndedBy: NSEvent?
     /// A file drag began from the last click.
     var dragBegan = false
+    /// For the self-test: runs while a click is down, before AppKit tracks it (a drag beginning mid-click).
+    var whilePressed: (() -> Void)?
 
     override func mouseDown(with event: NSEvent) {
         mouseDownRow = row(at: convert(event.locationInWindow, from: nil))
         let responder = window?.firstResponder as? NSView
-        mouseDownWhileRenaming = responder is NSTextView && responder?.isDescendant(of: self) == true
+        let renaming = responder is NSTextView && responder?.isDescendant(of: self) == true
+        let endedRename = renameEndedBy.map { $0.type == .leftMouseDown && $0.timestamp == event.timestamp } ?? false
+        mouseDownWhileRenaming = renaming || endedRename
+        renameEndedBy = nil
         dragBegan = false
+        whilePressed?()
         super.mouseDown(with: event) // sends the action on mouse-up, and the double action on a double-click
     }
 
@@ -863,6 +872,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         guard let field = notification.object as? NSTextField,
               let cell = field.superview as? FileCellView, cell.isRenaming, let node = cell.node else { return }
         let newName = cell.renameText
+        outline.renameEndedBy = NSApp.currentEvent
         cell.endRename()
         defer {
             renameCancelled = false

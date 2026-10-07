@@ -135,6 +135,8 @@ final class TabBarView: NSView {
     func shownShortcut(at index: Int) -> String? { tabViews[safe: index]?.shownShortcut }
     /// The font of a tab's title (for the self-test: a preview's is italic).
     func titleFont(at index: Int) -> NSFont? { tabViews[safe: index]?.titleFont }
+    /// A tab's view, to click (for the self-test).
+    func tabView(at index: Int) -> NSView? { tabViews[safe: index] }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
