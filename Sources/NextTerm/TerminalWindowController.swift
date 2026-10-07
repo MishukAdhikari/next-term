@@ -466,7 +466,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             guard group.isSplit else {
                 return TabBarItem(title: tab.title, truncation: tab.titleTruncation, state: tab.status.state, tooltip: tab.tooltip,
                                   accessibilityStatus: tab.ownStateDescription ?? "", shortcut: shortcuts[index], remote: tab.remoteMark,
-                                  shorterTitles: tab.shorterTitles)
+                                  shorterTitles: tab.shorterTitles, editableTitle: tab.editableTitle)
             }
             // A split tab: named by the pane with the keyboard, marked by the pane that most needs you.
             let lines = group.panes.map { "\($0.title): \($0.stateDescription)" }
@@ -476,7 +476,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                               state: Self.mostUrgent(group.panes.map(\.status.state)),
                               tooltip: ([mark?.summary].compactMap { $0 } + lines).joined(separator: "\n"),
                               accessibilityStatus: lines.joined(separator: "; "), shortcut: shortcuts[index], remote: mark,
-                              shorterTitles: tab.shorterTitles.map { $0 + others })
+                              shorterTitles: tab.shorterTitles.map { $0 + others }, editableTitle: tab.editableTitle)
         }
         tabBar.update(items: items, selectedIndex: activeIndex)
         sidebar.showRemote(activeTab?.remoteMark) // the pane with the keyboard: the tree follows it

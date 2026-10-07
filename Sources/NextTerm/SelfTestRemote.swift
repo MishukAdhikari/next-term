@@ -233,6 +233,10 @@ extension SelfTest {
         check(down.link == .disconnected && down.spoken.contains("Remote: selftest (nt@selftest.invalid), disconnected")
               && c.sidebar.remoteNote.shown?.link == .disconnected,
               "remote: and on its server mark (and the sidebar's)", "\(down.link?.rawValue ?? "no mark") / \(down.spoken)")
+        let plainItem = c.groups.firstIndex { $0.contains(plain) }.flatMap { c.tabBar.items[safe: $0] }
+        check(plainItem?.editableTitle == plain.title.replacingOccurrences(of: " (disconnected)", with: ""),
+              "remote: renaming it starts from its name without the note (which would stay in the name)",
+              "\(plainItem?.editableTitle ?? "no item") / \(plain.title)")
         // The title's note and the remote part: not a third time as the tab's state.
         let saidTimes = down.spoken.lowercased().components(separatedBy: "disconnected").count - 1
         check(saidTimes == 2 && !plain.tooltip.contains("\nDisconnected"), "remote: VoiceOver and the tooltip say the connection once, not as the state too",

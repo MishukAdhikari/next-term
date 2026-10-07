@@ -598,6 +598,14 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         return shorter.map { $0 + servedSuffix }
     }
 
+    /// What the rename field starts with: the name alone. Not a remote tab's connection note, which would
+    /// stay in the name ("(connecting)" long after it connected), nor the served port, which the title adds
+    /// to any name.
+    var editableTitle: String {
+        guard let remoteName else { return baseTitle }
+        return remoteName.host + ": " + remoteName.folder
+    }
+
     private var servedSuffix: String { servedURL.map(ServedURL.suffix) ?? "" }
 
     private var baseTitle: String {

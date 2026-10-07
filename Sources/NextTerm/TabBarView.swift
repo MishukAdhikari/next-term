@@ -18,6 +18,8 @@ struct TabBarItem: Equatable {
     var remote: RemoteMark? = nil
     /// Shorter forms of the title, tried in order when it does not fit ("app (connecting)", then "app").
     var shorterTitles: [String] = []
+    /// What the rename field starts with, if not the title: the name without a connection note or a port.
+    var editableTitle: String? = nil
 }
 
 protocol TabBarViewDelegate: AnyObject {
@@ -673,7 +675,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
 
     func beginRename() {
         guard renameField == nil else { return }
-        let field = NSTextField(string: item?.title ?? label.stringValue)
+        let field = NSTextField(string: item?.editableTitle ?? item?.title ?? label.stringValue)
         field.font = label.font
         field.focusRingType = .none
         field.bezelStyle = .roundedBezel
