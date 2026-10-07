@@ -224,6 +224,17 @@ final class EditorArea: NSView, TabBarViewDelegate {
         select(activeIndex)
     }
 
+    /// A file as one commit changed it, read-only (or brings that diff to the front).
+    func openCommitDiff(root: String, path: String, change: DiffPane.CommitChange) {
+        if let index = panes.firstIndex(where: { ($0 as? DiffPane)?.matches(root: root, path: path, commit: change.sha) == true }) {
+            return select(index)
+        }
+        let diff = DiffPane(root: root, path: path, commit: change)
+        diff.onTitleChange = { [weak self] in self?.refresh() }
+        insert(diff)
+        select(activeIndex)
+    }
+
     // MARK: closing
 
     /// Closes an editor, asking to save first if it has unsaved changes.

@@ -40,6 +40,15 @@ final class DiffPane: NSView {
         let client: ObjectIdentifier?
     }
     private(set) var proposal: Proposal?
+
+    /// A file as one commit changed it (from the Git Log), against the commit's first parent. Read-only.
+    struct CommitChange {
+        let sha: String
+        let parent: String?
+        /// Where a renamed file came from.
+        let oldPath: String?
+    }
+    private(set) var commit: CommitChange?
     /// Called once with the decision (true: accepted, with the proposed text).
     var onDecision: ((Bool, String) -> Void)?
     private var decided = false
@@ -62,10 +71,15 @@ final class DiffPane: NSView {
     var absolutePath: String { (root as NSString).appendingPathComponent(path) }
     var title: String {
         if let proposal { return (path as NSString).lastPathComponent + " ✻ " + proposal.author }
+        if let commit { return (path as NSString).lastPathComponent + " @ " + commit.sha.prefix(7) }
         return (path as NSString).lastPathComponent + " ↔ " + ["HEAD", "Index", "HEAD"][Self.bases.firstIndex(of: base) ?? 0]
     }
     var tooltip: String {
         if let proposal { return "\(proposal.author) proposes changes to \(absolutePath)" }
+        if let commit {
+            let from = commit.oldPath.map { ", renamed from \($0)" } ?? ""
+            return "\(path) in commit \(commit.sha.prefix(7))\(from), against " + (commit.parent.map { "its parent \($0.prefix(7))" } ?? "nothing (the first commit)")
+        }
         return "Changes in \(path) — " + ["working tree against HEAD", "working tree against the index (unstaged)", "index against HEAD (staged)"][Self.bases.firstIndex(of: base) ?? 0]
     }
     var focusView: NSView { right.textView }
@@ -76,7 +90,8 @@ final class DiffPane: NSView {
     var hunkCount: Int { hunkRows.count }
     var sideTexts: (String, String) { (left.textView.string, right.textView.string) }
 
-    func matches(root: String, path: String) -> Bool { proposal == nil && self.root == root && self.path == path }
+    func matches(root: String, path: String) -> Bool { proposal == nil && commit == nil && self.root == root && self.path == path }
+    func matches(root: String, path: String, commit sha: String) -> Bool { commit?.sha == sha && self.root == root && self.path == path }
 
     /// An agent's proposal for `absolutePath`.
     init(proposalFor absolutePath: String, proposal: Proposal) {
@@ -107,6 +122,19 @@ final class DiffPane: NSView {
         var view: NSView? = superview
         while let current = view, !(current is EditorArea) { view = current.superview }
         (view as? EditorArea)?.close(self)
+    }
+
+    /// `path` as commit `change.sha` changed it.
+    init(root: String, path: String, commit change: CommitChange) {
+        self.root = root
+        self.path = path
+        base = .head
+        commit = change
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = Theme.background.cgColor
+        build()
+        reload()
     }
 
     init(root: String, path: String, base: GitRunner.DiffBase) {
@@ -181,6 +209,14 @@ final class DiffPane: NSView {
             accept.toolTip = "Accept (⌘↩): \(proposal.author) then writes the file"
             reject.toolTip = "Reject: the file stays as it is"
             header.setViews([pathLabel, counts, NSView(), previous, position, next, reject, accept], in: .leading)
+        } else if let commit {
+            text.append(Typography.gap(8, font: .systemFont(ofSize: 12)))
+            text.append(NSAttributedString(string: "@ " + commit.sha.prefix(7), attributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 11.5, weight: .medium), .foregroundColor: Theme.textDim,
+            ]))
+            pathLabel.attributedStringValue = Typography.truncating(text, .byTruncatingMiddle)
+            pathLabel.toolTip = tooltip
+            header.setViews([pathLabel, counts, NSView(), previous, position, next], in: .leading)
         } else {
             header.setViews([pathLabel, baseControl, counts, NSView(), previous, position, next, stage, unstage, revert], in: .leading)
         }
@@ -250,6 +286,16 @@ final class DiffPane: NSView {
             }
             return
         }
+        if let commit {
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let diff = Self.git.flatMap { CommitLog.diff(of: path, oldPath: commit.oldPath, commit: commit.sha, parent: commit.parent, in: root, git: $0) }
+                DispatchQueue.main.async {
+                    guard let self, token == self.generation else { return }
+                    self.show(diff, message: diff == nil ? "This change could not be read from git." : nil, token: token)
+                }
+            }
+            return
+        }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let git = Self.git else { return DispatchQueue.main.async { self?.show(nil, message: "Git is not installed.", token: token) } }
             let tracked = GitRunner.isTracked(path, in: root, git: git)
@@ -265,7 +311,7 @@ final class DiffPane: NSView {
 
     /// The file or the index changed (an agent, a commit, a stage): diff again.
     func refreshIfChanged() {
-        guard proposal == nil else { return }
+        guard proposal == nil, commit == nil else { return } // a commit never changes
         let now = (FileStamp(path: absolutePath), FileStamp(path: (root as NSString).appendingPathComponent(".git/index")))
         if now.0 != stamps.file || now.1 != stamps.index { reload() }
     }
@@ -279,6 +325,8 @@ final class DiffPane: NSView {
             message.stringValue = "This is a binary file: its contents cannot be compared line by line."
         } else if empty, proposal != nil {
             message.stringValue = "The proposed version is the same as the file."
+        } else if empty, commit != nil {
+            message.stringValue = "This commit changed the file’s name or mode, not its lines."
         } else if empty {
             message.stringValue = ["No changes against the last commit.", "No unstaged changes.", "No staged changes."][Self.bases.firstIndex(of: base) ?? 0]
         }
@@ -318,7 +366,7 @@ final class DiffPane: NSView {
 
     private func updateButtons() {
         let has = !hunkRows.isEmpty
-        if proposal != nil {
+        if proposal != nil || commit != nil {
             for button in [previous, next] { button.isEnabled = has }
             position.stringValue = has ? "\(currentHunk + 1) of \(hunkRows.count)" : ""
             return
