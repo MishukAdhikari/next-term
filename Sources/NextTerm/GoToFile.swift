@@ -198,7 +198,8 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                     self.footer.stringValue = rows.isEmpty ? "\(total) files" : "Recently opened · \(total) files"
                 } else {
                     let found = NumberFormatter.localizedString(from: NSNumber(value: matches.count + extraFound), number: .decimal)
-                    self.footer.stringValue = "\(found) of \(total) files" + (catalog.complete ? "" : " (the first \(total) found)")
+                    let listed = NumberFormatter.localizedString(from: NSNumber(value: index.paths.count), number: .decimal)
+                    self.footer.stringValue = "\(found) of \(total) files" + (catalog.complete ? "" : " (the first \(listed) found)")
                 }
             }
         }
