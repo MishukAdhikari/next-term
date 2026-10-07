@@ -1850,7 +1850,8 @@ enum SelfTest {
         log.showBackground = shown
         check(hidden && listed, "Git Commands lists background fetches only with “Show background fetches” on", "hidden \(hidden), listed \(listed)")
         // --porcelain only where git knows it (2.41 or later; macOS 13 and 14 have 2.39), submodules never.
-        let version = GitWriter.version.map { $0.map(String.init).joined(separator: ".") } ?? "not read"
+        let numbers: [String] = (GitWriter.version ?? []).map { String($0) }
+        let version = numbers.isEmpty ? "not read" : numbers.joined(separator: ".")
         let fits = GitWriter.version != nil && command.contains("--porcelain") == porcelain && command.contains("--no-recurse-submodules")
         let worked = log.entries.contains { $0.background && $0.command == command && $0.status == 0 }
         check(fits && worked, "the background fetch fits the installed git, and works with it", "git \(version): \(command), worked \(worked)")

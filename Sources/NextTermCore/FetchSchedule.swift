@@ -216,8 +216,10 @@ public struct FetchSchedule: Sendable {
     /// (their remotes are other servers). `porcelain` (git 2.41 or later, see `hasPorcelainFetch`) makes
     /// the output one line per ref; nothing reads it but you, in Git Commands.
     public static func arguments(remote: String, porcelain: Bool) -> [String] {
-        let options = ["--no-write-fetch-head", "--no-auto-maintenance", "--no-recurse-submodules"]
-        return ["fetch"] + options + (porcelain ? ["--porcelain"] : []) + [remote]
+        var args = ["fetch", "--no-write-fetch-head", "--no-auto-maintenance", "--no-recurse-submodules"]
+        if porcelain { args.append("--porcelain") }
+        args.append(remote)
+        return args
     }
 
     /// Whether git of this version (GitRunner.version) knows `git fetch --porcelain`: 2.41 or later. The

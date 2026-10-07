@@ -279,8 +279,10 @@ public enum GitRunner {
     /// nil if none has.
     public static func lastSuccessfulFetch(root: String) -> Date? {
         guard let common = commonGitDir(root: root) else { return nil }
-        let linked = (try? FileManager.default.contentsOfDirectory(atPath: common + "/worktrees")) ?? []
-        let heads = [common + "/FETCH_HEAD"] + linked.map { common + "/worktrees/" + $0 + "/FETCH_HEAD" }
+        var heads = [common + "/FETCH_HEAD"]
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: common + "/worktrees")) ?? [] {
+            heads.append("\(common)/worktrees/\(name)/FETCH_HEAD")
+        }
         let dates = heads.compactMap { path -> Date? in
             guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
                   let size = attributes[.size] as? NSNumber, size.intValue > 0 else { return nil }
