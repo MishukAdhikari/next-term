@@ -34,7 +34,7 @@ A remote tab has a small server before its title. Tabs on your Mac have none, so
 The dots differ in shape as well as colour, so they read without colour too. The agent’s own mark (the spinner, the check, the “!”) keeps its place at the start of the tab, before the server.
 
 - **Hover over a tab** for where it runs, such as “Remote: web-1 (deploy@203.0.113.5), connected”. VoiceOver says the same.
-- **A narrow tab** drops the “(connecting)” note first, then “web-1: ”, and shows “app”: the mark says the rest.
+- **A tab too narrow for its whole title** drops “web-1: ” first, then the note, and shows “app”: the mark says the rest.
 - **A split tab** shows the weakest connection among its panes.
 - **The » menu** of tabs that do not fit shows the same marks.
 - **The project sidebar** stays on your Mac’s files while a remote tab is active (the tab’s folder is on the server). A line under its header says “Files on this Mac”, with the server and its name on the other side.

@@ -16,6 +16,8 @@ struct TabBarItem: Equatable {
     var shortcut: String? = nil
     /// Terminal tabs on a server: a server mark before the title, with the connection's dot on it.
     var remote: RemoteMark? = nil
+    /// Shorter forms of the title, tried in order when it does not fit ("app (connecting)", then "app").
+    var shorterTitles: [String] = []
 }
 
 protocol TabBarViewDelegate: AnyObject {
@@ -133,6 +135,7 @@ final class TabBarView: NSView {
     func shownShortcut(at index: Int) -> String? { tabViews[safe: index]?.shownShortcut }
     /// The connection a tab's server mark shows, and what VoiceOver says for the tab (for the self-test).
     func shownRemoteLink(at index: Int) -> RemoteLink? { tabViews[safe: index]?.shownRemoteLink }
+    func shownTitle(at index: Int) -> String? { tabViews[safe: index]?.shownTitle }
     func spokenLabel(at index: Int) -> String? { tabViews[safe: index]?.accessibilityLabel() }
 
     override init(frame: NSRect) {
@@ -523,9 +526,9 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     // Called several times a second: touch only what changed (re-setting a tooltip resets it).
     func configure(item newItem: TabBarItem, selected isSelected: Bool) {
         guard newItem != item || isSelected != selected else { return }
-        if newItem.title != item?.title {
+        if newItem.title != item?.title || newItem.shorterTitles != item?.shorterTitles {
             label.stringValue = newItem.title
-            if newItem.remote != nil { needsLayout = true } // fitTitle may shorten it
+            if !newItem.shorterTitles.isEmpty { needsLayout = true } // fitTitle may shorten it
         }
         if label.lineBreakMode != newItem.truncation { label.lineBreakMode = newItem.truncation }
         let tip = newItem.tooltip + (newItem.shortcut.map { "\n\($0) switches to this tab" } ?? "")
@@ -599,19 +602,21 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         renameField?.frame = NSRect(x: labelX - 3, y: (h - 22) / 2, width: max(40, bounds.width - labelX - 26), height: 22)
     }
 
-    /// A remote tab too narrow for "web-1: app (connecting)" says less rather than "w…)": first the note
-    /// goes (the dot on the server mark says it by shape), then "web-1: " (the mark says it is on a server,
-    /// the tooltip which one), leaving "app", as a narrow local tab shows "ne…rm".
+    /// A remote tab too narrow for "web-1: app (connecting)" says less rather than "web-1: a…g)": first
+    /// "web-1: " goes (the mark says it is on a server, the tooltip which one), then the note (the dot on
+    /// the mark says it by shape), leaving "app", as a narrow local tab shows "ne…rm". The note goes last:
+    /// it is the one thing the tab says in words that colour-blind users would otherwise have to read off a
+    /// 7 pt dot.
     private func fitTitle() {
         guard let item else { return }
+        func fits(_ title: String) -> Bool { (title as NSString).size(withAttributes: [.font: label.font as Any]).width + 4 <= label.frame.width }
         var shown = item.title
-        func fits() -> Bool { (shown as NSString).size(withAttributes: [.font: label.font as Any]).width + 4 <= label.frame.width }
-        if let remote = item.remote, !fits() {
-            if let note = remote.link.titleNote, shown.hasSuffix(" (\(note))") { shown = String(shown.dropLast(note.count + 3)) }
-            if !fits(), shown.hasPrefix(remote.host + ": ") { shown = String(shown.dropFirst(remote.host.count + 2)) }
-        }
+        if !fits(shown) { shown = item.shorterTitles.first(where: fits) ?? item.shorterTitles.last ?? shown }
         if label.stringValue != shown { label.stringValue = shown }
     }
+
+    /// For the self-test: the title as the tab shows it, shortened to fit.
+    var shownTitle: String { label.stringValue }
 
     override func draw(_ dirtyRect: NSRect) {
         Theme.border.setFill()

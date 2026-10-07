@@ -585,26 +585,48 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     /// The tab's name, and " · :5173" while it serves (state, so also after a name the user gave it).
     var title: String {
-        baseTitle + (servedURL.map(ServedURL.suffix) ?? "")
+        baseTitle + servedSuffix
     }
+
+    /// Shorter forms of the title, for a tab too narrow for "web-1: app (connecting)": without the host
+    /// ("app (connecting)": the server mark says it is on one), then without the note ("app": the mark's
+    /// dot says it). Only a remote tab named after its folder has them.
+    var shorterTitles: [String] {
+        guard let remoteName else { return [] }
+        let folder = remoteName.folder
+        let shorter = remoteName.note.map { [folder + " (\($0))", folder] } ?? [folder]
+        return shorter.map { $0 + servedSuffix }
+    }
+
+    private var servedSuffix: String { servedURL.map(ServedURL.suffix) ?? "" }
 
     private var baseTitle: String {
         if let userTitle, !userTitle.isEmpty { return userTitle }
         // While a program runs, its own title (Claude Code names the task) or its name.
         // At the prompt, the folder: shell themes set titles like "user@host: ~/dir" there, which say less.
-        if status.running {
-            if let programTitle, !programTitle.trimmingCharacters(in: .whitespaces).isEmpty { return String(programTitle.prefix(200)) }
-            if !status.program.isEmpty { return status.program }
-        }
-        if let remote {
-            let last = (directory as NSString).lastPathComponent
-            let name = remote.host.name + ": " + (directory == "~" || last.isEmpty ? directory : last)
-            return connectionNote.map { name + " (\($0))" } ?? name
+        if let programName { return programName }
+        if let remoteName {
+            let name = remoteName.host + ": " + remoteName.folder
+            return remoteName.note.map { name + " (\($0))" } ?? name
         }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         if directory == home { return "~" }
         let last = (directory as NSString).lastPathComponent
         return last.isEmpty ? directory : last
+    }
+
+    private var programName: String? {
+        guard status.running else { return nil }
+        if let programTitle, !programTitle.trimmingCharacters(in: .whitespaces).isEmpty { return String(programTitle.prefix(200)) }
+        return status.program.isEmpty ? nil : status.program
+    }
+
+    /// A remote tab at its prompt is named after its host and folder, with the connection's note: "web-1",
+    /// "app", "connecting". nil while a name of its own shows (the user's, a program's).
+    private var remoteName: (host: String, folder: String, note: String?)? {
+        guard let remote, userTitle?.isEmpty != false, programName == nil else { return nil }
+        let last = (directory as NSString).lastPathComponent
+        return (remote.host.name, directory == "~" || last.isEmpty ? directory : last, connectionNote)
     }
 
     var stateDescription: String {

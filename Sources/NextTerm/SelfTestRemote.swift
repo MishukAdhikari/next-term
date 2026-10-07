@@ -10,11 +10,47 @@ import NextTermCore
 /// NEXTTERM_TEST_TMUX), on a tmux socket folder of the test's own: the user's sessions are never touched.
 extension SelfTest {
     static func remoteChecks(_ c: TerminalWindowController) async {
+        remoteTabBarChecks()
         #if DEBUG
         await remoteChecksWithStandInSSH(c)
         #else
         note("remote: checks need a debug build (the stand-in ssh is debug-only)")
         #endif
+    }
+
+    /// Remote tabs in a tab bar of their own, offscreen, with made-up items: what a tab too narrow for its
+    /// whole title keeps.
+    private static func remoteTabBarChecks() {
+        func mark(_ link: RemoteLink) -> RemoteMark { RemoteMark(host: "web-1", destination: "deploy@203.0.113.5", link: link) }
+        let items = [
+            TabBarItem(title: "next-term", state: .idle, tooltip: "", accessibilityStatus: "Idle", shortcut: "⌘1"),
+            TabBarItem(title: "web-1: app (connecting)", state: .idle, tooltip: "", accessibilityStatus: "", shortcut: "⌘2",
+                       remote: mark(.connecting), shorterTitles: ["app (connecting)", "app"]),
+            TabBarItem(title: "web-1: app (disconnected)", state: .idle, tooltip: "", accessibilityStatus: "", shortcut: "⌘3",
+                       remote: mark(.disconnected), shorterTitles: ["app (disconnected)", "app"]),
+            TabBarItem(title: "claude", state: .done, tooltip: "", accessibilityStatus: "Done", shortcut: "⌘4"),
+        ]
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: TabBarView.height), styleMask: [.borderless],
+                              backing: .buffered, defer: true)
+        func bar(width: CGFloat) -> TabBarView {
+            let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: width, height: TabBarView.height))
+            bar.leadingInset = 12
+            window.setContentSize(bar.frame.size)
+            window.contentView = bar
+            bar.update(items: items, selectedIndex: 0)
+            bar.layoutSubtreeIfNeeded()
+            return bar
+        }
+        // The widest tabs (220 pt) have no room for "web-1: app (connecting)" next to the server mark: the
+        // host goes, the note stays (the only words for the dot's colour).
+        let wide = bar(width: 2000)
+        let wideTitles = items.indices.map { wide.shownTitle(at: $0) ?? "" }
+        check(wideTitles == ["next-term", "app (connecting)", "app (disconnected)", "claude"],
+              "remote tabs: a title that does not fit drops the host first and keeps the connection's note", "\(wideTitles)")
+        let narrow = bar(width: 12 + 36 + 24 + TabBarView.minTabWidth * CGFloat(items.count))
+        check(narrow.shownTitle(at: 1) == "app" && narrow.shownTitle(at: 2) == "app", "remote tabs: and the narrowest shows the folder alone",
+              "\(items.indices.map { narrow.shownTitle(at: $0) ?? "" })")
+        window.contentView = nil
     }
 
     #if DEBUG
@@ -179,6 +215,8 @@ extension SelfTest {
         check(await wait(10) { plain.disconnected }, "remote: a dropped connection keeps the tab, marked disconnected")
         check(plain.screenTail(4).joined().contains("Return opens a new shell") && plain.title.contains("(disconnected)"),
               "remote: and says so, in the tab and its title", plain.title + " / " + plain.screenTail(4).joined(separator: " | "))
+        check(plain.shorterTitles.first?.hasSuffix(" (disconnected)") == true && plain.shorterTitles.first?.hasPrefix("selftest") == false,
+              "remote: a tab too narrow for its title drops the host before the note", "\(plain.shorterTitles)")
         let down = shownMark()
         check(down.link == .disconnected && down.spoken.contains("Remote: selftest (nt@selftest.invalid), disconnected")
               && c.sidebar.remoteNote.shown?.link == .disconnected,
