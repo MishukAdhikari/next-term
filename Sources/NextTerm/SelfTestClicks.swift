@@ -82,10 +82,13 @@ extension SelfTest {
               "setting \(app.sidebarSingleClickOpens), box \(String(describing: box?.state)), menu \(String(describing: menuItem?.state))")
         check(box?.toolTip?.hasPrefix("A click opens the file in a preview tab") == true, "the checkbox says what it does", box?.toolTip ?? "no tooltip")
         if await frontmost(window, "the clicks with the setting off") {
+            // Nothing selected first (showing a.txt above selected it): the click is what must select it.
             window.makeFirstResponder(outline)
-            clickRow(c, files[0])
-            check(area.panes.isEmpty && outline.selectedRowIndexes == IndexSet(integer: sidebarRow(c, files[0])) && window.firstResponder === outline,
-                  "single click off: a click on a file only selects it", "\(area.panes.count) tabs, \(outline.selectedRowIndexes.count) selected")
+            outline.deselectAll(nil)
+            let tracked = clickRow(c, files[0])
+            let selected = isSelection(c, files[0])
+            check(tracked && selected && area.panes.isEmpty && window.firstResponder === outline,
+                  "single click off: a click on a file only selects it", "tracked \(tracked), selected \(selected), \(area.panes.count) tabs")
             doubleClickRow(c, files[0])
             check(area.panes.count == 1 && area.activePath == path(files[0]) && area.previewPane == nil && c.isEditorFocused,
                   "single click off: a double-click opens it in an ordinary tab, with the keyboard", "\(area.panes.count) tabs")
@@ -348,7 +351,9 @@ extension SelfTest {
         check(dragTracked && reached && area.panes.isEmpty, "pressing on one file and letting go on another opens nothing",
               "tracked \(dragTracked), rows \(Array(outline.selectedRowIndexes)) selected, \(area.panes.count) tabs")
 
-        // A drag that begins while the click is down: the dragging-session delegate sets the flag.
+        // A drag that begins while the click is down: the dragging-session delegate sets the flag. Here the
+        // hook sets it, as a real drag cannot be started from code; that the delegate method is the one
+        // AppKit calls (outlineView(_:draggingSession:willBeginAt:forItems:)) is checked only by reading it.
         outline.whilePressed = { outline.dragBegan = true }
         let dragClicked = clickRow(c, files[2]) && isSelection(c, files[2])
         outline.whilePressed = nil
