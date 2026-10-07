@@ -17,7 +17,7 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
   a notification says so with the question; click it to land on that tab. Works however you start the
   agent: directly, through an alias or a shell function, `npx`, or `cd app && claude`.
 - **Code editor.** Double-click a file, pick a Find in Files result, or ⌘-click `src/app.ts:42:7` in any
-  output: the file opens above the terminal at that line, coloured by VS Code's TextMate grammars for 103
+  output: the file opens above the terminal at that line, coloured by VS Code's TextMate grammars for 112
   languages: PHP and Blade (Laravel, WordPress), Ruby and ERB (Rails),
   Python and Jinja (Django, Flask), JS/TS/TSX (React, Next.js), Vue, Svelte, Astro, Angular, Liquid, Twig,
   Go and templ, Rust, Elixir, YAML, SQL and more. Line numbers, adjustable line height, soft wrap, auto-indent, ⌘/ to comment, ⌘L to go to a line, find, undo. Files keep
