@@ -117,6 +117,12 @@ import Testing
         #expect(DataHead.detectDelimiter(Array("a;b;c\n1,5;2,3;4\n".utf8), fallback: 0x2C) == 0x3B)
         #expect(DataHead.detectDelimiter(Array("\"x,y\";b\n\"1,2\";3\n".utf8), fallback: 0x2C) == 0x3B)
         #expect(DataHead.detectDelimiter(Array("just text\n".utf8), fallback: 0x09) == 0x09)
+        // Both in every line the same number of times: decimal commas in a semicolon file, commas in a TSV.
+        #expect(DataHead.detectDelimiter(Array("1,5;2,3;4,0\n2,5;3,1;7,2\n0,1;0,2;0,3\n".utf8), fallback: 0x2C) == 0x3B)
+        #expect(DataHead.detectDelimiter(Array("a\tb, c\n1\t2,5\n".utf8), fallback: 0x2C) == 0x09)
+        // One line says too little for that: the separator it has most.
+        #expect(DataHead.detectDelimiter(Array("a;b,c,d".utf8), fallback: 0x09) == 0x2C)
+        #expect(DataHead.detectDelimiter(Array("id,tags\n1,a;b\n2,c;d\n".utf8), fallback: 0x2C) == 0x2C)
         #expect(DataHead.looksLikeHeader([["id", "score"], ["1", "0.5"], ["2", "0.7"]]))
         #expect(DataHead.looksLikeHeader([["", "question", "answer"], ["0", "Why?", "Because."]]))
         #expect(!DataHead.looksLikeHeader([["1", "0.5"], ["2", "0.7"]]))

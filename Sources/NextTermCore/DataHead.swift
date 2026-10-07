@@ -307,7 +307,7 @@ public enum DataHead {
     }
 
     /// The separator a CSV's first lines use most consistently: comma, tab or semicolon (European
-    /// spreadsheets write "1,5;2,3"). Quoted text does not count.
+    /// spreadsheets write "1,5;2,3", which has both in every line). Quoted text does not count.
     public static func detectDelimiter<Bytes: Collection>(_ head: Bytes, fallback: UInt8) -> UInt8 where Bytes.Element == UInt8 {
         let candidates: [UInt8] = [0x2C, 0x09, 0x3B]
         var counts: [[Int]] = [[], [], []]
@@ -330,25 +330,44 @@ public enum DataHead {
             }
         }
         if lines == 0 { for k in 0..<3 { counts[k].append(current[k]) } } // one line, no newline yet
-        var best: (delimiter: UInt8, consistent: Int, mode: Int)?
+        // The lines with any separator: a blank line or a one-column row says nothing.
+        var sampled = 0
+        for i in counts[0].indices where counts[0][i] + counts[1][i] + counts[2][i] > 0 { sampled += 1 }
+        var best: SeparatorCount?
         for k in 0..<3 {
             let used = counts[k].filter { $0 > 0 }
             guard !used.isEmpty else { continue }
             var frequency: [Int: Int] = [:]
             for count in used { frequency[count, default: 0] += 1 }
             let top = frequency.max { a, b in a.value == b.value ? a.key < b.key : a.value < b.value }!
-            let candidate = (delimiter: candidates[k], consistent: top.value, mode: top.key)
-            guard let current = best else {
-                best = candidate
-                continue
-            }
-            if candidate.consistent > current.consistent
-                || (candidate.consistent == current.consistent && candidate.mode > current.mode)
-                || (candidate.consistent == current.consistent && candidate.mode == current.mode && candidate.delimiter == fallback) {
-                best = candidate
-            }
+            let candidate = SeparatorCount(delimiter: candidates[k], consistent: top.value, mode: top.key)
+            if let current = best, !candidate.beats(current, sampled: sampled, fallback: fallback) { continue }
+            best = candidate
         }
         return best?.delimiter ?? fallback
+    }
+
+    /// How a separator shows in a CSV's first lines: how many lines have its most common count, and that count.
+    private struct SeparatorCount {
+        var delimiter: UInt8
+        var consistent: Int
+        var mode: Int
+
+        /// Tab, then semicolon, over comma.
+        var rank: Int {
+            if delimiter == 0x09 { return 2 }
+            return delimiter == 0x3B ? 1 : 0
+        }
+
+        /// The more consistent one. When both are in every line the same number of times, the rank:
+        /// decimal commas fill a semicolon file ("1,5;2,3"), and commas in text are far more common than
+        /// a fixed number of tabs or semicolons. Otherwise (one line says little) the one used more.
+        func beats(_ other: SeparatorCount, sampled: Int, fallback: UInt8) -> Bool {
+            if consistent != other.consistent { return consistent > other.consistent }
+            if sampled > 1, consistent == sampled { return rank > other.rank }
+            if mode != other.mode { return mode > other.mode }
+            return delimiter == fallback
+        }
     }
 
     /// Whether the first row names the columns: no numbers in it, no repeats, and either a column of
