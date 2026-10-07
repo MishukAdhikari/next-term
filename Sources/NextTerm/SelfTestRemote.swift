@@ -284,6 +284,22 @@ extension SelfTest {
               plain.closeWarning ?? "nil")
         plain.view.send(txt: "kill %1; printf 'remote-%s\\n' ok\r")
         check(await wait(8) { plain.screenTail(10).contains { $0.contains("remote-ok") } }, "remote: typed commands run on the host")
+        // An agent on the host ("claude", cat under that name): Send to Agent types this Mac's paths, so it
+        // never sends there, and says the agent runs on a server instead of that none runs.
+        let agentLink = bin.appendingPathComponent("claude")
+        try? FileManager.default.createSymbolicLink(at: agentLink, withDestinationURL: URL(fileURLWithPath: "/bin/cat"))
+        plain.view.send(txt: "claude\r")
+        check(await wait(8) { plain.status.running && plain.status.kind == .agent }, "remote: an agent on the host is seen as one",
+              "\(plain.status.running) \(plain.status.program)")
+        c.window?.makeFirstResponder(plain.view)
+        c.refresh()
+        // What sending says when no agent on this Mac takes it (one may run here now: that one would).
+        let refusal = c.noAgentAlert().messageText
+        check(c.agentTab !== plain && refusal == "The agent in this window runs on a server",
+              "remote: Send to Agent never picks it, and without one on this Mac says it runs on a server", refusal)
+        plain.view.send(txt: "\u{4}")
+        check(await wait(8) { !plain.status.running }, "remote: and it ends", plain.status.program)
+        unlink(agentLink.path)
 
         // The connection drops: the tab stays, says so, and Return reconnects (a new shell, for keep off).
         let pidFile = home.appendingPathComponent(".cache/next-term/tabs/\(plain.remoteKey)").path

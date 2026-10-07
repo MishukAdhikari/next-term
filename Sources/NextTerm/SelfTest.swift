@@ -3211,17 +3211,24 @@ enum SelfTest {
         try? FileManager.default.removeItem(at: proj.appendingPathComponent("a-greet.md"))
         try? FileManager.default.removeItem(at: proj.appendingPathComponent("src/z.php"))
 
-        // With no agent running, ⌥⌘K stays on and says why nothing was sent.
+        // With no agent running, ⌥⌘K stays on in the editor and says why nothing was sent; with the keyboard in
+        // the terminal, where it sends nothing, it is off.
         if c.agentTab == nil {
             c.openFile(proj.appendingPathComponent("src/main.php"))
+            if let sendFrom = area.activeEditor { window.makeFirstResponder(sendFrom.textView) }
             let sendItem = NSMenuItem(title: "Send to Agent", action: #selector(TerminalWindowController.sendToAgent(_:)), keyEquivalent: "")
-            check(c.validateMenuItem(sendItem), "Send to Agent stays on with no agent running")
-            c.sendEditorSelection()
+            check(c.isEditorFocused && c.validateMenuItem(sendItem), "Send to Agent stays on in the editor with no agent running",
+                  "editor focused \(c.isEditorFocused)")
+            c.sendToAgent(nil)
             func texts(_ view: NSView) -> [String] { view.subviews.flatMap { ($0 as? NSTextField).map { [$0.stringValue] } ?? texts($0) } }
             check(await wait(2) { window.attachedSheet?.contentView.map(texts)?.contains("No agent is running in this window") == true },
                   "and sending says no agent is running", window.attachedSheet?.contentView.map(texts)?.joined(separator: " | ") ?? "no sheet")
             if let sheet = window.attachedSheet { window.endSheet(sheet) }
             _ = await wait(2) { window.attachedSheet == nil }
+            window.makeFirstResponder(tab.view)
+            check(!c.isEditorFocused && !c.validateMenuItem(sendItem), "and off with the keyboard in the terminal, where it would only beep")
+        } else {
+            check(false, "Send to Agent with no agent: an agent tab was still running", c.agentTab?.status.program ?? "")
         }
 
         // Send to Agent: an "agent" (cat under the name claude, so the tty echoes what it is given) in a tab.

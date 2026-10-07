@@ -633,10 +633,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(showChanges(_:)) {
             return editorArea.activePath != nil || sidebar.selection.contains { !$0.isFolder } || sidebar.selectedDeleted.contains { !$0.isDirectory }
         }
-        // On with no agent running too: sending then says that none is.
+        // On when the keyboard is where ⌥⌘K sends from, with something to send, even with no agent running:
+        // sending then says that none is.
         if item.action == #selector(sendToAgent(_:)) {
             let sendable = editorArea.activePath != nil && editorArea.activeDiff?.proposal == nil
-            return sendable || !sidebar.selection.isEmpty
+            let fromSidebar = window?.firstResponder === sidebar.outline && !sidebar.selection.isEmpty
+            return (isEditorFocused && sendable) || fromSidebar
         }
         if item.action == #selector(toggleEditorFocus(_:)) {
             item.title = isEditorFocused ? "Focus Terminal" : "Focus Editor"
@@ -1186,13 +1188,24 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         send(urls.map { ContextItem(path: $0.url.path, isFolder: $0.isFolder) })
     }
 
+    /// Why nothing was sent: no agent runs here, or the only ones run on a server (`agentTab` skips them).
+    func noAgentAlert() -> NSAlert {
+        let alert = NSAlert()
+        if tabs.contains(where: { $0.remote != nil && $0.status.running && $0.status.kind == .agent }) {
+            alert.messageText = "The agent in this window runs on a server"
+            alert.informativeText = "Send to Agent types this Mac’s paths, which mean nothing there. Start an agent in a tab on this Mac to send to it."
+        } else {
+            alert.messageText = "No agent is running in this window"
+            alert.informativeText = "Start one in a tab (claude, codex, gemini, junie…), then send again."
+        }
+        return alert
+    }
+
     /// Types references to `items` into the agent's prompt, in its own syntax, relative to its folder.
     /// Never presses Enter: you add the instruction.
     func send(_ items: [ContextItem]) {
         guard let tab = agentTab, let window else {
-            let alert = NSAlert()
-            alert.messageText = "No agent is running in this window"
-            alert.informativeText = "Start one in a tab (claude, codex, gemini, junie…), then send again."
+            let alert = noAgentAlert()
             if let window { alert.beginSheetModal(for: window) } else { alert.runModal() }
             return
         }
