@@ -9,8 +9,10 @@ public struct SkillReview: Sendable {
         public let size: Int
         public let executable: Bool
         public let script: Bool
-        /// A compiled program (Mach-O or ELF).
+        /// A compiled program, not named as text or a script: reviewed as a program.
         public let binary: Bool
+        /// A compiled program by its header, whatever its name.
+        public let program: Bool
         /// For a link: where it points.
         public let linkTarget: String?
     }
@@ -81,7 +83,7 @@ public struct SkillReview: Sendable {
             if type == S_IFDIR { continue }
             if type == S_IFLNK {
                 let target = (try? manager.destinationOfSymbolicLink(atPath: full)) ?? ""
-                files.append(File(path: relative, size: 0, executable: false, script: false, binary: false, linkTarget: target))
+                files.append(File(path: relative, size: 0, executable: false, script: false, binary: false, program: false, linkTarget: target))
                 if let problem = linkProblem(full: full, relative: relative, target: target, realFolder: realFolder) {
                     flags.append(Flag(level: .refuse, file: relative, text: problem))
                 }
@@ -110,7 +112,7 @@ public struct SkillReview: Sendable {
             let program = looksBinary && isProgramHeader(data, size: size)
             let binary = program && !textExtensions.contains(ext)
             let script = scriptExtensions.contains(ext) || data.starts(with: Data("#!".utf8))
-            files.append(File(path: relative, size: size, executable: executable, script: script, binary: binary, linkTarget: nil))
+            files.append(File(path: relative, size: size, executable: executable, script: script, binary: binary, program: program, linkTarget: nil))
             if program {
                 let named = "A compiled program, though named like text or a script: run directly, it runs as a program. It is checked as text below."
                 flags.append(Flag(level: .warning, file: relative, text: binary ? "A compiled program." : named))
@@ -141,7 +143,8 @@ public struct SkillReview: Sendable {
                 flags.append(Flag(level: .warning, file: relative, text: "Not valid UTF-8: shown with replacement characters."))
             }
             flags += textFlags(text, file: relative, readByAgents: readByAgentsExtensions.contains(ext))
-            for url in findURLs(text) { urls.insert(url) }
+            // A program's addresses from its printable runs: decoded whole, its code signature's read as junk.
+            for url in findURLs(program ? printableRuns(data) : text) { urls.insert(url) }
         }
         if total > 20_000_000 { flags.append(Flag(level: .warning, file: "", text: "The skill is large (\(total / 1_000_000) MB).")) }
         if !executables.isEmpty {
@@ -298,25 +301,37 @@ public struct SkillReview: Sendable {
         return String(decoding: out, as: UTF8.self)
     }
 
-    /// A program's text runs: at least `minimum` scalars with no control character (C0 but tab, DEL, C1)
-    /// and no replacement character: what an agent reads, or zsh runs, after a header.
+    /// A program's text runs: at least `minimum` scalars with no control character (C0 but tab and line
+    /// breaks, DEL, C1) and no replacement character: what an agent reads, or zsh runs, after a header.
+    /// Line breaks don't end a run, so text cut into short lines is still checked. Tag letters and the
+    /// variation selectors supplement (invisible text a program's own bytes don't form) are kept whatever
+    /// the run's length.
     static func textRuns(_ data: Data, minimum: Int = 16) -> String {
         var out = String.UnicodeScalarView()
         var run: [Unicode.Scalar] = []
-        for scalar in String(decoding: data, as: UTF8.self).unicodeScalars {
-            let v = scalar.value
-            let printable = (v >= 0x20 && v < 0x7F) || v == 0x09
-            if printable || (v > 0x9F && v != 0xFFFD) {
-                run.append(scalar)
-                continue
-            }
+        var carriers = 0
+        func close() {
             if run.count >= minimum {
                 out.append(contentsOf: run)
                 out.append("\n")
+            } else if carriers > 0 {
+                out.append(contentsOf: run.filter { (0xE0000...0xE01EF).contains($0.value) })
+                out.append("\n")
             }
             run.removeAll(keepingCapacity: true)
+            carriers = 0
         }
-        if run.count >= minimum { out.append(contentsOf: run) }
+        for scalar in String(decoding: data, as: UTF8.self).unicodeScalars {
+            let v = scalar.value
+            let printable = (v >= 0x20 && v < 0x7F) || v == 0x09 || v == 0x0A || v == 0x0D
+            if printable || (v > 0x9F && v != 0xFFFD) {
+                run.append(scalar)
+                if (0xE0000...0xE01EF).contains(v) { carriers += 1 }
+                continue
+            }
+            close()
+        }
+        close()
         return String(out)
     }
 
