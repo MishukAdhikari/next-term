@@ -132,11 +132,46 @@ extension SelfTest {
             app.post(decision("aider"), tab: front, in: c, appActive: true)
             check(c.isOnScreen(front) && app.testNotifications.count == before, "no notification for the tab on screen, not even a decision")
             await inFrontChecks(c, front)
+            await agentFinishingChecks(c, app)
         } else {
             note("notifications: the tab on screen skipped, the app is not frontmost")
         }
 
         await settingsChecks(app)
+    }
+
+    /// A real agent in a background tab finishing while Next Term is in front: read from its screen, held for
+    /// a second, posted. Nothing stands in for NSApp.isActive here.
+    private static func agentFinishingChecks(_ c: TerminalWindowController, _ app: AppDelegate) async {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("nextterm-notify-\(getpid())")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let agent = dir.appendingPathComponent("claude")
+        try? """
+        #!/bin/sh
+        printf '\\342\\234\\273 Working\\342\\200\\246 (esc to interrupt)\\n'; sleep 6
+        printf '\\033[2J\\033[HDone. Ready for your next prompt.\\n'
+        read answer
+        """.write(to: agent, atomically: true, encoding: .utf8)
+        chmod(agent.path, 0o755)
+        let tab = c.addTab(directory: nil, select: false)
+        _ = await wait(20) { tab.status.integrated }
+        c.window?.makeKeyAndOrderFront(nil)
+        guard await wait(3, { NSApp.isActive && c.window?.isKeyWindow == true }) else {
+            note("notifications: a real agent finishing in Next Term skipped, the app is not frontmost")
+            return c.remove(tab)
+        }
+        tab.view.send(txt: "PATH=\(dir.path):$PATH claude\r")
+        check(await wait(4) { tab.status.state == .working && tab.status.screenSynced }, "notifications: a real agent works in a background tab",
+              tab.status.state.rawValue)
+        let posted = await wait(12) {
+            app.testNotifications.contains { $0.identifier == tab.id.uuidString && $0.content.body == "claude is waiting for you" }
+        }
+        check(posted, "and notifies when it finishes, with Next Term in front", "\(app.testNotifications.suffix(3).map(\.content.body))")
+        if !NSApp.isActive { note("notifications: the app lost the front while the agent worked") }
+        tab.view.send(txt: "\u{03}")
+        _ = await wait(4) { !tab.status.running }
+        c.remove(tab)
     }
 
     /// The window's own sheet or ⌘P panel taking the keyboard leaves its tab in view; another window does not.
