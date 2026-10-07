@@ -146,6 +146,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         ])
         editorArea.delegate = self
         editorArea.onShowChanges = { [weak self] url in self?.showChanges(of: url) }
+        editorArea.onSendToAgent = { [weak self] items in self?.send(items) }
         editorArea.tabBar.onReveal = { [weak self] in self?.revealInSidebar(nil) }
         sidebar.header.onBranchClick = { [weak self] in self?.showBranches(nil) }
         editorArea.isHidden = true
@@ -1126,6 +1127,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             send([item])
         } else if let notebook = editorArea.activeNotebook {
             send([ContextItem(path: notebook.path)]) // the agent reads the notebook itself
+        } else if let database = editorArea.activeDatabase {
+            send([database.contextItem()]) // the table, and the selected rows when they are few
         }
     }
 

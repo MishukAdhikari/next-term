@@ -24,13 +24,17 @@ final class EditorArea: NSView, TabBarViewDelegate {
     var editors: [CodeEditorView] { panes.compactMap { $0 as? CodeEditorView } }
     var diffs: [DiffPane] { panes.compactMap { $0 as? DiffPane } }
     var notebooks: [NotebookPane] { panes.compactMap { $0 as? NotebookPane } }
+    var databases: [DatabasePane] { panes.compactMap { $0 as? DatabasePane } }
     var activePane: NSView? { panes[safe: activeIndex] }
     var activeEditor: CodeEditorView? { activePane as? CodeEditorView }
     var activeDiff: DiffPane? { activePane as? DiffPane }
     var activeNotebook: NotebookPane? { activePane as? NotebookPane }
-    /// The file in front: the one being edited, or the notebook being read.
-    var activePath: String? { activeEditor?.document.path ?? activeNotebook?.path }
-    var activeName: String? { activeEditor?.document.name ?? activeNotebook?.name }
+    var activeDatabase: DatabasePane? { activePane as? DatabasePane }
+    /// Send to Agent was clicked in a SQLite viewer.
+    var onSendToAgent: (([ContextItem]) -> Void)?
+    /// The file in front: the one being edited, or the notebook or database being read.
+    var activePath: String? { activeEditor?.document.path ?? activeNotebook?.path ?? activeDatabase?.path }
+    var activeName: String? { activeEditor?.document.name ?? activeNotebook?.name ?? activeDatabase?.name }
     /// Where its text is, for a selection to search for.
     var activeTextView: NSTextView? { activeEditor?.textView ?? activeNotebook?.textView }
     var documents: [EditorDocument] { editors.map(\.document) }
@@ -85,6 +89,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
     func open(_ url: URL, line: Int? = nil, column: Int = 1, focus: Bool = true, asText: Bool = false) -> OpenResult {
         let path = canonicalPath(url.path)
         if !asText, line == nil, Notebook.isNotebook(path) { return openNotebook(path, focus: focus) }
+        if !asText, DatabasePane.opens(path) { return openDatabase(path, focus: focus) }
         if let index = panes.firstIndex(where: { ($0 as? CodeEditorView)?.document.path == path }),
            let editor = panes[index] as? CodeEditorView {
             select(index, focus: focus)
@@ -137,6 +142,23 @@ final class EditorArea: NSView, TabBarViewDelegate {
         return .opened
     }
 
+    /// A SQLite file, read-only, in its own tab (or brought to the front if it is open).
+    @discardableResult
+    func openDatabase(_ path: String, focus: Bool = true) -> OpenResult {
+        let path = canonicalPath(path)
+        if let index = panes.firstIndex(where: { ($0 as? DatabasePane)?.path == path }) {
+            select(index, focus: focus)
+            return .opened
+        }
+        guard Databases.isSQLiteFile(path) || DatabasePane.isEmptyFile(path) else { return .notText }
+        let pane = DatabasePane(url: URL(fileURLWithPath: path))
+        pane.onTitleChange = { [weak self] in self?.refresh() }
+        pane.onSendToAgent = { [weak self] items in self?.onSendToAgent?(items) }
+        insert(pane)
+        select(activeIndex, focus: focus)
+        return .opened
+    }
+
     /// Open as JSON, from a notebook: its file in the editor, beside it.
     func openAsText(_ url: URL) {
         switch open(url, asText: true) {
@@ -179,6 +201,8 @@ final class EditorArea: NSView, TabBarViewDelegate {
             window?.makeFirstResponder(diff.focusView)
         } else if let notebook = panes[index] as? NotebookPane, focus {
             window?.makeFirstResponder(notebook.textView)
+        } else if let database = panes[index] as? DatabasePane, focus {
+            window?.makeFirstResponder(database.focusView)
         }
         refresh()
         delegate?.editorAreaSelectionChanged(self)
@@ -313,6 +337,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
         for editor in editors { editor.document.checkDisk() }
         for diff in diffs { diff.refreshIfChanged() }
         for notebook in notebooks { notebook.refreshIfChanged() }
+        for database in databases { database.refreshIfChanged() }
         // The file being edited against the last commit: a commit (yours or an agent's) moves the marks.
         checks += 1
         if checks % 5 == 0 { activeEditor?.refreshBaseline() }
@@ -342,6 +367,13 @@ final class EditorArea: NSView, TabBarViewDelegate {
                 notebook.moved(to: URL(fileURLWithPath: new + notebook.path.dropFirst(old.count)))
             }
         }
+        for database in databases {
+            if database.path == old {
+                database.moved(to: URL(fileURLWithPath: new))
+            } else if database.path.hasPrefix(old + "/") {
+                database.moved(to: URL(fileURLWithPath: new + database.path.dropFirst(old.count)))
+            }
+        }
         refresh()
     }
 
@@ -362,6 +394,10 @@ final class EditorArea: NSView, TabBarViewDelegate {
             if let notebook = pane as? NotebookPane {
                 return TabBarItem(title: title(notebook.url), state: .idle, tooltip: RecentProjects.abbreviate(notebook.path) + " (notebook, read-only)",
                                   accessibilityStatus: "notebook, read-only", icon: FileIcons.icon(for: notebook.url, size: 16), modified: false)
+            }
+            if let database = pane as? DatabasePane {
+                return TabBarItem(title: database.name, state: .idle, tooltip: RecentProjects.abbreviate(database.path) + " (SQLite, read-only)",
+                                  accessibilityStatus: "database, read-only", icon: FileIcons.icon(for: database.url, size: 16), modified: false)
             }
             let document = (pane as! CodeEditorView).document
             let status = document.isDirty ? "unsaved changes" : "saved"
