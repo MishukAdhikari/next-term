@@ -1202,6 +1202,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let fromEditor = isEditorFocused || window?.firstResponder !== sidebar.outline
         // A database file has no lines to compare, and one too large for the editor is too large to compare.
         if fromEditor, editorArea.activeDatabase != nil || editorArea.activeData?.isTooLargeForEditor == true { return NSSound.beep() }
+        // A diff of the file's changes is in front already: it stays on All Changes, Unstaged or Staged, as chosen.
+        if fromEditor, let diff = editorArea.activeDiff, diff.proposal == nil, diff.commit == nil { return diff.reload() }
         if let path = editorArea.activePath, fromEditor {
             return showChanges(of: URL(fileURLWithPath: path))
         }

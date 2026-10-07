@@ -2778,6 +2778,10 @@ enum SelfTest {
         diff.base = .staged
         check(await wait(5) { diff.hunkCount == 1 && diff.sideTexts.1.contains("line two") }, "Stage Hunk stages just that change",
               "\(diff.hunkCount) staged")
+        c.window?.makeFirstResponder(diff.focusView)
+        c.showChanges(nil)
+        check(diff.base == .staged && c.editorArea.activeDiff === diff, "⌥⌘G on the file's Staged diff leaves it on Staged",
+              "\(diff.title), \(c.editorArea.activeDiff?.title ?? "no diff in front")")
         // The staged version is not the file on disk: Send to Agent says so and brings its lines along.
         if let side = diff.focusView as? NSTextView {
             let at = (side.string as NSString).range(of: "line two")
