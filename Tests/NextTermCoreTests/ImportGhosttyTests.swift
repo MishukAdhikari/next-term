@@ -142,7 +142,7 @@ import Testing
         #expect(replaced.shortcuts.first?.source == "keybind command+t → new_window")
         #expect(reasons(replaced)["2 keybinds"] == "no matching Next Term command, or they send text to the terminal")
         // The = key: Ghostty's first "=" that isn't followed by "+" or "=" ends the trigger.
-        let equals = try self.plan("keybind = super+==increase_font_size:1\nkeybind = =+super=reset_font_size")
+        let equals = try self.plan("keybind = super+==increase_font_size:1\nkeybind = super+-=text:=-")
         #expect(equals.shortcuts.map(\.command) == ["increaseFontSize:"])
         #expect(equals.shortcuts.first?.chord == KeyChord(key: "=", command: true))
         #expect(ImportGhostty.triggerID("global:Shift+Super+bracket_left") == "cmd+shift+[bracketleft]")
@@ -195,6 +195,29 @@ import Testing
         #expect(ImportGhostty.triggerID("super+left_bracket") == ImportGhostty.triggerID("cmd+bracket_left"))
         #expect(ImportGhostty.triggerID("super+[") != ImportGhostty.triggerID("cmd+bracket_left"))
         #expect(ImportGhostty.triggerID("ctrl++") == ImportGhostty.triggerID("control+plus"))
+    }
+
+    /// Ghostty reads a trigger's key before its modifiers too, and turns down one with a modifier twice or two keys.
+    @Test func triggerOrder() throws {
+        // `=+super` is super+=, so the later line wins.
+        let equals = try self.plan("keybind = super+==increase_font_size:1\nkeybind = =+super=reset_font_size")
+        #expect(equals.shortcuts.map(\.command) == ["resetFontSize:"])
+        #expect(equals.shortcuts.first?.chord == KeyChord(key: "=", command: true))
+        let keyFirst = try self.plan("keybind = d+shift+super=new_split:down")
+        #expect(keyFirst.shortcuts.first?.chord == KeyChord(key: "d", command: true, shift: true))
+
+        // A line Ghostty turns down replaces nothing.
+        let refused = try self.plan("""
+            keybind = super+d=new_split:right
+            keybind = super+cmd+d=unbind
+            keybind = super+d+e=unbind
+            keybind = super+t=new_tab
+            keybind = super+super+t=new_window
+            """)
+        #expect(refused.shortcuts.map(\.command) == ["splitRight:", "newTab:"])
+        #expect(reasons(refused)["keybind super+super+t → new_window"] == "key not recognised")
+        #expect(ImportGhostty.triggerID("a+shift") == ImportGhostty.triggerID("shift+a"))
+        #expect(ImportGhostty.triggerID("shift+shift+a") == nil)
     }
 
     @Test func safety() throws {

@@ -380,7 +380,8 @@ public enum ImportGhostty {
             }
             let trigger = String(bind[..<equals]).trimmingCharacters(in: .whitespaces)
             let action = String(bind[bind.index(after: equals)...]).trimmingCharacters(in: .whitespaces)
-            let id = triggerID(trigger)
+            // A trigger Ghostty turns down stands alone: the line is ignored there, so it replaces nothing.
+            let id = triggerID(trigger) ?? "line \(order.count)"
             if binds[id] == nil { order.append(id) }
             binds[id] = (trigger, action)
         }
@@ -445,19 +446,36 @@ public enum ImportGhostty {
         return parts
     }
 
+    /// A trigger (lowercased, without its flags) as Ghostty's `Trigger.parse` reads it: its modifiers, by one name
+    /// each in a set order, and its key, which may come before them. Nil for one Ghostty turns down: a modifier
+    /// twice, a second key, or none.
+    static func parseTrigger(_ text: String) -> (modifiers: [String], key: TriggerKey)? {
+        var names: [String] = []
+        var key: TriggerKey?
+        for part in triggerParts(text) {
+            if let name = modifiers[part] {
+                guard !names.contains(name) else { return nil }
+                names.append(name)
+            } else {
+                guard key == nil else { return nil }
+                key = triggerKey(part)
+            }
+        }
+        guard let key else { return nil }
+        return (names.sorted(), key)
+    }
+
     /// Whether a trigger names its key by its place on the keyboard rather than by the character it types.
     static func isPlaced(_ trigger: String) -> Bool {
-        if case .placed = triggerKey(triggerParts(withoutFlags(trigger)).last ?? "") { return true }
+        if case .placed = parseTrigger(withoutFlags(trigger))?.key { return true }
         return false
     }
 
-    /// A trigger as Ghostty tells them apart: without its flags, each modifier by one name in a set order, and
-    /// its key by place or by character (`bracket_left` and `left_bracket` are one key, `[` another).
-    static func triggerID(_ trigger: String) -> String {
-        var parts = triggerParts(withoutFlags(trigger))
-        let key = vsCodeKey(triggerKey(parts.popLast() ?? ""))
-        let names = Set(parts.map { modifiers[$0] ?? $0 }).sorted()
-        return (names + [key]).joined(separator: "+")
+    /// A trigger as Ghostty tells them apart: without its flags, its modifiers in a set order, and its key by place
+    /// or by character (`bracket_left` and `left_bracket` are one key, `[` another). Nil for one Ghostty turns down.
+    static func triggerID(_ trigger: String) -> String? {
+        guard let parsed = parseTrigger(withoutFlags(trigger)) else { return nil }
+        return (parsed.modifiers + [vsCodeKey(parsed.key)]).joined(separator: "+")
     }
 
     /// A Ghostty trigger ("super+shift+d", "cmd+bracket_left") read the way VS Code's keys are. Key
@@ -467,14 +485,8 @@ public enum ImportGhostty {
         for prefix in ["unconsumed:", "performable:", "all:"] where text.hasPrefix(prefix) { text.removeFirst(prefix.count) }
         if text.hasPrefix("global:") { return .notSupported("system-wide keys aren't supported") }
         if text.contains(">") { return .notSupported(ImportShortcuts.twoStep) }
-        var parts = triggerParts(text)
-        guard let last = parts.popLast() else { return .notSupported(ImportShortcuts.notRecognised) }
-        var names: [String] = []
-        for part in parts {
-            guard let name = modifiers[part] else { return .notSupported(ImportShortcuts.notRecognised) }
-            names.append(name)
-        }
-        return ImportVSCode.parseKey((names + [vsCodeKey(triggerKey(last))]).joined(separator: "+"), usKeyboard: usKeyboard)
+        guard let parsed = parseTrigger(text) else { return .notSupported(ImportShortcuts.notRecognised) }
+        return ImportVSCode.parseKey((parsed.modifiers + [vsCodeKey(parsed.key)]).joined(separator: "+"), usKeyboard: usKeyboard)
     }
 
     // MARK: the rest
