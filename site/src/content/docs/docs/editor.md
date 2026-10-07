@@ -124,4 +124,4 @@ Click a mark to open the file’s changes side by side. After a commit (yours or
 - **Hover** over a commit’s lines for its full summary, author, date and hash. **Click** to show the commit; the right-click menu also has **Show Commit** and **Copy Commit Hash**.
 - **The current line:** **View › Current Line Blame** (off by default) adds a dim note after the line with the caret, such as “Ann, 3 days ago · Fix login”.
 
-Blame is read in the background, once per file and commit, and follows a file back through renames. After a commit or a checkout it updates by itself. A file outside git shows no column, a file not committed yet is all “Not committed”, and files over 2 MB are not annotated.
+Blame is read in the background, once per file and commit, and follows a file back through renames. After a commit or a checkout it updates by itself. A file outside git shows no column, a file not committed yet is all “Not committed”, and files over 2 MB are not annotated. In a shallow clone, lines from before its oldest commit say “Earlier history”, since the clone does not know who wrote them.

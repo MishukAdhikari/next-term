@@ -10,14 +10,18 @@ public struct Blame: Equatable, Sendable {
         public let summary: String
         /// The file's path in that commit (an older name, before a rename).
         public let path: String
+        /// git went no further back than this commit: the first one, or in a shallow clone the oldest it has.
+        public let isBoundary: Bool
 
-        public init(sha: String, author: String, authorMail: String, authorTime: Date, summary: String, path: String) {
+        public init(sha: String, author: String, authorMail: String, authorTime: Date, summary: String, path: String,
+                    isBoundary: Bool = false) {
             self.sha = sha
             self.author = author
             self.authorMail = authorMail
             self.authorTime = authorTime
             self.summary = summary
             self.path = path
+            self.isBoundary = isBoundary
         }
 
         public var shortSHA: String { String(sha.prefix(7)) }
@@ -51,6 +55,8 @@ public struct Blame: Equatable, Sendable {
     /// The work tree's root, and the commit the blame is of (empty when parsed from text alone).
     public var root = ""
     public var head = ""
+    /// A shallow clone: its oldest commits stand for all of the history it does not have.
+    public var isShallow = false
 
     public init() {}
 
@@ -64,10 +70,14 @@ public struct Blame: Equatable, Sendable {
 
     public func commit(_ line: Line) -> Commit? { line.sha.flatMap { commits[$0] } }
 
+    /// The oldest commit a shallow clone has: its lines come from it or from any commit before it, so
+    /// its author and date say nothing about them.
+    public func isShallowBoundary(_ commit: Commit) -> Bool { isShallow && commit.isBoundary }
+
     /// Parses `git blame --porcelain`: per line a header (`sha original final [count]`), the commit's
     /// details the first time it appears, and the line itself after a tab. Nil for a binary file.
     public static func parse(_ data: Data) -> Blame? {
-        struct Pending { var author = "", mail = "", time = 0.0, summary = "", path = "" }
+        struct Pending { var author = "", mail = "", time = 0.0, summary = "", path = "", boundary = false }
         var blame = Blame()
         var details: [String: Pending] = [:]
         var placed: [(final: Int, line: Line)] = []
@@ -102,12 +112,13 @@ public struct Blame: Equatable, Sendable {
             case "author-time": details[sha]?.time = Double(value) ?? 0
             case "summary": details[sha]?.summary = value
             case "filename": details[sha]?.path = value
+            case "boundary": details[sha]?.boundary = true
             default: break
             }
         }
         for (sha, d) in details where !isNotCommitted(sha) {
             blame.commits[sha] = Commit(sha: sha, author: d.author, authorMail: d.mail, authorTime: Date(timeIntervalSince1970: d.time),
-                                        summary: d.summary, path: d.path)
+                                        summary: d.summary, path: d.path, isBoundary: d.boundary)
         }
         blame.lines = placed.sorted { $0.final < $1.final }.map(\.line)
         return blame
@@ -150,15 +161,17 @@ extension GitRunner {
         let folder = (path as NSString).deletingLastPathComponent
         let name = (path as NSString).lastPathComponent
         let prefix = ["-C", folder, "--no-optional-locks"]
-        // The root and HEAD in one run; with no commit yet, only the root answers.
-        guard let found = lines(run(git, prefix + ["rev-parse", "--show-toplevel", "HEAD"], timeout: timeout)), found.count == 2 else {
+        // The root, whether the clone is shallow, and HEAD in one run; with no commit yet, only the root answers.
+        let parse = prefix + ["rev-parse", "--show-toplevel", "--is-shallow-repository", "HEAD"]
+        guard let found = lines(run(git, parse, timeout: timeout)), found.count == 3 else {
             if let root = lines(run(git, prefix + ["rev-parse", "--show-toplevel"], timeout: timeout))?.first { return .notCommitted(root: root) }
             return .notInRepository
         }
-        let (root, head) = (found[0], found[1])
+        let (root, shallow, head) = (found[0], found[1] == "true", found[2])
         let key = workingTree ? nil : path + "\0" + head
         if let key, let known = cache?[key] { return known }
-        let result = blame(name, prefix: prefix, root: root, head: head, git: git, workingTree: workingTree, maxSize: maxSize, timeout: timeout)
+        let result = blame(name, prefix: prefix, root: root, head: head, shallow: shallow, git: git, workingTree: workingTree,
+                           maxSize: maxSize, timeout: timeout)
         if let key, result != .failed { cache?[key] = result }
         return result
     }
@@ -167,8 +180,8 @@ extension GitRunner {
         data.flatMap { String(data: $0, encoding: .utf8) }?.split(separator: "\n").map(String.init)
     }
 
-    private static func blame(_ name: String, prefix: [String], root: String, head: String, git: String, workingTree: Bool,
-                              maxSize: Int, timeout: TimeInterval) -> BlameResult {
+    private static func blame(_ name: String, prefix: [String], root: String, head: String, shallow: Bool, git: String,
+                              workingTree: Bool, maxSize: Int, timeout: TimeInterval) -> BlameResult {
         // Its size in the commit, which also says whether it is there at all.
         guard let size = lines(run(git, prefix + ["cat-file", "-s", head + ":./" + name], timeout: timeout))?.first.flatMap({ Int($0) }) else {
             return .notCommitted(root: root)
@@ -188,6 +201,7 @@ extension GitRunner {
         guard !blame.lines.isEmpty || data.isEmpty else { return .failed } // output in a shape not understood
         blame.root = root
         blame.head = head
+        blame.isShallow = shallow
         return .annotated(blame)
     }
 }
@@ -204,7 +218,8 @@ public struct EditedBlame: Sendable {
     /// `diff` goes from the committed text to the current one (nil: they are the same).
     public init(_ blame: Blame, diff: FileDiff?, lineCount: Int) {
         self.blame = blame
-        let times = blame.commits.values.map(\.authorTime)
+        // A shallow clone's oldest commits carry no real date: they count as the oldest.
+        let times = blame.commits.values.filter { !blame.isShallowBoundary($0) }.map(\.authorTime)
         oldest = times.min() ?? Date()
         newest = times.max() ?? Date()
         var lines: [Blame.Line] = []
@@ -278,6 +293,7 @@ public struct EditedBlame: Sendable {
 
     /// How recent a commit is among the file's, from 0 (the oldest) to 1 (the newest).
     public func recency(of commit: Blame.Commit) -> Double {
+        if blame.isShallowBoundary(commit) { return 0 }
         let span = newest.timeIntervalSince(oldest)
         guard span > 0 else { return 1 }
         return max(0, min(1, commit.authorTime.timeIntervalSince(oldest) / span))

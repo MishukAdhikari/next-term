@@ -44,17 +44,32 @@ enum BlameText {
     }
 
     /// The column's text on a line, as plain text: “Ann  2d  abc1234” on the first line of a commit's
-    /// run of lines, “Not committed” on new ones, and nothing on the rest.
+    /// run of lines, “Not committed” on new ones, and nothing on the rest. A shallow clone's oldest
+    /// commit stands for the history it lacks: “Earlier history  ^abc123”.
     static func column(_ blame: EditedBlame, line: Int) -> String {
         guard let entry = blame.line(line), blame.isBlockStart(line) else { return "" }
         guard let commit = blame.blame.commit(entry) else { return "Not committed" }
+        if blame.blame.isShallowBoundary(commit) { return "\(earlier)  \(boundaryHash(commit))" }
         return "\(commit.shortAuthor)  \(Blame.compactAge(of: commit.authorTime))  \(commit.shortSHA)"
     }
+
+    static let earlier = "Earlier history"
+
+    /// git's mark for a commit it went no further back from: “^” and the hash, as short as the others.
+    static func boundaryHash(_ commit: Blame.Commit) -> String { "^" + commit.sha.prefix(6) }
 
     /// The hover text for a line's commit.
     static func toolTip(_ blame: EditedBlame, line: Int) -> String {
         guard let entry = blame.line(line) else { return "" }
         guard let commit = blame.blame.commit(entry) else { return "Not committed yet: changed since the last commit" }
+        if blame.blame.isShallowBoundary(commit) {
+            return """
+            From \(commit.shortSHA) or an earlier commit
+            History before this commit is not in this shallow clone
+            \(commit.sha)
+            Click to show the commit
+            """
+        }
         let author = commit.authorMail.isEmpty ? commit.author : "\(commit.author) <\(commit.authorMail)>"
         return """
         \(commit.summary)
@@ -94,6 +109,12 @@ extension LineNumberRuler: NSViewToolTipOwner {
         guard let commit else {
             let all = NSRect(x: style.author.minX, y: 0, width: style.hash.maxX - style.author.minX, height: 0)
             return put("Not committed", in: all, font: style.font, color: Theme.gitModified.withAlphaComponent(0.8))
+        }
+        if blame.blame.isShallowBoundary(commit) {
+            // No one person or date: dimmed, across the author and date.
+            let both = NSRect(x: style.author.minX, y: 0, width: style.date.maxX - style.author.minX, height: 0)
+            put(BlameText.earlier, in: both, font: style.font, color: Theme.blameHash)
+            return put(BlameText.boundaryHash(commit), in: style.hash, font: style.hashFont, color: Theme.blameHash, alignment: .right)
         }
         put(commit.shortAuthor, in: style.author, font: style.font, color: Theme.blameText)
         put(Blame.compactAge(of: commit.authorTime), in: style.date, font: style.font, color: Theme.blameText, alignment: .right)

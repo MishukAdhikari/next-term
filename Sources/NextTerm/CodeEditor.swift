@@ -747,6 +747,7 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
     private func blameNote(forLine line: Int) -> String? {
         guard AppDelegate.shared?.currentLineBlame == true, let entry = editedBlame?.line(line) else { return nil }
         guard let commit = editedBlame?.blame.commit(entry) else { return "Not committed yet" }
+        if editedBlame?.blame.isShallowBoundary(commit) == true { return "Before the clone’s history · \(commit.shortSHA) or earlier" }
         return "\(commit.shortAuthor), \(BlameText.relative(commit.authorTime)) · \(commit.summary)"
     }
 

@@ -46,6 +46,7 @@ import Testing
         #expect(first.author == "Ann Lee" && first.shortAuthor == "Ann" && first.authorMail == "ann@example.com")
         #expect(first.summary == "First" && first.path == "old.txt" && first.shortSHA == "b96133d")
         #expect(first.authorTime == Date(timeIntervalSince1970: 1_700_000_000))
+        #expect(first.isBoundary && !blame.isShallowBoundary(first)) // the first commit, in a full clone
         #expect(blame.commit(blame.lines[3])?.summary == "Second")
         #expect(Blame.parse(Data("\(ann) 1 1 1\nauthor A\n\tx\0y\n".utf8)) == nil) // binary
         // SHA-256 names, and its 64 zeros for a line not committed.
@@ -225,6 +226,31 @@ import Testing
             return #expect(Bool(false))
         }
         #expect(disk.lines.map(\.isCommitted) == [true, false] && disk.commits.count == 1)
+    }
+    /// A shallow clone has no history before its oldest commit: lines git puts there are marked as such,
+    /// and a full repository's first commit is not.
+    @Test func blameOfAShallowClone() throws {
+        guard let repo = try ScratchRepo() else { return }
+        let clone = repo.path + "-shallow"
+        defer { repo.remove(); try? FileManager.default.removeItem(atPath: clone) }
+        try repo.write("f.txt", "one\ntwo\nthree\n")
+        try repo.commit("Ann", "First")
+        try repo.write("f.txt", "one\nTWO\nthree\n")
+        try repo.commit("Bob", "Second")
+        guard case .annotated(let full) = GitRunner.blame(of: repo.path + "/f.txt", git: repo.gitPath) else { return #expect(Bool(false)) }
+        #expect(!full.isShallow && full.commits.values.allSatisfy { !full.isShallowBoundary($0) })
+        try repo.write("f.txt", "one\nTWO\nthree\nfour\n")
+        try repo.commit("Cy", "Third")
+
+        try repo.git("clone", "-q", "--depth", "2", "file://" + repo.path, clone)
+        guard case .annotated(let blame) = GitRunner.blame(of: clone + "/f.txt", git: repo.gitPath) else { return #expect(Bool(false)) }
+        #expect(blame.isShallow)
+        let cut = blame.lines.map { blame.commit($0).map(blame.isShallowBoundary) }
+        #expect(cut == [true, true, true, false]) // Bob's commit is the oldest the clone has: Ann's older lines land there too
+        let edited = EditedBlame(blame, diff: nil, lineCount: 4)
+        let bob = try #require(blame.commit(blame.lines[0]))
+        let cy = try #require(blame.commit(blame.lines[3]))
+        #expect(edited.recency(of: bob) == 0 && edited.recency(of: cy) == 1)
     }
 }
 
