@@ -256,6 +256,26 @@ extension SelfTest {
         window.makeKeyAndOrderFront(nil)
     }
 
+    /// Last of all, as it closes every window: with only the Welcome window open, minimized, a Dock click
+    /// brings it back. It used to open the last project instead, which closes the Welcome window.
+    static func welcomeReopenChecks() async {
+        let app = AppDelegate.shared!
+        for controller in app.controllers { controller.window?.close() }
+        app.showWelcome(nil)
+        guard let welcome = app.welcomeController?.window, await wait(5, { app.controllers.isEmpty && welcome.isVisible }) else {
+            return note("the windows did not close, so a Dock click on the minimized Welcome window was not checked")
+        }
+        welcome.miniaturize(nil)
+        guard await wait(8, { welcome.isMiniaturized }) else {
+            return note("the Welcome window did not minimize, so the Dock click was not checked")
+        }
+        let handled = app.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
+        let back = await wait(5) { !welcome.isMiniaturized && welcome.isVisible }
+        check(back && app.controllers.isEmpty && !handled,
+              "a Dock click with only the Welcome window open, minimized, brings it back and opens no project",
+              "back \(back), windows \(app.controllers.count), AppKit's reopen \(handled)")
+    }
+
     /// The words in the sheet over `window`: an alert's title and text.
     private static func sheetWords(_ window: NSWindow) -> String {
         func fields(_ view: NSView) -> [String] { view.subviews.flatMap { ($0 as? NSTextField).map { [$0.stringValue] } ?? fields($0) } }

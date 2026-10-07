@@ -18,6 +18,7 @@ enum SelfTest {
     static func run() {
         Task { @MainActor in
             await runAll()
+            await welcomeReopenChecks() // last: it closes every window
             finish()
         }
     }
