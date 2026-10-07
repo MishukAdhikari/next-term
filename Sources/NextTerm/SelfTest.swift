@@ -2825,6 +2825,13 @@ enum SelfTest {
             check(mentioned && claude.last("at_mentioned")?["lineEnd"] as? Int == 2, "⌥⌘K sends the lines straight into Claude's prompt",
                   "\(claude.last("at_mentioned") ?? [:])")
             check(agentTab.screenTail(3).joined() == screenBefore, "and types nothing into the terminal")
+
+            // A mention carries only the file and its lines: one with a note ("deleted") is typed instead.
+            let mentions = claude.received.filter { $0["method"] as? String == "at_mentioned" }.count
+            c.send([ContextItem(path: proj.appendingPathComponent("src/removed.txt").path, note: "deleted")])
+            let typed = await wait(3) { agentTab.screenTail(4).joined().contains("@src/removed.txt (deleted)") }
+            check(typed && claude.received.filter { $0["method"] as? String == "at_mentioned" }.count == mentions,
+                  "with Claude connected, a deleted file is typed with its note, not mentioned", agentTab.screenTail(3).joined(separator: " | "))
         }
 
         await geminiLinkChecks(c)

@@ -1167,8 +1167,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         show(tab)
         defer { window.makeFirstResponder(tab.view) }
-        // Claude connected to Next Term: the mentions go into its prompt directly, as from VS Code.
-        if let client = AppDelegate.shared.claudeClient(for: tab), items.allSatisfy({ !$0.isFolder && $0.code == nil }) {
+        // Claude connected to Next Term: the mentions go into its prompt directly, as from VS Code. A mention
+        // carries only the file and its lines, so anything with more to say ("as staged", "deleted") is typed.
+        if let client = AppDelegate.shared.claudeClient(for: tab), items.allSatisfy({ !$0.isFolder && $0.code == nil && $0.note == nil }) {
             for item in items {
                 var params: [String: Any] = ["filePath": canonicalPath(item.path)]
                 if let lines = item.lines {
