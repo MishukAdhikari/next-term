@@ -96,7 +96,10 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
         search.target = self
         search.action = #selector(searchChanged)
         search.setAccessibilityLabel("Search the loaded rows")
-        search.widthAnchor.constraint(equalToConstant: 170).isActive = true
+        let searchWidth = search.widthAnchor.constraint(equalToConstant: 170)
+        searchWidth.priority = .defaultHigh // a narrow window squeezes it rather than breaking the layout
+        searchWidth.isActive = true
+        search.setContentCompressionResistancePriority(.init(745), for: .horizontal)
         mode.controlSize = .small
         mode.font = .systemFont(ofSize: 11)
         mode.selectedSegment = 0
