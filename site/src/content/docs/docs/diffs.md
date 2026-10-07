@@ -60,6 +60,10 @@ Other guards:
 
 When Claude Code, Gemini CLI or Qwen Code proposes an edit, it opens in the same kind of diff tab with **Accept** (<kbd>⌘↩︎</kbd>) and **Reject** instead of the hunk buttons. See [Proposed edits open as a diff](/docs/agents/#proposed-edits-open-as-a-diff).
 
+## A file in a past commit
+
+In the [Git Log](/docs/projects-and-git/#git-log), double-click a file in a commit’s changed files to see what that commit did to it, against the commit before. The tab is titled like `app.txt @ 4cc062d` and is read-only: a commit never changes, so there is nothing to stage or revert.
+
 ## Coming next
 
 <span class="nt-soon">Coming soon</span> Folding long unchanged runs, staging selected lines, and editing the proposed side of an agent’s change before you accept it.

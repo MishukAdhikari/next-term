@@ -1,0 +1,322 @@
+import Foundation
+import Testing
+@testable import NextTermCore
+
+@Suite struct CommitLogTests {
+    @Test func decorations() {
+        let refs = CommitRef.parse(decoration: "HEAD -> refs/heads/main, refs/remotes/origin/main, tag: refs/tags/v1.0, refs/stash")
+        #expect(refs == [
+            CommitRef(kind: .branch, name: "main", fullName: "refs/heads/main", isCurrent: true),
+            CommitRef(kind: .remote, name: "origin/main", fullName: "refs/remotes/origin/main"),
+            CommitRef(kind: .tag, name: "v1.0", fullName: "refs/tags/v1.0"),
+            CommitRef(kind: .other, name: "stash", fullName: "refs/stash"),
+        ])
+        #expect(CommitRef.parse(decoration: "HEAD, refs/heads/feat/x") == [
+            CommitRef(kind: .head, name: "HEAD", fullName: "HEAD"),
+            CommitRef(kind: .branch, name: "feat/x", fullName: "refs/heads/feat/x"),
+        ])
+        #expect(CommitRef.parse(decoration: "").isEmpty)
+        let remote = CommitRef.parse(decoration: "refs/remotes/origin/main, refs/remotes/origin/HEAD")
+        #expect(remote.map(\.isRemoteHead) == [false, true] && !refs.contains { $0.isRemoteHead })
+    }
+
+    @Test func logRecords() {
+        let a = String(repeating: "a", count: 40), b = String(repeating: "b", count: 40), c = String(repeating: "c", count: 40)
+        let records = [
+            [a, "\(b) \(c)", "Ann", "ann@x", "1700000000", "Bo", "bo@x", "1700000100", "HEAD -> refs/heads/main", "Merge feat"],
+            [b, c, "Ann", "ann@x", "1690000000", "Ann", "ann@x", "1690000000", "", "Subject with\ttab"],
+        ].map { $0.joined(separator: "\0") + "\0" }.joined()
+        let commits = CommitLog.parse(Data(records.utf8))
+        #expect(commits.count == 2)
+        #expect(commits[0].sha == a && commits[0].parents == [b, c] && commits[0].isMerge && commits[0].shortSHA == "aaaaaaa")
+        #expect(commits[0].committerName == "Bo" && commits[0].authorDate == Date(timeIntervalSince1970: 1_700_000_000))
+        #expect(commits[0].refs.first?.isCurrent == true)
+        #expect(commits[1].parents == [c] && commits[1].subject == "Subject with\ttab" && !commits[1].isMerge)
+    }
+
+    @Test func changedFiles() {
+        let records = [":100644 100644 aaa bbb M", "b.txt", ":000000 100644 000 ccc A", "bin.dat", ":100644 100644 ddd ddd R100", "a.txt", "c.txt",
+                       "1\t0\tb.txt", "-\t-\tbin.dat", "0\t0\t", "a.txt", "c.txt", ""]
+        let files = CommitLog.parseChanges(Data(records.joined(separator: "\0").utf8))
+        #expect(files == [
+            ChangedFile(path: "b.txt", status: .modified, added: 1, removed: 0),
+            ChangedFile(path: "bin.dat", status: .added, isBinary: true),
+            ChangedFile(path: "c.txt", oldPath: "a.txt", status: .renamed, added: 0, removed: 0),
+        ])
+    }
+
+    @Test func hashPrefixes() {
+        #expect(CommitQuery(text: " 4CC062d ").hashPrefix == "4cc062d")
+        #expect(CommitQuery(text: "abc12").hashPrefix == nil) // too short to be taken for a hash
+        #expect(CommitQuery(text: "fix login").hashPrefix == nil)
+        #expect(CommitQuery(text: "fix").isConnected == false && CommitQuery(author: "ann").isConnected == false)
+        #expect(CommitQuery(paths: ["a"]).isConnected && CommitQuery(paths: ["a"]).isFiltered && !CommitQuery().isFiltered)
+    }
+
+    @Test func queryArguments() {
+        let all = CommitQuery().arguments(includeHead: true)
+        #expect(Array(all.suffix(6)) == ["--branches", "--remotes", "--tags", "--end-of-options", "HEAD", "--"])
+        #expect(all.first == "--topo-order" && all.last == "--")
+        let filtered = CommitQuery(scope: .ref("refs/heads/main"), text: "a.b", regex: true, author: "Ann (QA)", since: "2 weeks ago", paths: ["src", "x y"])
+            .arguments(includeHead: false)
+        #expect(filtered.contains("--extended-regexp") && filtered.contains("--grep=a.b") && filtered.contains("--author=Ann \\(QA\\)"))
+        #expect(filtered.contains("--since=2 weeks ago") && filtered.contains("--parents"))
+        #expect(Array(filtered.suffix(5)) == ["--end-of-options", "refs/heads/main", "--", "src", "x y"])
+        let fixed = CommitQuery(text: "a.b", author: "Ann").arguments(includeHead: true)
+        #expect(fixed.contains("--fixed-strings") && fixed.contains("--regexp-ignore-case") && fixed.contains("--author=Ann") && !fixed.contains("--parents"))
+        // A whole name: anchored, so the text is escaped to match as it is.
+        let whole = CommitQuery(text: "a.b", author: "Ann (QA)", exactAuthor: true).arguments(includeHead: true)
+        #expect(whole.contains("--extended-regexp") && whole.contains("--grep=a\\.b") && whole.contains("--author=^Ann \\(QA\\) <"))
+    }
+
+    @Test func orderOfIds() {
+        let a = String(repeating: "a", count: 40), b = "b" + String(repeating: "0", count: 39), c = "b" + String(repeating: "1", count: 39)
+        let order = CommitOrder(revList: Data("\(a) \(b) \(c)\n\(b)\n\(c) \(b)\n".utf8), withParents: true)
+        #expect(order.count == 3 && order.ids(0..<3) == [a, b, c] && order.id(at: 1) == b)
+        #expect(order.parents(at: 0) == [b, c] && order.parents(at: 1) == [] && order.parents(at: 2) == [b])
+        #expect(order.index(of: a) == 0 && order.index(of: "B1") == 2 && order.index(of: "b") == 1 && order.index(of: "c") == nil)
+        #expect(order.index(of: a + "0") == nil && order.index(of: "") == nil)
+        let plain = CommitOrder(revList: Data("\(a)\n\(b)\n".utf8), withParents: false)
+        #expect(plain.count == 2 && plain.parents(at: 0) == nil && CommitOrder(ids: []).index(of: "a") == nil)
+        let sha256 = String(repeating: "e", count: 64)
+        #expect(CommitOrder(revList: Data("\(sha256)\n".utf8), withParents: false).ids(0..<1) == [sha256])
+    }
+
+    /// main: one, then x by Ann; feat: a rename; a merge of feat; a tag on the first commit.
+    @Test func logOfARealRepository() throws {
+        guard let git = GitRunner.locateGit() else { return }
+        let work = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path)).appendingPathComponent("nt-log-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: work) }
+        try FileManager.default.createDirectory(atPath: work, withIntermediateDirectories: true)
+        @discardableResult func sh(_ args: [String], name: String = "T", email: String = "t@t") -> String {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: git)
+            p.arguments = ["-C", work, "-c", "user.name=\(name)", "-c", "user.email=\(email)", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false",
+                           "-c", "tag.gpgsign=false"] + args
+            let out = FileManager.default.temporaryDirectory.appendingPathComponent("nt-log-out-\(UUID().uuidString)")
+            FileManager.default.createFile(atPath: out.path, contents: nil)
+            defer { try? FileManager.default.removeItem(at: out) }
+            let handle = try? FileHandle(forWritingTo: out)
+            p.standardOutput = handle
+            p.standardError = FileHandle.nullDevice
+            try? p.run()
+            p.waitUntilExit()
+            try? handle?.close()
+            return ((try? String(contentsOf: out, encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        func write(_ path: String, _ text: String) throws {
+            try text.write(toFile: (work as NSString).appendingPathComponent(path), atomically: true, encoding: .utf8)
+        }
+        sh(["init"])
+        #expect(CommitLog.page(CommitQuery(), in: work, git: git) == []) // no commits yet
+
+        try write("a.txt", (1...20).map { "line \($0)\n" }.joined())
+        sh(["add", "-A"])
+        sh(["commit", "-qm", "One"])
+        let one = sh(["rev-parse", "HEAD"])
+        sh(["tag", "v1"])
+        sh(["switch", "-qc", "feat"])
+        sh(["mv", "a.txt", "b.txt"])
+        try write("b.txt", (1...20).map { "line \($0)\n" }.joined() + "line 21\n")
+        sh(["add", "-A"])
+        sh(["commit", "-qm", "Rename a to b\n\nKeeps the lines, adds one."])
+        let rename = sh(["rev-parse", "HEAD"])
+        sh(["switch", "-q", "main"])
+        try write("x.txt", "x\n")
+        sh(["add", "x.txt"])
+        sh(["commit", "-qm", "Add x"], name: "Ann Lee", email: "ann@example.com")
+        let x = sh(["rev-parse", "HEAD"])
+        sh(["merge", "-q", "--no-ff", "--no-edit", "feat"])
+        let merge = sh(["rev-parse", "HEAD"])
+
+        let all = try #require(CommitLog.page(CommitQuery(), in: work, git: git))
+        #expect(all.map(\.sha).first == merge && Set(all.map(\.sha)) == [one, rename, x, merge])
+        #expect(all[0].parents == [x, rename] && all[0].refs.contains { $0.name == "main" && $0.isCurrent })
+        #expect(all.first { $0.sha == one }?.refs.contains(CommitRef(kind: .tag, name: "v1", fullName: "refs/tags/v1")) == true)
+        // Topological: every commit is listed after all of its children.
+        let position = Dictionary(uniqueKeysWithValues: all.enumerated().map { ($1.sha, $0) })
+        #expect(all.allSatisfy { commit in commit.parents.allSatisfy { (position[$0] ?? .max) > position[commit.sha]! } })
+        // In the graph: two lanes, from the merge down to where feat started, and nothing left open.
+        var graph = CommitGraph()
+        let rows = graph.add(all)
+        #expect(rows[0].isMerge && rows.map(\.width).max() == 2 && rows.last?.column == 0 && graph.openLanes == 0)
+
+        // Paging: the order once, then commits by place, the same as one page of them all.
+        let first = try #require(CommitLog.page(CommitQuery(), skip: 0, limit: 2, in: work, git: git))
+        let second = try #require(CommitLog.page(CommitQuery(), skip: 2, limit: 2, in: work, git: git))
+        #expect((first + second).map(\.sha) == all.map(\.sha))
+        let order = try #require(CommitLog.order(CommitQuery(), in: work, git: git))
+        #expect(order.count == 4 && order.index(of: String(x.prefix(8))) == all.firstIndex { $0.sha == x })
+        #expect(CommitLog.commits(1..<3, of: order, in: work, git: git) == Array(all[1..<3]))
+        #expect(CommitLog.commits(3..<9, of: order, in: work, git: git)?.count == 1 && CommitLog.page(CommitQuery(), skip: 9, in: work, git: git) == [])
+
+        // Filters.
+        #expect(CommitLog.page(CommitQuery(author: "ANN"), in: work, git: git)?.map(\.sha) == [x])
+        #expect(CommitLog.page(CommitQuery(author: "ann@example"), in: work, git: git)?.map(\.sha) == [x])
+        // A whole name picked from the menu: "Ann" is part of "Ann Lee", not that name.
+        #expect(CommitLog.page(CommitQuery(author: "Ann"), in: work, git: git)?.map(\.sha) == [x])
+        #expect(CommitLog.page(CommitQuery(author: "Ann", exactAuthor: true), in: work, git: git)?.isEmpty == true)
+        #expect(CommitLog.page(CommitQuery(author: "ann lee", exactAuthor: true), in: work, git: git)?.map(\.sha) == [x])
+        #expect(CommitLog.page(CommitQuery(text: "x", author: "Ann Lee", exactAuthor: true), in: work, git: git)?.map(\.sha) == [x])
+        #expect(CommitLog.page(CommitQuery(text: "rename A"), in: work, git: git)?.map(\.sha) == [rename])
+        #expect(CommitLog.page(CommitQuery(text: "a.t"), in: work, git: git)?.isEmpty == true) // a fixed string, not a pattern
+        #expect(CommitLog.page(CommitQuery(text: "^add .$", regex: true), in: work, git: git)?.map(\.sha) == [x])
+        #expect(CommitLog.page(CommitQuery(text: String(rename.prefix(9))), in: work, git: git)?.map(\.sha) == [rename]) // a hash
+        #expect(CommitLog.page(CommitQuery(scope: .ref("refs/heads/feat")), in: work, git: git)?.map(\.sha) == [rename, one])
+        #expect(CommitLog.page(CommitQuery(scope: .ref("refs/tags/v1")), in: work, git: git)?.map(\.sha) == [one])
+        #expect(CommitLog.page(CommitQuery(since: "2099-01-01"), in: work, git: git) == [])
+        // Dates git does not read, and patterns it cannot compile, are known before asking.
+        #expect(["2 weeks ago", "2025-01-31", "yesterday", "now", "Today"].allSatisfy { CommitLog.isDate($0, in: work, git: git) })
+        #expect(!CommitLog.isDate("not a date at all", in: work, git: git) && !CommitLog.isDate("garbage", in: work, git: git))
+        #expect(CommitQuery(text: "fix(", regex: true).problem != nil && CommitQuery(text: "[a", regex: true).problem != nil)
+        #expect(CommitQuery(text: "fix(", regex: false).problem == nil && CommitQuery(text: "^fix (a|b)$", regex: true).problem == nil)
+        #expect(CommitLog.page(CommitQuery(scope: .ref("refs/heads/missing")), in: work, git: git) == nil)
+        // Limited to a path, parents are the nearest commits that are listed.
+        let onX = try #require(CommitLog.page(CommitQuery(paths: ["x.txt"]), in: work, git: git))
+        #expect(onX.map(\.sha) == [x] && onX[0].parents.isEmpty)
+        #expect(CommitLog.page(CommitQuery(paths: ["b.txt"]), in: work, git: git)?.map(\.sha) == [rename])
+
+        // Details: the whole message, files with status and counts; a merge against its first parent.
+        let renamed = try #require(CommitLog.details(of: rename, in: work, git: git))
+        #expect(renamed.message == "Rename a to b\n\nKeeps the lines, adds one." && renamed.body == "Keeps the lines, adds one.")
+        #expect(renamed.commit.subject == "Rename a to b" && renamed.commit.refs.contains { $0.name == "feat" })
+        #expect(renamed.files == [ChangedFile(path: "b.txt", oldPath: "a.txt", status: .renamed, added: 1, removed: 0)])
+        #expect(CommitLog.details(of: merge, in: work, git: git)?.files.map(\.path) == ["b.txt"])
+        let root = try #require(CommitLog.details(of: one, in: work, git: git))
+        #expect(root.files == [ChangedFile(path: "a.txt", status: .added, added: 20, removed: 0)] && root.totals == LineStats(added: 20, removed: 0, files: 1))
+        let capped = try #require(CommitLog.details(of: merge, in: work, git: git, fileLimit: 0))
+        #expect(capped.files.isEmpty && capped.truncated)
+
+        // One file's diff in a commit: a rename compares with where it came from.
+        let diff = try #require(CommitLog.diff(of: "b.txt", oldPath: "a.txt", commit: rename, parent: one, in: work, git: git))
+        #expect(diff.isRename && diff.hunks.count == 1 && diff.hunks[0].added == 1 && diff.hunks[0].removed == 0)
+        let added = try #require(CommitLog.diff(of: "a.txt", commit: one, parent: nil, in: work, git: git))
+        #expect(added.isNew && added.hunks.first?.added == 20)
+
+        #expect(CommitLog.tags(in: work, git: git) == ["v1"])
+        // The refs' signature changes with a branch switch at the same commit, and not otherwise.
+        sh(["branch", "same"])
+        let signature = CommitLog.refsSignature(in: work, git: git)
+        #expect(signature != nil && CommitLog.refsSignature(in: work, git: git) == signature)
+        sh(["switch", "-q", "same"])
+        #expect(CommitLog.refsSignature(in: work, git: git) != signature)
+        #expect(CommitLog.resolve("v1", in: work, git: git) == one && CommitLog.resolve("nope", in: work, git: git) == nil)
+    }
+
+    /// Paths are file names: brackets, stars and a leading colon are not pattern syntax.
+    @Test func pathsAreFileNames() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        var made: [String: String] = [:]
+        for name in [":weird.txt", "1.txt", "[1].txt", "f*.txt", "foo.txt"] {
+            try repo.write(name, "\(name)\n")
+            made[name] = repo.commit("add \(name)", [name])
+        }
+        for name in made.keys.sorted() {
+            #expect(CommitLog.page(CommitQuery(paths: [name]), in: repo.work, git: repo.git)?.map(\.subject) == ["add \(name)"], "\(name)")
+        }
+        let weird = try #require(made[":weird.txt"])
+        #expect(CommitLog.details(of: weird, in: repo.work, git: repo.git)?.files.map(\.path) == [":weird.txt"])
+        let diff = CommitLog.diff(of: ":weird.txt", commit: weird, parent: nil, in: repo.work, git: repo.git)
+        #expect(diff?.isNew == true && diff?.hunks.first?.added == 1)
+    }
+
+    /// Ignoring case covers letters beyond A to Z, in the message and in names. (A Cyrillic name: Process
+    /// passes “ë” decomposed, and git would keep a name given with -c that way.)
+    @Test func searchIgnoresCaseBeyondASCII() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        try repo.write("a.txt", "a\n")
+        let sha = repo.commit("Über alles: ÉCOLE fix", name: "Жанна Ли", email: "zh@x")
+        try repo.write("b.txt", "b\n")
+        repo.commit("Other")
+        for query in [CommitQuery(text: "über"), CommitQuery(text: "école"), CommitQuery(text: "^über", regex: true), CommitQuery(author: "жанна л")] {
+            #expect(CommitLog.page(query, in: repo.work, git: repo.git)?.map(\.sha) == [sha], "\(query)")
+        }
+    }
+
+    /// In a partial clone, reading a commit's files downloads nothing: they are listed without counts.
+    @Test func aPartialCloneIsNotFetchedFrom() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        try repo.write("a.txt", "one\n")
+        repo.commit("One")
+        try repo.write("a.txt", "two\n")
+        try repo.write("b.txt", "b\n")
+        let two = repo.commit("Two")
+        let clone = repo.work + "-partial"
+        defer { try? FileManager.default.removeItem(atPath: clone) }
+        repo.sh(["config", "uploadpack.allowFilter", "true"]) // read by the serving side
+        repo.sh(["clone", "-q", "--filter=blob:none", "--no-checkout", "file://" + repo.work, clone])
+        let packs = { (try? FileManager.default.contentsOfDirectory(atPath: clone + "/.git/objects/pack"))?.sorted() ?? [] }
+        let before = packs()
+        try #require(!before.isEmpty)
+        let details = try #require(CommitLog.details(of: two, in: clone, git: repo.git))
+        #expect(details.files.map(\.path) == ["a.txt", "b.txt"] && details.files.map(\.status) == [.modified, .added])
+        #expect(!details.isCounted && packs() == before)
+        #expect(CommitLog.details(of: two, in: repo.work, git: repo.git)?.isCounted == true)
+    }
+
+    /// A file that became a link shows both sides; an added empty file is new, with nothing in it.
+    @Test func aTypeChangeAndAnEmptyFile() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        try repo.write("link", "was a file\n")
+        let first = repo.commit("A file")
+        try FileManager.default.removeItem(atPath: repo.work + "/link")
+        try FileManager.default.createSymbolicLink(atPath: repo.work + "/link", withDestinationPath: "target")
+        try repo.write("empty.txt", "")
+        let second = repo.commit("A link, and an empty file")
+        let details = try #require(CommitLog.details(of: second, in: repo.work, git: repo.git))
+        #expect(details.files.map(\.path) == ["empty.txt", "link"] && details.files.map(\.status) == [.added, .typeChanged])
+        let link = try #require(CommitLog.diff(of: "link", commit: second, parent: first, in: repo.work, git: repo.git))
+        #expect(link.oldPath == "link" && link.newPath == "link" && !link.isNew && !link.isDeleted)
+        #expect(link.hunks.flatMap(\.lines).map(\.text) == ["was a file", "target"])
+        let empty = try #require(CommitLog.diff(of: "empty.txt", commit: second, parent: first, in: repo.work, git: repo.git))
+        #expect(empty.isNew && empty.newPath == "empty.txt" && empty.hunks.isEmpty)
+    }
+}
+
+/// A repository in a temporary folder, removed with `remove()`.
+struct ScratchRepo {
+    let git: String
+    let work: String
+
+    init?() {
+        guard let git = GitRunner.locateGit() else { return nil }
+        self.git = git
+        work = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path)).appendingPathComponent("nt-log-\(UUID().uuidString)").path
+        guard (try? FileManager.default.createDirectory(atPath: work, withIntermediateDirectories: true)) != nil else { return nil }
+        sh(["init", "-q"])
+    }
+
+    func remove() { try? FileManager.default.removeItem(atPath: work) }
+
+    @discardableResult func sh(_ args: [String], name: String = "T", email: String = "t@t") -> String {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: git)
+        p.arguments = ["-C", work, "-c", "user.name=\(name)", "-c", "user.email=\(email)", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false",
+                       "-c", "tag.gpgsign=false"] + args
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("nt-log-out-\(UUID().uuidString)")
+        FileManager.default.createFile(atPath: out.path, contents: nil)
+        defer { try? FileManager.default.removeItem(at: out) }
+        let handle = try? FileHandle(forWritingTo: out)
+        p.standardOutput = handle
+        p.standardError = FileHandle.nullDevice
+        try? p.run()
+        p.waitUntilExit()
+        try? handle?.close()
+        return ((try? String(contentsOf: out, encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func write(_ path: String, _ text: String) throws {
+        try text.write(toFile: (work as NSString).appendingPathComponent(path), atomically: true, encoding: .utf8)
+    }
+
+    /// Commits these paths (all changes when empty); the new commit's id.
+    @discardableResult func commit(_ message: String, _ paths: [String] = [], name: String = "T", email: String = "t@t") -> String {
+        sh(["add", "-A", "--"] + paths.map { ":(literal)" + $0 })
+        sh(["commit", "-qm", message], name: name, email: email)
+        return sh(["rev-parse", "HEAD"])
+    }
+}

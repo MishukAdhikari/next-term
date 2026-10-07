@@ -1319,14 +1319,40 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// ⌥⌘B, or a click on the branch at the top of the sidebar.
     @objc func showBranches(_ sender: Any?) {
-        guard let window, let folder = gitFolder else { return NSSound.beep() }
+        guard let anchor = branchPopupAnchor, let folder = gitFolder else { return NSSound.beep() }
         if branchPopup.isVisible { return branchPopup.close() }
+        branchPopup.show(for: self, directory: folder, snapshot: sidebar.git.snapshot, anchor: anchor)
+    }
+
+    /// Under the branch name at the top of the sidebar, or near the window's top left without it.
+    private var branchPopupAnchor: NSRect? {
+        guard let window else { return nil }
         var anchor = NSRect(x: window.frame.minX + 80, y: window.frame.maxY - 44, width: 1, height: 1)
         if isSidebarVisible {
             anchor = window.convertToScreen(sidebar.header.convert(sidebar.header.bounds, to: nil))
             anchor.origin.x += sidebar.headerInset - 4
         }
-        branchPopup.show(for: self, directory: folder, snapshot: sidebar.git.snapshot, anchor: anchor)
+        return anchor
+    }
+
+    /// The branch popup for the repository at `root` (a Git Log's), searching for `query`.
+    func showBranches(at root: String, query: String) {
+        guard let anchor = branchPopupAnchor else { return }
+        branchPopup.show(for: self, directory: root, snapshot: snapshot(of: root), anchor: anchor)
+        branchPopup.query = query
+    }
+
+    /// GitActions for the repository at `root` (a Git Log's), with the branch popup's model read fresh.
+    func withGit(at root: String, _ body: @escaping (GitActions) -> Void) {
+        branchPopup.prepare(for: self, directory: root, snapshot: snapshot(of: root)) { [weak self] in
+            guard let self else { return }
+            body(GitActions(self.branchPopup))
+        }
+    }
+
+    /// The sidebar's git state, when it is of the repository at `root`.
+    private func snapshot(of root: String) -> GitSnapshot? {
+        sidebar.git.snapshot.flatMap { canonicalPath($0.root) == canonicalPath(root) ? $0 : nil }
     }
 
     private func withGit(_ body: @escaping (GitActions) -> Void) {
@@ -1342,7 +1368,30 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     @objc func gitCommit(_ sender: Any?) { withGit { $0.commit() } }
     @objc func gitPush(_ sender: Any?) { withGit { $0.push() } }
     @objc func gitNewBranch(_ sender: Any?) { withGit { $0.askNewBranch(base: nil) } }
-    @objc func showGitLog(_ sender: Any?) { GitLogWindowController.shared.present() }
+    @objc func showGitCommands(_ sender: Any?) { GitCommandsWindowController.shared.present() }
+
+    /// ⌥⌘L: the commit history of the project's repository, in an editor tab.
+    @objc func showGitLog(_ sender: Any?) {
+        guard let folder = sidebar.git.snapshot?.root ?? editorArea.activeGitLog?.root ?? editorArea.gitLogs.first?.root else { return NSSound.beep() }
+        openGitLog(root: folder)
+    }
+
+    /// The Git Log of the repository containing `root`, in front; nil outside a repository.
+    @discardableResult
+    func openGitLog(root: String) -> GitLogPane? {
+        let top = canonicalPath(ProjectRoot.find(from: root))
+        guard FileManager.default.fileExists(atPath: (top as NSString).appendingPathComponent(".git")) else {
+            NSSound.beep()
+            return nil
+        }
+        return editorArea.openGitLog(root: top)
+    }
+
+    /// Opens the Git Log at one commit (from a line's blame, say): the pages down to it load at once, and
+    /// a commit no branch or tag lists is shown alone.
+    func showCommit(sha: String, root: String) {
+        openGitLog(root: root)?.select(sha: sha)
+    }
 
     @objc func selectTabByNumber(_ sender: NSMenuItem) {
         // ⌘1…⌘8 pick that tab; ⌘9 is always the last one, as in browsers.

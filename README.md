@@ -65,7 +65,10 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
   Files your agents create or change show up on their own.
 - **Branches in one popup.** Click the branch (⌥⌘B): search branches and actions, check out, branch,
   update, commit, push, rebase and merge. It asks before changing files under a working agent, keeps
-  uncommitted changes in a named stash, and logs every git command exactly as typed.
+  uncommitted changes in a named stash, and logs every git command exactly as typed (Git › Git Commands).
+- **Git Log.** The commit history as a graph in an editor tab (⌥⌘L): lanes per line of history, branch
+  and tag badges, filters by branch, author, date, paths and message or hash, and each commit's changed
+  files, with a double-click for a file's diff in that commit. It follows the repository as agents commit.
 - **Split panes.** Split any tab right (⌘D) or down (⌘⇧D), as often as you like: an agent beside its
   test run, two agents side by side. Move between panes with ⌥⌘ and the arrows, maximize one with
   ⌘⇧↩, close it with ⌘W. The panes without the keyboard are shaded, and the tab's mark shows the pane
@@ -227,11 +230,11 @@ agent would), then writes a report and screenshots.
 
 ```
 Sources/NextTermCore/   platform-neutral logic, no AppKit: TabStatus, AgentScreen, CommandClassifier,
-                        ShellIntegration, Git, Diff, HunkOps, FileTree and FileOps, ProjectSearch, TextFile
-                        and LineIndex, EditorLanguage, CommandLineOpen, KeyChord, Updates, MCPServer,
-                        MCPProjectTools, MCPRedaction and MCPRegistrar (the agent-facing MCP server, its
-                        file, search and git tools with their path and secrets rules, and its
-                        registration in each agent)
+                        ShellIntegration, Git, CommitLog and CommitGraph, Diff, HunkOps, FileTree and
+                        FileOps, ProjectSearch, TextFile and LineIndex, EditorLanguage, CommandLineOpen,
+                        KeyChord, Updates, MCPServer, MCPProjectTools, MCPRedaction and MCPRegistrar (the
+                        agent-facing MCP server, its file, search and git tools with their path and secrets
+                        rules, and its registration in each agent)
 Sources/NextTerm/       the macOS app: windows, tabs, sidebar, editor, projects, menus, shortcuts, updates,
                         notifications, self-test
 Resources/Highlighting/ the shipped grammars (scripts/update-highlighting.py) and the Next Dark theme

@@ -2,7 +2,7 @@ import AppKit
 import NextTermCore
 
 /// What the branch popup and the Git menu do. Each is a few git commands with fixed flags (run by
-/// GitWriter, so each is in the Git Log as it would be typed), with the rules from the design: never
+/// GitWriter, so each is in Git Commands as it would be typed), with the rules from the design: never
 /// change files under a working agent without asking, never discard (a stash is kept, by its id), say
 /// what an error means and offer a terminal when a person is needed.
 struct GitActions {
@@ -181,6 +181,23 @@ struct GitActions {
     }
 
     func newBranch(from ref: BranchRef) { askNewBranch(base: ref) }
+
+    /// New Branch from Here… on a commit in the Git Log: made there, and switched to.
+    func askNewBranch(atCommit sha: String, subject: String) {
+        let existing = Set(model?.locals.map(\.name) ?? [])
+        GitPrompt.text("New Branch", info: "From commit \(sha.prefix(7)), “\(Typography.shortened(subject, to: 60))”. Next Term switches to it.",
+                       placeholder: "feat/my-change", button: "Create", over: window, check: { BranchName.problem($0, existing: existing) }) { name in
+            if let name { createBranch(name, base: BranchRef(name: sha, isRemote: false, sha: sha), switching: true) }
+        }
+    }
+
+    /// Checkout… on a commit in the Git Log: says first that it leaves you detached.
+    func askCheckout(commit sha: String, subject: String) {
+        GitPrompt.ask("Check out \(sha.prefix(7))?", info: "“\(Typography.shortened(subject, to: 80))”. You’ll be on it detached: New Branch… keeps work made there.",
+                      buttons: ["Checkout", "Cancel"], over: window) { choice in
+            if choice == 0 { checkoutRevision(sha) }
+        }
+    }
 
     func createBranch(_ name: String, base: BranchRef?, switching: Bool) {
         // A branch made from a remote one with another name doesn't track it (feat/x from origin/main).
@@ -437,9 +454,9 @@ struct GitActions {
             try? FileManager.default.removeItem(at: folder)
             guard result.ok else {
                 if result.failure == .hookFailed {
-                    return GitPrompt.ask("A git hook stopped the commit", info: Self.tail(result.output), buttons: ["Open Terminal", "Show Git Log", "OK"], over: window) { choice in
+                    return GitPrompt.ask("A git hook stopped the commit", info: Self.tail(result.output), buttons: ["Open Terminal", "Show Git Commands", "OK"], over: window) { choice in
                         if choice == 0 { runInTerminal(["commit"]) }
-                        if choice == 1 { GitLogWindowController.shared.present() }
+                        if choice == 1 { GitCommandsWindowController.shared.present() }
                     }
                 }
                 return failed("Could not commit", result, retry: nil)
@@ -525,10 +542,10 @@ struct GitActions {
         default:
             person = retry != nil
         }
-        var buttons = ["OK", "Show Git Log"]
+        var buttons = ["OK", "Show Git Commands"]
         if person, retry != nil { buttons.append("Open Terminal") }
         GitPrompt.ask(title, info: info, buttons: buttons, style: .warning, over: window) { choice in
-            if choice == 1 { GitLogWindowController.shared.present() }
+            if choice == 1 { GitCommandsWindowController.shared.present() }
             if choice == 2, let retry { runInTerminal(retry) }
         }
     }
