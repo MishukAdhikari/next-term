@@ -88,8 +88,8 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
 - **Find and Replace in Files** (⌘⇧F / ⌘⇧R) across the project, with regular expressions, file masks and
   a preview of every replacement; a file an agent changed since the search is never overwritten.
 - **Dock badge and notifications** for agents that finished while you were in another app.
-- **Every shortcut is yours.** Next Term > Settings (⌘,) > Keyboard Shortcuts lists every command; click one and press
-  new keys. The shortcuts below are the defaults.
+- **Every menu shortcut is yours.** Next Term > Settings (⌘,) > Keyboard Shortcuts lists every menu
+  command; click one and press new keys. The shortcuts below are the defaults.
 - **Bring your settings over.** Coming from VS Code, Cursor, Devin Desktop, a JetBrains IDE, Zed, iTerm2,
   Ghostty or Terminal? Next Term > Import Settings and Shortcuts… (also offered on first launch) brings
   the matching shortcut set, the keys you changed yourself, font size, line height, wrap, fonts, terminal

@@ -25,7 +25,7 @@ Ghostty is a free, MIT-licensed terminal emulator for macOS and Linux, developed
 | Side-by-side diffs, per-hunk staging | ✓ <kbd>⌥⌘G</kbd> | — |
 | Project sidebar with git status | ✓ | — |
 | Quick terminal, hundreds of themes | — | ✓ |
-| Configuration | A Settings window; every shortcut can be changed | A text file; no settings window yet |
+| Configuration | A Settings window; every menu shortcut can be changed | A text file; no settings window yet |
 
 ## Choose Ghostty if…
 
