@@ -19,12 +19,46 @@ final class GitWriter {
 
     private var queues: [String: DispatchQueue] = [:]
 
+    /// A run that talks to a remote, shown as a spinning sync arrow in the sidebar header.
+    enum Activity: String {
+        case fetching = "Fetching", pulling = "Pulling", pushing = "Pushing"
+    }
+    /// Posted on the main thread when a fetch, pull or push starts or ends.
+    static let activityChanged = Notification.Name("NextTermGitActivityChanged")
+    /// The remote runs under way, by work-tree folder (canonical), oldest first. Main thread.
+    private var activities: [String: [Activity]] = [:]
+
+    /// What the work tree at `directory` is doing with its remote now, if anything.
+    func activity(in directory: String) -> Activity? { activities[canonicalPath(directory)]?.last }
+
+    /// For the self-test: as if a fetch, pull or push had started (or, with nil, all had ended) there.
+    func setActivity(_ activity: Activity?, in directory: String) {
+        let key = canonicalPath(directory)
+        activities[key] = activity.map { [$0] }
+        NotificationCenter.default.post(name: Self.activityChanged, object: self)
+    }
+
     /// Runs each step (the arguments after `git -C directory`) in order, stopping at the first that fails,
     /// and reports the last one run, on the main thread. `repository` (the common git dir) serializes.
-    func run(_ title: String, in directory: String, repository: String, steps: [[String]], completion: @escaping (Result) -> Void) {
+    /// `activity` marks a run that talks to a remote, for as long as it runs.
+    func run(_ title: String, in directory: String, repository: String, steps: [[String]], activity: Activity? = nil,
+             completion: @escaping (Result) -> Void) {
         guard let git = Self.git else { return completion(Result(status: 127, output: "Git is not installed.")) }
         let queue = queues[repository] ?? DispatchQueue(label: "nextterm.git-writes.\(repository)")
         queues[repository] = queue
+        let key = canonicalPath(directory)
+        if let activity {
+            activities[key, default: []].append(activity)
+            NotificationCenter.default.post(name: Self.activityChanged, object: self)
+        }
+        let completion: (Result) -> Void = { [weak self] result in
+            if let self, let activity, let index = self.activities[key]?.firstIndex(of: activity) {
+                self.activities[key]?.remove(at: index)
+                if self.activities[key]?.isEmpty == true { self.activities[key] = nil }
+                NotificationCenter.default.post(name: Self.activityChanged, object: self)
+            }
+            completion(result)
+        }
         queue.async {
             var last = Result(status: 0, output: "")
             for args in steps {

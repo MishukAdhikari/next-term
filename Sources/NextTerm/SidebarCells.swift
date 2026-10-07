@@ -3,7 +3,7 @@ import NextTermCore
 
 // MARK: - header: branch and changes at a glance
 
-/// The sidebar's title row. With git: "⎇ main  +41 −10  ↑2 ↓1"; otherwise "Project".
+/// The sidebar's title row. With git: "⎇ main  +41 −10  [Pull 2]"; otherwise "Project".
 final class SidebarHeaderView: NSView {
     private let branchIcon = NSImageView()
     private let title = NSTextField(labelWithString: "Project")
@@ -12,6 +12,12 @@ final class SidebarHeaderView: NSView {
     private let chevron = NSImageView()
     private var hoveringBranch = false { didSet { if hoveringBranch != oldValue { needsDisplay = true } } }
     private let summary = NSTextField(labelWithString: "")
+    /// Commits to pull or push, as a button; a spinning sync arrow while a fetch, pull or push runs.
+    let syncButton = SyncButton()
+    /// The sync button was clicked: pull (true) or push (false).
+    var onSync: ((_ pull: Bool) -> Void)?
+    private var snapshot: GitSnapshot?
+    private var activity: GitWriter.Activity?
     /// ⋯: which side the sidebar is on, and hiding it.
     let moreButton = MoreButton(toolTip: "Project sidebar layout", menu: LayoutMenu.sidebar)
     /// Hides the sidebar (⌘B); the top bar then shows a button to bring it back.
@@ -47,7 +53,10 @@ final class SidebarHeaderView: NSView {
             .withSymbolConfiguration(.init(pointSize: 8, weight: .bold))
         chevron.contentTintColor = Theme.textDim
         chevron.isHidden = true
-        [branchIcon, title, chevron, summary, hideButton, moreButton].forEach(addSubview)
+        syncButton.target = self
+        syncButton.action = #selector(syncClicked)
+        syncButton.isHidden = true
+        [branchIcon, title, chevron, summary, syncButton, hideButton, moreButton].forEach(addSubview)
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
         setAccessibilityLabel("Project")
@@ -75,6 +84,7 @@ final class SidebarHeaderView: NSView {
         let local = convert(point, from: superview)
         if moreButton.frame.contains(local) { return moreButton }
         if hideButton.frame.contains(local) { return hideButton }
+        if !syncButton.isHidden, syncButton.frame.contains(local) { return syncButton }
         return self
     }
     override func mouseDown(with event: NSEvent) {
@@ -103,6 +113,8 @@ final class SidebarHeaderView: NSView {
     override func mouseExited(with event: NSEvent) { hoveringBranch = false }
 
     func show(_ snapshot: GitSnapshot?) {
+        self.snapshot = snapshot
+        updateSyncButton()
         guard let snapshot else {
             branchIcon.isHidden = true
             chevron.isHidden = true
@@ -126,13 +138,74 @@ final class SidebarHeaderView: NSView {
         }
         if totals.added > 0 { add("+\(totals.added)", Theme.linesAdded) }
         if totals.removed > 0 { add("−\(totals.removed)", Theme.linesRemoved) }
-        if snapshot.ahead > 0 { add("↑\(snapshot.ahead)", Theme.textDim) }
-        if snapshot.behind > 0 { add("↓\(snapshot.behind)", Theme.textDim) }
         summary.attributedStringValue = Typography.truncating(text, .byTruncatingTail, alignment: .right)
         toolTip = Self.describe(snapshot)
         setAccessibilityLabel(Self.describe(snapshot))
         needsLayout = true
     }
+
+    /// A fetch, pull or push started or ended in this work tree.
+    func show(activity: GitWriter.Activity?) {
+        guard activity != self.activity else { return }
+        self.activity = activity
+        updateSyncButton()
+    }
+
+    @objc private func syncClicked() {
+        guard let snapshot, activity == nil else { return }
+        onSync?(snapshot.behind > 0 || snapshot.ahead == 0)
+    }
+
+    /// "Pull 152" when the upstream has commits this branch doesn't, "Push 3" the other way, both counts
+    /// when both; the commit glyph says they are commits. While git talks to the remote, a spinning sync
+    /// arrow, and "Fetching…" if there is no count to show.
+    private func updateSyncButton() {
+        let behind = snapshot?.behind ?? 0, ahead = snapshot?.ahead ?? 0
+        let branch = snapshot?.branch ?? "this branch"
+        let upstream = snapshot?.upstream ?? "the upstream"
+        let full: String, compact: String, help: String, spoken: String
+        if behind > 0, ahead > 0 {
+            full = "↓\(behind) ↑\(ahead)"
+            compact = full
+            help = "\(branch) and \(upstream) have both changed: \(Self.commits(ahead)) here, \(Self.commits(behind)) there. Click to update; it asks whether to rebase or merge."
+            spoken = "Update: \(Self.commits(behind)) to pull, \(Self.commits(ahead)) to push"
+        } else if behind > 0 {
+            full = "Pull \(behind)"
+            compact = "↓\(behind)"
+            help = "\(upstream) has \(Self.commits(behind)) that \(branch) doesn’t. Click to pull them."
+            spoken = "Pull \(Self.commits(behind)) from \(upstream)"
+        } else if ahead > 0 {
+            full = "Push \(ahead)"
+            compact = "↑\(ahead)"
+            help = "\(branch) has \(Self.commits(ahead)) not on \(upstream) yet. Click to push them."
+            spoken = "Push \(Self.commits(ahead)) to \(upstream)"
+        } else {
+            full = ""; compact = ""; help = ""; spoken = ""
+        }
+        var tip = help
+        if let fetched = snapshot?.lastFetch, behind + ahead > 0 {
+            tip += " Last fetched \(Self.relative.localizedString(for: fetched, relativeTo: Date()))."
+        }
+        if let activity {
+            let doing = activity.rawValue + "…"
+            syncButton.configure(full: full.isEmpty ? doing : full, compact: compact.isEmpty ? doing : compact,
+                                 busy: true, toolTip: doing, accessibilityLabel: doing)
+        } else {
+            syncButton.configure(full: full, compact: compact, busy: false, toolTip: tip, accessibilityLabel: spoken)
+        }
+        syncButton.isHidden = snapshot == nil || (activity == nil && full.isEmpty)
+        needsLayout = true
+    }
+
+    private static func commits(_ n: Int) -> String { n == 1 ? "1 commit" : "\(n.formatted()) commits" }
+    private static let relative: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .full
+        return f
+    }()
+
+    /// What the sync button says (for the self-test): "" when it is hidden.
+    var syncText: String { syncButton.isHidden ? "" : syncButton.shownTitle }
 
     /// "Branch main, tracking origin/main: 2 ahead, 1 behind. 3 modified, 1 added, 2 untracked. +41 −10 lines."
     static func describe(_ s: GitSnapshot) -> String {
@@ -168,7 +241,17 @@ final class SidebarHeaderView: NSView {
         let summaryWidth = min(ceil(summary.intrinsicContentSize.width) + 6, bounds.width * 0.5)
         moreButton.frame = NSRect(x: bounds.width - 30, y: (h - 24) / 2, width: 26, height: 24)
         hideButton.frame = NSRect(x: bounds.width - 56, y: (h - 24) / 2, width: 26, height: 24)
-        summary.frame = NSRect(x: bounds.width - summaryWidth - 60, y: summaryY, width: summaryWidth, height: summaryHeight)
+        var right = bounds.width - 60
+        if !syncButton.isHidden {
+            // The words when the branch name keeps room for a few letters; the arrow and count when not.
+            let nameStart = inset + 4 + (branchIcon.isHidden ? 0 : 18)
+            let fixed = summaryWidth + 6 + (chevron.isHidden ? 0 : 12) + 6 + 48
+            syncButton.compact = right - syncButton.width(compact: false) - 4 - fixed < nameStart
+            let width = syncButton.width(compact: syncButton.compact)
+            syncButton.frame = NSRect(x: right - width, y: (h - SyncButton.height) / 2, width: width, height: SyncButton.height)
+            right = syncButton.frame.minX - 4
+        }
+        summary.frame = NSRect(x: right - summaryWidth, y: summaryY, width: summaryWidth, height: summaryHeight)
         var x = inset + 4
         if !branchIcon.isHidden {
             branchIcon.frame = NSRect(x: x, y: (h - 14) / 2, width: 14, height: 14)
@@ -190,6 +273,117 @@ final class SidebarHeaderView: NSView {
             Theme.tabHover.setFill()
             NSBezierPath(roundedRect: branchArea, xRadius: 5, yRadius: 5).fill()
         }
+    }
+}
+
+/// The header's "Pull 152": a capsule with git's commit glyph (a dot on a line) and the count. While a
+/// fetch, pull or push runs, the glyph turns into a sync arrow that spins (still, with Reduce Motion).
+final class SyncButton: NSButton {
+    static let height: CGFloat = 20
+    private var full = "", short = ""
+    private(set) var busy = false
+    /// The arrow and count only, when the sidebar is narrow.
+    var compact = false { didSet { if compact != oldValue { needsDisplay = true } } }
+    private var hovering = false { didSet { if hovering != oldValue { needsDisplay = true } } }
+    private var angle: CGFloat = 0
+    private var spinner: Timer?
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        isBordered = false
+        title = ""
+        setButtonType(.momentaryChange)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func configure(full: String, compact: String, busy: Bool, toolTip: String, accessibilityLabel: String) {
+        self.full = full
+        short = compact
+        self.toolTip = toolTip
+        setAccessibilityLabel(accessibilityLabel)
+        if busy != self.busy {
+            self.busy = busy
+            angle = 0
+            updateSpinner()
+        }
+        needsDisplay = true
+    }
+
+    var shownTitle: String { compact ? short : full }
+
+    private func label(_ text: String) -> NSAttributedString {
+        NSAttributedString(string: text, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold),
+                                                      .foregroundColor: Theme.accent])
+    }
+
+    func width(compact: Bool) -> CGFloat { (8 + 12 + 5 + label(compact ? short : full).size().width + 9).rounded(.up) }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateSpinner()
+    }
+
+    private func updateSpinner() {
+        spinner?.invalidate()
+        spinner = nil
+        guard busy, window != nil, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let timer = Timer(timeInterval: 1 / 30, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.angle -= .pi / 15 // a turn a second
+            self.needsDisplay = true
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        spinner = timer
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+    }
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+    override func resetCursorRects() { if !busy { addCursorRect(bounds, cursor: .pointingHand) } }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let pill = NSRect(x: 0, y: ((bounds.height - Self.height) / 2).rounded(), width: bounds.width, height: Self.height)
+        let strength: CGFloat = isHighlighted ? 0.32 : (hovering && !busy ? 0.24 : 0.14)
+        Theme.accent.withAlphaComponent(strength).setFill()
+        NSBezierPath(roundedRect: pill, xRadius: Self.height / 2, yRadius: Self.height / 2).fill()
+        let icon = NSRect(x: 8, y: pill.midY - 6, width: 12, height: 12)
+        if busy { drawSync(in: icon) } else { drawCommit(in: icon) }
+        let text = label(shownTitle)
+        let size = text.size()
+        text.draw(at: NSPoint(x: icon.maxX + 5, y: pill.midY - size.height / 2))
+    }
+
+    /// git's commit glyph: a ring on a line.
+    private func drawCommit(in rect: NSRect) {
+        let radius: CGFloat = 3.2
+        let path = NSBezierPath()
+        path.lineWidth = 1.6
+        path.move(to: NSPoint(x: rect.minX, y: rect.midY))
+        path.line(to: NSPoint(x: rect.midX - radius, y: rect.midY))
+        path.move(to: NSPoint(x: rect.midX + radius, y: rect.midY))
+        path.line(to: NSPoint(x: rect.maxX, y: rect.midY))
+        path.appendOval(in: NSRect(x: rect.midX - radius, y: rect.midY - radius, width: radius * 2, height: radius * 2))
+        Theme.accent.setStroke()
+        path.stroke()
+    }
+
+    private func drawSync(in rect: NSRect) {
+        guard let image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold).applying(.init(paletteColors: [Theme.accent]))) else { return }
+        NSGraphicsContext.saveGraphicsState()
+        let turn = NSAffineTransform()
+        turn.translateX(by: rect.midX, yBy: rect.midY)
+        turn.rotate(byRadians: isFlipped ? -angle : angle)
+        turn.concat()
+        let size = image.size
+        image.draw(in: NSRect(x: -size.width / 2, y: -size.height / 2, width: size.width, height: size.height))
+        NSGraphicsContext.restoreGraphicsState()
     }
 }
 

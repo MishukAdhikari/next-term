@@ -60,7 +60,9 @@ Toggle it with <kbd>⌘B</kbd> (**View › Hide Project Sidebar**). Put it on th
 
 **Deleted files keep their rows** until the deletion is committed: struck through, where they were, with the lines they had (`−10`). A folder’s count always adds up to the rows inside it, and a folder deleted whole opens to show what was in it. Double-click a deleted file (or press <kbd>⌥⌘G</kbd>) to see what was removed.
 
-**The header** shows the branch, the total lines added and removed, and how far you are ahead of or behind the upstream: `main +41 −10 ↑2 ↓1`. Hover it for the full story, such as “Branch main, tracking origin/main: 2 ahead, 1 behind. 3 modified, 1 added, 2 untracked.”
+**The header** shows the branch and the total lines added and removed: `main +41 −10`. Hover it for the full story, such as “Branch main, tracking origin/main: 2 ahead, 1 behind. 3 modified, 1 added, 2 untracked.”
+
+When the upstream has commits your branch doesn’t, a blue button with git’s commit mark says how many: **Pull 152**. Click it to pull them (the same as **Update Project**). When your branch has commits the upstream doesn’t, it says **Push 3**; when both have changed, it shows both counts, `↓152 ↑3`, and a click asks whether to rebase or merge. In a narrow sidebar it shortens to `↓152`. The counts are as of the last fetch, and the button’s tooltip says when that was. While Next Term fetches, pulls or pushes, the mark turns into a spinning sync arrow.
 
 The sidebar reads git with `--no-optional-locks`, so it never holds the index lock while your own git commands, or your agents’, are running. To see a file’s changes in full, press <kbd>⌥⌘G</kbd>: see [Side-by-side diffs](/docs/diffs/).
 

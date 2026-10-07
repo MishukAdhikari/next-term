@@ -134,6 +134,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         // Row tooltips through one area over the visible rows. Tooltips set on the row views themselves
         // stay live for rows scrolled out of sight, so hovering the header showed some hidden row's path.
         scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(gitActivityChanged), name: GitWriter.activityChanged, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(updateToolTips), name: NSView.boundsDidChangeNotification,
                                                object: scrollView.contentView)
 
@@ -383,8 +384,14 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     // MARK: git
 
+    /// A fetch, pull or push started or ended somewhere: the header spins while one runs here.
+    @objc private func gitActivityChanged() {
+        header.show(activity: git.snapshot.flatMap { GitWriter.shared.activity(in: $0.root) })
+    }
+
     private func gitChanged(_ snapshot: GitSnapshot?) {
         header.show(snapshot)
+        gitActivityChanged()
         if let head = snapshot?.head, head != lastHead {
             if lastHead != nil { onHeadChange?() }
             lastHead = head

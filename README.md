@@ -61,7 +61,8 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
   open in it by default. Next Term reopens your last projects at launch (on first launch it asks for a
   folder). Open Recent, Close Project, and a Welcome window, like an IDE.
 - **Project sidebar with git.** The project as a live file tree: changed files and folders coloured, with
-  `+12 −3` line counts like a pull request, and the branch, total changes and ahead/behind at the top.
+  `+12 −3` line counts like a pull request, and the branch and total changes at the top, with a **Pull 152**
+  button when the upstream has commits you don't.
   Files your agents create or change show up on their own.
 - **Branches in one popup.** Click the branch (⌥⌘B): search branches and actions, check out, branch,
   update, commit, push, rebase and merge. It asks before changing files under a working agent, keeps

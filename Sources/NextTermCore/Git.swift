@@ -35,6 +35,8 @@ public struct GitSnapshot: Sendable {
     public var upstream: String?
     public var ahead = 0
     public var behind = 0
+    /// When the repository last fetched (FETCH_HEAD's date): ahead and behind are as of then.
+    public var lastFetch: Date?
     public var files: [String: GitChange] = [:]
     public var fileStats: [String: LineStats] = [:]
     /// git's two-letter status of each tracked change: staged (index) then unstaged (work tree), "." for
@@ -265,7 +267,33 @@ public enum GitRunner {
         let numstat = base.flatMap { run(git, ["-C", root, "--no-optional-locks", "diff-index", "--numstat", "-z", "-M", $0, "--"], timeout: timeout) } ?? Data()
         snapshot = GitSnapshot.parse(root: root, status: status, numstat: numstat)
         snapshot.addUntrackedLines(countLines(of: snapshot.files.filter { $0.value == .untracked }.map(\.key), in: root))
+        if snapshot.upstream != nil { snapshot.lastFetch = lastFetch(root: root) }
         return snapshot
+    }
+
+    /// When the repository at `root` last fetched: the date of FETCH_HEAD in its common git folder.
+    /// nil if it never has.
+    public static func lastFetch(root: String) -> Date? {
+        guard let common = commonGitDir(root: root) else { return nil }
+        return (try? FileManager.default.attributesOfItem(atPath: common + "/FETCH_HEAD"))?[.modificationDate] as? Date
+    }
+
+    /// The git folder that a work tree's refs live in, read from the files (no git run): `.git` itself, or
+    /// for a linked worktree (whose `.git` is a file naming its own folder) the folder its commondir names.
+    public static func commonGitDir(root: String) -> String? {
+        let dotGit = root + "/.git"
+        var isFolder: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: dotGit, isDirectory: &isFolder) else { return nil }
+        if isFolder.boolValue { return dotGit }
+        guard let text = try? String(contentsOfFile: dotGit, encoding: .utf8),
+              let line = text.split(separator: "\n").first, line.hasPrefix("gitdir:") else { return nil }
+        let gitDir = absolute(line.dropFirst(7).trimmingCharacters(in: .whitespaces), from: root)
+        guard let common = try? String(contentsOfFile: gitDir + "/commondir", encoding: .utf8) else { return gitDir }
+        return absolute(common.trimmingCharacters(in: .whitespacesAndNewlines), from: gitDir)
+    }
+
+    private static func absolute(_ path: String, from base: String) -> String {
+        path.hasPrefix("/") ? path : URL(fileURLWithPath: base).appendingPathComponent(path).standardized.path
     }
 
     private static func emptyTree(git: String, root: String) -> String? {

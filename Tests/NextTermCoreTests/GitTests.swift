@@ -68,6 +68,39 @@ import Testing
 
 @Suite struct GitRunnerTests {
     /// A real repository: a clone with an upstream, local commits ahead, and every kind of change.
+    @Test func lastFetchIsReadFromTheCommonGitFolder() throws {
+        guard let git = GitRunner.locateGit() else { return } // no git on this machine
+        let base = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path))
+            .appendingPathComponent("nt-fetch-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let main = base.appendingPathComponent("main").path
+        let linked = base.appendingPathComponent("linked").path
+        func sh(_ args: [String], in dir: String) throws {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: git)
+            p.arguments = ["-C", dir, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"] + args
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            try p.run()
+            p.waitUntilExit()
+            #expect(p.terminationStatus == 0, "git \(args.joined(separator: " "))")
+        }
+        try FileManager.default.createDirectory(atPath: main, withIntermediateDirectories: true)
+        try sh(["init"], in: main)
+        try sh(["commit", "--allow-empty", "-m", "one"], in: main)
+        #expect(GitRunner.commonGitDir(root: main) == main + "/.git")
+        #expect(GitRunner.lastFetch(root: main) == nil) // never fetched
+        let fetched = Date(timeIntervalSince1970: 1_790_000_000)
+        try Data().write(to: URL(fileURLWithPath: main + "/.git/FETCH_HEAD"))
+        try FileManager.default.setAttributes([.modificationDate: fetched], ofItemAtPath: main + "/.git/FETCH_HEAD")
+        #expect(GitRunner.lastFetch(root: main) == fetched)
+        // A linked worktree's .git is a file; its fetches land in the shared folder.
+        try sh(["worktree", "add", "-q", "-b", "side", linked], in: main)
+        #expect(GitRunner.commonGitDir(root: linked).map(canonicalPath) == canonicalPath(main + "/.git"))
+        #expect(GitRunner.lastFetch(root: linked) == fetched)
+        #expect(GitRunner.commonGitDir(root: base.path) == nil) // not a work tree
+    }
+
     @Test func snapshotOfARealRepository() throws {
         guard let git = GitRunner.locateGit() else { return } // no git on this machine
         let base = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path))

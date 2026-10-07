@@ -14,10 +14,10 @@ struct GitActions {
     private var model: BranchModel? { popup.model }
     private var root: String { model?.root ?? "" }
 
-    private func run(_ title: String, _ steps: [[String]], then: @escaping (GitWriter.Result) -> Void) {
+    private func run(_ title: String, _ steps: [[String]], activity: GitWriter.Activity? = nil, then: @escaping (GitWriter.Result) -> Void) {
         let popup = self.popup
         let controller = self.controller
-        GitWriter.shared.run(title, in: root, repository: model?.commonDir ?? root, steps: steps) { result in
+        GitWriter.shared.run(title, in: root, repository: model?.commonDir ?? root, steps: steps, activity: activity) { result in
             controller?.sidebar.git.refresh()
             popup.reload()
             then(result)
@@ -259,7 +259,7 @@ struct GitActions {
     // MARK: remotes
 
     func fetch() {
-        run("Fetch", [["fetch", "--all", "--prune"]]) { result in
+        run("Fetch", [["fetch", "--all", "--prune"]], activity: .fetching) { result in
             guard result.ok else { return failed("Fetch failed", result, retry: ["fetch", "--all", "--prune"]) }
             popup.reload {
                 let behind = popup.model?.currentRef?.behind ?? 0
@@ -276,21 +276,21 @@ struct GitActions {
             return GitPrompt.ask("“\(current.name)” isn’t tracking a remote branch", info: "Push… publishes it, and then it can be updated.",
                                  buttons: ["OK"], over: window) { _ in }
         }
-        run("Update Project", [["fetch", remote]]) { fetched in
+        run("Update Project", [["fetch", remote]], activity: .pulling) { fetched in
             guard fetched.ok else { return failed("Could not fetch from \(remote)", fetched, retry: ["fetch", remote]) }
             popup.reload {
                 guard let fresh = popup.model?.currentRef else { return }
                 guard fresh.behind > 0 else { return toast("Already up to date") }
                 confirmAgents("Updating") {
                     if fresh.ahead == 0 {
-                        integrate("Update \(fresh.name)", ["merge", "--ff-only", "--autostash", "@{upstream}"])
+                        integrate("Update \(fresh.name)", ["merge", "--ff-only", "--autostash", "@{upstream}"], activity: .pulling)
                         return
                     }
                     GitPrompt.ask("“\(fresh.name)” and “\(upstream)” have both changed",
                                   info: "\(fresh.ahead) commit\(fresh.ahead == 1 ? "" : "s") here, \(fresh.behind) there. Rebase puts yours on top of theirs; Merge joins them with a merge commit.",
                                   buttons: ["Rebase", "Merge", "Cancel"], over: window) { choice in
-                        if choice == 0 { integrate("Rebase \(fresh.name)", ["rebase", "--autostash", "@{upstream}"]) }
-                        if choice == 1 { integrate("Merge \(upstream)", ["merge", "--no-edit", "--autostash", "@{upstream}"]) }
+                        if choice == 0 { integrate("Rebase \(fresh.name)", ["rebase", "--autostash", "@{upstream}"], activity: .pulling) }
+                        if choice == 1 { integrate("Merge \(upstream)", ["merge", "--no-edit", "--autostash", "@{upstream}"], activity: .pulling) }
                     }
                 }
             }
@@ -306,8 +306,8 @@ struct GitActions {
     }
 
     /// A merge, rebase or fast-forward: on conflicts, says so and offers an agent or a terminal.
-    private func integrate(_ title: String, _ args: [String]) {
-        run(title, [args]) { result in
+    private func integrate(_ title: String, _ args: [String], activity: GitWriter.Activity? = nil) {
+        run(title, [args], activity: activity) { result in
             if result.ok, result.failure != .conflicts { return toast(result.failure == .nothingToDo ? "Already up to date" : "\(title): done") }
             guard result.failure == .conflicts || popup.model?.inProgress != nil else { return failed("\(title) failed", result, retry: args) }
             conflicts(title)
@@ -366,7 +366,7 @@ struct GitActions {
                     var args = ["push", "--porcelain"]
                     if publishing { args.append("--set-upstream") }
                     args += [remote, target == ref.name ? ref.name : "refs/heads/\(ref.name):refs/heads/\(target)"]
-                    run("Push \(ref.name)", [args]) { result in
+                    run("Push \(ref.name)", [args], activity: .pushing) { result in
                         if result.ok { return toast("Pushed \(ref.name) to \(remote)/\(target)") }
                         guard result.failure == .pushRejected else { return failed("Push failed", result, retry: args) }
                         GitPrompt.ask("\(remote)/\(target) has commits you don’t have", info: "Update first brings them in. Force push replaces them with yours.",
@@ -404,7 +404,7 @@ struct GitActions {
                           buttons: ["Force Push", "Cancel"], destructive: 0, style: .warning, over: window) { choice in
                 guard choice == 0 else { return }
                 let args = ["push", "--porcelain", "--force-with-lease=refs/heads/\(target):\(sha)", remote, "refs/heads/\(ref.name):refs/heads/\(target)"]
-                run("Force push \(ref.name)", [args]) { pushed in
+                run("Force push \(ref.name)", [args], activity: .pushing) { pushed in
                     if pushed.ok { return toast("Force-pushed \(ref.name) to \(remote)/\(target)") }
                     if pushed.failure == .leaseFailed {
                         return GitPrompt.ask("\(remote)/\(target) changed since you looked", info: "Nothing was overwritten. Fetch, look at the new commits, and try again.",

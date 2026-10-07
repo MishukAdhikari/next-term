@@ -149,6 +149,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         editorArea.onSendToAgent = { [weak self] items in self?.send(items) }
         editorArea.tabBar.onReveal = { [weak self] in self?.revealInSidebar(nil) }
         sidebar.header.onBranchClick = { [weak self] in self?.showBranches(nil) }
+        sidebar.header.onSync = { [weak self] pull in pull ? self?.gitUpdate(nil) : self?.gitPush(nil) }
         sidebar.onHeadChange = { [weak self] in self?.editorArea.headMoved() }
         editorArea.isHidden = true
         applyLayout()

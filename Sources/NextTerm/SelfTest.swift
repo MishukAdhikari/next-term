@@ -386,6 +386,7 @@ enum SelfTest {
             check(SidebarHeaderView.describe(snap!).contains("Branch main"), "the header tooltip describes it", SidebarHeaderView.describe(snap!))
             check(!c.sidebar.header.summaryIsTruncated, "the header shows its counts in full")
             check(!c.sidebar.header.titleIsTruncated, "and the branch name in full (a short one never becomes “…”)")
+            await syncButtonChecks(c, snap!)
             if let src = c.sidebar.root?.children?.first(where: { $0.name == "src" }) {
                 let row = c.sidebar.outline.row(forItem: src)
                 let cell = c.sidebar.outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? FileCellView
@@ -638,6 +639,49 @@ enum SelfTest {
     }
 
     /// Agent sessions: listed per project on the Welcome window and in ⌥⌘O, resumed in a tab in their folder.
+    /// The header's "Pull 152": the words, what a click does, and the spinner while git talks to a remote.
+    private static func syncButtonChecks(_ c: TerminalWindowController, _ real: GitSnapshot) async {
+        let header = c.sidebar.header
+        var fake = real
+        fake.upstream = "origin/main"
+        fake.behind = 152
+        fake.lastFetch = Date(timeIntervalSinceNow: -18 * 60)
+        header.show(fake)
+        header.layoutSubtreeIfNeeded()
+        check(header.syncText == "Pull 152" && !header.syncButton.busy, "152 commits behind shows “Pull 152” in the header", header.syncText)
+        let tip = header.syncButton.toolTip ?? ""
+        check(tip.contains("152 commits") && tip.contains("Last fetched 18 minutes ago"),
+              "its tooltip says they are commits and when it last fetched", tip)
+        let fits = !header.summaryIsTruncated && !header.titleIsTruncated && !header.syncButton.frame.intersects(header.hideButton.frame)
+        check(fits, "the button fits beside the branch and the counts", "\(header.syncButton.frame)")
+        var asked: Bool?
+        let onSync = header.onSync
+        header.onSync = { asked = $0 }
+        header.syncButton.performClick(nil)
+        check(asked == true, "a click on it pulls")
+        fake.ahead = 3
+        fake.behind = 0
+        header.show(fake)
+        asked = nil
+        header.syncButton.performClick(nil)
+        check(header.syncText == "Push 3" && asked == false, "3 commits ahead shows “Push 3”, and a click pushes", header.syncText)
+        fake.behind = 152
+        header.show(fake)
+        check(header.syncText == "↓152 ↑3", "both ways shows both counts", header.syncText)
+        header.onSync = onSync
+        // A fetch running here: the sync arrow spins, and a click does nothing until it ends.
+        fake.ahead = 0
+        fake.behind = 0
+        header.show(fake)
+        check(header.syncText.isEmpty, "up to date: no button", header.syncText)
+        GitWriter.shared.setActivity(.fetching, in: real.root)
+        check(await wait(2) { header.syncButton.busy && header.syncText == "Fetching…" },
+              "while fetching, the header says so with a spinning sync arrow", header.syncText)
+        GitWriter.shared.setActivity(nil, in: real.root)
+        check(await wait(2) { header.syncText.isEmpty }, "and it goes when the fetch ends", header.syncText)
+        header.show(c.sidebar.git.snapshot)
+    }
+
     private static func sessionChecks(proj: URL) async {
         let app = AppDelegate.shared!
         let home = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nt-sessions-\(getpid())")
