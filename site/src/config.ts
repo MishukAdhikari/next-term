@@ -5,6 +5,15 @@ export const APP_NAME = 'Next Term';
 export const TAGLINE = 'The missing IDE for the terminal';
 export const VERSION = '0.8.0';
 export const MIN_MACOS = 'macOS 13 or later';
+/**
+ * The newest release's size, rounded, in MB as Finder counts them (1,000,000 bytes): its disk image
+ * (NextTerm-x.y.z.dmg in `gh release view vX.Y.Z --json assets`) and the app once installed (Get Info
+ * on Next Term.app). The release step measures both again when it sets VERSION; README.md says them
+ * once too. Markdown pages write them as {{DOWNLOAD_SIZE}} and {{INSTALLED_SIZE}} (see src/lib/facts.ts).
+ * Measured on 0.8.0: 13,279,371 and 35,364,579 bytes.
+ */
+export const DOWNLOAD_SIZE = '13 MB';
+export const INSTALLED_SIZE = '35 MB';
 export const AUTHOR = 'Mishuk Adhikari';
 export const AUTHOR_URL = 'https://github.com/MishukAdhikari';
 export const REPO = 'https://github.com/MishukAdhikari/next-term';

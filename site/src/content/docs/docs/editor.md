@@ -1,6 +1,6 @@
 ---
 title: Code editor
-description: "The editor above your terminal: Go to File (⌘P), 112 languages, soft wrap, git blame, ⌘/ comments, ⌘L, and files that follow your agents’ edits."
+description: "The editor above your terminal: Go to File (⌘P), 112 grammars, soft wrap, git blame, ⌘/ comments, ⌘L, and files that follow your agents’ edits."
 head:
   - tag: title
     content: A native macOS terminal with a code editor — Next Term
@@ -41,9 +41,9 @@ Press <kbd>⌘P</kbd> and type: any file in the project, found by name or path a
 - **From a selection:** with text selected in the editor or the terminal, <kbd>⌘P</kbd> starts with it, as Find does. Select `app/Models/User.php:42` in a stack trace and press <kbd>⌘P</kbd>, then <kbd>↩</kbd>.
 - **Recently opened first:** with nothing typed, the list is the files you opened lately, newest first.
 
-## 112 languages
+## 112 grammars
 
-Colours come from open-source TextMate grammars, through shiki-swift. Highlighting is incremental, so long files stay fast. The theme is Next Term’s own, Next Dark.
+Colours come from 112 open-source TextMate grammars, through shiki-swift. Most are one per language below; the rest colour code inside other code, such as Angular and Vue templates, regular expressions and prompt templates inside Python strings. Highlighting is incremental, so long files stay fast. The theme is Next Term’s own, Next Dark.
 
 - **Web:** HTML, CSS, SCSS, Sass, Less, Stylus, PostCSS, JavaScript, TypeScript, JSX, TSX, Vue, Svelte, Astro, Angular templates, Marko, Glimmer, GraphQL, HTTP.
 - **Templates:** Blade (Laravel), Twig, Liquid, Handlebars, Jinja (Django, Flask), ERB and Haml (Rails), Pug, Edge, Razor, templ, Prompty.

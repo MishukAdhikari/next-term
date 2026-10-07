@@ -32,7 +32,7 @@ Prompt templates mostly live in Python strings, and the editor colours what is i
 | `.ipynb` | A notebook view (below) |
 | `.jsonl`, `.csv`, `.tsv` over 2 MB | A head view of the first rows (below) |
 
-See [112 languages](/docs/editor/#112-languages) for the full list.
+See [112 grammars](/docs/editor/#112-grammars) for every language they cover.
 
 ## Notebooks
 

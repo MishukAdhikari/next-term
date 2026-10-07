@@ -22,7 +22,8 @@ The build must finish without warnings and `npm run check` must pass before a de
 | Path | What |
 |---|---|
 | `astro.config.mjs` | **The site’s address (`SITE`)**, the sidebar, the head tags every page gets, Starlight options |
-| `src/config.ts` | Facts pages repeat: version, download and repository links, the one-sentence summary |
+| `src/config.ts` | Facts pages repeat: version, sizes, download and repository links, the one-sentence summary |
+| `src/lib/facts.ts` | Fills in `{{DOWNLOAD_SIZE}}` and the other facts a Markdown page writes, in the page, the FAQ’s JSON-LD and `/llms-full.txt` |
 | `src/pages/index.astro` | The landing page, with its `SoftwareApplication` and `WebSite` JSON-LD |
 | `src/content/docs/docs/*.md` | The documentation, one Markdown file per page (`docs/index.mdx` is the docs home) |
 | `src/routeData.ts` | Adds `BreadcrumbList` JSON-LD to every docs page and `FAQPage` to the FAQ, read from the page itself |
@@ -44,7 +45,7 @@ The build must finish without warnings and `npm run check` must pass before a de
 
 ### A new Next Term release
 
-1. Set `VERSION` in `src/config.ts`.
+1. Set `VERSION` in `src/config.ts`, and `DOWNLOAD_SIZE` and `INSTALLED_SIZE` from the new release’s disk image and installed app (the comment there says how). The repository’s `README.md` states both sizes once too.
 2. Search the docs for the old version (`grep -rn "0.2.0" src/content`) and update the DMG name and the examples.
 3. Update anything the release added or changed, labelling what is not released yet as “Coming next” or “Coming soon”.
 4. `npm run build && npm run check`, then deploy.

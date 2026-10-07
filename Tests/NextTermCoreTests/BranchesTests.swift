@@ -140,4 +140,93 @@ import Testing
         #expect(BranchModel.read(at: work, git: git)?.inProgress == .merge)
         #expect(BranchModel.read(at: base.path, git: git) == nil) // not a repository
     }
+
+    @Test func eachRemotesDefaultBranchIsShared() {
+        let records = [
+            ["refs/remotes/origin/HEAD", "a1b2c3d4e5", "1760000000", "", "", " ", "", "refs/remotes/origin/main"],
+            ["refs/remotes/origin/main", "a1b2c3d4e5", "1760000000", "", "", " ", "", ""],
+            ["refs/remotes/upstream/HEAD", "b2c3d4e5f6", "1760000000", "", "", " ", "", "refs/remotes/upstream/develop"],
+            ["refs/remotes/my/fork/HEAD", "c3d4e5f6a7", "1760000000", "", "", " ", "", "refs/remotes/my/fork/trunk"],
+        ].map { $0.joined(separator: "\0") }.joined(separator: "\n")
+        let heads = BranchModel.parseRemoteHeads(Data(records.utf8))
+        #expect(heads == ["origin": "main", "upstream": "develop", "my/fork": "trunk"])
+        var m = BranchModel(root: "/r", gitDir: "/r/.git", commonDir: "/r/.git")
+        m.defaultBranch = "main"
+        m.remoteHeads = heads
+        #expect(m.isShared("develop", on: "upstream") && !m.isShared("develop", on: "origin"))
+        #expect(m.isShared("trunk", on: "my/fork") && m.isShared("main", on: "upstream") && m.isShared("master", on: "origin"))
+        #expect(m.isShared("release/1.2", on: "origin") && !m.isShared("releases", on: "origin") && !m.isShared("feat/login", on: "upstream"))
+    }
+
+    @Test func pushingANewBranchRecordsNoDefaultBranch() throws {
+        guard let git = GitRunner.locateGit() else { return }
+        let base = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path)).appendingPathComponent("nt-heads-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let origin = base.appendingPathComponent("origin.git").path, work = base.appendingPathComponent("work").path
+        func sh(_ args: [String], in dir: String) {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: git)
+            p.arguments = ["-C", dir, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"] + args
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            try? p.run()
+            p.waitUntilExit()
+        }
+        try FileManager.default.createDirectory(atPath: base.path, withIntermediateDirectories: true)
+        sh(["init", "--bare", "-b", "develop", origin], in: base.path)
+        sh(["init", "-b", "develop", work], in: base.path)
+        sh(["commit", "--allow-empty", "-m", "one"], in: work)
+        sh(["remote", "add", "origin", origin], in: work)
+        sh(["push", "-u", "origin", "develop"], in: work)
+
+        // A push records no origin/HEAD, so develop, the remote's default branch, isn't known to be shared.
+        let pushed = try #require(BranchModel.read(at: work, git: git))
+        #expect(pushed.remoteHeads["origin"] == nil && !pushed.isShared("develop", on: "origin"))
+        sh(["remote", "set-head", "origin", "--auto"], in: work)
+        let known = try #require(BranchModel.read(at: work, git: git))
+        #expect(known.remoteHeads == ["origin": "develop"] && known.isShared("develop", on: "origin"))
+    }
+
+    @Test func whatUndoTakesACommitBackTo() throws {
+        guard let git = GitRunner.locateGit() else { return }
+        let base = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path)).appendingPathComponent("nt-undo-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let origin = base.appendingPathComponent("origin.git").path, work = base.appendingPathComponent("work").path
+        @discardableResult func sh(_ args: [String], in dir: String) -> String {
+            let p = Process(), out = Pipe()
+            p.executableURL = URL(fileURLWithPath: git)
+            p.arguments = ["-C", dir, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"] + args
+            p.standardOutput = out
+            p.standardError = FileHandle.nullDevice
+            try? p.run()
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        try FileManager.default.createDirectory(atPath: base.path, withIntermediateDirectories: true)
+        sh(["init", "--bare", "-b", "main", origin], in: base.path)
+        sh(["init", "-b", "main", work], in: base.path)
+        sh(["commit", "--allow-empty", "-m", "one"], in: work)
+        #expect(BranchModel.headAndPrevious(at: work, git: git) == nil) // a first commit has nothing before it
+        let one = sh(["rev-parse", "HEAD"], in: work)
+        sh(["remote", "add", "origin", origin], in: work)
+        sh(["push", "-u", "origin", "main"], in: work)
+
+        sh(["commit", "--allow-empty", "-m", "two"], in: work)
+        let two = sh(["rev-parse", "HEAD"], in: work)
+        let afterCommit = try #require(BranchModel.headAndPrevious(at: work, git: git))
+        #expect(afterCommit.head == two && afterCommit.previous == one)
+        #expect(BranchModel.isPublished(one, at: work, git: git) && !BranchModel.isPublished(two, at: work, git: git))
+
+        // After an amend, the commit it replaced, not that commit's parent.
+        sh(["commit", "--amend", "--allow-empty", "-m", "two, amended"], in: work)
+        let amended = try #require(BranchModel.headAndPrevious(at: work, git: git))
+        #expect(amended.head != two && amended.previous == two)
+
+        // Amending a pushed commit: the amended one is on no remote, and Undo goes back to the pushed one.
+        sh(["reset", "-q", "--hard", one], in: work)
+        sh(["commit", "--amend", "--allow-empty", "-m", "one, amended"], in: work)
+        let pushedThenAmended = try #require(BranchModel.headAndPrevious(at: work, git: git))
+        #expect(pushedThenAmended.previous == one && !BranchModel.isPublished(pushedThenAmended.head, at: work, git: git))
+    }
 }

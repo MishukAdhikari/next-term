@@ -29,7 +29,7 @@ VS Code is Microsoft’s free code editor for macOS, Windows and Linux, with the
 | Extensions | — | ✓ The Visual Studio Marketplace |
 | Reviewing changes | ✓ Side-by-side diffs; stage, unstage or revert per hunk; the Git Log and blame | ✓ The diff editor; stage selected ranges |
 | Remote development | Partly: terminal tabs on your servers over ssh, kept running in tmux or herdr; the editor opens your Mac’s files | ✓ SSH, Dev Containers, WSL, Tunnels |
-| The app | Native Swift and AppKit, about a 3 MB download | Built on Electron |
+| The app | Native Swift and AppKit, about a {{DOWNLOAD_SIZE}} download | Built on Electron |
 
 ## Choose VS Code if…
 
@@ -43,7 +43,7 @@ VS Code is Microsoft’s free code editor for macOS, Windows and Linux, with the
 - **You run agents as command-line tools,** such as Claude Code, Codex, Gemini CLI or Qwen Code, under their own subscriptions, and want each in its own tab with its status on the tab.
 - **You want the question in the notification.** When an agent in a tab asks for permission, Next Term’s notification quotes it and takes you to the tab.
 - **You want one agent to orchestrate the others** across projects, through Next Term’s MCP server.
-- **You want a small native app for agent work,** about 3 MB, with no account, separate from the editor you write code in.
+- **You want a small native app for agent work,** about a {{DOWNLOAD_SIZE}} download, with no account, separate from the editor you write code in.
 
 ## Use both
 

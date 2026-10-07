@@ -24,7 +24,7 @@ Zed is an open-source code editor written in Rust, for macOS, Linux and Windows,
 | Status of each agent | ✓ Working, done, waiting (with the question), failed. Read from the screen for Claude Code, Codex, Command Code and Gemini CLI, and from output timing for other agents | ✓ A status indicator for each thread in the sidebar |
 | Notifications | ✓ Quote the agent’s question, no setup; Dock badge | ✓ When an agent finishes or waits; Terminal Threads notify on the terminal bell |
 | MCP | ✓ An MCP server: one agent starts, prompts, waits for and reads the others | ✓ An MCP client, its servers forwarded to External Agents |
-| Code editor | ✓ 112 languages, Go to File (<kbd>⌘P</kbd>) | ✓ Language servers, Vim mode, a much fuller editor |
+| Code editor | ✓ 112 grammars, Go to File (<kbd>⌘P</kbd>) | ✓ Language servers, Vim mode, a much fuller editor |
 | Debugger | — | ✓ Through the Debug Adapter Protocol |
 | Extensions | — | ✓ Languages, themes, debuggers, MCP servers |
 | Reviewing agent changes | ✓ Side-by-side diffs; stage, unstage or revert per hunk; the Git Log and blame | ✓ Accept or reject each hunk; checkpoints; stage or unstage hunks in the Git Panel |
@@ -43,7 +43,7 @@ Zed is an open-source code editor written in Rust, for macOS, Linux and Windows,
 - **You want agent status with nothing to configure.** Next Term shows working, done or waiting on the tab of 20 agents as soon as they start: Claude Code, Codex, Command Code and Gemini CLI read from their screen, the way you would, and the others from output timing. In Zed, a Terminal Thread notifies you when the program rings the terminal bell, and Claude Code has to be set to ring it.
 - **You want the question in the notification.** When an agent asks for permission, Next Term’s notification quotes it and takes you to the tab.
 - **You want one agent to run the others.** Next Term is an MCP server: an orchestrator can list every tab with its agent’s state, start agents, send prompts, wait and read their screens, across projects.
-- **You want a small native Mac app,** about 3 MB, with no account and no AI service attached.
+- **You want a small native Mac app,** about a {{DOWNLOAD_SIZE}} download, with no account and no AI service attached.
 
 ## Use both
 
@@ -62,7 +62,7 @@ Zed’s Personal plan is free, including unlimited use of your own API keys and 
 
 ### Does Next Term have a debugger or language servers?
 
-No. Next Term’s editor colours 112 languages and finds files fast, but it has no debugger, language servers, refactoring or extensions. For those, keep Zed or another IDE next to it.
+No. Next Term’s editor colours code with 112 grammars and finds files fast, but it has no debugger, language servers, refactoring or extensions. For those, keep Zed or another IDE next to it.
 
 ## Read more
 

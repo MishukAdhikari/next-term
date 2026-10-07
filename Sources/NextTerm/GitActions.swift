@@ -412,29 +412,43 @@ struct GitActions {
     }
 
     /// Only after the commits it discards are shown, with the lease set to exactly what was shown, and
-    /// never for the default branch or main, master and release/*.
+    /// never for a shared branch: main, master, release/* and the remote's default branch (as far as its
+    /// `<remote>/HEAD` says; without one, the prompt says it can't tell).
     private func forcePush(_ ref: BranchRef, remote: String, target: String) {
-        if ["main", "master", model?.defaultBranch].contains(target) || target.hasPrefix("release/") {
+        if model?.isShared(target, on: remote) ?? true {
             return GitPrompt.ask("Force push to \(target) is off", info: "\(target) is shared: update first, or push to a branch of your own.", buttons: ["OK"], over: window) { _ in }
         }
-        run("Commits force push would discard", [["rev-parse", "--verify", "--quiet", "refs/remotes/\(remote)/\(target)"],
-                                                 ["log", "--format=%h %s", "--max-count=12", "\(ref.name)..\(remote)/\(target)"]]) { result in
-            let lines = result.output.split(separator: "\n").map(String.init)
-            guard result.ok, let sha = lines.first, sha.count >= 40 else { return failed("Could not read \(remote)/\(target)", result, retry: nil) }
-            let discarded = lines.dropFirst().joined(separator: "\n")
-            GitPrompt.ask("Force push discards these commits on \(remote)/\(target)", info: discarded.isEmpty ? "(none known locally)" : discarded,
-                          buttons: ["Force Push", "Cancel"], destructive: 0, style: .warning, over: window) { choice in
-                guard choice == 0 else { return }
-                let args = ["push", "--porcelain", "--force-with-lease=refs/heads/\(target):\(sha)", remote, "refs/heads/\(ref.name):refs/heads/\(target)"]
-                run("Force push \(ref.name)", [args], activity: .pushing) { pushed in
-                    if pushed.ok { return toast("Force-pushed \(ref.name) to \(remote)/\(target)") }
-                    if pushed.failure == .leaseFailed {
-                        return GitPrompt.ask("\(remote)/\(target) changed since you looked", info: "Nothing was overwritten. Fetch, look at the new commits, and try again.",
-                                             buttons: ["Fetch", "OK"], over: window) { choice in if choice == 0 { fetch() } }
-                    }
-                    failed("Force push failed", pushed, retry: args)
+        let headKnown = model?.remoteHeads[remote] != nil
+        // Two runs: a run hands back only its last command's output, and the lease needs the sha.
+        run("Commits force push would discard", [["rev-parse", "--verify", "--quiet", "refs/remotes/\(remote)/\(target)"]]) { tip in
+            let sha = tip.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard tip.ok, sha.count >= 40 else { return failed("Could not read \(remote)/\(target)", tip, retry: nil) }
+            run("Commits force push would discard", [["log", "--format=%h %s", "--max-count=12", "\(ref.name)..\(sha)"]]) { log in
+                guard log.ok else { return failed("Could not read \(remote)/\(target)", log, retry: nil) }
+                let discarded = log.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                var info = discarded.isEmpty ? "(none known locally)" : discarded
+                if !headKnown {
+                    info += "\n\n\(remote)/HEAD isn’t set here, so Next Term can’t tell whether \(target) is \(remote)’s default branch."
+                }
+                GitPrompt.ask("Force push discards these commits on \(remote)/\(target)", info: info,
+                              buttons: ["Force Push", "Cancel"], destructive: 0, style: .warning, over: window) { choice in
+                    guard choice == 0 else { return }
+                    forcePush(ref, remote: remote, target: target, lease: sha)
                 }
             }
+        }
+    }
+
+    /// The push itself, leased on the commit the prompt showed: if the remote moved since, nothing is replaced.
+    private func forcePush(_ ref: BranchRef, remote: String, target: String, lease sha: String) {
+        let args = ["push", "--porcelain", "--force-with-lease=refs/heads/\(target):\(sha)", remote, "refs/heads/\(ref.name):refs/heads/\(target)"]
+        run("Force push \(ref.name)", [args], activity: .pushing) { pushed in
+            if pushed.ok { return toast("Force-pushed \(ref.name) to \(remote)/\(target)") }
+            if pushed.failure == .leaseFailed {
+                return GitPrompt.ask("\(remote)/\(target) changed since you looked", info: "Nothing was overwritten. Fetch, look at the new commits, and try again.",
+                                     buttons: ["Fetch", "OK"], over: window) { choice in if choice == 0 { fetch() } }
+            }
+            failed("Force push failed", pushed, retry: args)
         }
     }
 
@@ -486,21 +500,36 @@ struct GitActions {
             let sha = result.output.range(of: #"\[[^\]]* ([0-9a-f]{7,})\]"#, options: .regularExpression)
                 .map { String(result.output[$0]).components(separatedBy: " ").last?.dropLast() ?? "" }.map(String.init) ?? ""
             if andPush { return push() }
-            GitToast.show("Committed\(sha.isEmpty ? "" : " " + sha)", in: window, button: "Undo") { undoCommit() }
+            let notice = "Committed\(sha.isEmpty ? "" : " " + sha)"
+            guard let git = GitWriter.git else { return toast(notice) }
+            let root = self.root
+            DispatchQueue.global().async {
+                // Read now what Undo takes back, and to where: a commit made after this one is never it.
+                let point = BranchModel.headAndPrevious(at: root, git: git).flatMap { $0.head.hasPrefix(sha) ? $0 : nil }
+                DispatchQueue.main.async {
+                    guard let point else { return toast(notice) }
+                    GitToast.show(notice, in: window, button: "Undo") { undoCommit(point.head, back: point.previous) }
+                }
+            }
         }
     }
 
-    /// Back to before the commit, with its changes staged: only while no remote has it.
-    private func undoCommit() {
+    /// Back to where HEAD was before `commit` (its parent, or the commit an amend replaced), with its
+    /// changes staged: only while HEAD is still `commit` and no remote has it.
+    private func undoCommit(_ commit: String, back previous: String) {
         guard let git = GitWriter.git else { return }
         let root = self.root
         DispatchQueue.global().async {
-            let published = BranchModel.headIsPublished(at: root, git: git)
+            let head = BranchModel.headAndPrevious(at: root, git: git)?.head
+            let published = BranchModel.isPublished(commit, at: root, git: git)
             DispatchQueue.main.async {
+                if head != commit {
+                    return GitPrompt.ask("HEAD has moved since this commit", info: "A commit or a checkout came after it, so Next Term leaves it.", buttons: ["OK"], over: window) { _ in }
+                }
                 if published {
                     return GitPrompt.ask("That commit is already on a remote", info: "Undoing it now would rewrite shared history, so Next Term leaves it.", buttons: ["OK"], over: window) { _ in }
                 }
-                run("Undo commit", [["reset", "--soft", "HEAD~1"]]) { result in
+                run("Undo commit", [["reset", "--soft", previous]]) { result in
                     result.ok ? toast("Commit undone: its changes are staged") : failed("Could not undo the commit", result, retry: nil)
                 }
             }

@@ -8,7 +8,7 @@ Next Term is one app: a terminal with tabs, a code editor above it, and a projec
 ## What you need
 
 - **macOS 13 Ventura or later**, on Apple Silicon or Intel. The app is universal.
-- About 3 MB to download and 8 MB on disk.
+- About {{DOWNLOAD_SIZE}} to download and {{INSTALLED_SIZE}} on disk.
 - The agents you want to run, installed as usual: `claude`, `codex`, `gemini` and so on. Next Term brings no AI of its own; it runs the command-line agents you already use.
 - zsh, the macOS default shell, gives the most precise tab status. bash and fish work too (see [how detection works](/docs/agent-status/#how-next-term-knows)).
 
@@ -103,4 +103,4 @@ scripts/build-dmg.sh          # universal app, DMG and checksum in dist/
 - [Agents and the IDE link](/docs/agents/): what Claude Code, Gemini CLI and Qwen Code see, and Send to Agent.
 - [Orchestrate agents (MCP)](/docs/orchestration/): let one agent start and steer the others.
 - [Projects and git](/docs/projects-and-git/): the sidebar, agent sessions, the branch popup and the Git Log.
-- [Keyboard shortcuts](/docs/keyboard-shortcuts/): the full list, and how to change any of them.
+- [Keyboard shortcuts](/docs/keyboard-shortcuts/): the full list, and how to change any menu shortcut.

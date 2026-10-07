@@ -9,6 +9,7 @@ import diffShot from '../assets/screenshots/diff.webp';
 import {
 	AUTHOR,
 	AUTHOR_URL,
+	DOWNLOAD_SIZE,
 	MIN_MACOS,
 	RELEASE_NOTES,
 	DOWNLOAD_DMG,
@@ -55,7 +56,7 @@ const head = [
 		softwareVersion: VERSION,
 		downloadUrl: DOWNLOAD_DMG,
 		releaseNotes: RELEASE_NOTES,
-		fileSize: '3MB',
+		fileSize: DOWNLOAD_SIZE.replace(' ', ''),
 		license: 'https://opensource.org/license/mit',
 		isAccessibleForFree: true,
 		offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
@@ -72,7 +73,7 @@ const head = [
 			'Remote tabs on your own servers over ssh, kept running in tmux or herdr',
 			'Split panes',
 			'Go to File: fuzzy search for any file in the project',
-			'Code editor for 112 languages, with git blame and change marks in the gutter',
+			'Code editor with 112 TextMate grammars, git blame and change marks in the gutter',
 			'Read-only Jupyter notebooks with their saved outputs',
 			'A head view for large JSON Lines, CSV and TSV files',
 			'Side-by-side git diffs with hunk staging',
@@ -196,7 +197,7 @@ const faq = [
 			<span>Free and open source (MIT)</span>
 			<span>{MIN_MACOS}</span>
 			<span>Apple Silicon and Intel</span>
-			<span>3 MB download</span>
+			<span>{DOWNLOAD_SIZE} download</span>
 		</p>
 
 		<figure class="shot shot--hero">
@@ -406,7 +407,7 @@ const faq = [
 					<li>
 						<h3>A real code editor</h3>
 						<p>
-							Above the terminal: 112 languages, soft wrap, <kbd>⌘P</kbd> to go to any file, <kbd>⌘/</kbd> to
+							Above the terminal: colours from 112 grammars, soft wrap, <kbd>⌘P</kbd> to go to any file, <kbd>⌘/</kbd> to
 							comment, <kbd>⌘L</kbd> to go to a line. When an agent changes an open file, the editor follows.
 						</p>
 					</li>

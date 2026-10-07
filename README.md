@@ -19,11 +19,17 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
   agent: directly, through an alias or a shell function, `npx`, or `cd app && claude`.
 - **Code editor.** Double-click a file (or click once, with a setting), pick a Find in Files result, or
   ⌘-click `src/app.ts:42:7` in any output: the file opens above the terminal at that line, coloured by
-  VS Code's TextMate grammars for 112 languages: PHP and Blade (Laravel, WordPress), Ruby and ERB (Rails),
+  112 TextMate grammars, the kind VS Code uses: PHP and Blade (Laravel, WordPress), Ruby and ERB (Rails),
   Python and Jinja (Django, Flask), JS/TS/TSX (React, Next.js), Vue, Svelte, Astro, Angular, Liquid, Twig,
   Go and templ, Rust, Elixir, YAML, SQL and more. Line numbers, adjustable line height, soft wrap, auto-indent, ⌘/ to comment, ⌘L to go to a line, find, undo. Files keep
   their encoding, line endings and permissions. When an agent changes a file you have open, the editor
   follows; if you have unsaved edits it asks first.
+- **Jupyter notebooks, read-only.** A `.ipynb` opens as cells: Markdown laid out, code coloured in the
+  kernel's language, and the outputs saved in the file (text, tables as text, images and errors). Nothing
+  runs (there is no kernel); Open as JSON shows the file itself.
+- **Large data files.** A JSON Lines, CSV or TSV file over 2 MB opens in a read-only head view: its first
+  1,000 rows as a table, as fast for a 2 GB file as for a small one, with Load More, search and Copy As.
+  Logs and other text files over 32 MB open there too.
 - **Send to Agent (⌥⌘K).** Select code in the editor or a diff, or files and folders in the sidebar, and send
   them to the agent in your tab: Next Term types the reference in that agent's own syntax (`@app/User.php#L10-20`
   for Claude, `app/User.php:10-20` for Codex and others) and hands you the prompt to add your instruction. It
@@ -59,20 +65,33 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
   `/opt/homebrew/bin`), or, when there is none, offers to put it in `/usr/local/bin` with your password.
   It never changes PATH or touches anyone else's `nxtrm`.
 - **Your layout.** The terminal below the editor (default), beside it on the right or left, or above it;
-  the project sidebar on the left or right. From the ⋯ buttons or the View menu.
+  the project sidebar on the left or right. From the ⋯ buttons or the View menu. ⌘J folds the terminal
+  away so the editor gets the room, and brings it back at its size.
 - **Projects.** Open a folder as a project (⌘O): its window keeps the project in the sidebar, and new tabs
   open in it by default. Next Term reopens your last projects at launch (on first launch it asks for a
   folder). Open Recent, Close Project, and a Welcome window, like an IDE.
 - **Project sidebar with git.** The project as a live file tree: changed files and folders coloured, with
   `+12 −3` line counts like a pull request, and the branch and total changes at the top, with a **Pull 152**
-  button when the upstream has commits you don't.
+  button when the upstream has commits you don't (Next Term fetches every 10 minutes, so it appears
+  without a click).
   Files your agents create or change show up on their own.
+- **Databases.** A Databases group in the sidebar lists the databases a project's own files name (Laravel
+  and Herd `DB_*` keys, `DATABASE_URL`, Prisma, Drizzle, Supabase, Vercel-linked projects, SQLite files),
+  found by reading them, without running project code; local or remote by host, passwords masked. SQLite
+  files open in a read-only viewer; other connections open in TablePlus when it is installed (libSQL
+  aside), and local and development ones (Docker, OrbStack) in `mysql` or `psql` in a new tab.
 - **Branches in one popup.** Click the branch (⌥⌘B): search branches and actions, check out, branch,
   update, commit, push, rebase and merge. It asks before changing files under a working agent, keeps
   uncommitted changes in a named stash, and logs every git command exactly as typed (Git › Git Commands).
 - **Git Log.** The commit history as a graph in an editor tab (⌥⌘L): lanes per line of history, branch
   and tag badges, filters by branch, author, date, paths and message or hash, and each commit's changed
   files, with a double-click for a file's diff in that commit. It follows the repository as agents commit.
+- **Git blame.** View › Annotate with Git Blame shows who last changed each line, how long ago and the
+  commit, beside the line numbers; click to see that commit in the Git Log. View › Current Line Blame
+  adds a note after the line with the caret.
+- **Changes in the gutter.** A bar beside the line numbers marks the lines added (green) or changed (blue)
+  since the last commit, and a red wedge where lines were deleted, as you type or an agent writes. Click a
+  mark for the file's changes side by side.
 - **Split panes.** Split any tab right (⌘D) or down (⌘⇧D), as often as you like: an agent beside its
   test run, two agents side by side. Move between panes with ⌥⌘ and the arrows, maximize one with
   ⌘⇧↩, close it with ⌘W. The panes without the keyboard are shaded, and the tab's mark shows the pane
@@ -103,8 +122,8 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
   version opens a window with what's new (Install, Remind Me Later or Skip This Version), and a blue
   Update button at the top right brings it back. It downloads, is checked against its checksum signed
   with the Next Term release key, and replaces the app when you relaunch.
-- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): a 3 MB download, about 8 MB installed.
-  macOS 13 or later.
+- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 13 MB to download, 35 MB
+  installed. macOS 13 or later.
 
 ## Install
 
@@ -165,6 +184,7 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 |---|---|
 | New tab (in the project, or the current tab's folder) | ⌘T |
 | New window | ⌘N |
+| New remote tab (on one of your servers) | ⌥⌘T |
 | Open project / Close project | ⌘O / Shell menu |
 | Go to File (`name` or `name:line`) | ⌘P |
 | Resume an agent session (↩ resume, ⌘↩ fork) | ⌥⌘O |
@@ -176,7 +196,9 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | Next / previous tab | ⌘⇧] / ⌘⇧[, Ctrl-Tab / Ctrl-Shift-Tab |
 | Rename tab | ⌥⌘R, or double-click the tab |
 | Project sidebar | ⌘B |
+| Fold the terminal away (and back) | ⌘J |
 | Find / next / previous | ⌘F / ⌘G / ⌘⇧G |
+| Use the selection for Find | ⌘E |
 | Replace in the open file | ⌥⌘F |
 | Find in Files / Replace in Files | ⌘⇧F / ⌘⇧R |
 | Clear | ⌘K |
@@ -186,10 +208,12 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | Close the file being edited | ⌘W (with the editor focused) |
 | Comment line / Go to line | ⌘/ / ⌘L |
 | Show changes (side by side) | ⌥⌘G |
+| Branches (the branch popup) | ⌥⌘B |
+| Git Log (the commit graph) | ⌥⌘L |
 | Send to Agent | ⌥⌘K |
 | Indent / Outdent | ⌘] / ⌘[ (Tab / ⇧Tab on selected lines) |
 | Between editor and terminal | ⌃` |
-| Keyboard Shortcuts (change any of these) | ⌘, |
+| Keyboard Shortcuts (change any menu shortcut) | ⌘, |
 
 In the sidebar: Return renames, ⌘⌫ moves to the Trash, ⌘↓ or double-click opens (or one click: Settings ›
 Editor › Open files with a single click). Right-click for Open in New Tab, Open as Project, Reveal in Finder,
@@ -211,8 +235,14 @@ closes; tabs that don't fit go behind the » button.
 - **The MCP server** listens on a Unix socket only you can open (0600, and each connection is checked to
   be yours), never on the network. Agents reach it through `nxtrm mcp`, which they start themselves.
   Tabs refuse input from their own agent, and a tab running something closes only when told to force it.
-- **Git** runs read-only with `--no-optional-locks`, so the sidebar never holds the index lock while your
-  own git commands run.
+- **Git:** the sidebar reads status with read-only calls and `--no-optional-locks`, so it never holds the
+  index lock while your own git commands run. On its own, Next Term only runs `git fetch`: every 10 minutes
+  while it is the active app, and as the branch popup opens if the last fetch is over 5 minutes old. That
+  updates remote-tracking branches and tags, never your branches, files or index, and Settings › Editor ›
+  Git turns it off. Everything else runs only when you ask: checkout, merge, rebase, commit, push, stash,
+  the sidebar's Pull and Push, and staging a hunk. Next Term asks first when an agent is working in the
+  folder, puts changes a switch would overwrite in a named stash, and force-pushes only with a lease on the
+  commits it showed you, never to `main`, `master`, `release/*` or the default branch `<remote>/HEAD` names.
 
 ## Build from source
 
@@ -258,8 +288,9 @@ Tests/                  unit tests (swift-testing)
 scripts/                build, test and icon scripts
 ```
 
-`NextTermCore` has no AppKit dependency, so an iPad/iPhone app (SwiftTerm supports UIKit) or another
-front end can reuse it.
+`NextTermCore` has no AppKit dependency, so another front end can reuse it. An iPad or iPhone app
+(SwiftTerm supports UIKit) could reuse most of it, but not as it is: it runs git with Foundation's
+`Process` and finds the home folder with `homeDirectoryForCurrentUser`, and iOS has neither.
 
 ## Roadmap
 
@@ -273,7 +304,10 @@ macOS-only); the core logic would carry over.
 Terminal emulation by [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT). Syntax highlighting by
 [shiki-swift](https://github.com/fayazara/shiki-swift) (MIT) with Oniguruma (BSD), using TextMate grammars from
 [shikijs/textmate-grammars-themes](https://github.com/shikijs/textmate-grammars-themes), each under its own
-permissive licence ([list](Resources/Highlighting/GRAMMARS.md)).
+permissive licence ([list](Resources/Highlighting/GRAMMARS.md)). File icons from the
+[Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme) (MIT), whose icons
+draw on Pictogrammers' Material Design Icons and Google's Material Symbols (Apache 2.0), rendered with
+[SwiftDraw](https://github.com/swhitty/SwiftDraw) (zlib).
 
 ## License
 

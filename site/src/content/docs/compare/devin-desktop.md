@@ -25,10 +25,10 @@ Devin Desktop is the new name for Windsurf, Cognition’s AI code editor, since 
 | Notifications | ✓ Quote the agent’s question; Dock badge | ✓ When a session finishes or needs input; off by default |
 | Cloud agents | — Agents run on your Mac, or on your own servers in remote tabs | ✓ Devin cloud agents, on paid plans |
 | MCP | ✓ An MCP server: one agent starts, prompts, waits for and reads the others | ✓ An MCP client for the tools you add |
-| Code editor | ✓ 112 languages, Go to File (<kbd>⌘P</kbd>); no language servers | ✓ A full editor on VS Code OSS, with extensions from Open VSX |
+| Code editor | ✓ 112 grammars, Go to File (<kbd>⌘P</kbd>); no language servers | ✓ A full editor on VS Code OSS, with extensions from Open VSX |
 | Reviewing agent changes | ✓ Side-by-side diffs, stage, unstage or revert per hunk; the Git Log and blame | ✓ Diff zones with accept and reject for each hunk |
 | Remote work | Partly: terminal tabs on your servers over ssh, kept running in tmux or herdr | ✓ Remote-SSH, Dev Containers, WSL (beta) |
-| The app | Native Swift and AppKit, about a 3 MB download | Built on VS Code OSS |
+| The app | Native Swift and AppKit, about a {{DOWNLOAD_SIZE}} download | Built on VS Code OSS |
 
 ## Choose Devin Desktop if…
 
@@ -42,7 +42,7 @@ Devin Desktop is the new name for Windsurf, Cognition’s AI code editor, since 
 - **You want to run Claude Code, Codex or Gemini CLI as they are,** in a terminal, signed in the way each one normally is, without an editor plan in between. In Devin Desktop, third-party agents need a paid plan.
 - **You want every agent in its own terminal tab,** with its status on the tab and a notification that quotes its question, on by default.
 - **You want one agent to run the others,** across projects, through Next Term’s MCP server.
-- **You want no account and nothing to pay.** Next Term is free, MIT-licensed, about 3 MB, and on its own talks only to GitHub, for a daily update check, and to your projects’ own git remotes, to fetch. You can turn off either.
+- **You want no account and nothing to pay.** Next Term is free, MIT-licensed, about a {{DOWNLOAD_SIZE}} download, and on its own talks only to GitHub, for a daily update check, and to your projects’ own git remotes, to fetch. You can turn off either.
 
 ## Use both
 

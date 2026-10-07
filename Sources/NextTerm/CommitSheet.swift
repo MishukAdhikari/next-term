@@ -169,5 +169,6 @@ final class CommitSheet: NSObject, NSTextViewDelegate {
     static var current: CommitSheet? { shown }
     func type(_ text: String) { message.string = text; updateState() }
     func pressCommit() { if commitButton.isEnabled { commit() } }
+    func setAmend(_ on: Bool) { amend.state = on ? .on : .off; updateState() }
     var fileListText: String { (window.contentView as? NSStackView)?.views.compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: "\n") ?? "" }
 }

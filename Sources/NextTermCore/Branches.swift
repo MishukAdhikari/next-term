@@ -105,6 +105,9 @@ public struct BranchModel: Equatable, Sendable {
     public var recent: [String] = []
     public var worktrees: [Worktree] = []
     public var defaultBranch: String?
+    /// Each remote's default branch, as its `<remote>/HEAD` names it ("origin": "main"). A clone records
+    /// it for origin, and a fetch with git 2.48 or later for any remote; `git remote set-head` sets it.
+    public var remoteHeads: [String: String] = [:]
     public var inProgress: GitInProgress?
 
     public init(root: String, gitDir: String, commonDir: String) {
@@ -116,6 +119,12 @@ public struct BranchModel: Equatable, Sendable {
     public var currentRef: BranchRef? { locals.first { $0.isHead } }
     public func local(_ name: String) -> BranchRef? { locals.first { $0.name == name } }
     public var remoteNames: [String] { Array(Set(remotes.compactMap(\.remote))).sorted() }
+
+    /// A branch others build on, which force push never replaces: main, master, release/*, the default
+    /// branch, and the default branch of the remote pushed to.
+    public func isShared(_ branch: String, on remote: String) -> Bool {
+        ["main", "master", defaultBranch, remoteHeads[remote]].contains(branch) || branch.hasPrefix("release/")
+    }
 
     /// The worktree a branch is checked out in, if it is not this one.
     public func otherWorktree(of branch: BranchRef) -> String? {
@@ -137,6 +146,7 @@ public struct BranchModel: Equatable, Sendable {
             let all = parseRefs(refs)
             model.locals = all.filter { !$0.isRemote }
             model.remotes = all.filter(\.isRemote)
+            model.remoteHeads = parseRemoteHeads(refs)
         }
         model.current = model.currentRef?.name
         model.headSHA = GitRunner.run(git, base + ["rev-parse", "--verify", "--quiet", "HEAD"], timeout: timeout)
@@ -180,6 +190,19 @@ public struct BranchModel: Equatable, Sendable {
                              upstream: f[3].isEmpty ? nil : f[3], ahead: ahead, behind: behind, upstreamGone: f[4] == "gone",
                              isHead: f[5] == "*", worktree: f[6].isEmpty ? nil : f[6])
         }
+    }
+
+    /// The `<remote>/HEAD` symrefs among the same records: each remote's default branch, by remote.
+    public static func parseRemoteHeads(_ data: Data) -> [String: String] {
+        var heads: [String: String] = [:]
+        for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
+            let f = line.split(separator: "\0", omittingEmptySubsequences: false).map(String.init)
+            guard f.count >= 8, f[0].hasPrefix("refs/remotes/"), f[0].hasSuffix("/HEAD") else { continue }
+            let prefix = String(f[0].dropLast("HEAD".count)) // refs/remotes/origin/
+            guard f[7].hasPrefix(prefix), f[7].count > prefix.count else { continue }
+            heads[String(prefix.dropFirst("refs/remotes/".count).dropLast())] = String(f[7].dropFirst(prefix.count))
+        }
+        return heads
     }
 
     /// The branches HEAD moved to lately ("checkout: moving from A to B"), newest first: switches made in
@@ -259,12 +282,21 @@ public struct BranchModel: Equatable, Sendable {
         return data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }
     }
 
-    /// Whether some remote branch already has HEAD (then undoing the last commit would rewrite history
-    /// others may have).
-    public static func headIsPublished(at root: String, git: String) -> Bool {
-        guard let data = GitRunner.run(git, ["-C", root, "--no-optional-locks", "for-each-ref", "--count=1", "--contains", "HEAD", "refs/remotes"],
+    /// Whether some remote branch already has `commit` (then undoing it would rewrite history others may
+    /// have).
+    public static func isPublished(_ commit: String, at root: String, git: String) -> Bool {
+        guard let data = GitRunner.run(git, ["-C", root, "--no-optional-locks", "for-each-ref", "--count=1", "--contains", commit, "refs/remotes"],
                                        timeout: 10) else { return true }
         return !data.isEmpty
+    }
+
+    /// HEAD's commit and the one HEAD was at before it, from HEAD's reflog: right after a commit that is
+    /// its parent, and after an amend the commit it replaced. Nil without an earlier entry (a first commit).
+    public static func headAndPrevious(at root: String, git: String) -> (head: String, previous: String)? {
+        guard let data = GitRunner.run(git, ["-C", root, "--no-optional-locks", "rev-parse", "HEAD", "HEAD@{1}"], timeout: 10) else { return nil }
+        let shas = String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
+        guard shas.count == 2 else { return nil }
+        return (shas[0], shas[1])
     }
 
     // MARK: grouping
