@@ -1,6 +1,6 @@
 ---
 title: Projects and git
-description: "Projects that reopen at launch, and git at a glance: coloured files, +12 −3 line counts, branch and ahead/behind, and file operations with undo."
+description: "Projects that reopen at launch, git at a glance (coloured files, +12 −3 line counts, branch and ahead/behind), the commit history as a graph, and file operations with undo."
 ---
 
 A project is a folder that a window is about. Its files stay in the sidebar, new tabs start in it, and Next Term brings it back the next time you launch. The sidebar is also where you see, at a glance, what your agents have changed.
@@ -68,12 +68,12 @@ The sidebar reads git with `--no-optional-locks`, so it never holds the index lo
 
 Click the branch name at the top of the sidebar, or press <kbd>⌥⌘B</kbd> (**Git › Branches…**). One search covers branches and actions: type a few letters of either.
 
-- **Actions** come first: **Update Project** (with how many commits are waiting, `↓3`), **Commit…** (with your uncommitted `+/−`), **Push…** (`↑2`, or **Publish** for a new branch), **New Branch…** and **Checkout Tag or Revision…**. The ⟳ button (<kbd>⌘R</kbd>) fetches.
+- **Actions** come first: **Update Project** (with how many commits are waiting, `↓3`), **Commit…** (with your uncommitted `+/−`), **Push…** (`↑2`, or **Publish** for a new branch), **New Branch…**, **Checkout Tag or Revision…** and **Git Log**. The ⟳ button (<kbd>⌘R</kbd>) fetches.
 - **Recent**: the last branches this folder was on, including switches made in a terminal or by an agent.
 - **Local**: the current branch first, then folders by prefix (`feat/`, `fix/`), and **Agent branches**, where branches agents make (`claude/…`, `codex/…`, `worktree-…`) stay out of your way. Each shows `↓` and `↑` against its upstream, `gone` when the upstream was deleted, and the worktree it is checked out in.
 - **Worktrees** and **Remote**, when there are any.
 
-<kbd>↩</kbd> checks the branch out; <kbd>→</kbd> or the › opens everything else: **New Branch from Here**, **Rebase onto**, **Merge into**, **Push**, **Rename…**, **Delete…**, **Copy Name**. Typing a name that doesn’t exist offers **New Branch** with it, and a tag or commit offers to check it out.
+<kbd>↩</kbd> checks the branch out; <kbd>→</kbd> or the › opens everything else: **New Branch from Here**, **Show History** (the [Git Log](#git-log) of that branch), **Rebase onto**, **Merge into**, **Push**, **Rename…**, **Delete…**, **Copy Name**. Typing a name that doesn’t exist offers **New Branch** with it, and a tag or commit offers to check it out.
 
 **Nothing is lost, and nothing happens behind an agent’s back:**
 
@@ -85,7 +85,29 @@ Click the branch name at the top of the sidebar, or press <kbd>⌥⌘B</kbd> (**
 
 **Commit…** shows exactly what goes in (what you staged, or every change, with new files marked and anything that looks like a secret or is over 5 MB called out), with **Amend last commit**, **Commit and Push**, and **Let Agent Commit**. A commit can be undone until it is pushed.
 
-Every git command Next Term runs for you is in **Git › Git Commands**, exactly as it would be typed. Next Term never waits on a password prompt: when git needs your password, a key passphrase or a new host key, it says so and opens a terminal tab with the command ready.
+Every git command Next Term runs for you is in **Git › Git Commands**, exactly as it would be typed (the commit history is the [Git Log](#git-log)). Next Term never waits on a password prompt: when git needs your password, a key passphrase or a new host key, it says so and opens a terminal tab with the command ready.
+
+## Git Log
+
+**Git › Git Log** (<kbd>⌥⌘L</kbd>) opens the repository’s commit history in an editor tab, as a graph. You can also open it from the branch popup (**Git Log**), or for one branch with **Show History** in that branch’s menu.
+
+- **The commits**, newest first, each listed after the commits made on top of it. Each line of history has a lane and a colour of its own: a dot is a commit, a ring is a merge, and a circled dot is where HEAD is. Next to the subject are its branches and tags (the branch you are on is filled in), then the author and the date (“3 hours ago” within a week). The first 1,000 commits load at once, and more as you scroll.
+- **Branches and tags**, on the left: All Branches, HEAD, Local (in folders by prefix, agents’ branches together), Remote and Tags. Select one to see only its history. The field above narrows the list.
+- **The selected commit**, on the right: the whole message, the author and committer with dates, the hash (with **Copy**), the parents (click one to go to it), its branches and tags, and the files it changed, with `+/−` for each. A merge is compared with its first parent. Double-click a file for its diff in that commit, side by side, in a tab titled like `app.txt @ 4cc062d`.
+
+**Filters**, above the commits:
+
+| Filter | What it does |
+|---|---|
+| Text or hash | Commits whose message contains the text, in any case. Turn on `.*` for a regular expression. A hash (6 characters or more) shows that commit. |
+| Branch | All branches, HEAD, or one branch or tag. |
+| Author | Part of a name or an email address; **Me** is your `user.name`. |
+| Date | The last 24 hours, 7 days, 30 days or 12 months, or since or until a date (`2025-01-31`, or words git understands, such as “2 weeks ago”). |
+| Paths | Commits that changed these files or folders: chosen, typed, or the ones selected in the sidebar. |
+
+Right-click a commit for **Copy Hash**, **Copy Message**, **New Branch from Here…**, **Checkout…** (of the commit, detached, or of a branch that points at it) and **Show in Branch Popup**. Checking out and branching go through the same steps as in the branch popup, so an agent working in the folder is asked about first.
+
+The log follows the repository: when a commit, checkout, fetch or rebase moves a branch (yours or an agent’s, in any worktree), it reads the history again and keeps the commit you had selected. Like the sidebar, it only reads, with `--no-optional-locks`.
 
 ## File operations
 
