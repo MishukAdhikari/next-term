@@ -2875,6 +2875,14 @@ enum SelfTest {
                 c.revealInSidebar(nil)
                 check(await wait(5) { c.sidebar.selection.contains { canonicalPath($0.url.path) == mainPath } },
                       "the reveal button finds it again after its folder was closed")
+                // Hidden and shown again (⌘B twice): the file in front is revealed.
+                c.sidebar.outline.collapseItem(src)
+                c.sidebar.outline.deselectAll(nil)
+                c.toggleProjectSidebar(nil)
+                c.toggleProjectSidebar(nil)
+                let revealed = await wait(5) { c.sidebar.selection.contains { canonicalPath($0.url.path) == mainPath } }
+                check(c.isSidebarVisible && revealed, "showing the sidebar again reveals the file in front",
+                      c.sidebar.selection.map(\.url.lastPathComponent).joined(separator: ","))
             }
         } else {
             note("sidebar root is \(c.sidebar.root?.path ?? "none"), not the test project: reveal not checked here")

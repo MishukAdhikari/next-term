@@ -729,6 +729,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             placeSidebarDivider(width: AppDelegate.shared.sidebarWidth)
             projectKey = nil
             updateProjectRoot()
+            // Files opened while it was hidden were not revealed: the one in front is now.
+            if let path = editorArea.activePath { sidebar.reveal(path) }
         } else {
             splitView.adjustSubviews()
         }
