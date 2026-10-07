@@ -1854,7 +1854,10 @@ enum SelfTest {
 
         // The branch popup, once the last fetch is old (here: at once), fetches as it opens; the timer is out of the way.
         fetcher.test = (root: work.path, interval: 3600, staleAfter: 0)
-        _ = await wait(5) { !GitWriter.shared.isFetchingInBackground(in: work.path) }
+        // A timer fetch still under way would make the popup skip its own; the schedule knows from its start
+        // (reading the tracked remotes), before GitWriter does.
+        let repository = GitWriter.repository(of: work.path)
+        _ = await wait(5) { !fetcher.schedule.isRunning(repository) }
         theirs("another change")
         w.showBranches(nil)
         let popup = w.branchPopup
