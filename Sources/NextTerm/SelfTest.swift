@@ -485,6 +485,7 @@ enum SelfTest {
         try? FileManager.default.removeItem(at: notes)
 
         await editorChecks(c, proj: proj, tab: inProject)
+        await emptyEditorChecks(c, proj: proj, tab: inProject)
         await goToFileChecks(c, proj: proj)
         await gutterAndCollapseChecks(c, proj: proj)
         await blameChecks(c, proj: proj)
@@ -1928,6 +1929,169 @@ enum SelfTest {
         check(await wait(5) { editor.changeMarks.isEmpty }, "the marks go once the file matches the commit again")
         c.editorArea.close(editor)
         _ = window
+    }
+
+    /// With nothing open the editor is hidden, and stays hidden whatever the pointer does at the work area's
+    /// edge, with the terminal across the whole area. Its divider used to stay grabbable there, 3 points
+    /// right of the sidebar with the terminal on the right (at the terminal's own edge in the other layouts):
+    /// a press that slipped a point, dismissing the branch popup say, showed an editor with no tabs between
+    /// the sidebar and the terminal, and saved its width as the editor's share. Real mouse events, as a hand
+    /// makes them.
+    private static func emptyEditorChecks(_ c: TerminalWindowController, proj: URL, tab: TerminalTab) async {
+        guard let window = c.window, let work = c.editorArea.superview as? NSSplitView, let terminalPane = c.tabBar.superview,
+              let outer = window.contentView as? NSSplitView else { return check(false, "the work area is a split view") }
+        let app = AppDelegate.shared!
+        let area = c.editorArea
+        let defaults = UserDefaults.standard
+        let saved = (position: app.terminalPosition, side: app.sidebarSide, fraction: defaults.object(forKey: "editorFraction"),
+                     width: defaults.object(forKey: "sidebarWidth"), sidebar: c.isSidebarVisible, frame: window.frame)
+        func restore(_ key: String, _ value: Any?) {
+            if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+        func restoreFraction() { restore("editorFraction", saved.fraction) }
+        let readme = proj.appendingPathComponent("README.md")
+        area.closeAll()
+        c.show(tab) // in the git project: the sidebar has its branch
+        if !c.isSidebarVisible { c.toggleProjectSidebar(nil) }
+        // The user's layout: sidebar on the left, terminal on the right.
+        app.terminalPosition = .right
+        app.sidebarSide = .left
+        c.applyLayout()
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        await pause(0.3)
+
+        // First, with a file open: a drag on the line between editor and terminal moves it (so the drags
+        // below reach the split view at all).
+        c.openFile(readme)
+        window.layoutIfNeeded()
+        let editorWidth = area.frame.width
+        let line = work.convert(NSPoint(x: area.frame.maxX + 0.5, y: work.bounds.midY), to: nil)
+        await drag(in: window, from: line, to: NSPoint(x: line.x - 40, y: line.y))
+        window.layoutIfNeeded()
+        check(abs(area.frame.width - (editorWidth - 40)) <= 2, "a drag on the line between editor and terminal moves it",
+              "\(editorWidth) → \(area.frame.width)")
+        area.closeAll()
+        restoreFraction()
+        let fraction = app.editorFraction
+
+        /// What is wrong while nothing is open: an editor showing, a terminal short of the whole work area.
+        func problems() -> String {
+            window.layoutIfNeeded()
+            var found: [String] = []
+            if !area.isHidden { found.append("an editor shows") }
+            if !area.isEmpty || !area.tabBar.items.isEmpty { found.append("\(area.panes.count) panes, \(area.tabBar.items.count) tabs") }
+            let length = work.isVertical ? work.bounds.width : work.bounds.height
+            let frame = terminalPane.frame
+            let (start, size) = work.isVertical ? (frame.minX, frame.width) : (frame.minY, frame.height)
+            if abs(start) > 0.5 || abs(size - length) > 0.5 { found.append("the terminal has \(size) of \(length) from \(start)") }
+            if c.tabBar.onToggleCollapse != nil { found.append("the terminal offers to collapse beside it") }
+            if app.editorFraction != fraction { found.append("the editor's share went from \(fraction) to \(app.editorFraction)") }
+            return found.joined(separator: "; ")
+        }
+        var shot = false
+        func edgeCheck(_ name: String, from: NSPoint, to: NSPoint, steps: Int = 1) async {
+            await drag(in: window, from: from, to: to, steps: steps)
+            let found = problems()
+            check(found.isEmpty, name, found)
+            guard !found.isEmpty else { return }
+            if !shot { shot = true; await screenshot(c, suffix: "-empty-editor") }
+            // Back to a clean start for the next check.
+            c.openFile(readme)
+            area.closeAll()
+            restoreFraction()
+        }
+        let found = problems()
+        check(found.isEmpty, "nothing open: the terminal fills the work area, edge to edge", found)
+
+        let edge = work.convert(NSPoint.zero, to: nil).x // the sidebar's right edge, in the window
+        let middle = work.convert(NSPoint(x: 0, y: work.bounds.midY), to: nil).y
+        let header = c.sidebar.header
+        let gitBar = header.convert(NSPoint(x: 0, y: header.bounds.midY), to: nil).y
+        await edgeCheck("a press 3 pt right of the sidebar that slips 1 pt leaves the editor hidden",
+                        from: NSPoint(x: edge + 3, y: middle), to: NSPoint(x: edge + 4, y: middle))
+        await edgeCheck("… so does a drag from there", from: NSPoint(x: edge + 3, y: middle), to: NSPoint(x: edge + 43, y: middle), steps: 4)
+        await edgeCheck("… and the same press level with the branch at the top",
+                        from: NSPoint(x: edge + 3, y: gitBar), to: NSPoint(x: edge + 5, y: gitBar))
+        // The user's steps: the branch clicked, then a click beside the sidebar to dismiss its popup.
+        if c.sidebar.git.snapshot != nil {
+            c.showBranches(nil)
+            _ = await wait(3) { c.branchPopup.isVisible }
+            await edgeCheck("a click there that closes the branch popup and slips 2 pt leaves the editor hidden",
+                            from: NSPoint(x: edge + 3, y: gitBar), to: NSPoint(x: edge + 5, y: gitBar))
+            if c.branchPopup.isVisible { c.branchPopup.close() }
+        } else {
+            note("no branch in the sidebar: the branch popup's step was skipped")
+        }
+        // The hidden editor's divider in the other layouts: the work area's top edge (terminal at the bottom,
+        // the default), its right edge (terminal on the left) or its bottom edge (terminal on top).
+        for (position, side) in [(AppDelegate.TerminalPosition.bottom, "top"), (.left, "right"), (.top, "bottom")] {
+            app.terminalPosition = position
+            c.applyLayout()
+            window.layoutIfNeeded()
+            let bounds = work.bounds
+            let from: NSPoint, to: NSPoint
+            switch position {
+            case .bottom: // clear of the sidebar's divider and of the tabs (a press on a tab selects it)
+                from = work.convert(NSPoint(x: 5, y: 2), to: nil)
+                to = NSPoint(x: from.x, y: from.y - 40)
+            case .left:
+                from = work.convert(NSPoint(x: bounds.maxX - 2, y: bounds.midY), to: nil)
+                to = NSPoint(x: from.x - 40, y: from.y)
+            default:
+                from = work.convert(NSPoint(x: bounds.midX, y: bounds.maxY - 2), to: nil)
+                to = NSPoint(x: from.x, y: from.y + 40)
+            }
+            await edgeCheck("terminal on the \(position.rawValue): a drag in from the work area's \(side) edge leaves the editor hidden",
+                            from: from, to: to, steps: 4)
+        }
+
+        // A hidden sidebar's divider at the window's edge is no handle either (a file open, so the editor's
+        // own divider is out of the way).
+        app.terminalPosition = .right
+        c.applyLayout()
+        c.openFile(readme)
+        c.toggleProjectSidebar(nil)
+        window.layoutIfNeeded()
+        let main = outer.arrangedSubviews.first { $0 !== c.sidebar }
+        await drag(in: window, from: NSPoint(x: 2, y: middle), to: NSPoint(x: 42, y: middle), steps: 4)
+        window.layoutIfNeeded()
+        let mainFrame = main?.frame ?? .zero
+        check(!c.isSidebarVisible && mainFrame.minX == 0 && mainFrame.width == outer.bounds.width,
+              "with the sidebar hidden, a drag at the window's edge leaves it hidden",
+              "sidebar hidden \(!c.isSidebarVisible), work area \(mainFrame) of \(outer.bounds.width)")
+        app.sidebarVisible = true
+        restore("sidebarWidth", saved.width) // a sidebar dragged out by AppKit saves its width
+        c.setSidebarVisible(true)
+        area.closeAll()
+
+        // Presses at the window's edge resize it (once no divider takes them): its frame back first, as
+        // resizing it moves the sidebar, then the sizes it saved.
+        window.setFrame(saved.frame, display: true)
+        app.terminalPosition = saved.position
+        app.sidebarSide = saved.side
+        restore("sidebarWidth", saved.width)
+        if c.isSidebarVisible != saved.sidebar { c.toggleProjectSidebar(nil) }
+        c.applyLayout()
+        restoreFraction()
+        restore("sidebarWidth", saved.width) // laying out saves the width it placed (the default, if none was saved)
+    }
+
+    /// A press at `from`, moved to `to` in `steps` and released there (window coordinates): real mouse events
+    /// through the app's event queue, as a hand makes them.
+    private static func drag(in window: NSWindow, from: NSPoint, to: NSPoint, steps: Int = 1) async {
+        func event(_ type: NSEvent.EventType, at point: NSPoint) -> NSEvent? {
+            NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                               pressure: type == .leftMouseUp ? 0 : 1)
+        }
+        let path = (1...max(1, steps)).map { i -> NSPoint in
+            let t = CGFloat(i) / CGFloat(max(1, steps))
+            return NSPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t)
+        }
+        let events = [event(.leftMouseDown, at: from)] + path.map { event(.leftMouseDragged, at: $0) } + [event(.leftMouseUp, at: to)]
+        for event in events.compactMap({ $0 }) { NSApp.postEvent(event, atStart: false) }
+        await pause(0.5)
     }
 
     /// View › Annotate with Git Blame: who last changed each line, beside the numbers; edited lines are not
