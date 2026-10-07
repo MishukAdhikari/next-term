@@ -42,7 +42,7 @@ Devin Desktop is the new name for Windsurf, Cognition’s AI code editor, since 
 - **You want to run Claude Code, Codex or Gemini CLI as they are,** in a terminal, signed in the way each one normally is, without an editor plan in between. In Devin Desktop, third-party agents need a paid plan.
 - **You want every agent in its own terminal tab,** with its status on the tab and a notification that quotes its question, on by default.
 - **You want one agent to run the others,** across projects, through Next Term’s MCP server.
-- **You want no account and nothing to pay.** Next Term is free, MIT-licensed, about 3 MB, and makes no network request of its own except a daily update check you can turn off.
+- **You want no account and nothing to pay.** Next Term is free, MIT-licensed, about 3 MB, and on its own talks only to GitHub, for a daily update check, and to your projects’ own git remotes, to fetch. You can turn off either.
 
 ## Use both
 

@@ -42,7 +42,7 @@ Cursor is an AI code editor built on the VS Code codebase, for macOS, Windows an
 - **You already use Claude Code, Codex or Gemini CLI** and want to run them exactly as they are, under your own subscriptions, rather than through an editor’s agent.
 - **You mix agents from different vendors.** Each gets a tab, and every tab shows whether its agent is working, done or waiting on you. When an agent asks for permission, a notification quotes the question.
 - **You want one agent to run the others.** Next Term is an MCP server: an orchestrator can open projects, start agents in new tabs, send prompts, wait for them and read their screens.
-- **You want no account and no lock-in.** Next Term is free, MIT-licensed, about 3 MB, and makes no network request of its own except a daily update check you can turn off.
+- **You want no account and no lock-in.** Next Term is free, MIT-licensed, about 3 MB, and on its own talks only to GitHub, for a daily update check, and to your projects’ own git remotes, to fetch. You can turn off either.
 
 ## Use both
 
