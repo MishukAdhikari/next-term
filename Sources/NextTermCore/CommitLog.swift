@@ -22,6 +22,9 @@ public struct CommitRef: Equatable, Hashable, Sendable {
         self.isCurrent = isCurrent
     }
 
+    /// A remote's HEAD ("origin/HEAD"): a pointer to its default branch, not a branch to check out.
+    public var isRemoteHead: Bool { kind == .remote && fullName.hasSuffix("/HEAD") }
+
     /// "HEAD -> refs/heads/main, refs/remotes/origin/main, tag: refs/tags/v1.0". A detached HEAD is
     /// "HEAD" on its own; with a branch checked out, HEAD is not listed apart from it.
     public static func parse(decoration: String) -> [CommitRef] {
@@ -96,18 +99,22 @@ public struct CommitQuery: Equatable, Sendable {
     public var regex = false
     /// In "Name <email>", ignoring case, always a fixed string.
     public var author = ""
+    /// The author is a whole name (picked from a list), not part of a name or an address: "Ann" is
+    /// not also "Joanne" or "Ann Lee".
+    public var exactAuthor = false
     /// Dates as git reads them: "2025-01-31", "2 weeks ago".
     public var since: String?
     public var until: String?
     /// From the work tree's root.
     public var paths: [String] = []
 
-    public init(scope: Scope = .all, text: String = "", regex: Bool = false, author: String = "", since: String? = nil, until: String? = nil,
-                paths: [String] = []) {
+    public init(scope: Scope = .all, text: String = "", regex: Bool = false, author: String = "", exactAuthor: Bool = false, since: String? = nil,
+                until: String? = nil, paths: [String] = []) {
         self.scope = scope
         self.text = text
         self.regex = regex
         self.author = author
+        self.exactAuthor = exactAuthor
         self.since = since
         self.until = until
         self.paths = paths
@@ -135,13 +142,18 @@ public struct CommitQuery: Equatable, Sendable {
         var args = ["--topo-order", "--decorate=full", "--no-color", "--encoding=UTF-8", "-z", "--format=" + CommitLog.format,
                     "--skip=\(skip)", "--max-count=\(limit)"]
         let text = self.text.trimmingCharacters(in: .whitespaces), author = self.author.trimmingCharacters(in: .whitespaces)
+        // --fixed-strings covers --author as well, so with any regular expression (the text's, or the
+        // anchored one for a whole name) the other part is escaped instead.
+        let exact = exactAuthor && !author.isEmpty
+        let patterns = (regex && !text.isEmpty) || exact
+        let escape = { (part: String) in patterns ? NSRegularExpression.escapedPattern(for: part) : part }
         if !text.isEmpty || !author.isEmpty {
             args.append("--regexp-ignore-case")
-            args.append(regex && !text.isEmpty ? "--extended-regexp" : "--fixed-strings")
+            args.append(patterns ? "--extended-regexp" : "--fixed-strings")
         }
-        if !text.isEmpty { args.append("--grep=" + text) }
-        // --fixed-strings covers --author as well; with a regular expression, the name is escaped instead.
-        if !author.isEmpty { args.append("--author=" + (regex && !text.isEmpty ? NSRegularExpression.escapedPattern(for: author) : author)) }
+        if !text.isEmpty { args.append("--grep=" + (regex ? text : escape(text))) }
+        // git matches the author against "Name <email> time zone".
+        if !author.isEmpty { args.append("--author=" + (exact ? "^" + escape(author) + " <" : escape(author))) }
         if let since, !since.isEmpty { args.append("--since=" + since) }
         if let until, !until.isEmpty { args.append("--until=" + until) }
         // Limited to paths, parents are rewritten to the nearest listed ancestors, so lines still join.

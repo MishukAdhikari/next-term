@@ -344,19 +344,22 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
 
     private func authorMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addBlock("Any Author", on: query.author.isEmpty) { [weak self] in self?.apply { $0.author = "" } }
-        if let me { menu.addBlock("Me (\(me))", on: query.author == me) { [weak self] in self?.apply { $0.author = me } } }
+        menu.addBlock("Any Author", on: query.author.isEmpty) { [weak self] in self?.apply { $0.author = ""; $0.exactAuthor = false } }
+        // A name picked here is that name exactly; Other… takes part of one.
+        let pick = { [weak self] (name: String) in self?.apply { $0.author = name; $0.exactAuthor = true } }
+        let picked = { (name: String) in self.query.exactAuthor && self.query.author == name }
+        if let me { menu.addBlock("Me (\(me))", on: picked(me)) { pick(me) } }
         // The people with the most commits among those loaded.
         let counts = Dictionary(commits.prefix(5000).map { ($0.authorName, 1) }, uniquingKeysWith: +)
         let top = counts.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }.prefix(12).map(\.key).filter { $0 != me && !$0.isEmpty }
         if !top.isEmpty { menu.addItem(.separator()) }
-        for name in top { menu.addBlock(name, on: query.author == name) { [weak self] in self?.apply { $0.author = name } } }
+        for name in top { menu.addBlock(name, on: picked(name)) { pick(name) } }
         menu.addItem(.separator())
         menu.addBlock("Other…") { [weak self] in
             guard let self else { return }
             GitPrompt.text("Show Commits by", info: "Part of a name or an email address, in any case.", initial: self.query.author, placeholder: "ann@example.com",
                            button: "Show", over: self.window, check: { _ in nil }) { text in
-                if let text { self.apply { $0.author = text } }
+                if let text { self.apply { $0.author = text; $0.exactAuthor = false } }
             }
         }
         return menu
@@ -650,7 +653,7 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             self?.withActions { actions, _ in actions.askNewBranch(atCommit: commit.sha, subject: commit.subject) }
         }
         // Its branches can be checked out as branches; the commit itself, detached.
-        let branches = commit.refs.filter { ($0.kind == .branch && !$0.isCurrent) || $0.kind == .remote }
+        let branches = commit.refs.filter { ($0.kind == .branch && !$0.isCurrent) || ($0.kind == .remote && !$0.isRemoteHead) }
         for ref in branches.prefix(6) {
             menu.addBlock("Checkout “\(ref.name)”") { [weak self] in
                 self?.withActions { actions, model in
@@ -667,7 +670,7 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         menu.addItem(.separator())
         menu.addBlock("Show in Branch Popup") { [weak self] in
             guard let self, let controller = self.window?.windowController as? TerminalWindowController else { return }
-            let branch = commit.refs.first { $0.kind == .branch } ?? commit.refs.first { $0.kind == .remote }
+            let branch = commit.refs.first { $0.kind == .branch } ?? commit.refs.first { $0.kind == .remote && !$0.isRemoteHead }
             controller.showBranches(at: self.root, query: branch?.name ?? commit.shortSHA)
         }
     }

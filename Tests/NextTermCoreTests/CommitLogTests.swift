@@ -16,6 +16,8 @@ import Testing
             CommitRef(kind: .branch, name: "feat/x", fullName: "refs/heads/feat/x"),
         ])
         #expect(CommitRef.parse(decoration: "").isEmpty)
+        let remote = CommitRef.parse(decoration: "refs/remotes/origin/main, refs/remotes/origin/HEAD")
+        #expect(remote.map(\.isRemoteHead) == [false, true] && !refs.contains { $0.isRemoteHead })
     }
 
     @Test func logRecords() {
@@ -62,6 +64,9 @@ import Testing
         #expect(Array(filtered.suffix(5)) == ["--end-of-options", "refs/heads/main", "--", "src", "x y"])
         let fixed = CommitQuery(text: "a.b", author: "Ann").arguments(skip: 0, limit: 1, includeHead: true)
         #expect(fixed.contains("--fixed-strings") && fixed.contains("--regexp-ignore-case") && fixed.contains("--author=Ann") && !fixed.contains("--parents"))
+        // A whole name: anchored, so the text is escaped to match as it is.
+        let whole = CommitQuery(text: "a.b", author: "Ann (QA)", exactAuthor: true).arguments(skip: 0, limit: 1, includeHead: true)
+        #expect(whole.contains("--extended-regexp") && whole.contains("--grep=a\\.b") && whole.contains("--author=^Ann \\(QA\\) <"))
     }
 
     /// main: one, then x by Ann; feat: a rename; a merge of feat; a tag on the first commit.
@@ -131,6 +136,11 @@ import Testing
         // Filters.
         #expect(CommitLog.page(CommitQuery(author: "ANN"), in: work, git: git)?.map(\.sha) == [x])
         #expect(CommitLog.page(CommitQuery(author: "ann@example"), in: work, git: git)?.map(\.sha) == [x])
+        // A whole name picked from the menu: "Ann" is part of "Ann Lee", not that name.
+        #expect(CommitLog.page(CommitQuery(author: "Ann"), in: work, git: git)?.map(\.sha) == [x])
+        #expect(CommitLog.page(CommitQuery(author: "Ann", exactAuthor: true), in: work, git: git)?.isEmpty == true)
+        #expect(CommitLog.page(CommitQuery(author: "ann lee", exactAuthor: true), in: work, git: git)?.map(\.sha) == [x])
+        #expect(CommitLog.page(CommitQuery(text: "x", author: "Ann Lee", exactAuthor: true), in: work, git: git)?.map(\.sha) == [x])
         #expect(CommitLog.page(CommitQuery(text: "rename A"), in: work, git: git)?.map(\.sha) == [rename])
         #expect(CommitLog.page(CommitQuery(text: "a.t"), in: work, git: git)?.isEmpty == true) // a fixed string, not a pattern
         #expect(CommitLog.page(CommitQuery(text: "^add .$", regex: true), in: work, git: git)?.map(\.sha) == [x])
