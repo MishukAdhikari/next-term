@@ -38,6 +38,8 @@ final class GitLogRefsView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
     let outline = NSOutlineView()
     let searchField = NSSearchField()
     private let scroll = NSScrollView()
+    /// The rows' tooltips, through one area over the rows in view (set up in build()).
+    private(set) var rowToolTips: RowToolTips?
     /// Folders open, by id, kept as the tree is read again.
     private var expanded: Set<String> = ["group:local"]
     private var selectedRef: String?
@@ -96,6 +98,7 @@ final class GitLogRefsView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
             outline.expandItem(node)
         }
         select(ref: selectedRef)
+        rowToolTips?.update()
     }
 
     /// The tree for a model and its tags; with a filter, only names containing it (and what holds them).
@@ -237,6 +240,9 @@ final class GitLogRefsView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         scroll.autohidesScrollers = true
         scroll.drawsBackground = true
         scroll.backgroundColor = Theme.background
+        rowToolTips = RowToolTips(outline, in: scroll) { [weak self] row in
+            (self?.outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? GitRefCell)?.tipText ?? ""
+        }
         for view in [searchField, scroll] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
@@ -260,6 +266,8 @@ final class GitRefCell: NSTableCellView {
     private let title = NSTextField(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
     private var iconWidth: NSLayoutConstraint!
+    /// The row's tooltip, shown by the tree for rows in view (see RowToolTips).
+    private(set) var tipText = ""
 
     init() {
         super.init(frame: .zero)
@@ -317,7 +325,7 @@ final class GitRefCell: NSTableCellView {
             ])
         }
         detail.stringValue = node.detail
-        toolTip = node.ref.map { $0 == "HEAD" ? "HEAD: " + node.detail : $0 }
+        tipText = node.ref.map { $0 == "HEAD" ? "HEAD: " + node.detail : $0 } ?? ""
         setAccessibilityLabel([node.title, node.detail].filter { !$0.isEmpty }.joined(separator: ", "))
     }
 }

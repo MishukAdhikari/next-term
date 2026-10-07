@@ -1951,6 +1951,17 @@ enum SelfTest {
               "it starts with the git actions", rows.prefix(6).joined(separator: " | "))
         check(rows.contains("▸ feat/ 1") && rows.contains("▸ fix/ 1") && rows.contains("▸ Agent branches 1") && rows.contains("✓ \(start)"),
               "branches sit in folders by prefix, agents' branches together, the current one first", rows.joined(separator: " | "))
+        // Row tooltips come from the popup, for rows in view only, as in the sidebar: none on the row views.
+        let list = popup.tableView
+        list.layoutSubtreeIfNeeded()
+        if let row = rows.firstIndex(of: "✓ \(start)"), let tips = popup.rowToolTips {
+            let rect = list.rect(ofRow: row)
+            let tip = tips.view(list, stringForToolTip: 0, point: NSPoint(x: rect.midX, y: rect.midY), userData: nil)
+            let outside = tips.view(list, stringForToolTip: 0, point: NSPoint(x: rect.midX, y: list.visibleRect.minY - 10), userData: nil)
+            let own = (0..<list.numberOfRows).compactMap { list.view(atColumn: 0, row: $0, makeIfNecessary: false)?.toolTip }
+            check(tip.hasPrefix(start) && outside.isEmpty && own.isEmpty, "the popup's row tooltips are the popup's, for rows in view only",
+                  "\(tip.debugDescription), outside \(outside.debugDescription), on rows \(own)")
+        }
         popup.toggleFolder("local:fix")
         check(popup.rowTitles.contains("b"), "a folder opens to its branches", popup.rowTitles.joined(separator: " | "))
         await screenshot(popup.panelWindow, suffix: "branches")
@@ -2118,6 +2129,17 @@ enum SelfTest {
         }
         check(await wait(8) { log.query.scope == .ref("refs/heads/log/side") && !log.isLoading && log.commits.first?.sha == side },
               "selecting a branch in the tree shows its history", "\(log.query.scope), " + log.refs.rowTitles.joined(separator: " | "))
+        // Its rows' tooltips come from the tree, for rows in view only, as in the sidebar: none on the row views.
+        let tree = log.refs.outline
+        tree.layoutSubtreeIfNeeded()
+        if let row = log.refs.rowTitles.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "side" }), let tips = log.refs.rowToolTips {
+            let rect = tree.rect(ofRow: row)
+            let tip = tips.view(tree, stringForToolTip: 0, point: NSPoint(x: rect.midX, y: rect.midY), userData: nil)
+            let outside = tips.view(tree, stringForToolTip: 0, point: NSPoint(x: rect.midX, y: tree.visibleRect.minY - 10), userData: nil)
+            let own = (0..<tree.numberOfRows).compactMap { tree.view(atColumn: 0, row: $0, makeIfNecessary: false)?.toolTip }
+            check(tip == "refs/heads/log/side" && outside.isEmpty && own.isEmpty, "the branch tree's tooltips are the tree's, for rows in view only",
+                  "\(tip.debugDescription), outside \(outside.debugDescription), on rows \(own)")
+        }
         c.showBranches(nil)
         check(await wait(5) { c.branchPopup.isVisible && c.branchPopup.rowTitles.contains("Git Log") }, "the branch popup has a Git Log row",
               c.branchPopup.rowTitles.prefix(8).joined(separator: " | "))
