@@ -209,5 +209,31 @@ import Testing
         SkillTreeListing.restoreSpelling(in: root, entries: ["refs", "refs/" + composed + ".md"])
         #expect(SkillTreeListing.rawNames(in: root + "/refs").map { Array($0.utf8) } == [Array((composed + ".md").utf8)])
     }
+
+    /// Each folder gets the paths inside it, relative to it, including nested skills and a root skill.
+    @Test func entriesAreGroupedByFolder() throws {
+        let data = Data(#"{"tree": [{"path": "SKILL.md", "type": "blob", "sha": "r"}, {"path": "skills", "type": "tree", "sha": "s"}, {"path": "skills/a", "type": "tree", "sha": "ta"}, {"path": "skills/a/SKILL.md", "type": "blob", "sha": "a1"}, {"path": "skills/a/b", "type": "tree", "sha": "tb"}, {"path": "skills/a/b/SKILL.md", "type": "blob", "sha": "b1"}]}"#.utf8)
+        let all = try #require(SkillTreeListing.parse(data, rootTree: "root", prefix: ""))
+        let byPath = Dictionary(uniqueKeysWithValues: all.skills.map { ($0.path, Set($0.entries)) })
+        #expect(byPath[""]?.contains("skills/a/b/SKILL.md") == true && byPath[""]?.count == 6)
+        #expect(byPath["skills/a"] == ["SKILL.md", "b", "b/SKILL.md"])
+        #expect(byPath["skills/a/b"] == ["SKILL.md"])
+    }
+
+    /// Several names in one folder get their spelling back, each once.
+    @Test func manyNamesInOneFolderGetTheirSpellingBack() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nt-spell2-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        var entries: [String] = []
+        for index in 0..<5 {
+            let fd = open(root + "/u\u{308}ber-\(index).md", O_CREAT | O_WRONLY, 0o644)
+            close(fd)
+            entries.append("\u{FC}ber-\(index).md")
+        }
+        SkillTreeListing.restoreSpelling(in: root, entries: entries)
+        let names = SkillTreeListing.rawNames(in: root).map { Array($0.utf8) }.sorted { $0.lexicographicallyPrecedes($1) }
+        let expected = entries.map { Array($0.utf8) }.sorted { $0.lexicographicallyPrecedes($1) }
+        #expect(names == expected)
+    }
 }
 

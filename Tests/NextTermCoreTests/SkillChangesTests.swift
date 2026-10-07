@@ -594,6 +594,77 @@ import Testing
     }
 }
 
+@Suite struct SkillChangesRoundFiveTests {
+    let home: String
+    let trash: String
+    let engine: SkillChanges
+
+    init() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nt-changes5-\(UUID().uuidString)").path
+        home = root + "/home"
+        trash = root + "/trash"
+        try FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
+        engine = SkillChanges(undoFile: root + "/undo.json", trash: SkillChanges.folderTrash(trash))
+    }
+
+    func skill(_ path: String, body: String = "Body") throws -> String {
+        let folder = (home as NSString).appendingPathComponent(path)
+        try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        let name = (path as NSString).lastPathComponent
+        try "---\nname: \(name)\ndescription: The \(name) skill.\n---\n\(body)\n".write(toFile: folder + "/SKILL.md", atomically: true, encoding: .utf8)
+        return folder
+    }
+
+    func succeeded(_ result: Result<Void, SkillChanges.Failure>) -> Bool {
+        if case .failure(let failure) = result { Issue.record("\(failure.message)"); return false }
+        return true
+    }
+
+    /// Putting a change back reports what is left after each step, and a made item is first reported
+    /// without its fingerprint, so a crash in the middle leaves an Undo that finishes the job.
+    @Test func puttingBackKeepsTheRecordCurrent() throws {
+        let old = try skill(".agents/skills/demo", body: "version 1")
+        let made = try skill("ready/demo", body: "version 2")
+        let trashed = trash + "/demo-v1"
+        try FileManager.default.createDirectory(atPath: trash, withIntermediateDirectories: true)
+        try FileManager.default.moveItem(atPath: old, toPath: trashed)
+        try FileManager.default.moveItem(atPath: made, toPath: old)
+        let entries: [SkillChanges.Change.Entry] = [
+            .init(kind: .trashed, path: old, other: trashed),
+            .init(kind: .created, path: old, left: SkillChanges.fingerprint(old)),
+        ]
+        var seen: [[SkillChanges.Change.Entry]] = []
+        let left = engine.reverse(entries, rollback: true) { seen.append($0) }
+        #expect(left.problems.isEmpty)
+        #expect(seen.first?.count == 2 && seen.first?.last?.left == nil)
+        #expect(seen.last?.isEmpty == true)
+        #expect(try String(contentsOfFile: old + "/SKILL.md", encoding: .utf8).contains("version 1"))
+    }
+
+    /// The record a crash in the middle of removing an installed copy leaves: Undo removes what is left
+    /// of the copy, brings the old one back, and the change below can then be undone too.
+    @Test func undoFinishesARemovalCutShort() throws {
+        let other = try skill(".codex/skills/other")
+        try #require(succeeded(engine.apply([.trash(other)], title: "Remove other")))
+        let old = try skill(".agents/skills/demo", body: "version 1")
+        let trashed = trash + "/demo-v1"
+        try FileManager.default.moveItem(atPath: old, toPath: trashed)
+        // What is left of the new copy, half removed.
+        try FileManager.default.createDirectory(atPath: old + "/scripts", withIntermediateDirectories: true)
+        try "half".write(toFile: old + "/scripts/a.sh", atomically: true, encoding: .utf8)
+        var list = engine.changes
+        list.append(SkillChanges.Change(title: "Update demo", entries: [
+            .init(kind: .trashed, path: old, other: trashed),
+            .init(kind: .created, path: old, left: nil),
+        ]))
+        engine.store(list)
+        try #require(succeeded(engine.undo()))
+        #expect(try String(contentsOfFile: old + "/SKILL.md", encoding: .utf8).contains("version 1"))
+        try #require(succeeded(engine.undo()))
+        #expect(FileManager.default.fileExists(atPath: other + "/SKILL.md"))
+    }
+}
+
 @Suite struct SkillInstallOrderTests {
     /// Several skills in one change: every new copy is made before any old one goes.
     @Test func everyCopyComesFirst() {

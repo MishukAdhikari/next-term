@@ -311,8 +311,12 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
         // and the scripts are what the agent follows and runs, and zsh runs a file's lines whatever its
         // first bytes, so a program is shown too, under a note.
         let text = String(decoding: data.prefix(400_000), as: UTF8.self)
-        let header = file?.binary == true ? "A compiled program, shown as text (zsh runs a file's lines whatever its first bytes):\n\n" : ""
-        textView.string = header + SkillReview.revealHidden(text) + (data.count > 400_000 ? "\n… (the rest is not shown)" : "")
+        let program = file?.binary == true
+        // A program's control bytes as dots: written out one by one they swamp the text and take seconds.
+        // Zero-width characters, tag letters and the like are still written out.
+        let shown = program ? SkillReview.dottingControls(text) : text
+        let header = program ? "A compiled program, shown as text (zsh runs a file's lines whatever its first bytes):\n\n" : ""
+        textView.string = header + SkillReview.revealHidden(shown) + (data.count > 400_000 ? "\n… (the rest is not shown)" : "")
     }
 
     // MARK: answer

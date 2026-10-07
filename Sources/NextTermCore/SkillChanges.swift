@@ -424,7 +424,9 @@ public struct SkillChanges: Sendable {
     /// Puts back what a change that stopped part-way did, and says how that went. `earlier`: the
     /// changes Undo could reverse before this one began (its journal is replaced).
     func putBack(_ change: Change, title: String, problem: String, earlier: [Change]) -> Result<Void, Failure> {
-        let left = reverse(change.entries, rollback: true)
+        let left = reverse(change.entries, rollback: true) { remaining in
+            self.store(earlier + [Change(title: title, entries: remaining, date: change.date)])
+        }
         var message = problem
         for path in left.lost { message += " To put \(path) back, use Put Back on it in the Finder's Trash." }
         if left.problems.isEmpty {
@@ -459,10 +461,10 @@ public struct SkillChanges: Sendable {
             switch entry.kind {
             case .trashed, .removedLink: expected[entry.path] = .some(nil)
             case .created:
-                // Gone: nothing to remove. No fingerprint yet (a crash part-way through the step): what is
-                // there is what it was making.
-                guard Self.exists(entry.path), let left = entry.left else { continue }
-                expected[entry.path] = .some(left)
+                // Gone: nothing to remove. No fingerprint (a crash part-way through making or removing it):
+                // what is there is what it was making, so nothing is expected of it.
+                guard Self.exists(entry.path) else { continue }
+                if let left = entry.left { expected[entry.path] = .some(left) } else { expected.removeValue(forKey: entry.path) }
             case .moved:
                 if let from = entry.other { expected[from] = .some(nil) }
                 expected[entry.path] = .some(entry.left)
@@ -540,7 +542,10 @@ public struct SkillChanges: Sendable {
     /// everything before it (still undoable later), `problems` says what failed. An item the Trash took
     /// without saying where is skipped and listed in `lost`. A rollback (the same change, moments
     /// after) deletes what it made itself; Undo moves it to the Trash.
-    func reverse(_ entries: [Change.Entry], rollback: Bool) -> (remaining: [Change.Entry], problems: [String], lost: [String]) {
+    /// `progress` gets what is still to be reversed after each step, so a journal can stay current: a
+    /// crash part-way through putting a change back then leaves an Undo that finishes the job.
+    func reverse(_ entries: [Change.Entry], rollback: Bool,
+                 progress: (([Change.Entry]) -> Void)? = nil) -> (remaining: [Change.Entry], problems: [String], lost: [String]) {
         let manager = FileManager.default
         var lost: [String] = []
         for index in entries.indices.reversed() {
@@ -556,6 +561,11 @@ public struct SkillChanges: Sendable {
                         guard unlink(entry.path) == 0 else { throw Failure(message: "unlink") }
                     } else if Self.exists(entry.path) {
                         if rollback {
+                            // Recorded without its fingerprint first: after a crash part-way through the
+                            // removal, Undo removes what is left of it rather than refusing.
+                            var pending = Array(entries[...index]).filter { !$0.isLost }
+                            if let last = pending.indices.last { pending[last].left = nil }
+                            progress?(pending)
                             Self.makeRemovable(entry.path)
                             try manager.removeItem(atPath: entry.path)
                         } else {
@@ -602,6 +612,7 @@ public struct SkillChanges: Sendable {
                         try SkillRecord.encodeList(records).write(to: URL(fileURLWithPath: entry.path), options: .atomic)
                     }
                 }
+                progress?(entries[..<index].filter { !$0.isLost })
             } catch {
                 let earlier = entries[...index]
                 lost += earlier.filter { $0.isLost }.map { SkillStep.short($0.path) }

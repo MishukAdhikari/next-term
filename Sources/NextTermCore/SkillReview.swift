@@ -103,16 +103,21 @@ public struct SkillReview: Sendable {
             let readable = size <= maxReadSize
             let data = readable ? (manager.contents(atPath: full) ?? Data()) : (FileHandle(forReadingAtPath: full)?.readData(ofLength: 4096) ?? Data())
             let executable = info.st_mode & 0o111 != 0
-            // A program is a file whose whole header holds together, and never a file named as text or
-            // a script: magic bytes in front of text (which zsh still runs, line by line, and an agent
-            // reads) don't make one.
+            // The header decides what a file is: a program is one whose whole header holds together
+            // (magic bytes in front of text, which zsh still runs line by line, don't make one). The name
+            // decides only how its text is checked: one named as text or a script keeps every text check.
             let looksBinary = isBinaryProgram(data)
-            let binary = looksBinary && !textExtensions.contains(ext) && isProgramHeader(data, size: size)
+            let program = looksBinary && isProgramHeader(data, size: size)
+            let binary = program && !textExtensions.contains(ext)
             let script = scriptExtensions.contains(ext) || data.starts(with: Data("#!".utf8))
             files.append(File(path: relative, size: size, executable: executable, script: script, binary: binary, linkTarget: nil))
-            if binary { flags.append(Flag(level: .warning, file: relative, text: "A compiled program.")) }
-            else if executable { executables.append(relative) }
-            if looksBinary, !binary {
+            if program {
+                let named = "A compiled program, though named like text or a script: run directly, it runs as a program. It is checked as text below."
+                flags.append(Flag(level: .warning, file: relative, text: binary ? "A compiled program." : named))
+            } else if executable {
+                executables.append(relative)
+            }
+            if looksBinary, !program {
                 flags.append(Flag(level: .warning, file: relative, text: "Starts like a compiled program but is text: it is shown below."))
             }
             if !readable {
@@ -124,10 +129,12 @@ public struct SkillReview: Sendable {
             // Checked even when not valid UTF-8 (one bad byte must not hide a script's lines from the checks).
             let text = String(decoding: data, as: UTF8.self)
             guard !binary else {
-                // A shell may still run lines after a program's header: the command checks run on its
-                // printable runs (what `strings` shows; decoding a whole program is slow, and its bytes
-                // read as hidden characters).
+                // A shell may still run lines after a program's header, and an agent may read them: the
+                // command checks run on its printable runs (what `strings` shows), and the hidden-character
+                // check on its text runs. Decoding a whole program is slow, and its bytes read as hidden
+                // characters.
                 flags += commandFlags(printableRuns(data).lowercased(), file: relative)
+                flags += hiddenFlags(textRuns(data), file: relative)
                 continue
             }
             if String(data: data, encoding: .utf8) == nil {
@@ -291,6 +298,28 @@ public struct SkillReview: Sendable {
         return String(decoding: out, as: UTF8.self)
     }
 
+    /// A program's text runs: at least `minimum` scalars with no control character (C0 but tab, DEL, C1)
+    /// and no replacement character: what an agent reads, or zsh runs, after a header.
+    static func textRuns(_ data: Data, minimum: Int = 16) -> String {
+        var out = String.UnicodeScalarView()
+        var run: [Unicode.Scalar] = []
+        for scalar in String(decoding: data, as: UTF8.self).unicodeScalars {
+            let v = scalar.value
+            let printable = (v >= 0x20 && v < 0x7F) || v == 0x09
+            if printable || (v > 0x9F && v != 0xFFFD) {
+                run.append(scalar)
+                continue
+            }
+            if run.count >= minimum {
+                out.append(contentsOf: run)
+                out.append("\n")
+            }
+            run.removeAll(keepingCapacity: true)
+        }
+        if run.count >= minimum { out.append(contentsOf: run) }
+        return String(out)
+    }
+
     /// Commands that fetch and run code the commit does not hold, or reach for credentials.
     static func commandFlags(_ lower: String, file: String) -> [Flag] {
         var flags: [Flag] = []
@@ -363,6 +392,16 @@ public struct SkillReview: Sendable {
         if v == 0x00AD || v == 0x034F || v == 0x115F || v == 0x1160 || v == 0x3164 || v == 0xFFA0 { return "invisible fillers" }
         if (0x200B...0x200F).contains(v) || (0x2060...0x2064).contains(v) || v == 0xFEFF { return "zero-width" }
         return "invisible format characters"
+    }
+
+    /// A program's text with its control characters (but newline and tab) shown as dots.
+    public static func dottingControls(_ text: String) -> String {
+        var out = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            let control = scalar.properties.generalCategory == .control && scalar != "\n" && scalar != "\t"
+            out.append(control ? "·" : scalar)
+        }
+        return String(out)
     }
 
     /// The text with every hidden character written out, so the user sees it: ⟦U+200B⟧.

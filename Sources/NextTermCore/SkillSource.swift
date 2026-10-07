@@ -221,10 +221,21 @@ public enum SkillTreeListing {
         // Split up: as one chain this is slow for the Swift 6.1 type checker.
         let plain = Set(skillFolders.filter(isPlainPath))
         let wanted = plain.filter { prefix.isEmpty || $0 == prefix || $0.hasPrefix(prefix + "/") }
+        // Each path goes to the wanted folders above it, in one pass (not one pass per folder).
+        var inside: [String: [String]] = [:]
+        for folder in wanted { inside[folder] = [] }
+        for path in paths {
+            if inside[""] != nil { inside[""]!.append(path) }
+            var end = path.endIndex
+            while let slash = path[..<end].lastIndex(of: "/") {
+                let folder = String(path[..<slash])
+                if inside[folder] != nil { inside[folder]!.append(String(path[path.index(after: slash)...])) }
+                end = slash
+            }
+        }
         let found: [SkillFolder] = wanted.compactMap { folder in
             guard let tree = folders[folder] else { return nil }
-            let inside = folder.isEmpty ? paths : paths.compactMap { $0.hasPrefix(folder + "/") ? String($0.dropFirst(folder.count + 1)) : nil }
-            return SkillFolder(path: folder, tree: tree, entries: inside)
+            return SkillFolder(path: folder, tree: tree, entries: inside[folder] ?? [])
         }
         let truncated = json["truncated"] as? Bool ?? false
         return (found.sorted { $0.path < $1.path }, truncated)
@@ -298,7 +309,9 @@ public enum SkillTreeListing {
     /// reads from pax headers, which git uses for long paths). Only names with non-ASCII characters,
     /// only through real folders, and only renaming within a folder.
     public static func restoreSpelling(in folder: String, entries: [String]) {
-        var listings: [String: [String]] = [:]
+        // One listing per folder, keyed by name: Swift's String hashing follows `==`, which is canonical
+        // equivalence, so looking up a name finds its on-disk spelling. Updated in place after a rename.
+        var listings: [String: [String: String]] = [:]
         let named = entries.filter { $0.utf8.contains { $0 >= 0x80 } }
         let ordered = named.sorted { $0.split(separator: "/").count < $1.split(separator: "/").count }
         for entry in ordered {
@@ -306,12 +319,11 @@ public enum SkillTreeListing {
             let want = (entry as NSString).lastPathComponent
             guard isRealFolder(parentRelative, in: folder) else { continue }
             let parent = parentRelative.isEmpty ? folder : (folder as NSString).appendingPathComponent(parentRelative)
-            let names = listings[parent] ?? rawNames(in: parent)
+            let names = listings[parent] ?? Dictionary(rawNames(in: parent).map { ($0, $0) }, uniquingKeysWith: { first, _ in first })
             listings[parent] = names
-            // Swift's == is canonical equivalence: the same name, in another spelling.
-            guard let onDisk = names.first(where: { $0 == want && Array($0.utf8) != Array(want.utf8) }) else { continue }
+            guard let onDisk = names[want], Array(onDisk.utf8) != Array(want.utf8) else { continue }
             if rename((parent as NSString).appendingPathComponent(onDisk), (parent as NSString).appendingPathComponent(want)) == 0 {
-                listings[parent] = nil
+                listings[parent]?[want] = want
             }
         }
     }
