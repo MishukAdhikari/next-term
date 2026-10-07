@@ -44,7 +44,7 @@ public struct IconTheme: Decodable, Sendable {
         return file
     }
 
-    /// The icon for a folder, open or closed; the project root has its own.
+    /// The icon for a folder, open or closed; the project root gets the plain folder, not the theme's root icon.
     public func icon(forFolder name: String, parent: String? = nil, expanded: Bool, isRoot: Bool = false) -> String {
         // The theme's root icon is a ring, which reads as a radio button in a tree: the project root is a folder.
         if isRoot { return expanded ? folderExpanded : folder }
