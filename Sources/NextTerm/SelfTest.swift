@@ -1109,6 +1109,35 @@ enum SelfTest {
         check(table.records[safe: 1]?.fields.first == "id", "from its new first row")
         area.close(table)
 
+        await dataEncodingAndGrowthChecks(c, proj: proj)
+
+        // Too large for the editor: the head view, not another app.
+        fm.createFile(atPath: log.path, contents: nil)
+        var logSize = 0
+        if let out = FileHandle(forWritingAtPath: log.path) {
+            let block = Data(String(repeating: "2026-10-07 12:00:00 INFO request served in 12 ms\n", count: 20_000).utf8)
+            while logSize <= TextFile.maxEditableSize { // just past the editor's limit
+                out.write(block)
+                logSize += block.count
+            }
+            try? out.close()
+        }
+        c.openFile(log)
+        let big = area.activeData
+        check(big?.path == canonicalPath(log.path) && big?.kind == .lines, "a 34 MB log the editor refuses opens in the head view",
+              area.activeName ?? "nothing")
+        check(await wait(10) { big?.isSettled == true && big?.records.count == 1000 }, "with its first 1,000 lines")
+        check(big?.isTooLargeForEditor == true && big?.grid.tableColumns.map(\.title) == ["#", "Text"], "as lines, without Open in Editor")
+        if let big { area.close(big) }
+        // Had it opened in the editor instead, close it before the file is deleted under it.
+        if let editor = area.activeEditor, editor.document.path == canonicalPath(log.path) { area.close(editor) }
+    }
+
+    /// A UTF-16 data file opens in the editor; a JSON Lines file whose last line is half written reads it
+    /// whole once it grows.
+    private static func dataEncodingAndGrowthChecks(_ c: TerminalWindowController, proj: URL) async {
+        let fm = FileManager.default
+        let area = c.editorArea
         // UTF-16 with a BOM, as some spreadsheet exports write it: the head view does not read it, the editor does.
         let wide = proj.appendingPathComponent("keywords.csv")
         defer { try? fm.removeItem(at: wide) }
@@ -1156,27 +1185,6 @@ enum SelfTest {
         check(whole?.error == nil && whole?.value(for: "text") == "\"half written\"" && whole?.line == 901
               && feed.records[safe: 901]?.value(for: "id") == "901", "the line reads whole, then the next", whole?.raw ?? "")
         area.close(feed)
-
-        // Too large for the editor: the head view, not another app.
-        fm.createFile(atPath: log.path, contents: nil)
-        var logSize = 0
-        if let out = FileHandle(forWritingAtPath: log.path) {
-            let block = Data(String(repeating: "2026-10-07 12:00:00 INFO request served in 12 ms\n", count: 20_000).utf8)
-            while logSize <= TextFile.maxEditableSize { // just past the editor's limit
-                out.write(block)
-                logSize += block.count
-            }
-            try? out.close()
-        }
-        c.openFile(log)
-        let big = area.activeData
-        check(big?.path == canonicalPath(log.path) && big?.kind == .lines, "a 34 MB log the editor refuses opens in the head view",
-              area.activeName ?? "nothing")
-        check(await wait(10) { big?.isSettled == true && big?.records.count == 1000 }, "with its first 1,000 lines")
-        check(big?.isTooLargeForEditor == true && big?.grid.tableColumns.map(\.title) == ["#", "Text"], "as lines, without Open in Editor")
-        if let big { area.close(big) }
-        // Had it opened in the editor instead, close it before the file is deleted under it.
-        if let editor = area.activeEditor, editor.document.path == canonicalPath(log.path) { area.close(editor) }
     }
 
     private static func deletedFileChecks(_ c: TerminalWindowController, proj: URL) async {
