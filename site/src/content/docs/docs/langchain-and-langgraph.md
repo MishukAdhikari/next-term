@@ -89,7 +89,7 @@ Next Term does not add LangSmith’s MCP server, or any other vendor’s, to you
   ```
 
   Accounts in the EU use `https://eu.api.smith.langchain.com/mcp`.
-- **Codex:** LangSmith’s docs say its hosted MCP server does not work with Codex, and point to the [`langsmith` command-line tool](https://github.com/langchain-ai/langsmith-cli) instead.
+- **Codex:** LangSmith’s docs say its hosted MCP server does not work with Codex, and point to the [`langsmith` command-line tool](https://github.com/langchain-ai/langsmith-cli) instead. LangSmith’s skills come to Codex through the same plugin marketplace, [`langchain-ai/langchain-plugins`](https://github.com/langchain-ai/langchain-plugins): `codex plugin marketplace add langchain-ai/langchain-plugins`, then `codex plugin add langsmith-skills@langchain-plugins`.
 
 If traces do not arrive in LangSmith, check three things the Python SDK is strict about:
 
