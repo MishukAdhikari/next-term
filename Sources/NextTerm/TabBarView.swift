@@ -875,7 +875,8 @@ final class RemoteMarkView: NSView {
         // The dot is cut into the server, so it reads on any background (a tab, its hover, a menu).
         context.saveGState()
         context.beginTransparencyLayer(auxiliaryInfo: nil)
-        glyph.draw(in: glyphRect, from: .zero, operation: .sourceOver, fraction: link == .disconnected ? 0.5 : 1,
+        // Faded when disconnected, but not below 3:1 against the bar: it still says "a server".
+        glyph.draw(in: glyphRect, from: .zero, operation: .sourceOver, fraction: link == .disconnected ? 0.7 : 1,
                    respectFlipped: true, hints: nil)
         context.setBlendMode(.clear)
         context.fillEllipse(in: dot.insetBy(dx: -1.5, dy: -1.5))
