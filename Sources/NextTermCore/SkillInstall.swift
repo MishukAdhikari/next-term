@@ -137,6 +137,14 @@ public enum SkillInstall {
                                 untouched: untouched, agents: SkillAgent.allCases.filter(agents.contains), steps: steps)
     }
 
+    /// Several skills' steps as one change: every new copy is made before any old one goes, so a crash
+    /// part-way through leaves each skill as it was; then each skill's other steps, in order.
+    public static func combined(_ parts: [[SkillStep]]) -> [SkillStep] {
+        let copies = parts.flatMap { $0.filter(\.isCopy) }
+        let rest = parts.flatMap { $0.filter { !$0.isCopy } }
+        return copies + rest
+    }
+
     /// Removing a skill's shared copy and every agent folder's link to it (Claude Code's, and the ones
     /// `npx skills` makes in ~/.commandcode/skills), so no link is left pointing at nothing. Copies of
     /// that name made by hand in an agent's own folder are not part of it and stay.

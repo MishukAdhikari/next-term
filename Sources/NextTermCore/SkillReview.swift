@@ -103,10 +103,10 @@ public struct SkillReview: Sendable {
             let readable = size <= maxReadSize
             let data = readable ? (manager.contents(atPath: full) ?? Data()) : (FileHandle(forReadingAtPath: full)?.readData(ofLength: 16) ?? Data())
             let executable = info.st_mode & 0o111 != 0
-            // A program has zero bytes right after its magic number; four magic bytes in front of text
-            // (which a shell still runs, line by line) don't make one.
+            // A program has a zero byte in its header before any line break; magic bytes in front of
+            // text (which a shell still runs, line by line) don't make one. The shells' own rule.
             let looksBinary = isBinaryProgram(data)
-            let binary = looksBinary && data.prefix(16).dropFirst(4).contains(0)
+            let binary = looksBinary && zeroBeforeNewline(data)
             let script = scriptExtensions.contains(ext) || data.starts(with: Data("#!".utf8))
             files.append(File(path: relative, size: size, executable: executable, script: script, binary: binary, linkTarget: nil))
             if binary { flags.append(Flag(level: .warning, file: relative, text: "A compiled program.")) }
@@ -120,9 +120,14 @@ public struct SkillReview: Sendable {
             }
             if size > 1_000_000 { flags.append(Flag(level: .warning, file: relative, text: "A large file (\(size / 1000) KB).")) }
             if packedExtensions.contains(ext) { flags.append(Flag(level: .warning, file: relative, text: "An archive: its contents are not reviewed here.")) }
-            guard !binary else { continue }
             // Checked even when not valid UTF-8 (one bad byte must not hide a script's lines from the checks).
             let text = String(decoding: data, as: UTF8.self)
+            guard !binary else {
+                // A shell runs the lines after a program's header too: the command checks still apply.
+                flags += commandFlags(text.lowercased(), file: relative)
+                for url in findURLs(text) { urls.insert(url) }
+                continue
+            }
             if String(data: data, encoding: .utf8) == nil {
                 flags.append(Flag(level: .warning, file: relative, text: "Not valid UTF-8: shown with replacement characters."))
             }
@@ -195,6 +200,14 @@ public struct SkillReview: Sendable {
         return true
     }
 
+    /// A zero byte comes before the first line break, in the first 80 bytes.
+    static func zeroBeforeNewline(_ data: Data) -> Bool {
+        let head = Array(data.prefix(80))
+        guard let zero = head.firstIndex(of: 0) else { return false }
+        guard let newline = head.firstIndex(of: 0x0A) else { return true }
+        return zero < newline
+    }
+
     /// Mach-O, fat, ELF and WebAssembly.
     static func isBinaryProgram(_ data: Data) -> Bool {
         let magic: [[UInt8]] = [[0xCF, 0xFA, 0xED, 0xFE], [0xCE, 0xFA, 0xED, 0xFE], [0xCA, 0xFE, 0xBA, 0xBE], [0x7F, 0x45, 0x4C, 0x46], [0x00, 0x61, 0x73, 0x6D]]
@@ -212,7 +225,12 @@ public struct SkillReview: Sendable {
             flags.append(Flag(level: .warning, file: file, text: "\(hidden.count) hidden characters (\(kinds)). They are shown in the text below."))
         }
         if readByAgents, text.contains("<!--") { flags.append(Flag(level: .warning, file: file, text: "An HTML comment: text agents read but rendered Markdown hides.")) }
-        let lower = text.lowercased()
+        return flags + commandFlags(text.lowercased(), file: file)
+    }
+
+    /// Commands that fetch and run code the commit does not hold, or reach for credentials.
+    static func commandFlags(_ lower: String, file: String) -> [Flag] {
+        var flags: [Flag] = []
         let patterns: [(String, String)] = [
             (#"(curl|wget)[^\n|]*\|\s*(sudo\s+)?(sh|bash|zsh|python3?)\b"#, "Downloads a script and runs it (curl … | sh)."),
             // A package name with no @version after it (a scope's leading @ is part of the name).
@@ -245,6 +263,8 @@ public struct SkillReview: Sendable {
     static func isHidden(_ scalar: Unicode.Scalar) -> Bool {
         let v = scalar.value
         if hiddenRanges.contains(where: { $0.contains(v) }) { return true }
+        // Control characters draw as nothing too; tab and line breaks are ordinary.
+        if scalar.properties.generalCategory == .control { return !ordinaryControls.contains(v) }
         guard v != 0xFE0E, v != 0xFE0F else { return false }
         return scalar.properties.isDefaultIgnorableCodePoint
     }
@@ -268,9 +288,11 @@ public struct SkillReview: Sendable {
     }
 
     static let keycapBases = Set("0123456789#*".unicodeScalars)
+    static let ordinaryControls: Set<UInt32> = [0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x85]
 
     static func hiddenKind(_ scalar: Unicode.Scalar) -> String {
         let v = scalar.value
+        if scalar.properties.generalCategory == .control { return "control characters" }
         if (0xE0000...0xE007F).contains(v) { return "invisible tag letters" }
         if (0x202A...0x202E).contains(v) || (0x2066...0x2069).contains(v) || v == 0x061C { return "direction overrides" }
         if (0xFFF9...0xFFFB).contains(v) || (0x1D173...0x1D17A).contains(v) { return "invisible format characters" }

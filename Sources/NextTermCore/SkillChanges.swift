@@ -32,13 +32,17 @@ public struct SkillChanges: Sendable {
             public var previous: String?
             /// created, moved: a fingerprint of what the step left. edited: the entry after (nil: removed).
             public var left: String?
+            /// edited: the file did not exist before, so putting the entry back removes the file again
+            /// when nothing else was written to it.
+            public var newFile: Bool?
 
-            public init(kind: Kind, path: String, other: String? = nil, previous: String? = nil, left: String? = nil) {
+            public init(kind: Kind, path: String, other: String? = nil, previous: String? = nil, left: String? = nil, newFile: Bool? = nil) {
                 self.kind = kind
                 self.path = path
                 self.other = other
                 self.previous = previous
                 self.left = left
+                self.newFile = newFile
             }
 
             /// Moved to the Trash, but the Trash did not say where: only the Finder's Put Back can bring
@@ -95,12 +99,9 @@ public struct SkillChanges: Sendable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let list = (try? decoder.decode([Change].self, from: data)) ?? (try? decoder.decode(Change.self, from: data)).map { [$0] } ?? []
-        // A record from before lost entries were left out: they would block Undo for good.
-        return list.compactMap { change in
-            var kept = change
-            kept.entries.removeAll { $0.isLost }
-            return kept.entries.isEmpty ? nil : kept
-        }
+        // A record from before lost entries were left out: one that holds nothing else has nothing to
+        // undo, and would only block the change below it. Others keep them, so Undo can name them.
+        return list.filter { change in change.entries.contains { !$0.isLost } }
     }
 
     /// The change Undo would reverse next.
@@ -309,8 +310,12 @@ public struct SkillChanges: Sendable {
     /// put back; the message says whether that worked. `verify` runs once every step is done and, by
     /// saying what is wrong, has the change put back the same way (an install that doesn't match what
     /// was reviewed). On success, the change becomes the one Undo reverses, unless it changed nothing
-    /// (a second removal planned before the first ran), when the earlier one stays.
-    public func apply(_ steps: [SkillStep], title: String, verify: (() -> String?)? = nil) -> Result<Void, Failure> {
+    /// (a second removal planned before the first ran), when the earlier one stays. `precheck` runs
+    /// first and, by saying what is wrong, stops the change before anything moves (the steps were
+    /// worked out before another change landed).
+    public func apply(_ steps: [SkillStep], title: String, precheck: (() -> String?)? = nil,
+                      verify: (() -> String?)? = nil) -> Result<Void, Failure> {
+        if let problem = precheck?() { return .failure(Failure(message: problem + " Nothing was changed.")) }
         if let problem = preflight(steps) { return .failure(Failure(message: problem + " Nothing was changed.")) }
         var change = Change(title: title)
         let manager = FileManager.default
@@ -344,8 +349,18 @@ public struct SkillChanges: Sendable {
                 case .move(let from, let to):
                     guard !Self.exists(to) else { throw Failure(message: "\(SkillStep.short(to)) is already there.") }
                     try manager.createDirectory(atPath: (to as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+                    guard let staged = change.entries.lastIndex(where: { $0.kind == .created && $0.path == from }) else {
+                        try manager.moveItem(atPath: from, toPath: to)
+                        change.entries.append(.init(kind: .moved, path: to, other: from, left: Self.fingerprint(to)))
+                        continue
+                    }
+                    // A copy this change made (a staging copy) takes its place: from then on it counts as
+                    // made there, so putting back or Undo removes it from its place, not by way of the
+                    // staging folder. Recorded before moving, so a move that fails half-way is put away too.
+                    change.entries.append(.init(kind: .created, path: to))
                     try manager.moveItem(atPath: from, toPath: to)
-                    change.entries.append(.init(kind: .moved, path: to, other: from, left: Self.fingerprint(to)))
+                    change.entries.remove(at: staged)
+                    change.entries[change.entries.count - 1].left = Self.fingerprint(to)
                 case .link(let at, let to):
                     try manager.createDirectory(atPath: (at as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
                     try manager.createSymbolicLink(atPath: at, withDestinationPath: Self.linkTarget(at: at, to: to))
@@ -369,8 +384,9 @@ public struct SkillChanges: Sendable {
                     let after = SkillLock.rawItem(updated, name: name)
                     guard after != before else { continue } // already as wanted: nothing to write or undo
                     try manager.createDirectory(atPath: (real as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+                    let newFile: Bool? = text == nil ? true : nil
                     try updated.write(toFile: real, atomically: true, encoding: .utf8)
-                    change.entries.append(.init(kind: .editedLock, path: real, other: name, previous: before, left: after))
+                    change.entries.append(.init(kind: .editedLock, path: real, other: name, previous: before, left: after, newFile: newFile))
                 case .recordEntry(let path, let name, let record):
                     var records = SkillRecord.decodeList(manager.contents(atPath: path))
                     let before = records.first { $0.name == name }?.raw()
@@ -378,8 +394,9 @@ public struct SkillChanges: Sendable {
                     records.removeAll { $0.name == name }
                     if let record { records.append(record) }
                     try manager.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+                    let newFile: Bool? = Self.exists(path) ? nil : true
                     try SkillRecord.encodeList(records).write(to: URL(fileURLWithPath: path), options: .atomic)
-                    change.entries.append(.init(kind: .editedRecord, path: path, other: name, previous: before, left: record?.raw()))
+                    change.entries.append(.init(kind: .editedRecord, path: path, other: name, previous: before, left: record?.raw(), newFile: newFile))
                 }
             } catch {
                 let message = (error as? Failure)?.message ?? error.localizedDescription
@@ -401,10 +418,18 @@ public struct SkillChanges: Sendable {
             return .failure(Failure(message: message + (left.lost.isEmpty ? " Nothing was changed." : " Nothing else was changed.")))
         }
         // What could not be put back stays recorded, above the earlier change, so Undo can finish this
-        // one once the cause is fixed and then still reverse the earlier one.
-        store(changes + [Change(title: title, entries: left.remaining)])
-        let problems = left.problems.joined(separator: ", ")
-        return .failure(Failure(message: message + " Next Term could not put back \(problems). Earlier versions are in the Trash, and Undo can try again."))
+        // one once the cause is fixed and then still reverse the earlier one. Recorded as it is now
+        // (the check that stopped it may have found it changed since the step), so Undo isn't refused.
+        var remaining = left.remaining
+        for index in remaining.indices where remaining[index].kind == .created || remaining[index].kind == .moved {
+            remaining[index].left = Self.fingerprint(remaining[index].path)
+        }
+        store(changes + [Change(title: title, entries: remaining)])
+        message += " Next Term could not put back \(left.problems.joined(separator: ", "))."
+        let made = remaining.filter { $0.kind == .created || $0.kind == .moved }.map { SkillStep.short($0.path) }
+        if !made.isEmpty { message += " What it made is still at \(made.joined(separator: ", "))." }
+        if remaining.contains(where: { $0.kind == .trashed }) { message += " Earlier versions are in the Trash." }
+        return .failure(Failure(message: message + " Undo can try again."))
     }
 
     // MARK: undoing
@@ -468,6 +493,13 @@ public struct SkillChanges: Sendable {
         if !list.isEmpty { list.removeLast() }
         if left.problems.isEmpty {
             store(list)
+            guard left.lost.isEmpty else {
+                // A record from before lost entries were left out: the rest is undone, and the user is
+                // told where the remainder is.
+                let lost = left.lost.joined(separator: ", ")
+                return .failure(Failure(message: "“\(change.title)” was undone, except \(lost): it is in the Trash, and macOS did not say where. "
+                                        + "Use Put Back on it in the Finder."))
+            }
             return .success(())
         }
         store(list + [Change(title: change.title, entries: left.remaining, date: change.date)])
@@ -529,18 +561,27 @@ public struct SkillChanges: Sendable {
                 case .removedLink:
                     guard let target = entry.other else { break }
                     if Self.exists(entry.path) { _ = try trash(entry.path) }
+                    try manager.createDirectory(atPath: (entry.path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
                     try manager.createSymbolicLink(atPath: entry.path, withDestinationPath: target)
                 case .editedLock:
                     let text = Self.exists(entry.path) ? try String(contentsOfFile: entry.path, encoding: .utf8) : nil
                     guard case .success(let restored) = SkillLock.replacingRawItem(text, name: entry.other ?? "", raw: entry.previous) else {
                         throw Failure(message: "unreadable")
                     }
-                    try restored.write(toFile: entry.path, atomically: true, encoding: .utf8)
+                    if entry.newFile == true, SkillLock.holdsNothing(restored) {
+                        try manager.removeItem(atPath: entry.path) // made by this change, and empty again
+                    } else {
+                        try restored.write(toFile: entry.path, atomically: true, encoding: .utf8)
+                    }
                 case .editedRecord:
                     var records = SkillRecord.decodeList(manager.contents(atPath: entry.path))
                     records.removeAll { $0.name == entry.other }
                     if let previous = entry.previous.flatMap(SkillRecord.fromRaw) { records.append(previous) }
-                    try SkillRecord.encodeList(records).write(to: URL(fileURLWithPath: entry.path), options: .atomic)
+                    if entry.newFile == true, records.isEmpty {
+                        try manager.removeItem(atPath: entry.path) // made by this change, and empty again
+                    } else {
+                        try SkillRecord.encodeList(records).write(to: URL(fileURLWithPath: entry.path), options: .atomic)
+                    }
                 }
             } catch {
                 let earlier = entries[...index]

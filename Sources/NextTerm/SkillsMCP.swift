@@ -19,7 +19,7 @@ enum SkillsMCP {
     static var cooldown: TimeInterval = 600
     static let maxRequestsPerAsker = 10
 
-    final class Request {
+    @MainActor final class Request {
         let id = String(UUID().uuidString.prefix(8)).lowercased()
         /// What is asked, for spotting the same request again: "install:owner/repo" or "remove:name".
         let key: String
@@ -269,7 +269,8 @@ enum SkillsMCP {
                                                  }
                                                  // From here the removal happens (it may wait for another change first).
                                                  window.setCommitted(true)
-                                                 switch await SkillsStore.apply(steps, title: "Remove \(name)") {
+                                                 let check = SkillsStore.removalCheck(name, shown: shown)
+                                                 switch await SkillsStore.apply(steps, title: "Remove \(name)", precheck: check) {
                                                  case .success:
                                                      resolve(request, ["status": "removed", "skill": name])
                                                      window.finish()

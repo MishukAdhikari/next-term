@@ -237,16 +237,17 @@ public enum SkillTreeListing {
         return out
     }
 
-    /// Folders as a `tar --null -T` list: each folder and everything in it, written both as given and
+    /// Folders as a `tar --null -T` list: each folder and everything in it, written as given and
     /// decomposed. tar compares a pattern with a name as the archive stores it, which is as committed,
-    /// or decomposed when it comes from a pax header; only one of the two is in the archive. Raw bytes
-    /// in a file, because arguments would reach tar decomposed.
+    /// or decomposed when it comes from a pax header (the way macOS file names are: some ranges are
+    /// left whole); only one spelling is in the archive. Raw bytes in a file, because arguments would
+    /// reach tar decomposed.
     public static func tarPatternList(_ folders: [String]) -> Data {
-        // By bytes: Swift's String equality would treat the two spellings as one.
+        // By bytes: Swift's String equality would treat the spellings as one.
         var seen = Set<[UInt8]>()
         var out = Data()
         for folder in folders {
-            for form in [folder, folder.decomposedStringWithCanonicalMapping] {
+            for form in [folder, folder.decomposedStringWithCanonicalMapping, fileSystemDecomposed(folder)] {
                 let literal = tarLiteral(form)
                 for pattern in [literal, literal + "/*"] where seen.insert(Array(pattern.utf8)).inserted {
                     out.append(contentsOf: Array(pattern.utf8))
@@ -257,10 +258,37 @@ public enum SkillTreeListing {
         return out
     }
 
+    /// Decomposed as macOS file names are: characters in U+2000–U+2FFF, U+F900–U+FAFF and
+    /// U+2F800–U+2FAFF stay whole.
+    static func fileSystemDecomposed(_ text: String) -> String {
+        var out = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            let v = scalar.value
+            let whole = (0x2000...0x2FFF).contains(v) || (0xF900...0xFAFF).contains(v) || (0x2F800...0x2FAFF).contains(v)
+            if whole { out.append(scalar) } else { out.append(contentsOf: String(scalar).decomposedStringWithCanonicalMapping.unicodeScalars) }
+        }
+        return String(out)
+    }
+
+    /// Whether `relative` (a/b/c) inside `root` is a folder reached through real folders only: a link
+    /// on the way (or a name that matches another folder's case or spelling and is a link) could lead
+    /// out of the download.
+    public static func isRealFolder(_ relative: String, in root: String) -> Bool {
+        var path = root
+        var info = stat()
+        guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { return false }
+        for component in relative.split(separator: "/") {
+            path = (path as NSString).appendingPathComponent(String(component))
+            guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { return false }
+        }
+        return true
+    }
+
     /// Whether tar's complaints are only about patterns that matched nothing (the spelling not in the
     /// archive): "tar: <name>: Not found in archive", then a closing line.
     public static func tarErrorsAreOnlyMissingNames(_ text: String) -> Bool {
-        let lines = text.split(whereSeparator: \.isNewline).map(String.init)
+        // Split on line feeds only: a name may hold other line separators (U+2028, U+0085).
+        let lines = text.utf8.split(separator: 0x0A).map { String(decoding: $0, as: UTF8.self) }
         return lines.allSatisfy { line in
             line.hasSuffix(": Not found in archive") || line == "tar: Error exit delayed from previous errors."
         }

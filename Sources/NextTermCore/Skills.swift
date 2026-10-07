@@ -544,6 +544,12 @@ public enum SkillStep: Equatable, Sendable {
     /// Set (or remove) one skill in Next Term's own record of installs, the same way.
     case recordEntry(path: String, name: String, record: SkillRecord?)
 
+    /// A copy step (the slow one).
+    public var isCopy: Bool {
+        if case .copy = self { return true }
+        return false
+    }
+
     public var summary: String {
         switch self {
         case .trash(let path): return "Move \(Self.short(path)) to the Trash"

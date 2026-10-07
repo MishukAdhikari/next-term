@@ -84,7 +84,7 @@ The orchestrator is the one waiting, so a tab it opened with `new_tab` or gave i
 
 ### Agents asking for skills
 
-`install_skill` and `remove_skill` are requests, not actions. Each opens a small window naming the tab that asked, or saying the request came from outside Next Term’s tabs, with the agent’s reason shown as its own words. The window does not take the keyboard and has no Return button, so typing meant for a terminal never answers it. One request is open at a time: another one gets `busy`. A source you decline stays declined until Next Term quits. The call answers within about 50 seconds: `installed`, `removed`, `declined`, or `pending` with a `request_id` the agent passes again to keep waiting.
+`install_skill` and `remove_skill` are requests, not actions. Each opens a small window naming the tab that asked, or saying the request came from outside Next Term’s tabs, with the agent’s reason shown as its own words. The window does not take the keyboard and has no Return button, so typing meant for a terminal never answers it. One request is open at a time: another one gets `busy`. A source you decline stays declined until Next Term quits. The call answers within about 50 seconds: `installed`, `removed`, `declined`, `failed` with a `note` saying why (for example, the download changed after the review), or `pending` with a `request_id` the agent passes again to keep waiting.
 
 ## An example: two projects, two agents
 

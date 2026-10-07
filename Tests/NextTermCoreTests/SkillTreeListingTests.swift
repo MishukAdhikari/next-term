@@ -127,7 +127,9 @@ import Testing
     /// decompose are found whichever way the archive stores them.
     @Test func foldersAreSelectedWhateverTheirSpelling() throws {
         let top = "example-skills-0123456"
-        let nfc = "caf\u{E9}", nfd = "cafe\u{301}"
+        let nfc = "caf\u{E9}"
+        // Committed decomposed (from a Mac), asked for by its composed name.
+        let storedDecomposed = "re\u{301}sume\u{301}", asked = "r\u{E9}sum\u{E9}"
         let long = String(repeating: "long", count: 30) + "/\u{AC00}"
         var entries = [Entry(name: Array("\(top)/".utf8), folder: true), Entry(name: Array("\(top)/skills/".utf8), folder: true)]
         entries.append(Entry(name: Array("\(top)/skills/中文/SKILL.md".utf8), data: Array("zh".utf8)))
@@ -135,6 +137,7 @@ import Testing
         entries.append(Entry(name: Array("\(top)/skills/\(nfc)/SKILL.md".utf8), data: Array("nfc".utf8)))
         entries.append(Entry(name: Array("\(top)/skills/\(long)/SKILL.md".utf8), data: Array("long".utf8), pax: true))
         entries.append(Entry(name: Array("\(top)/skills/other/SKILL.md".utf8), data: Array("other".utf8)))
+        entries.append(Entry(name: Array("\(top)/skills/\(storedDecomposed)/SKILL.md".utf8), data: Array("nfd".utf8)))
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("nt-tar-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let file = root.appendingPathComponent("a.tar")
@@ -148,7 +151,7 @@ import Testing
         let chinese = try select(["中文"])
         #expect(chinese.status == 0)
         #expect(chinese.out.split(separator: "\n").count == 21)
-        for folder in [nfc, long] {
+        for folder in [nfc, long, asked] {
             let found = try select([folder])
             #expect(found.out.split(separator: "\n").count == 1, "\(folder)")
             // The spelling that isn't in the archive is reported, and only that.
@@ -166,4 +169,28 @@ import Testing
         #expect(patterns.contains(Array("top/cafe\u{301}/*".utf8)))
         #expect(patterns.contains(Array("top/ok\\*".utf8)))
     }
+
+    /// Names as macOS decomposes them (some ranges stay whole) are in the list too, and a line
+    /// separator inside a name doesn't split tar's complaint about it.
+    @Test func moreSpellingsAndSeparators() {
+        let patterns = SkillTreeListing.tarPatternList(["top/\u{2126}\u{E9}"]).split(separator: 0).map { Array($0) }
+        #expect(patterns.contains(Array("top/\u{2126}e\u{301}".utf8)))
+        #expect(SkillTreeListing.tarErrorsAreOnlyMissingNames("tar: top/a\u{2028}b: Not found in archive\ntar: Error exit delayed from previous errors.\n"))
+    }
+
+    /// A chosen folder must be reached through real folders: not through a link, even one whose name
+    /// differs only in case.
+    @Test func chosenFoldersAreReachedWithoutLinks() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nt-real-\(UUID().uuidString)").path
+        let outside = root + "-outside"
+        try FileManager.default.createDirectory(atPath: root + "/skills/K", withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: outside + "/.ssh", withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: root + "/skills/K/L", withDestinationPath: outside)
+        #expect(SkillTreeListing.isRealFolder("skills/K", in: root))
+        #expect(SkillTreeListing.isRealFolder("", in: root))
+        #expect(!SkillTreeListing.isRealFolder("skills/K/L/.ssh", in: root))
+        #expect(!SkillTreeListing.isRealFolder("skills/k/L/.ssh", in: root))
+        #expect(!SkillTreeListing.isRealFolder("skills/missing", in: root))
+    }
 }
+

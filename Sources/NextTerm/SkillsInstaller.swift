@@ -210,9 +210,10 @@ enum SkillsInstaller {
             lockKnown = false
             notes.append("The lock file of npx skills is in a format Next Term does not know, so it was left alone.")
         }
+        var parts: [[SkillStep]] = []
         for candidate in chosen {
             let plan = plan(candidate, fetched: fetched, linkForClaude: linkForClaude, inventory: inventory)
-            steps += plan.steps
+            var part = plan.steps
             if lockKnown {
                 let hash = candidate.found.path.isEmpty ? fetched.resolved.commit : candidate.found.tree
                 // An update keeps the date it was first installed (nil keeps what the file has).
@@ -220,13 +221,15 @@ enum SkillsInstaller {
                                             skillPath: candidate.found.skillPath, skillFolderHash: hash,
                                             ref: fetched.resolved.namedRef ? source.ref : nil,
                                             installedAt: plan.existing == .update ? nil : date, updatedAt: date)
-                steps.append(.lockEntry(path: fetched.lockPath, name: candidate.name, entry: entry))
+                part.append(.lockEntry(path: fetched.lockPath, name: candidate.name, entry: entry))
             }
             let record = SkillRecord(name: candidate.name, owner: source.owner, repo: source.repo, path: candidate.found.path,
                                      ref: fetched.resolved.namedRef ? source.ref : nil, commit: fetched.resolved.commit, tree: candidate.found.tree,
                                      contentHash: candidate.found.tree, installedAt: date, linkedForClaude: plan.agents.contains(.claudeCode))
-            steps.append(.recordEntry(path: recordsFile, name: candidate.name, record: record))
+            part.append(.recordEntry(path: recordsFile, name: candidate.name, record: record))
+            parts.append(part)
         }
+        steps = SkillInstall.combined(parts)
         // The files sat on disk during the review: checked against the commit right before copying.
         let folders = chosen.map { ($0.folder, $0.found.tree) }
         let intact = await Task.detached { folders.allSatisfy { GitHash.folder($0.0) == $0.1 } }.value

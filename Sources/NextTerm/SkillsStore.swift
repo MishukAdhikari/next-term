@@ -45,15 +45,13 @@ enum SkillsStore {
     /// Posted when a change starts or ends, so views turn off (or back on) what would start another.
     static let busyChanged = Notification.Name("NextTermSkillsBusyChanged")
 
-    /// Changes asked for and not finished yet. Quitting waits until it is 0: a change cut off part-way
-    /// would leave a half-made skill and no Undo.
+    /// Changes asked for and not finished yet (views hold what would start another meanwhile).
     @MainActor private(set) static var running = 0
-    @MainActor private static var whenIdle: [() -> Void] = []
 
-    /// Runs `body` once no change is running (now, if none is).
-    @MainActor static func afterChanges(_ body: @escaping () -> Void) {
-        if running == 0 { body() } else { whenIdle.append(body) }
-    }
+    /// Blocks until every change asked for so far is on disk, with its Undo: quitting waits for this,
+    /// since a change cut off part-way would leave a half-made skill and no Undo. The work never needs
+    /// the main thread, so this can't deadlock, wherever the quit comes from.
+    static func waitForChanges() { queue.sync {} }
 
     /// Queued from the main actor, so changes run in the order they were asked for.
     @MainActor private static func run(_ work: @escaping @Sendable (SkillChanges) -> Result<Void, Failure>) async -> Result<Void, Failure> {
@@ -66,19 +64,26 @@ enum SkillsStore {
         running -= 1
         notify()
         NotificationCenter.default.post(name: busyChanged, object: nil)
-        if running == 0 {
-            let waiting = whenIdle
-            whenIdle = []
-            waiting.forEach { $0() }
-        }
         return result
     }
 
-    /// `verify` runs right after the last step, in the same turn on the queue: a problem it names puts
-    /// the change back before anything else can run.
+    /// `precheck` runs first and `verify` right after the last step, both in the change's own turn on
+    /// the queue: a problem either names stops the change, or puts it back, before anything else runs.
     @discardableResult
-    @MainActor static func apply(_ steps: [SkillStep], title: String, verify: (@Sendable () -> String?)? = nil) async -> Result<Void, Failure> {
-        await run { $0.apply(steps, title: title, verify: verify) }
+    @MainActor static func apply(_ steps: [SkillStep], title: String, precheck: (@Sendable () -> String?)? = nil,
+                                 verify: (@Sendable () -> String?)? = nil) async -> Result<Void, Failure> {
+        await run { $0.apply(steps, title: title, precheck: precheck, verify: verify) }
+    }
+
+    /// For a removal: whether the copies and links it moves to the Trash are still the ones the user
+    /// was shown, read again in the change's own turn (another change may have landed since).
+    static func removalCheck(_ name: String, shown: [SkillStep]) -> @Sendable () -> String? {
+        let home = home
+        let trashed = shown.filter { if case .trash = $0 { return true }; return false }
+        return {
+            let now = SkillInstall.removal(name: name, inventory: SkillInventory.scan(home: home))
+            return now == trashed ? nil : "“\(name)” changed since you looked. Look again before removing it."
+        }
     }
 
     /// `expected`: the change the user confirmed; if another one landed since, nothing is undone.

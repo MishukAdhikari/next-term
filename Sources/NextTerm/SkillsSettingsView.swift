@@ -26,6 +26,8 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     private var review: SkillsReviewSheet?
     /// Counts reloads, so a slow scan never overwrites a newer one.
     private var generation = 0
+    /// A change landed and the rows shown are from before it, until the reload shows.
+    private var pendingReload = false
     private var keyObserver: NSObjectProtocol?
 
     override init(frame: NSRect) {
@@ -131,7 +133,11 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
 
     // MARK: data
 
-    @objc private func reloadFromNotification() { reload() }
+    @objc private func reloadFromNotification() {
+        // Until the folders are read again, the rows shown are from before the change: hold the actions.
+        pendingReload = window != nil
+        reload()
+    }
 
     /// Reads the folders off the main thread (it reads every SKILL.md, and hashes copies to compare),
     /// only while the view is on screen.
@@ -149,6 +155,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
 
     private func show(_ inventory: SkillInventory) {
         self.inventory = inventory
+        pendingReload = false
         let needsAttention = filter.indexOfSelectedItem == 1
         rows = inventory.rows.filter { !needsAttention || Self.needsAttention($0) }
         let problems = inventory.rows.filter(Self.needsAttention).count
@@ -279,12 +286,20 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
 
     @objc private func busyChanged() { updateButtons() }
 
+    /// For the self-test: shows `inventory` and selects the skill named `name`.
+    func selectForTest(_ name: String, in inventory: SkillInventory) {
+        show(inventory)
+        guard let index = rows.firstIndex(where: { $0.name == name }) else { return }
+        table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+        updateButtons()
+    }
+
     private func updateButtons() {
         let row = selectedRow
         let personal = showsPersonal
         // While a change runs, nothing that would start another: the view is about to change, and Undo
         // would reverse whatever is on top by then.
-        let idle = SkillsStore.running == 0
+        let idle = SkillsStore.running == 0 && !pendingReload
         unifyButton.isEnabled = idle && personal && (row.map { !$0.isUnified && !$0.distinctCopies.isEmpty } ?? false)
         let claudeRoot = inventory?.root(.claude)
         let claudeHasIt = row?.copies.contains { $0.root.kind == .claude } != false
@@ -379,7 +394,10 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
                 Task {
                     let (steps, _, _) = await SkillsInstaller.removal(row.name)
                     guard steps == shown else { return Self.tell("“\(row.name)” changed since you looked. Look again before removing it.", in: window) }
-                    if case .failure(let failure) = await SkillsStore.apply(steps, title: "Remove \(row.name)") { Self.tell(failure.message, in: window) }
+                    let check = SkillsStore.removalCheck(row.name, shown: shown)
+                    if case .failure(let failure) = await SkillsStore.apply(steps, title: "Remove \(row.name)", precheck: check) {
+                        Self.tell(failure.message, in: window)
+                    }
                 }
             }
         }
@@ -407,7 +425,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         alert.beginSheetModal(for: window) { response in
             guard response == .alertFirstButtonReturn else { return }
             // Only the change named here: if another landed meanwhile, nothing is undone.
-            Task { if case .failure(let failure) = await SkillsStore.undo(expecting: last) { Self.tell(failure.message, in: window) } }
+            Task { if case .failure(let failure) = await SkillsStore.undo(expecting: last) { Self.tell(failure.message, in: window, title: "Undo") } }
         }
     }
 

@@ -200,8 +200,11 @@ enum SkillsGitHub {
         // through links, and does not restore owners.
         _ = try await tar(["-xzf", archive.path, "-C", unpacked.path, "--no-same-owner"] + select, timeout: 60, missingIsFine: true)
         let folder = unpacked.appendingPathComponent(top, isDirectory: true)
-        let missing = paths.contains { !manager.fileExists(atPath: folder.appendingPathComponent($0).path) }
-        guard manager.fileExists(atPath: folder.path), !missing else { throw Failure(message: "The downloaded files could not be unpacked.") }
+        // Each chosen folder is unpacked, and reached through real folders only: a folder left out of
+        // the download could otherwise be found through a link with a name that differs only in case
+        // or spelling, and lead out of it.
+        let reached = paths.allSatisfy { SkillTreeListing.isRealFolder($0, in: folder.path) }
+        guard reached else { throw Failure(message: "The downloaded files could not be unpacked.") }
         return folder
     }
 

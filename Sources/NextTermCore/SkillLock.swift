@@ -135,6 +135,13 @@ public enum SkillLock {
         return serialize(object)
     }
 
+    /// Holds nothing but an empty list of skills: what Next Term writes when it makes the file.
+    static func holdsNothing(_ text: String) -> Bool {
+        guard case .success(let object) = parse(text) else { return false }
+        let skills = object["skills"] as? [String: Any] ?? [:]
+        return skills.isEmpty && Set(object.keys).isSubset(of: ["version", "skills"])
+    }
+
     /// One entry exactly as the file holds it (keys sorted), or nil: what Undo puts back and checks.
     public static func rawItem(_ text: String?, name: String) -> String? {
         guard case .success(let object) = parse(text), let item = (object["skills"] as? [String: Any])?[name],

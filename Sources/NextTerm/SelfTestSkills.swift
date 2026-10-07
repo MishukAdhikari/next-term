@@ -53,15 +53,19 @@ extension SelfTest {
         guard let winner = sync?.copies.first(where: { $0.root.kind == .claude }) else { return check(false, "skills: the Claude copy is found") }
         let steps = SkillUnify.plan(sync!, winner: winner, in: inventory)
         // While it runs, Settings offers nothing that would start another change (Undo would reverse
-        // whatever is on top by then), and quitting waits for it to finish.
+        // whatever is on top by then). Offered before it: an earlier change to undo, and the row selected.
+        let shared = (home as NSString).appendingPathComponent(".agents/skills/tidy-prose")
+        let claudeLink = (home as NSString).appendingPathComponent(".claude/skills/tidy-prose")
+        await SkillsStore.apply([.link(at: claudeLink, to: shared)], title: "Link tidy-prose for Claude Code")
+        view.selectForTest("release-notes", in: SkillsStore.inventory())
+        let offered = view.undoButton.isEnabled && view.unifyButton.isEnabled
         let seen = WhileRunning()
-        let watcher = seen.watch { _ in !view.undoButton.isEnabled && !view.unifyButton.isEnabled }
+        let watcher = seen.watch { !view.undoButton.isEnabled && !view.unifyButton.isEnabled }
         let applied = await SkillsStore.apply(steps, title: "Unify release-notes")
         NotificationCenter.default.removeObserver(watcher)
         if case .failure(let failure) = applied { check(false, "skills: Unify applies", failure.message) }
-        check(seen.held == true && !seen.quitRanEarly && seen.quitWaited,
-              "skills: while a change runs, Settings holds Unify and Undo, and quitting waits for it",
-              "held=\(String(describing: seen.held)) early=\(seen.quitRanEarly) waited=\(seen.quitWaited)")
+        check(offered && seen.held == true, "skills: Unify and Undo are offered, and held while a change runs",
+              "offered=\(offered) held=\(String(describing: seen.held))")
         let after = SkillsStore.inventory().rows.first { $0.name == "release-notes" }
         check(read(".agents/skills/release-notes/SKILL.md")?.contains("claude version") == true && isLink(".claude/skills/release-notes"),
               "skills: Unify leaves one shared copy with the chosen version, linked for Claude Code")
@@ -71,8 +75,16 @@ extension SelfTest {
               "skills: the other copies are gone from the agents' folders")
         check(SkillsStore.lastChange?.title == "Unify release-notes", "skills: the change is remembered for Undo")
 
-        // Undo puts every copy back as it was.
-        if case .failure(let failure) = await SkillsStore.undo() { check(false, "skills: Undo applies", failure.message) }
+        // Undo puts every copy back as it was. Quitting meanwhile waits on the changes themselves (what
+        // the quit path calls): when the wait returns, the Undo is on disk.
+        let undoing = Task { await SkillsStore.undo() }
+        var spins = 0
+        while SkillsStore.running == 0, spins < 1000 { await Task.yield(); spins += 1 }
+        let wasRunning = SkillsStore.running > 0
+        SkillsStore.waitForChanges()
+        check(wasRunning && read(".codex/skills/release-notes/SKILL.md")?.contains("codex version") == true,
+              "skills: quitting during a change waits until it is on disk", "running=\(wasRunning)")
+        if case .failure(let failure) = await undoing.value { check(false, "skills: Undo applies", failure.message) }
         check(read(".claude/skills/release-notes/SKILL.md")?.contains("claude version") == true && !isLink(".claude/skills/release-notes")
               && read(".codex/skills/release-notes/SKILL.md")?.contains("codex version") == true
               && read(".commandcode/skills/release-notes/SKILL.md")?.contains("command code version") == true
@@ -158,14 +170,16 @@ extension SelfTest {
         try? await Task.sleep(nanoseconds: 300_000_000)
         let removeWindow = SkillsMCP.open?.window
         // Once the removal is under way it can't be stopped, so Decline (which would say it was) is held.
+        let declinable = removeWindow?.declineButton.isEnabled == true
         let seen = SelfTest.WhileRunning()
-        let watcher = seen.watch { _ in removeWindow?.declineButton.isEnabled == false && removeWindow?.stopButton?.isEnabled == false }
+        let watcher = seen.watch { removeWindow?.declineButton.isEnabled == false && removeWindow?.stopButton?.isEnabled == false }
         removeWindow?.approveButton.performClick(nil)
         let removed = await ask("remove_skill", ["request_id": removal["request_id"] as? String ?? ""])
         NotificationCenter.default.removeObserver(watcher)
         check(removed["status"] as? String == "removed" && !manager.fileExists(atPath: shared),
               "skills mcp: a removal the user approves goes through, and the agent hears so", "\(removal) \(removed)")
-        check(seen.held == true, "skills mcp: once the removal runs, Decline is held", "\(String(describing: seen.held))")
+        check(declinable && seen.held == true, "skills mcp: Decline is offered, and held once the removal runs",
+              "declinable=\(declinable) held=\(String(describing: seen.held))")
         _ = await SkillsStore.undo()
         check(manager.fileExists(atPath: shared + "/SKILL.md"), "skills mcp: Undo puts the removed skill back")
 
@@ -297,20 +311,15 @@ extension SelfTest {
         check(window.window?.title == "Skills" && SkillFeatured.list.count >= 10, "skills: Window › Skills opens with the Featured list")
     }
 
-    /// Looks at the window the moment a skill change starts (and asks to quit then), for checks that
-    /// hold only while it runs.
-    final class WhileRunning {
+    /// Looks at the window the moment a skill change starts, for checks that hold only while it runs.
+    @MainActor final class WhileRunning {
         var held: Bool?
-        var quitWaited = false
-        var quitRanEarly = false
 
-        func watch(_ test: @escaping (WhileRunning) -> Bool) -> NSObjectProtocol {
-            NotificationCenter.default.addObserver(forName: SkillsStore.busyChanged, object: nil, queue: nil) { [self] _ in
+        func watch(_ test: @escaping @MainActor () -> Bool) -> NSObjectProtocol {
+            NotificationCenter.default.addObserver(forName: SkillsStore.busyChanged, object: nil, queue: nil) { _ in
                 MainActor.assumeIsolated {
-                    guard SkillsStore.running > 0, held == nil else { return }
-                    held = test(self)
-                    SkillsStore.afterChanges { self.quitWaited = true }
-                    quitRanEarly = quitWaited
+                    guard SkillsStore.running > 0, self.held == nil else { return }
+                    self.held = test()
                 }
             }
         }
