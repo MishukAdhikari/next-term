@@ -2745,6 +2745,28 @@ enum SelfTest {
                   "from Staged, Send to Agent marks the lines as staged and sends them as code", "\(String(describing: item))")
             side.setSelectedRange(NSRange(location: 0, length: 0))
         }
+        // Both changes staged, and lines selected across them: the lines between, not shown, are marked.
+        diff.base = .unstaged
+        _ = await wait(5) { diff.hunkCount == 1 && diff.sideTexts.1.contains("line twelve") && !diff.sideTexts.1.contains("line two") }
+        diff.go(toHunk: 0)
+        diff.perform(.stage)
+        diff.base = .staged
+        if await wait(5, { diff.hunkCount == 2 }), let side = diff.focusView as? NSTextView {
+            let text = side.string as NSString
+            let from = text.range(of: "line two"), to = text.range(of: "line twelve")
+            if from.location != NSNotFound, to.location != NSNotFound {
+                side.setSelectedRange(NSRange(location: from.location, length: NSMaxRange(to) - from.location))
+            }
+            let item = diff.contextItem()
+            check(item?.lines == 2...12 && item?.code == "line two\nline 3\nline 4\nline 5\n⋯\nline 9\nline 10\nline 11\nline twelve",
+                  "a selection across two hunks marks the lines between them with ⋯", "\(String(describing: item))")
+            side.setSelectedRange(NSRange(location: 0, length: 0))
+            diff.go(toHunk: 1)
+            diff.perform(.unstage)
+            _ = await wait(5) { diff.hunkCount == 1 }
+        } else {
+            check(false, "Stage Hunk stages the second change too", "\(diff.hunkCount) staged")
+        }
         diff.go(toHunk: 0)
         diff.perform(.unstage)
         check(await wait(5) { diff.hunkCount == 0 }, "Unstage Hunk takes it back out")

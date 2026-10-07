@@ -375,6 +375,7 @@ final class DiffPane: NSView {
     func contextItem() -> ContextItem? {
         guard proposal == nil else { return nil }
         var item = ContextItem(path: absolutePath)
+        let language = EditorLanguage.id(forFileName: (path as NSString).lastPathComponent) ?? "text"
         let numbered = selectedRows().filter { right.number(at: $0) != nil }
         let lines = numbered.compactMap { right.number(at: $0) }
         if let first = lines.first, let last = lines.last { item.lines = first...last }
@@ -386,13 +387,27 @@ final class DiffPane: NSView {
             item.note = "deleted"
         }
         if commit != nil || base == .staged, item.lines != nil {
-            let code = numbered.compactMap { rows[$0].right?.text }.joined(separator: "\n")
+            let code = code(of: numbered, on: right)
             if !AgentPrompt.isTooLargeToInline(code) {
                 item.code = code
-                item.language = EditorLanguage.id(forFileName: (path as NSString).lastPathComponent) ?? "text"
+                item.language = language
             }
         }
         return item
+    }
+
+    /// The lines of `rows` on one side, with a "⋯" line where its line numbers jump: the lines between two
+    /// hunks, which the diff doesn't show.
+    private func code(of rows: [Int], on column: DiffColumn) -> String {
+        var lines: [String] = []
+        var previous: Int?
+        for row in rows {
+            guard let number = column.number(at: row), let text = column.text(at: row) else { continue }
+            if let previous, number != previous + 1 { lines.append("⋯") }
+            previous = number
+            lines.append(text)
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// The rows under the selection on the side that has the keyboard (else the new side).
@@ -591,6 +606,12 @@ final class DiffColumn: NSScrollView {
     func number(at row: Int) -> Int? {
         guard rows.indices.contains(row) else { return nil }
         return side == .left ? rows[row].left?.oldNumber : rows[row].right?.newNumber
+    }
+
+    /// Text shown on each row (nil: a filler or a hunk header).
+    func text(at row: Int) -> String? {
+        guard rows.indices.contains(row) else { return nil }
+        return side == .left ? rows[row].left?.text : rows[row].right?.text
     }
 
     func show(_ rows: [SideBySideRow], language: String?) {
