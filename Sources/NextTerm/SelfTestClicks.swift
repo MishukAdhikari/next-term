@@ -9,6 +9,7 @@ import SQLite3
 extension SelfTest {
     static func singleClickChecks(_ c: TerminalWindowController, proj: URL, tab: TerminalTab) async {
         guard let window = c.window, let app = AppDelegate.shared else { return }
+        guard await frontmost(window, "every check") else { return }
         let fm = FileManager.default
         let key = "sidebarSingleClickOpens"
         let savedSetting = UserDefaults.standard.object(forKey: key)
@@ -80,14 +81,16 @@ extension SelfTest {
               "single click: off by default, in Settings › Editor and in the sidebar's ⋯ menu",
               "setting \(app.sidebarSingleClickOpens), box \(String(describing: box?.state)), menu \(String(describing: menuItem?.state))")
         check(box?.toolTip?.hasPrefix("A click opens the file in a preview tab") == true, "the checkbox says what it does", box?.toolTip ?? "no tooltip")
-        window.makeFirstResponder(outline)
-        clickRow(c, files[0])
-        check(area.panes.isEmpty && outline.selectedRowIndexes == IndexSet(integer: sidebarRow(c, files[0])) && window.firstResponder === outline,
-              "single click off: a click on a file only selects it", "\(area.panes.count) tabs, \(outline.selectedRowIndexes.count) selected")
-        doubleClickRow(c, files[0])
-        check(area.panes.count == 1 && area.activePath == path(files[0]) && area.previewPane == nil && c.isEditorFocused,
-              "single click off: a double-click opens it in an ordinary tab, with the keyboard", "\(area.panes.count) tabs")
-        area.closeAll()
+        if await frontmost(window, "the clicks with the setting off") {
+            window.makeFirstResponder(outline)
+            clickRow(c, files[0])
+            check(area.panes.isEmpty && outline.selectedRowIndexes == IndexSet(integer: sidebarRow(c, files[0])) && window.firstResponder === outline,
+                  "single click off: a click on a file only selects it", "\(area.panes.count) tabs, \(outline.selectedRowIndexes.count) selected")
+            doubleClickRow(c, files[0])
+            check(area.panes.count == 1 && area.activePath == path(files[0]) && area.previewPane == nil && c.isEditorFocused,
+                  "single click off: a double-click opens it in an ordinary tab, with the keyboard", "\(area.panes.count) tabs")
+            area.closeAll()
+        }
 
         // On, from the ⋯ menu.
         let menu = LayoutMenu.sidebar()
@@ -96,17 +99,30 @@ extension SelfTest {
         let itemOn = LayoutMenu.sidebar().items.first { $0.title == "Open Files with a Single Click" }?.state == .on
         check(app.sidebarSingleClickOpens && boxOn && itemOn, "the ⋯ menu item turns single clicks on, and both places show it")
 
-        await previewChecks(c, files: files, atLimit: atLimit, invariant: invariant)
-        await keepChecks(c, files: files, invariant: invariant)
-        await selectOnlyChecks(c, folder: folder, files: files, png: png, binary: binary, large: large, invariant: invariant)
-        await keyboardAndLoopChecks(c, files: files, invariant: invariant)
-        await deletedAndDatabaseChecks(c, proj: proj, folder: folder, files: files, gone: gone, hasGit: gitPath != nil, invariant: invariant)
-        await renameAndOffChecks(c, files: files, invariant: invariant)
+        // Each group again: the app can lose the front during a long run.
+        if await frontmost(window, "previews") {
+            await previewChecks(c, files: files, atLimit: atLimit, invariant: invariant)
+        }
+        if await frontmost(window, "keeping a preview") {
+            await keepChecks(c, files: files, invariant: invariant)
+        }
+        if await frontmost(window, "the clicks that only select") {
+            await selectOnlyChecks(c, folder: folder, files: files, png: png, binary: binary, large: large, invariant: invariant)
+        }
+        if await frontmost(window, "keys, Locate and proposals") {
+            await keyboardAndLoopChecks(c, files: files, invariant: invariant)
+        }
+        if await frontmost(window, "deleted files and databases") {
+            await deletedAndDatabaseChecks(c, proj: proj, folder: folder, files: files, gone: gone, hasGit: gitPath != nil, invariant: invariant)
+        }
+        if await frontmost(window, "renames and turning it off") {
+            await renameAndOffChecks(c, files: files, invariant: invariant)
+        }
         check(broken.isEmpty, "a preview never has unsaved changes, and a window has one at most (after every step)", broken.joined(separator: ", "))
 
         area.closeAll()
         if let savedSetting { UserDefaults.standard.set(savedSetting, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
-        if gitPath != nil, !fm.fileExists(atPath: gone.path) {
+        if gitPath != nil { // deleted by the checks, or still there when they were skipped
             git("rm", "-q", "--", "clicks/gone.txt")
             git("commit", "-qm", "single click done")
         }
@@ -249,18 +265,23 @@ extension SelfTest {
         let selected = outline.selectedRowIndexes.count
         check(selected >= 3 && unchanged(), "⌘-click and ⇧-click select several files and open none", "\(selected) selected, \(area.panes.count) tabs")
 
-        // ⌃-click is the right-click: with no menu to show, AppKit would pass it on as a click.
+        // ⌃-click is the right-click: with no menu to show, AppKit would pass it on as a click. That
+        // selects the row, which shows the click arrived (one row selected first: on a row of several
+        // selected, AppKit sends nothing).
+        outline.selectRowIndexes(IndexSet(integer: sidebarRow(c, files[0])), byExtendingSelection: false)
         let rowMenu = outline.menu
         outline.menu = nil
-        clickRow(c, files[1], flags: .control)
+        let controlTracked = clickRow(c, files[1], flags: .control)
         outline.menu = rowMenu
-        check(unchanged(), "⌃-click opens nothing", area.activeName ?? "none")
+        let controlSelected = isSelection(c, files[1])
+        check(controlTracked && controlSelected && unchanged(), "⌃-click selects the file and opens nothing",
+              "tracked \(controlTracked), selected \(controlSelected), front \(area.activeName ?? "none")")
 
         let last = outline.rect(ofRow: outline.numberOfRows - 1)
         let below = NSPoint(x: 60, y: last.maxY + 12)
         if below.y < outline.bounds.maxY {
-            click(outline, at: below)
-            check(unchanged(), "a click in the empty space below the rows opens nothing")
+            let tracked = click(outline, at: below) // it changes no selection: the outline taking the mouse-up shows it arrived
+            check(tracked && unchanged(), "a click in the empty space below the rows opens nothing", "tracked \(tracked)")
         } else {
             note("no empty space below the sidebar's rows: that click is not checked")
         }
@@ -268,13 +289,18 @@ extension SelfTest {
         let sub = folder.appendingPathComponent("sub")
         if let subNode = root.node(at: canonicalPath(sub.path)) {
             let wasOpen = outline.isItemExpanded(subNode)
-            clickRow(c, sub)
+            let folderTracked = clickRow(c, sub)
+            let folderSelected = isSelection(c, sub)
             await pause(0.3)
-            check(outline.isItemExpanded(subNode) == wasOpen && unchanged(), "a click on a folder's name neither opens nor closes it")
-            outline.scrollRowToVisible(0)
-            click(outline, at: namePoint(outline, 0))
+            check(folderTracked && folderSelected && outline.isItemExpanded(subNode) == wasOpen && unchanged(),
+                  "a click on a folder's name selects it and neither opens nor closes it", "tracked \(folderTracked), selected \(folderSelected)")
+            let rootRow = outline.row(forItem: root)
+            outline.scrollRowToVisible(rootRow)
+            let rootTracked = click(outline, at: namePoint(outline, rootRow))
+            let rootSelected = rootRow >= 0 && outline.selectedRowIndexes == IndexSet(integer: rootRow)
             await pause(0.3)
-            check(outline.isItemExpanded(root) && unchanged(), "nor does a click on the project's own row")
+            check(rootTracked && rootSelected && outline.isItemExpanded(root) && unchanged(), "nor does a click on the project's own row",
+                  "tracked \(rootTracked), selected \(rootSelected)")
             if !outline.isItemExpanded(subNode) {
                 let row = outline.row(forItem: subNode)
                 let rowView = outline.rowView(atRow: row, makeIfNecessary: true)
@@ -291,17 +317,19 @@ extension SelfTest {
         // Nothing a click opens may reach another app. A double-click still hands an image to its app.
         SafeOpen.launches = false
         let handOffs = SafeOpen.handOffs
-        clickRow(c, png)
-        clickRow(c, binary)
-        check(area.panes.count == count && SafeOpen.handOffs == handOffs, "a click on an image or a binary opens nothing and hands nothing to another app",
-              "\(SafeOpen.handOffs - handOffs) hand-offs")
+        let image = clickRow(c, png) && isSelection(c, png)
+        let program = clickRow(c, binary) && isSelection(c, binary)
+        check(image && program && area.panes.count == count && SafeOpen.handOffs == handOffs,
+              "a click on an image or a binary selects it, opens nothing and hands nothing to another app",
+              "image clicked \(image), binary clicked \(program), \(SafeOpen.handOffs - handOffs) hand-offs")
         doubleClickRow(c, png)
         check(SafeOpen.handOffs == handOffs + 1, "a double-click still hands the image to its app", "\(SafeOpen.handOffs - handOffs) hand-offs")
         SafeOpen.launches = true
 
         window.makeFirstResponder(outline)
-        clickRow(c, large)
-        check(area.panes.count == count && area.activePath != canonicalPath(large.path), "a click on a text file over 4 MB opens nothing")
+        let bigClicked = clickRow(c, large) && isSelection(c, large)
+        check(bigClicked && area.panes.count == count && area.activePath != canonicalPath(large.path), "a click on a text file over 4 MB selects it and opens nothing",
+              "clicked \(bigClicked)")
         doubleClickRow(c, large)
         check(area.activePath == canonicalPath(large.path) && area.activePane !== area.previewPane, "a double-click opens it", area.activeName ?? "none")
         if let editor = area.activeEditor, editor.document.path == canonicalPath(large.path) { area.close(editor) }
@@ -311,17 +339,20 @@ extension SelfTest {
         area.closeAll()
         window.makeFirstResponder(outline)
         let from = sidebarRow(c, files[0]), to = sidebarRow(c, files[1])
+        outline.deselectAll(nil) // the row let go on is selected after: that shows the click arrived
         let canDrag = outline.verticalMotionCanBeginDrag
         outline.verticalMotionCanBeginDrag = false // up and down selects rows instead of dragging the file
-        click(outline, at: namePoint(outline, from), dragTo: namePoint(outline, to))
+        let dragTracked = click(outline, at: namePoint(outline, from), dragTo: namePoint(outline, to))
         outline.verticalMotionCanBeginDrag = canDrag
-        check(area.panes.isEmpty, "pressing on one file and letting go on another opens nothing", "\(outline.selectedRowIndexes.count) selected")
+        let reached = outline.selectedRowIndexes.contains(to)
+        check(dragTracked && reached && area.panes.isEmpty, "pressing on one file and letting go on another opens nothing",
+              "tracked \(dragTracked), rows \(Array(outline.selectedRowIndexes)) selected, \(area.panes.count) tabs")
 
         // A drag that begins while the click is down: the dragging-session delegate sets the flag.
         outline.whilePressed = { outline.dragBegan = true }
-        clickRow(c, files[2])
+        let dragClicked = clickRow(c, files[2]) && isSelection(c, files[2])
         outline.whilePressed = nil
-        check(area.panes.isEmpty, "a click that starts a file drag opens nothing")
+        check(dragClicked && area.panes.isEmpty, "a click that starts a file drag opens nothing", "clicked \(dragClicked)")
         clickRow(c, files[2])
         check(area.panes.count == 1 && area.previewPane != nil, "and the next plain click opens again")
         invariant("drags")
@@ -405,8 +436,10 @@ extension SelfTest {
         if hasGit {
             try? fm.removeItem(at: gone)
             if await wait(8, { deletedRow() != nil }), let row = deletedRow() {
-                click(outline, at: namePoint(outline, row))
-                check(area.panes.isEmpty, "a click on a deleted file shows nothing")
+                let tracked = click(outline, at: namePoint(outline, row))
+                let selected = outline.selectedRowIndexes == IndexSet(integer: row)
+                check(tracked && selected && area.panes.isEmpty, "a click on a deleted file selects it and shows nothing",
+                      "tracked \(tracked), selected \(selected), \(area.panes.count) tabs")
                 click(outline, at: namePoint(outline, row))
                 click(outline, at: namePoint(outline, row), count: 2)
                 let diff = area.activeDiff?.matches(root: canonicalPath(proj.path), path: "clicks/gone.txt") == true
@@ -435,8 +468,10 @@ extension SelfTest {
         let mysql = group.items.first { $0.database.engine == .mysql }?.database
         func sqliteRow() -> Int? { group.items.first { $0.database.engine == .sqlite }.flatMap { c.sidebar.databaseRow($0.database.id) } }
         if listed, let mysql, let row = c.sidebar.databaseRow(mysql.id) {
-            click(outline, at: namePoint(outline, row)) // a double-click would pop its menu
-            check(area.panes.isEmpty, "a click on a Databases row opens nothing")
+            let tracked = click(outline, at: namePoint(outline, row)) // a double-click would pop its menu
+            let selected = outline.selectedRowIndexes == IndexSet(integer: row)
+            check(tracked && selected && area.panes.isEmpty, "a click on a Databases row selects it and opens nothing",
+                  "tracked \(tracked), selected \(selected), \(area.panes.count) tabs")
         } else {
             note("the Databases group did not list the test databases: that click is not checked")
         }
@@ -476,9 +511,11 @@ extension SelfTest {
             c.sidebar.beginRename(node)
             if let field = window.firstResponder as? NSTextView { field.insertText("a2", replacementRange: field.selectedRange()) }
             let renaming = window.firstResponder is NSTextView
-            clickRow(c, files[1])
+            let tracked = clickRow(c, files[1])
+            let selected = isSelection(c, files[1]) // the tree reloads the renamed row later, not during the click
             if window.firstResponder is NSTextView { window.makeFirstResponder(outline) } // the outline kept it going: end it as a click elsewhere would
-            check(renaming && area.panes.isEmpty, "a click that ends a rename opens nothing", "renaming \(renaming), \(area.panes.count) tabs")
+            check(renaming && tracked && selected && area.panes.isEmpty, "a click that ends a rename selects the file it was on and opens nothing",
+                  "renaming \(renaming), tracked \(tracked), selected \(selected), \(area.panes.count) tabs")
             check(await wait(3) { fm.fileExists(atPath: renamed.path) }, "and the rename is kept")
             c.sidebar.rename(renamed, to: "a.txt")
             _ = await wait(3) { sidebarRow(c, files[0]) >= 0 }
@@ -500,11 +537,26 @@ extension SelfTest {
 
     // MARK: real clicks
 
+    /// Real clicks reach the tree only while Next Term is the active app and this window is key: otherwise
+    /// AppKit drops them, selecting nothing and sending nothing, and every "opens nothing" check would pass
+    /// without a click. Brings the window to the front, and skips `group` with a note when it cannot.
+    private static func frontmost(_ window: NSWindow, _ group: String) async -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        if await wait(3, { NSApp.isActive && window.isKeyWindow }) { return true }
+        note("single click: \(group) skipped, the app is not frontmost (active \(NSApp.isActive), key window \(window.isKeyWindow))")
+        return false
+    }
+
     /// A click made of real events. The mouse-up (and the drags toward `end`) wait in the queue, and the
     /// mouse-down goes straight to `view`, whose tracking loop takes them from the queue as it would a
-    /// hand's. Straight to the view, not through the window, so it works whether or not the window is key.
-    private static func click(_ view: NSView, at point: NSPoint, count: Int = 1, flags: NSEvent.ModifierFlags = [], dragTo end: NSPoint? = nil) {
-        guard let window = view.window else { return }
+    /// hand's. That works only while the app is active with the window key (see `frontmost`): otherwise
+    /// AppKit drops the click, sent to the view or through the window alike, and the mouse-up stays in the
+    /// queue (all but a ⌘-click, which AppKit lets through to a window in the background). Returns whether
+    /// the view took the mouse-up, that is whether the click arrived.
+    @discardableResult
+    private static func click(_ view: NSView, at point: NSPoint, count: Int = 1, flags: NSEvent.ModifierFlags = [], dragTo end: NSPoint? = nil) -> Bool {
+        guard let window = view.window else { return false }
         let start = view.convert(point, to: nil)
         let finish = view.convert(end ?? point, to: nil)
         let time = ProcessInfo.processInfo.systemUptime
@@ -512,7 +564,7 @@ extension SelfTest {
             NSEvent.mouseEvent(with: type, location: location, modifierFlags: flags, timestamp: time + delay, windowNumber: window.windowNumber,
                                context: nil, eventNumber: 0, clickCount: count, pressure: type == .leftMouseUp ? 0 : 1)
         }
-        guard let down = event(.leftMouseDown, start, after: 0) else { return }
+        guard let down = event(.leftMouseDown, start, after: 0) else { return false }
         if end != nil {
             for step in 1...6 {
                 let f = CGFloat(step) / 6
@@ -520,19 +572,30 @@ extension SelfTest {
                 if let drag = event(.leftMouseDragged, location, after: 0.01 * Double(step)) { NSApp.postEvent(drag, atStart: false) }
             }
         }
-        guard let up = event(.leftMouseUp, finish, after: 0.08) else { return }
+        guard let up = event(.leftMouseUp, finish, after: 0.08) else { return false }
         NSApp.postEvent(up, atStart: false)
         view.mouseDown(with: down)
         // What the view did not track (a double-click it handled on the way down) must not arrive later.
-        while NSApp.nextEvent(matching: [.leftMouseDragged, .leftMouseUp], until: .distantPast, inMode: .default, dequeue: true) != nil {}
+        var tracked = true
+        while let left = NSApp.nextEvent(matching: [.leftMouseDragged, .leftMouseUp], until: .distantPast, inMode: .default, dequeue: true) {
+            if left.type == .leftMouseUp { tracked = false }
+        }
+        return tracked
     }
 
-    private static func clickRow(_ c: TerminalWindowController, _ url: URL, count: Int = 1, flags: NSEvent.ModifierFlags = []) {
+    @discardableResult
+    private static func clickRow(_ c: TerminalWindowController, _ url: URL, count: Int = 1, flags: NSEvent.ModifierFlags = []) -> Bool {
         let outline = c.sidebar.outline
         let row = sidebarRow(c, url)
-        guard row >= 0 else { return }
+        guard row >= 0 else { return false }
         outline.scrollRowToVisible(row)
-        click(outline, at: namePoint(outline, row), count: count, flags: flags)
+        return click(outline, at: namePoint(outline, row), count: count, flags: flags)
+    }
+
+    /// Whether the file's row is the whole selection: what a plain click on it leaves.
+    private static func isSelection(_ c: TerminalWindowController, _ url: URL) -> Bool {
+        let row = sidebarRow(c, url)
+        return row >= 0 && c.sidebar.outline.selectedRowIndexes == IndexSet(integer: row)
     }
 
     private static func doubleClickRow(_ c: TerminalWindowController, _ url: URL) {
