@@ -170,4 +170,66 @@ import Testing
         #expect(CommitLog.refsSignature(in: work, git: git) != signature)
         #expect(CommitLog.resolve("v1", in: work, git: git) == one && CommitLog.resolve("nope", in: work, git: git) == nil)
     }
+
+    /// Paths are file names: brackets, stars and a leading colon are not pattern syntax.
+    @Test func pathsAreFileNames() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        var made: [String: String] = [:]
+        for name in [":weird.txt", "1.txt", "[1].txt", "f*.txt", "foo.txt"] {
+            try repo.write(name, "\(name)\n")
+            made[name] = repo.commit("add \(name)", [name])
+        }
+        for name in made.keys.sorted() {
+            #expect(CommitLog.page(CommitQuery(paths: [name]), in: repo.work, git: repo.git)?.map(\.subject) == ["add \(name)"], "\(name)")
+        }
+        let weird = try #require(made[":weird.txt"])
+        #expect(CommitLog.details(of: weird, in: repo.work, git: repo.git)?.files.map(\.path) == [":weird.txt"])
+        let diff = CommitLog.diff(of: ":weird.txt", commit: weird, parent: nil, in: repo.work, git: repo.git)
+        #expect(diff?.isNew == true && diff?.hunks.first?.added == 1)
+    }
+}
+
+/// A repository in a temporary folder, removed with `remove()`.
+struct ScratchRepo {
+    let git: String
+    let work: String
+
+    init?() {
+        guard let git = GitRunner.locateGit() else { return nil }
+        self.git = git
+        work = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path)).appendingPathComponent("nt-log-\(UUID().uuidString)").path
+        guard (try? FileManager.default.createDirectory(atPath: work, withIntermediateDirectories: true)) != nil else { return nil }
+        sh(["init", "-q"])
+    }
+
+    func remove() { try? FileManager.default.removeItem(atPath: work) }
+
+    @discardableResult func sh(_ args: [String], name: String = "T", email: String = "t@t") -> String {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: git)
+        p.arguments = ["-C", work, "-c", "user.name=\(name)", "-c", "user.email=\(email)", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false",
+                       "-c", "tag.gpgsign=false"] + args
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("nt-log-out-\(UUID().uuidString)")
+        FileManager.default.createFile(atPath: out.path, contents: nil)
+        defer { try? FileManager.default.removeItem(at: out) }
+        let handle = try? FileHandle(forWritingTo: out)
+        p.standardOutput = handle
+        p.standardError = FileHandle.nullDevice
+        try? p.run()
+        p.waitUntilExit()
+        try? handle?.close()
+        return ((try? String(contentsOf: out, encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func write(_ path: String, _ text: String) throws {
+        try text.write(toFile: (work as NSString).appendingPathComponent(path), atomically: true, encoding: .utf8)
+    }
+
+    /// Commits these paths (all changes when empty); the new commit's id.
+    @discardableResult func commit(_ message: String, _ paths: [String] = [], name: String = "T", email: String = "t@t") -> String {
+        sh(["add", "-A", "--"] + paths.map { ":(literal)" + $0 })
+        sh(["commit", "-qm", message], name: name, email: email)
+        return sh(["rev-parse", "HEAD"])
+    }
 }

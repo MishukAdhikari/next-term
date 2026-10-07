@@ -230,8 +230,9 @@ public enum CommitLog {
         return commits
     }
 
+    /// Paths are file names, never patterns: `[1].txt` is that file, and `:weird.txt` too.
     private static func base(_ root: String) -> [String] {
-        ["-C", root, "--no-optional-locks", "-c", "log.showSignature=false", "-c", "log.follow=false", "-c", "core.quotepath=off"]
+        ["-C", root, "--no-optional-locks", "--literal-pathspecs", "-c", "log.showSignature=false", "-c", "log.follow=false", "-c", "core.quotepath=off"]
     }
 
     /// One page of the log, or nil when git fails (not a repository, a bad revision). A query whose
@@ -333,7 +334,7 @@ public enum CommitLog {
                        "--src-prefix=a/", "--dst-prefix=b/"]
         let against = parent.map { ["--end-of-options", $0, commit] } ?? ["--root", "--end-of-options", commit]
         let paths = [oldPath, path].compactMap { $0 }
-        guard let data = GitRunner.run(git, ["-C", root, "--no-optional-locks", "-c", "core.quotepath=off", "diff-tree", "-r", "--no-commit-id"]
+        guard let data = GitRunner.run(git, ["-C", root, "--no-optional-locks", "--literal-pathspecs", "-c", "core.quotepath=off", "diff-tree", "-r", "--no-commit-id"]
                                        + options + against + ["--"] + paths, timeout: 15) else { return nil }
         let files = UnifiedDiff.parse(String(decoding: data, as: UTF8.self))
         return files.first { $0.newPath == path || $0.oldPath == path } ?? files.first ?? FileDiff()
