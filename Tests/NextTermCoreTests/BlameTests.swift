@@ -141,9 +141,10 @@ import Testing
         let old = "1\n2\n3\n4\n5\n"
         func aligned(_ new: String) throws -> [String?] {
             let diff = try #require(GitRunner.diff(old: old, new: new, git: git, context: 0))
-            let count = new.split(separator: "\n", omittingEmptySubsequences: false).count - 1
-            return EditedBlame(blame, diff: diff, lineCount: count).lines.map(\.sha)
+            return EditedBlame(blame, diff: diff, lineCount: EditedBlame.lineCount(of: new)).lines.map(\.sha)
         }
+        let counts: [Int] = ["", "a", "a\n", "a\n\nb"].map { EditedBlame.lineCount(of: $0) }
+        #expect(counts == [0, 1, 1, 3])
         #expect(EditedBlame(blame, diff: nil, lineCount: 5).lines.map(\.sha) == ["a", "a", "b", "b", "c"])
         #expect(try aligned("0\n1\n2\n3\n4\n5\n") == [nil, "a", "a", "b", "b", "c"])    // added at the top
         #expect(try aligned("1\n2\nX\n4\n5\n") == ["a", "a", nil, "b", "c"])            // changed

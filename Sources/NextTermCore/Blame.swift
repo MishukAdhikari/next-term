@@ -211,6 +211,16 @@ public struct EditedBlame: Sendable {
         self.lines = lines
     }
 
+    /// Lines as git counts them: a final newline ends the last line rather than starting another.
+    public static func lineCount(of text: String) -> Int {
+        var count = 0, last: UInt8 = 0x0A
+        for byte in text.utf8 {
+            if byte == 0x0A { count += 1 }
+            last = byte
+        }
+        return last == 0x0A ? count : count + 1
+    }
+
     /// A file with no commit: every line is new.
     public static func notCommitted(lineCount: Int, root: String) -> EditedBlame {
         var blame = Blame()
