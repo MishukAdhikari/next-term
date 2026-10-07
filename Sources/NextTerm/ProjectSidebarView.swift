@@ -638,10 +638,13 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         }
     }
 
+    /// ⌘↓: every selected file, deleted file and database. The selection is read first: opening a file
+    /// shows it in the tree, which selects its row alone.
     private func openSelected() {
-        for node in selectedNodes where !node.isDirectory { delegate?.sidebar(self, openFile: node.url) }
-        for entry in selectedDeleted where !entry.isDirectory { openDeleted(entry) }
-        for row in outline.selectedRowIndexes { if let item = outline.item(atRow: row) as? DatabaseItem { openDatabase(item.database) } }
+        let items = outline.selectedRowIndexes.compactMap { outline.item(atRow: $0) }
+        for case let node as FileNode in items where !node.isDirectory { delegate?.sidebar(self, openFile: node.url) }
+        for case let entry as DeletedEntry in items where !entry.isDirectory { openDeleted(entry) }
+        for case let item as DatabaseItem in items { openDatabase(item.database) }
     }
 
     /// A deleted file opens as what was removed; a deleted folder opens and closes.
