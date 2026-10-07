@@ -38,9 +38,9 @@ enum Theme {
         }
     }
 
-    static let terminalForeground = NSColor(hex: 0xBCBEC4)
-    static let caret = NSColor(hex: 0xCED0D6)
-    static let selection = NSColor(hex: 0x214283)
+    static let terminalForeground = NSColor(hex: defaultTerminal.foreground)
+    static let caret = NSColor(hex: defaultTerminal.cursor)
+    static let selection = NSColor(hex: defaultTerminal.selection)
 
     /// ANSI colours, normal then bright.
     static let ansi: [UInt32] = [
@@ -81,13 +81,41 @@ enum Theme {
 
     static func apply(to view: TerminalView, fontSize: CGFloat) {
         view.font = terminalFont(size: fontSize)
-        view.nativeForegroundColor = terminalForeground
-        view.nativeBackgroundColor = background
-        view.caretColor = caret
-        view.selectedTextBackgroundColor = selection
-        view.installColors(ansi.map { rgb in
+        applyColours(to: view)
+    }
+
+    /// The terminal's colours: the user's own (Settings › Terminal › Colours) over Next Term's.
+    static func applyColours(to view: TerminalView) {
+        let colours = terminalColours(Preferences.terminalPalette)
+        view.nativeForegroundColor = NSColor(hex: colours.foreground)
+        view.nativeBackgroundColor = NSColor(hex: colours.background)
+        view.caretColor = NSColor(hex: colours.cursor)
+        view.selectedTextBackgroundColor = NSColor(hex: colours.selection)
+        view.installColors(colours.ansi.map { rgb in
             SwiftTerm.Color(red8: UInt16((rgb >> 16) & 0xFF), green8: UInt16((rgb >> 8) & 0xFF), blue8: UInt16(rgb & 0xFF))
         })
+    }
+
+    struct TerminalColours: Equatable {
+        var ansi: [UInt32]
+        var foreground, background, cursor, selection: UInt32
+    }
+
+    /// Next Term's own terminal colours (the background is the window's).
+    static let defaultTerminal = TerminalColours(ansi: ansi, foreground: 0xBCBEC4, background: 0x1E1F22, cursor: 0xCED0D6, selection: 0x214283)
+
+    /// Every terminal colour, each from `palette` when it sets it, else Next Term's own.
+    static func terminalColours(_ palette: TerminalPalette?) -> TerminalColours {
+        var colours = defaultTerminal
+        guard let palette else { return colours }
+        for (index, colour) in palette.ansi.enumerated() where index < colours.ansi.count {
+            if let colour { colours.ansi[index] = colour }
+        }
+        colours.foreground = palette.foreground ?? colours.foreground
+        colours.background = palette.background ?? colours.background
+        colours.cursor = palette.cursor ?? colours.cursor
+        colours.selection = palette.selection ?? colours.selection
+        return colours
     }
 }
 
