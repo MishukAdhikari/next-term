@@ -230,9 +230,11 @@ final class BranchComparePane: NSView, NSTableViewDataSource, NSTableViewDelegat
             rows.append(.note("\(branch) and \(current) have no commit in common, so there is no starting point to compare files from."))
             return rows
         }
-        let files = "\(c.files.count.formatted()) file\(c.files.count == 1 ? "" : "s")"
-        rows.append(.header("Files changed on \(branch)", detail: "\(files), since \(base.prefix(7))"))
-        if c.files.isEmpty, c.branchCount == 0 {
+        let files = "\(c.files.count.formatted()) file\(c.files.count == 1 ? "" : "s")", since = "since \(base.prefix(7))"
+        rows.append(.header("Files changed on \(branch)", detail: c.filesUnread ? since : "\(files), \(since)"))
+        if c.filesUnread {
+            rows.append(.note("Git could not list the files \(branch) changed. Compare again to retry."))
+        } else if c.files.isEmpty, c.branchCount == 0 {
             rows.append(.note("None: \(branch) has nothing \(current) doesn’t."))
         } else if c.files.isEmpty {
             rows.append(.note("None: \(branch)’s commits leave the files as they were at \(base.prefix(7))."))

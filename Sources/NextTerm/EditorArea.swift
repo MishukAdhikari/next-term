@@ -350,10 +350,13 @@ final class EditorArea: NSView, TabBarViewDelegate {
         }
         let pane = BranchComparePane(root: root, branch: branch, mode: mode, current: current)
         pane.onTitleChange = { [weak self] in self?.refresh() }
-        pane.onOpenFile = { [weak self] file in
+        pane.onOpenFile = { [weak self, weak pane] file in
             guard let self else { return }
             switch mode {
-            case .compare: self.openBranchDiff(root: root, path: file.path, change: DiffPane.BranchChange(branch: branch, oldPath: file.oldPath))
+            case .compare:
+                // Files are listed only when there is a merge base: the diff starts from it too.
+                guard let base = pane?.comparison?.mergeBase else { return }
+                self.openBranchDiff(root: root, path: file.path, change: DiffPane.BranchChange(branch: branch, oldPath: file.oldPath, base: base))
             case .workingTree: self.openWorkingTreeDiff(root: root, path: file.path, branch: branch, renamedFrom: file.oldPath)
             }
         }

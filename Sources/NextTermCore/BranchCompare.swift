@@ -49,6 +49,8 @@ public struct BranchComparison: Equatable, Sendable {
     public var mergeBase: String?
     /// What the branch changed since the merge base; empty without one.
     public var files: [ChangedFile] = []
+    /// There is a merge base, but git could not list the files (a timeout, the branch gone meanwhile).
+    public var filesUnread = false
 
     public init(branch: String) { self.branch = branch }
 
@@ -88,16 +90,17 @@ public enum BranchCompare {
         ["rev-list", "--left-right", "--count", "--end-of-options", "HEAD..." + branch, "--"]
     }
 
-    /// The files `branch` changed since it parted from HEAD: against their merge base.
-    public static func filesArguments(branch: String) -> [String] {
-        ["diff-tree", "-r", "-z", "--name-status", "-M", "--merge-base", "--end-of-options", "HEAD", branch, "--"]
+    /// The files `branch` changed since it parted from HEAD: against `base`, their merge base. Named,
+    /// not `--merge-base`, which refuses two branches that merged each other (they have two).
+    public static func filesArguments(branch: String, base: String) -> [String] {
+        ["diff-tree", "-r", "-z", "--name-status", "-M", "--end-of-options", base, branch, "--"]
     }
 
-    /// One file's change on `branch` since it parted from HEAD. A renamed file is compared with where it
-    /// came from, so both paths are given.
-    public static func fileDiffArguments(path: String, oldPath: String? = nil, branch: String, context: Int = 3) -> [String] {
-        var args = ["diff-tree", "-r", "-p", "--histogram", "-M", "--merge-base", "--no-color", "--no-ext-diff", "--no-textconv", "--full-index"]
-        args += ["-U\(context)", "--src-prefix=a/", "--dst-prefix=b/", "--end-of-options", "HEAD", branch, "--"]
+    /// One file's change on `branch` since `base`, where it parted from HEAD. A renamed file is compared
+    /// with where it came from, so both paths are given.
+    public static func fileDiffArguments(path: String, oldPath: String? = nil, branch: String, base: String, context: Int = 3) -> [String] {
+        var args = ["diff-tree", "-r", "-p", "--histogram", "-M", "--no-color", "--no-ext-diff", "--no-textconv", "--full-index"]
+        args += ["-U\(context)", "--src-prefix=a/", "--dst-prefix=b/", "--end-of-options", base, branch, "--"]
         if let oldPath { args.append(oldPath) }
         args.append(path)
         return args
@@ -216,13 +219,16 @@ public enum BranchCompare {
             result.branchCount = counts.branch
         }
         result.current = current(in: root, git: git)
-        // merge-base exits 1 when there is none: unrelated histories have no files to compare.
+        // merge-base exits 1 when there is none: unrelated histories have no files to compare. With more
+        // than one (branches that merged each other), it picks one, as `git diff HEAD...branch` does.
         let mergeBase = GitRunner.run(git, base + ["merge-base", "--end-of-options", "HEAD", branch], timeout: timeout, acceptedStatus: [0, 1])
             .map { String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
         guard mergeBase.count >= 40 else { return result }
         result.mergeBase = mergeBase
-        guard let files = GitRunner.run(git, base + filesArguments(branch: branch), timeout: timeout) else { return nil }
-        result.files = parseNameStatus(files)
+        // The commits stand on their own: a list of files git couldn't give is said, not taken for none.
+        let files = GitRunner.run(git, base + filesArguments(branch: branch, base: mergeBase), timeout: timeout)
+        result.files = files.map(parseNameStatus) ?? []
+        result.filesUnread = files == nil
         return result
     }
 
@@ -253,9 +259,10 @@ public enum BranchCompare {
         return changes.filter { !($0.mayBeUnchanged && same.contains($0.file.path)) }.map(\.file)
     }
 
-    /// One file's change on `branch` since it parted from HEAD; nil when git fails.
-    public static func diff(of path: String, oldPath: String? = nil, branch: String, in root: String, git: String, context: Int = 3) -> FileDiff? {
-        let args = base(root) + fileDiffArguments(path: path, oldPath: oldPath, branch: branch, context: context)
+    /// One file's change on `branch` since `base`, the merge base the comparison read; nil when git fails.
+    public static func diff(of path: String, oldPath: String? = nil, branch: String, base mergeBase: String, in root: String, git: String,
+                            context: Int = 3) -> FileDiff? {
+        let args = base(root) + fileDiffArguments(path: path, oldPath: oldPath, branch: branch, base: mergeBase, context: context)
         guard let data = GitRunner.run(git, args, timeout: 15) else { return nil }
         return CommitLog.file(at: path, in: UnifiedDiff.parse(String(decoding: data, as: UTF8.self)))
     }

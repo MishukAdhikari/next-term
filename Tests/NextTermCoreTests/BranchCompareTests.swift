@@ -88,15 +88,17 @@ import Testing
         #expect(BranchCompare.logArguments(branch: "refs/remotes/origin/x", side: .current, limit: 20).contains("--left-only"))
         #expect(BranchCompare.logArguments(branch: "refs/remotes/origin/x", side: .current, limit: 20).contains("--max-count=20"))
         #expect(BranchCompare.countArguments(branch: "refs/heads/x") == ["rev-list", "--left-right", "--count", "--end-of-options", "HEAD...refs/heads/x", "--"])
-        #expect(BranchCompare.filesArguments(branch: "refs/heads/x") == [
-            "diff-tree", "-r", "-z", "--name-status", "-M", "--merge-base", "--end-of-options", "HEAD", "refs/heads/x", "--",
+        // From the merge base the comparison read, not `--merge-base`: that refuses a criss-cross.
+        let mergeBase = String(repeating: "b", count: 40)
+        #expect(BranchCompare.filesArguments(branch: "refs/heads/x", base: mergeBase) == [
+            "diff-tree", "-r", "-z", "--name-status", "-M", "--end-of-options", mergeBase, "refs/heads/x", "--",
         ])
-        let one = BranchCompare.fileDiffArguments(path: "new.txt", oldPath: "old.txt", branch: "refs/heads/x")
-        #expect(one.prefix(6) == ["diff-tree", "-r", "-p", "--histogram", "-M", "--merge-base"])
+        let one = BranchCompare.fileDiffArguments(path: "new.txt", oldPath: "old.txt", branch: "refs/heads/x", base: mergeBase)
+        #expect(one.prefix(5) == ["diff-tree", "-r", "-p", "--histogram", "-M"])
         let tail: [String] = Array(one.suffix(6))
-        #expect(tail == ["--end-of-options", "HEAD", "refs/heads/x", "--", "old.txt", "new.txt"])
-        #expect(["--src-prefix=a/", "-U3", "--no-ext-diff"].allSatisfy(one.contains))
-        #expect(BranchCompare.fileDiffArguments(path: "a.txt", branch: "refs/heads/x").suffix(2) == ["--", "a.txt"])
+        #expect(tail == ["--end-of-options", mergeBase, "refs/heads/x", "--", "old.txt", "new.txt"])
+        #expect(["--src-prefix=a/", "-U3", "--no-ext-diff"].allSatisfy(one.contains) && !one.contains("--merge-base"))
+        #expect(BranchCompare.fileDiffArguments(path: "a.txt", branch: "refs/heads/x", base: mergeBase).suffix(2) == ["--", "a.txt"])
         #expect(BranchCompare.workingTreeArguments(branch: "refs/heads/x") == ["diff-index", "-z", "-M", "--end-of-options", "refs/heads/x", "--"])
         // Paths are names, not patterns; reads never take a lock.
         #expect(BranchCompare.base("/r") == ["-C", "/r", "--no-optional-locks", "--literal-pathspecs", "-c", "core.quotepath=off", "-c", "log.showSignature=false"])
@@ -156,7 +158,7 @@ import Testing
         let index = root.appendingPathComponent(".git/index")
         let indexBefore = try Data(contentsOf: index)
         let c = try #require(BranchCompare.compare("refs/heads/feat", in: work, git: git))
-        #expect(c.current == "main" && c.mergeBase == base && !c.isSameCommit)
+        #expect(c.current == "main" && c.mergeBase == base && !c.isSameCommit && !c.filesUnread)
         #expect(c.branchOnly.map(\.subject) == ["Rename", "The fix", "Feat only"])
         #expect(c.branchCount == 3)
         #expect(c.currentOnly.map(\.subject) == ["The fix", "Main only"])
@@ -178,9 +180,9 @@ import Testing
         #expect(limited.currentOnly.count == 1 && limited.currentCount == 2)
 
         // One file's change on the branch: since the merge base, a rename as one.
-        let renamed = try #require(BranchCompare.diff(of: "new.txt", oldPath: "old.txt", branch: "refs/heads/feat", in: work, git: git))
+        let renamed = try #require(BranchCompare.diff(of: "new.txt", oldPath: "old.txt", branch: "refs/heads/feat", base: base, in: work, git: git))
         #expect(renamed.oldPath == "old.txt" && renamed.newPath == "new.txt" && renamed.hunks.isEmpty)
-        let changed = try #require(BranchCompare.diff(of: "a.txt", branch: "refs/heads/feat", in: work, git: git))
+        let changed = try #require(BranchCompare.diff(of: "a.txt", branch: "refs/heads/feat", base: base, in: work, git: git))
         let addedOnBranch: [String] = changed.hunks.flatMap(\.lines).filter { $0.kind == .added }.map(\.text)
         #expect(addedOnBranch == ["fix"])
 
@@ -234,5 +236,43 @@ import Testing
         sh("switch", "-q", "--detach", "feat")
         #expect(BranchCompare.compare("refs/heads/main", in: work, git: git)?.current == nil)
         #expect(BranchCompare.compare("refs/heads/no-such-branch", in: work, git: git) == nil)
+    }
+
+    /// Two branches that merged each other (a criss-cross) have two merge bases: `--merge-base` refuses
+    /// them, and `git diff main...feat` picks one. The comparison reads from the one it picks too.
+    @Test func branchesThatMergedEachOther() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        try repo.write("a.txt", "1\n")
+        repo.commit("Base")
+        repo.sh(["switch", "-qc", "feat"])
+        try repo.write("f.txt", "f\n")
+        repo.commit("Feat 1")
+        repo.sh(["switch", "-q", "main"])
+        try repo.write("m.txt", "m\n")
+        repo.commit("Main 1")
+        repo.sh(["branch", "main1"])
+        repo.sh(["merge", "-q", "--no-edit", "-m", "Main merges feat", "feat"])
+        repo.sh(["switch", "-q", "feat"])
+        repo.sh(["merge", "-q", "--no-edit", "-m", "Feat merges main", "main1"])
+        try repo.write("f2.txt", "f2\n")
+        repo.commit("Feat 2")
+        repo.sh(["switch", "-q", "main"])
+        try repo.write("m2.txt", "m2\n")
+        repo.commit("Main 2")
+        let bases = repo.sh(["merge-base", "--all", "HEAD", "feat"]).split(separator: "\n")
+        #expect(bases.count == 2, "the history isn't a criss-cross")
+        let picked = repo.sh(["merge-base", "HEAD", "feat"])
+
+        let c = try #require(BranchCompare.compare("refs/heads/feat", in: repo.work, git: repo.git))
+        #expect(c.branchOnly.map(\.subject) == ["Feat 2", "Feat merges main"])
+        #expect(c.currentOnly.map(\.subject) == ["Main 2", "Main merges feat"])
+        #expect(c.mergeBase == picked && !c.filesUnread)
+        // What `git diff HEAD...feat` lists.
+        let expected = repo.sh(["diff", "--name-status", "HEAD...feat"]).split(separator: "\n").map { String($0.split(separator: "\t").last ?? "") }
+        #expect(!c.files.isEmpty && c.files.map(\.path) == expected)
+        let diff = try #require(BranchCompare.diff(of: "f2.txt", branch: "refs/heads/feat", base: picked, in: repo.work, git: repo.git))
+        let added: [String] = diff.hunks.flatMap(\.lines).filter { $0.kind == .added }.map(\.text)
+        #expect(added == ["f2"])
     }
 }

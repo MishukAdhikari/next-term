@@ -93,7 +93,7 @@ Every git command Next Term runs for you is in **Git › Git Commands**, exactly
 
 Two items in a branch’s menu, local or remote, open a tab:
 
-- **Compare with “main”** (the branch you are on, or HEAD when detached) lists the commits only on that branch, then the commits only on yours, newest first, with how many in each heading (up to 500 are listed a side). A commit marked `=` has the same change on the other side, such as a cherry-pick. Below them are the files the branch changed since the two parted. Double-click a commit to see it in the [Git Log](#git-log), or a file for its diff, in a tab titled like `app.txt @ feat/x`.
+- **Compare with “main”** (the branch you are on, or HEAD when detached) lists the commits only on that branch, then the commits only on yours, newest first, with how many in each heading (up to 500 are listed a side). A commit marked `=` has the same change on the other side, such as a cherry-pick. Below them are the files the branch changed since the two parted (when they have merged each other, from the commit git picks, as `git diff main...feat/x` does). Double-click a commit to see it in the [Git Log](#git-log), or a file for its diff, in a tab titled like `app.txt @ feat/x`.
 - **Show Diff with Working Tree** lists the files on disk that differ from that branch. Double-click one for its diff side by side, the branch’s version on the left and yours on the right, in a tab titled like `app.txt ↔ feat/x`. Files git doesn’t track aren’t compared.
 
 Right-click a commit for **Show in Git Log** and **Copy Hash**, or a file for **Show Diff** and **Copy Path**. Both tabs only read, and read again when a branch moves (yours or an agent’s) or, for the working tree, when a file changes.

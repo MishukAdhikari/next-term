@@ -52,11 +52,13 @@ final class DiffPane: NSView {
 
     /// A file as a branch changed it since it parted from what is checked out (Compare with Current):
     /// their merge base on the left, the branch on the right. Read-only.
-    struct BranchChange {
+    struct BranchChange: Equatable {
         /// "refs/heads/feat/x".
         let branch: String
         /// Where a renamed file came from.
         let oldPath: String?
+        /// The merge base the comparison read, so the diff starts where its list of files does.
+        let base: String
     }
     private(set) var branchChange: BranchChange?
     /// Show Diff with Working Tree (base `.ref`): where the branch has a file that was renamed on disk.
@@ -101,7 +103,7 @@ final class DiffPane: NSView {
         }
         if let branchChange {
             let from = branchChange.oldPath.map { ", renamed from \($0)" } ?? ""
-            return "\(path) as \(BranchCompare.displayName(branchChange.branch)) changed it\(from), since the commit it shares with HEAD"
+            return "\(path) as \(BranchCompare.displayName(branchChange.branch)) changed it\(from), since \(branchChange.base.prefix(7)), the commit it shares with HEAD"
         }
         if let branch = workingTreeBranch {
             let from = renamedFrom.map { " (\($0) there)" } ?? ""
@@ -361,7 +363,7 @@ final class DiffPane: NSView {
         }
         if let change = branchChange {
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                let diff = Self.git.flatMap { BranchCompare.diff(of: path, oldPath: change.oldPath, branch: change.branch, in: root, git: $0) }
+                let diff = Self.git.flatMap { BranchCompare.diff(of: path, oldPath: change.oldPath, branch: change.branch, base: change.base, in: root, git: $0) }
                 DispatchQueue.main.async {
                     guard let self, token == self.generation else { return }
                     self.show(diff, message: diff == nil ? "This change could not be read from git." : nil, token: token)
