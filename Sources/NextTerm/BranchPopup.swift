@@ -6,7 +6,7 @@ import NextTermCore
 /// Revision, Git Log), then Recent, Local in folders by prefix (agents' branches together), Worktrees
 /// and Remote.
 /// Return checks a branch out; → opens everything else that can be done with it.
-final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate {
+final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate, NSMenuDelegate {
     enum Action: CaseIterable {
         case update, commit, push, newBranch, checkoutRevision, gitLog, fetch, gitCommands
         case continueOperation, skipStep, abortOperation, resolveWithAgent
@@ -443,7 +443,15 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
 
     /// Everything that can be done with a branch or a worktree, beside its row.
     func showMenu(row: Int) {
-        guard let item = items[safe: row], let model else { return }
+        guard items.indices.contains(row), model != nil else { return }
+        guard let menu = menu(forRow: row) else { return activate(row: row) }
+        let rect = table.rect(ofRow: row)
+        menu.popUp(positioning: nil, at: NSPoint(x: rect.maxX - 24, y: rect.maxY), in: table)
+    }
+
+    /// The menu of a branch or worktree row (nil for other rows): each item closes the popup, then acts.
+    func menu(forRow row: Int) -> NSMenu? {
+        guard let item = items[safe: row], let model else { return nil }
         let menu = NSMenu()
         let actions = GitActions(self)
         func add(_ title: String, enabled: Bool = true, tip: String? = nil, _ run: @escaping () -> Void) {
@@ -456,6 +464,13 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             menu.addItem(entry)
         }
         let current = model.current
+        // Compare needs a commit checked out; the working tree can be compared with a branch any time.
+        let compareTitle = current.map { "Compare with “\($0)”" } ?? "Compare with HEAD"
+        let noCommit = model.headSHA == nil ? "Nothing is committed here yet." : nil
+        func comparing(_ ref: BranchRef) {
+            add(compareTitle, enabled: noCommit == nil, tip: noCommit) { actions.compare(ref) }
+            add("Show Diff with Working Tree") { actions.diffWithWorkingTree(ref) }
+        }
         switch item {
         case let .branch(ref, _, _, _) where ref.isHead:
             add("New Branch from Here…") { actions.askNewBranch(base: nil) }
@@ -475,6 +490,8 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             add("New Branch from “\(ref.name)”…") { actions.newBranch(from: ref) }
             add("Show History") { self.showHistory(of: ref) }
             menu.addItem(.separator())
+            comparing(ref)
+            menu.addItem(.separator())
             if let current {
                 add("Rebase “\(current)” onto “\(ref.name)”") { actions.rebase(onto: ref.name) }
                 add("Merge “\(ref.name)” into “\(current)”") { actions.merge(ref.name) }
@@ -490,6 +507,8 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             add("Checkout") { actions.checkout(ref) }
             add("New Branch from “\(ref.name)”…") { actions.newBranch(from: ref) }
             add("Show History") { self.showHistory(of: ref) }
+            menu.addItem(.separator())
+            comparing(ref)
             if let current {
                 menu.addItem(.separator())
                 add("Rebase “\(current)” onto “\(ref.name)”") { actions.rebase(onto: ref.name) }
@@ -503,10 +522,9 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             add("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: w.path)]) }
             add("Copy Path") { self.copy(w.path) }
         default:
-            return activate(row: row)
+            return nil
         }
-        let rect = table.rect(ofRow: row)
-        menu.popUp(positioning: nil, at: NSPoint(x: rect.maxX - 24, y: rect.maxY), in: table)
+        return menu
     }
 
     /// The Git Log, showing one branch.
@@ -579,6 +597,9 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         table.action = #selector(clicked)
         table.refusesFirstResponder = true
         table.setAccessibilityLabel("Branches and actions")
+        let rightClick = NSMenu()
+        rightClick.delegate = self
+        table.menu = rightClick
         let scroll = NSScrollView()
         scroll.documentView = table
         scroll.drawsBackground = false
@@ -642,6 +663,16 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         let cell = tableView.makeView(withIdentifier: BranchCell.identifier, owner: self) as? BranchCell ?? BranchCell()
         cell.show(items[row], model: model)
         return cell
+    }
+
+    /// Right-click on a branch or worktree: the same menu as →.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        guard let built = self.menu(forRow: table.clickedRow) else { return }
+        for item in built.items {
+            built.removeItem(item)
+            menu.addItem(item)
+        }
     }
 
     func windowDidResignKey(_ notification: Notification) {
