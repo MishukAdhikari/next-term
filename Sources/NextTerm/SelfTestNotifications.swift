@@ -228,7 +228,9 @@ extension SelfTest {
     private static func settingsChecks(_ app: AppDelegate) async {
         let defaults = UserDefaults.standard
         let labels = (SettingsWindowController().window?.contentView as? NSTabView)?.tabViewItems.map(\.label) ?? []
-        check(labels == ["Editor", "Terminal", "Notifications", "Keyboard Shortcuts", "Import"], "Settings has a Notifications tab",
+        // Branches may add tabs of their own after these (Skills does).
+        let named = ["Editor", "Terminal", "Notifications", "Keyboard Shortcuts", "Import"]
+        check(Array(labels.prefix(named.count)) == named, "Settings has a Notifications tab",
               labels.joined(separator: " | "))
         NotificationSettings.Key.all.forEach(defaults.removeObject(forKey:))
         let view = NotificationSettingsView(frame: .zero)
