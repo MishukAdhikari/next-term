@@ -387,6 +387,11 @@ final class EditorArea: NSView, TabBarViewDelegate {
         editors.forEach { $0.applyWrap() }
     }
 
+    /// Blame was turned on or off (View menu); `announce` says when the file in front has none.
+    func applyBlame(announce: Bool = false) {
+        editors.forEach { $0.applyBlame(announce: announce && $0 === activeEditor) }
+    }
+
     // MARK: TabBarViewDelegate
 
     func tabBar(_ bar: TabBarView, didSelect index: Int) { select(index) }
