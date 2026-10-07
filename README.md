@@ -134,12 +134,13 @@ How it knows, most reliable first:
    points `ZDOTDIR` back at your real config, loads your `.zshenv`, and adds `preexec`/`precmd` hooks that
    report each command (as typed and with aliases expanded), its exit code, the working directory and any
    suspended jobs. Your `.zprofile`, `.zshrc` and frameworks such as oh-my-zsh load exactly as before.
-2. **Agents.** `claude`, `codex`, `commandcode`, `junie`, `gemini`, `aider`, `opencode` and friends stay
-   in the foreground, so Next Term reads the agent's own screen, the way you would: "esc to interrupt"
-   means working, a question with choices means it is waiting on you, anything else means idle. For an
-   agent whose screen it does not recognise yet, it falls back to output timing (printing means working,
-   2.5 s of silence means done). When a command looks plain (a shell function), Next Term also asks the
-   kernel what is really running.
+2. **Agents.** `claude`, `codex`, `commandcode`, `gemini` and other agents stay in the foreground, so
+   Next Term reads the agent's own screen, the way you would: "esc to interrupt" means working, a question
+   with choices means it is waiting on you, anything else means idle. These hints are checked against
+   Claude Code, Codex, Command Code and Gemini CLI. Other agents (Junie, opencode, Qwen Code and the rest)
+   go by output timing until their screen shows one of them: printing means working, 2.5 s of silence
+   means done. When a command looks plain (a shell function), Next Term also asks the kernel what is
+   really running.
 3. **Other shells.** For bash and fish, or after `exec bash`, Next Term asks the kernel for the terminal's
    foreground process and working directory twice a second.
 

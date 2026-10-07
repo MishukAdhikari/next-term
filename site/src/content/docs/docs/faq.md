@@ -42,7 +42,7 @@ Releases are not notarized by Apple yet, so macOS asks before it opens one downl
 
 ## How does Next Term know when an agent is done or waiting on me?
 
-It reads the agent’s own screen, the way you would. “esc to interrupt” means working; a question with choices means it is waiting on you; anything else means it is idle. With zsh, a small shell integration also reports each command and its exit code. See [Agent status in every tab](/docs/agent-status/).
+It reads the agent’s own screen, the way you would. “esc to interrupt” means working; a question with choices means it is waiting on you; anything else means it is idle. This is checked against Claude Code, Codex, Command Code and Gemini CLI; other agents go by output timing, where 2.5 seconds of silence means done. With zsh, a small shell integration also reports each command and its exit code. See [Agent status in every tab](/docs/agent-status/).
 
 ## How do I connect Claude Code to Next Term?
 
