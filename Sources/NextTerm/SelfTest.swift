@@ -1995,10 +1995,10 @@ enum SelfTest {
         // Row tooltips come from the popup, for rows in view only, as in the sidebar: none on the row views.
         let list = popup.tableView
         list.layoutSubtreeIfNeeded()
-        if let row = rows.firstIndex(of: "✓ \(start)"), let tips = popup.rowToolTips {
+        if let row = rows.firstIndex(of: "✓ \(start)"), popup.rowToolTips != nil {
             let rect = list.rect(ofRow: row)
-            let tip = tips.view(list, stringForToolTip: 0, point: NSPoint(x: rect.midX, y: rect.midY), userData: nil)
-            let outside = tips.view(list, stringForToolTip: 0, point: NSPoint(x: rect.midX, y: list.visibleRect.minY - 10), userData: nil)
+            let tip = RowToolTips.toolTip(for: list, at: NSPoint(x: rect.midX, y: rect.midY))
+            let outside = RowToolTips.toolTip(for: list, at: NSPoint(x: rect.midX, y: list.visibleRect.minY - 10))
             let own = (0..<list.numberOfRows).compactMap { list.view(atColumn: 0, row: $0, makeIfNecessary: false)?.toolTip }
             check(tip.hasPrefix(start) && outside.isEmpty && own.isEmpty, "the popup's row tooltips are the popup's, for rows in view only",
                   "\(tip.debugDescription), outside \(outside.debugDescription), on rows \(own)")
@@ -2247,10 +2247,10 @@ enum SelfTest {
         // Its rows' tooltips come from the tree, for rows in view only, as in the sidebar: none on the row views.
         let tree = log.refs.outline
         tree.layoutSubtreeIfNeeded()
-        if let row = log.refs.rowTitles.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "side" }), let tips = log.refs.rowToolTips {
+        if let row = log.refs.rowTitles.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "side" }), log.refs.rowToolTips != nil {
             let rect = tree.rect(ofRow: row)
-            let tip = tips.view(tree, stringForToolTip: 0, point: NSPoint(x: rect.midX, y: rect.midY), userData: nil)
-            let outside = tips.view(tree, stringForToolTip: 0, point: NSPoint(x: rect.midX, y: tree.visibleRect.minY - 10), userData: nil)
+            let tip = RowToolTips.toolTip(for: tree, at: NSPoint(x: rect.midX, y: rect.midY))
+            let outside = RowToolTips.toolTip(for: tree, at: NSPoint(x: rect.midX, y: tree.visibleRect.minY - 10))
             let own = (0..<tree.numberOfRows).compactMap { tree.view(atColumn: 0, row: $0, makeIfNecessary: false)?.toolTip }
             check(tip == "refs/heads/log/side" && outside.isEmpty && own.isEmpty, "the branch tree's tooltips are the tree's, for rows in view only",
                   "\(tip.debugDescription), outside \(outside.debugDescription), on rows \(own)")
