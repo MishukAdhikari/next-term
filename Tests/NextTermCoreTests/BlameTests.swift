@@ -165,6 +165,20 @@ import Testing
         #expect(EditedBlame.notCommitted(lineCount: 3, root: "/r").lines == Array(repeating: .notCommitted, count: 3))
     }
 
+    /// Typing in a 20,000-line file: each edit only moves an array, so a thousand stay well under a frame each.
+    @Test func editsOnALongFileStayCheap() {
+        let count = 20_000
+        let blame = committed((0..<count).map { "c\($0 / 50)" })
+        var edited = EditedBlame(blame, diff: nil, lineCount: count)
+        let start = Date()
+        for i in 0..<1000 {
+            let line = (i * 37) % (count - 2)
+            edited.edit(lines: line...line, nowEndingAt: line + i % 2, lineCount: count + (i + 1) / 2)
+        }
+        #expect(Date().timeIntervalSince(start) < 1)
+        #expect(edited.lines.count == count + 500)
+    }
+
     @Test func blocksAndRecency() throws {
         let edited = EditedBlame(committed(["a", "a", nil, "b", "b", "b"]), diff: nil, lineCount: 6)
         #expect((0..<6).filter(edited.isBlockStart) == [0, 2, 3])
