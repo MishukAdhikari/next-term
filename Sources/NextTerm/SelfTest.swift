@@ -497,6 +497,7 @@ enum SelfTest {
         await branchChecks(c, proj: proj)
         await gitLogChecks(c, proj: proj)
         await gitLogPagingChecks(c)
+        await branchCompareChecks(c)
         await ragColorChecks(c, proj: proj)
         await importChecks(c, proj: proj)
 
@@ -1762,6 +1763,161 @@ enum SelfTest {
         check(await wait(10) { log.commits.map(\.sha) == [orphan] && log.selectedCommit?.sha == orphan && log.query.text == orphan },
               "showCommit of a commit no branch lists shows it alone", log.commits.prefix(3).map(\.subject).joined(separator: " | "))
         c.editorArea.close(log)
+    }
+
+    /// Compare with Current and Show Diff with Working Tree, in a repository of their own with two branches
+    /// that parted: one commit cherry-picked across, a rename, a branch at the same commit. From a branch's
+    /// menu in the popup (local and remote), the commits both ways with the cherry-pick marked, the files,
+    /// a file's diff, a commit in the Git Log, the files on disk against the branch, the plain empty
+    /// states, and both tabs following the repository.
+    private static func branchCompareChecks(_ c: TerminalWindowController) async {
+        guard let git = GitRunner.locateGit() else { return }
+        let repo = URL(fileURLWithPath: canonicalPath(NSTemporaryDirectory())).appendingPathComponent("nt-selftest-compare-\(getpid())")
+        try? FileManager.default.removeItem(at: repo)
+        try? FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        @discardableResult func run(_ args: String...) -> String {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: git)
+            p.arguments = ["-C", repo.path, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main"] + args
+            let out = Pipe()
+            p.standardOutput = out
+            p.standardError = FileHandle.nullDevice
+            p.standardInput = FileHandle.nullDevice
+            try? p.run()
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        func write(_ name: String, _ text: String) { try? text.write(to: repo.appendingPathComponent(name), atomically: true, encoding: .utf8) }
+        run("init", "-q")
+        write("a.txt", "1\n2\n3\n")
+        write("old.txt", "x\ny\nz\n")
+        run("add", "-A")
+        run("commit", "-qm", "Base")
+        let base = run("rev-parse", "HEAD")
+        run("switch", "-qc", "feat")
+        write("f.txt", "feat\n")
+        run("add", "f.txt")
+        run("commit", "-qm", "Feat only")
+        write("a.txt", "1\n2\n3\nfix\n")
+        run("commit", "-qam", "The fix")
+        let fix = run("rev-parse", "HEAD")
+        run("mv", "old.txt", "new.txt")
+        run("commit", "-qm", "Rename")
+        run("switch", "-q", "main")
+        write("m.txt", "main\n")
+        run("add", "m.txt")
+        run("commit", "-qm", "Main only")
+        run("cherry-pick", fix)
+        run("branch", "same")
+        run("update-ref", "refs/remotes/origin/feat", "feat")
+
+        // The menu of a branch, and of a remote one, in the popup.
+        c.showBranches(at: repo.path, query: "feat")
+        let popup = c.branchPopup
+        func row(_ name: String, remote: Bool) -> Int? {
+            popup.items.firstIndex { item in
+                if case let .branch(ref, _, _, _) = item { return ref.name == name && ref.isRemote == remote }
+                return false
+            }
+        }
+        check(await wait(5) { popup.model.map { canonicalPath($0.root) == canonicalPath(repo.path) } == true && row("feat", remote: false) != nil },
+              "the branch popup opens on the comparison's repository", popup.rowTitles.joined(separator: " | "))
+        let local: [NSMenuItem] = row("feat", remote: false).flatMap { popup.menu(forRow: $0) }?.items ?? []
+        let remote: [NSMenuItem] = row("origin/feat", remote: true).flatMap { popup.menu(forRow: $0) }?.items ?? []
+        let wanted = ["Compare with “main”", "Show Diff with Working Tree"]
+        let inLocal = wanted.allSatisfy { title in local.contains { $0.title == title && $0.isEnabled } }
+        let inRemote = wanted.allSatisfy { title in remote.contains { $0.title == title } }
+        let menus = local.map(\.title).joined(separator: " | ") + " / " + remote.map(\.title).joined(separator: " | ")
+        check(inLocal && inRemote, "a branch's menu, local or remote, has Compare with “main” and Show Diff with Working Tree", menus)
+        guard let compareItem = local.first(where: { $0.title == wanted[0] }), let diskItem = local.first(where: { $0.title == wanted[1] }) else { return popup.close() }
+        (compareItem.target as? MenuBlock)?.run(nil)
+        check(!popup.isVisible, "choosing it closes the popup")
+
+        // Compare: the commits only on each side, newest first, the cherry-pick marked, then the files.
+        guard let compare = c.editorArea.activeComparison else { return check(false, "Compare with Current opens an editor tab") }
+        // What a tab lists, and why it couldn't, for the failure messages; a diff's two sides.
+        func listed(_ pane: BranchComparePane) -> String {
+            let why = pane.failure.map { " — " + $0 } ?? ""
+            return pane.rowTitles.joined(separator: " | ") + why
+        }
+        func sides(_ diff: DiffPane?) -> String {
+            guard let diff else { return "no diff in front" }
+            return diff.sideTexts.0 + " | " + diff.sideTexts.1
+        }
+        let expected = [
+            "# Only on feat · 3 commits, 1 also on main", "Rename", "= The fix", "Feat only",
+            "# Only on main · 2 commits, 1 also on feat", "= The fix", "Main only",
+            "# Files changed on feat · 3 files, since \(base.prefix(7))", "M a.txt", "A f.txt", "R new.txt ← old.txt",
+        ]
+        check(await wait(10) { !compare.isLoading && compare.rowTitles == expected }, "Compare lists the commits only on each side, the cherry-pick marked “=”, then the files",
+              listed(compare))
+        check(compare.title == "feat ↔ main" && compare.mode == .compare, "the tab is titled with both branches", compare.title)
+        await screenshot(c, suffix: "branch-compare")
+        if let index = compare.rowTitles.firstIndex(of: "M a.txt") {
+            compare.open(row: index)
+            let diff = c.editorArea.activeDiff
+            check(await wait(8) { diff?.title == "a.txt @ feat" && (diff?.changedLineCount ?? 0) > 0 },
+                  "a file opens as the branch's change to it, side by side", diff?.title ?? "no diff in front")
+            let shared = diff?.sideTexts.0 ?? "", onBranch = diff?.sideTexts.1 ?? ""
+            check(!shared.contains("fix") && onBranch.contains("fix"), "the commit they share on the left, the branch on the right", sides(diff))
+            if let diff { c.editorArea.close(diff) }
+        }
+        if let index = compare.rowTitles.firstIndex(of: "Feat only") {
+            compare.open(row: index)
+            let wantedSHA = run("rev-parse", "feat~2")
+            check(await wait(10) { c.editorArea.activeGitLog?.selectedCommit?.sha == wantedSHA }, "a commit opens in the Git Log",
+                  c.editorArea.activeGitLog?.selectedCommit?.subject ?? "no commit selected")
+            if let log = c.editorArea.activeGitLog { c.editorArea.close(log) }
+        }
+        // It follows the branch: a commit on feat (made elsewhere) shows without a click.
+        let later = run("commit-tree", "feat^{tree}", "-p", "feat", "-m", "Later on feat")
+        run("update-ref", "refs/heads/feat", later)
+        check(await wait(10) { compare.rowTitles.contains("Later on feat") && compare.rowTitles.first == "# Only on feat · 4 commits, 1 also on main" },
+              "the comparison reads again when the branch moves", compare.rowTitles.prefix(3).joined(separator: " | "))
+        c.editorArea.close(compare)
+
+        // The files on disk against the branch: changed, missing, new here, renamed; each opens side by side.
+        write("a.txt", "on disk\n")
+        (diskItem.target as? MenuBlock)?.run(nil)
+        guard let disk = c.editorArea.activeComparison, disk.mode == .workingTree else { return check(false, "Show Diff with Working Tree opens an editor tab") }
+        let onDisk = ["# On disk, different from feat · 4 files", "M a.txt", "D f.txt", "A m.txt", "R old.txt ← new.txt"]
+        check(await wait(10) { !disk.isLoading && disk.rowTitles == onDisk }, "Show Diff with Working Tree lists the files on disk that differ from the branch",
+              listed(disk))
+        check(disk.title == "feat ↔ Working Tree", "its tab says so", disk.title)
+        if let index = disk.rowTitles.firstIndex(of: "M a.txt") {
+            disk.open(row: index)
+            let diff = c.editorArea.activeDiff
+            let branchLeft = await wait(8) { (diff?.sideTexts.0 ?? "").contains("fix") && (diff?.sideTexts.1 ?? "").contains("on disk") }
+            check(branchLeft && diff?.title == "a.txt ↔ feat", "a file opens with the branch's version on the left and the file on disk on the right", sides(diff))
+            write("a.txt", "changed again\n")
+            check(await wait(8) { diff?.sideTexts.1.contains("changed again") == true }, "and follows the file as it changes", diff?.sideTexts.1 ?? "")
+            if let diff { c.editorArea.close(diff) }
+        }
+        if let index = disk.rowTitles.firstIndex(of: "R old.txt ← new.txt") {
+            disk.open(row: index)
+            let renamed = c.editorArea.activeDiff
+            let matched = await wait(8) { renamed?.messageText == "The file on disk is the same as new.txt on feat." }
+            let said = (renamed?.title ?? "no diff") + ": " + (renamed?.messageText ?? "")
+            check(matched && renamed?.title == "old.txt ↔ feat", "a file renamed since the branch is compared with its name there", said)
+            if let renamed { c.editorArea.close(renamed) }
+        }
+        // Put back as main has it: a.txt no longer differs from feat (main has the same fix), and the list follows.
+        run("checkout", "-q", "--", "a.txt")
+        check(await wait(10) { disk.rowTitles.first == "# On disk, different from feat · 3 files" && !disk.rowTitles.contains("M a.txt") },
+              "the list follows the files on disk", disk.rowTitles.joined(separator: " | "))
+        c.editorArea.close(disk)
+
+        // Nothing to show is said plainly.
+        let same = c.openBranchComparison(root: repo.path, branch: "refs/heads/same", mode: .compare, current: "main")
+        check(await wait(10) { same.messageText == "same and main are at the same commit: there is nothing to compare." }, "a branch at the same commit says so",
+              same.messageText + " " + same.rowTitles.joined(separator: " | "))
+        c.editorArea.close(same)
+        let clean = c.openBranchComparison(root: repo.path, branch: "refs/heads/main", mode: .workingTree, current: "main")
+        check(await wait(10) { clean.messageText.hasPrefix("The files on disk are the same as on main.") }, "files on disk that match the branch say so",
+              clean.messageText + " " + clean.rowTitles.joined(separator: " | "))
+        c.editorArea.close(clean)
     }
 
     /// The links agent platforms print (LangGraph's dev server, LangSmith, Weave, MLflow) are found whole:
