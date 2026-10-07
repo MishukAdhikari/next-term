@@ -19,7 +19,7 @@ Claude Code, Gemini CLI and Qwen Code connect to Next Term as their IDE. That li
 - **A fresh token per launch:** a new 256-bit secret every time Next Term starts, compared in constant time. The lock file that tells Claude Code where to connect is readable only by you (`0600` in a `0700` folder) and is removed on quit. Lock files left by other editors are never touched.
 - **Browsers refused:** any request with an `Origin` header, as web pages send, is rejected.
 - **Read-only for agents:** nothing an agent sends writes a file. Proposed edits are shown to you; the agent writes after you accept.
-- **Secrets stay out:** selections and open files from `.env` and `.env.*` (except `.env.example`), `*.pem`, `*.key`, `id_rsa`, `id_ed25519`, `.npmrc` and `.netrc` are never shared.
+- **Secrets stay out:** selections and open files from `.env`, `.env.*` (except `.env.example`), `*.env`, `.flaskenv`, `*.pem`, `*.key`, `id_rsa`, `id_ed25519`, `.npmrc` and `.netrc` are never shared.
 - **Off switch:** **Settings › Editor › Agents** turns the link off entirely.
 
 Next Term turns on Gemini CLI’s and Qwen Code’s IDE mode by changing exactly one setting in their settings files, and never rewrites a file with comments. See [Gemini CLI and Qwen Code](/docs/agents/#gemini-cli-and-qwen-code).
@@ -40,6 +40,10 @@ Agents can drive Next Term through its MCP server ([Orchestrate agents](/docs/or
 ## Tabs start fresh
 
 A new tab is a fresh terminal, not a child of whatever launched Next Term. Variables that agents and editors set for their own child processes are removed: Claude Code’s session markers (so `claude` never thinks it is a sub-agent), other programs’ messaging secrets, IDE links and terminal variables left by another editor, and a git password helper that belonged to an editor. Settings you set on purpose, such as `ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, stay.
+
+## Screen sharing
+
+**Settings › Editor › Hide values in .env files** draws the values in `.env`, `.env.*`, `*.env` and `.flaskenv` files as dots, so a screen share or a recording does not show them; **View › Hide .env Values** does it for one file. Keys and comments stay visible, the line you are typing in shows its value, and the file itself never changes. The terminal, diffs and Find in Files results still show values as they are. See [Hiding .env values](/docs/editor/#hiding-env-values).
 
 ## The terminal
 
