@@ -47,6 +47,17 @@ public struct ReleaseInfo: Equatable, Sendable {
     public let notes: String
     public let published: Date?
 
+    /// The disk image's name: `NextTerm-1.2.3.dmg` for the tag `v1.2.3`, as the release workflow and
+    /// scripts/sign-release.sh name it. Only this file is installed: the release's unversioned
+    /// `NextTerm.dmg` (for the website's download link) has no signature.
+    public var dmgName: String { Self.dmgName(tag: tag) }
+
+    static func dmgName(tag: String) -> String { "NextTerm-\(tag.hasPrefix("v") ? String(tag.dropFirst()) : tag).dmg" }
+
+    /// The release key's signature of the checksum (`NextTerm-1.2.3.dmg.sha256.sig`), uploaded a few
+    /// minutes after the release is published: where it will be, whether or not it is there yet.
+    public var signatureURL: URL? { checksumURL.flatMap { URL(string: $0.absoluteString + ".sig") } }
+
     public init(version: AppVersion, tag: String, pageURL: URL, dmgURL: URL?, checksumURL: URL?, notes: String, published: Date? = nil) {
         self.version = version
         self.tag = tag
@@ -88,20 +99,22 @@ public struct ReleaseInfo: Equatable, Sendable {
             guard url.scheme == "https", let host = url.host?.lowercased() else { return false }
             return host == "github.com" || host.hasSuffix(".github.com") || host.hasSuffix(".githubusercontent.com")
         }
-        func asset(_ suffix: String) -> URL? {
-            assets.first { ($0["name"] as? String)?.lowercased().hasSuffix(suffix) == true }
+        func asset(_ name: String) -> URL? {
+            assets.first { $0["name"] as? String == name }
                 .flatMap { $0["browser_download_url"] as? String }
                 .flatMap(URL.init(string:))
                 .flatMap { trusted($0) ? $0 : nil }
         }
-        return ReleaseInfo(version: version, tag: tag, pageURL: page, dmgURL: asset(".dmg"), checksumURL: asset(".dmg.sha256"),
+        let dmg = dmgName(tag: tag)
+        return ReleaseInfo(version: version, tag: tag, pageURL: page, dmgURL: asset(dmg), checksumURL: asset(dmg + ".sha256"),
                            notes: (json["body"] as? String) ?? "",
                            published: (json["published_at"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) })
     }
 
     /// When the API refuses (60 requests an hour per address, shared behind an office router), the
     /// releases page still redirects `…/releases/latest` to `…/releases/tag/v1.2.3`; the assets are
-    /// always `NextTerm-1.2.3.dmg` and its `.sha256` (scripts/build-dmg.sh and CI name them so).
+    /// always `NextTerm-1.2.3.dmg`, its `.sha256` and `.sha256.sig` (scripts/build-dmg.sh, CI and
+    /// scripts/sign-release.sh name them so).
     public static func fromLatestRedirect(_ finalURL: URL, repository: String) -> ReleaseInfo? {
         // Exactly /owner/repo/releases/tag/<tag>.
         let parts = finalURL.pathComponents.filter { $0 != "/" }
@@ -110,7 +123,7 @@ public struct ReleaseInfo: Equatable, Sendable {
               parts.count == 5, parts[0].lowercased() == expected[0].lowercased(), parts[1].lowercased() == expected[1].lowercased(),
               parts[2] == "releases", parts[3] == "tag", let version = AppVersion(parts[4]) else { return nil }
         let tag = parts[4]
-        let base = "https://github.com/\(repository)/releases/download/\(tag)/NextTerm-\(version).dmg"
+        let base = "https://github.com/\(repository)/releases/download/\(tag)/" + dmgName(tag: tag)
         return ReleaseInfo(version: version, tag: tag, pageURL: finalURL, dmgURL: URL(string: base),
                            checksumURL: URL(string: base + ".sha256"), notes: "")
     }
