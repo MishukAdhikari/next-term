@@ -649,7 +649,7 @@ enum SelfTest {
 
     /// `nxtrm` for other terminals, on real folders: the first command folder on PATH that is writable
     /// takes the link, which is kept, repointed when the app moves, and never put over someone else's.
-    private static func commandLineLinkChecks() {
+    private static func commandLineLinkChecks(_ c: TerminalWindowController) async {
         let fm = FileManager.default
         let home = (canonicalPath(NSTemporaryDirectory()) as NSString).appendingPathComponent("nt-nxtrm-\(getpid())")
         let local = home + "/.local/bin", own = home + "/bin", tools = home + "/tools"
@@ -750,6 +750,22 @@ enum SelfTest {
         let none = CommandLineTool.plan(for: script, path: [own, "/usr/bin", "/bin"], home: home)
         check(none == .unavailable && CommandLineTool.entry(at: own + "/nxtrm") == .nothing,
               "nxtrm: with no writable command folder on PATH, nothing is written", "\(none)")
+        // The offer waits, however long, for a project window that is key with nothing in front of it.
+        if let window = c.window {
+            let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 120), styleMask: [.titled], backing: .buffered, defer: true)
+            let free = CommandLineTool.offerWindow(key: window, modal: nil) === window
+            let elsewhere = CommandLineTool.offerWindow(key: other, modal: nil) == nil && CommandLineTool.offerWindow(key: nil, modal: nil) == nil
+            let modal = CommandLineTool.offerWindow(key: window, modal: other) == nil
+            let focus = window.firstResponder
+            window.beginSheet(other, completionHandler: nil)
+            let sheet = await wait(2) { window.attachedSheet != nil } && CommandLineTool.offerWindow(key: window, modal: nil) == nil
+            window.endSheet(other)
+            _ = await wait(2) { window.attachedSheet == nil }
+            window.makeKeyAndOrderFront(nil)
+            if let focus { window.makeFirstResponder(focus) }
+            check(free && elsewhere && modal && sheet, "nxtrm: the first-launch offer goes on the key project window, with nothing in the way",
+                  "free \(free), elsewhere \(elsewhere), modal \(modal), sheet \(sheet)")
+        }
         let buttons = CommandLineTool.offerAlert().buttons.map(\.title)
         check(buttons == ["Install…", "Not Now", "Don’t Ask Again"], "nxtrm: the first-launch offer can be taken, put off or declined for good",
               buttons.joined(separator: ", "))
@@ -2562,7 +2578,7 @@ enum SelfTest {
             try? FileManager.default.removeItem(at: shellFile)
         }
         try? FileManager.default.removeItem(at: cliFile)
-        commandLineLinkChecks()
+        await commandLineLinkChecks(c)
 
         // What the editor cannot show does not open in it.
         let png = proj.appendingPathComponent("logo.png")

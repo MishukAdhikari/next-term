@@ -87,7 +87,7 @@ enum CommandLineTool {
         try? FileManager.default.destinationOfSymbolicLink(atPath: installPath)
     }
 
-    static var isInstalled: Bool { installedTarget == script?.path }
+    static var isInstalled: Bool { script != nil && installedTarget == script?.path }
 
     /// Where `nxtrm` goes for other terminals (CommandLineLink.plan). Reading the login shell's PATH can
     /// take seconds the first time: call it off the main thread.
@@ -197,19 +197,30 @@ enum CommandLineTool {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
     }
 
+    /// Set while the offer waits for a project window.
+    private static var offerWait: NSObjectProtocol?
+
     /// No folder on PATH takes `nxtrm` without a password: offer the password route, once per version, on
-    /// a project window once the launch's own dialogs (the folder chooser, Import) are done.
-    private static func offer(attempt: Int = 0) {
+    /// a project window once nothing else is in the way, however long the launch's own windows (the folder
+    /// chooser, Import, Welcome) take. Until then it waits for a project window to become key.
+    private static func offer() {
         let remembered = UserDefaults.standard.string(forKey: offerKey)
-        guard CommandLineLink.shouldOffer(remembered: remembered, version: version) else { return }
-        let front = NSApp.keyWindow?.windowController as? TerminalWindowController
-        let window = (front ?? AppDelegate.shared.controllers.last { $0.window?.isVisible == true })?.window
-        guard let window, NSApp.modalWindow == nil, window.attachedSheet == nil else {
-            if NSApp.modalWindow != nil || attempt < 240 {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { offer(attempt: attempt + 1) }
+        guard CommandLineLink.shouldOffer(remembered: remembered, version: version), offerWait == nil, !showOffer() else { return }
+        offerWait = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { _ in
+            // Once the change is over: a sheet or modal session that is ending is still there when it posts.
+            DispatchQueue.main.async {
+                guard let wait = offerWait, showOffer() else { return }
+                NotificationCenter.default.removeObserver(wait)
+                offerWait = nil
             }
-            return
         }
+    }
+
+    /// Shows the offer on the key project window, unless a sheet or modal window is in the way. True when
+    /// it is shown, or no longer needed.
+    private static func showOffer() -> Bool {
+        if isInstalled { return true } // with the menu command, meanwhile
+        guard let window = offerWindow(key: NSApp.keyWindow, modal: NSApp.modalWindow) else { return false }
         UserDefaults.standard.set(version, forKey: offerKey)
         offerAlert().beginSheetModal(for: window) { response in
             if response == .alertFirstButtonReturn {
@@ -218,6 +229,14 @@ enum CommandLineTool {
                 UserDefaults.standard.set(CommandLineLink.declined, forKey: offerKey)
             }
         }
+        return true
+    }
+
+    /// Where the offer goes: the key window, if it is a project window and no sheet or modal window is in
+    /// the way.
+    static func offerWindow(key: NSWindow?, modal: NSWindow?) -> NSWindow? {
+        guard let key, key.windowController is TerminalWindowController, modal == nil, key.attachedSheet == nil else { return nil }
+        return key
     }
 
     static func offerAlert() -> NSAlert {
