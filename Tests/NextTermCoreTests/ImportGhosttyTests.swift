@@ -145,12 +145,56 @@ import Testing
         let equals = try self.plan("keybind = super+==increase_font_size:1\nkeybind = =+super=reset_font_size")
         #expect(equals.shortcuts.map(\.command) == ["increaseFontSize:"])
         #expect(equals.shortcuts.first?.chord == KeyChord(key: "=", command: true))
-        #expect(ImportGhostty.triggerID("global:Shift+Super+bracket_left") == "cmd+shift+[")
+        #expect(ImportGhostty.triggerID("global:Shift+Super+bracket_left") == "cmd+shift+[bracketleft]")
 
         // `keybind = clear` drops the ones before it.
         #expect(try self.plan("keybind = cmd+d=new_split:right\nkeybind = clear").shortcuts.isEmpty)
         // Every action lands on a command an import may set (the self-test checks those are in the menus).
         for (action, command) in ImportGhostty.actions { #expect(ImportShortcuts.titles[command] != nil, "\(action)") }
+    }
+
+    /// Ghostty keeps a key given by its place (`bracket_left`, `equal`, `key_d`) apart from the character it
+    /// types (`[`, `=`, `d`), and looks a key press up by its place first.
+    @Test func keysByPlaceAndByCharacter() throws {
+        // Unbinding the character leaves the key by its place bound, and the other way round.
+        let unbound = try self.plan("keybind = super+bracket_left=previous_tab\nkeybind = super+[=unbind")
+        #expect(unbound.shortcuts.map(\.command) == ["showPreviousTab:"])
+        #expect(unbound.shortcuts.first?.chord == KeyChord(key: "[", command: true))
+        let quote = try self.plan("keybind = super+quote=next_tab\nkeybind = super+apostrophe=unbind")
+        #expect(quote.shortcuts.map(\.command) == ["showNextTab:"])
+        let letter = try self.plan("keybind = super+d=new_split:right\nkeybind = super+key_d=unbind")
+        #expect(letter.shortcuts.map(\.command) == ["splitRight:"])
+
+        // Both bound: the key by its place wins, whichever line comes later, and even when what it does has no
+        // Next Term command.
+        for config in ["keybind = super+equal=reset_font_size\nkeybind = super+==increase_font_size:1",
+                       "keybind = super+==increase_font_size:1\nkeybind = super+equal=reset_font_size"] {
+            let both = try self.plan(config)
+            #expect(both.shortcuts.map(\.command) == ["resetFontSize:"], "\(config)")
+            #expect(both.shortcuts.first?.chord == KeyChord(key: "=", command: true))
+        }
+        let text = try self.plan("keybind = super+key_d=text:hi\nkeybind = super+d=new_split:right")
+        #expect(text.shortcuts.isEmpty)
+        #expect(reasons(text)["1 keybind"] == "no matching Next Term command, or they send text to the terminal")
+
+        // Ghostty 1.1's names are the same keys as today's: left_bracket is bracket_left, apostrophe is '.
+        let old = try self.plan("""
+            keybind = super+left_bracket=previous_tab
+            keybind = super+bracket_left=unbind
+            keybind = super+apostrophe=next_tab
+            keybind = super+'=unbind
+            """)
+        #expect(old.shortcuts.isEmpty)
+
+        // On another layout the key by its place types something else, so only the character's binding comes over.
+        let layout = try self.plan("keybind = super+bracket_left=previous_tab\nkeybind = super+[=next_tab", usKeyboard: false)
+        #expect(layout.shortcuts.map(\.command) == ["showNextTab:"])
+        #expect(reasons(layout)["keybind super+bracket_left → previous_tab"]
+                == "given by its place on the keyboard, which types something else on your layout")
+
+        #expect(ImportGhostty.triggerID("super+left_bracket") == ImportGhostty.triggerID("cmd+bracket_left"))
+        #expect(ImportGhostty.triggerID("super+[") != ImportGhostty.triggerID("cmd+bracket_left"))
+        #expect(ImportGhostty.triggerID("ctrl++") == ImportGhostty.triggerID("control+plus"))
     }
 
     @Test func safety() throws {

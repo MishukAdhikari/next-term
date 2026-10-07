@@ -313,13 +313,57 @@ public enum ImportGhostty {
         return actions
     }()
 
-    /// Ghostty's key names, as the VS Code key reader spells them.
-    static let keyNames: [String: String] = [
-        "arrow_up": "up", "arrow_down": "down", "arrow_left": "left", "arrow_right": "right", "page_up": "pageup",
-        "page_down": "pagedown", "bracket_left": "[", "left_bracket": "[", "bracket_right": "]", "right_bracket": "]",
-        "equal": "=", "minus": "-", "comma": ",", "period": ".", "slash": "/", "backslash": "\\", "semicolon": ";",
-        "quote": "'", "apostrophe": "'", "backquote": "`", "grave_accent": "`", "return": "enter",
-    ]
+    /// A trigger's key as Ghostty stores it: by its place on the keyboard (`key_a`, `bracket_left`, `arrow_up`;
+    /// kept as the W3C code those names spell, lowercased: "bracketleft") or by the character it types (`a`, `[`).
+    /// Ghostty keeps the two apart even where they are the same key.
+    enum TriggerKey: Hashable {
+        case placed(String)
+        case typed(String)
+    }
+
+    /// Ghostty 1.1's key names, as Ghostty reads them now (`backwards_compatible_keys` in its Binding.zig). Its
+    /// `kp_` names are read in `triggerKey`; the ones for modifier keys are left out, since no shortcut uses them.
+    static let oldKeyNames: [String: TriggerKey] = {
+        var names: [String: TriggerKey] = [
+            "plus": .typed("+"), "apostrophe": .typed("'"), "physical:apostrophe": .placed("quote"),
+            "grave_accent": .placed("backquote"), "left_bracket": .placed("bracketleft"), "right_bracket": .placed("bracketright"),
+        ]
+        for side in ["up", "down", "left", "right"] { names[side] = .placed("arrow" + side) }
+        for name in ["grave_accent", "left_bracket", "right_bracket", "up", "down", "left", "right"] {
+            names["physical:" + name] = names[name]
+        }
+        let digits = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
+        for (digit, name) in digits.enumerated() {
+            names[name] = .typed(String(digit))
+            names["physical:" + name] = .placed("digit\(digit)")
+        }
+        return names
+    }()
+
+    /// A trigger's key part (lowercased), read as Ghostty reads it: an empty part is the + key, one character is
+    /// what a key types, and a name is a key by its place.
+    static func triggerKey(_ part: String) -> TriggerKey {
+        if part.isEmpty { return .typed("+") }
+        if let old = oldKeyNames[part] { return old }
+        if part.unicodeScalars.count == 1 { return .typed(part) }
+        for prefix in ["kp_", "physical:kp_"] where part.hasPrefix(prefix) {
+            return .placed("numpad" + part.dropFirst(prefix.count).replacingOccurrences(of: "_", with: ""))
+        }
+        return .placed(part.replacingOccurrences(of: "_", with: ""))
+    }
+
+    /// The key as the VS Code key reader spells it: a key by its place as a scan code ("[bracketleft]", which
+    /// types [ only on a U.S. layout), a function key by its name (so F13 and up keep their own reason), a
+    /// character as itself.
+    static func vsCodeKey(_ key: TriggerKey) -> String {
+        switch key {
+        case .placed(let code):
+            if code.hasPrefix("f"), Int(code.dropFirst()) != nil { return code }
+            return "[\(code)]"
+        case .typed(let character):
+            return character
+        }
+    }
 
     /// Each trigger's last keybind becomes one of the user's shortcuts when its action has a matching
     /// command; the rest are counted. As in Ghostty, a later line for a trigger replaces an earlier one, so
@@ -340,8 +384,18 @@ public enum ImportGhostty {
             if binds[id] == nil { order.append(id) }
             binds[id] = (trigger, action)
         }
+        // Ghostty looks a key press up by the key's place first and by the character it types after, so a key
+        // bound by its place hides a binding of the character it types (an unbound one hides nothing).
+        var placed = Set<KeyChord>()
         for id in order {
-            guard let (trigger, action) = binds[id], let command = actions[action] else {
+            guard let bind = binds[id], bind.action != "unbind", isPlaced(bind.trigger) else { continue }
+            if case .chord(let chord) = key(withoutFlags(bind.trigger), usKeyboard: usKeyboard) { placed.insert(chord) }
+        }
+        for id in order {
+            guard let (trigger, action) = binds[id] else { continue }
+            if !isPlaced(trigger), case .chord(let chord) = key(withoutFlags(trigger), usKeyboard: usKeyboard),
+               placed.contains(chord) { continue }
+            guard let command = actions[action] else {
                 unmatched += 1
                 continue
             }
@@ -376,15 +430,34 @@ public enum ImportGhostty {
     static let modifiers: [String: String] = ["super": "cmd", "cmd": "cmd", "command": "cmd", "ctrl": "ctrl", "control": "ctrl",
                                               "alt": "alt", "opt": "alt", "option": "alt", "shift": "shift"]
 
-    /// A trigger as Ghostty tells them apart: without its flags (`global:` and the rest), each modifier by one
-    /// name in a set order, and the key by the name `key(_:usKeyboard:)` reads.
-    static func triggerID(_ trigger: String) -> String {
+    /// A trigger lowercased, without its flags (`global:` and the rest).
+    static func withoutFlags(_ trigger: String) -> String {
         var text = trigger.lowercased()
         while let flag = flags.first(where: { text.hasPrefix($0) }) { text.removeFirst(flag.count) }
+        return text
+    }
+
+    /// A trigger's parts between "+" signs, split as Ghostty splits them: an empty part is the + key, and a "+"
+    /// at the very end starts no part.
+    static func triggerParts(_ text: String) -> [String] {
         var parts = text.split(separator: "+", omittingEmptySubsequences: false).map(String.init)
-        let key = parts.popLast() ?? ""
+        if parts.last == "" { parts.removeLast() }
+        return parts
+    }
+
+    /// Whether a trigger names its key by its place on the keyboard rather than by the character it types.
+    static func isPlaced(_ trigger: String) -> Bool {
+        if case .placed = triggerKey(triggerParts(withoutFlags(trigger)).last ?? "") { return true }
+        return false
+    }
+
+    /// A trigger as Ghostty tells them apart: without its flags, each modifier by one name in a set order, and
+    /// its key by place or by character (`bracket_left` and `left_bracket` are one key, `[` another).
+    static func triggerID(_ trigger: String) -> String {
+        var parts = triggerParts(withoutFlags(trigger))
+        let key = vsCodeKey(triggerKey(parts.popLast() ?? ""))
         let names = Set(parts.map { modifiers[$0] ?? $0 }).sorted()
-        return (names + [keyNames[key] ?? key]).joined(separator: "+")
+        return (names + [key]).joined(separator: "+")
     }
 
     /// A Ghostty trigger ("super+shift+d", "cmd+bracket_left") read the way VS Code's keys are. Key
@@ -394,17 +467,14 @@ public enum ImportGhostty {
         for prefix in ["unconsumed:", "performable:", "all:"] where text.hasPrefix(prefix) { text.removeFirst(prefix.count) }
         if text.hasPrefix("global:") { return .notSupported("system-wide keys aren't supported") }
         if text.contains(">") { return .notSupported(ImportShortcuts.twoStep) }
-        var parts = text.split(separator: "+", omittingEmptySubsequences: false).map(String.init)
-        guard var key = parts.popLast(), !key.isEmpty else { return .notSupported(ImportShortcuts.notRecognised) }
+        var parts = triggerParts(text)
+        guard let last = parts.popLast() else { return .notSupported(ImportShortcuts.notRecognised) }
         var names: [String] = []
         for part in parts {
             guard let name = modifiers[part] else { return .notSupported(ImportShortcuts.notRecognised) }
             names.append(name)
         }
-        if let named = keyNames[key] { key = named }
-        if key.hasPrefix("key_"), key.count == 5 { key = "[key\(key.suffix(1))]" }
-        if key.hasPrefix("digit_"), key.count == 7 { key = "[digit\(key.suffix(1))]" }
-        return ImportVSCode.parseKey((names + [key]).joined(separator: "+"), usKeyboard: usKeyboard)
+        return ImportVSCode.parseKey((names + [vsCodeKey(triggerKey(last))]).joined(separator: "+"), usKeyboard: usKeyboard)
     }
 
     // MARK: the rest
