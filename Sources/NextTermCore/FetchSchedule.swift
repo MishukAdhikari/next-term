@@ -203,10 +203,13 @@ public struct FetchSchedule: Sendable {
     /// refs/heads`, each once, in order. Not "." (a branch tracking another local one), and nothing that
     /// could be read as an option or is a URL rather than a remote's name.
     public static func trackedRemotes(_ output: String) -> [String] {
-        var seen = Set<String>()
-        return output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { name in
-            !name.isEmpty && name != "." && !name.hasPrefix("-") && !name.contains(":") && seen.insert(name).inserted
+        var remotes: [String] = []
+        for line in output.split(separator: "\n") {
+            let name = line.trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, name != ".", !name.hasPrefix("-"), !name.contains(":"), !remotes.contains(name) else { continue }
+            remotes.append(name)
         }
+        return remotes
     }
 
     /// The remotes some local branch of the work tree at `root` tracks (a read, with --no-optional-locks).
