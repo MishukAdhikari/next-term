@@ -315,7 +315,11 @@ public enum DataHead {
         var current = [0, 0, 0]
         var inQuotes = false
         var lines = 0
-        for byte in head {
+        // Every comma read sits between two digits, as decimal commas do ("1,5").
+        var decimalCommas = true
+        let bytes = Array(head)
+        for i in bytes.indices {
+            let byte = bytes[i]
             if byte == 0x22 {
                 inQuotes.toggle()
                 continue
@@ -328,6 +332,7 @@ public enum DataHead {
                 if lines == 20 { break }
             } else if let k = candidates.firstIndex(of: byte) {
                 current[k] += 1
+                if byte == 0x2C, !isDecimalComma(bytes, at: i) { decimalCommas = false }
             }
         }
         if lines == 0 { for k in 0..<3 { counts[k].append(current[k]) } } // one line, no newline yet
@@ -342,10 +347,19 @@ public enum DataHead {
             for count in used { frequency[count, default: 0] += 1 }
             let top = frequency.max { a, b in a.value == b.value ? a.key < b.key : a.value < b.value }!
             let candidate = SeparatorCount(delimiter: candidates[k], consistent: top.value, mode: top.key)
-            if let current = best, !candidate.beats(current, sampled: sampled, fallback: fallback) { continue }
+            if let current = best, !candidate.beats(current, sampled: sampled, fallback: fallback, decimalCommas: decimalCommas) { continue }
             best = candidate
         }
         return best?.delimiter ?? fallback
+    }
+
+    private static func isDecimalComma(_ bytes: [UInt8], at i: Int) -> Bool {
+        guard i > 0, i + 1 < bytes.count else { return false }
+        return isDigit(bytes[i - 1]) && isDigit(bytes[i + 1])
+    }
+
+    private static func isDigit(_ byte: UInt8) -> Bool {
+        byte >= 0x30 && byte <= 0x39
     }
 
     /// How a separator shows in a CSV's first lines: how many lines have its most common count, and that count.
@@ -354,18 +368,21 @@ public enum DataHead {
         var consistent: Int
         var mode: Int
 
-        /// Tab, then semicolon, over comma.
-        var rank: Int {
+        /// Tab over the others: commas in text are far more common than a fixed number of tabs. Semicolon
+        /// over comma only when the commas are decimal commas ("1,5;2,3"); a comma file can have a
+        /// semicolon in a text column of every row ("1,a;b").
+        func rank(decimalCommas: Bool) -> Int {
             if delimiter == 0x09 { return 2 }
-            return delimiter == 0x3B ? 1 : 0
+            return delimiter == 0x3B && decimalCommas ? 1 : 0
         }
 
-        /// The more consistent one. When both are in every line the same number of times, the rank:
-        /// decimal commas fill a semicolon file ("1,5;2,3"), and commas in text are far more common than
-        /// a fixed number of tabs or semicolons. Otherwise (one line says little) the one used more.
-        func beats(_ other: SeparatorCount, sampled: Int, fallback: UInt8) -> Bool {
+        /// The more consistent one. When both are in every line the same number of times, the rank.
+        /// Otherwise (one line says little, or the rank does not choose) the one used more.
+        func beats(_ other: SeparatorCount, sampled: Int, fallback: UInt8, decimalCommas: Bool) -> Bool {
             if consistent != other.consistent { return consistent > other.consistent }
-            if sampled > 1, consistent == sampled { return rank > other.rank }
+            let mine = rank(decimalCommas: decimalCommas)
+            let theirs = other.rank(decimalCommas: decimalCommas)
+            if sampled > 1, consistent == sampled, mine != theirs { return mine > theirs }
             if mode != other.mode { return mode > other.mode }
             return delimiter == fallback
         }
