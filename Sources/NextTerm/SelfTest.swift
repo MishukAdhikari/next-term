@@ -1341,6 +1341,18 @@ enum SelfTest {
               "\(column(0)) / \(column(2))")
         check(column(1).isEmpty, "only on the first line of a commit’s run of lines", column(1))
         check(ruler.ruleThickness > narrow + 100, "in a column beside the line numbers", "\(narrow) → \(ruler.ruleThickness)")
+        if let gutter = ruler as? LineNumberRuler {
+            gutter.display()
+            check(await wait(2) { !gutter.blameToolTipRects.isEmpty }, "each commit’s lines get a hover area", "\(gutter.blameToolTipRects.count)")
+            // Right-click on the first line, in the column: the way to that line's commit.
+            let first = gutter.convert(NSPoint(x: 0, y: editor.textView.textContainerOrigin.y + 2), from: editor.textView)
+            let menu = gutter.blameMenu(at: NSPoint(x: 10, y: first.y))
+            let sha = editor.editedBlame?.commit(at: 0)?.sha ?? "none"
+            let show = menu.items.first { $0.title == "Show Commit \(sha.prefix(7))" }
+            let target = show?.representedObject as? [String]
+            check(target == [sha, editor.editedBlame?.blame.root ?? ""], "right-clicking a commit’s lines offers to show that commit",
+                  menu.items.map(\.title).joined(separator: ", "))
+        }
         if let blame = editor.editedBlame {
             let tip = BlameText.toolTip(blame, line: 2)
             check(tip.hasPrefix("Add a third line\nBob Stone <bob@example.com>\n"), "hovering a commit’s lines tells its summary and author", tip)
@@ -1356,6 +1368,14 @@ enum SelfTest {
         check(column(0) == "Not committed" && column(2) == "Not committed" && column(3).hasPrefix("Bob "), "and the lines below keep their commit",
               "\(column(2)) / \(column(3))")
 
+        // A commit while the file is open: blame follows at once, on the HEAD change (not the 5-second check).
+        c.editorArea.save(editor.document)
+        commit("Cy Doe", "Third")
+        check(await wait(3) { column(0).hasPrefix("Cy ") && column(2).hasPrefix("Cy ") && editor.changeMarks.isEmpty },
+              "a commit re-annotates the open file at once", "\(column(0)) / \(column(1)) / \(column(2)) / \(column(3))")
+        check(column(1).hasPrefix("Ann ") && column(3).hasPrefix("Bob "), "and the lines it did not change keep theirs",
+              "\(column(1)) / \(column(3))")
+
         // The caret line's note.
         if !app.currentLineBlame { app.toggleCurrentLineBlame(nil) }
         let note = editor.blameNoteText(line: 3) ?? "none"
@@ -1368,6 +1388,7 @@ enum SelfTest {
               "\(ruler.ruleThickness)")
         editor.textView.insertText("one\ntwo\nthree\n", replacementRange: NSRange(location: 0, length: (editor.textView.string as NSString).length))
         c.editorArea.save(editor.document)
+        commit("Ann Lee", "Back to three lines")
         c.editorArea.close(editor)
         if app.blameAnnotations != saved.0 { app.toggleBlameAnnotations(nil) }
         if app.currentLineBlame != saved.1 { app.toggleCurrentLineBlame(nil) }
