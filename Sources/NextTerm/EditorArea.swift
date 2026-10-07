@@ -174,6 +174,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
         for (i, pane) in panes.enumerated() { pane.isHidden = i != index }
         if let editor = panes[index] as? CodeEditorView {
             editor.document.lastFocused = Date()
+            editor.refreshBlameIfStale()
             if focus { window?.makeFirstResponder(editor.textView) }
         } else if let diff = panes[index] as? DiffPane, focus {
             window?.makeFirstResponder(diff.focusView)
@@ -387,9 +388,16 @@ final class EditorArea: NSView, TabBarViewDelegate {
         editors.forEach { $0.applyWrap() }
     }
 
-    /// Blame was turned on or off (View menu); `announce` says when the file in front has none.
+    /// Blame was turned on or off (View menu); `announce` says when the file in front has none. Only
+    /// the file in front is blamed now; the others when they come to the front.
     func applyBlame(announce: Bool = false) {
-        editors.forEach { $0.applyBlame(announce: announce && $0 === activeEditor) }
+        editors.forEach { $0.applyBlame(announce: announce && $0 === activeEditor, now: $0 === activeEditor) }
+    }
+
+    /// A commit or a checkout: every open file's change marks follow at once. Blame is read now for the
+    /// file in front only, and for the others when they come to the front.
+    func headMoved() {
+        editors.forEach { $0.refreshBaseline(blame: $0 === activeEditor) }
     }
 
     // MARK: TabBarViewDelegate

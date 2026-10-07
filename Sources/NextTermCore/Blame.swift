@@ -159,15 +159,16 @@ extension GitRunner {
     /// is on disk (lines changed since the last commit are not committed). Lines moved within the file
     /// keep their commit (`-M`), and a renamed file is followed to its old name. Read-only.
     /// With a `cache`, a file already blamed at this HEAD is not blamed again. `timeout` is for git blame
-    /// itself; the quick questions before it get a few seconds.
-    public static func blame(of path: String, git: String, workingTree: Bool = false, maxSize: Int = 2_000_000,
-                             timeout: TimeInterval = 30, cache: BlameCache? = nil) -> BlameResult {
+    /// itself; the quick questions before it get a few seconds. `revision` (a commit's full hash) blames
+    /// as of that commit instead of HEAD.
+    public static func blame(of path: String, git: String, revision: String? = nil, workingTree: Bool = false,
+                             maxSize: Int = 2_000_000, timeout: TimeInterval = 30, cache: BlameCache? = nil) -> BlameResult {
         let folder = (path as NSString).deletingLastPathComponent
         let name = (path as NSString).lastPathComponent
         let prefix = ["-C", folder, "--no-optional-locks"]
         let quick: TimeInterval = 10
         // The root, whether the clone is shallow, and HEAD in one run; with no commit yet, only the root answers.
-        let parse = prefix + ["rev-parse", "--show-toplevel", "--is-shallow-repository", "HEAD"]
+        let parse = prefix + ["rev-parse", "--show-toplevel", "--is-shallow-repository", revision ?? "HEAD"]
         guard let found = lines(run(git, parse, timeout: quick)), found.count == 3 else {
             if let root = lines(run(git, prefix + ["rev-parse", "--show-toplevel"], timeout: quick))?.first { return .notCommitted(root: root) }
             return .notInRepository

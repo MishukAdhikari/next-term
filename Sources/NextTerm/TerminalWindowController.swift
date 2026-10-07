@@ -148,7 +148,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         editorArea.onShowChanges = { [weak self] url in self?.showChanges(of: url) }
         editorArea.tabBar.onReveal = { [weak self] in self?.revealInSidebar(nil) }
         sidebar.header.onBranchClick = { [weak self] in self?.showBranches(nil) }
-        sidebar.onHeadChange = { [weak self] in self?.editorArea.editors.forEach { $0.refreshBaseline() } }
+        sidebar.onHeadChange = { [weak self] in self?.editorArea.headMoved() }
         editorArea.isHidden = true
         applyLayout()
         setSidebarVisible(AppDelegate.shared.sidebarVisible)

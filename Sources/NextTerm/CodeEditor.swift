@@ -611,11 +611,14 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
 
     // MARK: change marks
 
-    /// The file as of the last commit (nil: not committed, or not in a repository).
+    /// The file as of the last commit (nil: not committed, or not in a repository), and that commit.
     private var baseline: String?
+    private var baselineHead: String?
     private var baselineLoaded = false
     private var marksWork: DispatchWorkItem?
     private static let marksQueue = DispatchQueue(label: "nextterm.change-marks", qos: .utility)
+    /// Blame has its own queue: a slow one never holds up the change marks.
+    private static let blameQueue = DispatchQueue(label: "nextterm.blame", qos: .utility)
     private static let git = GitRunner.locateGit()
     /// For the self-test.
     var changeMarks: LineChanges.Marks { ruler.marks }
@@ -626,26 +629,28 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
     }
 
     /// Reads the committed version again (after a save, a commit, or coming back to the window), then
-    /// redraws the marks. With blame on, the file's blame too, unless it is known for this HEAD.
-    func refreshBaseline() {
+    /// redraws the marks. With blame on, the file's blame too, unless it is known for this HEAD; with
+    /// `blame` false, only once the file is in front again (`refreshBlameIfStale`).
+    func refreshBaseline(blame: Bool = true) {
         guard let git = Self.git else { return }
         guard document.storage.length <= Self.maxGitSize else { return announceBlame(.tooLarge) }
+        blameStale = !blame && Self.blameWanted
         let path = document.path
         let format = document.format
-        let wantsBlame = Self.blameWanted
         Self.marksQueue.async { [weak self] in
+            guard self != nil else { return } // closed meanwhile
+            // One commit for the text and its blame, so a commit between the two reads cannot mix them.
+            let head = GitRunner.headCommit(of: path, git: git)
             // As the editor holds the file (CRLF made LF), or every line would differ from it.
-            let text = GitRunner.headText(of: path, git: git).map(format.editorText)
-            let blame = wantsBlame ? GitRunner.blame(of: path, git: git, maxSize: Self.maxGitSize, cache: Self.blameCache) : nil
+            let text = head.flatMap { GitRunner.headText(of: path, git: git, revision: $0) }.map(format.editorText)
             DispatchQueue.main.async {
                 guard let self else { return }
-                let blame = Self.blameWanted ? blame : nil // turned off meanwhile
-                let changed = !self.baselineLoaded || text != self.baseline || blame != self.blameResult
+                let changed = !self.baselineLoaded || text != self.baseline || head != self.baselineHead
                 self.baseline = text
+                self.baselineHead = head
                 self.baselineLoaded = true
-                self.blameResult = blame
-                if let blame { self.announceBlame(blame) }
                 if changed { self.scheduleChangeMarks(after: 0) }
+                if blame { self.refreshBlame(at: head) }
             }
         }
     }
@@ -655,8 +660,12 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
     func scheduleChangeMarks(after delay: TimeInterval = 0.35) {
         guard baselineLoaded, let git = Self.git else { return }
         marksWork?.cancel()
+        // A blame of another commit than the baseline's (a new one is being read): the one shown stays,
+        // moving with edits, until the new one comes.
+        let keepsBlame = blameResult != nil && blameHead != baselineHead
         guard let baseline else {
             ruler.marks = LineChanges.Marks() // new or untracked: nothing to compare with
+            if keepsBlame { return }
             if case .notCommitted(let root)? = blameResult {
                 editedBlame = .notCommitted(lineCount: gitLineCount, root: root)
             } else {
@@ -665,19 +674,22 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
             return
         }
         let current = document.text
-        let committed: Blame? = if case .annotated(let blame)? = blameResult { blame } else { nil }
+        let head = baselineHead
+        let committed: Blame? = if case .annotated(let blame)? = blameResult, !keepsBlame { blame } else { nil }
         let work = DispatchWorkItem { [weak self] in
+            guard self != nil else { return }
             let diff = baseline == current ? nil : GitRunner.diff(old: baseline, new: current, git: git, context: 0)
             let marks = diff.map(LineChanges.marks(from:)) ?? LineChanges.Marks()
             // The blame is of the same commit as the baseline (same lines), carried over by the same diff.
             let aligned = committed.flatMap { blame -> EditedBlame? in
-                guard blame.lines.count == EditedBlame.lineCount(of: baseline), diff != nil || baseline == current else { return nil }
+                guard blame.head == head, blame.lines.count == EditedBlame.lineCount(of: baseline) else { return nil }
+                guard diff != nil || baseline == current else { return nil }
                 return EditedBlame(blame, diff: diff, lineCount: EditedBlame.lineCount(of: current))
             }
             DispatchQueue.main.async {
                 guard let self, self.document.text == current else { return } // typed on since: a newer run follows
                 self.ruler.marks = marks
-                self.editedBlame = aligned
+                if !keepsBlame { self.editedBlame = aligned }
             }
         }
         marksWork = work
@@ -694,11 +706,53 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
     }
     /// What git blame said about the file as of the last commit; nil while blame is off.
     private var blameResult: GitRunner.BlameResult?
+    /// The commit `blameResult` was read for (nil: no commit yet, or outside git).
+    private var blameHead: String?
+    /// The blame being read, for which commit, and whether another commit asked for one meanwhile.
+    private var blameReading: (head: String?, again: Bool)?
+    /// HEAD moved while the file was not in front: its blame is read when it is.
+    private var blameStale = false
     /// Say once, after blame was turned on, when the file has none.
     private var blameAnnouncement = false
     /// Each line's commit; kept in step with edits between diffs.
     private(set) var editedBlame: EditedBlame? {
         didSet { showBlame() }
+    }
+
+    /// Reads the file's blame as of `head` in the background, one at a time: a refresh while one is
+    /// being read waits for it, and the cache answers at once for a commit already read.
+    private func refreshBlame(at head: String?) {
+        guard Self.blameWanted, let git = Self.git else { return }
+        if let reading = blameReading {
+            if reading.head != head { blameReading?.again = true }
+            return
+        }
+        blameReading = (head, false)
+        let path = document.path
+        Self.blameQueue.async { [weak self] in
+            guard self != nil else { return } // closed meanwhile
+            let blame = GitRunner.blame(of: path, git: git, revision: head, maxSize: Self.maxGitSize, cache: Self.blameCache)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let again = self.blameReading?.again == true
+                self.blameReading = nil
+                if Self.blameWanted { // not turned off meanwhile
+                    let changed = blame != self.blameResult || head != self.blameHead
+                    self.blameResult = blame
+                    self.blameHead = head
+                    self.announceBlame(blame)
+                    if changed { self.scheduleChangeMarks(after: 0) }
+                }
+                if again { self.refreshBlame(at: self.baselineHead) }
+            }
+        }
+    }
+
+    /// The file came to the front: the blame put off while it was behind is read now.
+    func refreshBlameIfStale() {
+        guard blameStale else { return }
+        blameStale = false
+        refreshBaseline()
     }
 
     private func showBlame() {
@@ -713,16 +767,19 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         return lines.starts.last == lines.length ? lines.count - 1 : lines.count
     }
 
-    /// The View menu turned the blame column or the caret line's note on or off.
-    func applyBlame(announce: Bool = false) {
+    /// The View menu turned the blame column or the caret line's note on or off. A file not in front
+    /// (`now` false) is blamed when it comes to the front.
+    func applyBlame(announce: Bool = false, now: Bool = true) {
         guard Self.blameWanted else {
             blameResult = nil
+            blameHead = nil
+            blameStale = false
             editedBlame = nil
             return
         }
         blameAnnouncement = announce
         showBlame() // the column or the note alone may have changed
-        refreshBaseline()
+        refreshBaseline(blame: now)
     }
 
     private func announceBlame(_ result: GitRunner.BlameResult) {

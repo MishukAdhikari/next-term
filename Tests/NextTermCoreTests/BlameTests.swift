@@ -117,6 +117,13 @@ import Testing
         guard case .annotated(let after) = GitRunner.blame(of: repo + "/b.txt", git: git, cache: cache) else { return #expect(Bool(false)) }
         #expect(after.commit(after.lines[2])?.author == "Dee" && cache.count == 2)
 
+        // One commit for the text and its blame, whatever HEAD does in between.
+        let older = blame.head
+        #expect(GitRunner.headCommit(of: repo + "/b.txt", git: git) == after.head && after.head != older)
+        #expect(GitRunner.headText(of: repo + "/b.txt", git: git, revision: older) == "one\nTWO\nthree\nfour\n")
+        #expect(GitRunner.blame(of: repo + "/b.txt", git: git, revision: older) == .annotated(blame))
+        #expect(GitRunner.headCommit(of: "/tmp/nt-no-repo-\(UUID().uuidString)/x.txt", git: git) == nil)
+
         try write("new.txt", "x\n")
         #expect(GitRunner.blame(of: repo + "/new.txt", git: git) == .notCommitted(root: repo)) // untracked
         #expect(GitRunner.blame(of: repo + "/b.txt", git: git, maxSize: 4) == .tooLarge)
