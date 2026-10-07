@@ -19,7 +19,7 @@ Next Term has a real code editor, not a viewer, and it sits right above the term
 - **Run `nxtrm file:42`** in a tab or any terminal. See [The nxtrm command](/docs/command-line/).
 - **Finder:** use **Open With › Next Term**, or drop a file on Next Term’s Dock icon.
 
-Each file opens in its own tab above the terminal; a dot in place of the close button means unsaved changes. Images, binaries and files over 32 MB open in their usual app instead. An app, a script or an executable never opens without asking first, even behind a symlink or a Finder alias (see [Security and privacy](/docs/security-and-privacy/#opening-files-and-links)).
+Each file opens in its own tab above the terminal; a dot in place of the close button means unsaved changes. Jupyter notebooks open as notebooks, read-only (see [below](#jupyter-notebooks)). Images, binaries and files over 32 MB open in their usual app instead. An app, a script or an executable never opens without asking first, even behind a symlink or a Finder alias (see [Security and privacy](/docs/security-and-privacy/#opening-files-and-links)).
 
 Move between the editor and the terminal with <kbd>⌃&#96;</kbd> (**View › Focus Editor**). <kbd>⌘W</kbd> closes the file you are editing when the editor has the keyboard, and the terminal tab otherwise.
 
@@ -90,6 +90,19 @@ Agents edit the files you have open. Next Term checks them about once a second:
 - **Renames and moves in the sidebar** carry open files along.
 
 To see exactly what an agent changed, press <kbd>⌥⌘G</kbd>. See [Side-by-side diffs](/docs/diffs/).
+
+## Jupyter notebooks
+
+A notebook (`.ipynb`) opens as a notebook, read-only: its Markdown laid out, each code cell coloured in the kernel’s language with Jupyter’s `In [n]:` beside it, and below each cell what it showed the last time it ran.
+
+- **Outputs:** printed text, values, tables as text, images scaled to fit, and errors in red. A long output shows its first and last lines and says how many it left out. Widgets and interactive plots, which only Jupyter can draw, are named instead.
+- **Nothing runs.** Next Term has no kernel: it shows the outputs saved in the file.
+- **Find** (<kbd>⌘F</kbd>) searches the whole notebook, and a selection can span cells.
+- **Open as JSON**, in the notebook’s header, opens the file itself in the editor, to read or change it. A [Find in Files](/docs/search/) result in a notebook opens the JSON at its line.
+- **Open With** hands the notebook to Jupyter, VS Code or another app that opens notebooks.
+- **The view follows the file.** When an agent or Jupyter saves it, the new version shows, and renames and moves in the sidebar carry it along.
+
+Notebooks up to 50 MB open this way; most of a large notebook is images and outputs, which are never laid out as text.
 
 ## Changes in the gutter
 
