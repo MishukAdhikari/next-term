@@ -14,6 +14,18 @@ struct TabBarItem: Equatable {
     var modified = false
     /// Terminal tabs: the shortcut that selects it ("⌘1"), shown before the close button.
     var shortcut: String? = nil
+    /// Terminal tabs on a server: a server mark before the title, with the connection's dot on it.
+    var remote: RemoteMark? = nil
+}
+
+/// A remote tab's host and connection, as its tab, the sidebar and the overflow menu show them.
+struct RemoteMark: Equatable {
+    var host: String
+    var destination: String
+    var link: RemoteLink
+
+    /// "Remote: web-1 (deploy@203.0.113.5), connected"
+    var summary: String { "Remote: \(host) (\(destination)), \(link.phrase)" }
 }
 
 protocol TabBarViewDelegate: AnyObject {
@@ -129,6 +141,9 @@ final class TabBarView: NSView {
 
     /// The shortcut a tab shows, if there is room for it (for the self-test).
     func shownShortcut(at index: Int) -> String? { tabViews[safe: index]?.shownShortcut }
+    /// The connection a tab's server mark shows, and what VoiceOver says for the tab (for the self-test).
+    func shownRemoteLink(at index: Int) -> RemoteLink? { tabViews[safe: index]?.shownRemoteLink }
+    func spokenLabel(at index: Int) -> String? { tabViews[safe: index]?.accessibilityLabel() }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -310,12 +325,13 @@ final class TabBarView: NSView {
     @objc private func showOverflowMenu() {
         let menu = NSMenu()
         let range = visibleRange
+        let listsRemote = items.contains { $0.remote != nil }
         for (i, item) in items.enumerated() {
             let title = Typography.shortened(item.title, to: 60) // the full title is in the tooltip
             let entry = NSMenuItem(title: title, action: #selector(overflowMenuSelected(_:)), keyEquivalent: "")
             entry.target = self
             entry.tag = i
-            entry.image = StatusGlyph.image(for: item.state)
+            entry.image = listsRemote ? StatusGlyph.image(for: item.state, remote: item.remote) : StatusGlyph.image(for: item.state)
             entry.state = i == selectedIndex ? .on : .off
             entry.toolTip = item.tooltip
             // Tabs already on screen are dimmed; same menu font as the others.
@@ -460,6 +476,8 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     weak var bar: TabBarView?
     private let dot = StatusDotView()
     private let iconView = NSImageView()
+    /// A remote tab's server mark, between the status mark and the title.
+    private let remoteMark = RemoteMarkView()
     private let label = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
     /// "⌘1": how to get to this tab from the keyboard.
@@ -480,6 +498,8 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         iconView.imageScaling = .scaleProportionallyUpOrDown
         iconView.isHidden = true
         addSubview(iconView)
+        remoteMark.isHidden = true
+        addSubview(remoteMark)
 
         closeButton.bezelStyle = .regularSquare
         closeButton.isBordered = false
@@ -513,7 +533,10 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     // Called several times a second: touch only what changed (re-setting a tooltip resets it).
     func configure(item newItem: TabBarItem, selected isSelected: Bool) {
         guard newItem != item || isSelected != selected else { return }
-        if label.stringValue != newItem.title { label.stringValue = newItem.title }
+        if newItem.title != item?.title {
+            label.stringValue = newItem.title
+            if newItem.remote != nil { needsLayout = true } // fitTitle may shorten it
+        }
         if label.lineBreakMode != newItem.truncation { label.lineBreakMode = newItem.truncation }
         let tip = newItem.tooltip + (newItem.shortcut.map { "\n\($0) switches to this tab" } ?? "")
         if toolTip != tip { toolTip = tip }
@@ -526,16 +549,23 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         if iconView.image !== newItem.icon { iconView.image = newItem.icon }
         iconView.isHidden = newItem.icon == nil
         dot.isHidden = newItem.icon != nil
+        if (newItem.remote == nil) != (item?.remote == nil) { needsLayout = true } // the title moves over, or back
+        remoteMark.link = newItem.remote?.link
+        remoteMark.isHidden = newItem.remote == nil
         item = newItem
         selected = isSelected
-        setAccessibilityLabel("\(newItem.title), \(newItem.accessibilityStatus)")
+        setAccessibilityLabel(([newItem.title, newItem.accessibilityStatus] + [newItem.remote?.summary].compactMap { $0 }).joined(separator: ", "))
         setAccessibilityValue(isSelected)
         refresh()
     }
 
+    /// For the self-test: the server mark's connection, if it shows one.
+    var shownRemoteLink: RemoteLink? { remoteMark.isHidden ? nil : remoteMark.link }
+
     private func refresh() {
         layer?.backgroundColor = (selected ? Theme.background : hovering ? Theme.tabHover : .clear).cgColor
         label.textColor = selected || hovering ? Theme.text : Theme.textDim
+        remoteMark.tint = label.textColor ?? Theme.textDim
         // Unsaved: a dot that turns into the close button under the pointer.
         let modified = item?.modified == true
         let closeHidden = !(selected || hovering || modified)
@@ -557,7 +587,11 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         dot.frame = NSRect(x: 12, y: (h - 10) / 2, width: 10, height: 10)
         iconView.frame = NSRect(x: 10, y: (h - 16) / 2, width: 16, height: 16)
         closeButton.frame = NSRect(x: bounds.width - 24, y: (h - 18) / 2, width: 18, height: 18)
-        let labelX: CGFloat = 29
+        // A remote tab: the status mark keeps its column (the same place on every tab), and the server
+        // mark goes before the title, like an icon of the title.
+        // Its server sits on the title's centre line; the dot hangs a point lower.
+        remoteMark.frame = NSRect(x: 25, y: (h - 16) / 2, width: RemoteMarkView.size.width, height: RemoteMarkView.size.height)
+        let labelX: CGFloat = remoteMark.isHidden ? 29 : remoteMark.frame.maxX + 3
         let labelHeight = label.intrinsicContentSize.height
         var labelEnd = bounds.width - 28
         // The shortcut: in the close button's place while that is hidden, else just before it, as long as
@@ -571,7 +605,22 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
             labelEnd = min(labelEnd, hint.frame.minX - 6)
         }
         label.frame = NSRect(x: labelX, y: (h - labelHeight) / 2, width: max(0, labelEnd - labelX), height: labelHeight)
+        fitTitle()
         renameField?.frame = NSRect(x: labelX - 3, y: (h - 22) / 2, width: max(40, bounds.width - labelX - 26), height: 22)
+    }
+
+    /// A remote tab too narrow for "web-1: app (connecting)" says less rather than "w…)": first the note
+    /// goes (the dot on the server mark says it by shape), then "web-1: " (the mark says it is on a server,
+    /// the tooltip which one), leaving "app", as a narrow local tab shows "ne…rm".
+    private func fitTitle() {
+        guard let item else { return }
+        var shown = item.title
+        func fits() -> Bool { (shown as NSString).size(withAttributes: [.font: label.font as Any]).width + 4 <= label.frame.width }
+        if let remote = item.remote, !fits() {
+            if let note = remote.link.titleNote, shown.hasSuffix(" (\(note))") { shown = String(shown.dropLast(note.count + 3)) }
+            if !fits(), shown.hasPrefix(remote.host + ": ") { shown = String(shown.dropFirst(remote.host.count + 2)) }
+        }
+        if label.stringValue != shown { label.stringValue = shown }
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -619,7 +668,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
 
     func beginRename() {
         guard renameField == nil else { return }
-        let field = NSTextField(string: label.stringValue)
+        let field = NSTextField(string: item?.title ?? label.stringValue)
         field.font = label.font
         field.focusRingType = .none
         field.bezelStyle = .roundedBezel
@@ -696,6 +745,24 @@ enum StatusGlyph {
             .applying(.init(paletteColors: colors))
         return NSImage(systemSymbolName: name, accessibilityDescription: state.rawValue)?.withSymbolConfiguration(config)
     }
+
+    /// For a menu that lists remote tabs: the status mark, then the server mark, each in a column of its
+    /// own on every item, so the titles still line up.
+    static func image(for state: TabState, remote: RemoteMark?) -> NSImage {
+        let status = image(for: state)
+        let markSize = RemoteMarkView.size
+        return NSImage(size: NSSize(width: 18 + markSize.width, height: markSize.height), flipped: true) { rect in
+            if let status {
+                let size = status.size
+                status.draw(in: NSRect(x: (14 - size.width) / 2, y: (rect.height - size.height) / 2, width: size.width, height: size.height),
+                            from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            }
+            if let remote {
+                RemoteMarkView.draw(remote.link, tint: .secondaryLabelColor, in: NSRect(x: 18, y: 0, width: markSize.width, height: markSize.height))
+            }
+            return true
+        }
+    }
 }
 
 private final class StatusDotView: NSView {
@@ -761,6 +828,72 @@ private final class StatusDotView: NSView {
             }
         case .idle:
             break
+        }
+    }
+}
+
+// MARK: - remote mark
+
+/// A remote tab's server mark: a server with the connection's dot cut into its corner. The dot says it
+/// by shape as well as colour: filled green when connected, an amber ring while on its way (connecting,
+/// a login), red with a bar when lost, and the server fades then. Local tabs have none: remote is the
+/// exception that stands out.
+final class RemoteMarkView: NSView {
+    /// The 11 pt glyph's image is 16 × 13; the dot reaches 3 pt past its corner.
+    static let size = NSSize(width: 19, height: 17)
+
+    var link: RemoteLink? { didSet { if link != oldValue { needsDisplay = true } } }
+    var tint: NSColor = Theme.textDim { didSet { if tint != oldValue { needsDisplay = true } } }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setAccessibilityElement(false) // the tab, or the line it is on, says it in words
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        if let link { Self.draw(link, tint: tint, in: bounds) }
+    }
+
+    static func dotColor(for link: RemoteLink) -> NSColor {
+        if link == .connected { return Theme.done }
+        return link == .disconnected ? Theme.failed : Theme.attention
+    }
+
+    /// Draws into a flipped context: the tab's view, or a menu's image.
+    static func draw(_ link: RemoteLink, tint: NSColor, in rect: NSRect) {
+        let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium).applying(.init(paletteColors: [tint]))
+        guard let context = NSGraphicsContext.current?.cgContext,
+              let glyph = NSImage(systemSymbolName: "server.rack", accessibilityDescription: nil)?.withSymbolConfiguration(config)
+        else { return }
+        let glyphRect = NSRect(x: rect.minX, y: rect.minY + 1, width: glyph.size.width, height: glyph.size.height)
+        let d: CGFloat = 7
+        let dot = NSRect(x: glyphRect.maxX - d / 2 - 0.5, y: glyphRect.maxY - d / 2 - 0.5, width: d, height: d)
+        // The dot is cut into the server, so it reads on any background (a tab, its hover, a menu).
+        context.saveGState()
+        context.beginTransparencyLayer(auxiliaryInfo: nil)
+        glyph.draw(in: glyphRect, from: .zero, operation: .sourceOver, fraction: link == .disconnected ? 0.5 : 1,
+                   respectFlipped: true, hints: nil)
+        context.setBlendMode(.clear)
+        context.fillEllipse(in: dot.insetBy(dx: -1.5, dy: -1.5))
+        context.endTransparencyLayer()
+        context.restoreGState()
+        let color = dotColor(for: link)
+        if link.isOnItsWay {
+            let ring = NSBezierPath(ovalIn: dot.insetBy(dx: 0.75, dy: 0.75))
+            ring.lineWidth = 1.5
+            color.setStroke()
+            ring.stroke()
+            return
+        }
+        color.setFill()
+        NSBezierPath(ovalIn: dot).fill()
+        if link == .disconnected {
+            NSColor.white.setFill()
+            NSRect(x: dot.minX + 1.75, y: dot.midY - 0.65, width: d - 3.5, height: 1.3).fill()
         }
     }
 }

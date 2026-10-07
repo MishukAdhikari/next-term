@@ -465,14 +465,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             let tab = group.focused
             guard group.isSplit else {
                 return TabBarItem(title: tab.title, truncation: tab.titleTruncation, state: tab.status.state, tooltip: tab.tooltip,
-                                  accessibilityStatus: tab.stateDescription, shortcut: shortcuts[index])
+                                  accessibilityStatus: tab.stateDescription, shortcut: shortcuts[index], remote: tab.remoteMark)
             }
             // A split tab: named by the pane with the keyboard, marked by the pane that most needs you.
             let lines = group.panes.map { "\($0.title): \($0.stateDescription)" }
+            let mark = group.remoteMark
             return TabBarItem(title: tab.title + "  +\(group.panes.count - 1)", truncation: tab.titleTruncation,
                               state: Self.mostUrgent(group.panes.map(\.status.state)),
-                              tooltip: lines.joined(separator: "\n"), accessibilityStatus: lines.joined(separator: "; "),
-                              shortcut: shortcuts[index])
+                              tooltip: ([mark?.summary].compactMap { $0 } + lines).joined(separator: "\n"),
+                              accessibilityStatus: lines.joined(separator: "; "), shortcut: shortcuts[index], remote: mark)
         }
         tabBar.update(items: items, selectedIndex: activeIndex)
         announceBackgroundChanges()

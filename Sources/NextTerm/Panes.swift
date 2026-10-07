@@ -141,6 +141,15 @@ final class PaneGroup {
     var panes: [TerminalTab] { root.panes }
     var isSplit: Bool { panes.count > 1 }
 
+    /// The server mark the tab shows: the focused pane's host (else the first pane on a server), with the
+    /// weakest connection among the panes on servers, so a pane that lost its own is not hidden.
+    var remoteMark: RemoteMark? {
+        let marks = panes.compactMap(\.remoteMark)
+        guard var mark = focused.remoteMark ?? marks.first else { return nil }
+        mark.link = RemoteLink.weakest(marks.map(\.link)) ?? mark.link
+        return mark
+    }
+
     func contains(_ tab: TerminalTab) -> Bool { root.contains(tab) }
 
     /// `new` next to `tab`: to its right (vertical) or below it.

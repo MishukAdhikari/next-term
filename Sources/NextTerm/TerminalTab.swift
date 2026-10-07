@@ -559,14 +559,22 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         return "\(program) keeps running on \(remote.host.name), in tmux session \(remote.session). Reopen it from Shell › New Remote Tab… (Sessions on this host)."
     }
 
+    /// Where a remote tab's connection stands (nil: a tab on this Mac).
+    var remoteLink: RemoteLink? {
+        guard remote != nil else { return nil }
+        return RemoteLink(exited: exited, disconnected: disconnected, waiting: waitingForConnection, loginPrompt: loginPrompt,
+                          connected: remoteConnected)
+    }
+
+    /// The server mark its tab shows (nil: a tab on this Mac).
+    var remoteMark: RemoteMark? {
+        guard let remote, let remoteLink else { return nil }
+        return RemoteMark(host: remote.host.name, destination: remote.host.destination, link: remoteLink)
+    }
+
     /// Where a remote tab's connection stands, when it is not simply up: for the title and list_tabs.
     var connectionNote: String? {
-        guard remote != nil, !exited else { return nil }
-        if disconnected { return "disconnected" }
-        if waitingForConnection { return "waiting" }
-        if loginPrompt { return "log in" }
-        if !remoteConnected { return "connecting" }
-        return nil
+        exited ? nil : remoteLink?.titleNote
     }
 
     /// A folder or program name keeps both ends, like Finder; a title a program sets is prose and gives
@@ -614,12 +622,16 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         }
     }
 
+    /// A remote tab says where it runs right under its name; a state that is only the connection's is
+    /// said there once.
     var tooltip: String {
-        var lines = [title, stateDescription]
+        var lines = [title]
+        if let remoteMark { lines.append(remoteMark.summary) }
+        if remoteLink == nil || remoteLink == .connected || exited { lines.append(stateDescription) }
         if status.running && !status.command.isEmpty { lines.append(String(status.command.prefix(300))) }
-        lines.append(directory)
+        lines.append(remote == nil ? directory : "Folder on the host: \(directory)")
         if let servedURL { lines.append("Serving \(servedURL.absoluteString)") }
-        if let remote { lines.append("On \(remote.host.name) (\(remote.host.destination)), sessions kept: \(remote.keep.label)") }
+        if let remote { lines.append("Sessions kept: \(remote.keep.label)") }
         return lines.joined(separator: "\n")
     }
 
