@@ -92,10 +92,18 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
 
 ## Install
 
-Download `NextTerm-x.y.z.dmg` from [Releases](../../releases), open it, and drag **Next Term** to
+In one line, from the terminal:
+
+```sh
+curl -fsSL https://next-term.mishuk.me/install.sh | bash
+```
+
+It downloads the latest release, checks its SHA-256, the bundle and the signature, and copies it to
+Applications, with no `sudo` and no first-launch prompt ([the script](site/public/install.sh)). Or
+download `NextTerm-x.y.z.dmg` from [Releases](../../releases), open it, and drag **Next Term** to
 Applications. After that, Next Term updates itself (Next Term > Check for Updates).
 
-Releases are not notarized yet, so macOS blocks the first launch:
+Releases are not notarized yet, so with the disk image macOS blocks the first launch:
 
 - **macOS 15 and later:** open Next Term once (it will be blocked), then go to **System Settings →
   Privacy & Security**, scroll down, click **Open Anyway** next to Next Term, and confirm.

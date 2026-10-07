@@ -468,6 +468,13 @@ const faq = [
 
 		<section class="band band--install" aria-labelledby="install">
 			<h2 id="install">Install in a minute</h2>
+			<p class="oneliner-intro">In one line, from the terminal:</p>
+			<pre class="oneliner"><code>curl -fsSL https://next-term.mishuk.me/install.sh | bash</code></pre>
+			<p class="hint">
+				It checks the release’s SHA-256 and signature and copies Next Term to Applications,
+				with no <code>sudo</code> and no first-launch prompt. <a href="https://github.com/MishukAdhikari/next-term/blob/main/site/public/install.sh">Read the script</a>.
+				Or with the disk image:
+			</p>
 			<ol class="steps">
 				<li>
 					<strong><a href={DOWNLOAD_DMG}>Download NextTerm.dmg</a></strong>, the latest version ({VERSION}),
@@ -775,6 +782,22 @@ const faq = [
 		color: var(--sl-color-white);
 	}
 
+	.oneliner-intro {
+		margin-bottom: 0.4rem;
+	}
+	.oneliner {
+		margin: 0 0 0.6rem;
+		padding: 0.75rem 1rem;
+		border-radius: 8px;
+		overflow-x: auto;
+		background: var(--sl-color-gray-6, #1e1f22);
+		font-size: 0.95rem;
+	}
+	.oneliner code {
+		background: none;
+		padding: 0;
+		white-space: pre;
+	}
 	.steps {
 		display: grid;
 		gap: 0.9rem;
