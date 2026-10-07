@@ -95,13 +95,16 @@ extension SelfTest {
               "closed \(gone), on disk \(onDisk().debugDescription)")
         check(welcome == true, "and, had it been the last window, the Welcome window would follow", "\(String(describing: welcome))")
 
-        // An agent's close_tab on the last tab: the user is asked, and the agent is told so. Don't Save: the
-        // window goes, and the file on disk is as it was.
+        // An agent's close_tab on the last tab: the user is asked, and the agent is told so. The agent is in
+        // another window or none, so the window may be out of sight (here minimized): it comes back to ask.
+        // Don't Save: the window goes, and the file on disk is as it was.
         let v = app.openWindow(directory: root.path)
         if let vWindow = v.window, let vTab = v.tabs.first {
             _ = await wait(20) { vTab.status.integrated }
             v.openFile(file)
             v.editorArea.activeEditor?.textView.insertText("again ", replacementRange: NSRange(location: 0, length: 0))
+            vWindow.miniaturize(nil)
+            let minimized = await wait(8) { vWindow.isMiniaturized }
             if MCPControlServer.shared.isRunning, let mcp = MCPTestClient(socket: MCPControlServer.shared.path) {
                 _ = await mcp.call(1, "initialize", ["protocolVersion": "2025-06-18", "capabilities": [:], "clientInfo": ["name": "selftest", "version": "1"]])
                 let reply = await mcp.call(2, "tools/call", ["name": "close_tab", "arguments": ["tab_id": vTab.id.uuidString.lowercased()]])
@@ -109,12 +112,18 @@ extension SelfTest {
                 let told = ((result?["content"] as? [[String: Any]])?.first?["text"] as? String) ?? ""
                 mcp.close()
                 let json = (try? JSONSerialization.jsonObject(with: Data(told.utf8))) as? [String: Any]
-                check(json?["closed"] as? Bool == false && json?["asking_user"] != nil && vWindow.attachedSheet != nil && v.tabs.first === vTab,
+                let sheet = await wait(5) { vWindow.attachedSheet != nil }
+                check(json?["closed"] as? Bool == false && json?["asking_user"] != nil && sheet && v.tabs.first === vTab,
                       "MCP: close_tab on the last tab asks the user, and says so", told)
             } else {
                 note("agent control is off: the last tab is closed as close_tab closes it")
                 v.remove(vTab)
-                check(vWindow.attachedSheet != nil, "closing the last tab as close_tab does asks the user")
+                check(await wait(5) { vWindow.attachedSheet != nil }, "closing the last tab as close_tab does asks the user")
+            }
+            if minimized {
+                check(await wait(5) { !vWindow.isMiniaturized && vWindow.isVisible }, "a minimized window comes back to ask")
+            } else {
+                note("the window did not minimize, so its coming back to ask was not checked")
             }
             check(await pressSheetButton("Don’t Save", in: vWindow), "the sheet offers Don’t Save")
             let closed = await wait(5) { !app.controllers.contains { $0 === v } }
