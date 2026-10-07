@@ -43,6 +43,16 @@ enum SelfTest {
         try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
     }
 
+    /// Whether Edit › Find › Replace… is on with `responder` holding the window's keyboard, as AppKit enables
+    /// the menu item. Nil when the app is not in front: with no key window nothing is on.
+    static func replaceIsOn(with responder: NSResponder, in window: NSWindow) -> Bool? {
+        guard NSApp.isActive, window.isKeyWindow,
+              let item = KeyboardShortcuts.shared.commands.first(where: { $0.id == "replaceInFile:" })?.item else { return nil }
+        window.makeFirstResponder(responder)
+        item.menu?.update()
+        return item.isEnabled
+    }
+
     private static func runAll() async {
         guard let c = AppDelegate.shared.controllers.first, let window = c.window else {
             check(false, "a window opens at launch")
@@ -974,6 +984,7 @@ enum SelfTest {
             .usingColorSpace(.sRGB).map { String(format: "%02X%02X%02X", Int(round($0.redComponent * 255)), Int(round($0.greenComponent * 255)), Int(round($0.blueComponent * 255))) }
         check(defColor == "CF8E6D", "code cells are coloured in the kernel's language", defColor ?? "none")
         check(!notebook.textView.isEditable && notebook.textView.usesFindBar, "read-only, with ⌘F")
+        if let window = c.window, let on = replaceIsOn(with: notebook.textView, in: window) { check(!on, "and no Replace…") }
         await screenshot(c, suffix: "-notebook")
 
         // An agent adds a cell: the view follows the file.
@@ -2265,14 +2276,12 @@ enum SelfTest {
         check(doc.text == text as String, "and back in")
 
         // Edit › Find › Replace… (⌥⌘F): the find bar grows its Replace row. Only the editor has the action.
-        let replace = #selector(CodeTextView.replaceInFile(_:))
-        var terminalChain: [NSResponder] = []
-        var link: NSResponder? = tab.view
-        while let r = link { terminalChain.append(r); link = r.nextResponder }
-        check(view.validateMenuItem(NSMenuItem(title: "Replace…", action: replace, keyEquivalent: ""))
-              && !terminalChain.contains { $0.responds(to: replace) }
-              && !DiffTextView.instancesRespond(to: replace) && !NotebookTextView.instancesRespond(to: replace),
-              "Replace… is on in the editor, off in the terminal, notebooks and diffs")
+        if let inEditor = replaceIsOn(with: view, in: window), let inTerminal = replaceIsOn(with: c.activeTab?.view ?? tab.view, in: window) {
+            check(inEditor && !inTerminal, "Replace… is on in the editor, off in the terminal", "editor \(inEditor), terminal \(inTerminal)")
+            window.makeFirstResponder(view)
+        } else {
+            note("skipped Replace…'s menu item checks: the app is not frontmost")
+        }
         check(KeyboardShortcuts.shared.commands.first { $0.id == "replaceInFile:" }?.defaultChord == KeyChord(key: "f", command: true, option: true),
               "Replace… is ⌥⌘F")
         func finderAction(_ action: NSTextFinder.Action) -> NSMenuItem {
@@ -2285,6 +2294,7 @@ enum SelfTest {
         view.performFindPanelAction(finderAction(.showFindInterface))
         _ = await wait(3) { scroll?.isFindBarVisible == true && (scroll?.findBarView?.frame.height ?? 0) > 0 }
         let findHeight = scroll?.findBarView?.frame.height ?? 0
+        check(findHeight > 0, "⌘F's find bar opens first", "\(findHeight) points high")
         view.replaceInFile(nil)
         check(await wait(3) { (scroll?.findBarView?.frame.height ?? 0) > findHeight + 4 }, "⌥⌘F opens the find bar with its Replace field",
               "find bar \(findHeight) then \(scroll?.findBarView?.frame.height ?? 0) points high")
@@ -2736,7 +2746,20 @@ enum SelfTest {
             let item = diff.contextItem()
             check(item == ContextItem(path: file.path, lines: 2...3), "and the new side's lines when some are selected", "\(String(describing: item))")
             side.setSelectedRange(NSRange(location: 0, length: 0))
+            // The same rows selected on the old side: the new side's lines in them.
+            let old = diff.oldSideView, oldText = old.string as NSString
+            let oldFrom = oldText.range(of: "line 2"), oldTo = oldText.range(of: "line 3\n")
+            if oldFrom.location != NSNotFound, oldTo.location != NSNotFound {
+                old.setSelectedRange(NSRange(location: oldFrom.location, length: NSMaxRange(oldTo) - oldFrom.location))
+            }
+            c.window?.makeFirstResponder(old)
+            let fromOld = diff.contextItem()
+            check(fromOld == ContextItem(path: file.path, lines: 2...3), "and from the old side, the new side's lines in the same rows",
+                  "\(String(describing: fromOld))")
+            old.setSelectedRange(NSRange(location: 0, length: 0))
+            c.window?.makeFirstResponder(side)
         }
+        if let window = c.window, let on = replaceIsOn(with: diff.focusView, in: window) { check(!on, "Replace… is off in a diff") }
 
         // Stage one hunk; it moves to Staged. Unstage it again.
         diff.base = .unstaged
