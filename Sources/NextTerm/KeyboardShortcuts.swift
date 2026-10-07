@@ -140,6 +140,16 @@ final class KeyboardShortcuts {
         commands.first { $0.id == id }?.title ?? id
     }
 
+    /// Posted when the shortcuts change (Settings, a preset, an import), for tooltips that name a key.
+    static let changed = Notification.Name("NextTermKeyboardShortcutsChanged")
+
+    /// "New tab (⌘T)": the words with the key the command has now, or the words alone without one.
+    func hint(_ words: String, _ action: Selector) -> String {
+        let id = NSStringFromSelector(action)
+        guard let item = commands.first(where: { $0.id == id })?.item, let chord = Self.chord(of: item) else { return words }
+        return "\(words) (\(chord.display))"
+    }
+
     /// Lays the preset and the user's shortcuts over the menus. A saved shortcut that could not be typed
     /// (no ⌘ or ⌃, or hand-edited preferences) is ignored rather than taking keys from typing.
     func apply() {
@@ -162,6 +172,7 @@ final class KeyboardShortcuts {
         if let alias = goToFileAliasItem, !chords.contains(where: { $0.1 == Self.goToFileKey }) {
             Self.set(Self.goToFileKey, on: alias)
         }
+        NotificationCenter.default.post(name: Self.changed, object: self)
     }
 
     /// Whether ⌘P opens Go to File through the alias now (for the self-test and the import preview).
@@ -220,6 +231,27 @@ final class KeyboardShortcuts {
     }
 
     func isCustomised(_ id: String) -> Bool { bindings.overrides[id] != nil }
+}
+
+/// A view's tooltip that names a menu command's key as it is now ("New tab (⌘T)"), and follows it when
+/// the shortcut changes. Kept by the view's owner for as long as the view.
+final class ShortcutToolTip: NSObject {
+    private weak var view: NSView?
+    private let words: String
+    private let action: Selector
+
+    init(_ view: NSView, _ words: String, _ action: Selector) {
+        self.view = view
+        self.words = words
+        self.action = action
+        super.init()
+        update()
+        NotificationCenter.default.addObserver(self, selector: #selector(update), name: KeyboardShortcuts.changed, object: nil)
+    }
+
+    @objc private func update() {
+        view?.toolTip = KeyboardShortcuts.shared.hint(words, action)
+    }
 }
 
 // MARK: - Settings window

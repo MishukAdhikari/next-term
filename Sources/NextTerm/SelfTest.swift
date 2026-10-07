@@ -3485,6 +3485,7 @@ enum SelfTest {
         shortcuts.set(KeyChord(key: "t", command: true, control: true), for: "newTab:")
         check(newTabItem?.keyEquivalent == "t" && newTabItem?.keyEquivalentModifierMask == [.command, .control],
               "a new shortcut goes straight into the menu", newTabItem.map { "\($0.keyEquivalentModifierMask.rawValue)" } ?? "")
+        check(c.tabBar.newTabToolTip == "New tab (⌃⌘T)", "and into the tooltip that names it", c.tabBar.newTabToolTip ?? "none")
         check(shortcuts.bindings.owner(of: KeyChord(key: "f", command: true), defaults: shortcuts.defaults, except: "newTab:") == "performFindPanelAction:#1",
               "a shortcut already in use is found, so it can be moved deliberately")
         if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0, windowNumber: 0,
@@ -3499,6 +3500,9 @@ enum SelfTest {
         NSApp.windows.first { $0.title == "Settings" }?.close()
         shortcuts.resetAll()
         check(newTabItem?.keyEquivalentModifierMask == .command && shortcuts.chord(for: "clearBuffer:")?.display == "⌘K", "Restore All Defaults")
+        let sidebarKey = shortcuts.chord(for: "toggleProjectSidebar:")?.display ?? "none"
+        check(c.tabBar.newTabToolTip == "New tab (⌘T)" && c.sidebar.header.hideButton.toolTip == "Hide the project sidebar (\(sidebarKey))",
+              "tooltips that name a key follow it back", "\(c.tabBar.newTabToolTip ?? "none") | \(c.sidebar.header.hideButton.toolTip ?? "none")")
         UserDefaults.standard.set(savedBindings, forKey: "keyBindings")
         shortcuts.apply()
 

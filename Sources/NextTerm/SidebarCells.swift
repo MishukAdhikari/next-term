@@ -25,6 +25,7 @@ final class SidebarHeaderView: NSView {
     /// Hides the sidebar (⌘B); the top bar then shows a button to bring it back.
     let hideButton = HoverButton()
     var inset: CGFloat = 70 { didSet { needsLayout = true } }
+    private var hideTip: ShortcutToolTip?
     var onRight = false {
         didSet {
             hideButton.image = NSImage(systemSymbolName: onRight ? "sidebar.right" : "sidebar.left", accessibilityDescription: "Hide Project Sidebar")?
@@ -48,7 +49,7 @@ final class SidebarHeaderView: NSView {
         hideButton.isBordered = false
         hideButton.contentTintColor = Theme.textDim
         hideButton.action = #selector(TerminalWindowController.toggleProjectSidebar(_:)) // up the responder chain
-        hideButton.toolTip = "Hide the project sidebar (⌘B)"
+        hideTip = ShortcutToolTip(hideButton, "Hide the project sidebar", #selector(TerminalWindowController.toggleProjectSidebar(_:)))
         hideButton.setAccessibilityLabel("Hide Project Sidebar")
         onRight = false
         chevron.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)?

@@ -17,6 +17,7 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
     private let summary = NSTextField(labelWithString: "")
     private let copyAs = NSPopUpButton(frame: .zero, pullsDown: true)
     private let sendButton = NSButton(title: "Send to Agent", target: nil, action: nil)
+    private var sendTip: ShortcutToolTip?
     private let split = NSSplitView()
     let tableList = NSTableView()
     let grid = DatabaseGridView()
@@ -80,7 +81,7 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
         sendButton.font = .systemFont(ofSize: 11)
         sendButton.target = self
         sendButton.action = #selector(sendClicked)
-        sendButton.toolTip = "Send the selected rows to the agent in this window (⌥⌘K)"
+        sendTip = ShortcutToolTip(sendButton, "Send the selected rows to the agent in this window", #selector(TerminalWindowController.sendToAgent(_:)))
         header.setViews([titleLabel, summary, NSView(), copyAs, sendButton], in: .leading)
         header.spacing = 10
         header.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)

@@ -151,6 +151,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         sidebar.header.onBranchClick = { [weak self] in self?.showBranches(nil) }
         sidebar.header.onSync = { [weak self] pull in pull ? self?.gitUpdate(nil) : self?.gitPush(nil) }
         sidebar.onHeadChange = { [weak self] in self?.editorArea.headMoved() }
+        // The collapse button's tooltip names ⌘J, or the key Settings gives it instead.
+        NotificationCenter.default.addObserver(self, selector: #selector(shortcutsChanged), name: KeyboardShortcuts.changed, object: nil)
         editorArea.isHidden = true
         applyLayout()
         setSidebarVisible(AppDelegate.shared.sidebarVisible)
@@ -840,6 +842,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return view.isDescendant(of: terminalPane)
     }
 
+    @objc private func shortcutsChanged() { updateCollapseButton() }
+
     /// The arrow points where a click moves the tab bar: to the window's edge to collapse, back to expand.
     private func updateCollapseButton() {
         tabBar.onToggleCollapse = editorArea.isHidden ? nil : { [weak self] in self?.toggleTerminalCollapsed(nil) }
@@ -851,8 +855,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         case .right: toward = "right"
         }
         let away = ["down": "up", "up": "down", "left": "right", "right": "left"][toward]!
+        let words = terminalCollapsed ? "Expand the terminal" : "Collapse the terminal"
         tabBar.setCollapseButton(symbol: "chevron.\(terminalCollapsed ? away : toward)",
-                                 toolTip: terminalCollapsed ? "Expand the terminal (⌘J)" : "Collapse the terminal (⌘J)")
+                                 toolTip: KeyboardShortcuts.shared.hint(words, #selector(toggleTerminalCollapsed(_:))))
         updateUpdateButton()
     }
 

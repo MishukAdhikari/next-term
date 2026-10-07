@@ -127,6 +127,10 @@ final class TabBarView: NSView {
     private(set) var selectedIndex = 0
     private var tabViews: [TabItemView] = []
     private let newTabButton = NSButton()
+    /// The buttons' tooltips, which name their keys as they are now.
+    private var shortcutTips: [ShortcutToolTip] = []
+    /// The new-tab button's tooltip (for the self-test).
+    var newTabToolTip: String? { newTabButton.toolTip }
     /// "» 3": the tabs that do not fit, with the most urgent status among them.
     private let overflowButton = OverflowButton()
     /// First tab shown when not all fit; moves so the selected tab is always visible.
@@ -158,7 +162,7 @@ final class TabBarView: NSView {
         newTabButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "New Tab")?
             .withSymbolConfiguration(.init(pointSize: 13, weight: .regular))
         newTabButton.contentTintColor = Theme.textDim
-        newTabButton.toolTip = "New tab (⌘T)"
+        shortcutTips.append(ShortcutToolTip(newTabButton, "New tab", #selector(TerminalWindowController.newTab(_:))))
         newTabButton.target = self
         newTabButton.action = #selector(newTabClicked)
         addSubview(newTabButton)
@@ -190,7 +194,7 @@ final class TabBarView: NSView {
         sidebarButton.isBordered = false
         sidebarButton.contentTintColor = Theme.textDim
         sidebarButton.action = #selector(TerminalWindowController.toggleProjectSidebar(_:)) // up the responder chain
-        sidebarButton.toolTip = "Show the project sidebar (⌘B)"
+        shortcutTips.append(ShortcutToolTip(sidebarButton, "Show the project sidebar", #selector(TerminalWindowController.toggleProjectSidebar(_:))))
         sidebarButton.setAccessibilityLabel("Show Project Sidebar")
         sidebarButton.isHidden = true
         setSidebarButton(onRight: false)
@@ -485,6 +489,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     private let remoteMark = RemoteMarkView()
     private let label = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
+    private var closeTip: ShortcutToolTip?
     /// "⌘1": how to get to this tab from the keyboard.
     private let hint = NSTextField(labelWithString: "")
     private var renameField: NSTextField?
@@ -520,7 +525,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         closeButton.contentTintColor = Theme.textDim
         closeButton.target = self
         closeButton.action = #selector(closeClicked)
-        closeButton.toolTip = "Close tab (⌘W)"
+        closeTip = ShortcutToolTip(closeButton, "Close tab", #selector(TerminalWindowController.closeTab(_:)))
         addSubview(closeButton)
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = Theme.textDim
