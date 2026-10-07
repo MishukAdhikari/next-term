@@ -2275,10 +2275,19 @@ enum SelfTest {
         view.toggleComment(nil)
         check(doc.text == text as String, "and back in")
 
-        // Edit › Find › Replace… (⌥⌘F): the find bar grows its Replace row. Only the editor has the action.
+        // Edit › Find › Replace… (⌥⌘F): the find bar grows its Replace row. Only the editor has the action, and
+        // a sheet in front of it turns the item off (the menu would otherwise find the editor behind the sheet).
         if let inEditor = replaceIsOn(with: view, in: window), let inTerminal = replaceIsOn(with: c.activeTab?.view ?? tab.view, in: window) {
             check(inEditor && !inTerminal, "Replace… is on in the editor, off in the terminal", "editor \(inEditor), terminal \(inTerminal)")
             window.makeFirstResponder(view)
+            let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 80), styleMask: [.titled], backing: .buffered, defer: false)
+            window.beginSheet(sheet) { _ in }
+            _ = await wait(3) { sheet.isKeyWindow }
+            let replaceItem = KeyboardShortcuts.shared.commands.first { $0.id == "replaceInFile:" }?.item
+            replaceItem?.menu?.update()
+            check(sheet.isKeyWindow && replaceItem?.isEnabled == false, "and off while a sheet in front of the editor has the keyboard")
+            window.endSheet(sheet)
+            _ = await wait(3) { window.isKeyWindow }
         } else {
             note("skipped Replace…'s menu item checks: the app is not frontmost")
         }
