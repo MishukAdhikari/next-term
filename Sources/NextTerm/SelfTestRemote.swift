@@ -11,6 +11,7 @@ import NextTermCore
 extension SelfTest {
     static func remoteChecks(_ c: TerminalWindowController) async {
         remoteTabBarChecks()
+        remoteFilesNoteChecks()
         #if DEBUG
         await remoteChecksWithStandInSSH(c)
         #else
@@ -58,6 +59,18 @@ extension SelfTest {
         }
         check(uneven.isEmpty, "remote tabs: in a narrow bar, local and remote tabs show their ⌘N alike", "they differ at tab widths \(uneven)")
         window.contentView = nil
+    }
+
+    /// The sidebar's line while a remote tab is active: VoiceOver reads its sentence, not that and then its
+    /// parts ("Files on this Mac", "web-1") again after it.
+    private static func remoteFilesNoteChecks() {
+        let note = RemoteFilesNote(frame: NSRect(x: 0, y: 0, width: 280, height: RemoteFilesNote.height))
+        note.show(RemoteMark(host: "web-1", destination: "deploy@203.0.113.5", link: .connected))
+        note.layoutSubtreeIfNeeded()
+        let parts = (note.accessibilityChildren() ?? []).map { "\(type(of: $0))" }
+        check(note.accessibilityLabel()?.hasSuffix("runs on web-1 (deploy@203.0.113.5), connected.") == true && parts.isEmpty,
+              "remote tabs: VoiceOver reads the sidebar's line about this Mac's files once, not its parts after it",
+              "\(note.accessibilityLabel() ?? "no label") / parts: \(parts)")
     }
 
     #if DEBUG

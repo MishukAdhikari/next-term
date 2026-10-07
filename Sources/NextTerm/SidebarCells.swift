@@ -418,6 +418,9 @@ final class RemoteFilesNote: NSView {
         Typography.singleLine(host, truncation: .byTruncatingMiddle) // host names keep both ends
         mark.tint = Theme.text
         [local, localText, mark, host].forEach(addSubview)
+        // One line for VoiceOver, in its own words (show()), not its parts read again after it. A control's
+        // cell is what VoiceOver reads, so the cell opts out: the view saying so leaves the cell listed.
+        [local, localText, host].forEach { $0.cell?.setAccessibilityElement(false) }
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
     }
