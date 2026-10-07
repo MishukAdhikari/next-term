@@ -24,7 +24,7 @@ Cursor is an AI code editor built on the VS Code codebase, for macOS, Windows an
 | Status of each agent | ✓ On every tab: working, done, waiting (with the question), failed | ✓ In the sidebar, with a Dock badge for unread results |
 | Cloud agents | — Everything runs on your Mac | ✓ Cloud Agents in isolated VMs |
 | MCP | ✓ An MCP server: one agent starts, prompts, waits for and reads the others | ✓ An MCP client for the tools you add |
-| Code editor | ✓ 103 languages, Go to File (<kbd>⌘P</kbd>); no language servers | ✓ A full editor on the VS Code codebase |
+| Code editor | ✓ 112 languages, Go to File (<kbd>⌘P</kbd>); no language servers | ✓ A full editor on the VS Code codebase |
 | Extensions | — | ✓ From the Open VSX registry; imports VS Code settings and extensions |
 | Reviewing agent changes | ✓ Side-by-side diffs, stage, unstage or revert per hunk | ✓ A diff view to reject what you do not want, and Agent Review |
 | Remote work | — | ✓ Agents over SSH, in WSL and in dev containers |
@@ -60,7 +60,7 @@ Yes. Anthropic publishes its Claude Code extension for Cursor. What Next Term ad
 
 ### Does Next Term have Tab completion or a model of its own?
 
-No. Next Term brings no AI and needs no account. Its editor colours 103 languages and finds files fast, but completion and code generation come from the agents you run in its tabs.
+No. Next Term brings no AI and needs no account. Its editor colours 112 languages and finds files fast, but completion and code generation come from the agents you run in its tabs.
 
 ### Is Cursor free?
 

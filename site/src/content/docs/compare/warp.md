@@ -24,7 +24,7 @@ Warp is an agentic development environment built from a terminal, for macOS, Lin
 | Notifications | ✓ Built in, quoting the agent’s question; no plugins | Partly: for Claude Code (through a plugin), Codex (one config line) and OpenCode |
 | One agent runs the others | ✓ An MCP server for local tabs: start, prompt, wait for and read agents | Partly: a hosted Factory MCP server for Warp’s cloud factories |
 | MCP client | — Next Term is the server; your agents are the clients | ✓ For the Warp Agent |
-| Code editor | ✓ 103 languages, Go to File (<kbd>⌘P</kbd>); no language servers | ✓ With language servers, a file tree, find and replace |
+| Code editor | ✓ 112 languages, Go to File (<kbd>⌘P</kbd>); no language servers | ✓ With language servers, a file tree, find and replace |
 | Reviewing changes | ✓ Side-by-side diffs; stage, unstage or revert per hunk | ✓ A code review panel: revert hunks, comments the agent acts on |
 | Cloud agents | — Everything runs on your Mac | ✓ |
 | Team features | — | ✓ Warp Drive, teams, sharing agent sessions |

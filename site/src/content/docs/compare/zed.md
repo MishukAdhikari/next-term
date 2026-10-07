@@ -24,7 +24,7 @@ Zed is an open-source code editor written in Rust, for macOS, Linux and Windows,
 | Status of each agent | ✓ Read from the agent’s screen: working, done, waiting (with the question), failed | ✓ A status indicator for each thread in the sidebar |
 | Notifications | ✓ Quote the agent’s question, no setup; Dock badge | ✓ When an agent finishes or waits; Terminal Threads notify on the terminal bell |
 | MCP | ✓ An MCP server: one agent starts, prompts, waits for and reads the others | ✓ An MCP client, its servers forwarded to External Agents |
-| Code editor | ✓ 103 languages, Go to File (<kbd>⌘P</kbd>) | ✓ Language servers, Vim mode, a much fuller editor |
+| Code editor | ✓ 112 languages, Go to File (<kbd>⌘P</kbd>) | ✓ Language servers, Vim mode, a much fuller editor |
 | Debugger | — | ✓ Through the Debug Adapter Protocol |
 | Extensions | — | ✓ Languages, themes, debuggers, MCP servers |
 | Reviewing agent changes | ✓ Side-by-side diffs; stage, unstage or revert per hunk | ✓ Accept or reject each hunk; checkpoints; stage or unstage hunks in the Git Panel |
@@ -62,7 +62,7 @@ Zed’s Personal plan is free, including unlimited use of your own API keys and 
 
 ### Does Next Term have a debugger or language servers?
 
-No. Next Term’s editor colours 103 languages and finds files fast, but it has no debugger, language servers, refactoring or extensions. For those, keep Zed or another IDE next to it.
+No. Next Term’s editor colours 112 languages and finds files fast, but it has no debugger, language servers, refactoring or extensions. For those, keep Zed or another IDE next to it.
 
 ## Read more
 

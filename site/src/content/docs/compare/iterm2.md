@@ -21,7 +21,7 @@ iTerm2 is a free, open-source (GPL v2) terminal for macOS with a long list of fe
 | Notifications | ✓ Quote the agent’s question; Dock badge | ✓ On idle, bell, session end, triggers, or any session’s status change |
 | One agent runs the others | ✓ An MCP server any agent can use: start, prompt, wait for and read agents | Partly: an AI chat that can read your sessions and, after asking, type into them; needs your own API key |
 | AI of its own | — Runs the agents you install | Partly: an optional AI plugin, with your own API key |
-| Code editor | ✓ 103 languages, Go to File (<kbd>⌘P</kbd>) | — |
+| Code editor | ✓ 112 languages, Go to File (<kbd>⌘P</kbd>) | — |
 | Side-by-side diffs, per-hunk staging | ✓ <kbd>⌥⌘G</kbd> | Partly: a diff viewer in the Claude Code workgroup |
 | Project sidebar with git status | ✓ | — |
 | tmux integration | — | ✓ `tmux -CC` as native windows and tabs |
@@ -38,7 +38,7 @@ iTerm2 is a free, open-source (GPL v2) terminal for macOS with a long list of fe
 ## Choose Next Term if…
 
 - **You run several different agents.** Next Term reads each agent’s own screen, so Claude Code, Codex, Gemini CLI, Qwen Code and 16 more show working, done or waiting on their tab, with nothing added to their settings.
-- **You want to read and fix what the agents change, in the same window:** an editor for 103 languages, side-by-side diffs with per-hunk stage, unstage and revert, Find and Replace in Files, and a sidebar with `+12 −3` line counts.
+- **You want to read and fix what the agents change, in the same window:** an editor for 112 languages, side-by-side diffs with per-hunk stage, unstage and revert, Find and Replace in Files, and a sidebar with `+12 −3` line counts.
 - **You want your agents to see your editor.** Claude Code, Gemini CLI and Qwen Code connect to Next Term as their IDE, so your selection goes with the next prompt and proposed edits open as diffs to accept or reject.
 - **You want your own agent to orchestrate the others.** Next Term’s MCP server is used by the agents you already have, under their own subscriptions, with no extra API key.
 

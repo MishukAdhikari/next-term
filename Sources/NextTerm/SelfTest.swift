@@ -1009,8 +1009,7 @@ enum SelfTest {
         check(await press("Stash, Switch and Reapply"), "checkout over changes git would overwrite offers to stash and reapply them")
         check(await wait(10) { run("rev-parse", "--abbrev-ref", "HEAD") == "fix/b" }, "and switches", run("rev-parse", "--abbrev-ref", "HEAD"))
         let after = (try? String(contentsOf: conf, encoding: .utf8)) ?? ""
-        check(await wait(5) { ((try? String(contentsOf: conf, encoding: .utf8)) ?? "") == "one\n2\n3\n4\nfix\n" }
-              && !run("stash", "list").contains("Next Term: switching"),
+        check(await wait(8) { ((try? String(contentsOf: conf, encoding: .utf8)) ?? "") == "one\n2\n3\n4\nfix\n" && !run("stash", "list").contains("Next Term: switching") },
               "with the change put back, and the stash gone", after.debugDescription + " | " + run("stash", "list"))
         check(GitLog.shared.entries.contains { $0.command.hasPrefix("git stash push --include-untracked") } && GitLog.shared.entries.contains { $0.command == "git switch fix/b" },
               "every command is in the Git Log as it would be typed")

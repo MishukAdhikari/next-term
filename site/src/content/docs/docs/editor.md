@@ -1,6 +1,6 @@
 ---
 title: Code editor
-description: "The editor above your terminal: Go to File (⌘P), 103 languages, line height, soft wrap, ⌘/ comments, ⌘L, and files that follow your agents’ edits."
+description: "The editor above your terminal: Go to File (⌘P), 112 languages, line height, soft wrap, ⌘/ comments, ⌘L, and files that follow your agents’ edits."
 head:
   - tag: title
     content: A native macOS terminal with a code editor — Next Term
@@ -33,15 +33,17 @@ Press <kbd>⌘P</kbd> and type: any file in the project, found by name or path a
 - **From a selection:** with text selected in the editor or the terminal, <kbd>⌘P</kbd> starts with it, as Find does. Select `app/Models/User.php:42` in a stack trace and press <kbd>⌘P</kbd>, then <kbd>↩</kbd>.
 - **Recently opened first:** with nothing typed, the list is the files you opened lately, newest first.
 
-## 103 languages
+## 112 languages
 
 Colours come from open-source TextMate grammars, through shiki-swift. Highlighting is incremental, so long files stay fast. The theme is Next Term’s own, Next Dark.
 
 - **Web:** HTML, CSS, SCSS, Sass, Less, Stylus, PostCSS, JavaScript, TypeScript, JSX, TSX, Vue, Svelte, Astro, Angular templates, Marko, Glimmer, GraphQL, HTTP.
-- **Templates:** Blade (Laravel), Twig, Liquid, Handlebars, Jinja (Django, Flask), ERB and Haml (Rails), Pug, Edge, Razor, templ.
+- **Templates:** Blade (Laravel), Twig, Liquid, Handlebars, Jinja (Django, Flask), ERB and Haml (Rails), Pug, Edge, Razor, templ, Prompty.
 - **Languages:** PHP, Ruby, Python, Go, Rust, Java, Kotlin, Scala, Groovy, Swift, Objective-C, C, C++, C#, Dart, Elixir, Erlang, Haskell, OCaml, Clojure, Julia, Lua, Perl, R, Zig, CoffeeScript, PowerShell, Shell, Fish, Vim Script.
-- **Data and configuration:** JSON, JSON5, JSON with Comments, JSON Lines, YAML, TOML, INI, XML, CSV, SQL, Prisma, Protocol Buffers, Terraform and HCL, Nix, dotenv, Dockerfile, Makefile, CMake, Just.
-- **Writing and git:** Markdown, MDX, diffs, commit and rebase messages, log files.
+- **Data and configuration:** JSON, JSON5, JSON with Comments, JSON Lines, YAML, TOML, INI, XML, CSV, TSV, SQL, Cypher, SPARQL, Turtle, Prisma, Protocol Buffers, Terraform and HCL, Nix, dotenv, pip requirements, Dockerfile, Makefile, CMake, Just.
+- **Writing and git:** Markdown, MDX, reStructuredText, Mermaid, diffs, commit and rebase messages, log files.
+
+**Prompts read as prompts.** In RAG and agent projects (LangChain, LangGraph, LlamaIndex…), `{context}` placeholders and `{{ question }}` or `{% for %}` templates inside Python strings get their own colours, as they do in `.jinja`, `.j2` and `.prompty` files. A Markdown file’s front matter (a `SKILL.md`, say) and every language in its code fences colour from the moment it opens.
 
 PHP files are coloured with the grammar that also understands the HTML around `<?php … ?>`. Each grammar keeps its upstream licence; the list is in the repository’s `GRAMMARS.md`.
 
