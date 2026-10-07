@@ -31,8 +31,8 @@ final class GitWriter {
     private var activities: [String: [Activity]] = [:]
     /// Runs that talk to a remote, yours and background fetches, by repository (canonical). Main thread.
     private var remoteRuns: [String: Int] = [:]
-    /// The repositories (canonical) a background fetch runs in now. Main thread.
-    private var backgroundFetches: Set<String> = []
+    /// The background fetch under way in each repository (canonical). Main thread.
+    private var backgroundRuns: [String: BackgroundRun] = [:]
 
     /// What the work tree at `directory` is doing with its remote now, if anything.
     func activity(in directory: String) -> Activity? { activities[canonicalPath(directory)]?.last }
@@ -49,11 +49,11 @@ final class GitWriter {
     func isTalkingToRemote(repository: String) -> Bool { remoteRuns[canonicalPath(repository)] != nil }
 
     /// Whether a background fetch runs now in the repository of the work tree at `directory`.
-    func isFetchingInBackground(in directory: String) -> Bool { backgroundFetches.contains(Self.repository(of: directory)) }
+    func isFetchingInBackground(in directory: String) -> Bool { backgroundRuns[Self.repository(of: directory)] != nil }
 
     /// For the self-test: as if a background fetch had started (or ended) in the work tree's repository.
     func setFetchingInBackground(_ fetching: Bool, in directory: String) {
-        if fetching { backgroundFetches.insert(Self.repository(of: directory)) } else { backgroundFetches.remove(Self.repository(of: directory)) }
+        backgroundRuns[Self.repository(of: directory)] = fetching ? BackgroundRun() : nil
         NotificationCenter.default.post(name: Self.activityChanged, object: self)
     }
 
@@ -78,10 +78,12 @@ final class GitWriter {
 
     /// Runs each step (the arguments after `git -C directory`) in order, stopping at the first that fails,
     /// and reports the last one run, on the main thread. `repository` (the common git dir) serializes.
-    /// `activity` marks a run that talks to a remote, for as long as it runs.
+    /// `activity` marks a run that talks to a remote, for as long as it runs. A background fetch in the
+    /// repository makes way: it stops now, rather than keep this waiting behind a slow remote.
     func run(_ title: String, in directory: String, repository: String, steps: [[String]], activity: Activity? = nil,
              completion: @escaping (Result) -> Void) {
         guard let git = Self.git else { return completion(Result(status: 127, output: "Git is not installed.")) }
+        backgroundRuns[canonicalPath(repository)]?.stop()
         let queue = writeQueue(for: repository)
         let key = canonicalPath(directory)
         if let activity {
@@ -114,20 +116,24 @@ final class GitWriter {
 
     /// A background fetch of each remote in `remotes`, one after another on the repository's queue (so
     /// never at the same time as a write of yours), each with its own result, on the main thread. Nothing
-    /// can prompt, FETCH_HEAD stays as it is, and each stops after three minutes so a slow remote never
-    /// holds up your own commands for long. In Git Commands only when "Show background fetches" is on.
+    /// can prompt, FETCH_HEAD stays as it is, and each stops after three minutes. A command of yours for
+    /// the repository stops it (see `run`). In Git Commands only when "Show background fetches" is on.
     func fetchInBackground(in directory: String, repository: String, remotes: [String], completion: @escaping ([Result]) -> Void) {
         guard let git = Self.git else { return completion([Result(status: 127, output: "Git is not installed.")]) }
         let key = canonicalPath(repository)
-        backgroundFetches.insert(key)
+        let run = BackgroundRun()
+        backgroundRuns[key] = run
         remoteRunChanged(repository, by: 1)
         NotificationCenter.default.post(name: Self.activityChanged, object: self)
         writeQueue(for: repository).async {
             var results: [Result] = []
-            for remote in remotes {
+            for remote in remotes where !run.isStopped {
                 let args = FetchSchedule.arguments(remote: remote)
                 let started = Date()
-                let result = Self.execute(git, ["-C", directory] + args, environment: Self.backgroundEnvironment, timeout: 180)
+                var result = Self.execute(git, ["-C", directory] + args, environment: Self.backgroundEnvironment, timeout: 180,
+                                          started: run.started)
+                run.ended()
+                if run.isStopped { result = Result(status: result.status, output: result.output + "\nStopped, so a command of yours could run.") }
                 results.append(result)
                 let entry = GitCommandLog.Entry(title: "Background fetch", command: Self.commandLine(args), directory: directory, start: started,
                                                 duration: Date().timeIntervalSince(started), status: result.status, output: result.output,
@@ -135,7 +141,7 @@ final class GitWriter {
                 DispatchQueue.main.async { GitCommandLog.shared.add(entry) }
             }
             DispatchQueue.main.async { [weak self] in
-                self?.backgroundFetches.remove(key)
+                if self?.backgroundRuns[key] === run { self?.backgroundRuns[key] = nil }
                 self?.remoteRunChanged(repository, by: -1)
                 NotificationCenter.default.post(name: Self.activityChanged, object: self)
                 completion(results)
@@ -177,8 +183,9 @@ final class GitWriter {
 
     /// One git run: output to a file (never a pipe a long-lived child could hold open), no stdin, and a
     /// stop after ten minutes (or `timeout`) with SIGTERM only: a git that is writing is never killed outright.
+    /// `started` is handed the running git.
     private static func execute(_ git: String, _ arguments: [String], environment: [String: String] = environment,
-                                timeout: TimeInterval = 600) -> Result {
+                                timeout: TimeInterval = 600, started: ((Process) -> Void)? = nil) -> Result {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: git)
         process.arguments = arguments
@@ -197,6 +204,7 @@ final class GitWriter {
             return Result(status: 127, output: error.localizedDescription)
         }
         try? handle.close()
+        started?(process)
         var timedOut = false
         if exited.wait(timeout: .now() + timeout) == .timedOut {
             timedOut = true
@@ -206,6 +214,42 @@ final class GitWriter {
         let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         guard timedOut else { return Result(status: process.terminationStatus, output: text) }
         return Result(status: 124, output: text + "\nStopped after \(Int(timeout / 60)) minutes.")
+    }
+}
+
+/// A background fetch under way. A command of yours for the same repository stops it rather than wait
+/// behind it: SIGTERM, which git cleans up after (it removes its lock files), and the remotes still to go
+/// are skipped. The next interval tries again.
+private final class BackgroundRun: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var stopped = false
+
+    var isStopped: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return stopped
+    }
+
+    /// One of its gits started (on the repository's queue). One that starts after `stop` stops at once.
+    func started(_ process: Process) {
+        lock.lock()
+        defer { lock.unlock() }
+        if stopped { process.terminate() } else { self.process = process }
+    }
+
+    func ended() {
+        lock.lock()
+        defer { lock.unlock() }
+        process = nil
+    }
+
+    /// A command of yours was queued (main thread).
+    func stop() {
+        lock.lock()
+        defer { lock.unlock() }
+        stopped = true
+        process?.terminate()
     }
 }
 

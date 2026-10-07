@@ -1867,6 +1867,27 @@ enum SelfTest {
         check(!FileManager.default.fileExists(atPath: fetchHead), "FETCH_HEAD is still untouched")
         popup.close()
 
+        // A command of yours never waits behind a background fetch: one from a remote that takes 20 seconds
+        // to answer is stopped for it.
+        run(["config", "remote.origin.uploadpack", "sleep 20; :"], in: work)
+        fetcher.test = (root: work.path, interval: 1, staleAfter: 3600)
+        let slow = await wait(5) { GitWriter.shared.isFetchingInBackground(in: work.path) }
+        fetcher.test = nil // this one only
+        let queued = Date()
+        var waited: TimeInterval?, status: Int32 = -1
+        GitWriter.shared.run("Status", in: work.path, repository: repository, steps: [["status", "--porcelain"]]) { result in
+            waited = Date().timeIntervalSince(queued)
+            status = result.status
+        }
+        let ran = await wait(10) { waited != nil }
+        let soon: Bool = (waited ?? 99) < 5
+        check(slow && ran && soon && status == 0, "a command of yours stops a slow background fetch rather than wait behind it",
+              "fetching \(slow), waited \(waited.map { String(format: "%.1f s", $0) } ?? "over 10 s"), exit \(status)")
+        let stopped = GitCommandLog.shared.entries.last { $0.background }
+        check(stopped?.output.contains("Stopped, so a command of yours could run.") == true, "and Git Commands says why it stopped",
+              stopped?.output ?? "no background entry")
+        _ = await wait(5) { !fetcher.schedule.isRunning(repository) }
+
         fetcher.test = nil
         w.closeProject(nil)
         _ = await wait(5) { !AppDelegate.shared.controllers.contains { $0 === w } }
