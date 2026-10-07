@@ -3,7 +3,7 @@
 
 export const APP_NAME = 'Next Term';
 export const TAGLINE = 'The missing IDE for the terminal';
-export const VERSION = '0.8.0';
+export const VERSION = '0.9.0';
 export const MIN_MACOS = 'macOS 13 or later';
 /**
  * The newest release's size, rounded, in MB as Finder counts them (1,000,000 bytes): its disk image
