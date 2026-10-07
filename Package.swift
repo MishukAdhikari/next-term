@@ -17,7 +17,7 @@ let package = Package(
     ],
     targets: [
         // Platform-neutral logic (tab status, command classification). No AppKit, but not ready for iOS as it
-        // is: Process (how Git.swift runs git) and homeDirectoryForCurrentUser are macOS-only.
+        // is: iOS has no Process (how Git.swift runs git) and no homeDirectoryForCurrentUser.
         .target(name: "NextTermCore", linkerSettings: [.linkedLibrary("sqlite3")]),
         .executableTarget(
             name: "NextTerm",
