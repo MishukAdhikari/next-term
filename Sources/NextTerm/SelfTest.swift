@@ -1087,7 +1087,50 @@ enum SelfTest {
         let editor = area.activeEditor
         check(editor?.document.path == canonicalPath(csv.path), "Open in Editor opens it in the editor, which can take it")
         if let editor { area.close(editor) }
+
+        // Written again in place and larger, as `cp` or a script's `>` do (same inode): read again, not
+        // taken for a log that grew.
+        if let out = FileHandle(forWritingAtPath: csv.path) {
+            try? out.truncate(atOffset: 0)
+            out.write(Data(("key,question,answer\n" + text).utf8))
+            try? out.close()
+        }
+        table.refreshIfChanged()
+        check(await wait(10) { table.isSettled && table.columns == ["key", "question", "answer"] },
+              "a CSV written again in place is read again", table.columns.joined(separator: ", "))
+        check(table.records[safe: 1]?.fields.first == "id", "from its new first row")
         area.close(table)
+
+        // A log still being written: its last line has no line break yet. Once the file grows, that line
+        // is read again, whole.
+        let growing = proj.appendingPathComponent("growing.jsonl")
+        defer { try? fm.removeItem(at: growing) }
+        let pad = String(repeating: "x", count: 2400)
+        var body = ""
+        for i in 0..<900 { body += #"{"id":\#(i),"pad":"\#(pad)"}"# + "\n" }
+        body += #"{"id":900,"text":"half"#
+        try? body.write(to: growing, atomically: true, encoding: .utf8)
+        c.openFile(growing)
+        guard let feed = area.activeData, feed.path == canonicalPath(growing.path) else {
+            return check(false, "a 2 MB .jsonl opens in the head view", area.activeName ?? "nothing")
+        }
+        check(await wait(10) { feed.isSettled && feed.isAtEnd && feed.records.count == 901 }, "it reads a growing file to its end",
+              "\(feed.records.count)")
+        check(feed.records.last?.error != nil, "its half-written last line is not JSON yet")
+        if let out = FileHandle(forWritingAtPath: growing.path) {
+            _ = try? out.seekToEnd()
+            out.write(Data((#" written"}"# + "\n" + #"{"id":901}"# + "\n").utf8))
+            try? out.close()
+        }
+        feed.refreshIfChanged()
+        check(await wait(5) { feed.isSettled && !feed.isAtEnd && feed.records.count == 900 }, "it grew: the rows stay, the half line goes",
+              "\(feed.records.count)")
+        feed.loadMore()
+        check(await wait(10) { feed.isSettled && feed.records.count == 902 }, "Load More reads on", "\(feed.records.count)")
+        let whole = feed.records[safe: 900]
+        check(whole?.error == nil && whole?.value(for: "text") == "\"half written\"" && whole?.line == 901
+              && feed.records[safe: 901]?.value(for: "id") == "901", "the line reads whole, then the next", whole?.raw ?? "")
+        area.close(feed)
 
         // Too large for the editor: the head view, not another app.
         fm.createFile(atPath: log.path, contents: nil)

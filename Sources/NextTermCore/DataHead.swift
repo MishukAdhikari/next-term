@@ -75,6 +75,44 @@ public struct DataPage: Sendable, Equatable {
     public var isAtEnd: Bool
     /// The file's size when it was read.
     public var fileSize: UInt64
+    /// Where the last record starts, when the end of the file ended it rather than a line break: a log
+    /// may still be writing that line, so once the file grows it is read again from there.
+    public var unterminated: DataPosition?
+    /// What this read saw, to tell later whether the file only grew.
+    public var fingerprint: DataFingerprint
+}
+
+/// Some bytes a read saw: the start of the file and those just before where it stopped. A file that
+/// only grew (a log) still has them; one written again in place (`cp`, a script's `>`, which keep the
+/// inode) almost never does.
+public struct DataFingerprint: Sendable, Equatable {
+    public var head: Data
+    public var tail: Data
+    public var end: UInt64
+
+    static let tailLength = 4096
+
+    init(handle: FileHandle, end: UInt64) throws {
+        self.end = end
+        try handle.seek(toOffset: 0)
+        head = try handle.read(upToCount: Int(min(UInt64(DataHead.headLength), end))) ?? Data()
+        let from = end - min(end, UInt64(Self.tailLength))
+        try handle.seek(toOffset: from)
+        tail = try handle.read(upToCount: Int(end - from)) ?? Data()
+    }
+
+    /// The same bytes, from the file as it is now.
+    public init?(path: String, end: UInt64) {
+        guard isRegularFile(path), let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+        guard let print = try? DataFingerprint(handle: handle, end: end) else { return nil }
+        self = print
+    }
+
+    /// Whether the file still has these bytes where they were: it only grew since.
+    public func matches(_ path: String) -> Bool {
+        DataFingerprint(path: path, end: end) == self
+    }
 }
 
 public enum DataHeadError: Error, LocalizedError, Equatable {
@@ -165,8 +203,10 @@ public enum DataHead {
                 if scanned >= maxScanBytes, !scanner.isFull { scanner.stop() }
             }
             let end = scanner.position
+            let fingerprint = try DataFingerprint(handle: handle, end: end.offset)
             return DataPage(records: scanner.records, delimiter: kind == .delimited ? separator : nil,
-                            end: end, isAtEnd: end.offset >= size, fileSize: size)
+                            end: end, isAtEnd: end.offset >= size, fileSize: size,
+                            unterminated: scanner.unterminated, fingerprint: fingerprint)
         } catch let error as DataHeadError {
             throw error
         } catch {
@@ -470,6 +510,8 @@ struct RecordScanner {
     private(set) var records: [DataRecord] = []
     /// Where the record after the last one returned starts.
     private(set) var position: DataPosition
+    /// Where the last record starts, when the end of the file ended it.
+    private(set) var unterminated: DataPosition?
 
     /// The absolute offset of the next chunk.
     private var offset: UInt64
@@ -522,6 +564,8 @@ struct RecordScanner {
 
     /// The end of the file: what is left is the last record.
     mutating func finish() {
+        let start = position, count = records.count
+        defer { if records.count > count { unterminated = start } }
         if kind != .delimited {
             if !carry.isEmpty || truncated { endLine(next: offset) }
             return

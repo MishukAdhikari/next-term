@@ -178,6 +178,54 @@ import Testing
         withExtendedLifetime(project) {}
     }
 
+    /// A log that grows still has what was read; a file written again in place (same inode, larger)
+    /// does not. A last line with no line break yet is marked, so it can be read again once whole.
+    @Test func growingAndRewrittenFiles() throws {
+        let project = FixtureProject()
+        let path = project.root + "/data.csv"
+        let pad = String(repeating: "x", count: 90) // past the 64 KB the fingerprint keeps of the start
+        let original = "id,name\n" + (1...900).map { "\($0),row \($0) \(pad)" }.joined(separator: "\n") + "\n"
+        project.write("data.csv", original + "901,half writ")
+        let page = try DataHead.page(at: path, kind: .delimited)
+        #expect(page.isAtEnd && page.records.last?.fields == ["901", "half writ"])
+        #expect(page.unterminated == DataPosition(offset: UInt64(original.utf8.count), line: 902))
+        #expect(page.fingerprint.end == page.end.offset && page.fingerprint.head.count == 64 << 10)
+        #expect(page.fingerprint.matches(path))
+
+        // Appended to: the same bytes are still there, and the half line reads whole from where it starts.
+        let out = try #require(FileHandle(forWritingAtPath: path))
+        try out.seekToEnd()
+        out.write(Data("ten\n902,next\n".utf8))
+        try out.close()
+        #expect(page.fingerprint.matches(path))
+        let rest = try DataHead.page(at: path, kind: .delimited, from: try #require(page.unterminated), delimiter: page.delimiter)
+        #expect(rest.records.map(\.fields) == [["901", "half written"], ["902", "next"]] && rest.records[0].line == 902)
+        #expect(rest.unterminated == nil)
+
+        // Written again in place and larger: `cp`, or a script's `>`, keep the inode.
+        let inode = FileStamp(path: path)?.inode
+        let again = try #require(FileHandle(forWritingAtPath: path))
+        try again.truncate(atOffset: 0)
+        again.write(Data(("key,value\n" + original + original).utf8))
+        try again.close()
+        #expect(FileStamp(path: path)?.inode == inode)
+        #expect(!page.fingerprint.matches(path))
+        // The same start, other rows before where the read stopped.
+        let first = try DataHead.page(at: path, kind: .delimited, limit: 2)
+        let same = try #require(FileHandle(forWritingAtPath: path))
+        try same.truncate(atOffset: 0)
+        same.write(Data("key,value\n0,changed\n".utf8) + Data(repeating: 0x0A, count: 100_000))
+        try same.close()
+        #expect(!first.fingerprint.matches(path))
+        #expect(!page.fingerprint.matches(project.root + "/missing.csv"))
+
+        #expect(Self.scan("a\nb\n", kind: .lines, chunk: 1).count == 2)
+        project.write("ended.log", "a\nb\n")
+        #expect(try DataHead.page(at: project.root + "/ended.log", kind: .lines).unterminated == nil)
+        project.write("cr.csv", "a,b\r1,2\r")
+        #expect(try DataHead.page(at: project.root + "/cr.csv", kind: .delimited).unterminated == DataPosition(offset: 4, line: 2))
+    }
+
     @Test func estimatesAndCopies() {
         #expect(DataHead.estimatedTotal(records: 1000, through: DataPosition(offset: 100_000, line: 1001), fileSize: 10_000_000, lineCount: nil) == 100_000)
         #expect(DataHead.estimatedTotal(records: 1000, through: DataPosition(offset: 100_000, line: 2001), fileSize: 10_000_000, lineCount: 50_000) == 25_000)

@@ -52,6 +52,10 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
     private var matches: IndexSet?
     private var countedBytes: UInt64 = 0
     private var stamp: FileStamp?
+    /// What the last read saw, to tell a file that grew from one written again in place.
+    private var fingerprint: DataFingerprint?
+    /// Where the last record starts, when the end of the file ended it rather than a line break.
+    private var unterminated: DataPosition?
     private let queue = DispatchQueue(label: "me.mishuk.nextterm.data-viewer", qos: .userInitiated)
     private let countQueue = DispatchQueue(label: "me.mishuk.nextterm.data-count", qos: .utility)
     private var generation = 0
@@ -322,6 +326,8 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
                     if !page.isAtEnd { self.startCounting() }
                 case let .failure(error):
                     self.records = []
+                    self.fingerprint = nil
+                    self.unterminated = nil
                     self.loadError = error.localizedDescription
                 }
                 self.rebuildColumns()
@@ -362,6 +368,8 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
         end = page.end
         isAtEnd = page.isAtEnd
         fileSize = page.fileSize
+        fingerprint = page.fingerprint
+        unterminated = page.unterminated
         if page.delimiter != nil { delimiter = page.delimiter }
     }
 
@@ -394,7 +402,8 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
     }
 
     /// The file changed on disk. A log that grew keeps what was read and can load more; anything else
-    /// is read again. About once a second.
+    /// (a file written again in place too, though it keeps its inode and grew) is read again. About once
+    /// a second.
     func refreshIfChanged() {
         guard !isLoading else { return }
         let now = FileStamp(path: path)
@@ -406,12 +415,41 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
         }
         if let old = stamp, old.inode == now.inode, now.size > old.size, UInt64(now.size) >= end.offset {
             stamp = now
-            fileSize = UInt64(now.size)
-            isAtEnd = false
-            lineCount = nil // the estimate goes by bytes until the next count
-            return showSummary()
+            return checkGrowth(to: now)
         }
         reload()
+    }
+
+    /// The file is larger under the same inode. Whether it still has what was read is checked off the
+    /// main thread; Load More waits for the answer.
+    private func checkGrowth(to now: FileStamp) {
+        let token = generation, path = self.path, print = fingerprint
+        isLoading = true
+        queue.async { [weak self] in
+            let same = print?.matches(path) == true
+            DispatchQueue.main.async {
+                guard let self, token == self.generation else { return }
+                self.isLoading = false
+                guard same else { return self.reload() }
+                self.grew(to: now)
+            }
+        }
+    }
+
+    /// Only appended to: the rows stay and Load More reads on.
+    private func grew(to now: FileStamp) {
+        fileSize = UInt64(now.size)
+        isAtEnd = false
+        lineCount = nil // the estimate goes by bytes until the next count
+        if let start = unterminated, !records.isEmpty {
+            // Its last line had no line break yet, so it may have been half written: read it again.
+            records.removeLast()
+            end = start
+            unterminated = nil
+            rebuildColumns()
+            runSearch()
+        }
+        showSummary()
     }
 
     /// The file was renamed or moved in the sidebar.
