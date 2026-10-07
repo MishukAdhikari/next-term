@@ -462,4 +462,9 @@ import Testing
         #expect(RemoteMark.split(focused: nil, panes: [web2]) == web2)
         #expect(RemoteMark.split(focused: nil, panes: []) == nil)
     }
+
+    @Test func aHostAliasNamedLikeTheHostIsSaidOnce() {
+        #expect(RemoteMark(host: "web-1", destination: "web-1", link: .connected).summary == "Remote: web-1, connected")
+        #expect(RemoteMark(host: "web-1", destination: "deploy@web-1", link: .connected).place == "web-1 (deploy@web-1)")
+    }
 }

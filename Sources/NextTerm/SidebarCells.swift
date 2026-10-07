@@ -436,7 +436,7 @@ final class RemoteFilesNote: NSView {
         shown = remote
         host.stringValue = remote.host
         mark.link = remote.link
-        let words = "The files below are on this Mac. The active tab runs on \(remote.host) (\(remote.destination)), \(remote.link.phrase)."
+        let words = "The files below are on this Mac. The active tab runs on \(remote.place), \(remote.link.phrase)."
         toolTip = words
         setAccessibilityLabel(words)
         needsLayout = true

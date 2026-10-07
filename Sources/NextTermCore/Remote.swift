@@ -101,8 +101,11 @@ public struct RemoteMark: Equatable, Sendable {
         self.link = link
     }
 
+    /// "web-1 (deploy@203.0.113.5)", or "web-1" alone when the destination is an ssh alias of that name.
+    public var place: String { destination == host ? host : "\(host) (\(destination))" }
+
     /// "Remote: web-1 (deploy@203.0.113.5), connected"
-    public var summary: String { "Remote: \(host) (\(destination)), \(link.phrase)" }
+    public var summary: String { "Remote: \(place), \(link.phrase)" }
 
     /// A split tab's mark: its weakest pane's, so a pane that lost its connection is not hidden, and the
     /// host named is the one whose connection it shows (the focused pane's, when that one is as weak).
