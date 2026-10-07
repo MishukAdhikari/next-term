@@ -17,7 +17,9 @@ public enum ReleaseNotes {
     /// version) are for the release page; someone reading them in the app already has it.
     public static let pageOnlySections: Set<String> = ["install", "installation", "update", "updating", "download", "downloads"]
 
-    public static func blocks(_ markdown: String) -> [Block] {
+    /// `keepingEverySection` keeps what only belongs on a release page (install sections, the changelog
+    /// link), for Markdown that is not release notes, such as a notebook's.
+    public static func blocks(_ markdown: String, keepingEverySection: Bool = false) -> [Block] {
         var blocks: [Block] = []
         var skippingBelow: Int? // inside a dropped section: until a heading at this level or higher
         var fence: [String]?
@@ -51,7 +53,7 @@ public enum ReleaseNotes {
                 flush()
                 if let below = skippingBelow, level > below { continue }
                 skippingBelow = nil
-                if pageOnlySections.contains(text.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ":.!").union(.whitespaces))) {
+                if !keepingEverySection, pageOnlySections.contains(text.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ":.!").union(.whitespaces))) {
                     skippingBelow = level
                     continue
                 }
@@ -59,7 +61,7 @@ public enum ReleaseNotes {
                 continue
             }
             if skippingBelow != nil { continue }
-            if trimmed.isEmpty || isRule(trimmed) || trimmed.hasPrefix("<!--") || trimmed.hasPrefix("**Full Changelog**") {
+            if trimmed.isEmpty || isRule(trimmed) || trimmed.hasPrefix("<!--") || (!keepingEverySection && trimmed.hasPrefix("**Full Changelog**")) {
                 flush()
                 continue
             }
