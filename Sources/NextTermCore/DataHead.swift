@@ -45,8 +45,8 @@ public struct DataRecord: Sendable, Equatable {
     /// Why it could not be read: not JSON, a quote that is never closed, too long.
     public var error: String?
     public var isTruncated = false
-    /// It has more than `DataHead.maxFields` fields (CSV and TSV) or keys (JSON Lines). Only the first
-    /// ones are in `fields` and `keys`; `raw` has them all.
+    /// CSV and TSV: it has more than `DataHead.maxFields` fields. Only the first ones are in `fields`;
+    /// `raw` has them all. A JSON line keeps every key, since its cells are found by name.
     public var hasMoreFields = false
 
     public init(line: Int, raw: String, fields: [String] = [], keys: [String] = [], error: String? = nil, isTruncated: Bool = false) {
@@ -154,8 +154,9 @@ public enum DataHead {
     public static let pageSize = 1000
     /// A record longer than this is cut (an embedding row is about 16 KB; a whole minified file is not a row).
     public static let maxRecordBytes = 1 << 20
-    /// A record keeps its first this many fields (or keys): a sparse matrix with 100,000 columns would
-    /// otherwise cost ten times its size, and the table shows only 200.
+    /// A CSV or TSV record keeps its first this many fields: a sparse matrix with 100,000 columns would
+    /// otherwise cost ten times its size, and the table shows only 200. A JSON line keeps all its keys:
+    /// the columns are the first 200 keys seen in any line, which can come after its 1,000th.
     public static let maxFields = 1000
     /// A page stops early past this many bytes, so 1,000 huge records cannot fill memory.
     public static let maxPageBytes = 64 << 20
@@ -411,7 +412,6 @@ public enum DataHead {
         if let object = topLevelFields(bytes) {
             record.keys = object.keys
             record.fields = object.values
-            record.hasMoreFields = object.more
         } else {
             record.fields = [record.raw.trimmingCharacters(in: .whitespaces)] // an array, or a single value
         }
@@ -434,10 +434,9 @@ public enum DataHead {
         return decoded as? String ?? json
     }
 
-    /// The keys and values of a valid JSON object, as written, up to `limit` of them (`more`: it has
-    /// others); nil for anything else.
-    static func topLevelFields(_ bytes: [UInt8], limit: Int = maxFields) -> (keys: [String], values: [String], more: Bool)? {
-        bytes.withUnsafeBufferPointer { b -> (keys: [String], values: [String], more: Bool)? in
+    /// The keys and values of a valid JSON object, as written; nil for anything else.
+    static func topLevelFields(_ bytes: [UInt8]) -> (keys: [String], values: [String])? {
+        bytes.withUnsafeBufferPointer { b -> (keys: [String], values: [String])? in
             let n = b.count
             var i = skipSpace(b, from: 0)
             guard i < n, b[i] == 0x7B else { return nil } // {
@@ -453,7 +452,6 @@ public enum DataHead {
                     continue
                 }
                 guard b[i] == 0x22 else { return nil }
-                if keys.count == limit { return (keys, values, true) }
                 let keyStart = i
                 i = stringEnd(b, from: i)
                 keys.append(displayValue(String(decoding: UnsafeBufferPointer(rebasing: b[keyStart..<i]), as: UTF8.self)))
@@ -464,7 +462,7 @@ public enum DataHead {
                 i = valueEnd(b, from: i)
                 values.append(String(decoding: UnsafeBufferPointer(rebasing: b[valueStart..<i]), as: UTF8.self))
             }
-            return (keys, values, false)
+            return (keys, values)
         }
     }
 

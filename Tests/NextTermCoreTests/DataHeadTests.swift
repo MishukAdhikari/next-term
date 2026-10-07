@@ -123,6 +123,10 @@ import Testing
         // One line says too little for that: the separator it has most.
         #expect(DataHead.detectDelimiter(Array("a;b,c,d".utf8), fallback: 0x09) == 0x2C)
         #expect(DataHead.detectDelimiter(Array("id,tags\n1,a;b\n2,c;d\n".utf8), fallback: 0x2C) == 0x2C)
+        // The same with no header: commas that are not between digits are not decimal commas.
+        #expect(DataHead.detectDelimiter(Array("1,a;b\n2,c;d\n3,e;f\n".utf8), fallback: 0x2C) == 0x2C)
+        #expect(DataHead.detectDelimiter(Array("1,5,a;b\n2,5,c;d\n".utf8), fallback: 0x2C) == 0x2C)
+        #expect(DataHead.detectDelimiter(Array("1,5;\"a, b\"\n2,5;\"c, d\"\n".utf8), fallback: 0x2C) == 0x3B) // quoted ones do not count
         #expect(DataHead.looksLikeHeader([["id", "score"], ["1", "0.5"], ["2", "0.7"]]))
         #expect(DataHead.looksLikeHeader([["", "question", "answer"], ["0", "Why?", "Because."]]))
         #expect(!DataHead.looksLikeHeader([["1", "0.5"], ["2", "0.7"]]))
@@ -186,9 +190,15 @@ import Testing
         #expect(all.count == width && all[997 * 19] == "\(997 * 19)" && all[1] == "")
         #expect(!Self.scan("a,b\n", kind: .delimited, chunk: 1)[0].hasMoreFields)
 
+        // A JSON line keeps every key: its cells are found by name, not by place.
         let object = "{" + (0..<5000).map { #""k\#($0)": \#($0)"# }.joined(separator: ", ") + "}"
         let json = Self.scan(object + "\n", kind: .jsonLines, chunk: 100_000)[0]
-        #expect(json.error == nil && json.keys.count == DataHead.maxFields && json.hasMoreFields && json.value(for: "k999") == "999")
+        #expect(json.error == nil && json.keys.count == 5000 && !json.hasMoreFields && json.value(for: "k4999") == "4999")
+        let reversed = "{" + (0..<5000).reversed().map { #""k\#($0)": \#($0)"# }.joined(separator: ", ") + "}"
+        let lines = Self.scan(object + "\n" + reversed + "\n", kind: .jsonLines, chunk: 100_000)
+        let columns = DataHead.columns(of: lines)
+        let blank = columns.filter { lines[1].value(for: $0) == nil }
+        #expect(columns.count == 200 && blank.isEmpty && lines[1].value(for: "k0") == "0", "\(blank.count) blank cells")
 
         // A page of such rows costs about its size, not ten times it.
         let project = FixtureProject()
