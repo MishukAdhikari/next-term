@@ -554,15 +554,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     @discardableResult
     func openWindow(directory: String?, project: String? = nil) -> TerminalWindowController {
         let controller = TerminalWindowController(directory: directory, project: project)
-        controller.onClose = { [weak self] closed, closedProject in
+        controller.onClose = { [weak self] closed, welcome in
             // Defer: the window is still mid-close in this call.
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.controllers.removeAll { $0 === closed }
                 self.updateBadge()
                 self.projectsChanged()
-                // Closing the last project leaves the Welcome window, with recent projects, like an IDE.
-                if closedProject && self.controllers.isEmpty && !self.isTerminating { self.showWelcome(nil) }
+                // Closing the last project (or the last window's last tab) leaves the Welcome window, with
+                // recent projects, like an IDE.
+                if welcome && self.controllers.isEmpty && !self.isTerminating { self.showWelcome(nil) }
             }
         }
         welcome?.close()
