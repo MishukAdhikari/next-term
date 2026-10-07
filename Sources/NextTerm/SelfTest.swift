@@ -640,6 +640,8 @@ enum SelfTest {
 
         await sessionChecks(proj: proj)
 
+        await lastTabChecks()
+
         // Font size.
         let size = AppDelegate.shared.fontSize
         AppDelegate.shared.increaseFontSize(nil)
