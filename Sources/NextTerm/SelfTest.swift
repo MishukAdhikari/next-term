@@ -3491,7 +3491,9 @@ enum SelfTest {
         try? FileManager.default.createSymbolicLink(at: fakeBin.appendingPathComponent("claude"), withDestinationURL: URL(fileURLWithPath: "/bin/cat"))
         let agentTab = c.addTab(directory: proj.path)
         _ = await wait(20) { agentTab.status.integrated }
-        agentTab.view.send(txt: "\u{15}PATH=\(fakeBin.path):$PATH claude\r")
+        // Its output goes nowhere: cat would write back the paste markers it is given, and "ESC [ 200 ~" on the
+        // screen deletes columns (DECDC) on every row. The tty's echo shows what the agent was given.
+        agentTab.view.send(txt: "\u{15}PATH=\(fakeBin.path):$PATH claude >/dev/null\r")
         _ = await wait(5) { agentTab.status.running && agentTab.status.kind == .agent }
         check(c.agentTab === agentTab, "the agent tab is found", agentTab.status.program)
         c.openFile(proj.appendingPathComponent("src/main.php"))
