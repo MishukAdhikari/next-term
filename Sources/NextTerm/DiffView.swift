@@ -371,16 +371,19 @@ final class DiffPane: NSView {
             }
             return
         }
-        if workingTreeBranch != nil {
+        if let branch = workingTreeBranch {
             // Tracked or not doesn't matter here: the list came from the branch's files and the disk's.
             let renamedFrom = self.renamedFrom
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                let diff = Self.git.flatMap { GitRunner.diff(of: path, in: root, git: $0, base: base, oldPath: renamedFrom) }
+                guard let git = Self.git else { return DispatchQueue.main.async { self?.show(nil, message: "Git is not installed.", token: token) } }
+                // Nil only when git fails: the branch was deleted, or pruned by a fetch, since the tab opened.
+                let diff = GitRunner.diff(of: path, in: root, git: git, base: base, oldPath: renamedFrom)
                 let stamps = (FileStamp(path: absolute), FileStamp(path: (root as NSString).appendingPathComponent(".git/index")))
                 DispatchQueue.main.async {
                     guard let self, token == self.generation else { return }
                     self.stamps = stamps
-                    self.show(diff, message: nil, token: token)
+                    let gone = "Git could not read \(BranchCompare.displayName(branch)): it may have been deleted."
+                    self.show(diff, message: diff == nil ? gone : nil, token: token)
                 }
             }
             return

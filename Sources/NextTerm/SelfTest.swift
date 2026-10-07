@@ -1903,6 +1903,17 @@ enum SelfTest {
             check(matched && renamed?.title == "old.txt ↔ feat", "a file renamed since the branch is compared with its name there", said)
             if let renamed { c.editorArea.close(renamed) }
         }
+        // A branch deleted meanwhile (a fetch prunes one): the diff says git can't read it, not that the
+        // file is the same as there.
+        run("branch", "gone", "feat")
+        c.editorArea.openWorkingTreeDiff(root: repo.path, path: "a.txt", branch: "refs/heads/gone", renamedFrom: nil)
+        let goneDiff = c.editorArea.activeDiff
+        let read = await wait(8) { goneDiff?.title == "a.txt ↔ gone" && (goneDiff?.hunkCount ?? 0) > 0 }
+        run("branch", "-D", "gone")
+        write("a.txt", "and once more\n")
+        let gone = await wait(8) { goneDiff?.messageText == "Git could not read gone: it may have been deleted." }
+        check(read && gone, "a diff against a branch deleted since says git can't read it", goneDiff.map { $0.title + ": " + $0.messageText } ?? "no diff in front")
+        if let goneDiff { c.editorArea.close(goneDiff) }
         // Put back as main has it: a.txt no longer differs from feat (main has the same fix), and the list follows.
         run("checkout", "-q", "--", "a.txt")
         check(await wait(10) { disk.rowTitles.first == "# On disk, different from feat · 3 files" && !disk.rowTitles.contains("M a.txt") },
