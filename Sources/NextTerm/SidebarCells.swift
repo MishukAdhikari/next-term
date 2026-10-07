@@ -393,6 +393,79 @@ final class SyncButton: NSButton {
     }
 }
 
+// MARK: - remote tab: whose files these are
+
+/// Under the header while the active tab runs on a server: the tree stays on this Mac's files (a remote
+/// tab's folder is on its host), so it says so, with the tab's server mark on the other side.
+final class RemoteFilesNote: NSView {
+    static let height: CGFloat = 28
+    private let local = NSImageView()
+    private let localText = NSTextField(labelWithString: "Files on this Mac")
+    private let mark = RemoteMarkView()
+    private let host = NSTextField(labelWithString: "")
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        local.image = NSImage(systemSymbolName: "laptopcomputer", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 11, weight: .medium))
+        local.contentTintColor = Theme.textDim
+        localText.font = .systemFont(ofSize: 11.5)
+        localText.textColor = Theme.textDim
+        Typography.singleLine(localText, truncation: .byTruncatingTail)
+        host.font = .systemFont(ofSize: 11.5, weight: .medium)
+        host.textColor = Theme.text
+        host.alignment = .right
+        Typography.singleLine(host, truncation: .byTruncatingMiddle) // host names keep both ends
+        mark.tint = Theme.text
+        [local, localText, mark, host].forEach(addSubview)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override var isFlipped: Bool { true }
+
+    private(set) var shown: RemoteMark?
+
+    func show(_ remote: RemoteMark) {
+        guard remote != shown else { return }
+        shown = remote
+        host.stringValue = remote.host
+        mark.link = remote.link
+        let words = "The files below are on this Mac. The active tab runs on \(remote.host) (\(remote.destination)), \(remote.link.phrase)."
+        toolTip = words
+        setAccessibilityLabel(words)
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        let h = bounds.height - 1
+        let textHeight = localText.intrinsicContentSize.height
+        let textY = (h - textHeight) / 2
+        local.frame = NSRect(x: 12, y: (h - 16) / 2, width: 18, height: 16)
+        // The host as wide as it is, up to half the row; "Files on this Mac" gives way first.
+        let hostWidth = min(ceil(host.cell?.cellSize.width ?? 0) + 1, bounds.width * 0.5)
+        host.frame = NSRect(x: bounds.width - 12 - hostWidth, y: textY, width: hostWidth, height: textHeight)
+        mark.frame = NSRect(x: host.frame.minX - 4 - RemoteMarkView.size.width, y: (h - RemoteMarkView.size.height) / 2,
+                            width: RemoteMarkView.size.width, height: RemoteMarkView.size.height)
+        let room = max(0, mark.frame.minX - 8 - local.frame.maxX - 5)
+        // A narrow sidebar keeps the words that matter, "This Mac", rather than "Files on th…".
+        let full = "Files on this Mac"
+        let fits = (full as NSString).size(withAttributes: [.font: localText.font as Any]).width + 4 <= room
+        if localText.stringValue != (fits ? full : "This Mac") { localText.stringValue = fits ? full : "This Mac" }
+        localText.frame = NSRect(x: local.frame.maxX + 5, y: textY, width: room, height: textHeight)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        Theme.background.setFill()
+        bounds.fill()
+        Theme.tabHover.setFill()
+        NSRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1).fill()
+    }
+}
+
 // MARK: - a row in the tree
 
 /// "… 12,345 more items" under a folder that is too big to list in full.

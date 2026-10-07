@@ -476,6 +476,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                               accessibilityStatus: lines.joined(separator: "; "), shortcut: shortcuts[index], remote: mark)
         }
         tabBar.update(items: items, selectedIndex: activeIndex)
+        sidebar.showRemote(activeTab?.remoteMark) // the pane with the keyboard: the tree follows it
         announceBackgroundChanges()
         updateTitle()
         AppDelegate.shared.updateBadge()
@@ -488,11 +489,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return order.first { states.contains($0) } ?? .idle
     }
 
-    /// "Alertable.php — xCloud" while editing, "zsh — xCloud" in the terminal.
+    /// "Alertable.php — xCloud" while editing, "zsh — xCloud" in the terminal, "claude — on web-1 — xCloud"
+    /// in a remote tab (the Window menu, Mission Control and VoiceOver say where it runs).
     func updateTitle() {
         let name = project.map { ($0 as NSString).lastPathComponent }
         let focus = isEditorFocused ? editorArea.activeName : activeTab?.title
-        window?.title = [focus, name, "Next Term"].compactMap { $0 }.joined(separator: " — ")
+        let host = isEditorFocused ? nil : activeTab?.remote.map { "on \($0.host.name)" }
+        window?.title = [focus, host, name, "Next Term"].compactMap { $0 }.joined(separator: " — ")
     }
 
     /// Tells VoiceOver users when a background tab finishes, fails or asks for attention: the dots are
