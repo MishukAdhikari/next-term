@@ -136,6 +136,8 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
 
     var isVisible: Bool { panel.isVisible }
     var panelWindow: NSWindow { panel }
+    /// For the self-test: the list, to right-click a row.
+    var tableView: NSTableView { table }
 
     /// For the self-test: the search text, and the rows as words.
     var query: String {

@@ -1824,13 +1824,31 @@ enum SelfTest {
         }
         check(await wait(5) { popup.model.map { canonicalPath($0.root) == canonicalPath(repo.path) } == true && row("feat", remote: false) != nil },
               "the branch popup opens on the comparison's repository", popup.rowTitles.joined(separator: " | "))
-        let local: [NSMenuItem] = row("feat", remote: false).flatMap { popup.menu(forRow: $0) }?.items ?? []
+        let localRow = row("feat", remote: false)
+        let local: [NSMenuItem] = localRow.flatMap { popup.menu(forRow: $0) }?.items ?? []
         let remote: [NSMenuItem] = row("origin/feat", remote: true).flatMap { popup.menu(forRow: $0) }?.items ?? []
         let wanted = ["Compare with “main”", "Show Diff with Working Tree"]
         let inLocal = wanted.allSatisfy { title in local.contains { $0.title == title && $0.isEnabled } }
-        let inRemote = wanted.allSatisfy { title in remote.contains { $0.title == title } }
+        let inRemote = wanted.allSatisfy { title in remote.contains { $0.title == title && $0.isEnabled } }
         let menus = local.map(\.title).joined(separator: " | ") + " / " + remote.map(\.title).joined(separator: " | ")
         check(inLocal && inRemote, "a branch's menu, local or remote, has Compare with “main” and Show Diff with Working Tree", menus)
+        // A right-click on feat's row: the table finds the row under the click, and the menu fills in as it
+        // opens, the same as →.
+        var rightClicked: [String] = []
+        if let localRow {
+            let table = popup.tableView
+            let rect = table.rect(ofRow: localRow)
+            let point = table.convert(NSPoint(x: rect.midX, y: rect.midY), to: nil)
+            let event = NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [], timestamp: 0,
+                                           windowNumber: popup.panelWindow.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+            if let event, let menu = table.menu(for: event) {
+                popup.menuNeedsUpdate(menu)
+                rightClicked = menu.items.map(\.title)
+            }
+        }
+        let clickedRow = popup.tableView.clickedRow
+        check(!rightClicked.isEmpty && rightClicked == local.map(\.title), "a right-click on a branch shows its menu",
+              rightClicked.joined(separator: " | ") + " (clicked row \(clickedRow), feat's \(localRow ?? -1))")
         guard let compareItem = local.first(where: { $0.title == wanted[0] }), let diskItem = local.first(where: { $0.title == wanted[1] }) else { return popup.close() }
         (compareItem.target as? MenuBlock)?.run(nil)
         check(!popup.isVisible, "choosing it closes the popup")
@@ -1893,6 +1911,16 @@ enum SelfTest {
             if let first { c.editorArea.close(first) }
         }
         c.editorArea.close(compare)
+
+        // From the remote branch's menu: refs/remotes/origin/feat, where feat was, compared with main.
+        if let remoteCompare = remote.first(where: { $0.title == wanted[0] }) {
+            (remoteCompare.target as? MenuBlock)?.run(nil)
+            let fromRemote = c.editorArea.activeComparison
+            let read = await wait(10) { fromRemote?.isLoading == false && fromRemote?.rowTitles.first == "# Only on origin/feat · 3 commits, 1 also on main" }
+            let said = (fromRemote?.title ?? "no comparison in front") + ": " + (fromRemote.map(listed) ?? "")
+            check(read && fromRemote?.title == "origin/feat ↔ main", "Compare from a remote branch's menu compares the remote branch", said)
+            if let fromRemote { c.editorArea.close(fromRemote) }
+        }
 
         // The files on disk against the branch: changed, missing, new here, renamed; each opens side by side.
         write("a.txt", "on disk\n")
