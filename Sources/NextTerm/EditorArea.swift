@@ -17,15 +17,22 @@ final class EditorArea: NSView, TabBarViewDelegate {
     private let container = NSView()
     private let banner = EditorBanner()
     private var bannerHeight: NSLayoutConstraint!
-    /// Tabs in order: files being edited (CodeEditorView) and diffs (DiffPane).
+    /// Tabs in order: files being edited (CodeEditorView), diffs (DiffPane) and notebooks (NotebookPane).
     private(set) var panes: [NSView] = []
     private(set) var activeIndex = 0
 
     var editors: [CodeEditorView] { panes.compactMap { $0 as? CodeEditorView } }
     var diffs: [DiffPane] { panes.compactMap { $0 as? DiffPane } }
+    var notebooks: [NotebookPane] { panes.compactMap { $0 as? NotebookPane } }
     var activePane: NSView? { panes[safe: activeIndex] }
     var activeEditor: CodeEditorView? { activePane as? CodeEditorView }
     var activeDiff: DiffPane? { activePane as? DiffPane }
+    var activeNotebook: NotebookPane? { activePane as? NotebookPane }
+    /// The file in front: the one being edited, or the notebook being read.
+    var activePath: String? { activeEditor?.document.path ?? activeNotebook?.path }
+    var activeName: String? { activeEditor?.document.name ?? activeNotebook?.name }
+    /// Where its text is, for a selection to search for.
+    var activeTextView: NSTextView? { activeEditor?.textView ?? activeNotebook?.textView }
     var documents: [EditorDocument] { editors.map(\.document) }
     var dirtyDocuments: [EditorDocument] { documents.filter(\.isDirty) }
     var isEmpty: Bool { panes.isEmpty }
@@ -72,9 +79,12 @@ final class EditorArea: NSView, TabBarViewDelegate {
     enum OpenResult { case opened, notText, tooLarge, failed }
 
     /// Opens a file (or shows it if open), optionally at a line. Binary and huge files are not opened.
+    /// A notebook opens read-only as cells, unless asked for as text or at a line (a search result points
+    /// into its JSON).
     @discardableResult
-    func open(_ url: URL, line: Int? = nil, column: Int = 1, focus: Bool = true) -> OpenResult {
+    func open(_ url: URL, line: Int? = nil, column: Int = 1, focus: Bool = true, asText: Bool = false) -> OpenResult {
         let path = canonicalPath(url.path)
+        if !asText, line == nil, Notebook.isNotebook(path) { return openNotebook(path, focus: focus) }
         if let index = panes.firstIndex(where: { ($0 as? CodeEditorView)?.document.path == path }),
            let editor = panes[index] as? CodeEditorView {
             select(index, focus: focus)
@@ -109,6 +119,39 @@ final class EditorArea: NSView, TabBarViewDelegate {
         return .opened
     }
 
+    /// A notebook's cells, read-only. Its size limit is the notebook reader's (50 MB), not the editor's:
+    /// most of a big notebook is images and outputs, which it never lays out as text.
+    private func openNotebook(_ path: String, focus: Bool) -> OpenResult {
+        if let index = panes.firstIndex(where: { ($0 as? NotebookPane)?.path == path }) {
+            select(index, focus: focus)
+            return .opened
+        }
+        guard isRegularFile(path) else { return .notText } // a named pipe would block forever
+        let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+        guard size <= Notebook.maxFileSize else { return .tooLarge }
+        let pane = NotebookPane(url: URL(fileURLWithPath: path))
+        pane.onTitleChange = { [weak self] in self?.refresh() }
+        pane.onOpenAsJSON = { [weak self] url in self?.openAsText(url) }
+        insert(pane)
+        select(activeIndex, focus: focus)
+        return .opened
+    }
+
+    /// Open as JSON, from a notebook: its file in the editor, beside it.
+    func openAsText(_ url: URL) {
+        switch open(url, asText: true) {
+        case .opened:
+            break
+        case .tooLarge:
+            let alert = NSAlert()
+            alert.messageText = "“\(url.lastPathComponent)” is too large to open as text"
+            alert.informativeText = "The editor opens files up to \(TextFile.maxEditableSize / 1024 / 1024) MB."
+            if let window { alert.beginSheetModal(for: window) } else { alert.runModal() }
+        case .notText, .failed:
+            NSSound.beep()
+        }
+    }
+
     /// Adds a tab next to the current one, filling the content area.
     private func insert(_ pane: NSView) {
         pane.translatesAutoresizingMaskIntoConstraints = false
@@ -134,6 +177,8 @@ final class EditorArea: NSView, TabBarViewDelegate {
             if focus { window?.makeFirstResponder(editor.textView) }
         } else if let diff = panes[index] as? DiffPane, focus {
             window?.makeFirstResponder(diff.focusView)
+        } else if let notebook = panes[index] as? NotebookPane, focus {
+            window?.makeFirstResponder(notebook.textView)
         }
         refresh()
         delegate?.editorAreaSelectionChanged(self)
@@ -267,6 +312,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
     func checkDisk() {
         for editor in editors { editor.document.checkDisk() }
         for diff in diffs { diff.refreshIfChanged() }
+        for notebook in notebooks { notebook.refreshIfChanged() }
         // The file being edited against the last commit: a commit (yours or an agent's) moves the marks.
         checks += 1
         if checks % 5 == 0 { activeEditor?.refreshBaseline() }
@@ -289,27 +335,40 @@ final class EditorArea: NSView, TabBarViewDelegate {
                 document.moved(to: URL(fileURLWithPath: new + document.path.dropFirst(old.count)))
             }
         }
+        for notebook in notebooks {
+            if notebook.path == old {
+                notebook.moved(to: URL(fileURLWithPath: new))
+            } else if notebook.path.hasPrefix(old + "/") {
+                notebook.moved(to: URL(fileURLWithPath: new + notebook.path.dropFirst(old.count)))
+            }
+        }
         refresh()
     }
 
     // MARK: display
 
     func refresh() {
-        // Same name twice: add the folder, as editors do.
-        let names = Dictionary(grouping: documents, by: \.name)
+        // Same name twice: add the folder, as editors do (a notebook open as JSON too is the same file).
+        let names = Dictionary(grouping: Set(documents.map(\.path) + notebooks.map(\.path)), by: { ($0 as NSString).lastPathComponent })
+        func title(_ url: URL) -> String {
+            let name = url.lastPathComponent
+            return (names[name]?.count ?? 0) > 1 ? name + " — " + url.deletingLastPathComponent().lastPathComponent : name
+        }
         let items = panes.map { pane -> TabBarItem in
             if let diff = pane as? DiffPane {
                 return TabBarItem(title: diff.title, state: .idle, tooltip: diff.tooltip, accessibilityStatus: "changes",
                                   icon: FileIcons.icon(for: URL(fileURLWithPath: diff.absolutePath), size: 16), modified: false)
             }
-            let document = (pane as! CodeEditorView).document
-            var title = document.name
-            if (names[document.name]?.count ?? 0) > 1 {
-                title += " — " + document.url.deletingLastPathComponent().lastPathComponent
+            if let notebook = pane as? NotebookPane {
+                return TabBarItem(title: title(notebook.url), state: .idle, tooltip: RecentProjects.abbreviate(notebook.path) + " (notebook, read-only)",
+                                  accessibilityStatus: "notebook, read-only", icon: FileIcons.icon(for: notebook.url, size: 16), modified: false)
             }
+            let document = (pane as! CodeEditorView).document
             let status = document.isDirty ? "unsaved changes" : "saved"
-            return TabBarItem(title: title, state: .idle, tooltip: RecentProjects.abbreviate(document.path),
-                              accessibilityStatus: status, icon: FileIcons.icon(for: document.url, size: 16), modified: document.isDirty)
+            // A notebook open as JSON gets JSON's icon, to tell it from the notebook's own tab.
+            let icon = FileIcons.icon(for: Notebook.isNotebook(document.path) ? document.url.deletingPathExtension().appendingPathExtension("json") : document.url, size: 16)
+            return TabBarItem(title: title(document.url), state: .idle, tooltip: RecentProjects.abbreviate(document.path),
+                              accessibilityStatus: status, icon: icon, modified: document.isDirty)
         }
         tabBar.update(items: items, selectedIndex: activeIndex)
         let conflict = activeEditor?.document.conflict
@@ -321,6 +380,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
     func applyFont() {
         editors.forEach { $0.applyFont() }
         diffs.forEach { $0.applyFont() }
+        notebooks.forEach { $0.applyFont() }
     }
 
     func applyWrap() {

@@ -487,7 +487,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// "Alertable.php — xCloud" while editing, "zsh — xCloud" in the terminal.
     func updateTitle() {
         let name = project.map { ($0 as NSString).lastPathComponent }
-        let focus = isEditorFocused ? editorArea.activeEditor?.document.name : activeTab?.title
+        let focus = isEditorFocused ? editorArea.activeName : activeTab?.title
         window?.title = [focus, name, "Next Term"].compactMap { $0 }.joined(separator: " — ")
     }
 
@@ -548,7 +548,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// What ⌘⇧F starts with: the selection in the editor (or the word at the caret), or the terminal's.
     var searchSeed: String? {
         var seed: String?
-        if isEditorFocused, let view = editorArea.activeEditor?.textView {
+        if isEditorFocused, let view = editorArea.activeTextView {
             let text = view.string as NSString
             var range = view.selectedRange()
             if range.length == 0, text.length > 0 {
@@ -565,7 +565,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// The edited file, relative to the search root, so its type is listed first.
     private var currentFileForSearch: String? {
-        guard let path = editorArea.activeEditor?.document.path else { return nil }
+        guard let path = editorArea.activePath else { return nil }
         let root = canonicalPath(searchRoot)
         return path.hasPrefix(root + "/") ? String(path.dropFirst(root.count + 1)) : nil
     }
@@ -612,12 +612,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(saveAllDocuments(_:)) { return !editorArea.dirtyDocuments.isEmpty }
         if item.action == #selector(goToLine(_:)) { return editorArea.activeEditor != nil }
         if item.action == #selector(showChanges(_:)) {
-            return editorArea.activeEditor != nil || sidebar.selection.contains { !$0.isFolder } || sidebar.selectedDeleted.contains { !$0.isDirectory }
+            return editorArea.activePath != nil || sidebar.selection.contains { !$0.isFolder } || sidebar.selectedDeleted.contains { !$0.isDirectory }
         }
-        if item.action == #selector(sendToAgent(_:)) { return agentTab != nil && (editorArea.activeEditor != nil || !sidebar.selection.isEmpty) }
+        if item.action == #selector(sendToAgent(_:)) { return agentTab != nil && (editorArea.activePath != nil || !sidebar.selection.isEmpty) }
         if item.action == #selector(toggleEditorFocus(_:)) {
             item.title = isEditorFocused ? "Focus Terminal" : "Focus Editor"
-            return editorArea.activeEditor != nil
+            return editorArea.activeTextView != nil
         }
         if item.action == #selector(closeTab(_:)) {
             item.title = !isEditorFocused && activeGroup?.isSplit == true ? "Close Pane" : "Close Tab"
@@ -634,7 +634,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(clearBuffer(_:)) {
             return !(KeyboardShortcuts.shared.preset.clearsOnlyInTerminal && isEditorFocused)
         }
-        if item.action == #selector(revealInSidebar(_:)) { return editorArea.activeEditor != nil }
+        if item.action == #selector(revealInSidebar(_:)) { return editorArea.activePath != nil }
         if item.action == #selector(toggleTerminalCollapsed(_:)) {
             item.title = terminalCollapsed ? "Expand Terminal" : "Collapse Terminal"
             return !editorArea.isHidden
@@ -797,7 +797,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         workSplit.layoutSubtreeIfNeeded()
         let length = workSplit.isVertical ? workSplit.bounds.width : workSplit.bounds.height
         workSplit.setPosition(terminalFirst ? collapsedLength : length - collapsedLength - workSplit.dividerThickness, ofDividerAt: 0)
-        if isTerminalFocused, let editor = editorArea.activeEditor { window?.makeFirstResponder(editor.textView) }
+        if isTerminalFocused, let view = editorArea.activeTextView { window?.makeFirstResponder(view) }
         updateCollapseButton()
     }
 
@@ -898,7 +898,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if editorArea.open(url, line: line, column: column) != .opened { return SafeOpen.open(url, from: window) }
         let path = canonicalPath(url.path)
         // Opened from ⌘P, a search result or a link: the sidebar shows where it is, even if it was in front.
-        frontFile = editorArea.activeEditor?.document.path
+        frontFile = editorArea.activePath
         if isSidebarVisible { sidebar.reveal(path) }
         recentFiles.removeAll { $0 == path }
         recentFiles.insert(path, at: 0)
@@ -944,7 +944,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// The file in front in the editor, shown in the project sidebar (the sidebar comes back if hidden).
     @objc func revealInSidebar(_ sender: Any?) {
-        guard let path = editorArea.activeEditor?.document.path else { return NSSound.beep() }
+        guard let path = editorArea.activePath else { return NSSound.beep() }
         if !isSidebarVisible { toggleProjectSidebar(nil) }
         sidebar.reveal(path)
     }
@@ -954,7 +954,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// The sidebar follows the file in front when another one comes forward (a tab, a closed tab).
     private func followActiveFile() {
-        let path = editorArea.activeEditor?.document.path
+        let path = editorArea.activePath
         guard path != frontFile else { return }
         frontFile = path
         if let path, isSidebarVisible { sidebar.reveal(path) }
@@ -981,7 +981,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// The selected text, if it is one short line: in the editor when it has the keyboard, else the terminal's.
     var selectionSeed: String? {
         var text: String?
-        if isEditorFocused, let view = editorArea.activeEditor?.textView {
+        if isEditorFocused, let view = editorArea.activeTextView {
             let range = view.selectedRange()
             if range.length > 0, NSMaxRange(range) <= (view.string as NSString).length {
                 text = (view.string as NSString).substring(with: range)
@@ -1124,6 +1124,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                 }
             }
             send([item])
+        } else if let notebook = editorArea.activeNotebook {
+            send([ContextItem(path: notebook.path)]) // the agent reads the notebook itself
         }
     }
 
@@ -1176,8 +1178,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// ⌥⌘G: the changes of the file being edited, or the file selected in the sidebar, side by side.
     @objc func showChanges(_ sender: Any?) {
-        if let editor = editorArea.activeEditor, isEditorFocused || window?.firstResponder !== sidebar.outline {
-            return showChanges(of: editor.document.url)
+        if let path = editorArea.activePath, isEditorFocused || window?.firstResponder !== sidebar.outline {
+            return showChanges(of: URL(fileURLWithPath: path))
         }
         if let file = sidebar.selection.first(where: { !$0.isFolder }) { return showChanges(of: file.url) }
         if let gone = sidebar.selectedDeleted.first(where: { !$0.isDirectory }) { return showChanges(of: gone.url) }
@@ -1206,8 +1208,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     @objc func toggleEditorFocus(_ sender: Any?) {
         if isEditorFocused {
             if let view = activeTab?.view { window?.makeFirstResponder(view) }
-        } else if let editor = editorArea.activeEditor {
-            window?.makeFirstResponder(editor.textView)
+        } else if let view = editorArea.activeTextView {
+            window?.makeFirstResponder(view)
         } else {
             NSSound.beep()
         }
