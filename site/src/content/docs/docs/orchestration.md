@@ -77,6 +77,8 @@ Seven more tools work with your servers: `list_hosts`, `add_host`, `remove_host`
 
 `wait_for_tab` waits up to 50 seconds by default, because some clients give up on a tool after a minute; `timeout_seconds` raises it to 300. When it returns with `"timed_out": true`, the agent is still working: call it again to keep waiting. Input that a tool has just sent counts as work, so a wait right after `send_to_tab` waits for the job it started, however quickly it begins.
 
+The orchestrator is the one waiting, so a tab it opened with `new_tab` or gave input to does not notify you when its agent finishes while you are in Next Term; from another app, it does, and its decisions always do. Type in the tab yourself and it notifies you again like any other. See [Notifications and the Dock badge](/docs/agent-status/#notifications-and-the-dock-badge).
+
 ## An example: two projects, two agents
 
 Ask the agent you are talking to (here Claude Code, in any Next Term tab):

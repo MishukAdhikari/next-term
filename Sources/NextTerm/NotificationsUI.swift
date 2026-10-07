@@ -18,7 +18,7 @@ final class NotificationSettingsView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         decisions.toolTip = "An agent asks for permission or for a choice. Also while you are in Next Term, for a tab you are not looking at."
-        agentFinished.toolTip = "An agent stopped and is waiting for your next prompt, or exited. Also while you are in Next Term, for a tab you are not looking at."
+        agentFinished.toolTip = "An agent stopped and is waiting for your next prompt, or exited. Also while you are in Next Term, for a tab you are not looking at, unless another agent drives it over MCP."
         programAlerts.toolTip = "A program rang the terminal bell, or sent a notification of its own, while you were in another app."
         for button in [decisions, agentFinished, programAlerts, sound] {
             button.target = self

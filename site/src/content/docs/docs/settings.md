@@ -36,13 +36,13 @@ Which of a tab’s notices reach Notification Center. None ever comes for the ta
 | Setting | Default | What it does |
 |---|---|---|
 | **Agents: When an agent needs your decision** | On | An agent asks for permission or for a choice: the notification names the agent and quotes the question. It comes in Next Term too, for a tab you are not looking at. |
-| **Agents: When an agent finishes** | On | An agent stopped and is waiting for your next prompt, or exited. It comes in Next Term too, for a tab you are not looking at. |
+| **Agents: When an agent finishes** | On | An agent stopped and is waiting for your next prompt, or exited. It comes in Next Term too, for a tab you are not looking at, unless another agent drives that tab over MCP. |
 | **Commands: When one finishes or fails** | Only when I’m in another app | Anything that is not an agent: a build, a test run, a script. **Always, for tabs I’m not looking at** notifies in Next Term too; **Never** turns these off. |
 | **Finished work: Only for work that took at least** | 5 seconds | 5 seconds, 30 seconds, 1 minute or 5 minutes, for an agent or a command that finished. A decision or a bell notifies whatever its length. |
 | **Programs: A program’s own bell or notification (OSC 9/777)** | On | A program rang the bell, or sent a notification of its own, while you were in another app. Off, its tab still turns amber. |
 | **Sound: Play a sound** | On | Off, notifications come without a sound. |
 
-Below them, a line says whether macOS allows Next Term’s notifications: allowed, off, or not asked yet. When they are off, **Open Notification Settings…** opens **System Settings → Notifications**. **Send Test Notification** shows one, after macOS asks you if it has not asked yet.
+Below them, a line says whether macOS allows Next Term’s notifications: allowed; allowed but with the alert style None, so they go to Notification Center without a banner; off; or not answered yet. When they are off or without banners, **Open Notification Settings…** opens Next Term’s entry in **System Settings → Notifications**. **Send Test Notification** shows one, when macOS allows them, after asking you if you have not answered yet; when macOS does not show it, the line says so.
 
 ## Import
 
