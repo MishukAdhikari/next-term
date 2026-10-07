@@ -59,7 +59,7 @@ If you cancel, you get a plain terminal in your home folder. You can open a proj
 
 If Next Term finds an editor or terminal it can read settings from, such as VS Code, Cursor, a JetBrains IDE, Zed, iTerm2, Ghostty or Terminal, it asks **Coming from another app?** Choose one to see exactly what it would bring over (your shortcuts, fonts, terminal colours and recent projects), or keep Next Term’s own. You can do it later from **Next Term › Import Settings and Shortcuts…**. See [Switching to Next Term](/docs/switching/).
 
-macOS also asks whether Next Term may send notifications. Allow them: that is how an agent waiting on your decision reaches you while you are in another tab or app.
+macOS also asks whether Next Term may send notifications. Allow them: that is how an agent waiting on your decision, or done with its work, reaches you while you are in another tab or app.
 
 Next Term also adds the `nxtrm` command for your other terminals, in a folder on your `PATH` that needs no password. When there is no such folder, as on a Mac without Homebrew, it asks first: **Install the “nxtrm” command?** **Install…** asks for your administrator password, **Not Now** asks again after the next update, and **Don’t Ask Again** never does. See [Installing it](/docs/command-line/#installing-it).
 
@@ -69,7 +69,7 @@ Next Term also adds the `nxtrm` command for your other terminals, in a folder on
 2. Start an agent, for example `claude`.
 3. Press <kbd>⌘T</kbd> again and start another, for example `codex`.
 4. Or keep them in one tab: <kbd>⌘D</kbd> splits it, and each pane runs its own agent.
-5. Give each a task and switch away. Each tab shows a spinner while its agent works, a green check when it is done, and an amber “!” when it is asking you something. If you are elsewhere, a notification tells you which agent needs a decision; click it to land on that tab.
+5. Give each a task and switch away. Each tab shows a spinner while its agent works, a green check when it is done, and an amber “!” when it is asking you something. If you are elsewhere, a notification tells you which agent needs a decision or has finished; click it to land on that tab.
 
 Read [Agent status in every tab](/docs/agent-status/) for what each mark means.
 

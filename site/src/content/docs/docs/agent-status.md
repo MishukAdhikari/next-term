@@ -32,14 +32,22 @@ Answer the question in the terminal as usual; the amber mark clears once the que
 
 ## Notifications and the Dock badge
 
-- **Finished work** produces a notification only when you are in another app. In Next Term, the tab mark says it already. A notification is sent only for work that took at least 5 seconds.
-- **An agent that stopped** is “waiting for you”; an agent that exited (`claude -p …`) has “finished”; a failed command says so, with its exit code.
-- **A bell**, or a program’s own notification (OSC 9 or OSC 777), marks the tab amber: it needs your attention.
-- **The Dock badge** counts the tabs with a mark you have not seen yet.
+**Settings › Notifications** chooses which of these reach Notification Center (see [Settings](/docs/settings/#notifications)). By default:
+
+- **A decision** notifies wherever you are, in Next Term or in another app (see above).
+- **An agent that finished** notifies the same way: in Next Term too, for a tab you are not looking at. An agent that stopped is “waiting for you”; an agent that exited (`claude -p …`) has “finished”.
+- **A command that finished or failed**, such as a build or a test run, notifies only while you are in another app. In Next Term, the tab mark says it already. A failed command says so, with its exit code.
+- **Finished work** notifies only when it took at least 5 seconds. Settings can raise that to 30 seconds, 1 minute or 5 minutes. A decision or a bell notifies whatever its length.
+- **A bell**, or a program’s own notification (OSC 9 or OSC 777), marks the tab amber: it needs your attention. It notifies while you are in another app.
+- **Never the tab on screen:** none comes for the selected tab of the window you are working in. Folded to its rail, the terminal is not on screen, so the tab in front notifies like any other.
+- **Each one names its tab and the window’s project** (or, without one, the tab’s folder). Click it to land on that tab, in that window.
 - **Repeats are held back:** each tab replaces its previous notification, and the same message is not repeated within 10 seconds.
+- **The Dock badge** counts the tabs with a mark you have not seen yet.
 - **VoiceOver** announces when a background tab finishes, fails or needs your attention, since the marks themselves are visual.
 
-Notifications use macOS’s own Notification Center. If you declined them at first launch, turn them on in **System Settings → Notifications → Next Term**.
+The tab marks, the Dock badge and VoiceOver’s announcements come whatever Settings › Notifications says: it chooses only the notifications.
+
+Notifications use macOS’s own Notification Center. **Settings › Notifications** says whether macOS allows Next Term’s. If you declined them at first launch, **Open Notification Settings…** there takes you to **System Settings → Notifications**, where you turn them on for Next Term. **Send Test Notification** shows one.
 
 ## How Next Term knows
 

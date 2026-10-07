@@ -44,7 +44,7 @@ The marks differ in shape as well as colour, so they read without colour too. Th
 
 Next Term runs the system’s `/usr/bin/ssh`, so everything in your `~/.ssh/config` applies: `Host` aliases, keys, `ProxyJump`, `UseKeychain` and agents such as 1Password, Secretive or gpg-agent. ssh gets the `PATH` and `SSH_AUTH_SOCK` your login shell sets, so a remote tab connects the way `ssh web-1` does in a local tab.
 
-If ssh needs a password, a passphrase or a one-time code, it asks in the tab, as it would in any terminal. A tab that is asking for one in the background is marked for attention and sends a notification.
+If ssh needs a password, a passphrase or a one-time code, it asks in the tab, as it would in any terminal. A tab that is asking for one in the background is marked for attention, and sends a notification while you are in another app.
 
 All the tabs on one server share one connection, so you log in once. Up to 7 tabs share a connection; an 8th tab on the same server opens a second one, and asks you to log in once more.
 

@@ -1,9 +1,9 @@
 ---
 title: Settings
-description: "Next Term’s Settings (⌘,): fonts, line height, soft wrap, background git fetch, terminal colours, agent link and MCP switches, shortcuts, imports, menus."
+description: "Next Term’s Settings (⌘,): fonts, line height, soft wrap, background git fetch, terminal colours, agent link and MCP switches, notifications, shortcuts, imports, menus."
 ---
 
-Open **Next Term › Settings…** (<kbd>⌘,</kbd>). Settings has four tabs: **Editor**, **Terminal**, **Keyboard Shortcuts** and **Import**. Every change applies at once, to every window.
+Open **Next Term › Settings…** (<kbd>⌘,</kbd>). Settings has five tabs: **Editor**, **Terminal**, **Notifications**, **Keyboard Shortcuts** and **Import**. Every change applies at once, to every window.
 
 ## Editor
 
@@ -28,6 +28,21 @@ More about the editor in [Code editor](/docs/editor/), and about the agent link 
 |---|---|---|
 | **Font** | Next Term default | The terminal’s font, from the monospaced fonts installed on this Mac. Its size is the editor’s. |
 | **Colours** | Next Term default | Your own terminal colours: the 16 ANSI colours, text, background, cursor and selection, shown as a row of swatches. An import brings them over; colours it doesn’t set keep Next Term’s. **Next Term default** goes back, and your colours stay in the menu to choose again. |
+
+## Notifications
+
+Which of a tab’s notices reach Notification Center. None ever comes for the tab you are looking at, and the tab marks, the Dock badge and VoiceOver’s announcements come whatever is chosen here. See [Notifications and the Dock badge](/docs/agent-status/#notifications-and-the-dock-badge).
+
+| Setting | Default | What it does |
+|---|---|---|
+| **Agents: When an agent needs your decision** | On | An agent asks for permission or for a choice: the notification names the agent and quotes the question. It comes in Next Term too, for a tab you are not looking at. |
+| **Agents: When an agent finishes** | On | An agent stopped and is waiting for your next prompt, or exited. It comes in Next Term too, for a tab you are not looking at. |
+| **Commands: When one finishes or fails** | Only when I’m in another app | Anything that is not an agent: a build, a test run, a script. **Always, for tabs I’m not looking at** notifies in Next Term too; **Never** turns these off. |
+| **Finished work: Only for work that took at least** | 5 seconds | 5 seconds, 30 seconds, 1 minute or 5 minutes, for an agent or a command that finished. A decision or a bell notifies whatever its length. |
+| **Programs: A program’s own bell or notification (OSC 9/777)** | On | A program rang the bell, or sent a notification of its own, while you were in another app. Off, its tab still turns amber. |
+| **Sound: Play a sound** | On | Off, notifications come without a sound. |
+
+Below them, a line says whether macOS allows Next Term’s notifications: allowed, off, or not asked yet. When they are off, **Open Notification Settings…** opens **System Settings → Notifications**. **Send Test Notification** shows one, after macOS asks you if it has not asked yet.
 
 ## Import
 

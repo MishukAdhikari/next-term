@@ -108,7 +108,9 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
   projects (git's file list, searched off the main thread).
 - **Find and Replace in Files** (⌘⇧F / ⌘⇧R) across the project, with regular expressions, file masks and
   a preview of every replacement; a file an agent changed since the search is never overwritten.
-- **Dock badge and notifications** for agents that finished while you were in another app.
+- **Dock badge and notifications** for agents that finished, in another app or in a tab you are not
+  looking at, and for commands that finished while you were in another app. Settings > Notifications
+  chooses which ones notify, after how long, and with or without a sound.
 - **Every menu shortcut is yours.** Next Term > Settings (⌘,) > Keyboard Shortcuts lists every menu
   command; click one and press new keys. The shortcuts below are the defaults.
 - **Bring your settings over.** Coming from VS Code, Cursor, Devin Desktop, a JetBrains IDE, Zed, iTerm2,
