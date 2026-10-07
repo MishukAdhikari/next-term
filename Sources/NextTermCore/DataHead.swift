@@ -45,6 +45,9 @@ public struct DataRecord: Sendable, Equatable {
     /// Why it could not be read: not JSON, a quote that is never closed, too long.
     public var error: String?
     public var isTruncated = false
+    /// It has more than `DataHead.maxFields` fields (CSV and TSV) or keys (JSON Lines). Only the first
+    /// ones are in `fields` and `keys`; `raw` has them all.
+    public var hasMoreFields = false
 
     public init(line: Int, raw: String, fields: [String] = [], keys: [String] = [], error: String? = nil, isTruncated: Bool = false) {
         self.line = line
@@ -113,6 +116,9 @@ public enum DataHead {
     public static let pageSize = 1000
     /// A record longer than this is cut (an embedding row is about 16 KB; a whole minified file is not a row).
     public static let maxRecordBytes = 1 << 20
+    /// A record keeps its first this many fields (or keys): a sparse matrix with 100,000 columns would
+    /// otherwise cost ten times its size, and the table shows only 200.
+    public static let maxFields = 1000
     /// A page stops early past this many bytes, so 1,000 huge records cannot fill memory.
     public static let maxPageBytes = 64 << 20
     /// A page reads at most about this much. A record still going at that point (a multi-GB file with no
@@ -315,9 +321,10 @@ public enum DataHead {
             record.error = jsonError(error)
             return record
         }
-        if let (keys, values) = topLevelFields(bytes) {
-            record.keys = keys
-            record.fields = values
+        if let object = topLevelFields(bytes) {
+            record.keys = object.keys
+            record.fields = object.values
+            record.hasMoreFields = object.more
         } else {
             record.fields = [record.raw.trimmingCharacters(in: .whitespaces)] // an array, or a single value
         }
@@ -340,9 +347,10 @@ public enum DataHead {
         return decoded as? String ?? json
     }
 
-    /// The keys and values of a valid JSON object, as written; nil for anything else.
-    static func topLevelFields(_ bytes: [UInt8]) -> ([String], [String])? {
-        bytes.withUnsafeBufferPointer { b -> ([String], [String])? in
+    /// The keys and values of a valid JSON object, as written, up to `limit` of them (`more`: it has
+    /// others); nil for anything else.
+    static func topLevelFields(_ bytes: [UInt8], limit: Int = maxFields) -> (keys: [String], values: [String], more: Bool)? {
+        bytes.withUnsafeBufferPointer { b -> (keys: [String], values: [String], more: Bool)? in
             let n = b.count
             var i = skipSpace(b, from: 0)
             guard i < n, b[i] == 0x7B else { return nil } // {
@@ -358,6 +366,7 @@ public enum DataHead {
                     continue
                 }
                 guard b[i] == 0x22 else { return nil }
+                if keys.count == limit { return (keys, values, true) }
                 let keyStart = i
                 i = stringEnd(b, from: i)
                 keys.append(displayValue(String(decoding: UnsafeBufferPointer(rebasing: b[keyStart..<i]), as: UTF8.self)))
@@ -368,7 +377,7 @@ public enum DataHead {
                 i = valueEnd(b, from: i)
                 values.append(String(decoding: UnsafeBufferPointer(rebasing: b[valueStart..<i]), as: UTF8.self))
             }
-            return (keys, values)
+            return (keys, values, false)
         }
     }
 
@@ -435,6 +444,15 @@ public enum DataHead {
         return columns
     }
 
+    /// A CSV or TSV record's fields, all of them: split again from `raw` when it has more than it keeps.
+    public static func allFields(of record: DataRecord, delimiter: UInt8) -> [String] {
+        guard record.hasMoreFields else { return record.fields }
+        var scanner = RecordScanner(kind: .delimited, delimiter: delimiter, start: .start, limit: 1, maxFields: .max)
+        scanner.feed(Data(record.raw.utf8))
+        scanner.finish()
+        return scanner.records.first?.fields ?? record.fields
+    }
+
     /// Text from bytes. A cut record can end inside a character: that half character goes.
     static func decode(_ bytes: [UInt8], truncated: Bool) -> String {
         let text = String(decoding: bytes, as: UTF8.self)
@@ -448,6 +466,7 @@ struct RecordScanner {
     let kind: DataFileKind
     let delimiter: UInt8
     let limit: Int
+    let maxFields: Int
     private(set) var records: [DataRecord] = []
     /// Where the record after the last one returned starts.
     private(set) var position: DataPosition
@@ -477,11 +496,14 @@ struct RecordScanner {
     /// The record ran past maxRecordBytes: skip to the end of its line.
     private var skipping = false
     private var recordError: String?
+    /// Fields past maxFields were dropped.
+    private var moreFields = false
 
-    init(kind: DataFileKind, delimiter: UInt8, start: DataPosition, limit: Int) {
+    init(kind: DataFileKind, delimiter: UInt8, start: DataPosition, limit: Int, maxFields: Int = DataHead.maxFields) {
         self.kind = kind
         self.delimiter = delimiter
         self.limit = limit
+        self.maxFields = maxFields
         position = start
         offset = start.offset
         line = start.line
@@ -561,7 +583,7 @@ struct RecordScanner {
             } else {
                 records.append(DataRecord(line: start, raw: DataHead.decode(carry, truncated: truncated), isTruncated: truncated))
             }
-            pageBytes += carry.count
+            pageBytes += carry.count + Self.overhead(records[records.count - 1])
         }
         carry.removeAll(keepingCapacity: true)
         truncated = false
@@ -683,7 +705,11 @@ struct RecordScanner {
     }
 
     private mutating func endField() {
-        fields.append(String(decoding: field, as: UTF8.self))
+        if fields.count < maxFields {
+            fields.append(String(decoding: field, as: UTF8.self))
+        } else {
+            moreFields = true // `raw` still has it
+        }
         field.removeAll(keepingCapacity: true)
         fieldStarted = false
         recordBytes += 1
@@ -694,13 +720,20 @@ struct RecordScanner {
         append(UnsafeBufferPointer(rebasing: bytes[start..<end]))
     }
 
+    /// What a record's fields and keys cost beyond its text, which the page limit counts too.
+    private static func overhead(_ record: DataRecord) -> Int {
+        (record.fields.count + record.keys.count) * MemoryLayout<String>.stride
+    }
+
     /// Adds the record (a blank line is not one) and starts the next at `next`.
     private mutating func emit(next: UInt64) {
         let blank = carry.isEmpty && fields.count <= 1 && (fields.first?.isEmpty ?? true) && recordError == nil
         if !blank {
-            records.append(DataRecord(line: recordLine, raw: DataHead.decode(carry, truncated: truncated), fields: fields,
-                                      error: recordError, isTruncated: truncated))
-            pageBytes += carry.count
+            var record = DataRecord(line: recordLine, raw: DataHead.decode(carry, truncated: truncated), fields: fields,
+                                    error: recordError, isTruncated: truncated)
+            record.hasMoreFields = moreFields
+            records.append(record)
+            pageBytes += carry.count + Self.overhead(record)
         }
         carry.removeAll(keepingCapacity: true)
         fields = []
@@ -712,6 +745,7 @@ struct RecordScanner {
         skipping = false
         truncated = false
         recordError = nil
+        moreFields = false
         recordLine = line
         position = DataPosition(offset: next, line: line)
     }

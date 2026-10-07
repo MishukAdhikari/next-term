@@ -146,6 +146,38 @@ import Testing
         #expect(throws: DataHeadError.notAFile) { try DataHead.page(at: project.root, kind: .lines) }
     }
 
+    /// A sparse matrix with thousands of columns keeps the first 1,000 fields of a row, not a String for
+    /// every empty cell; the text still has them all.
+    @Test func wideRowsKeepTheirFirstFields() throws {
+        let width = 20_000
+        let row = (0..<width).map { $0 % 997 == 0 ? "\($0)" : "" }.joined(separator: ",")
+        let records = Self.scan(row + "\n" + row + "\n", kind: .delimited, chunk: 4096)
+        #expect(records.count == 2 && records.allSatisfy { $0.fields.count == DataHead.maxFields && $0.hasMoreFields })
+        #expect(records[0].raw == row && !records[0].isTruncated)
+        let all = DataHead.allFields(of: records[0], delimiter: 0x2C)
+        #expect(all.count == width && all[997 * 19] == "\(997 * 19)" && all[1] == "")
+        #expect(!Self.scan("a,b\n", kind: .delimited, chunk: 1)[0].hasMoreFields)
+
+        let object = "{" + (0..<5000).map { #""k\#($0)": \#($0)"# }.joined(separator: ", ") + "}"
+        let json = Self.scan(object + "\n", kind: .jsonLines, chunk: 100_000)[0]
+        #expect(json.error == nil && json.keys.count == DataHead.maxFields && json.hasMoreFields && json.value(for: "k999") == "999")
+
+        // A page of such rows costs about its size, not ten times it.
+        let project = FixtureProject()
+        let path = project.root + "/sparse.csv"
+        FileManager.default.createFile(atPath: path, contents: nil)
+        let out = try #require(FileHandle(forWritingAtPath: path))
+        let line = Data((row + "\n").utf8)
+        for _ in 0..<500 { out.write(line) }
+        try out.close()
+        let before = Self.footprint()
+        let page = try DataHead.page(at: path, kind: .delimited)
+        let grew = Int64(Self.footprint()) - Int64(before)
+        #expect(page.records.count == 500 && page.isAtEnd)
+        #expect(grew < 64 << 20, "memory grew by \(grew >> 20) MB")
+        withExtendedLifetime(project) {}
+    }
+
     @Test func estimatesAndCopies() {
         #expect(DataHead.estimatedTotal(records: 1000, through: DataPosition(offset: 100_000, line: 1001), fileSize: 10_000_000, lineCount: nil) == 100_000)
         #expect(DataHead.estimatedTotal(records: 1000, through: DataPosition(offset: 100_000, line: 2001), fileSize: 10_000_000, lineCount: 50_000) == 25_000)

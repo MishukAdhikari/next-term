@@ -578,8 +578,9 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
     func exportJSON() -> String {
         let chosen = chosenRecords
         if kind == .jsonLines { return DataExport.jsonLines(chosen.map(\.raw)) }
-        let names = csvColumns(chosen)
-        let rows = chosen.map { record in names.indices.map { $0 < record.fields.count ? record.fields[$0] : nil } }
+        let fields = chosen.map(allFields)
+        let names = csvColumns(fields)
+        let rows = fields.map { row in names.indices.map { $0 < row.count ? row[$0] : nil } }
         return DataExport.objects(columns: names, rows: rows)
     }
 
@@ -591,8 +592,9 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
             let rows = chosen.map { record in keys.map { record.value(for: $0).map(DataHead.displayValue) } }
             return DataExport.csv(columns: keys, rows: rows)
         }
-        let names = csvColumns(chosen)
-        let rows = chosen.map { record in names.indices.map { $0 < record.fields.count ? record.fields[$0] : nil } }
+        let fields = chosen.map(allFields)
+        let names = csvColumns(fields)
+        let rows = fields.map { row in names.indices.map { $0 < row.count ? row[$0] : nil } }
         return DataExport.csv(columns: names, rows: rows)
     }
 
@@ -602,11 +604,22 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
         return chosen.isEmpty ? "" : chosen.map(\.raw).joined(separator: "\n") + "\n"
     }
 
+    /// A CSV row's fields, the ones it did not keep too (a row of 100,000 columns keeps the first 1,000).
+    private func allFields(_ record: DataRecord) -> [String] {
+        DataHead.allFields(of: record, delimiter: delimiter ?? 0x2C)
+    }
+
     /// The header's names (or "Column 1"…), in the Lines view too.
-    private func csvColumns(_ chosen: [DataRecord]) -> [String] {
+    /// Past the 200 the table shows, the rest of the header's names.
+    private func csvColumns(_ rows: [[String]]) -> [String] {
         var names = tableColumns()
-        let width = chosen.map(\.fields.count).max() ?? 0
-        while names.count < width { names.append("Column \(names.count + 1)") }
+        let width = rows.map(\.count).max() ?? 0
+        let header = width > names.count && headerRow ? allFields(records[0]) : []
+        while names.count < width {
+            let i = names.count
+            let name = i < header.count ? header[i].trimmingCharacters(in: .whitespaces) : ""
+            names.append(name.isEmpty ? "Column \(i + 1)" : name)
+        }
         return names
     }
 
