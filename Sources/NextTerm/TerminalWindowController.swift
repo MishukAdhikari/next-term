@@ -73,6 +73,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private var opensWelcome = false
     /// The sheet asking to save before the last tab takes the window is up: it alone decides.
     private var askingToSave = false
+    /// Save or Don't Save was answered for closing this tab, then End Session: until its tmux session has
+    /// ended, the tab closes without asking again, unless a file was edited since (`edits`: the unsaved
+    /// files then, and their text).
+    private var saveAnswered: (tab: TerminalTab, edits: [(EditorDocument, String)])?
     /// When this window last had the keyboard, so a Dock click brings back the one used last.
     private(set) var lastKey = Date.distantPast
     private(set) lazy var finder: FindInFilesController = {
@@ -347,15 +351,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             alert.beginSheetModal(for: window) { [weak self] response in
                 switch response {
                 case .alertFirstButtonReturn: self?.remove(tab, saveAsked: saveAsked)
-                case .alertThirdButtonReturn:
-                    RemoteConnection.endSession(remote.host, session: remote.session) { problem in
-                        guard let problem else { self?.remove(tab, saveAsked: saveAsked); return }
-                        // Not ended: the tab stays, so the session is not left running out of sight.
-                        let failed = NSAlert()
-                        failed.messageText = "Could not end the session on \(remote.host.name)"
-                        failed.informativeText = problem
-                        failed.beginSheetModal(for: window)
-                    }
+                case .alertThirdButtonReturn: self?.endSession(closing: tab, remote: remote, saveAsked: saveAsked)
                 default: break
                 }
             }
@@ -378,11 +374,31 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
     }
 
+    /// End Session on a kept tmux tab: the tab closes once the session has ended on the host. That can take
+    /// up to 15 s, and the editor is in use meanwhile: a file edited after Save or Don't Save is asked about.
+    private func endSession(closing tab: TerminalTab, remote: RemoteTab, saveAsked: Bool) {
+        if saveAsked { saveAnswered = (tab, editorArea.dirtyDocuments.map { ($0, $0.text) }) }
+        RemoteConnection.endSession(remote.host, session: remote.session) { [weak self] problem in
+            guard let self else { return }
+            defer { if self.saveAnswered?.tab === tab { self.saveAnswered = nil } }
+            guard let problem else { return self.remove(tab) }
+            // Not ended: the tab stays, so the session is not left running out of sight.
+            guard let window = self.window else { return }
+            let failed = NSAlert()
+            failed.messageText = "Could not end the session on \(remote.host.name)"
+            failed.informativeText = problem
+            failed.beginSheetModal(for: window)
+        }
+    }
+
     /// Closes a tab without asking (callers have asked, or were told to force it). The exception is the
     /// window's last tab while its editor has unsaved files: the window closes with it, so the user is
     /// asked first, unless `saveAsked` says they were.
     func remove(_ tab: TerminalTab, saveAsked: Bool = false) {
         guard let index = groups.firstIndex(where: { $0.contains(tab) }) else { return }
+        // The sheet asking to save is up: it decides whether the window goes (its Save and Don't Save close
+        // the tab once it is down), not a close that comes meanwhile (`exit`, End Session, an agent).
+        if askingToSave, closesWindow([tab]) { return }
         if !saveAsked, asksToSave(closing: tab) {
             return askToSave(closing: [tab]) { [weak self] in self?.remove(tab, saveAsked: true) }
         }
@@ -427,7 +443,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// Closing `tab` would close the window while files in its editor are unsaved: the user is asked first.
     func asksToSave(closing tab: TerminalTab) -> Bool {
-        closesWindow([tab]) && !editorArea.dirtyDocuments.isEmpty
+        let dirty = editorArea.dirtyDocuments
+        guard closesWindow([tab]), !dirty.isEmpty else { return false }
+        // Answered before End Session: asked again only about a file edited since.
+        guard let answered = saveAnswered, answered.tab === tab else { return true }
+        return !dirty.allSatisfy { doc in answered.edits.contains { $0.0 === doc && $0.1 == doc.text } }
     }
 
     /// The window's last tab is closing, and the window with it, while files in its editor are unsaved:
