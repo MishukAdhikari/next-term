@@ -638,6 +638,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             return !(KeyboardShortcuts.shared.preset.clearsOnlyInTerminal && isEditorFocused)
         }
         if item.action == #selector(revealInSidebar(_:)) { return editorArea.activePath != nil }
+        if item.action == #selector(toggleEnvValues(_:)) {
+            item.title = editorArea.activeEditor?.hidesEnvValues == true ? "Show .env Values" : "Hide .env Values"
+            return editorArea.activeEditor?.isEnvFile == true
+        }
         if item.action == #selector(toggleTerminalCollapsed(_:)) {
             item.title = terminalCollapsed ? "Expand Terminal" : "Collapse Terminal"
             return !editorArea.isHidden
@@ -1259,6 +1263,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             window.makeFirstResponder(editor.textView)
             editor.textView.go(toLine: line, column: parts.count > 1 ? parts[1] : 1)
         }
+    }
+
+    /// View › Hide .env Values or Show .env Values: the file in front only (Settings › Editor does all).
+    @objc func toggleEnvValues(_ sender: Any?) {
+        guard let editor = editorArea.activeEditor, editor.isEnvFile else { return NSSound.beep() }
+        editor.toggleEnvValues()
     }
 
     func sidebar(_ sidebar: ProjectSidebarView, openTabIn directory: String) {

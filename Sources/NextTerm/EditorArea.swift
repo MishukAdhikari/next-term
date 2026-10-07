@@ -503,6 +503,10 @@ final class EditorArea: NSView, TabBarViewDelegate {
         editors.forEach { $0.applyWrap() }
     }
 
+    func applyEnvValuesSetting() {
+        editors.forEach { $0.applyEnvValuesSetting() }
+    }
+
     /// Blame was turned on or off (View menu); `announce` says when the file in front has none. Only
     /// the file in front is blamed now; the others when they come to the front.
     func applyBlame(announce: Bool = false) {

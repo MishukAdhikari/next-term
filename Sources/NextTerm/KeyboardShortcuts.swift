@@ -464,11 +464,12 @@ final class ShortcutRecorder: NSButton {
     }
 }
 
-/// Settings › Editor: line height, soft wrap and font size, applied as they change.
+/// Settings › Editor: line height, soft wrap, hidden .env values and font size, applied as they change.
 final class EditorSettingsView: NSView {
     private let lineHeight = NSSlider(value: 1.35, minValue: 1.0, maxValue: 2.0, target: nil, action: nil)
     private let lineHeightValue = NSTextField(labelWithString: "")
     private let wrap = NSButton(checkboxWithTitle: "Wrap long lines at the edge", target: nil, action: nil)
+    private let envValues = NSButton(checkboxWithTitle: "Hide values in .env files", target: nil, action: nil)
     private let dotIcons = NSButton(checkboxWithTitle: "Icons on configuration folders (.github, .claude, .idea…)", target: nil, action: nil)
     private let claude = NSButton(checkboxWithTitle: "Agents in a tab see the editor (Claude Code, Gemini CLI, Qwen Code)", target: nil, action: nil)
     private let control = NSButton(checkboxWithTitle: "Let agents control Next Term (MCP: projects, tabs, prompts, the editor)", target: nil, action: nil)
@@ -488,6 +489,9 @@ final class EditorSettingsView: NSView {
         lineHeightValue.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         wrap.target = self
         wrap.action = #selector(wrapChanged)
+        envValues.target = self
+        envValues.action = #selector(envValuesChanged)
+        envValues.toolTip = "For screen sharing: values show as dots, and the file itself does not change. The line you click or type in shows its value."
         dotIcons.target = self
         dotIcons.action = #selector(dotIconsChanged)
         claude.target = self
@@ -522,6 +526,7 @@ final class EditorSettingsView: NSView {
             row("Font size:", [fontSize, fontSizeValue]),
             row("Line height:", [lineHeight, lineHeightValue]),
             row("", [wrap]),
+            row("", [envValues]),
             row("Sidebar:", [dotIcons]),
             row("Agents:", [claude]),
             row("", [control]),
@@ -558,6 +563,7 @@ final class EditorSettingsView: NSView {
         lineHeight.doubleValue = Double(app.editorLineHeight)
         lineHeightValue.stringValue = String(format: "%.2f×", app.editorLineHeight)
         wrap.state = app.softWrap ? .on : .off
+        envValues.state = app.hidesEnvValues ? .on : .off
         dotIcons.state = app.iconsOnDotFolders ? .on : .off
         claude.state = app.shareWithClaude ? .on : .off
         control.state = app.agentControl ? .on : .off
@@ -576,6 +582,11 @@ final class EditorSettingsView: NSView {
 
     @objc private func wrapChanged() {
         if (wrap.state == .on) != AppDelegate.shared.softWrap { AppDelegate.shared.toggleSoftWrap(nil) }
+        refresh()
+    }
+
+    @objc private func envValuesChanged() {
+        AppDelegate.shared.hidesEnvValues = envValues.state == .on
         refresh()
     }
 

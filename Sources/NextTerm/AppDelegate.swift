@@ -230,6 +230,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         controllers.forEach { $0.editorArea.applyWrap() }
     }
 
+    /// The values in .env files drawn as bullets, for screen shares (off unless turned on). Changing it
+    /// also undoes each file's own choice from the View menu.
+    var hidesEnvValues: Bool {
+        get { UserDefaults.standard.bool(forKey: "hideEnvValues") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "hideEnvValues")
+            controllers.forEach { $0.editorArea.applyEnvValuesSetting() }
+        }
+    }
+
     /// Who last changed each line, in a column beside the line numbers (off unless turned on).
     var blameAnnotations: Bool {
         get { UserDefaults.standard.bool(forKey: "blameAnnotations") }
@@ -964,6 +974,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(view, "Current Line Blame", #selector(toggleCurrentLineBlame(_:)), "", target: self)
         view.addItem(.separator())
         item(view, "Soft Wrap", #selector(toggleSoftWrap(_:)), "", target: self)
+        item(view, "Hide .env Values", #selector(TerminalWindowController.toggleEnvValues(_:)), "") // title follows the file
         let heights = NSMenu(title: "Line Height")
         for value in Self.lineHeights {
             let title = ["1.0", "1.15", "1.25", "1.35 (default)", "1.5", "1.75", "2.0"][Self.lineHeights.firstIndex(of: value) ?? 0]
