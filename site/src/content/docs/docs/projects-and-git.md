@@ -62,7 +62,30 @@ Toggle it with <kbd>⌘B</kbd> (**View › Hide Project Sidebar**). Put it on th
 
 **The header** shows the branch, the total lines added and removed, and how far you are ahead of or behind the upstream: `main +41 −10 ↑2 ↓1`. Hover it for the full story, such as “Branch main, tracking origin/main: 2 ahead, 1 behind. 3 modified, 1 added, 2 untracked.”
 
-Next Term runs git read-only, with `--no-optional-locks`, so the sidebar never holds the index lock while your own git commands, or your agents’, are running. To see a file’s changes in full, press <kbd>⌥⌘G</kbd>: see [Side-by-side diffs](/docs/diffs/).
+The sidebar reads git with `--no-optional-locks`, so it never holds the index lock while your own git commands, or your agents’, are running. To see a file’s changes in full, press <kbd>⌥⌘G</kbd>: see [Side-by-side diffs](/docs/diffs/).
+
+## Branches
+
+Click the branch name at the top of the sidebar, or press <kbd>⌥⌘B</kbd> (**Git › Branches…**). One search covers branches and actions: type a few letters of either.
+
+- **Actions** come first: **Update Project** (with how many commits are waiting, `↓3`), **Commit…** (with your uncommitted `+/−`), **Push…** (`↑2`, or **Publish** for a new branch), **New Branch…** and **Checkout Tag or Revision…**. The ⟳ button (<kbd>⌘R</kbd>) fetches.
+- **Recent**: the last branches this folder was on, including switches made in a terminal or by an agent.
+- **Local**: the current branch first, then folders by prefix (`feat/`, `fix/`), and **Agent branches**, where branches agents make (`claude/…`, `codex/…`, `worktree-…`) stay out of your way. Each shows `↓` and `↑` against its upstream, `gone` when the upstream was deleted, and the worktree it is checked out in.
+- **Worktrees** and **Remote**, when there are any.
+
+<kbd>↩</kbd> checks the branch out; <kbd>→</kbd> or the › opens everything else: **New Branch from Here**, **Rebase onto**, **Merge into**, **Push**, **Rename…**, **Delete…**, **Copy Name**. Typing a name that doesn’t exist offers **New Branch** with it, and a tag or commit offers to check it out.
+
+**Nothing is lost, and nothing happens behind an agent’s back:**
+
+- If an agent is working in the folder, Next Term asks before anything that changes its files.
+- If your uncommitted changes would be overwritten, it offers **Stash, Switch and Reapply**. If they don’t fit on the other branch, they stay in that stash, named “Next Term: switching from … to …”.
+- **Delete** shows the commit the branch was at, with **Undo**. A branch with unmerged commits lists them first.
+- **Force push** is only offered after a push is refused, lists the commits it would discard, and only replaces exactly what you saw. It is never offered for `main`, `master` or `release/*`.
+- Conflicts stop where you can see them: **Continue**, **Skip** and **Abort** appear in the popup, and **Ask Agent to Resolve** writes the request in your agent’s tab for you to send.
+
+**Commit…** shows exactly what goes in (what you staged, or every change, with new files marked and anything that looks like a secret or is over 5 MB called out), with **Amend last commit**, **Commit and Push**, and **Let Agent Commit**. A commit can be undone until it is pushed.
+
+Every git command Next Term runs for you is in **Git › Show Git Log** (<kbd>⌥⌘L</kbd>), exactly as it would be typed. Next Term never waits on a password prompt: when git needs your password, a key passphrase or a new host key, it says so and opens a terminal tab with the command ready.
 
 ## File operations
 

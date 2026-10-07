@@ -946,6 +946,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         view.addItem(.separator())
         item(view, "Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control])
 
+        let git = submenu(main, "Git")
+        item(git, "Branches…", #selector(TerminalWindowController.showBranches(_:)), "b", [.command, .option])
+        git.addItem(.separator())
+        item(git, "Fetch", #selector(TerminalWindowController.gitFetch(_:)), "")
+        item(git, "Update Project", #selector(TerminalWindowController.gitUpdate(_:)), "")
+        item(git, "Commit…", #selector(TerminalWindowController.gitCommit(_:)), "")
+        item(git, "Push…", #selector(TerminalWindowController.gitPush(_:)), "")
+        item(git, "New Branch…", #selector(TerminalWindowController.gitNewBranch(_:)), "")
+        git.addItem(.separator())
+        item(git, "Show Git Log", #selector(TerminalWindowController.showGitLog(_:)), "l", [.command, .option])
+
         let window = submenu(main, "Window")
         item(window, "Minimize", #selector(NSWindow.performMiniaturize(_:)), "m")
         window.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")

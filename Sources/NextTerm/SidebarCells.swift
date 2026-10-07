@@ -7,6 +7,10 @@ import NextTermCore
 final class SidebarHeaderView: NSView {
     private let branchIcon = NSImageView()
     private let title = NSTextField(labelWithString: "Project")
+    /// The branch name is a button: it opens the branch popup (⌥⌘B).
+    var onBranchClick: (() -> Void)?
+    private let chevron = NSImageView()
+    private var hoveringBranch = false { didSet { if hoveringBranch != oldValue { needsDisplay = true } } }
     private let summary = NSTextField(labelWithString: "")
     /// ⋯: which side the sidebar is on, and hiding it.
     let moreButton = MoreButton(toolTip: "Project sidebar layout", menu: LayoutMenu.sidebar)
@@ -39,7 +43,11 @@ final class SidebarHeaderView: NSView {
         hideButton.toolTip = "Hide the project sidebar (⌘B)"
         hideButton.setAccessibilityLabel("Hide Project Sidebar")
         onRight = false
-        [branchIcon, title, summary, hideButton, moreButton].forEach(addSubview)
+        chevron.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 8, weight: .bold))
+        chevron.contentTintColor = Theme.textDim
+        chevron.isHidden = true
+        [branchIcon, title, chevron, summary, hideButton, moreButton].forEach(addSubview)
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
         setAccessibilityLabel("Project")
@@ -63,11 +71,35 @@ final class SidebarHeaderView: NSView {
         if hideButton.frame.contains(local) { return hideButton }
         return self
     }
-    override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }
+    override func mouseDown(with event: NSEvent) {
+        if let onBranchClick, branchArea.contains(convert(event.locationInWindow, from: nil)) { return onBranchClick() }
+        window?.performDrag(with: event)
+    }
+
+    /// The branch's icon, name and chevron, with a little room around them.
+    var branchArea: NSRect {
+        guard !branchIcon.isHidden, onBranchClick != nil else { return .zero }
+        return branchIcon.frame.union(title.frame).union(chevron.frame).insetBy(dx: -5, dy: -4)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        if !branchArea.isEmpty { addCursorRect(branchArea, cursor: .pointingHand) }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+    }
+
+    override func mouseMoved(with event: NSEvent) { hoveringBranch = branchArea.contains(convert(event.locationInWindow, from: nil)) }
+    override func mouseExited(with event: NSEvent) { hoveringBranch = false }
 
     func show(_ snapshot: GitSnapshot?) {
         guard let snapshot else {
             branchIcon.isHidden = true
+            chevron.isHidden = true
             title.stringValue = "Project"
             summary.attributedStringValue = NSAttributedString()
             toolTip = nil
@@ -76,6 +108,7 @@ final class SidebarHeaderView: NSView {
             return
         }
         branchIcon.isHidden = false
+        chevron.isHidden = onBranchClick == nil
         title.stringValue = snapshot.branch ?? "Detached at \(snapshot.head ?? "?")"
         let totals = snapshot.totals
         let text = NSMutableAttributedString()
@@ -135,12 +168,20 @@ final class SidebarHeaderView: NSView {
             branchIcon.frame = NSRect(x: x, y: (h - 14) / 2, width: 14, height: 14)
             x += 18
         }
-        title.frame = NSRect(x: x, y: titleY, width: max(0, summary.frame.minX - x - 6), height: titleHeight)
+        // The name as wide as it is (the chevron right after it), up to the counts.
+        let room = max(0, summary.frame.minX - x - 6 - (chevron.isHidden ? 0 : 12))
+        title.frame = NSRect(x: x, y: titleY, width: min(room, ceil(title.intrinsicContentSize.width) + 2), height: titleHeight)
+        chevron.frame = NSRect(x: title.frame.maxX + 2, y: (h - 10) / 2, width: 10, height: 10)
+        window?.invalidateCursorRects(for: self)
     }
 
     override func draw(_ dirtyRect: NSRect) {
         Theme.border.setFill()
         NSRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1).fill()
+        if hoveringBranch {
+            Theme.tabHover.setFill()
+            NSBezierPath(roundedRect: branchArea, xRadius: 5, yRadius: 5).fill()
+        }
     }
 }
 

@@ -487,6 +487,7 @@ enum SelfTest {
         await deletedFileChecks(c, proj: proj)
         await updateChecks(c)
         await platformLinkChecks(c)
+        await branchChecks(c, proj: proj)
         await ragColorChecks(c, proj: proj)
         await importChecks(c, proj: proj)
 
@@ -940,6 +941,113 @@ enum SelfTest {
             }
             c.editorArea.close(editor)
         }
+    }
+
+    /// The branch popup: actions, branches in folders, agents' branches together, search; checkout that
+    /// keeps uncommitted changes (stash, switch, reapply), new branch, delete with Undo, commit.
+    private static func branchChecks(_ c: TerminalWindowController, proj: URL) async {
+        guard let git = GitRunner.locateGit(), let window = c.window else { return }
+        @discardableResult func run(_ args: String...) -> String {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: git)
+            p.arguments = ["-C", proj.path, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"] + args
+            let out = Pipe()
+            p.standardOutput = out
+            p.standardError = FileHandle.nullDevice
+            p.standardInput = FileHandle.nullDevice
+            try? p.run()
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        /// Presses a button in the sheet over the window (an alert from a git action).
+        func press(_ title: String, within seconds: Double = 5) async -> Bool {
+            func buttons(_ view: NSView) -> [NSButton] { view.subviews.flatMap { ($0 as? NSButton).map { [$0] } ?? buttons($0) } }
+            guard await wait(seconds, { window.attachedSheet.flatMap { $0.contentView.map(buttons) }?.contains { $0.title == title } == true }),
+                  let button = window.attachedSheet?.contentView.map(buttons)?.first(where: { $0.title == title }) else { return false }
+            button.performClick(nil)
+            return true
+        }
+        let start = run("rev-parse", "--abbrev-ref", "HEAD")
+        let conf = proj.appendingPathComponent("conf.txt")
+        try? "1\n2\n3\n4\nmain\n".write(to: conf, atomically: true, encoding: .utf8)
+        run("add", "conf.txt")
+        run("commit", "-qm", "conf")
+        for name in ["feat/a", "fix/b", "claude/try"] { run("branch", name) }
+        run("switch", "-q", "fix/b")
+        try? "1\n2\n3\n4\nfix\n".write(to: conf, atomically: true, encoding: .utf8)
+        run("commit", "-qam", "fix conf")
+        run("switch", "-q", start)
+        c.sidebar.git.refresh()
+        _ = await wait(5) { c.sidebar.git.snapshot?.branch == start }
+
+        // The popup: actions first, branches in folders, agents' branches in their own folder.
+        c.showBranches(nil)
+        let popup = c.branchPopup
+        check(await wait(5) { popup.isVisible && popup.model?.current == start }, "⌥⌘B opens the branch popup", popup.rowTitles.joined(separator: " | "))
+        let rows = popup.rowTitles
+        check(["Update Project", "Commit…", "Push…", "New Branch…", "Checkout Tag or Revision…"].allSatisfy(rows.contains),
+              "it starts with the git actions", rows.prefix(6).joined(separator: " | "))
+        check(rows.contains("▸ feat/ 1") && rows.contains("▸ fix/ 1") && rows.contains("▸ Agent branches 1") && rows.contains("✓ \(start)"),
+              "branches sit in folders by prefix, agents' branches together, the current one first", rows.joined(separator: " | "))
+        popup.toggleFolder("local:fix")
+        check(popup.rowTitles.contains("b"), "a folder opens to its branches", popup.rowTitles.joined(separator: " | "))
+        await screenshot(popup.panelWindow, suffix: "branches")
+        popup.query = "fxb"
+        check(popup.rowTitles.contains("fix/b") && popup.rowTitles.first(where: { !$0.hasPrefix("#") }) != nil, "search finds a branch by a few letters",
+              popup.rowTitles.joined(separator: " | "))
+        popup.query = "new idea"
+        check(popup.rowTitles.contains("new new-idea"), "and offers a new branch named from what was typed", popup.rowTitles.joined(separator: " | "))
+        popup.close()
+
+        // Checkout with an uncommitted change git would overwrite: stash, switch, put it back.
+        try? "one\n2\n3\n4\nmain\n".write(to: conf, atomically: true, encoding: .utf8)
+        let actions = GitActions(popup)
+        guard let fix = popup.model?.local("fix/b") else { return check(false, "fix/b is listed") }
+        actions.checkout(fix)
+        _ = await press("Switch Anyway", within: 1) // an agent tab from an earlier check may still be open here
+        check(await press("Stash, Switch and Reapply"), "checkout over changes git would overwrite offers to stash and reapply them")
+        check(await wait(10) { run("rev-parse", "--abbrev-ref", "HEAD") == "fix/b" }, "and switches", run("rev-parse", "--abbrev-ref", "HEAD"))
+        let after = (try? String(contentsOf: conf, encoding: .utf8)) ?? ""
+        check(await wait(5) { ((try? String(contentsOf: conf, encoding: .utf8)) ?? "") == "one\n2\n3\n4\nfix\n" }
+              && !run("stash", "list").contains("Next Term: switching"),
+              "with the change put back, and the stash gone", after.debugDescription + " | " + run("stash", "list"))
+        check(GitLog.shared.entries.contains { $0.command.hasPrefix("git stash push --include-untracked") } && GitLog.shared.entries.contains { $0.command == "git switch fix/b" },
+              "every command is in the Git Log as it would be typed")
+        run("checkout", "-q", "--", "conf.txt")
+
+        // New branch from here; delete with Undo.
+        actions.createBranch("feat/new-idea", base: nil, switching: true)
+        check(await wait(5) { run("rev-parse", "--abbrev-ref", "HEAD") == "feat/new-idea" }, "New Branch creates it and switches to it")
+        await pause(0.5)
+        if let a = popup.model?.local("feat/a") {
+            actions.delete(a)
+            check(await wait(5) { run("branch", "--list", "feat/a").isEmpty && GitToast.text?.hasPrefix("Deleted feat/a (was ") == true },
+                  "Delete removes a merged branch and says what it was", GitToast.text ?? "no notice")
+            GitToast.pressButtonForTest()
+            check(await wait(5) { !run("branch", "--list", "feat/a").isEmpty }, "and Undo brings it back")
+        }
+
+        // Commit through the sheet.
+        try? "one\n2\n3\n4\nfix\n".write(to: conf, atomically: true, encoding: .utf8)
+        c.sidebar.git.refresh()
+        _ = await wait(5) { c.sidebar.git.snapshot?.files["conf.txt"] != nil }
+        actions.commit()
+        check(await wait(5) { CommitSheet.current != nil }, "Commit… opens the commit sheet")
+        if let sheet = CommitSheet.current {
+            check(sheet.fileListText.contains("conf.txt"), "it lists what will be committed", sheet.fileListText)
+            sheet.type("Change the first line")
+            sheet.pressCommit()
+            check(await wait(8) { run("log", "-1", "--format=%s") == "Change the first line" }, "and commits it", run("log", "-1", "--format=%s"))
+        }
+
+        // Back as it was.
+        GitToast.dismiss()
+        run("switch", "-q", start)
+        for name in ["feat/a", "fix/b", "claude/try", "feat/new-idea"] { run("branch", "-D", name) }
+        run("rm", "-q", "conf.txt")
+        run("commit", "-qm", "branch checks done")
+        c.sidebar.git.refresh()
     }
 
     /// The links agent platforms print (LangGraph's dev server, LangSmith, Weave, MLflow) are found whole:

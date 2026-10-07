@@ -147,6 +147,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         editorArea.delegate = self
         editorArea.onShowChanges = { [weak self] url in self?.showChanges(of: url) }
         editorArea.tabBar.onReveal = { [weak self] in self?.revealInSidebar(nil) }
+        sidebar.header.onBranchClick = { [weak self] in self?.showBranches(nil) }
         editorArea.isHidden = true
         applyLayout()
         setSidebarVisible(AppDelegate.shared.sidebarVisible)
@@ -602,6 +603,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        let gitActions: [Selector] = [#selector(showBranches(_:)), #selector(gitFetch(_:)), #selector(gitUpdate(_:)), #selector(gitCommit(_:)),
+                                      #selector(gitPush(_:)), #selector(gitNewBranch(_:))]
+        if let action = item.action, gitActions.contains(action) { return gitFolder != nil }
         if item.action == #selector(closeProject(_:)) { return project != nil }
         if item.action == #selector(openServedURL(_:)) { return activeTab?.servedURL != nil }
         if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil }
@@ -1282,6 +1286,40 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             return index == count - 1 ? byNumber[9] : nil
         }
     }
+
+    // MARK: git
+
+    private(set) lazy var branchPopup = BranchPopupController()
+
+    /// The folder git operations act on: the sidebar's, when it is in a repository.
+    private var gitFolder: String? { sidebar.git.snapshot != nil ? sidebar.root?.path : nil }
+
+    /// ⌥⌘B, or a click on the branch at the top of the sidebar.
+    @objc func showBranches(_ sender: Any?) {
+        guard let window, let folder = gitFolder else { return NSSound.beep() }
+        if branchPopup.isVisible { return branchPopup.close() }
+        var anchor = NSRect(x: window.frame.minX + 80, y: window.frame.maxY - 44, width: 1, height: 1)
+        if isSidebarVisible {
+            anchor = window.convertToScreen(sidebar.header.convert(sidebar.header.bounds, to: nil))
+            anchor.origin.x += sidebar.headerInset - 4
+        }
+        branchPopup.show(for: self, directory: folder, snapshot: sidebar.git.snapshot, anchor: anchor)
+    }
+
+    private func withGit(_ body: @escaping (GitActions) -> Void) {
+        guard let folder = gitFolder else { return NSSound.beep() }
+        branchPopup.prepare(for: self, directory: folder, snapshot: sidebar.git.snapshot) { [weak self] in
+            guard let self else { return }
+            body(GitActions(self.branchPopup))
+        }
+    }
+
+    @objc func gitFetch(_ sender: Any?) { withGit { $0.fetch() } }
+    @objc func gitUpdate(_ sender: Any?) { withGit { $0.updateProject() } }
+    @objc func gitCommit(_ sender: Any?) { withGit { $0.commit() } }
+    @objc func gitPush(_ sender: Any?) { withGit { $0.push() } }
+    @objc func gitNewBranch(_ sender: Any?) { withGit { $0.askNewBranch(base: nil) } }
+    @objc func showGitLog(_ sender: Any?) { GitLogWindowController.shared.present() }
 
     @objc func selectTabByNumber(_ sender: NSMenuItem) {
         // ⌘1…⌘8 pick that tab; ⌘9 is always the last one, as in browsers.

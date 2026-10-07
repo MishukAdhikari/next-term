@@ -61,6 +61,9 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
 - **Project sidebar with git.** The project as a live file tree: changed files and folders coloured, with
   `+12 −3` line counts like a pull request, and the branch, total changes and ahead/behind at the top.
   Files your agents create or change show up on their own.
+- **Branches in one popup.** Click the branch (⌥⌘B): search branches and actions, check out, branch,
+  update, commit, push, rebase and merge. It asks before changing files under a working agent, keeps
+  uncommitted changes in a named stash, and logs every git command exactly as typed.
 - **Split panes.** Split any tab right (⌘D) or down (⌘⇧D), as often as you like: an agent beside its
   test run, two agents side by side. Move between panes with ⌥⌘ and the arrows, maximize one with
   ⌘⇧↩, close it with ⌘W. The panes without the keyboard are shaded, and the tab's mark shows the pane
