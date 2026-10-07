@@ -1,4 +1,4 @@
-# next-term.mishuk.me
+# nxtrm.mishuk.me
 
 The website and documentation for Next Term: a landing page and one documentation page per area, built with [Astro](https://astro.build) and [Starlight](https://starlight.astro.build) (both MIT). The output is plain static files: no server code, no cookies, no trackers, and no requests to any other site.
 
@@ -56,19 +56,19 @@ Docs say what a feature does, how to use it (menus and keys) and why it matters,
 
 ## Deploying
 
-The site is plain files in `dist/`. Copy them to the web root (for example `/var/www/next-term.mishuk.me`), replacing what is there:
+The site is plain files in `dist/`. Copy them to the web root (for example `/var/www/nxtrm.mishuk.me`), replacing what is there:
 
 ```sh
 npm ci && npm run build && npm run check
-rsync -a --delete dist/ <host>:/var/www/next-term.mishuk.me/
+rsync -a --delete dist/ <host>:/var/www/nxtrm.mishuk.me/
 ```
 
 An nginx server block that fits the build (Astro writes `page/index.html` for each page and long-lived, content-hashed files under `/_astro/`):
 
 ```nginx
 server {
-    server_name next-term.mishuk.me;
-    root /var/www/next-term.mishuk.me;
+    server_name nxtrm.mishuk.me;
+    root /var/www/nxtrm.mishuk.me;
     index index.html;
     charset utf-8;                      # llms.txt and robots.txt contain curly quotes and ⌘
     charset_types text/plain text/css application/javascript application/xml;

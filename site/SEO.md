@@ -1,4 +1,4 @@
-# Search and AI visibility for next-term.mishuk.me
+# Search and AI visibility for nxtrm.mishuk.me
 
 This file is not published. It says where people and AI assistants find the site, what to do about it, and what the build already does. Last checked against the sources at the end on 6 October 2026.
 
@@ -24,17 +24,17 @@ So: Search Console for Google, **Bing Webmaster Tools plus IndexNow** for Bing (
 ### Owner actions, in this order
 
 1. **Search Console** (`sc-domain:mishuk.me`, already verified by the apex TXT record; do not delete it).
-   **Sitemaps** → add `https://next-term.mishuk.me/sitemap-index.xml` → Submit. Then **URL Inspection** → `https://next-term.mishuk.me/` → **Request indexing**; repeat for `/docs/`, `/docs/agents/`, `/docs/orchestration/` and `/docs/faq/`.
-2. **Bing Webmaster Tools** ([bing.com/webmasters](https://www.bing.com/webmasters)). After step 1, sign in and choose **Import from Google Search Console**: it brings verified sites and their sitemaps and verifies them for you. If `next-term.mishuk.me` is not in the list, add it by hand (verification by DNS CNAME on `mishuk.me` needs no site change), submit the same sitemap, and use **URL Inspection → Request indexing** for the home page. Later, its **AI Performance** report shows citations in Copilot and Bing’s AI answers.
+   **Sitemaps** → add `https://nxtrm.mishuk.me/sitemap-index.xml` → Submit. Then **URL Inspection** → `https://nxtrm.mishuk.me/` → **Request indexing**; repeat for `/docs/`, `/docs/agents/`, `/docs/orchestration/` and `/docs/faq/`.
+2. **Bing Webmaster Tools** ([bing.com/webmasters](https://www.bing.com/webmasters)). After step 1, sign in and choose **Import from Google Search Console**: it brings verified sites and their sitemaps and verifies them for you. If `nxtrm.mishuk.me` is not in the list, add it by hand (verification by DNS CNAME on `mishuk.me` needs no site change), submit the same sitemap, and use **URL Inspection → Request indexing** for the home page. Later, its **AI Performance** report shows citations in Copilot and Bing’s AI answers.
 3. **IndexNow**, after the deploy that carries the key file: `npm run indexnow` once (all pages), then `npm run indexnow -- <changed paths>` after each later deploy. See `README.md`, “After a deploy: IndexNow”.
 4. **GitHub repository settings** (currently empty): set the Website and topics, and link the site from the README:
    ```sh
-   gh repo edit MishukAdhikari/next-term --homepage https://next-term.mishuk.me \
+   gh repo edit MishukAdhikari/next-term --homepage https://nxtrm.mishuk.me \
      --add-topic macos --add-topic terminal --add-topic terminal-emulator --add-topic code-editor \
      --add-topic swift --add-topic appkit --add-topic ai-agents --add-topic claude-code \
      --add-topic codex --add-topic gemini-cli --add-topic mcp --add-topic mcp-server
    ```
-   In the README, a line under the tagline such as `Website and documentation: https://next-term.mishuk.me`.
+   In the README, a line under the tagline such as `Website and documentation: https://nxtrm.mishuk.me`.
 5. **Cloudflare** (the API token cannot read these settings, so check them in the dashboard for `mishuk.me`):
    - **AI Crawl Control / Block AI bots** must not block this hostname; **Bot Fight Mode** must not challenge verified bots. A request with a crawler’s user-agent from an ordinary IP gets `200`, which does not prove the real crawlers do: Cloudflare judges them by verified IP. After step 2, Bing’s URL Inspection shows what Bingbot gets.
    - **Managed robots.txt** is off: the live `/robots.txt` is byte-for-byte the build’s.
@@ -45,7 +45,7 @@ So: Search Console for Google, **Bing Webmaster Tools plus IndexNow** for Bing (
    - **awesome-mac** and **open-source-mac-os-apps**: pull requests following each list’s CONTRIBUTING.
    - **Product Hunt**: optional; it brings a link and some traffic more than search value.
    - **Homebrew cask**: not planned. homebrew/cask requires apps to pass Gatekeeper, and Next Term is not notarized. A tap of your own would work.
-7. **Brave Search** (Claude’s web search): no console exists. Once the site is linked from GitHub and elsewhere, check `site:next-term.mishuk.me` on search.brave.com; if it is missing after a few weeks, use [search.brave.com/submit-url](https://search.brave.com/submit-url).
+7. **Brave Search** (Claude’s web search): no console exists. Once the site is linked from GitHub and elsewhere, check `site:nxtrm.mishuk.me` on search.brave.com; if it is missing after a few weeks, use [search.brave.com/submit-url](https://search.brave.com/submit-url).
 8. **Check every few weeks**: Search Console **Pages**, **Performance** and the **Generative AI performance** report (AI Overviews and AI Mode), Bing’s **AI Performance**, and ask ChatGPT, Claude, Perplexity, Gemini and Copilot questions such as “terminal that shows which Claude Code agent is waiting on me”, “open-source agentic terminal for macOS”, “MCP server to orchestrate Claude Code and Codex”. Note whether Next Term is named and described correctly.
 
 ### Decisions for the owner
@@ -78,15 +78,15 @@ The site’s address lives in one place: `SITE` in `astro.config.mjs`.
 
 ```sh
 for p in / /docs/ /docs/faq/ /robots.txt /sitemap-index.xml /llms.txt /llms-full.txt /og.jpg; do
-  curl -s -o /dev/null -w "%{http_code} $p\n" "https://next-term.mishuk.me$p"
+  curl -s -o /dev/null -w "%{http_code} $p\n" "https://nxtrm.mishuk.me$p"
 done
-curl -s -o /dev/null -w "%{http_code} /nothing-here\n" https://next-term.mishuk.me/nothing-here
-curl -s https://next-term.mishuk.me/robots.txt | diff - dist/robots.txt && echo "robots.txt as built"
+curl -s -o /dev/null -w "%{http_code} /nothing-here\n" https://nxtrm.mishuk.me/nothing-here
+curl -s https://nxtrm.mishuk.me/robots.txt | diff - dist/robots.txt && echo "robots.txt as built"
 ```
 
 ## Social cards
 
-Paste `https://next-term.mishuk.me/` and a docs URL into a card preview (for example the LinkedIn Post Inspector or opengraph.xyz) and check the title, description and image. Regenerate `public/og.jpg` with `scripts/make-og-image.swift` after retaking the screenshots.
+Paste `https://nxtrm.mishuk.me/` and a docs URL into a card preview (for example the LinkedIn Post Inspector or opengraph.xyz) and check the title, description and image. Regenerate `public/og.jpg` with `scripts/make-og-image.swift` after retaking the screenshots.
 
 ## On every release
 

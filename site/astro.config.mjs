@@ -9,7 +9,7 @@ import { remarkFacts, FACTS } from './src/lib/facts.ts';
 // The site's address, in one place. Canonical URLs, Open Graph tags, the sitemap, robots.txt,
 // llms.txt and the JSON-LD all read it from here (as Astro's `site`). To move the site, change
 // this line and the server name in your web server config; nothing else.
-const SITE = 'https://next-term.mishuk.me';
+const SITE = 'https://nxtrm.mishuk.me';
 const REPO = 'https://github.com/MishukAdhikari/next-term';
 
 // Code blocks use the app's own colours (Next Dark) in dark mode.

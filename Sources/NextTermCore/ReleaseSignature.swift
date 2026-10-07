@@ -8,6 +8,7 @@ import Foundation
 public enum ReleaseSignature {
     /// The release key's public half. install.sh has the same value; a test keeps the two identical.
     public static let publicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIInsbvx/ft3ytGC9zAlM4hSOqqVKy0X94Ah77mDzAneG"
+    /// The key's name in the allowed-signers line, not a web address: it stays as it is when the site moves.
     public static let signer = "release@next-term.mishuk.me"
     public static let namespace = "next-term-release"
     /// The system's, never one found on PATH.

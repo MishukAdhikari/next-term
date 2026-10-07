@@ -115,7 +115,7 @@ The app’s own updater checks a release as [the installer](#the-installer) does
 
 ## The installer
 
-The one-line installer (`curl -fsSL https://next-term.mishuk.me/install.sh | bash`) downloads the disk image and its checksum from GitHub over HTTPS, and installs only when:
+The one-line installer (`curl -fsSL https://nxtrm.mishuk.me/install.sh | bash`) downloads the disk image and its checksum from GitHub over HTTPS, and installs only when:
 
 - **the checksum is signed with the Next Term release key.** The key’s private half never leaves the maintainer’s Mac, so a release changed on GitHub is refused;
 - **the download matches that checksum;**

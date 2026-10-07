@@ -2,7 +2,7 @@ import type { APIRoute } from 'astro';
 import script from '../install.sh?raw';
 import { VERSION } from '../config';
 
-// /install.sh, for `curl -fsSL https://next-term.mishuk.me/install.sh | bash`. The script refuses a
+// /install.sh, for `curl -fsSL https://nxtrm.mishuk.me/install.sh | bash`. The script refuses a
 // "latest" older than the site's own version, so pointing GitHub's latest at an old release can't roll
 // installs back.
 export const GET: APIRoute = () => {

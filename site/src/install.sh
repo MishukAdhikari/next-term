@@ -1,7 +1,7 @@
 #!/bin/bash
-# Installs Next Term (https://next-term.mishuk.me) from its GitHub release:
+# Installs Next Term (https://nxtrm.mishuk.me) from its GitHub release:
 #
-#     curl -fsSL https://next-term.mishuk.me/install.sh | bash
+#     curl -fsSL https://nxtrm.mishuk.me/install.sh | bash
 #
 # It downloads the disk image and its SHA-256, checks that the checksum is signed with the Next Term
 # release key (below; the key never leaves the maintainer's Mac, so a release changed on GitHub is
@@ -64,7 +64,7 @@ main() {
     # The Next Term release key's public half (scripts/sign-release.sh signs each release's checksums).
     # The app's updater checks with the same key, in Sources/NextTermCore/ReleaseSignature.swift; a test
     # keeps the two identical.
-    local signer="release@next-term.mishuk.me"
+    local signer="release@next-term.mishuk.me" # the key's name, not the site's address: never changes
     local release_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIInsbvx/ft3ytGC9zAlM4hSOqqVKy0X94Ah77mDzAneG"
 
     say() { printf '%s\n' "$*"; }

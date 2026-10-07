@@ -7,7 +7,7 @@ Command Code, Junie, a test suite and a dev server side by side, one per tab, an
 agents are working, which are done, and which are waiting on your decision.
 
 **[Download for macOS](https://github.com/MishukAdhikari/next-term/releases/latest/download/NextTerm.dmg)** ·
-website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)**
+website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
 
 - **Agent status, in step with the agent.** A spinner shows while an agent is working, read from the
   agent's own screen ("esc to interrupt") for Claude Code, Codex, Command Code and Gemini CLI, so it stops
@@ -119,7 +119,7 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
   colours and recent projects. Nothing changes unless you choose it: the preview shows every item as a
   checkbox, and what it leaves out and why; Undo Import puts it all back. It only reads, on this Mac, and
   never opens files that can hold secrets. See
-  [Switching to Next Term](https://next-term.mishuk.me/docs/switching/).
+  [Switching to Next Term](https://nxtrm.mishuk.me/docs/switching/).
 - **Updates in one click.** Next Term checks GitHub Releases once a day (or Check for Updates). A new
   version opens a window with what's new (Install, Remind Me Later or Skip This Version), and a blue
   Update button at the top right brings it back. It downloads, is checked against its checksum signed
@@ -132,7 +132,7 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
 In one line, from the terminal:
 
 ```sh
-curl -fsSL https://next-term.mishuk.me/install.sh | bash
+curl -fsSL https://nxtrm.mishuk.me/install.sh | bash
 ```
 
 It downloads the latest release, checks its SHA-256, the bundle and the signature, and copies it to
