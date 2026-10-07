@@ -62,6 +62,8 @@ main() {
     local bundle_id="me.mishuk.nextterm"
     local app_name="Next Term.app"
     # The Next Term release key's public half (scripts/sign-release.sh signs each release's checksums).
+    # The app's updater checks with the same key, in Sources/NextTermCore/ReleaseSignature.swift; a test
+    # keeps the two identical.
     local signer="release@next-term.mishuk.me"
     local release_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIInsbvx/ft3ytGC9zAlM4hSOqqVKy0X94Ah77mDzAneG"
 

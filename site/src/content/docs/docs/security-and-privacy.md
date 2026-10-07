@@ -111,7 +111,7 @@ Next Term talks to your git remotes on a schedule, so the sidebar can say **Pull
 
 ## Updates
 
-Downloads come only over HTTPS from GitHub, are checked against the release’s published SHA-256, and must be Next Term at the expected version with an intact code signature before they replace anything. See [Updates](/docs/updates/).
+The app’s own updater checks a release as [the installer](#the-installer) does. Downloads come only over HTTPS from GitHub. The release’s SHA-256 checksum must be signed with the Next Term release key and name that version’s disk image, and the download must match it. The app inside must be Next Term at the expected version, with an intact code signature, before it replaces anything. A release changed on GitHub is refused. See [Updates](/docs/updates/).
 
 ## The installer
 

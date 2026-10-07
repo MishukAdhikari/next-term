@@ -505,6 +505,8 @@ enum SelfTest {
         await databaseChecks(c, proj: proj)
         await dataChecks(c, proj: proj)
         await updateChecks(c)
+        await updateSignatureChecks()
+        await updateWaitChecks()
         await platformLinkChecks(c)
         await branchChecks(c, proj: proj)
         await gitLogChecks(c, proj: proj)
