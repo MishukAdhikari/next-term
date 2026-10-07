@@ -412,17 +412,23 @@ struct GitActions {
     }
 
     /// Only after the commits it discards are shown, with the lease set to exactly what was shown, and
-    /// never for the default branch or main, master and release/*.
+    /// never for a shared branch: main, master, release/* and the remote's default branch (as far as its
+    /// `<remote>/HEAD` says; without one, the prompt says it can't tell).
     private func forcePush(_ ref: BranchRef, remote: String, target: String) {
-        if ["main", "master", model?.defaultBranch].contains(target) || target.hasPrefix("release/") {
+        if model?.isShared(target, on: remote) ?? true {
             return GitPrompt.ask("Force push to \(target) is off", info: "\(target) is shared: update first, or push to a branch of your own.", buttons: ["OK"], over: window) { _ in }
         }
+        let headKnown = model?.remoteHeads[remote] != nil
         run("Commits force push would discard", [["rev-parse", "--verify", "--quiet", "refs/remotes/\(remote)/\(target)"],
                                                  ["log", "--format=%h %s", "--max-count=12", "\(ref.name)..\(remote)/\(target)"]]) { result in
             let lines = result.output.split(separator: "\n").map(String.init)
             guard result.ok, let sha = lines.first, sha.count >= 40 else { return failed("Could not read \(remote)/\(target)", result, retry: nil) }
             let discarded = lines.dropFirst().joined(separator: "\n")
-            GitPrompt.ask("Force push discards these commits on \(remote)/\(target)", info: discarded.isEmpty ? "(none known locally)" : discarded,
+            var info = discarded.isEmpty ? "(none known locally)" : discarded
+            if !headKnown {
+                info += "\n\n\(remote)/HEAD isn’t set here, so Next Term can’t tell whether \(target) is \(remote)’s default branch."
+            }
+            GitPrompt.ask("Force push discards these commits on \(remote)/\(target)", info: info,
                           buttons: ["Force Push", "Cancel"], destructive: 0, style: .warning, over: window) { choice in
                 guard choice == 0 else { return }
                 let args = ["push", "--porcelain", "--force-with-lease=refs/heads/\(target):\(sha)", remote, "refs/heads/\(ref.name):refs/heads/\(target)"]
