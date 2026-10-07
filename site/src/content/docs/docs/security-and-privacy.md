@@ -1,6 +1,6 @@
 ---
 title: Security and privacy
-description: "What Next Term shares and with whom: local-only agent links and MCP socket, a fresh token per launch, no telemetry, and clipboard and paste safeguards."
+description: "What Next Term shares and with whom: local-only agent links and MCP socket, a fresh token per launch, no telemetry, background git fetches you can turn off, and clipboard and paste safeguards."
 ---
 
 A terminal sees everything you type, and an agent link exposes your editor to programs. Next Term is built so that both stay on your Mac and under your control. The source is public under the MIT licence, so every claim on this page can be checked.
@@ -8,7 +8,9 @@ A terminal sees everything you type, and an agent link exposes your editor to pr
 ## What leaves your Mac
 
 - **No account, no telemetry, no analytics.** Next Term has no sign-in and sends no usage data.
-- **One network request of its own:** the daily update check to GitHub, which you can turn off. See [Updates](/docs/updates/#what-the-check-sends).
+- **Two kinds of request of its own, each with an off switch:**
+  - the daily update check to GitHub (see [Updates](/docs/updates/#what-the-check-sends));
+  - `git fetch` from your projects’ own remotes, on a schedule (see [Background fetch](#background-fetch) below).
 - **No AI of its own.** Next Term runs the agents you install. What those agents send to their providers is between you and them.
 
 ## The agent links
@@ -63,6 +65,18 @@ Opening a file from the sidebar, or with <kbd>⌘</kbd>-click in the terminal, a
 - **The sidebar’s git calls are read-only** and use `--no-optional-locks`, so the sidebar never holds the index lock while your own git commands or your agents’ run.
 - **Every change you make through Next Term’s git tools is checked first:** a hunk is staged, unstaged or reverted only if the file still matches the diff you saw. See [Side-by-side diffs](/docs/diffs/#safe-while-agents-keep-working).
 - **Replace in Files** re-reads each file and skips anything that changed since the search.
+
+### Background fetch
+
+Next Term talks to your git remotes on a schedule, so the sidebar can say **Pull 3** when someone pushes. This is exactly what it does:
+
+- **When:** every 10 minutes for each repository open in a window, only while Next Term is the active app, and when you open the branch popup if the last fetch is over 5 minutes old.
+- **What:** `git fetch --no-write-fetch-head --no-auto-maintenance --porcelain <remote>`, for each remote one of your local branches tracks, and no other. It talks only to the hosts your repository already names, with your own git configuration, credential helper and ssh agent, as `git fetch` in a terminal does. Nothing is pushed and no other server is contacted.
+- **What it changes:** the remote-tracking branches (`origin/main`) and the tags that come with them. Never your branches, your files, the index or `FETCH_HEAD`, and it starts no `git maintenance` or `gc`.
+- **No prompts:** it can’t ask for a password, a passphrase or a host key (git’s prompts, its askpass helpers and the Git Credential Manager’s window are all turned off for it). The first time a remote needs one, background fetch stops for that repository until a fetch you start succeeds.
+- **It holds back** in Low Power Mode, on expensive or Low Data networks, and offline.
+- **You can see it:** **Git › Git Commands** lists the background fetches, exactly as they would be typed, when **Show background fetches** is on.
+- **Off switch:** **Settings › Editor › Git › Fetch in the background: Off**. **Only when opening the branch popup** keeps the popup’s fetch and drops the timer.
 
 ## Updates
 
