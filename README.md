@@ -41,15 +41,16 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
   and Qwen's IDE mode on for you. Local only, with a fresh secret per launch; `.env` files are never shared;
   Settings turns it off.
 - **Orchestrate agents across projects (MCP).** Next Term is an MCP server for any agent: Claude Code and
-  the Claude app, Codex and the ChatGPT app, Gemini CLI, Qwen Code, Cursor, opencode, Copilot CLI, Amp,
-  Junie and Command Code. One agent can run the others. It sees every project and tab with each agent's
-  state (working, done, waiting for a decision and the question), opens projects, starts an agent in a new
-  tab, gives it a prompt, waits until it stops, reads its screen, answers its questions (only the question
-  it saw, never a newer one), reads the projects' files, searches them and sees their git status and diffs
-  (secrets files refused, secret-looking values masked), and uses the editor (the selection, open files,
-  opening a file at a line). Next Term adds itself to the agents it finds, with nothing to run; Settings
-  turns it off and removes it again. The tools are marked honestly, so agents ask you before they type into
-  a tab. Local only: a private socket, no network port.
+  the Claude desktop app, Codex and the ChatGPT desktop app, Gemini CLI, Qwen Code, Cursor, opencode,
+  Copilot CLI, Amp, Junie and Command Code. One agent can run the others. It sees every project and tab
+  with each agent's state (working, done, waiting for a decision and the question), opens projects, starts
+  an agent in a new tab, gives it a prompt, waits until it stops, reads its screen, answers its questions
+  (only the question it saw, never a newer one), reads the projects' files, searches them and sees their
+  git status and diffs (secrets files refused, secret-looking values masked), and uses the editor (the
+  selection, open files, opening a file at a line). Next Term adds itself to the agents it finds, with
+  nothing to run; Settings turns it off and removes it again (from the Claude desktop app once Claude is
+  closed). The tools are marked honestly, so agents ask you before they type into a tab. Local only: a
+  private socket, no network port.
 - **Pick up any agent's conversation.** The Welcome window lists your projects; choose one and every
   conversation Claude Code, Codex and Command Code kept for it is there, newest first, with its title,
   branch and model, including the ones started in its subfolders. Resume runs it again in a new tab, in

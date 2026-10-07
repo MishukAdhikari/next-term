@@ -323,7 +323,9 @@ import Testing
         #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .registered)
         let servers = try #require(strictJSON(app.file)?["mcpServers"] as? [String: Any])
         let entry = try #require(servers["next-term"] as? [String: Any])
-        #expect(entry.keys.sorted() == ["args", "command"])
+        let keys: [String] = entry.keys.sorted()
+        let expected: [String] = ["args", "command"]
+        #expect(keys == expected)
         #expect(entry["command"] as? String == command && entry["args"] as? [String] == ["mcp"])
     }
 
@@ -375,7 +377,9 @@ import Testing
         try write(original, app.file)
         #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .registered)
         let servers = try #require(strictJSON(app.file)?["mcpServers"] as? [String: Any])
-        #expect(servers.keys.sorted() == ["next-term", "weather"])
+        let names: [String] = servers.keys.sorted()
+        let expected: [String] = ["next-term", "weather"]
+        #expect(names == expected)
         let weather = servers["weather"] as? [String: Any]
         #expect(weather?["command"] as? String == "/usr/local/bin/weather-mcp" && weather?["args"] as? [String] == ["--units", "metric"])
         #expect(MCPRegistrar.unregister(app) == .removed)
@@ -568,7 +572,9 @@ import Testing
         defer { try? FileManager.default.removeItem(atPath: home) }
         // The ChatGPT app reads Codex's file; it runs its own copy of codex, not one on the PATH.
         let codex = try target("codex", home: home)
-        #expect(codex.apps == ["com.openai.codex"])
+        let apps: [String] = codex.apps
+        let expected: [String] = ["com.openai.codex"]
+        #expect(apps == expected)
         #expect(!MCPRegistrar.isInstalled(codex, found: [:]))
         #expect(MCPRegistrar.isInstalled(codex, found: ["com.openai.codex": "/Applications/ChatGPT.app"]))
         try FileManager.default.createDirectory(atPath: home + "/.codex", withIntermediateDirectories: true)
@@ -608,6 +614,331 @@ import Testing
         // Just after the setting changed, the last pass was for the other one: no note until the new pass is done.
         #expect(MCPRegistrar.claudeAppNote(waiting: true, on: false).isEmpty)
         #expect(MCPRegistrar.claudeAppNote(waiting: false, on: true).isEmpty)
+        // A file left alone says why; waiting for the app is not a reason.
+        let readOnly: [String: MCPRegistrar.Status] = ["claude-desktop": .skipped("read-only"), "codex": .skipped("write")]
+        #expect(MCPRegistrar.claudeAppNote(waiting: nil, on: true, statuses: readOnly) == " The Claude app's file was left as it is (read-only).")
+        let open: [String: MCPRegistrar.Status] = ["claude-desktop": .skipped("the Claude app is open")]
+        #expect(MCPRegistrar.claudeAppNote(waiting: nil, on: true, statuses: open).isEmpty)
+        #expect(MCPRegistrar.claudeAppNote(waiting: nil, on: false, statuses: ["claude-desktop": .removed]).isEmpty)
+    }
+
+    @Test func claudeAppInAThirdPartySetUpHasItsOwnFile() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let app = try target("claude-desktop-3p", home: home)
+        #expect(app.file == home + "/Library/Application Support/Claude-3p/claude_desktop_config.json")
+        #expect(app.readOnceBy == MCPRegistrar.claudeAppBundle && app.format == .json(strict: true))
+        #expect(!MCPRegistrar.isInstalled(app, found: [:]))
+        // The usual folder does not count for it.
+        try FileManager.default.createDirectory(atPath: home + "/Library/Application Support/Claude", withIntermediateDirectories: true)
+        #expect(!MCPRegistrar.isInstalled(app, found: [:]))
+        try FileManager.default.createDirectory(atPath: home + "/Library/Application Support/Claude-3p", withIntermediateDirectories: true)
+        #expect(MCPRegistrar.isInstalled(app, found: [:]))
+    }
+
+    // MARK: A pass, as the app makes it
+
+    @Test func aPassWaitsForTheClaudeAppToQuit() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let targets = MCPRegistrar.targets(home: home).filter { ["claude-desktop", "gemini"].contains($0.id) }
+        let claudeOnly = targets.filter { $0.readOnceBy != nil }
+        let app = try target("claude-desktop", home: home)
+        let gemini = try target("gemini", home: home)
+        try write(claudePreferences, app.file)
+        let found = ["gemini": "/usr/local/bin/gemini"]
+        var asked: [String] = []
+        // On while Claude is open: Gemini is registered, the Claude app waits.
+        var pass = MCPRegistrar.pass(targets, command: command, found: found) { asked.append($0); return true }
+        let bundles: [String] = [MCPRegistrar.claudeAppBundle]
+        #expect(asked == bundles)
+        #expect(pass.statuses["gemini"] == .registered && pass.statuses["claude-desktop"] == .skipped("the Claude app is open"))
+        #expect(pass.waiting == true)
+        #expect(try read(app.file) == claudePreferences)
+        var statuses = MCPRegistrar.merged([:], pass.statuses, whole: true)
+        // Claude quits: only its file, and the others' statuses stay.
+        pass = MCPRegistrar.pass(claudeOnly, command: command, found: [:]) { _ in false }
+        let quit: [String: MCPRegistrar.Status] = ["claude-desktop": .registered]
+        #expect(pass.statuses == quit && pass.waiting == nil)
+        statuses = MCPRegistrar.merged(statuses, pass.statuses, whole: false)
+        let both: [String: MCPRegistrar.Status] = ["gemini": .registered, "claude-desktop": .registered]
+        #expect(statuses == both)
+        // Off while Claude is open again: Gemini's goes, the Claude app's waits to be taken out.
+        pass = MCPRegistrar.pass(targets, command: nil, found: found) { _ in true }
+        #expect(pass.waiting == false && pass.statuses["gemini"] == .removed)
+        #expect(json(app.file).map { ($0["mcpServers"] as? [String: Any])?["next-term"] != nil } == true)
+        // Next Term quits before Claude does; at its next launch, with the setting off, only Claude's file is taken care of.
+        let geminiText = try read(gemini.file)
+        try write(geminiText.replacingOccurrences(of: "{", with: "{\"mcpServers\": {\"next-term\": {\"command\": \"\(command)\"}}, ", options: [], range: geminiText.range(of: "{")), gemini.file)
+        let geminiBefore = try read(gemini.file)
+        pass = MCPRegistrar.pass(claudeOnly, command: nil, found: [:]) { _ in false }
+        let removed: [String: MCPRegistrar.Status] = ["claude-desktop": .removed]
+        #expect(pass.statuses == removed && pass.waiting == nil)
+        #expect(try read(app.file) == claudePreferences)
+        #expect(try read(gemini.file) == geminiBefore)
+        // Both of the Claude app's folders: one wait for both.
+        try FileManager.default.createDirectory(atPath: home + "/Library/Application Support/Claude-3p", withIntermediateDirectories: true)
+        let folders = MCPRegistrar.targets(home: home).filter { $0.readOnceBy != nil }
+        pass = MCPRegistrar.pass(folders, command: command, found: [:]) { _ in true }
+        #expect(pass.waiting == true && pass.statuses.count == 2)
+    }
+
+    @Test func summaryNamesTheApps() {
+        let home = "/nonexistent-\(UUID().uuidString)"
+        let statuses: [String: MCPRegistrar.Status] = ["claude": .registered, "claude-desktop": .registered,
+                                                       "claude-desktop-3p": .alreadyRegistered, "codex": .registered]
+        let withApp = MCPRegistrar.summary(statuses, apps: ["com.openai.codex"], home: home)
+        #expect(withApp.hasPrefix("Registered in ") && withApp.contains("the ChatGPT app") && withApp.contains("Codex"))
+        let parts: Int = withApp.components(separatedBy: "the Claude app").count
+        #expect(parts == 2) // once for both of its files
+        #expect(withApp.contains("Claude Code"))
+        #expect(!MCPRegistrar.summary(statuses, apps: [], home: home).contains("ChatGPT"))
+        let taken = MCPRegistrar.summary(["claude-desktop": .nameTaken], apps: [], home: home)
+        #expect(taken == "Not registered in any agent yet. The Claude app already has another server named “next-term”, left as it is.")
+    }
+
+    // MARK: Round trips: turning off gives the file back as it was
+
+    /// Registers and unregisters `original` for `target`, expecting the file back byte for byte; the text while
+    /// registered, for more checks.
+    @discardableResult
+    func roundTrip(_ original: String, _ target: MCPRegistrar.Target, sourceLocation: SourceLocation = #_sourceLocation) throws -> String {
+        try write(original, target.file)
+        let added = MCPRegistrar.register(target, command: command, programInstalled: true)
+        #expect(added == .registered, "\(original)", sourceLocation: sourceLocation)
+        let registered = try read(target.file)
+        let removed = MCPRegistrar.unregister(target)
+        #expect(removed == .removed, "\(original)", sourceLocation: sourceLocation)
+        let after = try read(target.file)
+        #expect(after == original, sourceLocation: sourceLocation)
+        return registered
+    }
+
+    @Test func commentsBesideTheServersStay() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let gemini = try target("gemini", home: home)
+        let weather = "{\"command\": \"w\", \"args\": []}"
+        // A comment line above a server, and comments after the servers' {.
+        let above = "{\n  \"mcpServers\": {\n    // my weather server, keep\n    \"weather\": \(weather)\n  }\n}\n"
+        try roundTrip(above, gemini)
+        let daily = "{\n  \"mcpServers\": { // servers I use daily\n    \"weather\": \(weather)\n  }\n}\n"
+        let registered = try roundTrip(daily, gemini)
+        #expect(registered.contains("\"mcpServers\": { // servers I use daily\n    \"next-term\": "))
+        let cursor = try target("cursor", home: home)
+        try roundTrip("{\n  \"mcpServers\": { /* keep */\n    \"weather\": \(weather)\n  }\n}\n", cursor)
+        // A comment above the first member stays with it.
+        let theme = "{\n  // the theme I like\n  \"theme\": \"x\"\n}\n"
+        let themed = try roundTrip(theme, gemini)
+        #expect(themed.contains("// the theme I like\n  \"theme\": \"x\""))
+        // A comment in an empty container, and on the line of the server before ours.
+        try roundTrip("{\n  \"mcpServers\": {\n    // add yours here\n  }\n}\n", gemini)
+        try roundTrip("{\n  \"mcpServers\": { // none yet\n  }\n}\n", gemini)
+        try roundTrip("{\n  \"mcpServers\": { /* none yet */ }\n}\n", gemini)
+        try roundTrip("{\n  // nothing yet\n}\n", gemini)
+    }
+
+    @Test func compactAndCRLFFilesStayAsTheyWere() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let app = try target("claude-desktop", home: home)
+        // Servers on the { line: ours goes on that line too.
+        let compact = "{\"mcpServers\":{\"weather\":{\"command\":\"w\",\"args\":[]}},\"preferences\":{}}"
+        #expect(try !roundTrip(compact, app).contains("\n"))
+        try roundTrip("{\n  \"mcpServers\": {\"weather\": {\"command\": \"w\"}},\n  \"preferences\": {}\n}\n", app)
+        try roundTrip("{\n  \"mcpServers\": {\"weather\": {\"command\": \"w\"},\n    \"maps\": {\"command\": \"m\"}},\n  \"preferences\": {}\n}\n", app)
+        // Windows line endings: every line break added is one too.
+        let crlf = [
+            "{\r\n  \"mcpServers\": {\r\n    \"weather\": {\"command\": \"w\"}\r\n  },\r\n  \"preferences\": {}\r\n}\r\n",
+            "{\r\n  \"preferences\": {}\r\n}\r\n",
+            "{\r\n  \"mcpServers\": {\r\n  },\r\n  \"preferences\": {}\r\n}\r\n",
+        ]
+        for original in crlf {
+            let registered = try roundTrip(original, app)
+            let bare: String = registered.replacingOccurrences(of: "\r\n", with: "")
+            #expect(!bare.contains("\n"), "\(original)")
+        }
+    }
+
+    @Test func emptyObjectsOverLinesStay() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let app = try target("claude-desktop", home: home)
+        let gemini = try target("gemini", home: home)
+        let originals = [
+            "{\n  \"mcpServers\": {\n  },\n  \"preferences\": {\"a\": 1}\n}\n",
+            "{\n  \"mcpServers\": {\n  }\n}\n",
+            "{\n  \"mcpServers\": {\n\n  }\n}\n",
+            "{\"mcpServers\": { }}",
+            "{ }",
+            "{\n}\n",
+            "{}",
+        ]
+        for original in originals {
+            try roundTrip(original, app)
+            try roundTrip(original, gemini)
+        }
+    }
+
+    @Test func repeatedKeysInsideTheEntryAreLeftAlone() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let app = try target("claude-desktop", home: home)
+        // Foundation takes the first command, the Claude app the last: whose entry it is cannot be told.
+        let text = "{\"mcpServers\": {\"next-term\": {\"command\": \"\(moved)\", \"command\": \"/usr/local/bin/theirs\", \"args\": [\"mcp\"]}}}"
+        try write(text, app.file)
+        #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .skipped("repeated keys"))
+        #expect(MCPRegistrar.unregister(app) == .skipped("repeated keys"))
+        #expect(try read(app.file) == text)
+    }
+
+    @Test func aReadOnlyFileIsNotWaitedFor() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let app = try target("claude-desktop", home: home)
+        try write(claudePreferences, app.file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: app.file)
+        let open = MCPRegistrar.whileClaudeAppIsOpen(app, command: command, programInstalled: true)
+        #expect(open.status == .skipped("read-only") && open.waiting == nil)
+    }
+
+    /// Made-up files in many shapes: one line or a line per member, LF or CRLF, servers or none, comments where
+    /// the agent takes them.
+    func shapes(count: Int, comments: Bool) -> [String] {
+        var random = SplitMix(seed: comments ? 7 : 3)
+        return (0..<count).map { _ in shape(&random, comments: comments) }
+    }
+
+    func shape(_ random: inout SplitMix, comments: Bool) -> String {
+        let newline = Bool.random(using: &random) ? "\r\n" : "\n"
+        let lines = Int.random(in: 0..<3, using: &random) // 0: compact, 1: one line with spaces, 2: a line per member
+        func space(_ depth: Int) -> String {
+            lines == 2 ? newline + String(repeating: "  ", count: depth) : lines == 1 ? " " : ""
+        }
+        func object(_ members: [String], depth: Int) -> String {
+            if members.isEmpty {
+                let empties = ["{}", "{ }", "{" + newline + String(repeating: "  ", count: depth) + "}"]
+                return empties[Int.random(in: 0..<empties.count, using: &random)]
+            }
+            let comment = comments && lines == 2 && Bool.random(using: &random) ? " // mine" : ""
+            return "{" + comment + space(depth + 1) + members.joined(separator: "," + space(depth + 1)) + space(depth) + "}"
+        }
+        let colon = lines > 0 ? ": " : ":"
+        var servers: [String] = []
+        for name in ["weather", "maps"] where Bool.random(using: &random) {
+            servers.append("\"\(name)\"" + colon + "{\"command\": \"/usr/local/bin/\(name)\", \"args\": []}")
+        }
+        let preferences = "\"preferences\"" + colon + "{\"sidebarMode\": \"chat\", \"pinned\": [\"a\", \"b\"]}"
+        let candidates = [preferences, "\"note\"" + colon + "\"caf\u{E9} \u{301}x\"", "\"windowSizes\"" + colon + "[800, 600]"]
+        var members = candidates.filter { _ in Bool.random(using: &random) }
+        if Bool.random(using: &random) {
+            let container = "\"mcpServers\"" + colon + object(servers, depth: 1)
+            members.insert(container, at: Int.random(in: 0...members.count, using: &random))
+        }
+        if comments, lines == 2, !members.isEmpty, Bool.random(using: &random) {
+            members[0] = "// first" + newline + "  " + members[0]
+        }
+        return object(members, depth: 0) + (Bool.random(using: &random) ? newline : "")
+    }
+
+    @Test func manyShapesComeBackAsTheyWere() throws {
+        // The edits of the text alone (files are the other tests' business), each in a pool of its own: the memory
+        // tests that run beside this one count every byte the process holds.
+        for target in MCPRegistrar.targets(home: "/nonexistent") where ["claude-desktop", "gemini"].contains(target.id) {
+            for original in shapes(count: 100, comments: target.format == .json(strict: false)) { try autoreleasepool {
+                let added = MCPRegistrar.plan(target, text: original, command: command)
+                #expect(added.status == .registered, "\(original)")
+                let registered = try #require(added.text, "\(original)")
+                // While it is there, the rest of the file means what it meant.
+                var file = try #require(JSONC.plain(registered).flatMap { try JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] })
+                let before = try #require(JSONC.plain(original).flatMap { try JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] })
+                var servers = try #require(file["mcpServers"] as? [String: Any], "\(original)")
+                #expect(servers.removeValue(forKey: "next-term") != nil)
+                file["mcpServers"] = servers.isEmpty && before["mcpServers"] == nil ? nil : servers
+                #expect(NSDictionary(dictionary: file).isEqual(to: before), "\(original)")
+                let removed = MCPRegistrar.plan(target, text: registered, command: nil)
+                #expect(removed.status == .removed, "\(original)")
+                #expect(removed.text == original)
+            } }
+        }
+    }
+
+    // MARK: Codex's TOML
+
+    @Test func codexNeverMakesItsFileInvalid() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let codex = try target("codex", home: home)
+        // Servers written inline, or as an array of tables: a [mcp_servers.next-term] table after them is not TOML.
+        for text in ["mcp_servers = { weather = { command = \"w\" } }\n", "[[mcp_servers]]\nname = \"w\"\n"] {
+            try write(text, codex.file)
+            let status = MCPRegistrar.register(codex, command: command, programInstalled: true)
+            #expect(status == .skipped("mcp_servers is not a table of its own"), "\(text)")
+            #expect(try read(codex.file) == text)
+        }
+        // Someone else's next-term as dotted keys.
+        let dotted = "[mcp_servers]\nnext-term.command = \"/opt/theirs\"\n"
+        try write(dotted, codex.file)
+        #expect(MCPRegistrar.register(codex, command: command, programInstalled: true) == .nameTaken)
+        #expect(MCPRegistrar.unregister(codex) == .nameTaken)
+        #expect(try read(codex.file) == dotted)
+        // Servers as dotted keys at the top: a table of ours can follow them.
+        let topDotted = "mcp_servers.weather.command = \"w\"\n"
+        try write(topDotted, codex.file)
+        #expect(MCPRegistrar.register(codex, command: command, programInstalled: true) == .registered)
+        #expect(MCPRegistrar.unregister(codex) == .removed)
+        #expect(try read(codex.file) == topDotted)
+    }
+
+    @Test func codexKeepsComments() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let codex = try target("codex", home: home)
+        let original = "model = \"gpt-5\"\n"
+        try write(original, codex.file)
+        #expect(MCPRegistrar.register(codex, command: command, programInstalled: true) == .registered)
+        // A server added after ours, with a comment above it.
+        let weather = "# My weather server: do not remove\n[mcp_servers.weather]\ncommand = \"w\"\n"
+        try write(try read(codex.file) + "\n" + weather, codex.file)
+        #expect(MCPRegistrar.unregister(codex) == .removed)
+        #expect(try read(codex.file) == original + "\n" + weather)
+        // Another copy's entry: only the command's value changes, its indent and comment stay.
+        let pinned = "[mcp_servers.next-term]\n  command = \"\(moved)\" # pinned by me\n  args = [\"mcp\"]\n"
+        try write(pinned, codex.file)
+        #expect(MCPRegistrar.register(codex, command: command, programInstalled: true) == .registered)
+        #expect(try read(codex.file) == pinned.replacingOccurrences(of: moved, with: command))
+    }
+
+    @Test func codexFilesComeBackAsTheyWere() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let codex = try target("codex", home: home)
+        let originals = [
+            "", "model = \"gpt-5\"", "model = \"gpt-5\" # no line break at the end", "model = \"gpt-5\"\n\n",
+            "model = \"gpt-5\"\r\n[mcp_servers.w]\r\ncommand = \"w\"\r\n",
+            "[mcp_servers]\nweather = { command = \"w\" }\n",
+            // A [ or # at the start of a line inside a string or an array is not a table or a comment.
+            "x = \"\"\"\n[not a table]\n\"\"\"\n", "x = '''\n# not a comment\n'''\n[profiles.a]\nmodel = \"o3\"\n",
+            "when = 1979-05-27 07:32:00Z\nlist = [\n  1, # one\n  2,\n]\n",
+        ]
+        for original in originals {
+            let registered = try roundTrip(original, codex)
+            #expect(registered.hasPrefix(original), "\(original)")
+        }
+    }
+
+    @Test func codexReadsArraysOverLines() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let codex = try target("codex", home: home)
+        // A line inside an array that starts with [ is not a table.
+        let theirs = "[mcp_servers.weather]\ncommand = \"w\"\n"
+        let ours = "[mcp_servers.next-term]\ncommand = \"\(moved)\"\nargs = [\n  \"mcp\",\n]\nmatrix = [\n  [1, 2],\n]\n"
+        try write(ours + "\n" + theirs, codex.file)
+        #expect(MCPRegistrar.register(codex, command: command, programInstalled: true) == .registered)
+        #expect(try read(codex.file) == ours.replacingOccurrences(of: moved, with: command) + "\n" + theirs)
+        #expect(MCPRegistrar.unregister(codex) == .removed)
+        #expect(try read(codex.file) == theirs)
     }
 
     // MARK: Claude Code and ownership
@@ -638,5 +969,19 @@ import Testing
         #expect(root.member("d")?.value.object(in: text) as? String == "\"q")
         #expect(JSONC("{\"a\": }") == nil)
         #expect(JSONC("{\"a\": 1} trailing") == nil)
+    }
+}
+
+/// The same made-up files on every run.
+struct SplitMix: RandomNumberGenerator {
+    var state: UInt64
+    init(seed: UInt64) { state = seed }
+
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
     }
 }

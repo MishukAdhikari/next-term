@@ -40,7 +40,7 @@ Agents can drive Next Term through its MCP server ([Orchestrate agents](/docs/or
 - **No self-control:** an agent cannot type into, or close, the tab it runs in.
 - **Busy tabs are protected:** closing a tab that runs something needs an explicit `force`.
 - **Your files are respected:** registering in an agent writes only Next Term’s own `next-term` entry, keeps comments and every other server, and never touches an entry it did not write.
-- **Off switch:** **Settings › Editor › Agents: “Let agents control Next Term”** closes the socket and removes the entries.
+- **Off switch:** **Settings › Editor › Agents: “Let agents control Next Term”** closes the socket and removes the entries (the Claude desktop app’s once Claude is closed).
 
 ## Tabs start fresh
 

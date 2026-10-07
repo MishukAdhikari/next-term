@@ -58,7 +58,7 @@ No. The agent links listen only on your Mac (`127.0.0.1`), with a fresh secret t
 
 ## Can one agent control the others?
 
-Yes. Next Term is an MCP server, set up for you in Claude Code and the Claude app, Codex and the ChatGPT app, Gemini CLI, Qwen Code, Cursor Agent, opencode, Copilot CLI, Amp, Junie and Command Code. An orchestrator agent can list every project and tab with each agent’s state, start agents in new tabs, send them prompts, wait for them, read their screens and answer their questions. It can also read, search and diff the open projects (never their secrets files), and open tabs on your servers. It works only on your Mac, through a private socket with no network port, and **Settings** turns it off. See [Orchestrate agents (MCP)](/docs/orchestration/).
+Yes. Next Term is an MCP server, set up for you in Claude Code and the Claude desktop app, Codex and the ChatGPT desktop app, Gemini CLI, Qwen Code, Cursor Agent, opencode, Copilot CLI, Amp, Junie and Command Code. An orchestrator agent can list every project and tab with each agent’s state, start agents in new tabs, send them prompts, wait for them, read their screens and answer their questions. It can also read, search and diff the open projects (never their secrets files), and open tabs on your servers. It works only on your Mac, through a private socket with no network port, and **Settings** turns it off. See [Orchestrate agents (MCP)](/docs/orchestration/).
 
 ## Can my agents run on a server?
 
