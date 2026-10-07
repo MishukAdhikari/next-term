@@ -61,12 +61,14 @@ enum GitLogStyle {
         return absolute.string(from: date)
     }
 
-    static func fullDate(_ date: Date) -> String {
+    private static let full: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .full
         formatter.timeStyle = .medium
-        return formatter.string(from: date)
-    }
+        return formatter
+    }()
+
+    static func fullDate(_ date: Date) -> String { full.string(from: date) }
 }
 
 /// One row's piece of the graph: the lines through it and the commit's dot. Rows touch, so the lines

@@ -161,6 +161,8 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             loadMore()
         } else {
             self.wanted = nil
+            // A filter left the selected commit out: its details go too.
+            if selectedCommit == nil, details.shown?.sha == wanted.sha { details.show(nil) }
             guard wanted.orFilter else { return }
             // Not on the branches listed (or too far down): the log shows that commit alone.
             searchField.stringValue = wanted.sha
@@ -315,15 +317,20 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         let menu = NSMenu()
         menu.addBlock("All Branches", on: query.scope == .all) { [weak self] in self?.show(ref: nil) }
         menu.addBlock("HEAD", on: query.scope == .ref("HEAD")) { [weak self] in self?.show(ref: "HEAD") }
-        let refs = Set(commits.prefix(2000).flatMap(\.refs).filter { $0.kind == .branch || $0.kind == .remote || $0.kind == .tag })
-        let byKind = Dictionary(grouping: refs, by: \.kind)
-        for (kind, title) in [(CommitRef.Kind.branch, "Local"), (.remote, "Remote"), (.tag, "Tags")] {
-            guard let list = byKind[kind], !list.isEmpty else { continue }
+        // The same branches and tags as the tree on the left, the first 40 of each kind.
+        let model = refs.model
+        let lists: [(title: String, refs: [(name: String, full: String)])] = [
+            ("Local", (model?.locals ?? []).map { ($0.name, "refs/heads/" + $0.name) }),
+            ("Remote", (model?.remotes ?? []).map { ($0.name, "refs/remotes/" + $0.name) }),
+            ("Tags", refs.tags.map { ($0, "refs/tags/" + $0) }),
+        ]
+        for list in lists where !list.refs.isEmpty {
             menu.addItem(.separator())
-            menu.addItem(withTitle: title, action: nil, keyEquivalent: "").isEnabled = false
-            for ref in list.sorted(by: { $0.name.localizedStandardCompare($1.name) == .orderedAscending }).prefix(40) {
-                menu.addBlock(ref.name, on: query.scope == .ref(ref.fullName)) { [weak self] in self?.show(ref: ref.fullName) }
+            menu.addItem(withTitle: list.title, action: nil, keyEquivalent: "").isEnabled = false
+            for ref in list.refs.prefix(40) {
+                menu.addBlock(ref.name, on: query.scope == .ref(ref.full)) { [weak self] in self?.show(ref: ref.full) }
             }
+            if list.refs.count > 40 { menu.addItem(withTitle: "\(list.refs.count - 40) more in the list on the left", action: nil, keyEquivalent: "").isEnabled = false }
         }
         return menu
     }
@@ -469,6 +476,10 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         header.wantsLayer = true
         header.layer?.backgroundColor = Theme.bar.cgColor
         status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // In a narrow tab the count goes first, then the date and paths filters.
+        header.setVisibilityPriority(.init(rawValue: 700), for: status)
+        header.setVisibilityPriority(.init(rawValue: 800), for: pathsButton)
+        header.setVisibilityPriority(.init(rawValue: 800), for: dateButton)
 
         graphColumn.title = ""
         graphColumn.width = GitLogStyle.graphWidth(lanes: 1)
@@ -490,7 +501,7 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         date.minWidth = 60
         date.resizingMask = .userResizingMask
         for column in [graphColumn, subject, author, date] { table.addTableColumn(column) }
-        table.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
+        table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle // only the subject has the autoresizing mask
         table.style = .plain
         table.rowHeight = GitLogStyle.rowHeight
         table.intercellSpacing = .zero

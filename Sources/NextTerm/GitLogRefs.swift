@@ -166,6 +166,12 @@ final class GitLogRefsView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
 
     func controlTextDidChange(_ obj: Notification) { rebuild() }
 
+    /// A click on a group or folder opens or closes it.
+    @objc private func clicked() {
+        guard let node = outline.item(atRow: outline.clickedRow) as? Node, !node.isSelectable else { return }
+        if outline.isItemExpanded(node) { outline.collapseItem(node) } else { outline.expandItem(node) }
+    }
+
     // MARK: outline
 
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
@@ -223,6 +229,8 @@ final class GitLogRefsView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         outline.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         outline.dataSource = self
         outline.delegate = self
+        outline.target = self
+        outline.action = #selector(clicked)
         outline.setAccessibilityLabel("Branches and tags")
         scroll.documentView = outline
         scroll.hasVerticalScroller = true
