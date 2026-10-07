@@ -59,6 +59,28 @@ import Testing
         #expect(EnvFile.values(EnvFile.parse(text))["KEY"] == "-----BEGIN KEY-----\nabc\n-----END KEY-----")
     }
 
+    /// What stays hidden with the caret on `line` (0-based): the value text of each range left.
+    func hidden(_ text: String, caretOn line: Int) -> [String] {
+        let string = text as NSString
+        var start = 0
+        for _ in 0..<line { start = NSMaxRange(string.lineRange(for: NSRange(location: start, length: 0))) }
+        let shown = string.lineRange(for: NSRange(location: start, length: 0))
+        return EnvFile.ranges(EnvFile.valueRanges(in: text), showing: shown).map { string.substring(with: $0) }
+    }
+
+    @Test func theCaretLineShowsOnlyItself() {
+        let text = "A=1\nPEM=\"-----BEGIN KEY-----\nMIIabc\nMIIdef\n-----END KEY-----\"\nB=2\n"
+        // On one line of a private key, the key's other lines stay hidden, in order.
+        #expect(hidden(text, caretOn: 2) == ["1", "\"-----BEGIN KEY-----\n", "MIIdef\n-----END KEY-----\"", "2"])
+        #expect(hidden(text, caretOn: 1) == ["1", "MIIabc\nMIIdef\n-----END KEY-----\"", "2"])
+        #expect(hidden(text, caretOn: 4) == ["1", "\"-----BEGIN KEY-----\nMIIabc\nMIIdef\n", "2"])
+        // A one-line value on the caret's line shows; the others stay hidden.
+        #expect(hidden(text, caretOn: 0) == ["\"-----BEGIN KEY-----\nMIIabc\nMIIdef\n-----END KEY-----\"", "2"])
+        #expect(hidden(text, caretOn: 5) == ["1", "\"-----BEGIN KEY-----\nMIIabc\nMIIdef\n-----END KEY-----\""])
+        // On the empty line at the end, every value stays hidden.
+        #expect(hidden(text, caretOn: 6) == values(text))
+    }
+
     @Test func rangesCountUTF16() {
         let text = "E=héllo 👋\nK=v"
         let ranges = EnvFile.valueRanges(in: text)

@@ -162,6 +162,23 @@ public enum EnvFile {
         return ranges
     }
 
+    /// `ranges` without the characters of `line`, the caret's line, whose value shows while you work
+    /// on it. A value over several lines (a private key) is cut, not dropped: its other lines stay
+    /// hidden. The order is kept.
+    public static func ranges(_ ranges: [NSRange], showing line: NSRange) -> [NSRange] {
+        ranges.flatMap { range -> [NSRange] in
+            guard NSIntersectionRange(range, line).length > 0 else { return [range] }
+            var parts: [NSRange] = []
+            if range.location < line.location {
+                parts.append(NSRange(location: range.location, length: line.location - range.location))
+            }
+            if NSMaxRange(range) > NSMaxRange(line) {
+                parts.append(NSRange(location: NSMaxRange(line), length: NSMaxRange(range) - NSMaxRange(line)))
+            }
+            return parts
+        }
+    }
+
     /// The last value of each key.
     static func values(_ entries: [EnvEntry]) -> [String: String] {
         var result: [String: String] = [:]

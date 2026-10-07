@@ -101,13 +101,13 @@ extension CodeEditorView {
         textView.needsDisplay = true
     }
 
-    /// What the layout manager draws as bullets: the values, when hidden, but not those on the caret's
-    /// line while you work on it.
+    /// What the layout manager draws as bullets: the values, when hidden, but not the caret's line
+    /// while you work on it. Only that line shows: the rest of a value over several lines stays hidden.
     func hiddenEnvValues() -> [NSRange] {
         guard hidesEnvValues else { return [] }
         let ranges = envValues.ranges(in: document.text)
         guard let shown = caretLineShown() else { return ranges }
-        return ranges.filter { NSIntersectionRange($0, shown).length == 0 }
+        return EnvFile.ranges(ranges, showing: shown)
     }
 
     /// The caret's line, when its value shows: the editor has the keyboard, nothing is selected, and you
