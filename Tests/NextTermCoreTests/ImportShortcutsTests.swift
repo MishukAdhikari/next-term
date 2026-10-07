@@ -19,7 +19,7 @@ import Testing
             "saveAllDocuments:": cmd("s", option: true), "splitRight:": cmd("d"), "splitDown:": cmd("d", shift: true),
             "renameTab:": cmd("r", option: true), "closeTab:": cmd("w"), "performClose:": cmd("w", shift: true),
             "undo:": cmd("z"), "redo:": cmd("z", shift: true), "cut:": cmd("x"), "copy:": cmd("c"), "paste:": cmd("v"), "selectAll:": cmd("a"),
-            "performFindPanelAction:#1": cmd("f"), "performFindPanelAction:#2": cmd("g"),
+            "performFindPanelAction:#1": cmd("f"), "replaceInFile:": cmd("f", option: true), "performFindPanelAction:#2": cmd("g"),
             "performFindPanelAction:#3": cmd("g", shift: true), "performFindPanelAction:#7": cmd("e"),
             "findInFiles:": cmd("f", shift: true), "replaceInFiles:": cmd("r", shift: true), "sendToAgent:": cmd("k", option: true),
             "goToLine:": cmd("l"), "toggleComment:": cmd("/"), "indentSelection:": cmd("]"), "outdentSelection:": cmd("["),
@@ -99,6 +99,21 @@ import Testing
         #expect(ImportShortcuts.terminalCommands.subtracting(titles).isEmpty)
         // The same command ids the menus give (the self-test checks them against the real menus too).
         #expect(Set(Self.menuDefaults.keys).isSuperset(of: titles.filter { !$0.hasPrefix("setTerminalPosition:") }))
+    }
+
+    @Test func replaceInTheOpenFile() {
+        #expect(ImportJetBrains.actionMap["Replace"] == "replaceInFile:" && ImportJetBrains.actionMap["ReplaceInPath"] == "replaceInFiles:")
+        #expect(ImportVSCode.commandMap["editor.action.startFindReplaceAction"] == "replaceInFile:")
+        // ⌥⌘F, as in VS Code; ⌘R under the JetBrains keys, as in their IDEs.
+        let replace = Self.cmd("f", option: true)
+        #expect(Self.current()["replaceInFile:"] == .some(replace) && Self.current(.vsCode)["replaceInFile:"] == .some(replace))
+        #expect(Self.current(.jetBrains)["replaceInFile:"] == .some(Self.cmd("r")))
+        // No other command has either key under any set.
+        for preset in KeymapPreset.allCases {
+            let chords = Self.current(preset)
+            let key = chords["replaceInFile:"] ?? nil
+            #expect(chords.filter { $0.key != "replaceInFile:" && $0.value == key }.isEmpty, "\(preset)")
+        }
     }
 
     @Test func everyTitleIsAnActionInTheMenus() throws {

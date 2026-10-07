@@ -29,6 +29,7 @@ extension ImportVSCode {
             "editor.action.clipboardPasteAction": "paste:",
             "editor.action.selectAll": "selectAll:",
             "actions.find": "performFindPanelAction:#1",
+            "editor.action.startFindReplaceAction": "replaceInFile:",
             "editor.action.nextMatchFindAction": "performFindPanelAction:#2",
             "editor.action.previousMatchFindAction": "performFindPanelAction:#3",
             "actions.findWithSelection": "performFindPanelAction:#7",

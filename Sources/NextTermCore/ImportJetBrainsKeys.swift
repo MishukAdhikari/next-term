@@ -26,6 +26,7 @@ extension ImportJetBrains {
             "$Paste": "paste:",
             "$SelectAll": "selectAll:",
             "Find": "performFindPanelAction:#1",
+            "Replace": "replaceInFile:",
             "FindNext": "performFindPanelAction:#2",
             "FindPrevious": "performFindPanelAction:#3",
             "FindInPath": "findInFiles:",

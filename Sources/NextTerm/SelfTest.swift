@@ -790,6 +790,8 @@ enum SelfTest {
         check(item("goToFile:")?.keyEquivalent == "o" && item("goToFile:")?.keyEquivalentModifierMask == [.command, .shift]
               && item("saveAllDocuments:")?.keyEquivalentModifierMask == .command && item("indentSelection:")?.keyEquivalent == "",
               "JetBrains keys: Go to File ⇧⌘O, Save All ⌘S, Indent has no key")
+        check(item("replaceInFile:")?.keyEquivalent == "r" && item("replaceInFile:")?.keyEquivalentModifierMask == .command,
+              "JetBrains keys: Replace… ⌘R")
         check(item("goToLine:")?.keyEquivalentModifierMask == [.command, .control], "your own shortcut changes stay on top of a preset")
         // ⌘P still opens Go to File under JetBrains keys, until a command takes ⌘P; then it's that command's.
         check(shortcuts.goToFileAliasActive, "with JetBrains keys, ⌘P still opens Go to File")
@@ -821,6 +823,8 @@ enum SelfTest {
         check(item("replaceInFiles:")?.keyEquivalent == "r" && item("goToFile:")?.keyEquivalentModifierMask == .command
               && !shortcuts.goToFileAliasActive,
               "back to Next Term's keys (⌘P is Go to File's own key again, no alias)")
+        check(item("replaceInFile:")?.keyEquivalent == "f" && item("replaceInFile:")?.keyEquivalentModifierMask == [.command, .option],
+              "and Replace… is ⌥⌘F again")
 
         // Every command an imported shortcut can land on is a real menu command.
         let ids = Set(shortcuts.commands.map(\.id))
@@ -2246,6 +2250,34 @@ enum SelfTest {
               (doc.text as NSString).substring(with: doc.lines.range(ofLine: 3)))
         view.toggleComment(nil)
         check(doc.text == text as String, "and back in")
+
+        // Edit › Find › Replace… (⌥⌘F): the find bar grows its Replace row. Only the editor has the action.
+        let replace = #selector(CodeTextView.replaceInFile(_:))
+        var terminalChain: [NSResponder] = []
+        var link: NSResponder? = tab.view
+        while let r = link { terminalChain.append(r); link = r.nextResponder }
+        check(view.validateMenuItem(NSMenuItem(title: "Replace…", action: replace, keyEquivalent: ""))
+              && !terminalChain.contains { $0.responds(to: replace) }
+              && !DiffTextView.instancesRespond(to: replace) && !NotebookTextView.instancesRespond(to: replace),
+              "Replace… is on in the editor, off in the terminal, notebooks and diffs")
+        check(KeyboardShortcuts.shared.commands.first { $0.id == "replaceInFile:" }?.defaultChord == KeyChord(key: "f", command: true, option: true),
+              "Replace… is ⌥⌘F")
+        func finderAction(_ action: NSTextFinder.Action) -> NSMenuItem {
+            let item = NSMenuItem()
+            item.tag = action.rawValue
+            return item
+        }
+        let scroll = view.enclosingScrollView
+        window.makeFirstResponder(view)
+        view.performFindPanelAction(finderAction(.showFindInterface))
+        _ = await wait(3) { scroll?.isFindBarVisible == true && (scroll?.findBarView?.frame.height ?? 0) > 0 }
+        let findHeight = scroll?.findBarView?.frame.height ?? 0
+        view.replaceInFile(nil)
+        check(await wait(3) { (scroll?.findBarView?.frame.height ?? 0) > findHeight + 4 }, "⌥⌘F opens the find bar with its Replace field",
+              "find bar \(findHeight) then \(scroll?.findBarView?.frame.height ?? 0) points high")
+        view.performFindPanelAction(finderAction(.hideFindInterface))
+        _ = await wait(2) { scroll?.isFindBarVisible == false }
+        window.makeFirstResponder(view)
 
         // Save keeps the file's CRLF line endings.
         view.setSelectedRange(NSRange(location: 0, length: 0))

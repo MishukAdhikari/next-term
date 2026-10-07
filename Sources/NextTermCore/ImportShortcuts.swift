@@ -31,6 +31,7 @@ public enum ImportShortcuts {
             "paste:": "Paste",
             "selectAll:": "Select All",
             "performFindPanelAction:#1": "Find…",
+            "replaceInFile:": "Replace…",
             "performFindPanelAction:#2": "Find Next",
             "performFindPanelAction:#3": "Find Previous",
             "performFindPanelAction:#7": "Use Selection for Find",
