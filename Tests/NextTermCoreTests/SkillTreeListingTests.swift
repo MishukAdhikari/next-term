@@ -18,8 +18,9 @@ import Testing
 
     @Test func findsEverySkillFolderWithItsTree() throws {
         let all = try #require(SkillTreeListing.parse(listing, rootTree: "root", prefix: ""))
-        #expect(all.skills == [SkillFolder(path: "", tree: "root"), SkillFolder(path: "skills/.curated/gh-fix-ci", tree: "t-fix"),
-                               SkillFolder(path: "skills/skill-creator", tree: "t-creator")])
+        #expect(all.skills.map(\.path) == ["", "skills/.curated/gh-fix-ci", "skills/skill-creator"])
+        #expect(all.skills.map(\.tree) == ["root", "t-fix", "t-creator"])
+        #expect(all.skills[2].entries.contains("SKILL.md") && !all.skills[2].entries.contains { $0.hasPrefix("skills/") })
         #expect(all.skills[0].skillPath == "SKILL.md" && all.skills[2].skillPath == "skills/skill-creator/SKILL.md")
         #expect(!all.truncated)
         let one = try #require(SkillTreeListing.parse(listing, rootTree: "root", prefix: "skills/skill-creator"))
@@ -191,6 +192,22 @@ import Testing
         #expect(!SkillTreeListing.isRealFolder("skills/K/L/.ssh", in: root))
         #expect(!SkillTreeListing.isRealFolder("skills/k/L/.ssh", in: root))
         #expect(!SkillTreeListing.isRealFolder("skills/missing", in: root))
+    }
+
+    /// A long name tar unpacked decomposed gets its committed spelling back, and nothing is renamed
+    /// through a link.
+    @Test func namesGetTheirCommittedSpellingBack() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nt-spell-\(UUID().uuidString)").path
+        let decomposed = "u\u{308}ber"
+        let composed = "\u{FC}ber"
+        try FileManager.default.createDirectory(atPath: root + "/refs", withIntermediateDirectories: true)
+        // Made with the bytes as given (Foundation could change their spelling).
+        let fd = open(root + "/refs/" + decomposed + ".md", O_CREAT | O_WRONLY, 0o644)
+        #expect(fd >= 0)
+        close(fd)
+        #expect(SkillTreeListing.rawNames(in: root + "/refs").map { Array($0.utf8) } == [Array((decomposed + ".md").utf8)])
+        SkillTreeListing.restoreSpelling(in: root, entries: ["refs", "refs/" + composed + ".md"])
+        #expect(SkillTreeListing.rawNames(in: root + "/refs").map { Array($0.utf8) } == [Array((composed + ".md").utf8)])
     }
 }
 

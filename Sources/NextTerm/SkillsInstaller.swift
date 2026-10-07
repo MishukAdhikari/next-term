@@ -80,7 +80,7 @@ enum SkillsInstaller {
         liveDownloads.insert(scratch.path)
         do {
             let top = try await SkillsGitHub.download(owner: source.owner, repo: source.repo, commit: resolved.commit,
-                                                       paths: resolved.skills.map(\.path), into: scratch)
+                                                       skills: resolved.skills, into: scratch)
             let skills = resolved.skills
             let repo = source.repo
             let candidates = await Task.detached { check(skills, top: top.path, repo: repo) }.value
@@ -241,9 +241,9 @@ enum SkillsInstaller {
         // And what was written is what was reviewed.
         let sharedRoot = (SkillsStore.home as NSString).appendingPathComponent(".agents/skills")
         let written = chosen.map { ((sharedRoot as NSString).appendingPathComponent($0.name), $0.found.tree) }
-        let applied = await SkillsStore.apply(steps, title: title) {
+        let applied = await SkillsStore.apply(steps, title: title, verify: {
             written.allSatisfy { GitHash.folder($0.0) == $0.1 } ? nil : "The installed files did not match the reviewed commit."
-        }
+        })
         if case .failure(let failure) = applied { return .failure(failure) }
         fetched.discard()
         return .success(notes.joined(separator: " "))

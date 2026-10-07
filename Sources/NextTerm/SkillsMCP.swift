@@ -230,7 +230,9 @@ enum SkillsMCP {
                     alert.alertStyle = .warning
                     alert.messageText = "The skills were not changed"
                     alert.informativeText = message
-                    alert.runModal()
+                    // From the run loop, not inside this main-actor job: a modal opened inside it would
+                    // stop terminal output and every MCP call until it closed.
+                    RunLoop.main.perform { MainActor.assumeIsolated { _ = alert.runModal() } }
                 }
                 request.review = sheet
                 approval.finish()

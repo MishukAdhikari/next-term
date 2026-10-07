@@ -401,11 +401,11 @@ import Testing
         let staged = try skill("staged/demo", body: "version 2")
         let shared = home + "/.agents/skills/demo"
         let steps: [SkillStep] = [.trash(old), .copy(from: staged, to: shared), .link(at: home + "/.claude/skills/demo", to: shared)]
-        let result = engine.apply(steps, title: "Update demo") {
+        let result = engine.apply(steps, title: "Update demo", verify: {
             // Changed between the copy and the check: what the check exists to catch.
             try? "tampered".write(toFile: shared + "/extra.txt", atomically: true, encoding: .utf8)
             return "The installed files did not match the reviewed commit."
-        }
+        })
         guard case .failure(let failure) = result else { Issue.record("should fail"); return }
         #expect(failure.message == "The installed files did not match the reviewed commit. Nothing was changed.")
         #expect(try String(contentsOfFile: shared + "/SKILL.md", encoding: .utf8).contains("version 1"))
@@ -413,7 +413,7 @@ import Testing
         #expect(!SkillChanges.exists(home + "/.claude/skills/demo"))
         #expect(engine.lastChange?.title == "Remove other")
         // A check that passes records the change as usual.
-        try #require(succeeded(engine.apply(steps, title: "Update demo") { nil }))
+        try #require(succeeded(engine.apply(steps, title: "Update demo", verify: { nil })))
         #expect(engine.lastChange?.title == "Update demo")
     }
 
@@ -472,11 +472,11 @@ import Testing
         let agents = home + "/.agents"
         let steps: [SkillStep] = [.copy(from: staged, to: home + "/ready/demo"), .move(from: home + "/ready/demo", to: shared),
                                   .lockEntry(path: lock, name: "demo", entry: entry)]
-        let result = engine.apply(steps, title: "Install demo") {
+        let result = engine.apply(steps, title: "Install demo", verify: {
             try? "changed".write(toFile: shared + "/extra.txt", atomically: true, encoding: .utf8)
             chmod(agents, 0o555) // the lock file can't be put back
             return "The installed files did not match the reviewed commit."
-        }
+        })
         chmod(agents, 0o755)
         guard case .failure(let failure) = result else { Issue.record("should fail"); return }
         #expect(failure.message.contains("could not put back") && failure.message.contains("What it made is still at"))
@@ -518,6 +518,82 @@ import Testing
     }
 }
 
+@Suite struct SkillChangesRoundFourTests {
+    let home: String
+    let trash: String
+    let engine: SkillChanges
+
+    init() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nt-changes4-\(UUID().uuidString)").path
+        home = root + "/home"
+        trash = root + "/trash"
+        try FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
+        engine = SkillChanges(undoFile: root + "/undo.json", trash: SkillChanges.folderTrash(trash))
+    }
+
+    func skill(_ path: String, body: String = "Body") throws -> String {
+        let folder = (home as NSString).appendingPathComponent(path)
+        try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        let name = (path as NSString).lastPathComponent
+        try "---\nname: \(name)\ndescription: The \(name) skill.\n---\n\(body)\n".write(toFile: folder + "/SKILL.md", atomically: true, encoding: .utf8)
+        return folder
+    }
+
+    func succeeded(_ result: Result<Void, SkillChanges.Failure>) -> Bool {
+        if case .failure(let failure) = result { Issue.record("\(failure.message)"); return false }
+        return true
+    }
+
+    /// What a crash part-way would leave: while the change runs, the record already holds what was done,
+    /// so Undo from it brings the old copy back and keeps the change below it.
+    @Test func aCrashPartWayStillLeavesAnUndo() throws {
+        let other = try skill(".codex/skills/other")
+        try #require(succeeded(engine.apply([.trash(other)], title: "Remove other")))
+        let old = try skill(".agents/skills/demo", body: "version 1")
+        let staged = try skill("download/demo", body: "version 2")
+        let shared = home + "/.agents/skills/demo"
+        let steps: [SkillStep] = [.copy(from: staged, to: home + "/ready/demo"), .trash(old), .move(from: home + "/ready/demo", to: shared)]
+        let undoFile = engine.undoFile
+        let seen = Seen()
+        try #require(succeeded(engine.apply(steps, title: "Update demo", verify: {
+            // Read as a relaunch after a crash here would.
+            seen.record = SkillChanges(undoFile: undoFile).lastChange
+            seen.below = SkillChanges(undoFile: undoFile).changes.first?.title
+            return nil
+        })))
+        let journal = try #require(seen.record)
+        #expect(journal.title == "Update demo" && journal.entries.contains { $0.kind == .trashed && $0.path == old })
+        #expect(seen.below == "Remove other")
+        // Undo from that record, as after the crash.
+        engine.store([journal])
+        try #require(succeeded(engine.undo()))
+        #expect(try String(contentsOfFile: shared + "/SKILL.md", encoding: .utf8).contains("version 1"))
+    }
+
+    final class Seen: @unchecked Sendable {
+        var record: SkillChanges.Change?
+        var below: String?
+    }
+
+    /// A staging copy named in a kept record and gone since (the download was removed) doesn't block
+    /// Undo: there is nothing of it to remove.
+    @Test func aGoneStagingCopyDoesNotBlockUndo() throws {
+        let old = try skill(".agents/skills/demo", body: "version 1")
+        let ready = try skill("ready/demo", body: "version 2")
+        let trashed = trash + "/demo-v1"
+        try FileManager.default.createDirectory(atPath: trash, withIntermediateDirectories: true)
+        try FileManager.default.moveItem(atPath: old, toPath: trashed)
+        let fingerprint = SkillChanges.fingerprint(ready)
+        engine.store([SkillChanges.Change(title: "Install demo", entries: [
+            .init(kind: .created, path: ready, left: fingerprint),
+            .init(kind: .trashed, path: old, other: trashed),
+        ])])
+        try FileManager.default.removeItem(atPath: home + "/ready")
+        try #require(succeeded(engine.undo()))
+        #expect(try String(contentsOfFile: old + "/SKILL.md", encoding: .utf8).contains("version 1"))
+    }
+}
+
 @Suite struct SkillInstallOrderTests {
     /// Several skills in one change: every new copy is made before any old one goes.
     @Test func everyCopyComesFirst() {
@@ -525,6 +601,8 @@ import Testing
         let b: [SkillStep] = [.copy(from: "/d/b", to: "/r/b"), .trash("/s/b"), .move(from: "/r/b", to: "/s/b")]
         let steps = SkillInstall.combined([a, b])
         #expect(steps.prefix(2) == [.copy(from: "/d/a", to: "/r/a"), .copy(from: "/d/b", to: "/r/b")])
-        #expect(Array(steps.dropFirst(2)) == Array(a.dropFirst()) + Array(b.dropFirst()))
+        var rest = Array(a.dropFirst())
+        rest += b.dropFirst()
+        #expect(Array(steps.dropFirst(2)) == rest)
     }
 }

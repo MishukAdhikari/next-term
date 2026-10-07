@@ -160,7 +160,8 @@ enum SkillsGitHub {
     /// Downloads the commit's files (at most `maxDownload` bytes), checks what the skills would unpack
     /// to, and unpacks only the skill folders, in a private folder. Returns the repository's top folder
     /// there; the caller removes `scratch` when done.
-    static func download(owner: String, repo: String, commit: String, paths: [String], into scratch: URL) async throws -> URL {
+    static func download(owner: String, repo: String, commit: String, skills: [Found], into scratch: URL) async throws -> URL {
+        let paths = skills.map(\.path)
         let source = SkillSource(owner: owner, repo: repo)
         guard source.isValid, commit.count == 40, commit.allSatisfy(\.isHexDigit),
               let url = URL(string: "https://codeload.github.com/\(owner)/\(repo)/tar.gz/\(commit)") else {
@@ -205,6 +206,10 @@ enum SkillsGitHub {
         // or spelling, and lead out of it.
         let reached = paths.allSatisfy { SkillTreeListing.isRealFolder($0, in: folder.path) }
         guard reached else { throw Failure(message: "The downloaded files could not be unpacked.") }
+        for skill in skills {
+            let place = skill.path.isEmpty ? folder.path : folder.appendingPathComponent(skill.path).path
+            SkillTreeListing.restoreSpelling(in: place, entries: skill.entries)
+        }
         return folder
     }
 

@@ -101,12 +101,13 @@ public struct SkillReview: Sendable {
             }
             // Files too large to read here whole are flagged rather than read.
             let readable = size <= maxReadSize
-            let data = readable ? (manager.contents(atPath: full) ?? Data()) : (FileHandle(forReadingAtPath: full)?.readData(ofLength: 16) ?? Data())
+            let data = readable ? (manager.contents(atPath: full) ?? Data()) : (FileHandle(forReadingAtPath: full)?.readData(ofLength: 4096) ?? Data())
             let executable = info.st_mode & 0o111 != 0
-            // A program has a zero byte in its header before any line break; magic bytes in front of
-            // text (which a shell still runs, line by line) don't make one. The shells' own rule.
+            // A program is a file whose whole header holds together, and never a file named as text or
+            // a script: magic bytes in front of text (which zsh still runs, line by line, and an agent
+            // reads) don't make one.
             let looksBinary = isBinaryProgram(data)
-            let binary = looksBinary && zeroBeforeNewline(data)
+            let binary = looksBinary && !textExtensions.contains(ext) && isProgramHeader(data, size: size)
             let script = scriptExtensions.contains(ext) || data.starts(with: Data("#!".utf8))
             files.append(File(path: relative, size: size, executable: executable, script: script, binary: binary, linkTarget: nil))
             if binary { flags.append(Flag(level: .warning, file: relative, text: "A compiled program.")) }
@@ -123,9 +124,10 @@ public struct SkillReview: Sendable {
             // Checked even when not valid UTF-8 (one bad byte must not hide a script's lines from the checks).
             let text = String(decoding: data, as: UTF8.self)
             guard !binary else {
-                // A shell runs the lines after a program's header too: the command checks still apply.
-                flags += commandFlags(text.lowercased(), file: relative)
-                for url in findURLs(text) { urls.insert(url) }
+                // A shell may still run lines after a program's header: the command checks run on its
+                // printable runs (what `strings` shows; decoding a whole program is slow, and its bytes
+                // read as hidden characters).
+                flags += commandFlags(printableRuns(data).lowercased(), file: relative)
                 continue
             }
             if String(data: data, encoding: .utf8) == nil {
@@ -200,12 +202,54 @@ public struct SkillReview: Sendable {
         return true
     }
 
-    /// A zero byte comes before the first line break, in the first 80 bytes.
-    static func zeroBeforeNewline(_ data: Data) -> Bool {
-        let head = Array(data.prefix(80))
-        guard let zero = head.firstIndex(of: 0) else { return false }
-        guard let newline = head.firstIndex(of: 0x0A) else { return true }
-        return zero < newline
+    /// Names that are text or scripts: reviewed as text whatever their first bytes.
+    static let textExtensions: Set<String> = scriptExtensions.union(["md", "markdown", "mdx", "txt", "json", "yaml", "yml", "toml",
+                                                                    "html", "htm", "css", "xml", "csv", "ini", "cfg"])
+
+    /// Whether the header after the magic number holds together as a Mach-O (thin or fat), ELF,
+    /// WebAssembly or Java class file of `size` bytes. Four magic bytes followed by text don't.
+    static func isProgramHeader(_ data: Data, size: Int) -> Bool {
+        let bytes = Array(data.prefix(4096))
+        func little(_ at: Int) -> Int {
+            guard at + 4 <= bytes.count else { return -1 }
+            return Int(bytes[at]) | Int(bytes[at + 1]) << 8 | Int(bytes[at + 2]) << 16 | Int(bytes[at + 3]) << 24
+        }
+        func big(_ at: Int) -> Int {
+            guard at + 4 <= bytes.count else { return -1 }
+            return Int(bytes[at]) << 24 | Int(bytes[at + 1]) << 16 | Int(bytes[at + 2]) << 8 | Int(bytes[at + 3])
+        }
+        let cpus: Set<Int> = [7, 0x0100_0007, 12, 0x0100_000C, 0x0200_000C, 18, 0x0100_0012]
+        switch Array(bytes.prefix(4)) {
+        case [0xCF, 0xFA, 0xED, 0xFE], [0xCE, 0xFA, 0xED, 0xFE]:
+            // Mach-O: a known CPU, a known file type, and load commands that fit in the file.
+            let header = bytes[0] == 0xCF ? 32 : 28
+            let commands = little(16), commandBytes = little(20)
+            return cpus.contains(little(4)) && (1...12).contains(little(12)) && commands > 0 && commandBytes > 0
+                && header + commandBytes <= size
+        case [0xCA, 0xFE, 0xBA, 0xBE]:
+            let count = big(4)
+            if (1...16).contains(count) {
+                // Fat: every slice is a known CPU, inside the file.
+                return (0..<count).allSatisfy { index in
+                    let at = 8 + index * 20
+                    return cpus.contains(big(at)) && big(at + 8) > 0 && big(at + 8) + big(at + 12) <= size
+                }
+            }
+            // A Java class file shares the magic: a version from Java 1.1 on.
+            guard bytes.count >= 8 else { return false }
+            let major = Int(bytes[6]) << 8 | Int(bytes[7])
+            return (45...100).contains(major)
+        case [0x7F, 0x45, 0x4C, 0x46]:
+            // ELF: 32 or 64 bits, either byte order, version 1, a known file type.
+            guard bytes.count >= 24, [1, 2].contains(bytes[4]), [1, 2].contains(bytes[5]), bytes[6] == 1 else { return false }
+            let type = bytes[5] == 1 ? Int(bytes[16]) | Int(bytes[17]) << 8 : Int(bytes[16]) << 8 | Int(bytes[17])
+            let version = bytes[5] == 1 ? little(20) : big(20)
+            return (1...4).contains(type) && version == 1
+        case [0x00, 0x61, 0x73, 0x6D]:
+            return little(4) == 1 // WebAssembly version 1
+        default:
+            return false
+        }
     }
 
     /// Mach-O, fat, ELF and WebAssembly.
@@ -216,16 +260,35 @@ public struct SkillReview: Sendable {
 
     /// Hidden characters, HTML comments, and commands that fetch and run code that the commit does not hold.
     static func textFlags(_ text: String, file: String, readByAgents: Bool = true) -> [Flag] {
-        var flags: [Flag] = []
+        var flags = hiddenFlags(text, file: file)
+        if readByAgents, text.contains("<!--") { flags.append(Flag(level: .warning, file: file, text: "An HTML comment: text agents read but rendered Markdown hides.")) }
+        return flags + commandFlags(text.lowercased(), file: file)
+    }
+
+    /// Characters that draw as nothing, counted by kind.
+    static func hiddenFlags(_ text: String, file: String) -> [Flag] {
         let scalars = Array(text.unicodeScalars)
         let mask = hiddenMask(scalars)
         let hidden = scalars.indices.filter { mask[$0] }.map { scalars[$0] }
-        if !hidden.isEmpty {
-            let kinds = Set(hidden.map(hiddenKind)).sorted().joined(separator: ", ")
-            flags.append(Flag(level: .warning, file: file, text: "\(hidden.count) hidden characters (\(kinds)). They are shown in the text below."))
+        guard !hidden.isEmpty else { return [] }
+        let kinds = Set(hidden.map(hiddenKind)).sorted().joined(separator: ", ")
+        return [Flag(level: .warning, file: file, text: "\(hidden.count) hidden characters (\(kinds)). They are shown in the text below.")]
+    }
+
+    /// Runs of at least `minimum` printable ASCII bytes (and tabs), one per line: what `strings` shows.
+    static func printableRuns(_ data: Data, minimum: Int = 4) -> String {
+        var out: [UInt8] = []
+        var run: [UInt8] = []
+        for byte in data {
+            if (0x20...0x7E).contains(byte) || byte == 0x09 {
+                run.append(byte)
+                continue
+            }
+            if run.count >= minimum { out += run + [0x0A] }
+            run.removeAll(keepingCapacity: true)
         }
-        if readByAgents, text.contains("<!--") { flags.append(Flag(level: .warning, file: file, text: "An HTML comment: text agents read but rendered Markdown hides.")) }
-        return flags + commandFlags(text.lowercased(), file: file)
+        if run.count >= minimum { out += run }
+        return String(decoding: out, as: UTF8.self)
     }
 
     /// Commands that fetch and run code the commit does not hold, or reach for credentials.

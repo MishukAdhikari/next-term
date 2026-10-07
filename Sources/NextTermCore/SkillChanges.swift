@@ -319,6 +319,10 @@ public struct SkillChanges: Sendable {
         if let problem = preflight(steps) { return .failure(Failure(message: problem + " Nothing was changed.")) }
         var change = Change(title: title)
         let manager = FileManager.default
+        let earlier = changes
+        // What is done so far, kept above the earlier change after each step that touches the user's
+        // folders: a crash or Force Quit part-way still leaves an Undo that puts things back.
+        func journal() { store(earlier + [change]) }
         for step in steps {
             do {
                 switch step {
@@ -329,9 +333,11 @@ public struct SkillChanges: Sendable {
                         let target = try manager.destinationOfSymbolicLink(atPath: path)
                         guard unlink(path) == 0 else { throw Failure(message: "Could not remove the link \(SkillStep.short(path)).") }
                         change.entries.append(.init(kind: .removedLink, path: path, other: target))
+                        journal()
                     } else {
                         do {
                             change.entries.append(.init(kind: .trashed, path: path, other: try trash(path)))
+                            journal()
                         } catch where !Self.exists(path) {
                             // It left its place (into the Trash) but where is unknown: recorded, so putting
                             // back reports it rather than claiming nothing changed.
@@ -356,15 +362,20 @@ public struct SkillChanges: Sendable {
                     }
                     // A copy this change made (a staging copy) takes its place: from then on it counts as
                     // made there, so putting back or Undo removes it from its place, not by way of the
-                    // staging folder. Recorded before moving, so a move that fails half-way is put away too.
-                    change.entries.append(.init(kind: .created, path: to))
+                    // staging folder. Recorded before moving, so a move that fails or a crash half-way is
+                    // put away too. Moving doesn't change what the copy holds, so its fingerprint stays.
+                    let left = change.entries[staged].left
+                    change.entries.append(.init(kind: .created, path: to, left: left))
+                    journal()
                     try manager.moveItem(atPath: from, toPath: to)
                     change.entries.remove(at: staged)
-                    change.entries[change.entries.count - 1].left = Self.fingerprint(to)
+                    if left == nil { change.entries[change.entries.count - 1].left = Self.fingerprint(to) }
+                    journal()
                 case .link(let at, let to):
                     try manager.createDirectory(atPath: (at as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
                     try manager.createSymbolicLink(atPath: at, withDestinationPath: Self.linkTarget(at: at, to: to))
                     change.entries.append(.init(kind: .created, path: at, left: Self.fingerprint(at)))
+                    journal()
                     // The link must reach a skill, or Claude Code would be left without it.
                     var isFolder: ObjCBool = false
                     let skill = (at as NSString).appendingPathComponent("SKILL.md")
@@ -387,6 +398,7 @@ public struct SkillChanges: Sendable {
                     let newFile: Bool? = text == nil ? true : nil
                     try updated.write(toFile: real, atomically: true, encoding: .utf8)
                     change.entries.append(.init(kind: .editedLock, path: real, other: name, previous: before, left: after, newFile: newFile))
+                    journal()
                 case .recordEntry(let path, let name, let record):
                     var records = SkillRecord.decodeList(manager.contents(atPath: path))
                     let before = records.first { $0.name == name }?.raw()
@@ -397,24 +409,27 @@ public struct SkillChanges: Sendable {
                     let newFile: Bool? = Self.exists(path) ? nil : true
                     try SkillRecord.encodeList(records).write(to: URL(fileURLWithPath: path), options: .atomic)
                     change.entries.append(.init(kind: .editedRecord, path: path, other: name, previous: before, left: record?.raw(), newFile: newFile))
+                    journal()
                 }
             } catch {
                 let message = (error as? Failure)?.message ?? error.localizedDescription
-                return putBack(change, title: title, problem: "\(step.summary) failed: \(message)")
+                return putBack(change, title: title, problem: "\(step.summary) failed: \(message)", earlier: earlier)
             }
         }
-        if let problem = verify?() { return putBack(change, title: title, problem: problem) }
+        if let problem = verify?() { return putBack(change, title: title, problem: problem, earlier: earlier) }
         if !change.entries.isEmpty { store([change]) }
         return .success(())
     }
 
-    /// Puts back what a change that stopped part-way did, and says how that went.
-    func putBack(_ change: Change, title: String, problem: String) -> Result<Void, Failure> {
+    /// Puts back what a change that stopped part-way did, and says how that went. `earlier`: the
+    /// changes Undo could reverse before this one began (its journal is replaced).
+    func putBack(_ change: Change, title: String, problem: String, earlier: [Change]) -> Result<Void, Failure> {
         let left = reverse(change.entries, rollback: true)
         var message = problem
         for path in left.lost { message += " To put \(path) back, use Put Back on it in the Finder's Trash." }
         if left.problems.isEmpty {
             // The disk is as it was: the earlier change's Undo stays as it is.
+            store(earlier)
             return .failure(Failure(message: message + (left.lost.isEmpty ? " Nothing was changed." : " Nothing else was changed.")))
         }
         // What could not be put back stays recorded, above the earlier change, so Undo can finish this
@@ -424,7 +439,7 @@ public struct SkillChanges: Sendable {
         for index in remaining.indices where remaining[index].kind == .created || remaining[index].kind == .moved {
             remaining[index].left = Self.fingerprint(remaining[index].path)
         }
-        store(changes + [Change(title: title, entries: remaining)])
+        store(earlier + [Change(title: title, entries: remaining)])
         message += " Next Term could not put back \(left.problems.joined(separator: ", "))."
         let made = remaining.filter { $0.kind == .created || $0.kind == .moved }.map { SkillStep.short($0.path) }
         if !made.isEmpty { message += " What it made is still at \(made.joined(separator: ", "))." }
@@ -443,7 +458,11 @@ public struct SkillChanges: Sendable {
         for entry in change.entries where !entry.isLost {
             switch entry.kind {
             case .trashed, .removedLink: expected[entry.path] = .some(nil)
-            case .created: expected[entry.path] = .some(entry.left)
+            case .created:
+                // Gone: nothing to remove. No fingerprint yet (a crash part-way through the step): what is
+                // there is what it was making.
+                guard Self.exists(entry.path), let left = entry.left else { continue }
+                expected[entry.path] = .some(left)
             case .moved:
                 if let from = entry.other { expected[from] = .some(nil) }
                 expected[entry.path] = .some(entry.left)

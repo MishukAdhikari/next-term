@@ -187,12 +187,16 @@ public struct SkillFolder: Equatable, Sendable {
     public let path: String
     /// That folder's git tree hash at the commit.
     public let tree: String
+    /// Every file and folder inside it, relative to it, spelled as committed: tar may unpack a name in
+    /// another spelling, and the tree hash covers names byte for byte.
+    public let entries: [String]
     /// SKILL.md's path (what the lock file records).
     public var skillPath: String { path.isEmpty ? "SKILL.md" : path + "/SKILL.md" }
 
-    public init(path: String, tree: String) {
+    public init(path: String, tree: String, entries: [String] = []) {
         self.path = path
         self.tree = tree
+        self.entries = entries
     }
 }
 
@@ -205,8 +209,10 @@ public enum SkillTreeListing {
               let entries = json["tree"] as? [[String: Any]] else { return nil }
         var folders: [String: String] = ["": rootTree]
         var skillFolders: [String] = []
+        var paths: [String] = []
         for entry in entries {
             guard let path = entry["path"] as? String, let type = entry["type"] as? String else { continue }
+            if type == "tree" || type == "blob" { paths.append(path) }
             if type == "tree", let hash = entry["sha"] as? String { folders[path] = hash }
             if type == "blob", ["SKILL.md", "skill.md"].contains((path as NSString).lastPathComponent) {
                 skillFolders.append((path as NSString).deletingLastPathComponent)
@@ -215,7 +221,11 @@ public enum SkillTreeListing {
         // Split up: as one chain this is slow for the Swift 6.1 type checker.
         let plain = Set(skillFolders.filter(isPlainPath))
         let wanted = plain.filter { prefix.isEmpty || $0 == prefix || $0.hasPrefix(prefix + "/") }
-        let found: [SkillFolder] = wanted.compactMap { folder in folders[folder].map { SkillFolder(path: folder, tree: $0) } }
+        let found: [SkillFolder] = wanted.compactMap { folder in
+            guard let tree = folders[folder] else { return nil }
+            let inside = folder.isEmpty ? paths : paths.compactMap { $0.hasPrefix(folder + "/") ? String($0.dropFirst(folder.count + 1)) : nil }
+            return SkillFolder(path: folder, tree: tree, entries: inside)
+        }
         let truncated = json["truncated"] as? Bool ?? false
         return (found.sorted { $0.path < $1.path }, truncated)
     }
@@ -282,6 +292,42 @@ public enum SkillTreeListing {
             guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { return false }
         }
         return true
+    }
+
+    /// Puts back the committed spelling of names tar unpacked in another one (it decomposes names it
+    /// reads from pax headers, which git uses for long paths). Only names with non-ASCII characters,
+    /// only through real folders, and only renaming within a folder.
+    public static func restoreSpelling(in folder: String, entries: [String]) {
+        var listings: [String: [String]] = [:]
+        let named = entries.filter { $0.utf8.contains { $0 >= 0x80 } }
+        let ordered = named.sorted { $0.split(separator: "/").count < $1.split(separator: "/").count }
+        for entry in ordered {
+            let parentRelative = (entry as NSString).deletingLastPathComponent
+            let want = (entry as NSString).lastPathComponent
+            guard isRealFolder(parentRelative, in: folder) else { continue }
+            let parent = parentRelative.isEmpty ? folder : (folder as NSString).appendingPathComponent(parentRelative)
+            let names = listings[parent] ?? rawNames(in: parent)
+            listings[parent] = names
+            // Swift's == is canonical equivalence: the same name, in another spelling.
+            guard let onDisk = names.first(where: { $0 == want && Array($0.utf8) != Array(want.utf8) }) else { continue }
+            if rename((parent as NSString).appendingPathComponent(onDisk), (parent as NSString).appendingPathComponent(want)) == 0 {
+                listings[parent] = nil
+            }
+        }
+    }
+
+    /// A folder's entry names exactly as stored (Foundation may change their spelling).
+    static func rawNames(in folder: String) -> [String] {
+        guard let handle = opendir(folder) else { return [] }
+        defer { closedir(handle) }
+        var names: [String] = []
+        while let entry = readdir(handle) {
+            let name = withUnsafePointer(to: &entry.pointee.d_name) { pointer in
+                pointer.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+            }
+            if name != "." && name != ".." { names.append(name) }
+        }
+        return names
     }
 
     /// Whether tar's complaints are only about patterns that matched nothing (the spelling not in the

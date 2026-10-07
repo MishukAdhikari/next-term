@@ -304,14 +304,15 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
         let path = (candidate.folder as NSString).appendingPathComponent(relative)
         let file = candidate.review.files.first { $0.path == relative }
         if let target = file?.linkTarget { return textView.string = "A link to \(target)." }
-        if file?.binary == true { return textView.string = "A compiled program: it can't be shown as text." }
         guard let handle = FileHandle(forReadingAtPath: path) else { return textView.string = "" }
         let data = (try? handle.read(upToCount: 400_001)) ?? Data()
         try? handle.close()
-        // Every file that isn't a program is shown, as text, even when not valid UTF-8 (with replacement
-        // characters): SKILL.md and the scripts are what the agent follows and runs.
+        // Every file is shown as text, even when not valid UTF-8 (with replacement characters): SKILL.md
+        // and the scripts are what the agent follows and runs, and zsh runs a file's lines whatever its
+        // first bytes, so a program is shown too, under a note.
         let text = String(decoding: data.prefix(400_000), as: UTF8.self)
-        textView.string = SkillReview.revealHidden(text) + (data.count > 400_000 ? "\n… (the rest is not shown)" : "")
+        let header = file?.binary == true ? "A compiled program, shown as text (zsh runs a file's lines whatever its first bytes):\n\n" : ""
+        textView.string = header + SkillReview.revealHidden(text) + (data.count > 400_000 ? "\n… (the rest is not shown)" : "")
     }
 
     // MARK: answer
