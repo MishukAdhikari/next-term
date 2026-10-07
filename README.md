@@ -89,6 +89,13 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
 - **Dock badge and notifications** for agents that finished while you were in another app.
 - **Every shortcut is yours.** Next Term > Settings (⌘,) > Keyboard Shortcuts lists every command; click one and press
   new keys. The shortcuts below are the defaults.
+- **Bring your settings over.** Coming from VS Code, Cursor, Devin Desktop, a JetBrains IDE, Zed, iTerm2,
+  Ghostty or Terminal? Next Term > Import Settings and Shortcuts… (also offered on first launch) brings
+  the matching shortcut set, the keys you changed yourself, font size, line height, wrap, fonts, terminal
+  colours and recent projects. Nothing changes unless you choose it: the preview shows every item as a
+  checkbox, and what it leaves out and why; Undo Import puts it all back. It only reads, on this Mac, and
+  never opens files that can hold secrets. See
+  [Switching to Next Term](https://next-term.mishuk.me/docs/switching/).
 - **Updates in one click.** Next Term checks GitHub Releases once a day (or Check for Updates). A new
   version opens a window with what's new (Install, Remind Me Later or Skip This Version), and a blue
   Update button at the top right brings it back. It downloads, is verified against its published
