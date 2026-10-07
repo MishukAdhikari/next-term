@@ -20,7 +20,7 @@ extension SelfTest {
         }
 
         // The files: five small ones (and three more), a folder, an image, a binary, one at the size limit
-        // and one past it, and a committed file to delete.
+        // and one past it with a link to it, and a committed file to delete.
         let folder = proj.appendingPathComponent("clicks")
         try? fm.createDirectory(at: folder.appendingPathComponent("sub"), withIntermediateDirectories: true)
         let files = ["a", "b", "c", "d", "e", "f", "g", "h"].map { folder.appendingPathComponent("\($0).txt") }
@@ -35,6 +35,7 @@ extension SelfTest {
         try? String(repeating: line, count: SidebarClick.singleClickMaxSize / 100).write(to: atLimit, atomically: false, encoding: .utf8)
         let large = folder.appendingPathComponent("large.log")
         try? String(repeating: line, count: (SidebarClick.singleClickMaxSize + (1 << 20)) / 100).write(to: large, atomically: false, encoding: .utf8)
+        try? fm.createSymbolicLink(at: folder.appendingPathComponent("large-link.log"), withDestinationURL: large)
         let gone = folder.appendingPathComponent("gone.txt")
         try? "1\n2\n".write(to: gone, atomically: true, encoding: .utf8)
         let gitPath = GitRunner.locateGit()
@@ -333,6 +334,16 @@ extension SelfTest {
         let bigClicked = clickRow(c, large) && isSelection(c, large)
         check(bigClicked && area.panes.count == count && area.activePath != canonicalPath(large.path), "a click on a text file over 4 MB selects it and opens nothing",
               "clicked \(bigClicked)")
+        // A link to it, listed as a file: what counts is the size of the file it points to.
+        let linkRow = root.node(at: canonicalPath(folder.path) + "/large-link.log").map { outline.row(forItem: $0) } ?? -1
+        if linkRow >= 0 {
+            outline.scrollRowToVisible(linkRow)
+            let linkClicked = click(outline, at: namePoint(outline, linkRow)) && outline.selectedRowIndexes == IndexSet(integer: linkRow)
+            check(linkClicked && area.panes.count == count, "a click on a link to it selects the link and opens nothing",
+                  "clicked \(linkClicked), \(area.panes.count) tabs, front \(area.activeName ?? "none")")
+        } else {
+            check(false, "the link to the file over 4 MB is listed in the tree")
+        }
         doubleClickRow(c, large)
         check(area.activePath == canonicalPath(large.path) && area.activePane !== area.previewPane, "a double-click opens it", area.activeName ?? "none")
         if let editor = area.activeEditor, editor.document.path == canonicalPath(large.path) { area.close(editor) }
