@@ -749,6 +749,11 @@ enum SelfTest {
         app.setRecentProjects(Array(fullList.prefix(3))) // room for an imported one (an import never pushes yours out)
         let before = (app.fontSize, app.softWrap, app.recentProjects, shortcuts.preset)
         let bindingsBefore = shortcuts.bindings // holds the Go to Line change made above
+        // A font and terminal colours come over too, and go back exactly.
+        let appearanceBefore = (Preferences.editorFontFamily, Preferences.terminalPalette, Preferences.customTerminalPalette)
+        var ansi: [UInt32?] = Array(repeating: nil, count: 16)
+        ansi[1] = 0xFF5555
+        let colours = TerminalPalette(name: "VS Code terminal colours", ansi: ansi, background: 0x102030)
         let extra = proj.appendingPathComponent("imported-project")
         try? FileManager.default.createDirectory(at: extra, withIntermediateDirectories: true)
         // One of the user's own shortcuts (⌥⌘P for Go to File), and a Control key that is never taken.
@@ -757,21 +762,36 @@ enum SelfTest {
                               settings: [PlannedSetting(.fontSize(clamping: before.0 + 2), source: "editor.fontSize \(Int(before.0) + 2)"),
                                          PlannedSetting(.softWrap(!before.1), source: "editor.wordWrap"),
                                          PlannedSetting(.optionAsMeta(true), source: "terminal.integrated.macOptionIsMeta", ticked: false,
-                                                        note: "Option types @ [ ] { } on your keyboard layout")],
+                                                        note: "Option types @ [ ] { } on your keyboard layout"),
+                                         PlannedSetting(.editorFontFamily("Menlo"), source: "editor.fontFamily Menlo, monospace"),
+                                         PlannedSetting(.terminalPalette(colours), source: "terminal colours in workbench.colorCustomizations",
+                                                        note: "2 of 20 colours; the others stay Next Term's")],
                               shortcuts: [PlannedShortcut(command: "goToFile:", title: "Go to File…", chord: mine,
                                                           source: "keybindings.json: cmd+alt+p → workbench.action.quickOpen"),
                                           PlannedShortcut(command: "goToLine:", title: "Go to Line…", chord: KeyChord(key: "g", control: true),
                                                           source: "keybindings.json: ctrl+g → workbench.action.gotoLine", allowed: false,
                                                           note: "Control keys without ⌘ stay with your shell and agents")],
                               recentProjects: [canonicalPath(extra.path)],
-                              skipped: [SkippedItem("editor.fontFamily", "font choice is coming"),
+                              skipped: [SkippedItem("Terminal font “Operator Mono”", "not installed on this Mac"),
                                         SkippedItem("terminal.integrated.env.osx", "never imported: can hold secrets")])
         let window = ImportWindowController.shared
         window.showPreview(for: DetectedApp(kind: .vsCode, name: "VS Code", configPath: "/tmp", lastUsed: Date()), plan: plan)
         await pause(0.4)
         if let previewWindow = window.window { await screenshot(previewWindow, suffix: "import") }
-        check(window.applyTitle == "Apply \(KeymapPreset.vsCode.overrides.count + 4) Changes", "the preview counts what is ticked", window.applyTitle)
+        check(window.applyTitle == "Apply \(KeymapPreset.vsCode.overrides.count + 6) Changes", "the preview counts what is ticked", window.applyTitle)
+        func swatches(in view: NSView?) -> [PaletteSwatches] {
+            guard let view else { return [] }
+            return (view as? PaletteSwatches).map { [$0] } ?? view.subviews.flatMap { swatches(in: $0) }
+        }
+        let shownSwatches = swatches(in: window.window?.contentView)
+        check(shownSwatches.count == 1 && shownSwatches.first?.colours == Theme.terminalColours(colours),
+              "the preview shows the imported terminal colours as a swatch row", "\(shownSwatches.count)")
         window.applyForTest()
+        let terminalView = c.tabs.first?.view
+        check(Preferences.editorFontFamily == "Menlo" && EditorDocument.font.familyName == "Menlo"
+              && Preferences.terminalPalette == colours && terminalView?.nativeBackgroundColor == NSColor(hex: 0x102030),
+              "Apply sets the editor font and the terminal colours, at once in the open terminal",
+              "\(EditorDocument.font.familyName ?? "none") \(String(describing: terminalView?.nativeBackgroundColor))")
         check(app.fontSize == before.0 + 2 && app.softWrap != before.1 && !Preferences.optionAsMeta
               && shortcuts.preset == .vsCode && app.recentProjects.contains(canonicalPath(extra.path)),
               "Apply sets the ticked changes and leaves the unticked one",
@@ -784,6 +804,11 @@ enum SelfTest {
         ImportCoordinator.shared.undo()
         check(app.fontSize == before.0 && app.softWrap == before.1 && shortcuts.preset == before.3 && app.recentProjects == before.2,
               "Undo Import puts everything back exactly", "\(app.fontSize) \(app.softWrap) \(shortcuts.preset) \(app.recentProjects.count)")
+        let backgroundBefore = NSColor(hex: Theme.terminalColours(appearanceBefore.1).background)
+        check(Preferences.editorFontFamily == appearanceBefore.0 && Preferences.terminalPalette == appearanceBefore.1
+              && Preferences.customTerminalPalette == appearanceBefore.2 && terminalView?.nativeBackgroundColor == backgroundBefore,
+              "Undo Import puts the editor font and the terminal colours back, in the open terminal too",
+              "\(Preferences.editorFontFamily ?? "default") \(Preferences.terminalPalette?.name ?? "Next Term's")")
         check(shortcuts.bindings == bindingsBefore && item("goToFile:")?.keyEquivalent == "p"
               && item("goToFile:")?.keyEquivalentModifierMask == .command,
               "Undo Import gives Go to File its old shortcut back, and your other changes stay",
