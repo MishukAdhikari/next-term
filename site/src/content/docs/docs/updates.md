@@ -1,6 +1,6 @@
 ---
 title: Updates
-description: "How Next Term updates itself from GitHub Releases: a daily check and one-click install verified by SHA-256, and how to turn automatic checks off."
+description: "How Next Term updates itself from GitHub Releases: a daily check, a one-click install verified with the release key, and how to turn automatic checks off."
 ---
 
 You install Next Term once. After that it keeps itself current from GitHub Releases, and every update is checked before it replaces anything.
@@ -9,10 +9,12 @@ You install Next Term once. After that it keeps itself current from GitHub Relea
 
 1. **A daily check.** About 20 seconds after launch, and then once a day, Next Term asks GitHub for the latest release. Drafts and pre-releases are ignored.
 2. **You decide.** When there is a newer version, the update window opens over your project with what’s new: the notes of every version since yours, newest first. It offers **Install and Relaunch**, **Remind Me Later** and **Skip This Version**. Opened by the daily check, it doesn’t take the keyboard: what you’re typing to an agent stays in the terminal until you click the window.
-3. **Download and verify.** **Install and Relaunch** downloads the disk image with a progress window and checks it against the SHA-256 published with the release. It then opens the image read-only, copies the new app next to the current one, and checks that it really is Next Term, at the expected version, with an intact code signature.
+3. **Download and verify.** **Install and Relaunch** checks the release as the [one-line installer](/docs/security-and-privacy/#the-installer) does. The release’s SHA-256 checksum must be signed with the Next Term release key and must name that version’s disk image (`NextTerm-0.8.0.dmg`). Next Term then downloads the disk image with a progress window and checks that it matches the checksum. It opens the image read-only, copies the new app next to the current one, and checks that it really is Next Term, at the expected version, with an intact code signature.
 4. **Swap on quit.** “Next Term 0.8.0 is ready” offers to relaunch now (running commands and agents stop) or later. The new version replaces the old one when Next Term quits; if anything goes wrong during the swap, the old app is put back.
 
-If any step fails, nothing is replaced. Next Term says what went wrong, and you can download the release from its page instead.
+If any step fails, nothing is replaced, and Next Term says what went wrong. A release whose checksum isn’t signed with the release key, or whose download doesn’t match it, is refused. For any other failure, such as a lost connection, Next Term offers the release’s page so you can download it there instead.
+
+Each release is signed a few minutes after it is published. If you install one before that, Next Term says it isn’t signed yet, checks again every 10 minutes for the next two hours, and downloads it once it is signed. A release that is more than a day old and still has no signature is refused.
 
 ## The Update button
 
