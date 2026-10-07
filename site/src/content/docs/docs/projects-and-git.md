@@ -91,9 +91,9 @@ Every git command Next Term runs for you is in **Git › Git Commands**, exactly
 
 **Git › Git Log** (<kbd>⌥⌘L</kbd>) opens the repository’s commit history in an editor tab, as a graph. You can also open it from the branch popup (**Git Log**), or for one branch with **Show History** in that branch’s menu.
 
-- **The commits**, newest first, each listed after the commits made on top of it. Each line of history has a lane and a colour of its own: a dot is a commit, a ring is a merge, and a circled dot is where HEAD is. Next to the subject are its branches and tags (the branch you are on is filled in), then the author and the date (“3 hours ago” within a week). The first 1,000 commits load at once, and more as you scroll.
+- **The commits**, newest first, each listed after the commits made on top of it. Each line of history has a lane and a colour of its own: a dot is a commit, a ring is a merge, and a circled dot is where HEAD is. Past 20 lanes side by side, the rest share one more column, where their commits are dim rings with no line between them. Next to the subject are its branches and tags (the branch you are on is filled in), then the author and the date (“3 hours ago” within a week). The first 1,000 commits load at once, and more as you scroll.
 - **Branches and tags**, on the left: All Branches, HEAD, Local (in folders by prefix, agents’ branches together), Remote and Tags. Select one to see only its history. The field above narrows the list.
-- **The selected commit**, on the right: the whole message, the author and committer with dates, the hash (with **Copy**), the parents (click one to go to it), its branches and tags, and the files it changed, with `+/−` for each. A merge is compared with its first parent. Double-click a file for its diff in that commit, side by side, in a tab titled like `app.txt @ 4cc062d`.
+- **The selected commit**, on the right: the whole message, the author and committer with dates, the hash (with **Copy**), the parents (click one to go to it), its branches and tags, and the files it changed, with `+/−` for each (in a partial clone, without the counts, rather than downloading the files). A merge is compared with its first parent. Double-click a file for its diff in that commit, side by side, in a tab titled like `app.txt @ 4cc062d`.
 
 **Filters**, above the commits:
 
@@ -101,13 +101,13 @@ Every git command Next Term runs for you is in **Git › Git Commands**, exactly
 |---|---|
 | Text or hash | Commits whose message contains the text, in any case. Turn on `.*` for a regular expression. A hash (6 characters or more) shows that commit. |
 | Branch | All branches, HEAD, or one branch or tag. |
-| Author | Part of a name or an email address; **Me** is your `user.name`. |
+| Author | A name from the list, that person only (**Me** is your `user.name`), or with **Other…** part of a name or an email address. |
 | Date | The last 24 hours, 7 days, 30 days or 12 months, or since or until a date (`2025-01-31`, or words git understands, such as “2 weeks ago”). |
 | Paths | Commits that changed these files or folders: chosen, typed, or the ones selected in the sidebar. |
 
 Right-click a commit for **Copy Hash**, **Copy Message**, **New Branch from Here…**, **Checkout…** (of the commit, detached, or of a branch that points at it) and **Show in Branch Popup**. Checking out and branching go through the same steps as in the branch popup, so an agent working in the folder is asked about first.
 
-The log follows the repository: when a commit, checkout, fetch or rebase moves a branch (yours or an agent’s, in any worktree), it reads the history again and keeps the commit you had selected. Like the sidebar, it only reads, with `--no-optional-locks`.
+The log follows the repository: when a commit, checkout, fetch or rebase moves a branch (yours or an agent’s, in any worktree), it reads the history again in place: the commit you had selected stays selected, however far down, and the list stays where you were (at the very top, so new commits show). Like the sidebar, it only reads, with `--no-optional-locks`.
 
 ## File operations
 
