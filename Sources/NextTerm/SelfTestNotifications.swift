@@ -68,9 +68,10 @@ extension SelfTest {
               "naming the window's project, with a sound, and clicking it opens the tab", done?.content.subtitle ?? "nothing posted")
         check(done?.content.threadIdentifier == c.placeName(of: back), "stacked with the window's others in Notification Center",
               done?.content.threadIdentifier ?? "nothing posted")
+        // Straight after it: a repeat says nothing new (the guard compares with the tab's last notification).
+        check(posted(agent("claude", after: 60), active: true) == nil, "the same notification from a tab is held back for 10 seconds")
         let next = posted(agent("goose", after: 60), active: true)
         check(next != nil && next?.content.sound == nil, "another within 3 seconds comes without a sound, so tabs finishing together make one")
-        check(posted(agent("claude", after: 60), active: true) == nil, "the same notification from a tab is held back for 10 seconds")
         defaults.set(false, forKey: NotificationSettings.Key.agentFinished)
         check(posted(agent("codex", after: 60), active: true) == nil && posted(agent("codex", after: 60), active: false) == nil,
               "with “When an agent finishes” off, it does not, in Next Term or from another app")
