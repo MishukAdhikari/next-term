@@ -134,13 +134,14 @@ These are fixed.
 | Where | Action | Keys |
 |---|---|---|
 | Tabs | Next tab, previous tab | <kbd>⌃⇥</kbd>, <kbd>⌃⇧⇥</kbd> |
-| Tabs | Rename | Double-click the tab |
+| Tabs | Rename a terminal tab | Double-click the tab |
+| Tabs | Keep a preview tab | Double-click the tab |
 | Tabs | Close | Middle-click the tab |
 | Terminal | Open a path such as `src/app.ts:42:7`, or a link | <kbd>⌘</kbd>-click |
 | Terminal | Suspend the running program | <kbd>⌃Z</kbd> |
 | Editor | Indent or outdent the selected lines | <kbd>⇥</kbd>, <kbd>⇧⇥</kbd> |
 | Sidebar | Rename | <kbd>↩︎</kbd> |
-| Sidebar | Open | <kbd>⌘↓</kbd>, or double-click |
+| Sidebar | Open | <kbd>⌘↓</kbd>, or double-click (one click, with **Open files with a single click** on) |
 | Sidebar | Move to the Trash | <kbd>⌘⌫</kbd> |
 | Sidebar | Copy instead of move while dragging | Hold <kbd>⌥</kbd> |
 | Agent’s proposed edit | Accept | <kbd>⌘↩︎</kbd> |

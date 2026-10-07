@@ -16,9 +16,9 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
 - **Decisions come to you.** When an agent asks for permission ("Do you want to make this edit…?"),
   a notification says so with the question; click it to land on that tab. Works however you start the
   agent: directly, through an alias or a shell function, `npx`, or `cd app && claude`.
-- **Code editor.** Double-click a file, pick a Find in Files result, or ⌘-click `src/app.ts:42:7` in any
-  output: the file opens above the terminal at that line, coloured by VS Code's TextMate grammars for 103
-  languages: PHP and Blade (Laravel, WordPress), Ruby and ERB (Rails),
+- **Code editor.** Double-click a file (or click once, with a setting), pick a Find in Files result, or
+  ⌘-click `src/app.ts:42:7` in any output: the file opens above the terminal at that line, coloured by
+  VS Code's TextMate grammars for 103 languages: PHP and Blade (Laravel, WordPress), Ruby and ERB (Rails),
   Python and Jinja (Django, Flask), JS/TS/TSX (React, Next.js), Vue, Svelte, Astro, Angular, Liquid, Twig,
   Go and templ, Rust, Elixir, YAML, SQL and more. Line numbers, adjustable line height, soft wrap, auto-indent, ⌘/ to comment, ⌘L to go to a line, find, undo. Files keep
   their encoding, line endings and permissions. When an agent changes a file you have open, the editor
@@ -177,9 +177,10 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | Between editor and terminal | ⌃` |
 | Keyboard Shortcuts (change any of these) | ⌘, |
 
-In the sidebar: Return renames, ⌘⌫ moves to the Trash, ⌘↓ or double-click opens. Right-click for Open in
-New Tab, Open as Project, Reveal in Finder, Insert Path in Terminal, Copy Path and Copy Relative Path. Tabs
-can be dragged to reorder; middle-click closes; tabs that don't fit go behind the » button.
+In the sidebar: Return renames, ⌘⌫ moves to the Trash, ⌘↓ or double-click opens (or one click: Settings ›
+Editor › Open files with a single click). Right-click for Open in New Tab, Open as Project, Reveal in Finder,
+Insert Path in Terminal, Copy Path and Copy Relative Path. Tabs can be dragged to reorder; middle-click
+closes; tabs that don't fit go behind the » button.
 
 ## Security
 

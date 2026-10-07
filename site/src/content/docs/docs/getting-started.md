@@ -77,7 +77,7 @@ To run an agent on one of your servers instead, press <kbd>⌥⌘T</kbd> (**Shel
 
 Files open in the editor above the terminal:
 
-- Double-click a file in the sidebar.
+- Double-click a file in the sidebar (or click it once, with **Open files with a single click** on in **Settings › Editor**).
 - <kbd>⌘</kbd>-click a path such as `src/app.ts:42:7` anywhere in terminal output, or a Python traceback’s `File "graph.py", line 42`: the file opens at that line.
 - Press <kbd>⌘P</kbd> and type part of its name ([Go to File](/docs/editor/#go-to-file)).
 - Run `nxtrm app/User.php:42` in a tab. See [The nxtrm command](/docs/command-line/).

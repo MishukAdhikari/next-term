@@ -13,6 +13,7 @@ Open **Next Term › Settings…** (<kbd>⌘,</kbd>). Settings has four tabs: **
 | **Font size** | 13 pt | From 8 to 32 pt. Shared with the terminal, so <kbd>⌘+</kbd> and <kbd>⌘-</kbd> change both. |
 | **Line height** | 1.35× | A multiple of the font’s own line height, from 1.0 to 2.0 in steps of 0.05. 1.35 reads well for code. |
 | **Wrap long lines at the edge** | On | Soft wrap, with a hanging indent. Also **View › Soft Wrap**. |
+| **Sidebar: Open files with a single click** | Off | One click on a file in the project sidebar opens it in a preview tab, with its name in italics; the next file you click takes its place. Editing the file, double-clicking its tab or opening it any other way keeps it. The keyboard stays in the sidebar, and folders still open with their arrow or a double-click. Off, a click selects and a double-click opens, as in Finder. Also in the sidebar’s ⋯ menu. See [Preview tabs](/docs/editor/#preview-tabs). |
 | **Sidebar: Icons on configuration folders (.github, .claude, .idea…)** | Off | Gives configuration folders their brand icons. Off, they stay plain and quiet. |
 | **Agents: Agents in a tab see the editor (Claude Code, Gemini CLI, Qwen Code)** | On | The IDE link. Agents started in a tab see your open files and selected lines (never from `.env` files), and their proposed edits open as diffs. Next Term keeps Gemini’s and Qwen’s IDE mode on while this is on. Off stops sharing. |
 | **Let agents control Next Term (MCP: projects, tabs, prompts, the editor)** | On | Registers Next Term’s MCP server in your agents, so one can drive the others. The line below it says where it is registered. Off closes the server and removes Next Term’s entries. See [Orchestrate agents](/docs/orchestration/). |
@@ -36,13 +37,14 @@ Every menu command, with its shortcut and where it lives in the menus. Search by
 
 ## Preferences in the menus
 
-Some choices live where you use them. The View and Shell menus show a checkmark next to the choice in effect:
+Some choices live where you use them. The View and Shell menus, and the ⋯ buttons, show a checkmark next to the choice in effect:
 
 | Preference | Where | Default |
 |---|---|---|
 | Terminal position: bottom, right, left or top | **View › Terminal Position**, or the terminal’s ⋯ button | Bottom |
 | Project sidebar on the right | **View › Project Sidebar on the Right**, or a ⋯ button | Left |
 | Line height presets | **View › Line Height** | 1.35 |
+| Open files with a single click | The project sidebar’s ⋯ button, or **Settings › Editor** | Off |
 | Soft wrap | **View › Soft Wrap** | On |
 | Where projects open | **Shell › Open Projects In**: Ask Each Time, This Window, New Window | Ask Each Time |
 | Option as Meta (for Emacs-style keys in the terminal) | **Shell › Use Option as Meta Key** | Off |
