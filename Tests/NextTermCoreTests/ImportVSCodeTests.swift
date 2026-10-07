@@ -34,12 +34,12 @@ import Testing
 
     /// The plan with only the test's own Applications folder searched for the app bundle.
     func plan(_ app: DetectedApp, home: String, usKeyboard: Bool = true) -> ImportPlan {
-        ImportVSCode.plan(for: app, home: home, usKeyboard: usKeyboard, applications: [home + "/Applications"])
+        ImportVSCode.plan(for: app, home: home, usKeyboard: usKeyboard, applications: [home + "/Applications"], fonts: testFonts)
     }
 
     func settings(_ json: String, usKeyboard: Bool = true, appName: String = "VS Code") throws -> ImportVSCode.SettingsResult {
         let file = try #require(ImportVSCode.SettingsFile(json))
-        return ImportVSCode.settingsPlan(file, appName: appName, usKeyboard: usKeyboard)
+        return ImportVSCode.settingsPlan(file, appName: appName, usKeyboard: usKeyboard, fonts: testFonts)
     }
 
     func row(_ result: ImportVSCode.SettingsResult, _ key: String) -> PlannedSetting? {
@@ -273,6 +273,67 @@ import Testing
         #expect(result.skipped.isEmpty)
     }
 
+    // MARK: fonts and colours
+
+    @Test func fontFamilies() throws {
+        // The terminal follows the editor's list while its own is unset or empty, as in VS Code.
+        for terminal in ["", #", "terminal.integrated.fontFamily": "  ""#] {
+            let result = try settings(#"{"editor.fontFamily": "Operator Mono, 'Fira Code', monospace"\#(terminal)}"#, appName: "Cursor")
+            #expect(result.settings == [
+                PlannedSetting(.editorFontFamily("Fira Code"), source: "editor.fontFamily Operator Mono, 'Fira Code', monospace",
+                               note: "the first font in the list that this Mac has"),
+                PlannedSetting(.terminalFontFamily("Fira Code"), source: "editor.fontFamily Operator Mono, 'Fira Code', monospace",
+                               note: "the first font in the list that this Mac has; Cursor's terminal uses the editor font while terminal.integrated.fontFamily is unset"),
+            ])
+            #expect(result.skipped == [SkippedItem("Editor font “Operator Mono”", "not installed on this Mac")])
+        }
+        let both = try settings(#"{"editor.fontFamily": "Menlo", "terminal.integrated.fontFamily": "Hack, Menlo"}"#)
+        #expect(both.settings.map(\.setting) == [.editorFontFamily("Menlo"), .terminalFontFamily("Hack")])
+        let proportional = try settings(#"{"terminal.integrated.fontFamily": "Helvetica"}"#)
+        #expect(proportional.settings.isEmpty)
+        #expect(proportional.skipped == [SkippedItem("Terminal font “Helvetica”", "not a monospaced font, which code and the terminal need")])
+        #expect(try settings(#"{"editor.fontFamily": 12}"#).skipped == [SkippedItem("editor.fontFamily", "value not recognised")])
+        #expect(try settings(#"{"editor.fontFamily": "monospace"}"#).settings.isEmpty)
+    }
+
+    @Test func terminalColoursFromColorCustomizations() throws {
+        let result = try settings("""
+            {
+              "workbench.colorTheme": "Monokai",
+              "workbench.colorCustomizations": {
+                "terminal.ansiRed": "#ff0000",
+                "terminal.ansiBrightWhite": "#FFF",
+                "terminal.background": "#101010",
+                "terminal.foreground": "#eeeeee",
+                "terminalCursor.foreground": "#ffcc00",
+                "terminal.selectionBackground": "#ffffff80",
+                "terminal.ansiBlue": "blue",
+                "editor.background": "#000000",
+                "[Monokai]": { "terminal.ansiRed": "#aa0000", "sideBar.background": "#111111" },
+                "[Solarized Dark]": { "terminal.ansiGreen": "#00ff00" }
+              }
+            }
+            """)
+        var ansi: [UInt32?] = Array(repeating: nil, count: 16)
+        ansi[1] = 0xAA0000 // the theme's own block wins
+        ansi[15] = 0xFFFFFF
+        let palette = TerminalPalette(name: "VS Code terminal colours", ansi: ansi, foreground: 0xEEEEEE, background: 0x101010,
+                                      cursor: 0xFFCC00, selection: TerminalPalette.blend(0xFFFFFF, alpha: 128.0 / 255, over: 0x101010))
+        #expect(result.settings == [PlannedSetting(.terminalPalette(palette), source: "terminal colours in workbench.colorCustomizations and its [Monokai] block",
+                                                   note: "6 of 20 colours; the others stay Next Term's")])
+        #expect(result.skipped == [
+            SkippedItem("workbench.colorTheme", "colour themes come later"),
+            SkippedItem("workbench.colorCustomizations terminal.ansiBlue", "value not recognised"),
+            SkippedItem("workbench.colorCustomizations: 2 other colours", "colour themes come later"),
+        ])
+        // Editor colours only: nothing for the terminal, and they are reported.
+        let editorOnly = try settings(##"{"workbench.colorCustomizations": {"editor.background": "#000000"}}"##)
+        #expect(editorOnly.settings.isEmpty)
+        #expect(editorOnly.skipped == [SkippedItem("workbench.colorCustomizations: 1 other colour", "colour themes come later")])
+        #expect(try settings(#"{"workbench.colorCustomizations": "dark"}"#).skipped
+                == [SkippedItem("workbench.colorCustomizations", "value not recognised")])
+    }
+
     // MARK: what is left out
 
     @Test func skippedOnlyForKeysTheUserSet() throws {
@@ -298,12 +359,16 @@ import Testing
               "git.autofetch": true,
             }
             """)
-        #expect(result.settings == [PlannedSetting(.fontSize(14), source: "editor.fontSize 14")])
+        let black = TerminalPalette(name: "VS Code terminal colours", background: 0x000000)
+        #expect(result.settings == [
+            PlannedSetting(.fontSize(14), source: "editor.fontSize 14"),
+            PlannedSetting(.editorFontFamily("JetBrains Mono"), source: "editor.fontFamily JetBrains Mono, Menlo, monospace"),
+            PlannedSetting(.terminalPalette(black), source: "terminal colours in workbench.colorCustomizations",
+                           note: "1 of 20 colours; the others stay Next Term's"),
+        ])
         #expect(result.skipped == [
-            SkippedItem("editor.fontFamily", "font choice is coming"),
-            SkippedItem("terminal.integrated.fontFamily", "font choice is coming"),
+            SkippedItem("Terminal font “MesloLGS NF”", "not installed on this Mac"),
             SkippedItem("workbench.colorTheme", "colour themes come later"),
-            SkippedItem("workbench.colorCustomizations", "colour themes come later"),
             SkippedItem("editor.tabSize", "tab width and spaces come later"),
             SkippedItem("editor.insertSpaces", "tab width and spaces come later"),
             SkippedItem("files.trimTrailingWhitespace", "clean-up on save comes later"),
@@ -348,6 +413,7 @@ import Testing
         }
         #expect(plan.skipped == [
             SkippedItem("workbench.sideBar.location", "value not recognised"), // mapped keys first, then the rest in file order
+            SkippedItem("Editor font", "looked like a credential"),
             SkippedItem("terminal.integrated.env.osx", "never imported: can hold secrets"),
             SkippedItem("http.proxy", "never imported: can hold secrets"),
             SkippedItem("http.proxyAuthorization", "never imported: can hold secrets"),
@@ -357,7 +423,6 @@ import Testing
             SkippedItem("terminal.integrated.automationProfile.osx", "never imported: runs commands"),
             SkippedItem("openai.apiKey", "never imported: can hold secrets"),
             SkippedItem("github.token", "never imported: can hold secrets"),
-            SkippedItem("editor.fontFamily", "font choice is coming"),
             SkippedItem("a setting", "looked like a credential"),
         ])
         // A secret key is never converted, even when asked for by name.

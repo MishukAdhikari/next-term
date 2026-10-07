@@ -485,8 +485,8 @@ enum NotebookRenderer {
 
         init(style: Style) {
             self.style = style
-            mono = Theme.monoFont(size: style.fontSize)
-            labelFont = Theme.monoFont(size: max(8, style.fontSize - 2))
+            mono = Theme.editorFont(size: style.fontSize)
+            labelFont = Theme.editorFont(size: max(8, style.fontSize - 2))
             body = .systemFont(ofSize: style.fontSize)
             gutter = ceil(("Out[000]:" as NSString).size(withAttributes: [.font: labelFont]).width) + 22
             let natural = ceil(mono.ascender - mono.descender + mono.leading)

@@ -121,10 +121,11 @@ public enum ImportJetBrains {
         plan(for: app, home: home, usKeyboard: usKeyboard, now: Date())
     }
 
-    static func plan(for app: DetectedApp, home: String, usKeyboard: Bool, now: Date) -> ImportPlan {
+    /// `fonts`: the fonts this Mac has (tests pass their own).
+    static func plan(for app: DetectedApp, home: String, usKeyboard: Bool, now: Date, fonts: FontCatalog = .system) -> ImportPlan {
         var plan = ImportPlan(preset: app.preset)
         addKeymap(config: app.configPath, to: &plan)
-        addSettings(config: app.configPath, usKeyboard: usKeyboard, to: &plan)
+        addSettings(config: app.configPath, usKeyboard: usKeyboard, fonts: fonts, to: &plan)
         var configs = products(home: home, now: now).map(\.path)
         if !configs.contains(app.configPath) { configs.insert(app.configPath, at: 0) }
         let recents = recentProjects(configs: configs, home: home)
@@ -230,7 +231,7 @@ public enum ImportJetBrains {
         var ligatures = false
     }
 
-    static func addSettings(config: String, usKeyboard: Bool, to plan: inout ImportPlan) {
+    static func addSettings(config: String, usKeyboard: Bool, fonts: FontCatalog = .system, to plan: inout ImportPlan) {
         let font = editorFont(config: config)
         var editorSize: Double?
         if let text = font.size {
@@ -251,9 +252,12 @@ public enum ImportJetBrains {
             }
         }
         if let family = font.family, !family.isEmpty {
-            plan.skipped.append(named("Editor font", family, reason: "font choice is coming"))
+            let key = font.file == "options/editor-font.xml" ? "FONT_FAMILY" : "EDITOR_FONT_NAME"
+            let row = ImportFonts.row(.editor, list: family, source: "\(font.file) \(key)", fonts: fonts)
+            plan.settings += [row.setting].compactMap { $0 }
+            plan.skipped += row.skipped
         }
-        if font.ligatures { plan.skipped.append(SkippedItem("Font ligatures", "font choice is coming")) }
+        if font.ligatures { plan.skipped.append(SkippedItem("Font ligatures", "Next Term has no ligature setting")) }
 
         let editorKeys: Set<String> = ["USE_SOFT_WRAPS", "SOFT_WRAP_FILE_MASKS", "STRIP_TRAILING_SPACES", "IS_ENSURE_NEWLINE_AT_EOF"]
         let editor = options(component(read(config, "options/editor.xml", keep: editorKeys), "EditorSettings"), keep: editorKeys)
@@ -264,10 +268,11 @@ public enum ImportJetBrains {
         if editor.values["IS_ENSURE_NEWLINE_AT_EOF"] == "true" {
             plan.skipped.append(SkippedItem("Ensure a newline at the end of files", "a final newline on save comes later"))
         }
-        addTerminal(config: config, usKeyboard: usKeyboard, editorSize: editorSize, to: &plan)
+        addTerminal(config: config, usKeyboard: usKeyboard, editorSize: editorSize, fonts: fonts, to: &plan)
         addRedacted(editor, file: "options/editor.xml", to: &plan)
 
         if let scheme = activeScheme(config: config) {
+            addConsoleColours(config: config, scheme: scheme, to: &plan)
             plan.skipped.append(named("Colour scheme", displaySchemeName(scheme), reason: "colour themes come later"))
         }
         if hasCodeStyle(config: config) {
@@ -361,7 +366,7 @@ public enum ImportJetBrains {
         plan.skipped.append(named("Soft wrap only for", masks ?? defaultSoftWrapMasks, reason: "Next Term wraps every file or none"))
     }
 
-    static func addTerminal(config: String, usKeyboard: Bool, editorSize: Double?, to plan: inout ImportPlan) {
+    static func addTerminal(config: String, usKeyboard: Bool, editorSize: Double?, fonts: FontCatalog = .system, to plan: inout ImportPlan) {
         let terminalKeys: Set<String> = ["useOptionAsMetaKey"]
         let terminal = options(component(read(config, "options/terminal.xml", keep: terminalKeys), "TerminalOptionsProvider"),
                                keep: terminalKeys)
@@ -397,8 +402,66 @@ public enum ImportJetBrains {
             }
         }
         if let family = font.values["FONT_FAMILY"], !family.isEmpty {
-            plan.skipped.append(named("Terminal font", family, reason: "font choice is coming"))
+            let row = ImportFonts.row(.terminal, list: family, source: "options/terminal-font.xml FONT_FAMILY", fonts: fonts)
+            plan.settings += [row.setting].compactMap { $0 }
+            plan.skipped += row.skipped
         }
+    }
+
+    // MARK: Console colours
+
+    /// The scheme's console colours for ANSI 0–15, in order. JetBrains calls white "gray", bright black
+    /// "dark gray" and bright white "white".
+    static let consoleColourKeys = [
+        "CONSOLE_BLACK_OUTPUT", "CONSOLE_RED_OUTPUT", "CONSOLE_GREEN_OUTPUT", "CONSOLE_YELLOW_OUTPUT",
+        "CONSOLE_BLUE_OUTPUT", "CONSOLE_MAGENTA_OUTPUT", "CONSOLE_CYAN_OUTPUT", "CONSOLE_GRAY_OUTPUT",
+        "CONSOLE_DARKGRAY_OUTPUT", "CONSOLE_RED_BRIGHT_OUTPUT", "CONSOLE_GREEN_BRIGHT_OUTPUT", "CONSOLE_YELLOW_BRIGHT_OUTPUT",
+        "CONSOLE_BLUE_BRIGHT_OUTPUT", "CONSOLE_MAGENTA_BRIGHT_OUTPUT", "CONSOLE_CYAN_BRIGHT_OUTPUT", "CONSOLE_WHITE_OUTPUT",
+    ]
+
+    /// Colours of the whole scheme the terminal uses too: its background, the caret and the selection.
+    static let schemeColourKeys = ["CONSOLE_BACKGROUND_KEY", "CARET_COLOR", "SELECTION_BACKGROUND"]
+
+    /// The terminal colours the active scheme sets, when the scheme is a file in `colors/` (one the user
+    /// made or edited). A built-in scheme isn't on disk; what a scheme doesn't set stays Next Term's.
+    static func addConsoleColours(config: String, scheme: String, to plan: inout ImportPlan) {
+        var keep = Set(consoleColourKeys + schemeColourKeys)
+        keep.formUnion(["CONSOLE_NORMAL_OUTPUT", "FOREGROUND"])
+        guard let file = schemeFile(config: config, name: scheme), let root = read(config, file, keep: keep), root.name == "scheme" else { return }
+        let colours = options(root.children.first { $0.name == "colors" }, keep: Set(schemeColourKeys)).values
+        var foregrounds: [String: String] = [:]
+        for option in root.children.first(where: { $0.name == "attributes" })?.children ?? [] where option.name == "option" {
+            guard let name = option["name"], keep.contains(name) else { continue }
+            let value = option.children.first { $0.name == "value" }
+            if let text = options(value, keep: ["FOREGROUND"]).values["FOREGROUND"] { foregrounds[name] = text }
+        }
+        var palette = TerminalPalette(name: "\(displaySchemeName(scheme)) console colours")
+        var unreadable: [String] = []
+        func colour(_ key: String, _ text: String?) -> UInt32? {
+            guard let text else { return nil }
+            guard let rgb = schemeColour(text) else {
+                unreadable.append(key)
+                return nil
+            }
+            return rgb
+        }
+        for (slot, key) in consoleColourKeys.enumerated() { palette.ansi[slot] = colour(key, foregrounds[key]) }
+        palette.foreground = colour("CONSOLE_NORMAL_OUTPUT", foregrounds["CONSOLE_NORMAL_OUTPUT"])
+        palette.background = colour("CONSOLE_BACKGROUND_KEY", colours["CONSOLE_BACKGROUND_KEY"])
+        palette.cursor = colour("CARET_COLOR", colours["CARET_COLOR"])
+        palette.selection = colour("SELECTION_BACKGROUND", colours["SELECTION_BACKGROUND"])
+        let note = "colours the scheme doesn't set come from its parent in the IDE, which can't be read here"
+        if let row = ImportColours.row(palette, source: "\(file) console colours", note: palette.count < 20 ? note : nil) {
+            plan.settings.append(row)
+        }
+        for key in unreadable { plan.skipped.append(SkippedItem("\(file) \(key)", "not a colour Next Term can read")) }
+    }
+
+    /// A scheme colour: hex without "#", and JetBrains drops leading zeros ("ff" is 0x0000FF).
+    static func schemeColour(_ text: String) -> UInt32? {
+        let digits = text.trimmingCharacters(in: .whitespaces)
+        guard (1...6).contains(digits.count), digits.allSatisfy(\.isHexDigit) else { return nil }
+        return UInt32(digits, radix: 16)
     }
 
     /// Options whose names say they can hold a secret: named in the preview, their values never read.

@@ -54,14 +54,14 @@ public enum KeymapPreset: String, CaseIterable, Codable, Sendable {
 
 /// The apps an import can read.
 public enum ImportSourceKind: String, CaseIterable, Codable, Sendable {
-    case vsCode, vsCodeInsiders, vsCodium, cursor, devinDesktop, jetBrains, zed, iTerm2
+    case vsCode, vsCodeInsiders, vsCodium, cursor, devinDesktop, jetBrains, zed, iTerm2, ghostty, warp, terminalApp
 
     /// The preset that fits people coming from it.
     public var preset: KeymapPreset {
         switch self {
         case .vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop: return .vsCode
         case .jetBrains: return .jetBrains
-        case .zed, .iTerm2: return .nextTerm
+        case .zed, .iTerm2, .ghostty, .warp, .terminalApp: return .nextTerm
         }
     }
 }
@@ -94,6 +94,9 @@ public enum ImportedSetting: Equatable, Sendable {
     case optionAsMeta(Bool)
     case terminalPosition(String)  // bottom, right, left, top
     case sidebarSide(String)       // left, right
+    case editorFontFamily(String)  // an installed monospaced family, by its own name
+    case terminalFontFamily(String)
+    case terminalPalette(TerminalPalette)
 
     /// The UserDefaults key the app keeps it under.
     public var key: String {
@@ -104,7 +107,17 @@ public enum ImportedSetting: Equatable, Sendable {
         case .optionAsMeta: return "optionAsMeta"
         case .terminalPosition: return "terminalPosition"
         case .sidebarSide: return "sidebarSide"
+        case .editorFontFamily: return "editorFontFamily"
+        case .terminalFontFamily: return "terminalFontFamily"
+        case .terminalPalette: return "terminalPalette"
         }
+    }
+
+    /// Every key applying it writes, for the snapshot Undo restores: custom colours are also kept for
+    /// Settings to offer again.
+    public var keys: [String] {
+        if case .terminalPalette = self { return [key, "customTerminalPalette"] }
+        return [key]
     }
 
     public static func fontSize(clamping value: Double) -> ImportedSetting { .fontSize(min(32, max(8, value.rounded()))) }

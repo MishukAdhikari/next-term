@@ -147,15 +147,15 @@ import Testing
             """
         let (home, app) = try zedHome(settings: settings)
         defer { try? FileManager.default.removeItem(atPath: home) }
-        let plan = ImportZed.plan(for: app, home: home)
+        let plan = ImportZed.plan(for: app, home: home, fonts: testFonts)
         #expect(plan.preset == .jetBrains)
-        #expect(plan.settings.isEmpty, "v1 imports no Zed settings, only the keymap")
+        #expect(plan.settings.isEmpty, "the one font isn't installed, and the other settings come later")
         #expect(plan.recentProjects.isEmpty)
 
         let expected: [String: String] = [
             "vim_mode": "Next Term has no Vim mode",
             "buffer_font_size": "comes in a later version",
-            "buffer_font_family": "font choice is coming",
+            "Editor font “Berkeley Mono”": "not installed on this Mac",
             "buffer_line_height": "comes in a later version",
             "soft_wrap": "comes in a later version",
             "ui_font_size": "Next Term's window text follows macOS",
@@ -175,11 +175,38 @@ import Testing
         #expect(reasons(plan) == expected)
         #expect(plan.skipped.count == expected.count)
 
-        // Only names: no value of any key reaches the plan.
-        for value in ["ghp_", "sk-proj", "github_pat_", "hunter2", "/opt/bin/fish", "llm.internal", "Berkeley", "Gruvbox",
+        // Only names (and a font's name): no other value reaches the plan.
+        for value in ["ghp_", "sk-proj", "github_pat_", "hunter2", "/opt/bin/fish", "llm.internal", "Gruvbox",
                       "claude-sonnet", "npx", "on_focus_change", "editor_width"] {
             #expect(!shown(plan).contains(value), "\(value) leaked into the plan")
         }
+    }
+
+    @Test func zedFonts() throws {
+        func plan(_ settings: String) throws -> ImportPlan {
+            let (home, app) = try zedHome(settings: settings)
+            defer { try? FileManager.default.removeItem(atPath: home) }
+            return ImportZed.plan(for: app, home: home, fonts: testFonts)
+        }
+        // The terminal uses the buffer font while it has none of its own.
+        let shared = try plan(#"{"base_keymap": "VSCode", "buffer_font_family": "Fira Code"}"#)
+        #expect(shared.settings == [
+            PlannedSetting(.editorFontFamily("Fira Code"), source: "buffer_font_family Fira Code"),
+            PlannedSetting(.terminalFontFamily("Fira Code"), source: "buffer_font_family Fira Code",
+                           note: "Zed's terminal uses the buffer font while terminal.font_family is unset"),
+        ])
+        #expect(shared.skipped.isEmpty)
+
+        let both = try plan(#"{"buffer_font_family": "Hack", "terminal": {"font_family": "JetBrains Mono", "font_fallbacks": ["Menlo"]}}"#)
+        #expect(both.settings.map(\.setting) == [.editorFontFamily("Hack"), .terminalFontFamily("JetBrains Mono")])
+        #expect(reasons(both)["terminal.font_fallbacks"] == "font fallbacks aren't supported")
+
+        // Zed's own font comes with Zed only; a terminal font that isn't installed doesn't fall back.
+        let zedFont = try plan(#"{"buffer_font_family": ".ZedMono", "terminal": {"font_family": "Berkeley Mono"}}"#)
+        #expect(zedFont.settings.isEmpty)
+        #expect(reasons(zedFont)["buffer_font_family “.ZedMono”"] == "Zed's own font, which only Zed has")
+        #expect(reasons(zedFont)["Terminal font “Berkeley Mono”"] == "not installed on this Mac")
+        #expect(reasons(try plan(#"{"buffer_font_family": 3}"#))["buffer_font_family"] == "value not recognised")
     }
 
     @Test func zedOtherSettingsList() {
@@ -349,8 +376,15 @@ import Testing
         defer { try? FileManager.default.removeItem(atPath: home) }
         _ = try writePlist(root, home: home, format: format)
         let app = try #require(ImportITerm2.detect(home: home).first)
-        return ImportITerm2.plan(for: app, home: home, usKeyboard: usKeyboard)
+        return ImportITerm2.plan(for: app, home: home, usKeyboard: usKeyboard, fonts: testFonts)
     }
+
+    /// What the fixture profile's two colours become.
+    let fixtureColours: TerminalPalette = {
+        var ansi: [UInt32?] = Array(repeating: nil, count: 16)
+        ansi[0] = 0x000000
+        return TerminalPalette(name: "iTerm2 colours", ansi: ansi, background: 0x1A1A1A)
+    }()
 
     let paneNote = SkippedItem("⌘] and ⌘[ (Next and Previous Pane in iTerm2)", "they indent and outdent here; ⌥⌘] and ⌥⌘[ move between panes")
 
@@ -377,12 +411,13 @@ import Testing
             #expect(plan.settings == [
                 PlannedSetting(.fontSize(14), source: "Normal Font JetBrainsMono-Regular 14",
                                note: "sets the editor too: Next Term has one size for both"),
+                PlannedSetting(.terminalFontFamily("JetBrains Mono"), source: "Normal Font JetBrainsMono-Regular"),
                 PlannedSetting(.optionAsMeta(true), source: "Option Key Sends Esc+, Right Option Key Sends Esc+"),
+                PlannedSetting(.terminalPalette(fixtureColours), source: "the default profile's colours",
+                               note: "2 of 20 colours; the others stay Next Term's"),
             ])
             #expect(plan.recentProjects.isEmpty)
             #expect(plan.skipped == [
-                SkippedItem("font JetBrainsMono-Regular", "font choice is coming"),
-                SkippedItem("colours", "colour themes come later"),
                 SkippedItem("iTerm2 key mappings (2)", "terminal key mappings aren't brought over"),
                 paneNote,
             ])
@@ -392,7 +427,7 @@ import Testing
         for guid in [nil, "gone"] as [String?] {
             let plan = try iTermPlan(preferences([profile(guid: "A", font: "Menlo 11"), profile(guid: "B", font: "Monaco 15")],
                                                  defaultGuid: guid))
-            #expect(plan.settings.map(\.setting) == [.fontSize(11)])
+            #expect(plan.settings.first?.setting == .fontSize(11))
         }
     }
 
@@ -406,7 +441,7 @@ import Testing
         #expect(plan("Monaco 12").0?.setting == .fontSize(12))
         #expect(plan("SFMono-Regular 13.5").0?.setting == .fontSize(14))
         #expect(plan("Menlo-Regular 11.0").0?.setting == .fontSize(11))
-        #expect(plan("Fira Code Retina 16").1 == [SkippedItem("font Fira Code Retina", "font choice is coming")])
+        #expect(plan("Fira Code Retina 16").1.isEmpty) // the font itself: iTermFontFamily
 
         let big = plan("Menlo 40")
         #expect(big.0?.setting == .fontSize(32))
@@ -425,6 +460,56 @@ import Testing
         let odd = plan("ghp_abcdefghijklmnopqrstuvwxyz0123 12")
         #expect(odd.0 == nil)
         #expect(odd.1 == [SkippedItem("Normal Font", "looked like a credential")])
+    }
+
+    @Test func iTermFontFamily() {
+        func row(_ font: String?) -> (setting: PlannedSetting?, skipped: [SkippedItem]) {
+            var profile = ImportITerm2.Profile()
+            profile.normalFont = font
+            return ImportITerm2.fontFamily(profile, fonts: testFonts)
+        }
+        #expect(row("FiraCode-Regular 13").setting == PlannedSetting(.terminalFontFamily("Fira Code"), source: "Normal Font FiraCode-Regular"))
+        #expect(row("Fira Code Retina 16").skipped == [SkippedItem("Terminal font “Fira Code Retina”", "not installed on this Mac")])
+        #expect(row("Helvetica 12").skipped == [SkippedItem("Terminal font “Helvetica”", "not a monospaced font, which code and the terminal need")])
+        // No size, no font, or a credential (reported by the size's row): nothing.
+        for font in ["Menlo", nil, "ghp_abcdefghijklmnopqrstuvwxyz0123 12"] as [String?] {
+            #expect(row(font).setting == nil && row(font).skipped.isEmpty)
+        }
+    }
+
+    @Test func iTermColours() throws {
+        func colour(_ r: Double, _ g: Double, _ b: Double, alpha: Double? = nil, space: String = "sRGB") -> [String: Any] {
+            var colour: [String: Any] = ["Red Component": r, "Green Component": g, "Blue Component": b, "Color Space": space]
+            if let alpha { colour["Alpha Component"] = alpha }
+            return colour
+        }
+        var extra: [String: Any] = [:]
+        for n in 0...15 { extra["Ansi \(n) Color"] = colour(Double(n) / 15, 0, 0) }
+        extra["Foreground Color"] = colour(1, 1, 1)
+        extra["Background Color"] = colour(0, 0, 0)
+        extra["Cursor Color"] = colour(1, 0.5, 0)
+        extra["Selection Color"] = colour(1, 1, 1, alpha: 0.5)
+        extra["Bold Color"] = colour(0, 1, 0) // not a Next Term colour
+        let plan = try iTermPlan(preferences([profile(guid: "A", font: nil, extra: extra)], defaultGuid: "A"))
+        let ansi: [UInt32?] = (0...15).map { UInt32((Double($0) / 15 * 255).rounded()) << 16 }
+        let palette = TerminalPalette(name: "iTerm2 colours", ansi: ansi, foreground: 0xFFFFFF, background: 0, cursor: 0xFF8000, selection: 0x808080)
+        #expect(plan.settings == [PlannedSetting(.terminalPalette(palette), source: "the default profile's colours")])
+
+        // Separate light and dark colours: the dark ones; another colour space is said to be read as sRGB.
+        extra["Use Separate Colors for Light and Dark Mode"] = true
+        extra["Background Color (Dark)"] = colour(0.2, 0.2, 0.2, space: "P3")
+        let dark = try iTermPlan(preferences([profile(guid: "A", font: nil, extra: extra)], defaultGuid: "A"))
+        let row = try #require(dark.settings.first)
+        guard case .terminalPalette(let darkPalette) = row.setting else { throw CancellationError() }
+        #expect(darkPalette.background == 0x333333 && darkPalette.foreground == 0xFFFFFF) // a colour without a dark one keeps its own
+        #expect(row.source == "the default profile's colours (its Dark Mode ones)")
+        #expect(row.note == "colours in Display P3 or a calibrated space are read as sRGB, so a few may look slightly different")
+
+        // Components out of range or missing: that colour is left out.
+        let odd = try iTermPlan(preferences([profile(guid: "A", font: nil, extra: [
+            "Ansi 0 Color": colour(2, 0, 0), "Background Color": ["Red Component": 0.5],
+        ])], defaultGuid: "A"))
+        #expect(odd.settings.isEmpty)
     }
 
     @Test func iTermOptionKeys() {
@@ -468,8 +553,9 @@ import Testing
             values["Option Key Sends"] = testCase.left
             values["Right Option Key Sends"] = testCase.right
             let plan = try iTermPlan(preferences([values], defaultGuid: "A"))
-            #expect(plan.settings.first?.setting == testCase.expected)
-            if testCase.expected != nil { #expect(plan.settings.first?.ticked == testCase.ticked) }
+            let option = plan.settings.first { $0.setting.key == "optionAsMeta" }
+            #expect(option?.setting == testCase.expected)
+            if testCase.expected != nil { #expect(option?.ticked == testCase.ticked) }
         }
         let planned = try iTermPlan(preferences([profile(guid: "A", font: nil, left: 2, right: 2)], defaultGuid: "A"), usKeyboard: false)
         #expect(planned.settings.first?.ticked == false)
@@ -483,7 +569,7 @@ import Testing
         var expected = ImportITerm2.Profile()
         expected.normalFont = "Monaco 12"
         expected.leftOption = 2
-        expected.hasColours = true
+        expected.palette = fixtureColours
         expected.customDirectory = "No"
         expected.scrollbackLines = 1000
         #expect(parsed.profile == expected)
@@ -510,16 +596,14 @@ import Testing
             if !colours { values = values.filter { !$0.key.hasSuffix("Color") } }
             return try iTermPlan(preferences([values], defaultGuid: "A")).skipped
         }
-        let colours = SkippedItem("colours", "colour themes come later")
         let keyMaps = SkippedItem("iTerm2 key mappings (2)", "terminal key mappings aren't brought over")
-        // iTerm2's defaults (home folder, 1,000 lines) aren't news.
-        #expect(try later([:]) == [colours, keyMaps, paneNote])
+        // iTerm2's defaults (home folder, 1,000 lines) aren't news, and colours come over.
+        #expect(try later([:]) == [keyMaps, paneNote])
         #expect(try later([:], colours: false) == [keyMaps, paneNote])
-        #expect(try later(["Foreground Color (Dark)": ["Red Component": 1.0]], colours: false).first == colours)
 
         #expect(try later(["Custom Directory": "Recycle"]).contains(SkippedItem("Custom Directory (Recycle)", "a start folder setting comes later")))
         #expect(try later(["Custom Directory": "Advanced"]).contains(SkippedItem("Custom Directory (Advanced)", "a start folder setting comes later")))
-        #expect(try later(["Custom Directory": "/somewhere"]) == [colours, keyMaps, paneNote])
+        #expect(try later(["Custom Directory": "/somewhere"]) == [keyMaps, paneNote])
         #expect(try later(["Scrollback Lines": 5000]).contains(SkippedItem("Scrollback Lines 5000", "a scrollback setting comes later")))
         #expect(try later(["Unlimited Scrollback": true]).contains(SkippedItem("Unlimited Scrollback", "a scrollback setting comes later")))
     }
@@ -539,7 +623,7 @@ import Testing
 
         // Profiles that aren't dictionaries are passed over.
         _ = try writePlist(preferences([], defaultGuid: "B", extra: ["New Bookmarks": ["junk", 3, profile(guid: "B", font: "Monaco 13")] as [Any]]), home: home)
-        #expect(ImportITerm2.plan(for: app, home: home).settings.map(\.setting) == [.fontSize(13)])
+        #expect(ImportITerm2.plan(for: app, home: home).settings.first?.setting == .fontSize(13))
 
         // Not a plist, a plist that isn't a dictionary, an empty file, a missing file.
         for contents in [Data("not a plist".utf8), try PropertyListSerialization.data(fromPropertyList: ["a"], format: .binary, options: 0), Data()] {
