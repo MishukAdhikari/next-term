@@ -1,6 +1,6 @@
 ---
 title: Projects and git
-description: "Projects that reopen at launch, git at a glance, background fetch, the branch popup and the commit graph, file operations with undo, and a project’s databases."
+description: "Projects that reopen at launch, git at a glance, background fetch, the branch popup, the commit graph, file operations with undo, a project’s databases."
 ---
 
 A project is a folder that a window is about. Its files stay in the sidebar, new tabs start in it, and Next Term brings it back the next time you launch. The sidebar is also where you see, at a glance, what your agents have changed.

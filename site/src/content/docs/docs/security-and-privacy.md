@@ -1,6 +1,6 @@
 ---
 title: Security and privacy
-description: "What Next Term shares and with whom: local-only agent links and MCP socket, a fresh token per launch, no telemetry, background git fetches you can turn off, and clipboard and paste safeguards."
+description: "What Next Term shares and with whom: local-only agent links and MCP socket, a fresh token per launch, no telemetry, background git fetch, paste safeguards."
 ---
 
 A terminal sees everything you type, and an agent link exposes your editor to programs. Next Term is built so that both stay on your Mac and under your control. The source is public under the MIT licence, so every claim on this page can be checked.
@@ -66,7 +66,7 @@ Opening a file from the sidebar, or with <kbd>⌘</kbd>-click in the terminal, a
 - **Every change you make through Next Term’s git tools is checked first:** a hunk is staged, unstaged or reverted only if the file still matches the diff you saw. See [Side-by-side diffs](/docs/diffs/#safe-while-agents-keep-working).
 - **Replace in Files** re-reads each file and skips anything that changed since the search.
 
-### Background fetch
+## Background fetch
 
 Next Term talks to your git remotes on a schedule, so the sidebar can say **Pull 3** when someone pushes. This is exactly what it does:
 

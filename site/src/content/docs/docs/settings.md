@@ -1,6 +1,6 @@
 ---
 title: Settings
-description: "Next Term’s Settings (⌘,): fonts, line height, soft wrap, background git fetch, terminal colours, the agent link and MCP switches, every shortcut, imports and menu preferences."
+description: "Next Term’s Settings (⌘,): fonts, line height, soft wrap, background git fetch, terminal colours, agent link and MCP switches, shortcuts, imports, menus."
 ---
 
 Open **Next Term › Settings…** (<kbd>⌘,</kbd>). Settings has four tabs: **Editor**, **Terminal**, **Keyboard Shortcuts** and **Import**. Every change applies at once, to every window.
