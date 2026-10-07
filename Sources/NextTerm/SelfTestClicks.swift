@@ -503,7 +503,7 @@ extension SelfTest {
     /// A click made of real events. The mouse-up (and the drags toward `end`) wait in the queue, and the
     /// mouse-down goes straight to `view`, whose tracking loop takes them from the queue as it would a
     /// hand's. Straight to the view, not through the window, so it works whether or not the window is key.
-    static func click(_ view: NSView, at point: NSPoint, count: Int = 1, flags: NSEvent.ModifierFlags = [], dragTo end: NSPoint? = nil) {
+    private static func click(_ view: NSView, at point: NSPoint, count: Int = 1, flags: NSEvent.ModifierFlags = [], dragTo end: NSPoint? = nil) {
         guard let window = view.window else { return }
         let start = view.convert(point, to: nil)
         let finish = view.convert(end ?? point, to: nil)
@@ -527,7 +527,7 @@ extension SelfTest {
         while NSApp.nextEvent(matching: [.leftMouseDragged, .leftMouseUp], until: .distantPast, inMode: .default, dequeue: true) != nil {}
     }
 
-    static func clickRow(_ c: TerminalWindowController, _ url: URL, count: Int = 1, flags: NSEvent.ModifierFlags = []) {
+    private static func clickRow(_ c: TerminalWindowController, _ url: URL, count: Int = 1, flags: NSEvent.ModifierFlags = []) {
         let outline = c.sidebar.outline
         let row = sidebarRow(c, url)
         guard row >= 0 else { return }
@@ -535,24 +535,24 @@ extension SelfTest {
         click(outline, at: namePoint(outline, row), count: count, flags: flags)
     }
 
-    static func doubleClickRow(_ c: TerminalWindowController, _ url: URL) {
+    private static func doubleClickRow(_ c: TerminalWindowController, _ url: URL) {
         clickRow(c, url)
         clickRow(c, url, count: 2)
     }
 
-    static func sidebarRow(_ c: TerminalWindowController, _ url: URL) -> Int {
+    private static func sidebarRow(_ c: TerminalWindowController, _ url: URL) -> Int {
         guard let node = c.sidebar.root?.node(at: canonicalPath(url.path)) else { return -1 }
         return c.sidebar.outline.row(forItem: node)
     }
 
     /// On a row's name: past its disclosure arrow and its icon.
-    static func namePoint(_ outline: NSOutlineView, _ row: Int) -> NSPoint {
+    private static func namePoint(_ outline: NSOutlineView, _ row: Int) -> NSPoint {
         let cell = outline.frameOfCell(atColumn: 0, row: row)
         return NSPoint(x: cell.minX + 40, y: cell.midY)
     }
 
     /// A key pressed in `view`, as AppKit hands it over.
-    static func press(_ view: NSView, key: String, code: UInt16, flags: NSEvent.ModifierFlags = []) {
+    private static func press(_ view: NSView, key: String, code: UInt16, flags: NSEvent.ModifierFlags = []) {
         guard let window = view.window,
               let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                                            windowNumber: window.windowNumber, context: nil, characters: key, charactersIgnoringModifiers: key,
@@ -560,7 +560,7 @@ extension SelfTest {
         view.keyDown(with: event)
     }
 
-    static func checkbox(in view: NSView, titled title: String) -> NSButton? {
+    private static func checkbox(in view: NSView, titled title: String) -> NSButton? {
         if let button = view as? NSButton, button.title == title { return button }
         for sub in view.subviews {
             if let found = checkbox(in: sub, titled: title) { return found }
