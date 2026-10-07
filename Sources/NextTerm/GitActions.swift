@@ -500,21 +500,36 @@ struct GitActions {
             let sha = result.output.range(of: #"\[[^\]]* ([0-9a-f]{7,})\]"#, options: .regularExpression)
                 .map { String(result.output[$0]).components(separatedBy: " ").last?.dropLast() ?? "" }.map(String.init) ?? ""
             if andPush { return push() }
-            GitToast.show("Committed\(sha.isEmpty ? "" : " " + sha)", in: window, button: "Undo") { undoCommit() }
+            let notice = "Committed\(sha.isEmpty ? "" : " " + sha)"
+            guard let git = GitWriter.git else { return toast(notice) }
+            let root = self.root
+            DispatchQueue.global().async {
+                // Read now what Undo takes back, and to where: a commit made after this one is never it.
+                let point = BranchModel.headAndPrevious(at: root, git: git).flatMap { $0.head.hasPrefix(sha) ? $0 : nil }
+                DispatchQueue.main.async {
+                    guard let point else { return toast(notice) }
+                    GitToast.show(notice, in: window, button: "Undo") { undoCommit(point.head, back: point.previous) }
+                }
+            }
         }
     }
 
-    /// Back to before the commit, with its changes staged: only while no remote has it.
-    private func undoCommit() {
+    /// Back to where HEAD was before `commit` (its parent, or the commit an amend replaced), with its
+    /// changes staged: only while HEAD is still `commit` and no remote has it.
+    private func undoCommit(_ commit: String, back previous: String) {
         guard let git = GitWriter.git else { return }
         let root = self.root
         DispatchQueue.global().async {
-            let published = BranchModel.headIsPublished(at: root, git: git)
+            let head = BranchModel.headAndPrevious(at: root, git: git)?.head
+            let published = BranchModel.isPublished(commit, at: root, git: git)
             DispatchQueue.main.async {
+                if head != commit {
+                    return GitPrompt.ask("HEAD has moved since this commit", info: "A commit or a checkout came after it, so Next Term leaves it.", buttons: ["OK"], over: window) { _ in }
+                }
                 if published {
                     return GitPrompt.ask("That commit is already on a remote", info: "Undoing it now would rewrite shared history, so Next Term leaves it.", buttons: ["OK"], over: window) { _ in }
                 }
-                run("Undo commit", [["reset", "--soft", "HEAD~1"]]) { result in
+                run("Undo commit", [["reset", "--soft", previous]]) { result in
                     result.ok ? toast("Commit undone: its changes are staged") : failed("Could not undo the commit", result, retry: nil)
                 }
             }

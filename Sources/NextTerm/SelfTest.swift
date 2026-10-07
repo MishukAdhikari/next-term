@@ -1979,6 +1979,30 @@ enum SelfTest {
             check(await wait(8) { run("log", "-1", "--format=%s") == "Change the first line" }, "and commits it", run("log", "-1", "--format=%s"))
         }
 
+        // Undo on the commit's notice takes back that commit only: not one made after it, and after Amend
+        // only the amend.
+        check(await wait(5) { GitToast.text?.hasPrefix("Committed ") == true }, "the commit's notice comes up", GitToast.text ?? "no notice")
+        let committed = run("rev-parse", "HEAD")
+        run("commit", "--allow-empty", "-qm", "an agent's commit")
+        GitToast.pressButtonForTest()
+        let moved = await wait(5) { sheetText().contains("HEAD has moved since this commit") }
+        check(moved, "its Undo after a newer commit says HEAD has moved", sheetText())
+        _ = await press("OK")
+        check(run("log", "-2", "--format=%s") == "an agent's commit\nChange the first line", "and takes back neither commit", run("log", "-2", "--format=%s"))
+        run("reset", "-q", "--soft", committed)
+        GitToast.dismiss()
+        actions.commit()
+        if await wait(5, { CommitSheet.current != nil }), let sheet = CommitSheet.current {
+            sheet.setAmend(true)
+            sheet.type("Change the first line again")
+            sheet.pressCommit()
+            check(await wait(8) { run("log", "-1", "--format=%s") == "Change the first line again" && GitToast.text?.hasPrefix("Committed ") == true },
+                  "Amend replaces the last commit, with a notice", run("log", "-2", "--format=%s"))
+            GitToast.pressButtonForTest()
+            check(await wait(8) { run("rev-parse", "HEAD") == committed }, "and its Undo puts back the commit it replaced, not that one's parent",
+                  run("log", "-2", "--format=%s"))
+        }
+
         // Force push, after a rejected push: it lists what it would discard and replaces exactly that, and
         // it is refused for the branch the remote's HEAD names.
         let bare = proj.deletingLastPathComponent().appendingPathComponent("force-remote.git")

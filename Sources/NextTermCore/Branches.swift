@@ -282,12 +282,21 @@ public struct BranchModel: Equatable, Sendable {
         return data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }
     }
 
-    /// Whether some remote branch already has HEAD (then undoing the last commit would rewrite history
-    /// others may have).
-    public static func headIsPublished(at root: String, git: String) -> Bool {
-        guard let data = GitRunner.run(git, ["-C", root, "--no-optional-locks", "for-each-ref", "--count=1", "--contains", "HEAD", "refs/remotes"],
+    /// Whether some remote branch already has `commit` (then undoing it would rewrite history others may
+    /// have).
+    public static func isPublished(_ commit: String, at root: String, git: String) -> Bool {
+        guard let data = GitRunner.run(git, ["-C", root, "--no-optional-locks", "for-each-ref", "--count=1", "--contains", commit, "refs/remotes"],
                                        timeout: 10) else { return true }
         return !data.isEmpty
+    }
+
+    /// HEAD's commit and the one HEAD was at before it, from HEAD's reflog: right after a commit that is
+    /// its parent, and after an amend the commit it replaced. Nil without an earlier entry (a first commit).
+    public static func headAndPrevious(at root: String, git: String) -> (head: String, previous: String)? {
+        guard let data = GitRunner.run(git, ["-C", root, "--no-optional-locks", "rev-parse", "HEAD", "HEAD@{1}"], timeout: 10) else { return nil }
+        let shas = String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
+        guard shas.count == 2 else { return nil }
+        return (shas[0], shas[1])
     }
 
     // MARK: grouping
