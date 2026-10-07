@@ -163,6 +163,22 @@ import Testing
         #expect(try aligned("1\n2\nY\nZ\nW\n4\n") == ["a", "a", nil, nil, nil, "b"])    // grown, last one gone
     }
 
+    /// A file with CRLF line endings: the editor holds it with LF, so the committed text is read the same
+    /// way, or every line would differ from it.
+    @Test func alignsAFileWithCRLFLineEndings() throws {
+        let git = try #require(GitRunner.locateGit())
+        let blame = committed(["a", "a", "b"])
+        let stored = "one\r\ntwo\r\nthree\r\n"
+        let baseline = TextFormat(lineEnding: .crlf).editorText(stored)
+        #expect(baseline == "one\ntwo\nthree\n" && TextFormat().editorText(stored) == stored)
+        #expect(EditedBlame.lineCount(of: baseline) == EditedBlame.lineCount(of: stored)) // the blame still fits it
+        let changed = "one\nTWO\nthree\n"
+        let diff = try #require(GitRunner.diff(old: baseline, new: changed, git: git, context: 0))
+        #expect(EditedBlame(blame, diff: diff, lineCount: 3).lines.map(\.sha) == ["a", nil, "b"])
+        let raw = try #require(GitRunner.diff(old: stored, new: changed, git: git, context: 0))
+        #expect(EditedBlame(blame, diff: raw, lineCount: 3).lines.map(\.sha) == [nil, nil, nil]) // what it was before
+    }
+
     /// Between diffs, edits shift the lines after them; the lines edited are not committed.
     @Test func shiftsWithEdits() {
         var edited = EditedBlame(committed(["a", "a", "b", "c"]), diff: nil, lineCount: 4)

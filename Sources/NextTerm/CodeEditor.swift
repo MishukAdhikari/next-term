@@ -631,9 +631,11 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         guard let git = Self.git else { return }
         guard document.storage.length <= Self.maxGitSize else { return announceBlame(.tooLarge) }
         let path = document.path
+        let format = document.format
         let wantsBlame = Self.blameWanted
         Self.marksQueue.async { [weak self] in
-            let text = GitRunner.headText(of: path, git: git)
+            // As the editor holds the file (CRLF made LF), or every line would differ from it.
+            let text = GitRunner.headText(of: path, git: git).map(format.editorText)
             let blame = wantsBlame ? GitRunner.blame(of: path, git: git, maxSize: Self.maxGitSize, cache: Self.blameCache) : nil
             DispatchQueue.main.async {
                 guard let self else { return }
