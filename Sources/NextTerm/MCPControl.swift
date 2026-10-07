@@ -672,7 +672,13 @@ enum MCPControl {
                 lastSent.removeValue(forKey: tab.id)
                 return ok(info)
             }
-            return ok(["id": id, "closed": false, "asking_user": "It is the last tab in its window and the editor there has unsaved files, so closing it closes the window: Next Term asks the user whether to save them. The tab closes if they choose Save or Don't Save; list_tabs shows whether it did."])
+            var answer: [String: Any] = ["id": id, "closed": false, "asking_user": "It is the last tab in its window and the editor there has unsaved files, so closing it closes the window: Next Term asks the user whether to save them. The tab closes if they choose Save or Don't Save; list_tabs shows whether it did."]
+            // Done already, whatever the user answers: force ended the tmux session, and what ran in it.
+            if let ended = info["session_ended"] {
+                answer["session_ended"] = ended
+                answer["note"] = "The tmux session has ended already, whatever the user answers."
+            }
+            return ok(answer)
         }
         // A tab kept on its host: closing only detaches, and what runs there goes on.
         if let remote = tab.remote, tab.isKept {
