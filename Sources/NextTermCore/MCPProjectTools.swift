@@ -181,6 +181,15 @@ public struct MCPProjects: Sendable {
     }
 }
 
+extension MCPServer {
+    /// Whether a decoded JSON value is true or false. Not `value is Bool`: the numbers 1 and 0 from
+    /// JSONSerialization pass that test too, and a Bool passes `as? Int`.
+    public static func isBoolean(_ value: Any) -> Bool {
+        guard let number = value as? NSNumber else { return false }
+        return String(cString: number.objCType) == "c"
+    }
+}
+
 /// Reads a tool's arguments, refusing values of the wrong type or out of range.
 struct MCPArguments {
     let values: [String: Any]
@@ -194,14 +203,14 @@ struct MCPArguments {
 
     func int(_ key: String, in range: ClosedRange<Int>, default fallback: Int) throws -> Int {
         guard let value = values[key], !(value is NSNull) else { return fallback }
-        guard !(value is Bool), let number = value as? Int else { throw MCPToolError("\(key) must be a whole number.") }
+        guard !MCPServer.isBoolean(value), let number = value as? Int else { throw MCPToolError("\(key) must be a whole number.") }
         guard range.contains(number) else { throw MCPToolError("\(key) is \(range.lowerBound) to \(range.upperBound).") }
         return number
     }
 
     func bool(_ key: String, default fallback: Bool) throws -> Bool {
         guard let value = values[key], !(value is NSNull) else { return fallback }
-        guard let flag = value as? Bool else { throw MCPToolError("\(key) must be true or false.") }
+        guard MCPServer.isBoolean(value), let flag = value as? Bool else { throw MCPToolError("\(key) must be true or false.") }
         return flag
     }
 

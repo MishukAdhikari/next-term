@@ -122,6 +122,21 @@ func json(_ result: MCPServer.CallResult) -> [String: Any] {
         #expect(error(["project": "api"])?.contains("path") == true)
     }
 
+    @Test func argumentsAsTheSocketDecodesThem() throws {
+        // JSONSerialization's 1 also casts to Bool, and its true to Int: the types must still be told apart.
+        let f = try ProjectFixture()
+        func call(_ text: String) throws -> MCPServer.CallResult {
+            let arguments = try #require(try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+            return MCPProjectTools.readFile(arguments, in: f.both)
+        }
+        let one = try call(#"{"path": "src/app.txt", "project": "api", "offset": 1, "limit": 1}"#)
+        #expect(!one.isError && json(one)["text"] as? String == "line 1", "\(one.text)")
+        #expect(try call(#"{"path": "src/app.txt", "project": "api", "limit": true}"#).text.contains("whole number"))
+        let regex = try #require(try JSONSerialization.jsonObject(with: Data(#"{"query": "x", "project": "api", "regex": 1}"#.utf8)) as? [String: Any])
+        #expect(MCPProjectTools.findInFiles(regex, in: f.both, git: nil).text.contains("true or false"))
+        #expect(MCPServer.isBoolean(true) && !MCPServer.isBoolean(1) && !MCPServer.isBoolean("true"))
+    }
+
     @Test func secretValuesAreMasked() throws {
         let f = try ProjectFixture()
         let result = json(MCPProjectTools.readFile(["path": "config.json", "project": "api"], in: f.both))

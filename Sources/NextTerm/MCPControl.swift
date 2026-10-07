@@ -546,7 +546,7 @@ enum MCPControl {
         }
         let choice = arguments["choice"], answer = arguments["answer"]
         if choice != nil && answer != nil { return reply(fail("Give choice or answer, not both.")) }
-        if let choice, choice is Bool || !(choice is Int) { return reply(fail("choice must be a whole number.")) }
+        if let choice, MCPServer.isBoolean(choice) || !(choice is Int) { return reply(fail("choice must be a whole number.")) }
         if let answer, !(answer is String) { return reply(fail("answer must be text.")) }
         tab.pollAgentScreen() // what the screen shows now, not at the last look
         guard let question = tab.status.question, let current = questionID(tab) else {
