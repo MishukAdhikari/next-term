@@ -77,7 +77,7 @@ public enum MCPServer {
              inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "get_open_files", title: "Get open files",
-             description: "Files open in the editor, per window, with which one is in front and which have unsaved changes.",
+             description: "Files open in the editor, per window, with which one is in front and which have unsaved changes. A file marked preview was opened by a single click in the project sidebar, and the next file clicked there takes its place.",
              inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "read_file", title: "Read a file in a project",

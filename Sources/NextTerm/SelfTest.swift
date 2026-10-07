@@ -512,6 +512,7 @@ enum SelfTest {
         await ragColorChecks(c, proj: proj)
         await envValueChecks(c, proj: proj)
         await importChecks(c, proj: proj)
+        await singleClickChecks(c, proj: proj, tab: inProject)
 
         // The tree remembers what was expanded when you switch to a tab in another folder and back.
         if let src = c.sidebar.root?.children?.first(where: { $0.name == "src" }) {

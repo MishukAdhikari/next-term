@@ -365,8 +365,11 @@ enum MCPControl {
     private static func openFiles() -> MCPServer.CallResult {
         let windows: [[String: Any]] = app.controllers.map { controller in
             let active = controller.editorArea.activeEditor?.document
+            let preview = (controller.editorArea.previewPane as? CodeEditorView)?.document
             var window: [String: Any] = ["files": controller.editorArea.documents.map { document -> [String: Any] in
-                ["path": document.path, "unsaved": document.isDirty, "front": document === active]
+                var file: [String: Any] = ["path": document.path, "unsaved": document.isDirty, "front": document === active]
+                if document === preview { file["preview"] = true } // the next file clicked in the sidebar replaces it
+                return file
             }]
             if let project = controller.project { window["project"] = project }
             return window

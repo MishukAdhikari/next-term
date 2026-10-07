@@ -13,7 +13,7 @@ Next Term has a real code editor, not a viewer, and it sits right above the term
 ## Opening files
 
 - **Go to File** (<kbd>⌘P</kbd>): type part of a file’s name or path and pick it. See [below](#go-to-file).
-- **Double-click** a file in the project sidebar, or select it and press <kbd>⌘↓</kbd>.
+- **Double-click** a file in the project sidebar, or select it and press <kbd>⌘↓</kbd>. With **Open files with a single click** on (**Settings › Editor**), one click opens it in a [preview tab](#preview-tabs).
 - **<kbd>⌘</kbd>-click a path** in terminal output, such as `src/app.ts:42:7` from a compiler, linter or agent: the file opens at that line and column. A Python traceback’s `File "graph.py", line 42` opens at line 42 (at the frame you clicked, when the same file appears twice), and so do pytest’s and ruff’s `path.py:42:` lines. A `graph.py:graph` reference, as `langgraph.json` writes it, opens at the definition of `graph`.
 - **Pick a result** in [Find in Files](/docs/search/).
 - **Run `nxtrm file:42`** in a tab or any terminal. See [The nxtrm command](/docs/command-line/).
@@ -22,6 +22,14 @@ Next Term has a real code editor, not a viewer, and it sits right above the term
 Each file opens in its own tab above the terminal; a dot in place of the close button means unsaved changes. Jupyter notebooks open as notebooks, read-only (see [below](#jupyter-notebooks)). Large data files, and UTF-8 text files over 32 MB, open their first rows read-only (see [Large data files](#large-data-files)). Images and binaries open in their usual app instead. An app, a script or an executable never opens without asking first, even behind a symlink or a Finder alias (see [Security and privacy](/docs/security-and-privacy/#opening-files-and-links)).
 
 Move between the editor and the terminal with <kbd>⌃&#96;</kbd> (**View › Focus Editor**). <kbd>⌘W</kbd> closes the file you are editing when the editor has the keyboard, and the terminal tab otherwise.
+
+### Preview tabs
+
+With **Open files with a single click** on (**Settings › Editor**, or the project sidebar’s ⋯ button), one click on a file in the sidebar opens it in a preview tab. Its name is in italics, and the next file you click opens in the same tab instead of a new one. The keyboard stays in the sidebar, so you can keep clicking or use the arrow keys; click in the text or press <kbd>⌃&#96;</kbd> to start typing.
+
+A preview tab becomes an ordinary tab when you edit the file, double-click its tab or its row in the sidebar, press <kbd>⌘↓</kbd>, drag the tab, or open the file another way (<kbd>⌘P</kbd>, a path in the terminal, Find in Files). A preview never has unsaved changes, so nothing is lost when the next click replaces it.
+
+One click opens only what the editor shows itself, up to 4 MB; large data files and SQLite databases open at any size. Folders, images, binaries, larger files, deleted files and Databases rows still open with a double-click. <kbd>⌘</kbd>-click and <kbd>⇧</kbd>-click select several files without opening any.
 
 ## Go to File
 

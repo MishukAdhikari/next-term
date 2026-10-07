@@ -20,6 +20,8 @@ struct TabBarItem: Equatable {
     var shorterTitles: [String] = []
     /// What the rename field starts with, if not the title: the name without a connection note or a port.
     var editableTitle: String? = nil
+    /// Editor tabs: a preview, which the next file clicked in the sidebar takes over. Its title is in italics.
+    var preview = false
 }
 
 protocol TabBarViewDelegate: AnyObject {
@@ -31,6 +33,8 @@ protocol TabBarViewDelegate: AnyObject {
     /// Rename finished or was cancelled; focus can go back to the terminal.
     func tabBarDidEndEditing(_ bar: TabBarView)
     func tabBarDidRequestNewTab(_ bar: TabBarView)
+    /// A tab was double-clicked where tabs cannot be renamed (the editor's: it keeps a preview).
+    func tabBar(_ bar: TabBarView, didDoubleClick index: Int)
 }
 
 /// The tab strip along the top of the window, drawn in the title bar area.
@@ -139,6 +143,10 @@ final class TabBarView: NSView {
     func shownRemoteLink(at index: Int) -> RemoteLink? { tabViews[safe: index]?.shownRemoteLink }
     func shownTitle(at index: Int) -> String? { tabViews[safe: index]?.shownTitle }
     func spokenLabel(at index: Int) -> String? { tabViews[safe: index]?.accessibilityLabel() }
+    /// The font of a tab's title (for the self-test: a preview's is italic).
+    func titleFont(at index: Int) -> NSFont? { tabViews[safe: index]?.titleFont }
+    /// A tab's view, to click (for the self-test).
+    func tabView(at index: Int) -> NSView? { tabViews[safe: index] }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -380,7 +388,7 @@ final class TabBarView: NSView {
     fileprivate func itemMouseDown(_ view: TabItemView, event: NSEvent) {
         guard let index = index(of: view) else { return }
         if event.clickCount == 2 {
-            if allowsRename { view.beginRename() }
+            if allowsRename { view.beginRename() } else { delegate?.tabBar(self, didDoubleClick: index) }
             return
         }
         delegate?.tabBar(self, didSelect: index)
@@ -487,11 +495,15 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     /// starts after the server mark), so all of them show it or none does.
     var barHasRemote = false { didSet { if barHasRemote != oldValue { needsLayout = true } } }
 
+    private static let font = NSFont.systemFont(ofSize: 12.5)
+    /// A preview's title: italics say that the next file clicked takes the tab.
+    private static let previewFont = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
 
-        label.font = .systemFont(ofSize: 12.5)
+        label.font = Self.font
         Typography.singleLine(label, truncation: .byTruncatingMiddle)
         addSubview(label)
         addSubview(dot)
@@ -529,6 +541,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
 
     private var item: TabBarItem?
     var shownShortcut: String? { hint.isHidden ? nil : hint.stringValue }
+    var titleFont: NSFont? { label.font }
 
     // Called several times a second: touch only what changed (re-setting a tooltip resets it).
     func configure(item newItem: TabBarItem, selected isSelected: Bool) {
@@ -538,6 +551,8 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
             if !newItem.shorterTitles.isEmpty { needsLayout = true } // layout may shorten it
         }
         if label.lineBreakMode != newItem.truncation { label.lineBreakMode = newItem.truncation }
+        let font = newItem.preview ? Self.previewFont : Self.font
+        if label.font != font { label.font = font }
         let tip = newItem.tooltip + (newItem.shortcut.map { "\n\($0) switches to this tab" } ?? "")
         if toolTip != tip { toolTip = tip }
         if hint.stringValue != newItem.shortcut ?? "" {

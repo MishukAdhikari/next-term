@@ -905,6 +905,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         openFile(url)
     }
 
+    /// A single click: never another app, and the keyboard stays in the tree to click or arrow on.
+    func sidebar(_ sidebar: ProjectSidebarView, previewFile url: URL) {
+        openFile(url, focus: false, preview: true, handOff: false)
+    }
+
     func sidebar(_ sidebar: ProjectSidebarView, didMove from: String, to: String) {
         editorArea.itemMoved(from: from, to: to)
     }
@@ -912,13 +917,18 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     // MARK: editor
 
     /// Opens a file in the editor, at a line if given. What the editor cannot show (images, binaries,
-    /// huge files) opens in its app instead, safely.
-    func openFile(_ url: URL, line: Int? = nil, column: Int = 1) {
+    /// huge files) opens in its app instead, safely, unless `handOff` is false. `preview` opens it in the
+    /// preview tab (a single click in the sidebar).
+    func openFile(_ url: URL, line: Int? = nil, column: Int = 1, focus: Bool = true, preview: Bool = false, handOff: Bool = true) {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
-            return SafeOpen.open(url, from: window)
+            if handOff { SafeOpen.open(url, from: window) }
+            return
         }
-        if editorArea.open(url, line: line, column: column) != .opened { return SafeOpen.open(url, from: window) }
+        if editorArea.open(url, line: line, column: column, focus: focus, preview: preview) != .opened {
+            if handOff { SafeOpen.open(url, from: window) }
+            return
+        }
         let path = canonicalPath(url.path)
         // Opened from ⌘P, a search result or a link: the sidebar shows where it is, even if it was in front.
         frontFile = editorArea.activePath
@@ -1583,6 +1593,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func tabBarDidRequestNewTab(_ bar: TabBarView) { newTab(nil) }
+    func tabBar(_ bar: TabBarView, didDoubleClick index: Int) {} // terminal tabs rename instead
 
     // MARK: TerminalTabDelegate
 

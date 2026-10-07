@@ -144,7 +144,7 @@ Everything here can be undone with <kbd>⌘Z</kbd>.
 | Copy | Drag with <kbd>⌥</kbd> held |
 | New file, new folder | Right-click › **New File** or **New Folder** |
 | Move to the Trash | <kbd>⌘⌫</kbd> (asks first), or right-click › **Move to Trash** |
-| Open a file | Double-click, or <kbd>⌘↓</kbd>; from anywhere, <kbd>⌘P</kbd> ([Go to File](/docs/editor/#go-to-file)) |
+| Open a file | Double-click, or <kbd>⌘↓</kbd> (one click, with **Open files with a single click** on in **Settings › Editor**); from anywhere, <kbd>⌘P</kbd> ([Go to File](/docs/editor/#go-to-file)) |
 
 Rename selects the name without its extension, as Finder does. Open files follow a rename or a move.
 
