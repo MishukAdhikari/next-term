@@ -118,6 +118,10 @@ import Testing
         // Topological: every commit is listed after all of its children.
         let position = Dictionary(uniqueKeysWithValues: all.enumerated().map { ($1.sha, $0) })
         #expect(all.allSatisfy { commit in commit.parents.allSatisfy { (position[$0] ?? .max) > position[commit.sha]! } })
+        // In the graph: two lanes, from the merge down to where feat started, and nothing left open.
+        var graph = CommitGraph()
+        let rows = graph.add(all)
+        #expect(rows[0].isMerge && rows.map(\.width).max() == 2 && rows.last?.column == 0 && graph.openLanes == 0)
 
         // Paging.
         let first = try #require(CommitLog.page(CommitQuery(), skip: 0, limit: 2, in: work, git: git))
