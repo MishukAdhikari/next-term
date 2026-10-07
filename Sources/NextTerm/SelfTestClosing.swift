@@ -59,10 +59,27 @@ extension SelfTest {
         check(canonicalPath(shell.currentDirectory()) == canonicalPath(tab.directory), "in the folder the last one was in",
               shell.currentDirectory() + " vs " + tab.directory)
 
-        // Something running in it: one sheet names the unsaved file and what closing stops. Save saves first.
-        shell.view.send(txt: "sleep 30\r")
-        _ = await wait(3) { shell.status.running }
+        // A shell that failed (`exit 3`) stays, to show why. ⌘W asks, and Cancel leaves that tab as it was.
+        shell.view.send(txt: "\u{15}exit 3\r")
+        let failed = await wait(5) { shell.exited }
         window.makeFirstResponder(shell.view)
+        w.closeTab(nil)
+        check(failed && window.attachedSheet != nil && doc.isDirty, "⌘W on a last tab whose shell failed asks too",
+              "exited \(shell.exited), sheet \(window.attachedSheet != nil)")
+        _ = await pressSheetButton("Cancel", in: window)
+        await pause(0.2)
+        let reason = shell.screenTail(6).joined(separator: " ")
+        check(window.isVisible && w.tabs.count == 1 && w.tabs.first === shell && reason.contains("exited with code 3"),
+              "Cancel keeps that tab and why its shell ended, not a fresh shell", "tabs \(w.tabs.count), same \(w.tabs.first === shell): \(reason)")
+
+        // A fresh shell, and something running in it: one sheet names the unsaved file and what closing stops.
+        // Save saves first.
+        let live = w.addTab(directory: root.path)
+        w.remove(shell)
+        _ = await wait(20) { live.status.integrated }
+        live.view.send(txt: "sleep 30\r")
+        _ = await wait(3) { live.status.running }
+        window.makeFirstResponder(live.view)
         w.closeTab(nil)
         let both = sheetWords(window)
         check(both.contains("“notes.txt”") && both.contains("stops “sleep"), "with a program running, the one sheet names the unsaved file and what closing stops", both)
