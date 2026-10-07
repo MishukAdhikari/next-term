@@ -131,26 +131,35 @@ final class PaletteSwatches: NSView {
 /// A font menu for Settings: Next Term's default face first, then every installed monospaced family. A
 /// chosen family that is no longer installed stays listed, marked, so the menu says why the default shows.
 final class FontFamilyPopup: NSPopUpButton {
-    /// The families, read once: listing them measures every installed font.
+    /// The families, listed once and off the main thread: listing them measures every installed font, which
+    /// on a Mac with many fonts takes seconds. Until then the menu holds the default and the chosen family.
     nonisolated(unsafe) private static var families: [String]?
+    nonisolated(unsafe) private static var listing = false
+    nonisolated static let listed = Notification.Name("NextTermFontFamiliesListed")
 
     var onChange: ((String?) -> Void)?
+    private var selected: String?
 
     init() {
         super.init(frame: .zero, pullsDown: false)
         target = self
         action = #selector(chosen)
+        NotificationCenter.default.addObserver(self, selector: #selector(fill), name: Self.listed, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
     func show(_ selected: String?) {
+        self.selected = selected
+        fill()
+        Self.listFamilies()
+    }
+
+    @objc private func fill() {
         removeAllItems()
         addItem(withTitle: "Next Term default (\(Theme.defaultFontName))")
         menu?.addItem(.separator())
-        let families = Self.families ?? FontCatalog.monospacedFamilies()
-        Self.families = families
-        for family in families {
+        for family in Self.families ?? [] {
             addItem(withTitle: family)
             lastItem?.representedObject = family
         }
@@ -158,14 +167,28 @@ final class FontFamilyPopup: NSPopUpButton {
         if let item = itemArray.first(where: { ($0.representedObject as? String)?.caseInsensitiveCompare(selected) == .orderedSame }) {
             select(item)
         } else {
-            addItem(withTitle: "\(selected) (not installed)")
+            // Marked only once the list is in: before that, it isn't known.
+            addItem(withTitle: Self.families == nil ? selected : "\(selected) (not installed)")
             lastItem?.representedObject = selected
             select(lastItem)
         }
     }
 
+    private static func listFamilies() {
+        guard families == nil, !listing else { return }
+        listing = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let found = FontCatalog.monospacedFamilies()
+            DispatchQueue.main.async {
+                families = found
+                NotificationCenter.default.post(name: listed, object: nil)
+            }
+        }
+    }
+
     @objc private func chosen() {
-        onChange?(selectedItem?.representedObject as? String)
+        selected = selectedItem?.representedObject as? String
+        onChange?(selected)
     }
 }
 
