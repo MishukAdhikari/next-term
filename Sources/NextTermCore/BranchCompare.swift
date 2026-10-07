@@ -242,7 +242,9 @@ public enum BranchCompare {
     /// The tracked files on disk that differ from `branch`; nil when git fails.
     public static func workingTreeFiles(against branch: String, in root: String, git: String, timeout: TimeInterval = 30) -> [ChangedFile]? {
         guard let data = GitRunner.run(git, base(root) + workingTreeArguments(branch: branch), timeout: timeout) else { return nil }
-        let changes = parseRaw(data)
+        // diff-index only sees the index: a file the branch has that is on disk but untracked here (ignored
+        // here, tracked there) looks deleted. Untracked files aren't compared, so it is left out.
+        let changes = parseRaw(data).filter { !($0.file.status == .deleted && isFileOrLink(root + "/" + $0.file.path)) }
         // diff-index never refreshes the index (that would write it), so a file touched or rewritten
         // with the same text is listed as modified. Hash those (one run, writing nothing) and leave out
         // the ones whose text is the branch's.
@@ -257,6 +259,13 @@ public enum BranchCompare {
         var same = Set<String>()
         for (change, id) in zip(unsure, ids) where id == change.oldID { same.insert(change.file.path) }
         return changes.filter { !($0.mayBeUnchanged && same.contains($0.file.path)) }.map(\.file)
+    }
+
+    /// A file or a link at `path`, as git would track one (a folder in its place is not).
+    static func isFileOrLink(_ path: String) -> Bool {
+        var info = stat()
+        guard lstat(path, &info) == 0 else { return false }
+        return (info.st_mode & S_IFMT) == S_IFREG || (info.st_mode & S_IFMT) == S_IFLNK
     }
 
     /// One file's change on `branch` since `base`, the merge base the comparison read; nil when git fails.

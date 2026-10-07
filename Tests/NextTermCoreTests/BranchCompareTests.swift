@@ -195,6 +195,16 @@ import Testing
             ChangedFile(path: "m.txt", status: .added),
             ChangedFile(path: "old.txt", oldPath: "new.txt", status: .renamed),
         ])
+        // A file the branch tracks, on disk here but untracked (ignored here, tracked there): not
+        // compared, like any untracked file, rather than listed as deleted. A folder in its place is.
+        try write("f.txt", "feat\n")
+        let untracked = try #require(BranchCompare.workingTreeFiles(against: "refs/heads/feat", in: work, git: git))
+        #expect(untracked.map(\.path) == ["a.txt", "m.txt", "old.txt"])
+        try FileManager.default.removeItem(at: root.appendingPathComponent("f.txt"))
+        try write("f.txt/inside.txt", "a folder now\n")
+        let folder = try #require(BranchCompare.workingTreeFiles(against: "refs/heads/feat", in: work, git: git))
+        #expect(folder.map(\.path) == ["a.txt", "f.txt", "m.txt", "old.txt"])
+        try FileManager.default.removeItem(at: root.appendingPathComponent("f.txt"))
         // A file's diff: the branch's version first, the disk's second.
         let file = try #require(GitRunner.diff(of: "a.txt", in: work, git: git, base: .ref("refs/heads/feat")))
         let lines = file.hunks.flatMap(\.lines)
