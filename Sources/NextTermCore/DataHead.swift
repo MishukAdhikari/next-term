@@ -316,7 +316,8 @@ public enum DataHead {
         var inQuotes = false
         var lines = 0
         // Every comma in the lines counted sits between two digits, as decimal commas do ("1,5"). Decided
-        // line by line: the sample can end partway through a line, and that one is not counted.
+        // line by line: the sample can end partway through a line, and that one is not counted. The first
+        // line is left out too: a header's commas are text ("Preis, EUR"), whatever the separator.
         var decimalCommas = true
         var lineDecimal = true
         let bytes = Array(head)
@@ -329,7 +330,7 @@ public enum DataHead {
             if inQuotes { continue }
             if byte == 0x0A {
                 for k in 0..<3 { counts[k].append(current[k]) }
-                if !lineDecimal { decimalCommas = false }
+                if lines > 0, !lineDecimal { decimalCommas = false }
                 current = [0, 0, 0]
                 lineDecimal = true
                 lines += 1

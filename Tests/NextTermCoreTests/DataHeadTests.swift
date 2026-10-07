@@ -144,6 +144,8 @@ import Testing
         // The sample ends partway through a line: its commas are not counted, so they say nothing either.
         #expect(DataHead.detectDelimiter(Array("1,5;2,3\n4,5;6,7\n8,".utf8), fallback: 0x2C) == 0x3B)
         #expect(DataHead.detectDelimiter(Array("1,5;2,3\n4,5;6,7\nab, c".utf8), fallback: 0x2C) == 0x3B)
+        // Nor do a header's: they are text, in a semicolon file too.
+        #expect(DataHead.detectDelimiter(Array("Name;Preis, EUR\nApfel;1,50\nBirne;2,30\n".utf8), fallback: 0x2C) == 0x3B)
         #expect(DataHead.looksLikeHeader([["id", "score"], ["1", "0.5"], ["2", "0.7"]]))
         #expect(DataHead.looksLikeHeader([["", "question", "answer"], ["0", "Why?", "Because."]]))
         #expect(!DataHead.looksLikeHeader([["1", "0.5"], ["2", "0.7"]]))
