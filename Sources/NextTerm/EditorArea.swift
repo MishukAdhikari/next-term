@@ -251,6 +251,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
         }
         let log = GitLogPane(root: root)
         log.onTitleChange = { [weak self] in self?.refresh() }
+        log.onOpenChange = { [weak self] path, change in self?.openCommitDiff(root: root, path: path, change: change) }
         insert(log)
         select(activeIndex)
         return log

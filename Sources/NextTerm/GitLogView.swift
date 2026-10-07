@@ -10,6 +10,8 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     /// The work tree's top folder.
     let root: String
     var onTitleChange: (() -> Void)?
+    /// A changed file was opened from the details: its path and the commit's change to it.
+    var onOpenChange: ((String, DiffPane.CommitChange) -> Void)?
 
     private(set) var query = CommitQuery()
     private(set) var commits: [Commit] = []
@@ -48,9 +50,13 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     /// Left of the commits (the branch tree) and right of them (the commit's details).
     let split = NSSplitView()
     let centre = NSView()
+    /// The selected commit in full.
+    let details: GitLogDetailsView
+    private var placedDividers = false
 
     init(root: String) {
         self.root = root
+        details = GitLogDetailsView(root: root)
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = Theme.background.cgColor
@@ -465,6 +471,17 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         split.isVertical = true
         split.dividerStyle = .thin
         split.addArrangedSubview(centre)
+        split.addArrangedSubview(details)
+        centre.widthAnchor.constraint(greaterThanOrEqualToConstant: 320).isActive = true
+        details.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+        // The commits take what the window gives or takes; the sides keep their width.
+        split.setHoldingPriority(.init(200), forSubviewAt: 0)
+        split.setHoldingPriority(.init(260), forSubviewAt: 1)
+        table.onReturn = { [weak self] in self?.details.focusFiles() }
+        details.onSelectCommit = { [weak self] sha in self?.select(sha: sha) }
+        details.onOpenFile = { [weak self] file, shown in
+            self?.onOpenChange?(file.path, DiffPane.CommitChange(sha: shown.commit.sha, parent: shown.commit.parents.first, oldPath: file.oldPath))
+        }
         for view in [header, split] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
@@ -479,6 +496,16 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             split.trailingAnchor.constraint(equalTo: trailingAnchor),
             split.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+    }
+
+    override func layout() {
+        super.layout()
+        // The details get a third of the width (at most 380), the first time there is room.
+        if !placedDividers, split.bounds.width > 700 {
+            placedDividers = true
+            let width = split.bounds.width
+            split.setPosition(width - min(380, round(width / 3)), ofDividerAt: split.arrangedSubviews.count - 2)
+        }
     }
 
     // MARK: table
@@ -515,11 +542,12 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
-        onSelectionChange?(selectedCommit)
+        let commit = selectedCommit
+        // Over a refresh the selection comes back: the details stay meanwhile.
+        if commit == nil, let wanted, wanted.sha == details.shown?.sha { return }
+        if let commit, commit == details.shown { return }
+        details.show(commit)
     }
-
-    /// The selection moved (the details follow it).
-    var onSelectionChange: ((Commit?) -> Void)?
 
     // MARK: menu
 
