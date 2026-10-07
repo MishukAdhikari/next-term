@@ -55,14 +55,20 @@ enum MCPRegistration {
         return found
     }
 
-    /// When the Claude app quits, the edit that waited for it is made, with the setting as it is then.
+    /// When the Claude app quits, the edit that waited for it is made, with the setting as it is then. When it opens
+    /// (installed or opened since the last pass), nothing is written, but what now waits for it to quit is worked out,
+    /// so the line under the setting says so.
     static func watchClaudeApp() {
         let center = NSWorkspace.shared.notificationCenter
-        _ = center.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { note in
-            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            guard let app, app.bundleIdentifier == MCPRegistrar.claudeAppBundle else { return }
-            let on = MainActor.assumeIsolated { AppDelegate.shared.agentControl }
-            update(on: on, claudeAppOnly: true, quit: app.processIdentifier)
+        let terminated = NSWorkspace.didTerminateApplicationNotification
+        for name in [NSWorkspace.didLaunchApplicationNotification, terminated] {
+            _ = center.addObserver(forName: name, object: nil, queue: .main) { note in
+                let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                guard let app, app.bundleIdentifier == MCPRegistrar.claudeAppBundle else { return }
+                let on = MainActor.assumeIsolated { AppDelegate.shared.agentControl }
+                let quit = note.name == terminated ? app.processIdentifier : nil
+                update(on: on, claudeAppOnly: true, quit: quit)
+            }
         }
     }
 

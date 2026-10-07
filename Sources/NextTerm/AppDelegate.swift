@@ -413,6 +413,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var settings: SettingsWindowController?
 
     @objc func showSettings(_ sender: Any?) {
+        // The Claude app may have been opened since the last pass: what waits for it to quit, under the setting, is
+        // worked out again (nothing is written while it is open).
+        MCPRegistration.update(on: agentControl, claudeAppOnly: true)
         if settings == nil { settings = SettingsWindowController() }
         settings?.reload()
         settings?.showWindow(nil)

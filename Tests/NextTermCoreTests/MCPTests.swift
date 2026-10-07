@@ -567,6 +567,124 @@ import Testing
         #expect(try read(app.file) == saved)
     }
 
+    @Test func aSaveWhileTheEditIsWrittenIsLeftAlone() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let codex = try target("codex", home: home)
+        let original = "model = \"gpt-5\"\n"
+        try write(original, codex.file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: codex.file)
+        let planned = MCPRegistrar.plan(codex, command: command, programInstalled: true)
+        #expect(planned.status == .registered && planned.text != nil)
+        // Codex saves its file (a temporary file renamed over it) while the edit is being written: the edit would undo it.
+        let saved = original + "\n[projects.\"/Users/me/code\"]\ntrust_level = \"trusted\"\n"
+        var temporary: (mode: mode_t, text: String?)?
+        let status = MCPRegistrar.write(planned, to: codex.file) { path in
+            var info = stat()
+            if lstat(path, &info) == 0 { temporary = (info.st_mode & 0o7777, try? String(contentsOfFile: path, encoding: .utf8)) }
+            try? self.write(saved, codex.file)
+        }
+        #expect(status == .skipped("changed while being edited"))
+        #expect(try read(codex.file) == saved)
+        // The edit was all there, in a file only its owner can read, and nothing is left beside the file.
+        #expect(temporary?.mode == 0o600 && temporary?.text == planned.text)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: home + "/.codex") == ["config.toml"])
+    }
+
+    @Test func theTemporaryFileIsPrivateFromTheStart() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let codex = try target("codex", home: home)
+        // Codex keeps its file 0600: it can hold its servers' tokens.
+        let original = "[mcp_servers.weather]\ncommand = \"w\"\nenv = { TOKEN = \"made-up\" }\n"
+        try write(original, codex.file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: codex.file)
+        let watcher = FolderWatcher(home + "/.codex", ignoring: "config.toml")
+        for _ in 0..<100 {
+            #expect(MCPRegistrar.register(codex, command: command, programInstalled: true) == .registered)
+            #expect(MCPRegistrar.unregister(codex) == .removed)
+        }
+        let seen = watcher.stop()
+        #expect(seen.allSatisfy { $0 == 0o600 }, "\(seen.map { String($0, radix: 8) })")
+        #expect(try read(codex.file) == original)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: home + "/.codex") == ["config.toml"])
+    }
+
+    @Test func theEditKeepsTheFilesPermissions() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        func mode(_ path: String) -> Int? {
+            ((try? FileManager.default.attributesOfItem(atPath: path))?[.posixPermissions] as? NSNumber)?.intValue
+        }
+        let gemini = try target("gemini", home: home)
+        try write("{}\n", gemini.file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o640], ofItemAtPath: gemini.file)
+        #expect(MCPRegistrar.register(gemini, command: command, programInstalled: true) == .registered)
+        #expect(mode(gemini.file) == 0o640)
+        // A new file is its owner's alone.
+        let cursor = try target("cursor", home: home)
+        #expect(MCPRegistrar.register(cursor, command: command, programInstalled: true) == .registered)
+        #expect(mode(cursor.file) == 0o600)
+        // Through a link: the link stays, the file it points at is edited and keeps its permissions.
+        let codex = try target("codex", home: home)
+        let dotfile = home + "/dotfiles/config.toml"
+        try write("model = \"gpt-5\"\n", dotfile)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: dotfile)
+        try FileManager.default.createDirectory(atPath: home + "/.codex", withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: codex.file, withDestinationPath: dotfile)
+        #expect(MCPRegistrar.register(codex, command: command, programInstalled: true) == .registered)
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: codex.file) == dotfile)
+        #expect(mode(dotfile) == 0o600)
+        #expect(try read(dotfile).contains("[mcp_servers.next-term]"))
+        #expect(MCPRegistrar.unregister(codex) == .removed)
+        #expect(try read(dotfile) == "model = \"gpt-5\"\n")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: home + "/dotfiles") == ["config.toml"])
+    }
+
+    @Test func deeplyNestedFilesAreRefusedNotACrash() throws {
+        let gemini = try target("gemini", home: "/nonexistent")
+        let codex = try target("codex", home: "/nonexistent")
+        func nested(_ depth: Int) -> String { String(repeating: "[", count: depth) + String(repeating: "]", count: depth) }
+        func objects(_ depth: Int) -> String { String(repeating: "{\"a\": ", count: depth) + "1" + String(repeating: "}", count: depth) }
+        let ours = "\n[mcp_servers.next-term]\ncommand = \"\(command)\"\n"
+        let inline: String = "a = " + String(repeating: "{b = ", count: 5000) + "1" + String(repeating: "}", count: 5000)
+        let json = MCPRegistrar.Status.skipped("not valid JSON")
+        let toml = MCPRegistrar.Status.skipped("not valid TOML")
+        // A file, registering (a command) or not, and what comes of it.
+        var cases: [(MCPRegistrar.Target, String, String?, MCPRegistrar.Status)] = []
+        cases.append((gemini, "{\"a\": \(nested(5000))}", command, json))
+        cases.append((gemini, "{\"a\": \(nested(5000))}", nil, json))
+        cases.append((gemini, objects(5000), command, json))
+        cases.append((codex, "a = \(nested(5000))\n", command, toml))
+        cases.append((codex, "a = \(nested(5000))\n" + ours, nil, toml))
+        cases.append((codex, inline, command, toml))
+        // 512 levels are still read, not one more.
+        cases.append((gemini, "{\"a\": \(nested(511))}", command, .registered))
+        cases.append((gemini, "{\"a\": \(nested(512))}", command, json))
+        cases.append((gemini, objects(512), command, .registered))
+        cases.append((gemini, objects(513), command, json))
+        cases.append((codex, "a = \(nested(512))\n", command, .registered))
+        cases.append((codex, "a = \(nested(513))\n", command, toml))
+        // On a queue's thread, as passes run, whose stack is smaller than the main thread's.
+        let statuses: [MCPRegistrar.Status] = onAQueue {
+            cases.map { MCPRegistrar.plan($0.0, text: $0.1, command: $0.2).status }
+        }
+        let expected: [MCPRegistrar.Status] = cases.map(\.3)
+        #expect(statuses == expected)
+    }
+
+    /// `body`'s result, run on a dispatch queue's thread.
+    func onAQueue<T>(_ body: @escaping () -> T) -> T {
+        var result: T?
+        let done = DispatchSemaphore(value: 0)
+        DispatchQueue(label: "nextterm.tests.registration").async {
+            result = body()
+            done.signal()
+        }
+        done.wait()
+        return result!
+    }
+
     @Test func codexIsFoundByTheChatGPTAppOrItsFolder() throws {
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
@@ -681,6 +799,30 @@ import Testing
         let folders = MCPRegistrar.targets(home: home).filter { $0.readOnceBy != nil }
         pass = MCPRegistrar.pass(folders, command: command, found: [:]) { _ in true }
         #expect(pass.waiting == true && pass.statuses.count == 2)
+    }
+
+    @Test func aClaudeAppInstalledAfterTheLastPassIsWaitedFor() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let claudeOnly = MCPRegistrar.targets(home: home).filter { $0.readOnceBy != nil }
+        let app = try target("claude-desktop", home: home)
+        // Next Term's last pass: no Claude app yet.
+        var pass = MCPRegistrar.pass(claudeOnly, command: command, found: [:]) { _ in false }
+        #expect(pass.waiting == nil && pass.statuses["claude-desktop"] == .notInstalled)
+        // Installed and opened: its first start makes its folder. The pass its opening starts (or Settings opening) writes
+        // nothing and has the line say what waits; its file may not be there yet.
+        try FileManager.default.createDirectory(atPath: (app.file as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        pass = MCPRegistrar.pass(claudeOnly, command: command, found: [:]) { _ in true }
+        #expect(pass.waiting == true && !FileManager.default.fileExists(atPath: app.file))
+        let note = MCPRegistrar.claudeAppNote(waiting: pass.waiting, on: true, statuses: pass.statuses)
+        #expect(note == " Quit and reopen the Claude app to add it there too.")
+        try write("{}", app.file)
+        pass = MCPRegistrar.pass(claudeOnly, command: command, found: [:]) { _ in true }
+        #expect(pass.waiting == true)
+        #expect(try read(app.file) == "{}")
+        // It quits: the entry is added.
+        pass = MCPRegistrar.pass(claudeOnly, command: command, found: [:]) { _ in false }
+        #expect(pass.waiting == nil && pass.statuses["claude-desktop"] == .registered)
     }
 
     @Test func summaryNamesTheApps() {
@@ -927,6 +1069,113 @@ import Testing
         }
     }
 
+    @Test func codexKeepsWhatTheUserAddedAfterItsTable() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let codex = try target("codex", home: home)
+        let additions = [
+            // Servers kept for later, as comments.
+            "\n# Servers I turned off for now:\n# [mcp_servers.github]\n# command = \"gh-mcp\"\n",
+            // A comment about the tables after it, set apart by a blank line.
+            "\n# ---- trusted projects (keep) ----\n\n[projects.\"/Users/me/code\"]\ntrust_level = \"trusted\"\n",
+            "\n# the profile I use\n[profiles.fast]\nmodel = \"o3\"\n",
+        ]
+        for newline in ["\n", "\r\n"] {
+            let original = "model = \"gpt-5\"" + newline
+            for addition in additions.map({ $0.replacingOccurrences(of: "\n", with: newline) }) {
+                try write(original, codex.file)
+                #expect(MCPRegistrar.register(codex, command: command, programInstalled: true) == .registered)
+                try write(try read(codex.file) + addition, codex.file)
+                #expect(MCPRegistrar.unregister(codex) == .removed)
+                #expect(try read(codex.file) == original + addition)
+            }
+            // Blank lines after ours at the end of the file go with it.
+            try write(original, codex.file)
+            #expect(MCPRegistrar.register(codex, command: command, programInstalled: true) == .registered)
+            try write(try read(codex.file) + newline + newline, codex.file)
+            #expect(MCPRegistrar.unregister(codex) == .removed)
+            #expect(try read(codex.file) == original)
+            // A comment just under ours is the user's too.
+            #expect(MCPRegistrar.register(codex, command: command, programInstalled: true) == .registered)
+            try write(try read(codex.file) + "# mine" + newline, codex.file)
+            #expect(MCPRegistrar.unregister(codex) == .removed)
+            #expect(try read(codex.file) == original + newline + "# mine" + newline)
+        }
+    }
+
+    /// Made-up Codex files: strings and arrays over lines, inline tables, quoted and dotted keys, servers as tables, as
+    /// dotted keys at the top or under [mcp_servers], arrays of tables, Codex's tools subtables, LF or CRLF.
+    func tomlShapes(count: Int) -> [String] {
+        var random = SplitMix(seed: 11)
+        return (0..<count).map { _ in tomlShape(&random) }
+    }
+
+    func tomlShape(_ random: inout SplitMix) -> String {
+        let newline = Bool.random(using: &random) ? "\r\n" : "\n"
+        func lines(_ parts: [String]) -> String { parts.joined(separator: newline) }
+        let dottedServers = Int.random(in: 0..<4, using: &random) == 0
+        let settings: [String] = [
+            "model = \"gpt-5\" # mine",
+            "approval_policy = 'on-request'",
+            "\"quoted key\" = \"a # not a comment\"",
+            lines(["notes = \"\"\"", "[not a table]", "# not a comment", "\"\"\""]),
+            lines(["raw = '''", "[[not a table either]]", "'''"]),
+            "when = 1979-05-27T07:32:00Z",
+            lines(["list = [", "  1, # one", "  [2, 3],", "]"]),
+            "point = { x = 1, y = { z = \"}\" } }",
+            "a.b.c = true",
+        ]
+        var top = settings.filter { _ in Bool.random(using: &random) }
+        if dottedServers { top.append("mcp_servers.weather.command = \"w\"") }
+        var tables: [String] = [
+            lines(["[profiles.fast]", "model = \"o3\""]),
+            lines(["[ profiles.\"o3 high\" ] # spaced", "model_reasoning_effort = \"high\""]),
+            lines(["[projects.\"/Users/me/code\"]", "trust_level = \"trusted\""]),
+            lines(["[mcp_servers.maps]", "command = \"m\"", "args = [\"--port\", \"1\"]"]),
+            lines(["[[hooks]]", "run = \"x\"", "", "[[hooks]]", "run = \"y\""]),
+            lines(["[tui]", "notifications = [", "  \"a\",", "]"]),
+        ]
+        if !dottedServers {
+            tables.append(lines(["[mcp_servers.weather]", "command = \"w\"", "[mcp_servers.weather.env]", "TOKEN = \"made-up\"",
+                                 "[mcp_servers.weather.tools.forecast]", "approval_mode = \"approve\""]))
+            tables.append(lines(["[mcp_servers]", "docs.command = \"d\"", "docs.args = []"]))
+        }
+        tables = tables.filter { _ in Bool.random(using: &random) }.map { table in
+            Int.random(in: 0..<3, using: &random) == 0 ? "# about this one" + newline + table : table
+        }
+        var parts = top.shuffled(using: &random) + tables.shuffled(using: &random)
+        if parts.isEmpty || Int.random(in: 0..<5, using: &random) == 0 { parts.insert("# my settings", at: 0) }
+        let separator = Bool.random(using: &random) ? newline : newline + newline
+        return parts.joined(separator: separator) + (Int.random(in: 0..<4, using: &random) == 0 ? "" : newline)
+    }
+
+    @Test func codexFilesInManyShapesComeBackAsTheyWere() throws {
+        let codex = try target("codex", home: "/nonexistent")
+        var random = SplitMix(seed: 5)
+        for original in tomlShapes(count: 800) { try autoreleasepool {
+            let added = MCPRegistrar.plan(codex, text: original, command: command)
+            #expect(added.status == .registered, "\(original)")
+            let registered = try #require(added.text, "\(original)")
+            // Byte for byte, not only as equal strings (which compare canonically).
+            func bytes(_ text: String?) -> [UInt8]? { text.map { Array($0.utf8) } }
+            #expect(Array(registered.utf8.prefix(original.utf8.count)) == Array(original.utf8), "\(original)")
+            #expect(bytes(MCPRegistrar.plan(codex, text: registered, command: nil).text) == bytes(original), "\(original)")
+            // Another copy of the app: only the command changes.
+            let repointed = MCPRegistrar.plan(codex, text: registered, command: moved).text
+            #expect(bytes(repointed) == bytes(registered.replacingOccurrences(of: command, with: moved)), "\(original)")
+            // What the user adds after ours, a table or comments, stays when ours goes.
+            let newline = original.contains("\r\n") ? "\r\n" : "\n"
+            let start = (registered.hasSuffix(newline) ? "" : newline) + newline
+            let table: [String] = ["# added later", "[later]", "x = 1"]
+            let comments: [String] = ["# Servers I turned off for now:", "# [mcp_servers.github]"]
+            let later = Bool.random(using: &random) ? table : comments
+            let addition = start + later.joined(separator: newline) + newline
+            let removed = MCPRegistrar.plan(codex, text: registered + addition, command: nil)
+            #expect(removed.status == .removed, "\(original)")
+            #expect(bytes(removed.text) == bytes(original + addition), "\(original)")
+        } }
+    }
+
     @Test func codexReadsArraysOverLines() throws {
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
@@ -969,6 +1218,48 @@ import Testing
         #expect(root.member("d")?.value.object(in: text) as? String == "\"q")
         #expect(JSONC("{\"a\": }") == nil)
         #expect(JSONC("{\"a\": 1} trailing") == nil)
+    }
+}
+
+/// The permissions of every file seen in a folder, but one, while it runs: a writer's temporary files.
+final class FolderWatcher: @unchecked Sendable {
+    private let lock = NSLock()
+    private var running = true
+    private var modes = Set<mode_t>()
+    private let done = DispatchSemaphore(value: 0)
+
+    init(_ folder: String, ignoring name: String) {
+        Thread.detachNewThread { [self] in
+            while isRunning {
+                autoreleasepool {
+                    for entry in (try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? [] where entry != name {
+                        var info = stat()
+                        guard lstat(folder + "/" + entry, &info) == 0 else { continue }
+                        lock.lock()
+                        modes.insert(info.st_mode & 0o7777)
+                        lock.unlock()
+                    }
+                }
+            }
+            done.signal()
+        }
+    }
+
+    private var isRunning: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return running
+    }
+
+    /// Stops, and the permissions seen.
+    func stop() -> Set<mode_t> {
+        lock.lock()
+        running = false
+        lock.unlock()
+        done.wait()
+        lock.lock()
+        defer { lock.unlock() }
+        return modes
     }
 }
 

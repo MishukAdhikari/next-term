@@ -39,7 +39,7 @@ Agents can drive Next Term through its MCP server ([Orchestrate agents](/docs/or
 - **Servers only over your own logins:** `check_host`, `host_sessions` and `host_changes` run over a connection a remote tab already has, and never log in by themselves. `new_remote_tab` opens a tab where your own ssh logs in, and any password or host-key prompt appears there for you. The ones that save a host or run something on a server are marked so that your agent’s client asks you first.
 - **No self-control:** an agent cannot type into, or close, the tab it runs in.
 - **Busy tabs are protected:** closing a tab that runs something needs an explicit `force`.
-- **Your files are respected:** registering in an agent writes only Next Term’s own `next-term` entry, keeps comments and every other server, and never touches an entry it did not write.
+- **Your files are respected:** registering in an agent writes only Next Term’s own `next-term` entry, keeps comments and every other server, and never touches an entry it did not write. The edit is written to a temporary file only you can read, then put in place in one step with the file’s own permissions, so a private file such as Codex’s `config.toml` is never readable by others along the way. If the agent saves the file meanwhile, Next Term leaves it as the agent saved it.
 - **Off switch:** **Settings › Editor › Agents: “Let agents control Next Term”** closes the socket and removes the entries (the Claude desktop app’s once Claude is closed).
 
 ## Tabs start fresh

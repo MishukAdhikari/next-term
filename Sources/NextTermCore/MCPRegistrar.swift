@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
 
 /// Registers Next Term's MCP server (`nxtrm mcp`) in the AI agents on this Mac, so any of them can drive
 /// Next Term. Each agent keeps its servers in its own file and format; only Next Term's entry is
@@ -176,10 +179,10 @@ public enum MCPRegistrar {
         }
     }
 
-    /// Atomic, through symlinks, keeping the file's permissions (0600 stays 0600) and a UTF-8 byte order mark.
-    /// A read-only file is left alone, and so is one that changed since it was read (its agent saving it: this
-    /// edit would undo that).
-    static func write(_ planned: Plan, to path: String) -> Status {
+    /// Atomic and private throughout (see `replace`), through symlinks, keeping the file's permissions and a UTF-8 byte
+    /// order mark. A read-only file is left alone, and so is one that changed since it was read (its agent saving it:
+    /// this edit would undo that). `beforeRename`: called with the temporary file once it is ready (for tests).
+    static func write(_ planned: Plan, to path: String, beforeRename: (_ temporary: String) -> Void = { _ in }) -> Status {
         guard let text = planned.text else { return planned.status }
         let mark = Data([0xEF, 0xBB, 0xBF])
         let marked = planned.original?.starts(with: mark) == true
@@ -192,7 +195,62 @@ public enum MCPRegistrar {
             let folder = (path as NSString).deletingLastPathComponent
             try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
         }
-        return (try? TextFile.write(data, to: URL(fileURLWithPath: path))) != nil ? planned.status : .skipped("write")
+        switch replace(path, with: data, original: planned.original, beforeRename: beforeRename) {
+        case .done: return planned.status
+        case .changed: return .skipped("changed while being edited")
+        case .failed: return .skipped("write")
+        }
+    }
+
+    enum Replacement { case done, changed, failed }
+
+    /// Puts `data` in the file `path` points at (through symlinks, so a link stays a link), atomically. It is written to
+    /// a temporary file beside it that only its owner can read from the start (an agent's file can hold its servers'
+    /// tokens, and its folder can be open to other accounts), made with O_EXCL and O_NOFOLLOW so nothing already there
+    /// is used; flushed to disk, given the file's permissions (0600 for a new file), and renamed over the file. Just
+    /// before the rename the file is read again: when it no longer has the bytes `original` (nil: no file), its agent
+    /// saved it meanwhile, and the edit, made from the older bytes, is dropped.
+    static func replace(_ path: String, with data: Data, original: Data?, beforeRename: (_ temporary: String) -> Void) -> Replacement {
+        let target = canonicalPath(path)
+        var info = stat()
+        let permissions: mode_t = stat(target, &info) == 0 ? info.st_mode & 0o7777 : 0o600
+        let folder = (target as NSString).deletingLastPathComponent
+        let temporary = folder + "/." + (target as NSString).lastPathComponent + ".nextterm-" + UUID().uuidString
+        let descriptor = open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { return .failed }
+        let written = data.withUnsafeBytes { buffer -> Bool in
+            var offset = 0
+            while offset < buffer.count, let start = buffer.baseAddress {
+                let count = Darwin.write(descriptor, start + offset, buffer.count - offset)
+                if count < 0, errno == EINTR { continue }
+                guard count > 0 else { return false }
+                offset += count
+            }
+            return true
+        }
+        let ready = written && fchmod(descriptor, permissions) == 0 && fsync(descriptor) == 0
+        guard close(descriptor) == 0, ready else {
+            unlink(temporary)
+            return .failed
+        }
+        beforeRename(temporary)
+        guard FileManager.default.contents(atPath: path) == original else {
+            unlink(temporary)
+            return .changed
+        }
+        // A new file: only if there is still none.
+        let renamed: Int32
+        if original == nil {
+            renamed = renamex_np(temporary, target, UInt32(RENAME_EXCL))
+        } else {
+            renamed = rename(temporary, target)
+        }
+        let failure = errno
+        guard renamed == 0 else {
+            unlink(temporary)
+            return original == nil && failure == EEXIST ? .changed : .failed
+        }
+        return .done
     }
 
     // MARK: The Claude app
@@ -423,8 +481,10 @@ public enum MCPRegistrar {
     enum TOMLEntry: Equatable {
         case absent
         /// One [mcp_servers.next-term] table, with its subtables (Codex adds `[mcp_servers.next-term.tools.<tool>]`
-        /// on "Always allow"): `whole` runs from its header to the next table that is not one of them, less the
-        /// comments just above that one; `command`, its command string, and `value`, what that says.
+        /// on "Always allow"): `whole` runs from its header to the end of its last line and the blank lines after it,
+        /// short of the next table that is not one of them and the comments just above that; comments after ours
+        /// are the user's (ours goes at the end, so what the user adds later comes after it). `command`, its command
+        /// string, and `value`, what that says.
         case table(whole: Range<String.Index>, command: Range<String.Index>, value: String)
         /// Written some other way (dotted keys, inline, as an array), or without a command string: not Next Term's
         /// to change. Codex refuses its whole file over a second definition, so ours is never added beside it.
@@ -441,10 +501,11 @@ public enum MCPRegistrar {
               keys.allSatisfy({ isUnder($0.table) }) else { return .other }
         let commands = keys.filter { $0.table == tomlOurs && $0.path == ["command"] }
         guard commands.count == 1, let command = outline.string(at: commands[0].value) else { return .other }
-        // The table and its subtables, in one run.
-        var end = outline.text.endIndex
+        // The table and its subtables, in one run: up to the last line that is ours, and the blank lines after it.
+        let lastLines = headers.map(\.line.upperBound) + keys.map(\.line.upperBound)
+        var end = outline.blankLinesAfter(lastLines.max() ?? header.line.upperBound)
         if let next = outline.headers.first(where: { $0.line.lowerBound > header.line.lowerBound && !isUnder($0.path) }) {
-            end = outline.commentsAbove(next.line.lowerBound)
+            end = min(end, outline.commentsAbove(next.line.lowerBound))
         }
         guard headers.allSatisfy({ $0.line.lowerBound < end }) else { return .other }
         return .table(whole: header.line.lowerBound..<end, command: command.range, value: command.value)
@@ -568,6 +629,10 @@ struct JSONC {
         }
     }
 
+    /// Arrays and objects (in TOML, arrays and inline tables) in one another deeper than this make a file unreadable here,
+    /// so it is left alone: no agent writes one like that.
+    static let maxDepth = 512
+
     let text: String
     private let scalars: String.UnicodeScalarView
     private(set) var root: Value?
@@ -622,36 +687,87 @@ struct JSONC {
         if i < scalars.endIndex, scalars[i] == "}" || scalars[i] == "]" { hasTrailingCommas = true }
     }
 
+    /// An array or object being read: where it starts, its members so far, and the key of the member being read.
+    private struct Open {
+        let start: String.Index
+        let isObject: Bool
+        var members: [Member] = []
+        var key: (name: String, range: Range<String.Index>)?
+        var close: Unicode.Scalar { isObject ? "}" : "]" }
+    }
+
+    /// A value and all it holds. Arrays and objects in one another are followed with a list of those still open, not by
+    /// recursion, so a file nested deeply does not overflow the stack of a queue's thread; past `maxDepth`, it is unread.
     private mutating func parseValue() -> Value? {
-        guard i < scalars.endIndex else { return nil }
-        switch scalars[i] {
-        case "{":
-            return parseObject().map(Value.object)
-        case "[":
-            let start = i
-            advance()
-            skipSpace()
-            while i < scalars.endIndex, scalars[i] != "]" {
-                guard parseValue() != nil else { return nil }
+        var open: [Open] = []
+        while true {
+            // At a value: an array or object starts, or a string, number or literal is read whole.
+            guard i < scalars.endIndex else { return nil }
+            var value: Value
+            let c = scalars[i]
+            if c == "{" || c == "[" {
+                guard open.count < Self.maxDepth else { return nil }
+                open.append(Open(start: i, isObject: c == "{"))
+                advance()
                 skipSpace()
                 guard i < scalars.endIndex else { return nil }
-                if scalars[i] == "," { skipComma() } else if scalars[i] != "]" { return nil }
+                if scalars[i] != open[open.count - 1].close {
+                    guard parseKey(of: &open[open.count - 1]) else { return nil }
+                    continue
+                }
+                advance()
+                value = closed(open.removeLast())
+            } else if c == "\"" {
+                guard let string = parseStringValue() else { return nil }
+                value = string
+            } else {
+                guard let bare = parseBareValue() else { return nil }
+                value = bare
             }
-            guard i < scalars.endIndex else { return nil }
-            advance()
-            return .array(start..<i)
-        case "\"":
-            let start = i
-            guard parseString() != nil else { return nil }
-            return .scalar(start..<i)
-        default:
-            let start = i
-            let ends: Set<Unicode.Scalar> = [",", "}", "]", ":", "/"]
-            while i < scalars.endIndex, !ends.contains(scalars[i]), !scalars[i].properties.isWhitespace { advance() }
-            guard i > start,
-                  (try? JSONSerialization.jsonObject(with: Data(text.utf8[start..<i]), options: .fragmentsAllowed)) != nil else { return nil }
-            return .scalar(start..<i)
+            // The value is done: it goes in the array or object it is in, then a comma (the next member), or the close
+            // of that one, which is then done too.
+            while let last = open.indices.last {
+                if let key = open[last].key {
+                    open[last].members.append(Member(key: key.name, keyRange: key.range, value: value))
+                }
+                skipSpace()
+                guard i < scalars.endIndex else { return nil }
+                if scalars[i] == "," {
+                    skipComma()
+                } else if scalars[i] != open[last].close {
+                    return nil
+                }
+                guard i < scalars.endIndex, scalars[i] == open[last].close else {
+                    guard parseKey(of: &open[last]) else { return nil }
+                    break
+                }
+                advance()
+                value = closed(open.removeLast())
+            }
+            if open.isEmpty { return value }
         }
+    }
+
+    /// The value of an array or object just closed (`i` is just past its close).
+    private func closed(_ container: Open) -> Value {
+        guard container.isObject else { return .array(container.start..<i) }
+        return .object(Object(open: container.start, close: i, members: container.members))
+    }
+
+    private mutating func parseStringValue() -> Value? {
+        let start = i
+        guard parseString() != nil else { return nil }
+        return .scalar(start..<i)
+    }
+
+    /// A number, true, false or null.
+    private mutating func parseBareValue() -> Value? {
+        let start = i
+        let ends: Set<Unicode.Scalar> = [",", "}", "]", ":", "/"]
+        while i < scalars.endIndex, !ends.contains(scalars[i]), !scalars[i].properties.isWhitespace { advance() }
+        guard i > start,
+              (try? JSONSerialization.jsonObject(with: Data(text.utf8[start..<i]), options: .fragmentsAllowed)) != nil else { return nil }
+        return .scalar(start..<i)
     }
 
     private mutating func parseString() -> String? {
@@ -669,29 +785,18 @@ struct JSONC {
         return (try? JSONSerialization.jsonObject(with: Data(text.utf8[start..<i]), options: .fragmentsAllowed)) as? String
     }
 
-    private mutating func parseObject() -> Object? {
-        let open = i
-        advance()
-        var members: [Member] = []
+    /// In an object, the key of its next member, and past the colon after it (an array's elements have none).
+    private mutating func parseKey(of container: inout Open) -> Bool {
+        guard container.isObject else { return true }
+        guard i < scalars.endIndex, scalars[i] == "\"" else { return false }
+        let start = i
+        guard let key = parseString() else { return false }
+        container.key = (key, start..<i)
         skipSpace()
-        while i < scalars.endIndex, scalars[i] != "}" {
-            guard scalars[i] == "\"" else { return nil }
-            let keyStart = i
-            guard let key = parseString() else { return nil }
-            let keyRange = keyStart..<i
-            skipSpace()
-            guard i < scalars.endIndex, scalars[i] == ":" else { return nil }
-            advance()
-            skipSpace()
-            guard let value = parseValue() else { return nil }
-            members.append(Member(key: key, keyRange: keyRange, value: value))
-            skipSpace()
-            guard i < scalars.endIndex else { return nil }
-            if scalars[i] == "," { skipComma() } else if scalars[i] != "}" { return nil }
-        }
-        guard i < scalars.endIndex else { return nil }
+        guard i < scalars.endIndex, scalars[i] == ":" else { return false }
         advance()
-        return Object(open: open, close: i, members: members)
+        skipSpace()
+        return true
     }
 
     /// The elements of an array in this document, by position like members (nothing is converted).
@@ -957,6 +1062,8 @@ struct TOMLOutline {
         let path: [String]
         /// Where its value starts.
         let value: String.Index
+        /// From its line's start to just past the line break after its value (which can take several lines).
+        let line: Range<String.Index>
     }
 
     let text: String
@@ -998,8 +1105,27 @@ struct TOMLOutline {
             skipBlanks()
             let value = i
             guard skipValue(), endOfLine() else { return nil }
-            keys.append(Key(table: table, path: path, value: value))
+            keys.append(Key(table: table, path: path, value: value, line: lineStart..<i))
         }
+    }
+
+    /// Where the blank lines from `lineStart` on end: the start of the next line with something on it, or the end of the
+    /// text when only blank lines are left.
+    func blankLinesAfter(_ lineStart: String.Index) -> String.Index {
+        var start = lineStart
+        var i = lineStart
+        while i < scalars.endIndex {
+            let c = scalars[i]
+            if c == "\n" {
+                i = scalars.index(after: i)
+                start = i
+            } else if c == " " || c == "\t" || c == "\r" {
+                i = scalars.index(after: i)
+            } else {
+                return start
+            }
+        }
+        return scalars.endIndex
     }
 
     /// Where the comment lines just above `lineStart` start (`lineStart` when there are none).
@@ -1127,9 +1253,55 @@ struct TOMLOutline {
         return String(value)
     }
 
-    /// Past a value: a string of any kind, an array, an inline table, or a bare one (a number, a date, true).
+    /// Past a value: a string of any kind, an array, an inline table, or a bare one (a number, a date, true). Arrays and
+    /// inline tables in one another are followed with a list of those still open, not by recursion (see `JSONC.parseValue`).
     private mutating func skipValue() -> Bool {
+        // What closes each array or inline table still open, the innermost last.
+        var open: [Unicode.Scalar] = []
+        while true {
+            // At a value.
+            guard i < scalars.endIndex else { return false }
+            let c = scalars[i]
+            if c == "[" || c == "{" {
+                guard open.count < JSONC.maxDepth else { return false }
+                open.append(c == "[" ? "]" : "}")
+                advance()
+            } else {
+                guard skipScalar() else { return false }
+                if open.isEmpty { return true }
+                guard separator(in: open) else { return false }
+            }
+            // At the next element, or at the close of the innermost one, and what that closes in turn.
+            while true {
+                skipSpace()
+                guard i < scalars.endIndex else { return false }
+                guard scalars[i] == open.last else { break }
+                advance()
+                open.removeLast()
+                if open.isEmpty { return true }
+                guard separator(in: open) else { return false }
+            }
+            // An element of an inline table starts with its key.
+            if open.last == "}" {
+                guard parseKey() != nil, take("=") else { return false }
+                skipBlanks()
+            }
+        }
+    }
+
+    /// After an element: past a comma, or at the close of the innermost of `open`; false when something else is there.
+    private mutating func separator(in open: [Unicode.Scalar]) -> Bool {
+        skipSpace()
         guard i < scalars.endIndex else { return false }
+        if scalars[i] == "," {
+            advance()
+            return true
+        }
+        return scalars[i] == open.last
+    }
+
+    /// Past a string of any kind, or a bare value.
+    private mutating func skipScalar() -> Bool {
         let c = scalars[i]
         if c == "\"" || c == "'" {
             guard isMultiLine(at: i) else { return parseString() != nil }
@@ -1153,30 +1325,6 @@ struct TOMLOutline {
                 advance()
             }
             return false
-        }
-        if c == "[" || c == "{" {
-            let close: Unicode.Scalar = c == "[" ? "]" : "}"
-            advance()
-            while true {
-                skipSpace()
-                guard i < scalars.endIndex else { return false }
-                if scalars[i] == close {
-                    advance()
-                    return true
-                }
-                if c == "{" {
-                    guard parseKey() != nil, take("=") else { return false }
-                    skipBlanks()
-                }
-                guard skipValue() else { return false }
-                skipSpace()
-                guard i < scalars.endIndex else { return false }
-                if scalars[i] == "," {
-                    advance()
-                } else if scalars[i] != close {
-                    return false
-                }
-            }
         }
         let start = i
         let ends: Set<Unicode.Scalar> = [",", "]", "}", "#", "\n", "\r"]
