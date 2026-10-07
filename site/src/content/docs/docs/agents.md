@@ -97,8 +97,12 @@ The Welcome window lists every conversation Claude Code, Codex and Command Code 
 
 Next Term is also an MCP server. An orchestrator agent can list every project and tab with each agent’s state, start agents in new tabs, send them prompts, wait for them, read their screens and answer their questions. It is set up for you in the agents above. See [Orchestrate agents (MCP)](/docs/orchestration/).
 
+## Agents on your servers
+
+A remote tab (<kbd>⌥⌘T</kbd>) runs an agent on a server you reach with ssh, kept running in tmux or herdr while your Mac sleeps, with the same marks as a local one. Agents can open and check those tabs through MCP too. See [Remote tabs on your servers](/docs/remote/).
+
 ## Coming next
 
-<span class="nt-soon">Coming next</span> **Tabs on your servers:** connect a VPS over SSH, run agents there in tabs that keep running while your Mac is away, and drive them through MCP.
+<span class="nt-soon">Coming next</span> **Sessions from more agents:** the conversations Gemini CLI, opencode, Copilot CLI and Cursor keep, in the Welcome window beside Claude Code’s, Codex’s and Command Code’s.
 
 <span class="nt-soon">Coming later</span> An IDE link for GitHub Copilot CLI, and remote access to the MCP server for agents outside your Mac.

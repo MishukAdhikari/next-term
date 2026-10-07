@@ -68,14 +68,22 @@ const head = [
 			'Gemini CLI and Qwen Code IDE integration',
 			'Send to Agent (⌥⌘K) in each agent’s own syntax',
 			'MCP server for orchestration: one agent starts, prompts, waits for and reads the others across projects',
+			'Agent sessions per project: resume or fork Claude Code, Codex and Command Code conversations',
+			'Remote tabs on your own servers over ssh, kept running in tmux or herdr',
 			'Split panes',
 			'Go to File: fuzzy search for any file in the project',
-			'Code editor for 112 languages',
+			'Code editor for 112 languages, with git blame and change marks in the gutter',
+			'Read-only Jupyter notebooks with their saved outputs',
+			'A head view for large JSON Lines, CSV and TSV files',
 			'Side-by-side git diffs with hunk staging',
+			'Branch popup: checkout, update, commit and push',
+			'Git Log: the commit graph, with filters and each commit’s diffs',
 			'Project sidebar with git status and line counts',
+			'The databases a project names, and a read-only SQLite viewer',
 			'Find and Replace in Files',
+			'Import of shortcuts, settings, fonts and terminal colours from other editors and terminals',
 			'nxtrm command-line tool',
-			'Checksum-verified self-updates',
+			'One-line installer and checksum-verified self-updates',
 		],
 	}),
 ];
@@ -122,6 +130,16 @@ const mcpTools = [
 	'open_in_editor',
 ];
 
+const mcpServerTools = [
+	'list_hosts',
+	'add_host',
+	'remove_host',
+	'check_host',
+	'new_remote_tab',
+	'host_sessions',
+	'host_changes',
+];
+
 const faq = [
 	{
 		q: 'Is Next Term free?',
@@ -138,6 +156,10 @@ const faq = [
 	{
 		q: 'Can one agent control the others?',
 		a: 'Yes. Next Term is an MCP server, set up for you in Claude Code, Codex, Gemini CLI and seven other agents. An orchestrator can list every tab with its agent’s state, start agents, send them prompts, wait for them and read their screens. It works only on your Mac, and Settings turns it off.',
+	},
+	{
+		q: 'Can my agents run on a server?',
+		a: 'Yes. Shell › New Remote Tab… (⌥⌘T) opens a tab on any server you reach with your own ssh. With tmux or herdr, the session keeps running while your Mac sleeps, the tab reconnects by itself, and its agent gets the same marks as one on your Mac.',
 	},
 	{
 		q: 'Why does macOS ask me to allow the first launch?',
@@ -291,8 +313,8 @@ const faq = [
 			<h2 id="orchestrate">One agent can run the others</h2>
 			<p class="lede">
 				Next Term is an MCP server. Ask Claude Code, Codex or any agent that speaks MCP to open your projects,
-				start other agents in new tabs, give them their tasks, wait for them and read what they did. You watch
-				every tab, and step in whenever you like.
+				start other agents in new tabs, on your Mac or on your servers, give them their tasks, wait for them and
+				read what they did. You watch every tab, and step in whenever you like.
 			</p>
 			<figure class="ask">
 				<figcaption>You ask your agent</figcaption>
@@ -332,10 +354,48 @@ const faq = [
 					<p>A socket only you can open, and no network port. Settings turns it off and removes the entries.</p>
 				</li>
 			</ul>
-			<ul class="tools" aria-label="The 18 MCP tools">
+			<p class="hint tools-label">18 tools for the projects, tabs and editor on your Mac</p>
+			<ul class="tools" aria-label="The 18 MCP tools for your Mac">
 				{mcpTools.map((tool) => <li><code>{tool}</code></li>)}
 			</ul>
+			<p class="hint tools-label">7 more for your servers</p>
+			<ul class="tools" aria-label="The 7 MCP tools for your servers">
+				{mcpServerTools.map((tool) => <li><code>{tool}</code></li>)}
+			</ul>
 			<p class="more"><a href="/docs/orchestration/">Orchestrate agents (MCP)</a></p>
+		</section>
+
+		<section class="band" aria-labelledby="remote">
+			<h2 id="remote">Agents on your own servers</h2>
+			<p class="lede">
+				<strong>Shell › New Remote Tab…</strong> (<kbd>⌥⌘T</kbd>) opens a tab on any server you reach with ssh.
+				Start Claude Code or Codex there, close the lid, and with tmux or herdr on the server the agent keeps
+				working; open the Mac again and the tab is back where it was.
+			</p>
+			<ul class="features features--grid">
+				<li>
+					<h3>Your ssh, as you set it up</h3>
+					<p>
+						Your <code>~/.ssh/config</code>, keys, <code>ProxyJump</code> and key agents such as 1Password apply.
+						Tabs on one server share a connection, so you log in once.
+					</p>
+				</li>
+				<li>
+					<h3>Kept running</h3>
+					<p>
+						With tmux or herdr, a session outlives a sleeping Mac or a dropped network. The tab reconnects
+						by itself, and comes back at the next launch.
+					</p>
+				</li>
+				<li>
+					<h3>The same marks</h3>
+					<p>
+						Agents on a server get the spinner, the check, and the amber “!” with the question, and
+						your agents can open tabs there through MCP.
+					</p>
+				</li>
+			</ul>
+			<p class="more"><a href="/docs/remote/">Remote tabs on your servers</a></p>
 		</section>
 
 		<section class="band band--split band--reverse" aria-labelledby="workbench">
@@ -361,7 +421,16 @@ const faq = [
 						<p>
 							The project sidebar colours changed files and shows <span class="counts"
 								><span class="plus">+12</span> <span class="minus">−3</span></span
-							> per file and folder, like a pull request, with the branch and ahead/behind at the top.
+							> per file and folder, like a pull request, with the branch and ahead/behind at the top. In the
+							editor’s gutter, a bar marks each added or changed line as you or an agent type.
+						</p>
+					</li>
+					<li>
+						<h3>Paths in the output open</h3>
+						<p>
+							<kbd>⌘</kbd>-click <code>src/app.ts:42:7</code>, or a Python traceback’s{' '}
+							<code>File "graph.py", line 42</code>, and the file opens at that line. pytest and ruff lines
+							work too.
 						</p>
 					</li>
 					<li>
@@ -382,6 +451,105 @@ const faq = [
 					sizes="(min-width: 72rem) 34rem, 100vw"
 				/>
 			</figure>
+		</section>
+
+		<section class="band" aria-labelledby="git">
+			<h2 id="git">Git, from branch to blame</h2>
+			<ul class="features features--grid">
+				<li>
+					<h3>The branch popup</h3>
+					<p>
+						Click the branch, or press <kbd>⌥⌘B</kbd>: one search over branches and actions.{' '}
+						<strong>Update Project</strong>, <strong>Commit…</strong> and <strong>Push…</strong> each show what
+						they would do (<code>↓3</code>, <code>+41 −10</code>, <code>↑2</code>).
+					</p>
+				</li>
+				<li>
+					<h3>Nothing behind an agent’s back</h3>
+					<p>
+						It asks before changing files under a working agent, keeps your uncommitted changes in a named
+						stash when you switch, and every deleted branch has <strong>Undo</strong>.
+					</p>
+				</li>
+				<li>
+					<h3>Commits you can read</h3>
+					<p>
+						<strong>Commit…</strong> shows exactly what goes in and calls out files that look like secrets.{' '}
+						<strong>Let Agent Commit</strong> hands it to your agent instead.
+					</p>
+				</li>
+				<li>
+					<h3>The Git Log</h3>
+					<p>
+						<kbd>⌥⌘L</kbd> opens the history as a graph in a tab, with branch, author, date and path filters,
+						each commit in full, and its changes side by side.
+					</p>
+				</li>
+				<li>
+					<h3>Blame in the editor</h3>
+					<p>
+						<strong>View › Annotate with Git Blame</strong> shows who last changed each line, and when, beside
+						the line numbers, the newest work brightest. Click one for its commit in the Git Log.
+					</p>
+				</li>
+				<li>
+					<h3>Every command written down</h3>
+					<p>
+						<strong>Git › Git Commands</strong> lists each git command Next Term ran for you, exactly as it
+						would be typed.
+					</p>
+				</li>
+			</ul>
+			<p class="more"><a href="/docs/projects-and-git/#branches">Branches</a> · <a href="/docs/projects-and-git/#git-log">Git Log</a> · <a href="/docs/editor/#git-blame">Git blame</a></p>
+		</section>
+
+		<section class="band" aria-labelledby="data">
+			<h2 id="data">Notebooks, data and databases</h2>
+			<ul class="features features--grid">
+				<li>
+					<h3>Jupyter notebooks</h3>
+					<p>
+						An <code>.ipynb</code> opens as cells with their saved outputs: Markdown laid out, code coloured,
+						images shown, errors in red. Nothing runs, and <strong>Open as JSON</strong> is one click away.
+					</p>
+				</li>
+				<li>
+					<h3>Large data files</h3>
+					<p>
+						A JSON Lines, CSV or TSV file over 2 MB opens in a head view: its first 1,000 rows as a table, as
+						quickly for a 2 GB file as for a small one.
+					</p>
+				</li>
+				<li>
+					<h3>Prompts read as prompts</h3>
+					<p>
+						<code>{'{context}'}</code> placeholders and <code>{'{{ question }}'}</code> templates inside Python
+						strings get their own colour, and Prompty, Mermaid and Cypher files have grammars of their own.
+					</p>
+				</li>
+				<li>
+					<h3>Your project’s databases</h3>
+					<p>
+						The databases a project names in its own files (<code>DB_*</code> keys, <code>DATABASE_URL</code>,
+						Prisma, Drizzle, Supabase, SQLite files) sit in the sidebar, local or remote, password masked.
+					</p>
+				</li>
+				<li>
+					<h3>SQLite, read-only</h3>
+					<p>
+						A SQLite file opens in a tab: its tables, 1,000 rows a page, <strong>Copy As</strong> CSV, JSON or
+						Markdown, and <strong>Send to Agent</strong>.
+					</p>
+				</li>
+				<li>
+					<h3>Hand-offs</h3>
+					<p>
+						<strong>Open in TablePlus</strong>, or mysql and psql in a new tab for a local database. The
+						password goes through a private file that is deleted at once, never the command line.
+					</p>
+				</li>
+			</ul>
+			<p class="more"><a href="/docs/editor/#jupyter-notebooks">Notebooks</a> · <a href="/docs/editor/#large-data-files">Large data files</a> · <a href="/docs/projects-and-git/#databases">Databases</a></p>
 		</section>
 
 		<section class="band" aria-labelledby="fit">
@@ -408,13 +576,35 @@ const faq = [
 				</li>
 				<li>
 					<h3>Every shortcut is yours</h3>
-					<p>Change any of them in Settings (<kbd>⌘,</kbd>).</p>
+					<p>Change any of them in Settings (<kbd>⌘,</kbd>), or keep the keys you know from another editor.</p>
+				</li>
+				<li>
+					<h3>Bring your settings over</h3>
+					<p>
+						From VS Code, Cursor, a JetBrains IDE, Zed, iTerm2, Ghostty or Terminal: your shortcuts,
+						fonts, terminal colours and recent projects. You see each change first, and one click undoes it.
+					</p>
+				</li>
+				<li>
+					<h3>Pick up any conversation</h3>
+					<p>
+						The Welcome window lists the sessions Claude Code, Codex and Command Code kept for each project.{' '}
+						<strong>Resume</strong> or <strong>Fork</strong> one in a tab; <kbd>⌥⌘O</kbd> does it in a project window.
+					</p>
+				</li>
+				<li>
+					<h3>Tabs that serve</h3>
+					<p>
+						A tab running <code>npm run dev</code>, <code>uvicorn</code> or <code>langgraph dev</code> shows its port,
+						such as “app · :5173”, and <strong>Shell › Open Served URL</strong> opens it.
+					</p>
 				</li>
 				<li>
 					<h3>Updates in one click</h3>
 					<p>Checked against the published SHA-256 before anything is replaced.</p>
 				</li>
 			</ul>
+			<p class="more"><a href="/docs/switching/">Switching to Next Term</a></p>
 		</section>
 
 		<section class="band" aria-labelledby="works-with">
@@ -457,6 +647,20 @@ const faq = [
 					<p>The only request Next Term makes on its own is a daily update check to GitHub. You can turn it off.</p>
 				</li>
 				<li>
+					<h3>Databases stay put</h3>
+					<p>
+						Found by reading the project’s files, never by running its code. Passwords are never shown, logged,
+						copied or handed to an agent.
+					</p>
+				</li>
+				<li>
+					<h3>Your servers, your ssh</h3>
+					<p>
+						Host keys are never accepted silently, no password is stored, and nothing on a server can reach back
+						to Next Term.
+					</p>
+				</li>
+				<li>
 					<h3>Open source, MIT</h3>
 					<p>
 						Read every line on GitHub. Releases are built from it by GitHub Actions, with a SHA-256 checksum
@@ -472,8 +676,9 @@ const faq = [
 			<p class="oneliner-intro">In one line, from the terminal:</p>
 			<pre class="oneliner"><code>curl -fsSL https://next-term.mishuk.me/install.sh | bash</code></pre>
 			<p class="hint">
-				It checks the release’s SHA-256 and signature and copies Next Term to Applications,
-				with no <code>sudo</code> and no first-launch prompt. <a href="https://github.com/MishukAdhikari/next-term/blob/main/site/src/install.sh">Read the script</a>.
+				It checks that the release’s checksum is signed with the Next Term release key and that the download
+				matches it, then copies Next Term to Applications, with no <code>sudo</code> and no first-launch prompt.{' '}
+				<a href="https://github.com/MishukAdhikari/next-term/blob/main/site/src/install.sh">Read the script</a>.
 				Or with the disk image:
 			</p>
 			<ol class="steps">
@@ -502,8 +707,13 @@ const faq = [
 			<h2 id="next">What comes next</h2>
 			<ul class="next">
 				<li>
-					<span class="nt-soon">Coming next</span> <strong>Tabs on your servers.</strong> Connect a VPS over SSH and run
-					agents there in tabs that keep running while your Mac is away.
+					<span class="nt-soon">Coming next</span> <strong>Sessions from more agents.</strong> The conversations
+					Gemini CLI, opencode, Copilot CLI and Cursor keep, in the Welcome window beside Claude Code’s, Codex’s
+					and Command Code’s.
+				</li>
+				<li>
+					<span class="nt-soon">Coming later</span> <strong>A server’s files in the editor and sidebar</strong>, next
+					to its remote tabs, and then dev containers.
 				</li>
 				<li>
 					<span class="nt-soon">Coming later</span> <strong>Remote access to the MCP server</strong> for agents that
@@ -878,6 +1088,12 @@ const faq = [
 		background: transparent;
 		color: var(--sl-color-gray-2);
 		font-size: var(--sl-text-xs);
+	}
+	.tools-label {
+		margin-top: 1.75rem !important;
+	}
+	.tools-label + .tools {
+		margin-top: 0.6rem !important;
 	}
 	.next {
 		display: grid;

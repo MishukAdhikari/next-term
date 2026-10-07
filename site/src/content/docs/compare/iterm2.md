@@ -24,7 +24,7 @@ iTerm2 is a free, open-source (GPL v2) terminal for macOS with a long list of fe
 | Code editor | ✓ 112 languages, Go to File (<kbd>⌘P</kbd>) | — |
 | Side-by-side diffs, per-hunk staging | ✓ <kbd>⌥⌘G</kbd> | Partly: a diff viewer in the Claude Code workgroup |
 | Project sidebar with git status | ✓ | — |
-| tmux integration | — | ✓ `tmux -CC` as native windows and tabs |
+| tmux integration | Partly: remote tabs keep their sessions in tmux or herdr on the server and reattach by themselves; no `tmux -CC` mode | ✓ `tmux -CC` as native windows and tabs |
 | Automation | `nxtrm` and the MCP server | ✓ Triggers, a Python API, the `it2` tool |
 | Hotkey window, profiles, Instant Replay | — | ✓ |
 
@@ -44,7 +44,8 @@ iTerm2 is a free, open-source (GPL v2) terminal for macOS with a long list of fe
 
 ## Use both
 
-- **Keep iTerm2 for ssh, tmux and everything else; open agent projects in Next Term.** `nxtrm .` in an iTerm2 tab opens that folder as a Next Term project; Next Term links the command into `/usr/local/bin` at launch, or asks once through **Next Term › Install Command Line Tool (nxtrm)…**.
+- **Keep iTerm2 for tmux integration, scripting and everything else; open agent projects in Next Term.** `nxtrm .` in an iTerm2 tab opens that folder as a Next Term project; Next Term links the command into `/usr/local/bin` at launch, or asks once through **Next Term › Install Command Line Tool (nxtrm)…**.
+- **Bring your profile over.** **Next Term › Import Settings and Shortcuts…** reads iTerm2’s default profile (its font, font size, colours and Option keys) and shows each change before it applies it.
 - **Agents started in iTerm2 can still use Next Term.** A `claude` started in iTerm2 inside a project open in Next Term can connect to Next Term with `/ide`, and any agent with Next Term’s MCP server registered can start other agents in Next Term tabs.
 
 ## Questions
@@ -55,7 +56,7 @@ If Claude Code is the only agent you run, iTerm2 may be enough. Next Term shows 
 
 ### Does Next Term support tmux integration, triggers or profiles?
 
-No. Next Term runs tmux like any terminal, but has no tmux integration mode, triggers, profiles or scripting API beyond `nxtrm` and its MCP server.
+Not tmux’s control mode. Next Term runs tmux like any terminal, and a remote tab can keep its session in Next Term’s own tmux server on the host and reattach when the connection comes back. It has no `tmux -CC` mode, triggers, profiles or scripting API beyond `nxtrm` and its MCP server.
 
 ### Is iTerm2 free?
 

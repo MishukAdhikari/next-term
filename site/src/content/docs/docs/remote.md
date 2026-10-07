@@ -3,7 +3,7 @@ title: Remote tabs on your servers
 description: "Run agents on your own VPS from a Next Term tab: sessions that keep running while your Mac sleeps, reconnecting, and the host keys and logins left to ssh."
 ---
 
-A remote tab is a terminal tab on one of your servers. Start Claude Code or Codex there, close the lid, and the agent keeps working on the server; open the Mac again and the tab is back where it was. Next Term connects with the ssh you already use, and installs nothing on the server.
+A remote tab is a terminal tab on one of your servers. Start Claude Code or Codex there, close the lid, and with tmux or herdr on the server the agent keeps working there; open the Mac again and the tab is back where it was. Next Term connects with the ssh you already use, and installs nothing on the server.
 
 ## Open a remote tab
 

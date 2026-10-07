@@ -1,6 +1,6 @@
 ---
 title: Code editor
-description: "The editor above your terminal: Go to File (⌘P), 112 languages, line height, soft wrap, git blame, ⌘/ comments, ⌘L, and files that follow your agents’ edits."
+description: "The editor above your terminal: Go to File (⌘P), 112 languages, soft wrap, git blame, ⌘/ comments, ⌘L, and files that follow your agents’ edits."
 head:
   - tag: title
     content: A native macOS terminal with a code editor — Next Term

@@ -8,7 +8,7 @@ head:
     content: Next Term vs PyCharm for AI coding agents
 ---
 
-PyCharm is JetBrains’ Python IDE for Windows, macOS and Linux, “built for web, data, and AI/ML professionals”. Since 2025.1 it is one product: free core features, including a debugger, test runners, Git, Docker and basic Jupyter notebooks, with PyCharm Pro adding full notebooks, Django, Flask and FastAPI support, databases and remote interpreters over SSH, in Docker or in WSL. For AI it offers Junie and AI Assistant, agents from other vendors through the Agent Client Protocol, a terminal that starts Claude Code, Codex or Junie, and a built-in MCP server that agents can use. Next Term is not a Python IDE: it has no Python code intelligence, debugger or notebooks. It is a free macOS terminal and editor for running agents such as Claude Code and Codex side by side, with each agent’s status on its tab. For Python work, keep PyCharm and run your agents in Next Term next to it.
+PyCharm is JetBrains’ Python IDE for Windows, macOS and Linux, “built for web, data, and AI/ML professionals”. Since 2025.1 it is one product: free core features, including a debugger, test runners, Git, Docker and basic Jupyter notebooks, with PyCharm Pro adding full notebooks, Django, Flask and FastAPI support, databases and remote interpreters over SSH, in Docker or in WSL. For AI it offers Junie and AI Assistant, agents from other vendors through the Agent Client Protocol, a terminal that starts Claude Code, Codex or Junie, and a built-in MCP server that agents can use. Next Term is not a Python IDE: it has no Python code intelligence or debugger, and it opens notebooks read-only, without a kernel. It is a free macOS terminal and editor for running agents such as Claude Code and Codex side by side, with each agent’s status on its tab. For Python work, keep PyCharm and run your agents in Next Term next to it.
 
 ## At a glance
 
@@ -16,9 +16,9 @@ PyCharm is JetBrains’ Python IDE for Windows, macOS and Linux, “built for we
 |---|---|---|
 | Platforms | macOS 13 or later | Windows, macOS, Linux |
 | Price | Free, MIT | Free core features; PyCharm Pro is a subscription |
-| Python code intelligence | — Highlighting only: Python, Jinja and 100 more languages | ✓ Inspections, navigation, refactoring |
+| Python code intelligence | — Highlighting only: Python, Jinja, prompt templates inside strings and 109 more languages; traceback links | ✓ Inspections, navigation, refactoring |
 | Debugger | — | ✓ In the free core features |
-| Jupyter notebooks | — | ✓ Basic for free; full, local and remote, in Pro |
+| Jupyter notebooks | Partly: read-only, with the outputs saved in the file; nothing runs | ✓ Basic for free; full, local and remote, in Pro |
 | Django, Flask, FastAPI | — | ✓ Advanced support in Pro |
 | Remote interpreters | — | ✓ SSH, Docker, WSL, in Pro |
 | AI of its own | — Runs the agents you install | ✓ Junie and AI Assistant; the free AI tier is not included when PyCharm is used for free |
@@ -26,7 +26,7 @@ PyCharm is JetBrains’ Python IDE for Windows, macOS and Linux, “built for we
 | Several agents at once, with their status | ✓ Tabs and split panes, with status on every tab | Partly: Air, in early access, shows parallel sessions |
 | MCP | ✓ An MCP server for orchestration: start, prompt, wait for and read agents | ✓ An MCP server that gives agents the IDE’s tools |
 | Claude Code’s IDE link | ✓ Built in, also for Gemini CLI and Qwen Code | ✓ Anthropic’s plugin supports PyCharm |
-| Reviewing changes | ✓ Side-by-side diffs; stage, unstage or revert per hunk | ✓ The IDE’s diff viewer; commit chosen chunks and lines |
+| Reviewing changes | ✓ Side-by-side diffs; stage, unstage or revert per hunk; the Git Log and blame | ✓ The IDE’s diff viewer; commit chosen chunks and lines |
 
 ## Choose PyCharm if…
 
@@ -39,6 +39,7 @@ PyCharm is JetBrains’ Python IDE for Windows, macOS and Linux, “built for we
 
 - **You hand more of the work to agents.** Run Claude Code in one tab, Codex in another and `pytest` in a split pane, each with its status on its tab, and a notification that quotes any agent’s question.
 - **You want to read every change before it lands.** Claude Code’s, Gemini CLI’s and Qwen Code’s proposed edits open as diffs to accept or reject, and <kbd>⌥⌘G</kbd> shows any file’s changes side by side, with per-hunk stage, unstage and revert.
+- **You build RAG or agent projects.** `{context}` placeholders and `{{ question }}` templates inside Python strings get their own colour, <kbd>⌘</kbd>-click opens a traceback’s line, or the definition behind a `graph.py:graph` reference as `langgraph.json` writes it, and a tab running `langgraph dev` shows its port.
 - **You want one agent to coordinate the others** across projects, through Next Term’s MCP server.
 - **You want a light window for agent work** that opens next to PyCharm and costs nothing.
 
@@ -55,7 +56,7 @@ PyCharm for code, Next Term for agents: the two do not compete for the same job.
 
 ### Does Next Term open Jupyter notebooks?
 
-No. Next Term has no notebook support, debugger or Python language intelligence. Its editor colours Python, Jinja and 100 more languages, finds files with <kbd>⌘P</kbd>, and searches and replaces across the project.
+Yes, read-only. A notebook opens as cells with the outputs saved in the file, and follows the file when Jupyter or an agent saves it, but nothing runs: Next Term has no kernel, debugger or Python language intelligence. To run cells, use PyCharm or Jupyter. See [Jupyter notebooks](/docs/editor/#jupyter-notebooks).
 
 ### Is PyCharm free?
 

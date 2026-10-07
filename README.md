@@ -248,9 +248,10 @@ front end can reuse it.
 
 ## Roadmap
 
-Next: remote development over SSH and Dev Containers,
-and a secure link so agents outside this Mac (ChatGPT, Claude) can use the MCP server. Later: notarized
-releases. A Linux build would need a different UI layer (AppKit is
+Next: sessions from more agents (Gemini CLI, opencode, Copilot CLI, Cursor). Then a server's files in
+the editor and sidebar next to its remote tabs, then Dev Containers, and a secure link so agents outside
+this Mac (ChatGPT, Claude) can use the MCP server. Later: more of the diff view, a Copilot CLI IDE link,
+session restore and notarized releases. A Linux build would need a different UI layer (AppKit is
 macOS-only); the core logic would carry over.
 
 ## Credits

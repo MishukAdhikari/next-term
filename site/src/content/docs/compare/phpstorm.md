@@ -16,24 +16,24 @@ PhpStorm is JetBrains’ IDE for PHP, on Windows, macOS and Linux. It understand
 |---|---|---|
 | Platforms | macOS 13 or later | Windows, macOS, Linux |
 | Price | Free, MIT | A subscription, with a 30-day trial; free for students and for non-commercial open-source work |
-| PHP code intelligence | — Highlighting only: PHP, Blade, Twig and 100 more languages | ✓ Inspections, navigation, refactoring |
+| PHP code intelligence | — Highlighting only: PHP, Blade, Twig and 109 more languages | ✓ Inspections, navigation, refactoring |
 | Laravel, Symfony, WordPress, Drupal | — | ✓ Laravel support built in and free |
 | Debugging | — | ✓ Xdebug and Zend Debugger |
 | Tests | Run them in a tab or split pane | ✓ PHPUnit, Pest, Behat, Codeception, phpspec |
-| Database tools | — | ✓ Bundled |
+| Database tools | Partly: the databases a project names (Laravel’s `DB_*` keys too) in the sidebar, a read-only SQLite viewer, and hand-offs to TablePlus, mysql or psql | ✓ Bundled |
 | AI of its own | — Runs the agents you install | ✓ Junie and AI Assistant; AI Free comes with the subscription |
 | Agents from other vendors | ✓ Any agent that runs in a terminal; 20 recognised by name | ✓ Claude Agent and Codex in AI Chat; Copilot, Cursor and others through ACP |
 | Several agents at once, with their status | ✓ Tabs and split panes, with status on every tab | Partly: Air, in early access, shows parallel sessions |
 | MCP | ✓ An MCP server for orchestration: start, prompt, wait for and read agents | ✓ An MCP server that gives agents the IDE’s tools |
 | Claude Code’s IDE link | ✓ Built in, also for Gemini CLI and Qwen Code | ✓ Anthropic’s plugin supports PhpStorm |
-| Reviewing changes | ✓ Side-by-side diffs; stage, unstage or revert per hunk | ✓ The IDE’s diff viewer; commit chosen chunks and lines |
-| Remote development | — | ✓ SSH, dev containers, JetBrains Gateway |
+| Reviewing changes | ✓ Side-by-side diffs; stage, unstage or revert per hunk; the Git Log and blame | ✓ The IDE’s diff viewer; commit chosen chunks and lines |
+| Remote development | Partly: terminal tabs on your servers over ssh, kept running in tmux or herdr; the editor opens your Mac’s files | ✓ SSH, dev containers, JetBrains Gateway |
 
 ## Choose PhpStorm if…
 
 - **You write PHP for a living.** Inspections, refactoring and navigation that understand your code, and framework support for Laravel, Symfony, WordPress and Drupal.
 - **You debug with Xdebug** or run PHPUnit and Pest tests from the editor.
-- **You work with databases** from the same window.
+- **You query and change databases** from the same window.
 - **You want agents inside the IDE,** in AI Chat or, in early access, in Air.
 
 ## Choose Next Term if…
@@ -49,6 +49,7 @@ This is the setup Next Term is made for in a PHP shop: PhpStorm for code, Next T
 
 - **Open the project in both.** `nxtrm .` in PhpStorm’s terminal opens the folder as a Next Term project. Run your agents, test watchers and `php artisan serve` in Next Term tabs.
 - **Debug in PhpStorm.** When an agent’s change breaks something, set a breakpoint and step through it with Xdebug in PhpStorm.
+- **Find the database in either.** Next Term lists the database your `.env` names (Herd projects included) in the sidebar, password masked, and opens it in TablePlus, or in mysql in a tab when it is local. PhpStorm’s database tools query and change it.
 - **Give the agents PhpStorm’s tools.** PhpStorm’s built-in MCP server lets Claude Code, Codex and other agents use the IDE’s tools, and PhpStorm 2026.2 made setting it up for terminal agent sessions faster. A configured agent has those tools in a Next Term tab too.
 - **Send code to an agent from either side.** In Next Term, <kbd>⌥⌘K</kbd> types `@app/Http/Controllers/UserController.php#L10-20` into Claude’s prompt. In PhpStorm, Anthropic’s plugin shares your selection when Claude is connected to the IDE.
 

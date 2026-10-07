@@ -24,8 +24,8 @@ JetBrains IDEs (IntelliJ IDEA, WebStorm, GoLand, PhpStorm, PyCharm, Rider, RubyM
 | Several agents at once, with their status | ✓ Tabs and split panes, with status on every tab | Partly: Air, in early access, shows parallel sessions across projects |
 | MCP | ✓ An MCP server for orchestration: start, prompt, wait for and read agents | ✓ An MCP server that gives agents the IDE’s tools, and an MCP client in AI Assistant |
 | Claude Code’s IDE link | ✓ Built in, also for Gemini CLI and Qwen Code | ✓ Anthropic’s plugin: diffs in the IDE’s viewer, selection, diagnostics |
-| Reviewing changes | ✓ Side-by-side diffs; stage, unstage or revert per hunk | ✓ The IDE’s diff viewer; commit chosen chunks and lines |
-| Remote development | — | ✓ SSH, dev containers, WSL, JetBrains Gateway |
+| Reviewing changes | ✓ Side-by-side diffs; stage, unstage or revert per hunk; the Git Log and blame | ✓ The IDE’s diff viewer; commit chosen chunks and lines |
+| Remote development | Partly: terminal tabs on your servers over ssh, kept running in tmux or herdr; the editor opens your Mac’s files | ✓ SSH, dev containers, WSL, JetBrains Gateway |
 | Real-time collaboration | — | Partly: Code With Me is being retired; its service ends in the first quarter of 2027 |
 | The app | Native Swift and AppKit, about a 3 MB download | Full IDEs |
 
@@ -48,6 +48,7 @@ JetBrains IDEs (IntelliJ IDEA, WebStorm, GoLand, PhpStorm, PyCharm, Rider, RubyM
 For most JetBrains users this is the setup that makes sense: the IDE for code, Next Term for the agents.
 
 - **Open the project in both.** `nxtrm .` in the IDE’s terminal opens the folder as a Next Term project; run your agents there.
+- **Keep your keymap.** **Next Term › Import Settings and Shortcuts…** offers a JetBrains shortcut set and reads the keys you changed in your keymap, showing each change first. In that set, <kbd>⌘P</kbd> still opens Go to File. See [Switching to Next Term](/docs/switching/).
 - **Give the agents in Next Term the IDE’s tools.** JetBrains IDEs have a built-in MCP server that Claude Code, Codex and other agents can use to build the project, read the problems the IDE found in a file and rename symbols, and the IDE can configure detected agents for you. A configured agent has those tools in a Next Term tab too.
 - **Let Junie drive Next Term.** Junie reads `~/.junie/mcp/mcp.json`, in the IDE and in its CLI. Next Term adds its own server there when that file exists or the Junie CLI is installed, so Junie can start agents in Next Term tabs, give them tasks and read the results.
 - **Review where you like.** A `claude` started in Next Term connects to Next Term, and proposed edits open in Next Term’s diff view. To use the IDE’s diff viewer for a session instead, run `/ide` in Claude Code and pick your JetBrains IDE (with Anthropic’s plugin installed).

@@ -69,7 +69,9 @@ Add a stdio server that runs `nxtrm mcp`. `nxtrm` is on the `PATH` in Next Term�
 | `close_tab` | Closes a tab. A tab with something running is refused unless `force` is true, which stops it. | Yes: asks first |
 | `open_in_editor` | Opens a file in the editor, at a line and column if given. | Opens a file |
 
-“Asks first” means the tool is marked as destructive in its MCP description, so agents that ask before risky actions ask you before using it. Every tool is marked honestly: the ten that only read say so.
+“Asks first” means the tool is marked as destructive in its MCP description, so agents that ask before risky actions ask you before using it. Every tool is marked honestly: the ten in this table that only read say so.
+
+Seven more tools work with your servers: `list_hosts`, `add_host`, `remove_host`, `check_host`, `new_remote_tab`, `host_sessions` and `host_changes`. They are described in [Remote tabs: for agents](/docs/remote/#for-agents-mcp). Of these, only `list_hosts` only reads; the others are marked so that your agent’s client asks you first.
 
 ### Waiting
 

@@ -1,6 +1,6 @@
 ---
 title: Switching from VS Code or JetBrains
-description: "Bring shortcuts, settings, fonts, colours and recent projects from VS Code, Cursor, JetBrains, Zed, iTerm2, Ghostty, Warp or Terminal. You see it first."
+description: "Bring shortcuts, settings, fonts, colours and recent projects from VS Code, Cursor, JetBrains, Zed, iTerm2, Ghostty, Terminal and more. You see it first."
 sidebar:
   label: Switching to Next Term
 ---

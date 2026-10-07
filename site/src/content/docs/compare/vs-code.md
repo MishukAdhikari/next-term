@@ -27,8 +27,8 @@ VS Code is Microsoft’s free code editor for macOS, Windows and Linux, with the
 | Code intelligence | — | ✓ IntelliSense and refactoring, built in for JavaScript and TypeScript, more through extensions |
 | Debugger | — | ✓ Built in for JavaScript, TypeScript and Node.js; other languages through extensions |
 | Extensions | — | ✓ The Visual Studio Marketplace |
-| Reviewing changes | ✓ Side-by-side diffs; stage, unstage or revert per hunk | ✓ The diff editor; stage selected ranges |
-| Remote development | — | ✓ SSH, Dev Containers, WSL, Tunnels |
+| Reviewing changes | ✓ Side-by-side diffs; stage, unstage or revert per hunk; the Git Log and blame | ✓ The diff editor; stage selected ranges |
+| Remote development | Partly: terminal tabs on your servers over ssh, kept running in tmux or herdr; the editor opens your Mac’s files | ✓ SSH, Dev Containers, WSL, Tunnels |
 | The app | Native Swift and AppKit, about a 3 MB download | Built on Electron |
 
 ## Choose VS Code if…
@@ -50,6 +50,7 @@ VS Code is Microsoft’s free code editor for macOS, Windows and Linux, with the
 If VS Code is your editor, keep it: VS Code for the code, Next Term for the agents.
 
 - **Open the project in both.** `nxtrm .` in VS Code’s terminal opens the folder as a Next Term project. Run your agents, tests and dev servers in Next Term tabs.
+- **Keep your keys.** **Next Term › Import Settings and Shortcuts…** reads the keys you changed in VS Code’s `keybindings.json` and the settings Next Term has too, shows each change first, and undoes them in one click. See [Switching to Next Term](/docs/switching/).
 - **Pick the IDE link per session.** A `claude` started in VS Code’s integrated terminal connects to VS Code, where Anthropic’s extension shows its diffs and shares diagnostics. A `claude` started in a Next Term tab connects to Next Term instead.
 - **Let Copilot drive Next Term.** VS Code is an MCP client, and it also reads `~/.copilot/mcp-config.json`, the file where Next Term registers itself for GitHub Copilot CLI. Or add a stdio server that runs `nxtrm mcp` with **MCP: Open User Configuration**. Copilot’s agent can then start Claude Code or Codex in Next Term tabs, send them tasks, wait for them and read the results.
 

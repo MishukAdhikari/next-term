@@ -3,6 +3,7 @@ import { getCollection, type CollectionEntry } from 'astro:content';
 /** The documentation pages in reading order (the sidebar’s order in astro.config.mjs). */
 export const DOCS_ORDER = [
 	'docs/getting-started',
+	'docs/switching',
 	'docs/updates',
 	'docs/agent-status',
 	'docs/agents',

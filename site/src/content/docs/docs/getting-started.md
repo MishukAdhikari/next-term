@@ -20,7 +20,7 @@ Next Term is one app: a terminal with tabs, a code editor above it, and a projec
 curl -fsSL https://next-term.mishuk.me/install.sh | bash
 ```
 
-It downloads the latest release from GitHub, checks it against its published SHA-256, checks that the app inside is Next Term with an intact signature, and copies it to **Applications**. Nothing else changes: no `sudo`, and a Next Term that is running is never replaced (use **Check for Updates** in it instead). Because the download comes through `curl` rather than a browser, macOS doesn’t ask you to allow the first launch. [Read the script](https://github.com/MishukAdhikari/next-term/blob/main/site/src/install.sh) before you run it, if you like; it is short.
+It downloads the latest release from GitHub, checks that its SHA-256 checksum is signed with the Next Term release key and that the download matches it, checks that the app inside is Next Term with an intact signature, and copies it to **Applications** (or `~/Applications` when you can’t write to Applications). Nothing else changes: no `sudo`, and a Next Term that is running is never replaced (use **Check for Updates** in it instead). Because the download comes through `curl` rather than a browser, macOS doesn’t ask you to allow the first launch. [Read the script](https://github.com/MishukAdhikari/next-term/blob/main/site/src/install.sh) before you run it, if you like; it is short.
 
 `NEXTTERM_VERSION=0.7.0` installs a particular version, and `NEXTTERM_DIR=~/Apps` another folder, for example `curl -fsSL https://next-term.mishuk.me/install.sh | NEXTTERM_DIR=~/Apps bash`.
 
@@ -57,6 +57,8 @@ The first time it starts, Next Term asks which folder to work in. That folder op
 
 If you cancel, you get a plain terminal in your home folder. You can open a project at any time with **Shell › Open Project…** (<kbd>⌘O</kbd>). More in [Projects and git](/docs/projects-and-git/).
 
+If Next Term finds an editor or terminal it can read settings from, such as VS Code, Cursor, a JetBrains IDE, Zed, iTerm2, Ghostty or Terminal, it asks **Coming from another app?** Choose one to see exactly what it would bring over (your shortcuts, fonts, terminal colours and recent projects), or keep Next Term’s own. You can do it later from **Next Term › Import Settings and Shortcuts…**. See [Switching to Next Term](/docs/switching/).
+
 macOS also asks whether Next Term may send notifications. Allow them: that is how an agent waiting on your decision reaches you while you are in another tab or app.
 
 ## Run two agents side by side
@@ -69,12 +71,14 @@ macOS also asks whether Next Term may send notifications. Allow them: that is ho
 
 Read [Agent status in every tab](/docs/agent-status/) for what each mark means.
 
+To run an agent on one of your servers instead, press <kbd>⌥⌘T</kbd> (**Shell › New Remote Tab…**) and give it the ssh destination. With **tmux** or **herdr**, the agent keeps working while your Mac sleeps. See [Remote tabs on your servers](/docs/remote/).
+
 ## Open files next to your agents
 
 Files open in the editor above the terminal:
 
 - Double-click a file in the sidebar.
-- <kbd>⌘</kbd>-click a path such as `src/app.ts:42:7` anywhere in terminal output: the file opens at that line and column.
+- <kbd>⌘</kbd>-click a path such as `src/app.ts:42:7` anywhere in terminal output, or a Python traceback’s `File "graph.py", line 42`: the file opens at that line.
 - Press <kbd>⌘P</kbd> and type part of its name ([Go to File](/docs/editor/#go-to-file)).
 - Run `nxtrm app/User.php:42` in a tab. See [The nxtrm command](/docs/command-line/).
 
@@ -96,4 +100,5 @@ scripts/build-dmg.sh          # universal app, DMG and checksum in dist/
 - [Agent status in every tab](/docs/agent-status/): the marks, notifications and the Dock badge.
 - [Agents and the IDE link](/docs/agents/): what Claude Code, Gemini CLI and Qwen Code see, and Send to Agent.
 - [Orchestrate agents (MCP)](/docs/orchestration/): let one agent start and steer the others.
+- [Projects and git](/docs/projects-and-git/): the sidebar, agent sessions, the branch popup and the Git Log.
 - [Keyboard shortcuts](/docs/keyboard-shortcuts/): the full list, and how to change any of them.

@@ -27,9 +27,9 @@ Zed is an open-source code editor written in Rust, for macOS, Linux and Windows,
 | Code editor | ✓ 112 languages, Go to File (<kbd>⌘P</kbd>) | ✓ Language servers, Vim mode, a much fuller editor |
 | Debugger | — | ✓ Through the Debug Adapter Protocol |
 | Extensions | — | ✓ Languages, themes, debuggers, MCP servers |
-| Reviewing agent changes | ✓ Side-by-side diffs; stage, unstage or revert per hunk | ✓ Accept or reject each hunk; checkpoints; stage or unstage hunks in the Git Panel |
+| Reviewing agent changes | ✓ Side-by-side diffs; stage, unstage or revert per hunk; the Git Log and blame | ✓ Accept or reject each hunk; checkpoints; stage or unstage hunks in the Git Panel |
 | Collaboration | — | ✓ Channels, shared projects, voice chat, screen sharing |
-| Remote work | — | ✓ Remote development over SSH |
+| Remote work | Partly: terminal tabs on your servers over ssh, kept running in tmux or herdr; the editor opens your Mac’s files | ✓ Remote development over SSH |
 
 ## Choose Zed if…
 

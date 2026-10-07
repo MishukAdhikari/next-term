@@ -23,11 +23,11 @@ Devin Desktop is the new name for Windsurf, Cognition’s AI code editor, since 
 | Several agents at once | ✓ Tabs and split panes | ✓ The Agent Command Center, with Spaces that share Git worktrees |
 | Status of each agent | ✓ On every tab: working, done, waiting (with the question), failed | ✓ A board grouped by status: blocked, ready for review and so on |
 | Notifications | ✓ Quote the agent’s question; Dock badge | ✓ When a session finishes or needs input; off by default |
-| Cloud agents | — Everything runs on your Mac | ✓ Devin cloud agents, on paid plans |
+| Cloud agents | — Agents run on your Mac, or on your own servers in remote tabs | ✓ Devin cloud agents, on paid plans |
 | MCP | ✓ An MCP server: one agent starts, prompts, waits for and reads the others | ✓ An MCP client for the tools you add |
 | Code editor | ✓ 112 languages, Go to File (<kbd>⌘P</kbd>); no language servers | ✓ A full editor on VS Code OSS, with extensions from Open VSX |
-| Reviewing agent changes | ✓ Side-by-side diffs, stage, unstage or revert per hunk | ✓ Diff zones with accept and reject for each hunk |
-| Remote work | — | ✓ Remote-SSH, Dev Containers, WSL (beta) |
+| Reviewing agent changes | ✓ Side-by-side diffs, stage, unstage or revert per hunk; the Git Log and blame | ✓ Diff zones with accept and reject for each hunk |
+| Remote work | Partly: terminal tabs on your servers over ssh, kept running in tmux or herdr | ✓ Remote-SSH, Dev Containers, WSL (beta) |
 | The app | Native Swift and AppKit, about a 3 MB download | Built on VS Code OSS |
 
 ## Choose Devin Desktop if…
@@ -62,7 +62,7 @@ It runs **Claude Agent**, Codex CLI, Gemini CLI, OpenCode, Junie and other agent
 
 ### Does Next Term have cloud agents?
 
-No. Everything Next Term runs, runs on your Mac, in its tabs. Its MCP server listens on a private socket with no network port.
+No. Agents run in Next Term’s tabs: on your Mac, or in [remote tabs](/docs/remote/) on servers you reach with your own ssh. Its MCP server listens on a private socket with no network port, and is never forwarded to a server.
 
 ## Read more
 

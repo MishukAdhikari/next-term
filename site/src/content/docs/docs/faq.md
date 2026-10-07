@@ -1,6 +1,6 @@
 ---
 title: Frequently asked questions
-description: "Answers about Next Term: supported agents and Macs, Open Anyway, privacy, Claude Code and Codex, orchestration over MCP, split panes, and what comes next."
+description: "Answers about Next Term: agents and Macs, installing, privacy, MCP, remote tabs, git history, notebooks, databases, importing settings, what comes next."
 head:
   - tag: title
     content: Next Term FAQ — AI terminal for macOS
@@ -8,7 +8,7 @@ head:
 
 ## What is Next Term?
 
-Next Term is a native macOS terminal and code editor for running AI coding agents side by side. Each agent gets a tab, and every tab shows whether its agent is working, done, or waiting on your decision. An editor, side-by-side diffs and a git-aware project sidebar sit next to the agents, so you can read and fix what they change without leaving the window.
+Next Term is a native macOS terminal and code editor for running AI coding agents side by side. Each agent gets a tab, and every tab shows whether its agent is working, done, or waiting on your decision. An editor, side-by-side diffs, git from branches to blame and a git-aware project sidebar sit next to the agents, so you can read and fix what they change without leaving the window. Agents can run on your Mac or, in remote tabs, on your own servers.
 
 ## Which AI coding agents does it work with?
 
@@ -26,9 +26,19 @@ No. Next Term brings no model and no account. It runs the agent command-line too
 
 macOS 13 Ventura or later, on Apple Silicon and Intel: the app is universal. The download is about 3 MB and the app takes about 8 MB.
 
+## How do I install it?
+
+In one line, from the terminal:
+
+```sh
+curl -fsSL https://next-term.mishuk.me/install.sh | bash
+```
+
+It checks that the release’s checksum is signed with the Next Term release key and that the download matches it, then copies Next Term to Applications, with no `sudo` and no first-launch prompt. Or download the disk image and drag Next Term to Applications. See [Install and get started](/docs/getting-started/).
+
 ## Why does macOS block the first launch?
 
-Releases are not notarized by Apple yet. On macOS 15 and later, open Next Term once, then go to **System Settings → Privacy & Security** and click **Open Anyway**. On macOS 13 and 14, right-click the app, choose **Open**, then **Open** again. You only do this once. Each release includes a SHA-256 checksum so you can verify the download first. See [Install and get started](/docs/getting-started/#the-first-launch-open-anyway).
+Releases are not notarized by Apple yet, so macOS asks before it opens one downloaded in a browser. Installed with the one-line installer, Next Term opens without asking. On macOS 15 and later, open Next Term once, then go to **System Settings → Privacy & Security** and click **Open Anyway**. On macOS 13 and 14, right-click the app, choose **Open**, then **Open** again. You only do this once. Each release includes a SHA-256 checksum so you can verify the download first. See [Install and get started](/docs/getting-started/#the-first-launch-open-anyway).
 
 ## How does Next Term know when an agent is done or waiting on me?
 
@@ -44,11 +54,15 @@ Yes. Run `codex` in a tab: its tab shows when it is working, done or asking for 
 
 ## Does Next Term send my code anywhere?
 
-No. The agent links listen only on your Mac (`127.0.0.1`), with a fresh secret token each launch, and never share `.env` files or keys. The only request Next Term makes on its own is the daily update check to GitHub, which you can turn off. Your agents talk to their own providers as they always do. See [Security and privacy](/docs/security-and-privacy/).
+No. The agent links listen only on your Mac (`127.0.0.1`), with a fresh secret token each launch, and never share `.env` files or keys. The only request Next Term makes on its own is the daily update check to GitHub, which you can turn off. A project’s databases are found by reading its files, and nothing connects to one until you choose a hand-off; remote tabs connect only to the servers you open them on, through your own ssh. Your agents talk to their own providers as they always do. See [Security and privacy](/docs/security-and-privacy/).
 
 ## Can one agent control the others?
 
-Yes. Next Term is an MCP server, set up for you in Claude Code, Codex, Gemini CLI, Qwen Code, Cursor Agent, opencode, Copilot CLI, Amp, Junie and Command Code. An orchestrator agent can list every project and tab with each agent’s state, start agents in new tabs, send them prompts, wait for them, read their screens and answer their questions. It works only on your Mac, through a private socket with no network port, and **Settings** turns it off. See [Orchestrate agents (MCP)](/docs/orchestration/).
+Yes. Next Term is an MCP server, set up for you in Claude Code, Codex, Gemini CLI, Qwen Code, Cursor Agent, opencode, Copilot CLI, Amp, Junie and Command Code. An orchestrator agent can list every project and tab with each agent’s state, start agents in new tabs, send them prompts, wait for them, read their screens and answer their questions. It can also read, search and diff the open projects (never their secrets files), and open tabs on your servers. It works only on your Mac, through a private socket with no network port, and **Settings** turns it off. See [Orchestrate agents (MCP)](/docs/orchestration/).
+
+## Can my agents run on a server?
+
+Yes. **Shell › New Remote Tab…** (<kbd>⌥⌘T</kbd>) opens a tab on any server you reach with ssh, using your `~/.ssh/config`, keys and agent. Choose **tmux** or **herdr**, and the session keeps running while your Mac sleeps or the network drops; the tab reconnects by itself and comes back at the next launch. Agents there get the same marks as local ones. Nothing is installed on the server and no password is stored. See [Remote tabs on your servers](/docs/remote/).
 
 ## Can I split a tab into panes?
 
@@ -56,7 +70,19 @@ Yes. <kbd>⌘D</kbd> splits the tab to the right and <kbd>⇧⌘D</kbd> down, as
 
 ## Is Next Term a full IDE?
 
-No. It is built around the terminal tabs where your agents work: every tab shows its agent’s status, decisions arrive as notifications, and an editor, diffs and a git-aware sidebar sit next to them. There is no debugger, language server or extension system. See [how Next Term compares](/compare/) with VS Code, JetBrains IDEs, Cursor and others.
+No. It is built around the terminal tabs where your agents work: every tab shows its agent’s status, decisions arrive as notifications, and an editor, diffs, git tools and a git-aware sidebar sit next to them. There is no debugger, language server or extension system, and notebooks open read-only, without a kernel. See [how Next Term compares](/compare/) with VS Code, JetBrains IDEs, Cursor and others.
+
+## Does it show git history and blame?
+
+Yes. **Git › Git Log** (<kbd>⌥⌘L</kbd>) shows the commit history as a graph in a tab, with text, branch, author, date and path filters, each commit in full and its changes side by side. **View › Annotate with Git Blame** shows who last changed each line beside the line numbers. The branch popup (<kbd>⌥⌘B</kbd>) checks out, updates, commits and pushes, and asks first when an agent is working in the folder. See [Git Log](/docs/projects-and-git/#git-log), [Git blame](/docs/editor/#git-blame) and [Branches](/docs/projects-and-git/#branches).
+
+## Does it open Jupyter notebooks, data files and databases?
+
+Notebooks open read-only, as cells with the outputs saved in the file: nothing runs. JSON Lines, CSV and TSV files over 2 MB, and logs and other text files over 32 MB, open in a read-only head view that reads 1,000 rows at a time. The databases a project names in its own files appear in the sidebar; SQLite files open in a read-only viewer, and other databases hand off to TablePlus, or to mysql or psql in a tab. See [Jupyter notebooks](/docs/editor/#jupyter-notebooks), [Large data files](/docs/editor/#large-data-files) and [Databases](/docs/projects-and-git/#databases).
+
+## Can I bring my settings from VS Code or JetBrains?
+
+Yes. **Next Term › Import Settings and Shortcuts…** reads VS Code, Cursor, Devin Desktop, JetBrains IDEs, Zed, iTerm2, Ghostty and Terminal: the matching shortcut set, the keys you changed yourself, font size and other settings, fonts, terminal colours and recent projects. You see every change first, and one click undoes the import. See [Switching to Next Term](/docs/switching/).
 
 ## Will my zsh configuration and oh-my-zsh still work?
 
@@ -64,7 +90,7 @@ Yes. Next Term loads your `.zshenv`, `.zprofile` and `.zshrc` exactly as before,
 
 ## Can I change the keyboard shortcuts?
 
-Every one of them. Open **Settings** (<kbd>⌘,</kbd>) › **Keyboard Shortcuts**, click a shortcut and press the new keys. See [Keyboard shortcuts](/docs/keyboard-shortcuts/).
+Every one of them. Open **Settings** (<kbd>⌘,</kbd>) › **Keyboard Shortcuts**, click a shortcut and press the new keys. To keep the keys you know from another editor, choose a set in **Settings › Import › Shortcuts from**. See [Keyboard shortcuts](/docs/keyboard-shortcuts/).
 
 ## How do I update Next Term?
 
@@ -76,4 +102,4 @@ Not today. Next Term is built with AppKit, which is macOS-only. Its core logic h
 
 ## What is coming next?
 
-Next: tabs on your servers over SSH, with agents that keep running while your Mac is away. After that: your own key changes from VS Code and JetBrains keymaps, remote access to the MCP server for agents outside your Mac (such as ChatGPT and Claude on the web), more of the diff view, an IDE link for Copilot CLI, session restore and notarized releases. None of these is released yet.
+Next: the conversations Gemini CLI, opencode, Copilot CLI and Cursor keep, in the Welcome window beside the agent sessions it lists today, and Zed’s own key changes in the import. After that: a server’s files in the editor and sidebar, then dev containers; remote access to the MCP server for agents outside your Mac (such as ChatGPT and Claude on the web); more of the diff view; an IDE link for Copilot CLI; session restore and notarized releases. None of these is released yet.

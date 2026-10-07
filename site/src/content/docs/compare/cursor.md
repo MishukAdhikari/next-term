@@ -22,12 +22,12 @@ Cursor is an AI code editor built on the VS Code codebase, for macOS, Windows an
 | Agents from other vendors | ✓ Any agent that runs in a terminal; 20 recognised by name | Partly: Anthropic’s Claude Code extension installs in Cursor |
 | Several agents at once | ✓ Tabs and split panes | ✓ The Agents Window: parallel agents, local, cloud or over SSH |
 | Status of each agent | ✓ On every tab: working, done, waiting (with the question), failed | ✓ In the sidebar, with a Dock badge for unread results |
-| Cloud agents | — Everything runs on your Mac | ✓ Cloud Agents in isolated VMs |
+| Cloud agents | — Agents run on your Mac, or on your own servers in remote tabs | ✓ Cloud Agents in isolated VMs |
 | MCP | ✓ An MCP server: one agent starts, prompts, waits for and reads the others | ✓ An MCP client for the tools you add |
 | Code editor | ✓ 112 languages, Go to File (<kbd>⌘P</kbd>); no language servers | ✓ A full editor on the VS Code codebase |
 | Extensions | — | ✓ From the Open VSX registry; imports VS Code settings and extensions |
-| Reviewing agent changes | ✓ Side-by-side diffs, stage, unstage or revert per hunk | ✓ A diff view to reject what you do not want, and Agent Review |
-| Remote work | — | ✓ Agents over SSH, in WSL and in dev containers |
+| Reviewing agent changes | ✓ Side-by-side diffs, stage, unstage or revert per hunk; the Git Log and blame | ✓ A diff view to reject what you do not want, and Agent Review |
+| Remote work | Partly: terminal tabs on your servers over ssh, kept running in tmux or herdr | ✓ Agents over SSH, in WSL and in dev containers |
 | The app | Native Swift and AppKit, about a 3 MB download | Built on the VS Code codebase |
 
 ## Choose Cursor if…
@@ -51,6 +51,7 @@ Many people keep Cursor as their editor and run terminal agents in Next Term on 
 - **Edit and complete code in Cursor; run Claude Code, Codex and the rest in Next Term tabs,** where their status, notifications and diffs (<kbd>⌥⌘G</kbd>) stay in view.
 - **Let Cursor’s agent drive Next Term.** Cursor reads MCP servers from `~/.cursor/mcp.json`, in the editor and in its CLI alike. When that file exists, Next Term adds its own `next-term` entry there (**Settings › Editor › Agents**). Cursor’s agent can then start Claude Code in a Next Term tab, give it a task, wait for it and read the result. Otherwise, add a server that runs `nxtrm mcp` yourself.
 - **Review in either.** Agents write to the same files, so Cursor’s diff view and Next Term’s side-by-side diffs show the same changes.
+- **Keep your keys.** **Next Term › Import Settings and Shortcuts…** reads the keys you changed in Cursor and the settings Next Term has too, shows each change first, and undoes them in one click.
 
 ## Questions
 

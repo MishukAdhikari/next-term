@@ -1,6 +1,6 @@
 ---
 title: Security and privacy
-description: "What Next Term shares and with whom: local-only agent links and MCP socket, a fresh token per launch, no telemetry, and clipboard and paste safeguards."
+description: "What Next Term shares, and with whom: local-only agent links and MCP socket, no telemetry, the installer, databases, remote tabs, paste safeguards."
 ---
 
 A terminal sees everything you type, and an agent link exposes your editor to programs. Next Term is built so that both stay on your Mac and under your control. The source is public under the MIT licence, so every claim on this page can be checked.
@@ -9,6 +9,7 @@ A terminal sees everything you type, and an agent link exposes your editor to pr
 
 - **No account, no telemetry, no analytics.** Next Term has no sign-in and sends no usage data.
 - **One network request of its own:** the daily update check to GitHub, which you can turn off. See [Updates](/docs/updates/#what-the-check-sends).
+- **Everything else only when you ask.** A fetch, update or push you choose in the branch popup talks to your git remote. A remote tab connects only to the server you opened it on, through your own ssh; a tmux or herdr tab reconnects to it by itself, and reopens at launch. **Open in TablePlus** hands a database to TablePlus, and **Open in Vercel** runs Vercel’s own command line in a new tab. Nothing else starts by itself.
 - **No AI of its own.** Next Term runs the agents you install. What those agents send to their providers is between you and them.
 
 ## The agent links
@@ -31,7 +32,9 @@ Agents can drive Next Term through its MCP server ([Orchestrate agents](/docs/or
 - **No network port.** The app listens on a Unix socket, `~/Library/Application Support/Next Term/mcp.sock`, with mode `0600`, and checks that every connection comes from your own user. That is the reach your own shell already has.
 - **Honest tool descriptions:** typing into a tab, pressing keys, answering an agent’s question, opening and closing tabs are marked destructive, so agents ask before they use them.
 - **Questions are answered once:** an answer names the question it is for, and is refused if the agent has moved on to another one.
-- **Project files stay inside, and secrets stay out:** the file, search and git tools read only inside the projects open in Next Term, with symlinks resolved first. `.env` files, keys and certificates, ssh keys, credentials files and `.git` are refused, and secret-looking values in what they return are masked as `•••`. Nothing is written.
+- **Project files stay inside, and secrets stay out:** the file, search and git tools (`read_file`, `find_in_files`, `git_status`, `get_diff`) read only inside the projects open in Next Term, with symlinks resolved first. `.env` files, keys and certificates, ssh keys, credentials files and `.git` are refused, and secret-looking values in what they return are masked as `•••`. Nothing is written.
+- **The editor’s selection too:** in a `.env`, key or credentials file, `get_editor_selection` says the text is withheld instead of returning it.
+- **Servers only over your own logins:** `check_host`, `host_sessions` and `host_changes` run over a connection a remote tab already has, and never log in by themselves. `new_remote_tab` opens a tab where your own ssh logs in, and any password or host-key prompt appears there for you. The ones that save a host or run something on a server are marked so that your agent’s client asks you first.
 - **No self-control:** an agent cannot type into, or close, the tab it runs in.
 - **Busy tabs are protected:** closing a tab that runs something needs an explicit `force`.
 - **Your files are respected:** registering in an agent writes only Next Term’s own `next-term` entry, keeps comments and every other server, and never touches an entry it did not write.
@@ -63,14 +66,49 @@ Opening a file from the sidebar, or with <kbd>⌘</kbd>-click in the terminal, a
 - **The sidebar’s git calls are read-only** and use `--no-optional-locks`, so the sidebar never holds the index lock while your own git commands or your agents’ run.
 - **Every change you make through Next Term’s git tools is checked first:** a hunk is staged, unstaged or reverted only if the file still matches the diff you saw. See [Side-by-side diffs](/docs/diffs/#safe-while-agents-keep-working).
 - **Replace in Files** re-reads each file and skips anything that changed since the search.
+- **The Git Log and blame only read,** with `--no-optional-locks` as well. In a partial clone, the Git Log lists a commit’s files without downloading them.
+- **The branch popup asks before it acts behind an agent:** anything that would change files in a folder where an agent is working asks first, and uncommitted changes go into a named stash rather than being overwritten.
+- **Nothing in a notebook runs.** Next Term has no kernel; it shows the outputs saved in the file. The head view for large data files never writes to them.
+- **Import only reads,** on this Mac. It never writes to the other app, and never opens a file that can hold credentials.
+
+## Databases
+
+The **Databases** group in the project sidebar ([Projects and git](/docs/projects-and-git/#databases)) is built so that a connection string never leaks:
+
+- **Found offline.** Next Term reads the project’s text files and SQLite headers. It never runs the project’s code or `vercel env pull`, and nothing connects until you choose a hand-off.
+- **Passwords never leave their file.** They are masked in tooltips, menus and accessibility labels, and never shown, logged, copied, put in a command line or handed to an agent. **Open mysql in New Tab** and **Open psql in New Tab** pass the password in a temporary file only you can read, deleted once the client starts.
+- **Remote is treated as production.** Local or remote comes from the host, never the file’s name, and **Open in TablePlus** asks first for a remote host, naming it. mysql and psql tabs are offered for local and development databases only.
+- **SQLite files are opened read-only** and only read: no `-wal` or `-shm` file appears beside them. **Send to Agent** types only the file, the table and the rows you selected.
+- **Nothing is written** to an env file or a database, and nothing listens on a port.
+
+## Remote tabs
+
+A [remote tab](/docs/remote/) runs the system’s `ssh` with your own configuration, and adds rules of its own (more in [Security](/docs/remote/#security)):
+
+- **Host keys are never accepted silently.** A new key is asked about in the tab, and a changed one is refused, whatever your ssh config says, for jump hosts too.
+- **No password is stored,** and your `~/.ssh/config` is never written. ssh does every login.
+- **Nothing on a server can reach back to Next Term.** Every port forward is cleared, and the MCP socket and editor links are never forwarded. Agent forwarding is as your ssh config sets it.
+- **Nothing is installed.** tmux and herdr are used only if you installed them; a few small files go in `~/.cache/next-term` on the server.
+- **Commands are never pieced together from text:** what runs on a server is a fixed script, with every name and folder quoted.
 
 ## Updates
 
 Downloads come only over HTTPS from GitHub, are checked against the release’s published SHA-256, and must be Next Term at the expected version with an intact code signature before they replace anything. See [Updates](/docs/updates/).
 
+## The installer
+
+The one-line installer (`curl -fsSL https://next-term.mishuk.me/install.sh | bash`) downloads the disk image and its checksum from GitHub over HTTPS, and installs only when:
+
+- **the checksum is signed with the Next Term release key.** The key’s private half never leaves the maintainer’s Mac, so a release changed on GitHub is refused;
+- **the download matches that checksum;**
+- **the disk image holds Next Term at that version,** with an intact code signature, checked again after the copy;
+- **“latest” is not older than this site’s version,** so an older signed release cannot be passed off as the newest.
+
+It never uses `sudo`, never replaces a Next Term that is running, and changes nothing else. [Read the script](https://github.com/MishukAdhikari/next-term/blob/main/site/src/install.sh) before you run it, if you like.
+
 ## The first launch warning
 
-Releases are not notarized by Apple yet, which is why macOS asks you to allow the first launch. Each release ships a `.sha256` file so you can check the download yourself first; see [Check the download](/docs/getting-started/#check-the-download-optional).
+Releases are not notarized by Apple yet, which is why macOS asks you to allow the first launch of a disk image downloaded in a browser. Each release ships a `.sha256` file so you can check the download yourself first; see [Check the download](/docs/getting-started/#check-the-download-optional). With the one-line installer, which checks the signed checksum for you, macOS does not ask.
 
 ## Report a problem
 
