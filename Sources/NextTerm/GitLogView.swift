@@ -153,7 +153,7 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
 
     private func findWanted() {
         guard let wanted else { return }
-        if let index = commits.firstIndex(where: { $0.sha == wanted.sha }) {
+        if let index = commits.firstIndex(where: { Self.matches($0, wanted.sha) }) {
             self.wanted = nil
             select(row: index)
         } else if !isComplete, wanted.pagesLeft > 0 {
@@ -162,7 +162,7 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         } else {
             self.wanted = nil
             // A filter left the selected commit out: its details go too.
-            if selectedCommit == nil, details.shown?.sha == wanted.sha { details.show(nil) }
+            if selectedCommit == nil, let shown = details.shown, Self.matches(shown, wanted.sha) { details.show(nil) }
             guard wanted.orFilter else { return }
             // Not on the branches listed (or too far down): the log shows that commit alone.
             searchField.stringValue = wanted.sha
@@ -173,10 +173,14 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         }
     }
 
-    /// Selects a commit, loading pages until it is found; one that no branch lists is shown alone.
+    /// Selects a commit (by its id, or the start of it), loading up to ten more pages until it is found;
+    /// one that no branch lists, or one further down, is shown alone.
     func select(sha: String) {
-        if let index = commits.firstIndex(where: { $0.sha == sha }) { return select(row: index) }
-        wanted = (sha, 30, true)
+        let sha = sha.trimmingCharacters(in: .whitespaces).lowercased()
+        // Lines not committed yet have no commit (blame gives them an id of zeros).
+        guard sha.count >= 6, sha.contains(where: { $0 != "0" }) else { return NSSound.beep() }
+        if let index = commits.firstIndex(where: { Self.matches($0, sha) }) { return select(row: index) }
+        wanted = (sha, 10, true)
         if query.isFiltered || query.scope != .all {
             // Filters could hide it: look in the whole history.
             query = CommitQuery()
@@ -188,6 +192,9 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         if isComplete || failure != nil { return findWanted() }
         if !isLoading { loadMore() } // else the page on its way looks for it
     }
+
+    /// The commit with this id, or whose id starts with it.
+    static func matches(_ commit: Commit, _ sha: String) -> Bool { commit.sha == sha || commit.sha.hasPrefix(sha) }
 
     private func select(row: Int) {
         table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
@@ -620,7 +627,7 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     func tableViewSelectionDidChange(_ notification: Notification) {
         let commit = selectedCommit
         // Over a refresh the selection comes back: the details stay meanwhile.
-        if commit == nil, let wanted, wanted.sha == details.shown?.sha { return }
+        if commit == nil, let wanted, let shown = details.shown, Self.matches(shown, wanted.sha) { return }
         if let commit, commit == details.shown { return }
         details.show(commit)
     }
