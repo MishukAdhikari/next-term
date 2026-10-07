@@ -72,32 +72,35 @@ public enum ImportGhostty {
     /// At most this many files, includes and all (a loop of includes stops here too).
     static let fileLimit = 16
 
-    /// Every entry of the config files in the order Ghostty reads them: each file, then the files it
-    /// includes. Keys that run programs or can hold secrets are dropped here, so no value of theirs is kept.
+    /// Every entry of the config files in the order Ghostty reads them: all of its own files first, then the
+    /// files they include, then the files those include, each in the order listed (Ghostty loads includes
+    /// once its own files are read, so a value in an include wins over one in a later file). Keys that run
+    /// programs or can hold secrets are dropped here, so no value of theirs is kept.
     static func entries(home: String, skipped: inout [SkippedItem]) -> [Entry] {
         let folders = configFolders(home: home).map { canonicalPath($0) }
+        // Paths as listed, not resolved: an include is relative to the folder its file was opened from, which
+        // for a symlinked config (stow, chezmoi) isn't the folder the file is really in.
         var queue = configFiles(home: home)
         var seen = Set<String>()
         var result: [Entry] = []
         var redacted: [String] = []
         while !queue.isEmpty, seen.count < fileLimit {
-            let path = canonicalPath(queue.removeFirst())
+            let listed = queue.removeFirst()
+            let path = canonicalPath(listed)
             guard seen.insert(path).inserted else { continue }
             guard let text = ImportFile.text(path) else {
                 skipped.append(SkippedItem((path as NSString).lastPathComponent, "couldn't be read"))
                 continue
             }
-            var includes: [String] = []
             for entry in parse(text) {
                 if isNeverRead(entry.key) {
                     if !redacted.contains(entry.key) { redacted.append(entry.key) }
                 } else if entry.key == "config-file" {
-                    if let include = include(entry.value, from: path, folders: folders, skipped: &skipped) { includes.append(include) }
+                    if let include = include(entry.value, from: listed, home: home, folders: folders, skipped: &skipped) { queue.append(include) }
                 } else {
                     result.append(entry)
                 }
             }
-            queue = includes + queue
         }
         for key in redacted where !SecretGuard.looksSecret(key) {
             skipped.append(SkippedItem(key, "never imported: runs commands or can hold secrets"))
@@ -105,18 +108,35 @@ public enum ImportGhostty {
         return result
     }
 
-    /// An included file, when it is inside one of Ghostty's folders (`?` marks one that may be missing).
-    static func include(_ value: String, from file: String, folders: [String], skipped: inout [SkippedItem]) -> String? {
-        var relative = value
-        if relative.hasPrefix("?") { relative.removeFirst() }
-        guard !relative.isEmpty else { return nil }
+    /// An included file, as Ghostty finds it: `~/` is the home folder, and any other relative path is relative
+    /// to the including file's folder. It is read only when it is inside one of Ghostty's folders; `?` marks
+    /// one that may be missing. The path comes back as listed, for the includes inside it.
+    static func include(_ value: String, from file: String, home: String, folders: [String], skipped: inout [SkippedItem]) -> String? {
+        var given = value
+        let optional = given.hasPrefix("?")
+        if optional { given.removeFirst() }
+        guard !given.isEmpty else { return nil }
+        if given.hasPrefix("~/") { given = home + String(given.dropFirst()) }
         let base = URL(fileURLWithPath: (file as NSString).deletingLastPathComponent, isDirectory: true)
-        let path = canonicalPath(URL(fileURLWithPath: relative, relativeTo: base).standardizedFileURL.path)
+        let listed = URL(fileURLWithPath: given, relativeTo: base).standardizedFileURL.path
+        let path = resolvedPath(listed)
         guard folders.contains(where: { path.hasPrefix($0 + "/") }) else {
             skipped.append(SkippedItem("config-file", "only files in Ghostty's own folders are read"))
             return nil
         }
-        return isRegularFile(path) ? path : nil
+        guard isRegularFile(path) else {
+            let name = (path as NSString).lastPathComponent
+            if !optional { skipped.append(SkippedItem(SecretGuard.looksSecret(name) ? "config-file" : "config-file \(name)", "file not found")) }
+            return nil
+        }
+        return listed
+    }
+
+    /// The kernel's spelling of a path whose last part may not exist: its folder resolved, then the name.
+    static func resolvedPath(_ path: String) -> String {
+        if FileManager.default.fileExists(atPath: path) { return canonicalPath(path) }
+        let folder = canonicalPath((path as NSString).deletingLastPathComponent)
+        return (folder as NSString).appendingPathComponent((path as NSString).lastPathComponent)
     }
 
     /// Keys that start programs, set their environment or can hold secrets.

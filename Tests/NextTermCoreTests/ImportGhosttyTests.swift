@@ -165,6 +165,56 @@ import Testing
         }
     }
 
+    /// A plan from files alone (paths under the temporary home); `links` are symlinks, path → target.
+    func plan(files: [String: String], links: [String: String] = [:]) throws -> ImportPlan {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        for (path, text) in files { try write(text, to: home + path) }
+        for (path, target) in links {
+            try FileManager.default.createDirectory(atPath: (home + path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+            try FileManager.default.createSymbolicLink(atPath: home + path, withDestinationPath: home + target)
+        }
+        let app = try #require(ImportGhostty.detect(home: home).first)
+        return ImportGhostty.plan(for: app, home: home, fonts: testFonts, applications: [home + "/Applications"])
+    }
+
+    /// Ghostty reads its own files first and the includes after them, in the order they are listed.
+    @Test func includesComeAfterGhosttysOwnFiles() throws {
+        let later = try plan(files: [xdg: "config-file = local.conf\nfont-size = 10", "/.config/ghostty/local.conf": "font-size = 14",
+                                     appSupport: "font-size = 12"])
+        #expect(later.settings.map(\.setting) == [.fontSize(14)])
+
+        let breadthFirst = try plan(files: [
+            xdg: "config-file = a.conf\nconfig-file = b.conf",
+            "/.config/ghostty/a.conf": "config-file = c.conf", "/.config/ghostty/b.conf": "font-size = 15",
+            "/.config/ghostty/c.conf": "font-size = 17",
+        ])
+        #expect(breadthFirst.settings.map(\.setting) == [.fontSize(17)])
+    }
+
+    @Test func includePaths() throws {
+        // `~/` is the home folder.
+        let tilde = try plan(files: [xdg: "config-file = ~/.config/ghostty/local.conf", "/.config/ghostty/local.conf": "font-size = 14"])
+        #expect(tilde.settings.map(\.setting) == [.fontSize(14)])
+        #expect(tilde.skipped.isEmpty)
+
+        // A symlinked config (stow, chezmoi): an include is relative to where the config was opened from.
+        let linked = try plan(files: ["/dotfiles/ghostty/config": "config-file = theme.conf", "/.config/ghostty/theme.conf": "font-size = 18",
+                                      "/dotfiles/ghostty/theme.conf": "font-size = 20"],
+                              links: [xdg: "/dotfiles/ghostty/config"])
+        #expect(linked.settings.map(\.setting) == [.fontSize(18)])
+        #expect(linked.skipped.isEmpty)
+
+        // A missing include is reported unless it is marked optional.
+        let missing = try plan(files: [xdg: "config-file = gone.conf\nconfig-file = ?maybe.conf"])
+        #expect(missing.skipped == [SkippedItem("config-file gone.conf", "file not found")])
+
+        // `~/` elsewhere in the home folder is still outside Ghostty's folders.
+        let outside = try plan(files: [xdg: "config-file = ~/secrets.conf", "/secrets.conf": "font-size = 30"])
+        #expect(outside.settings.isEmpty)
+        #expect(reasons(outside)["config-file"] == "only files in Ghostty's own folders are read")
+    }
+
     @Test func parsing() {
         #expect(ImportGhostty.parse("# c\n a = b \nkeybind = cmd+d=new_split:right\nx = \"quoted\"\nnovalue\n= y") == [
             ImportGhostty.Entry(key: "a", value: "b"), ImportGhostty.Entry(key: "keybind", value: "cmd+d=new_split:right"),
