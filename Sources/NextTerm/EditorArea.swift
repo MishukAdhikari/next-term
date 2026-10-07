@@ -43,8 +43,11 @@ final class EditorArea: NSView, TabBarViewDelegate {
     var activeComparison: BranchComparePane? { activePane as? BranchComparePane }
     /// Send to Agent was clicked in a SQLite viewer.
     var onSendToAgent: (([ContextItem]) -> Void)?
-    /// The file in front: the one being edited, or the notebook, database or data file being read.
-    var activePath: String? { activeEditor?.document.path ?? activeNotebook?.path ?? activeDatabase?.path ?? activeData?.path }
+    /// The file in front: the one being edited, the notebook, database or data file being read, or the
+    /// file whose diff is shown.
+    var activePath: String? {
+        activeEditor?.document.path ?? activeNotebook?.path ?? activeDatabase?.path ?? activeData?.path ?? activeDiff?.absolutePath
+    }
     var activeName: String? { activeEditor?.document.name ?? activeNotebook?.name ?? activeDatabase?.name ?? activeData?.name }
     /// Where its text is, for a selection to search for.
     var activeTextView: NSTextView? { activeEditor?.textView ?? activeNotebook?.textView }

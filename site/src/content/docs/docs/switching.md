@@ -48,6 +48,7 @@ A built-in colour scheme or theme lives inside its app, so it can’t be read; t
 | Save | <kbd>⌘S</kbd> | <kbd>⌘S</kbd> | <kbd>⌥⌘S</kbd> |
 | Save All | <kbd>⌥⌘S</kbd> | <kbd>⌥⌘S</kbd> | <kbd>⌘S</kbd> |
 | Split Right | <kbd>⌘D</kbd> | <kbd>⌘&#92;</kbd> | <kbd>⌘&#92;</kbd> |
+| Replace (in the open file) | <kbd>⌥⌘F</kbd> | <kbd>⌥⌘F</kbd> | <kbd>⌘R</kbd> |
 | Replace in Files | <kbd>⇧⌘R</kbd> | <kbd>⇧⌘H</kbd> | <kbd>⇧⌘R</kbd> |
 | Indent / Outdent | <kbd>⌘]</kbd> / <kbd>⌘[</kbd> | <kbd>⌘]</kbd> / <kbd>⌘[</kbd> | no key (<kbd>⇥</kbd> and <kbd>⇧⇥</kbd> indent) |
 

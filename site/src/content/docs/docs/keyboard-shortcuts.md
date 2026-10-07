@@ -67,6 +67,7 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Cut, Copy, Paste | <kbd>⌘X</kbd>, <kbd>⌘C</kbd>, <kbd>⌘V</kbd> |
 | Select All | <kbd>⌘A</kbd> |
 | Find › Find… | <kbd>⌘F</kbd> |
+| Find › Replace… (in the file you are editing) | <kbd>⌥⌘F</kbd> |
 | Find › Find Next | <kbd>⌘G</kbd> |
 | Find › Find Previous | <kbd>⇧⌘G</kbd> |
 | Find › Use Selection for Find | <kbd>⌘E</kbd> |

@@ -48,6 +48,18 @@ Act on the current change (the hunk) with the buttons on the right:
 
 You build a clean commit out of an agent’s work one hunk at a time, without leaving the window and without remembering `git add -p`’s keys.
 
+## Send lines to your agent
+
+Select lines on the new side (the right) and press <kbd>⌥⌘K</kbd> (**Edit › Send to Agent**): the agent in your tab gets the file at those lines, in its own syntax, as from the editor (`@app/User.php#L10-20` for Claude Code, `app/User.php:10-20` for Codex). A selection on the old side picks the same rows, and the new side’s lines in them are sent. With nothing selected, the file is sent. See [Send to Agent](/docs/agents/#send-to-agent-k).
+
+- **Staged:** the index isn’t the file on disk, so the reference says “(as staged)” and the selected lines are pasted after it.
+- **A past commit:** the reference says “(as of commit 4cc062d)”, with the selected lines pasted after it.
+- **Removed lines only:** select red lines on the old side and they are pasted after the reference, which says “(lines removed)”: the file no longer has them.
+- **A deleted file** is sent as “(deleted)”, with any lines you select pasted after it.
+- **An agent’s proposed edit:** nothing is sent. The agent is waiting for your answer in its terminal; accept or reject first.
+
+Lines pasted from two changes at once have a `⋯` line where the diff skips the unchanged lines between them. More than 200 lines (or 16 KB) are not pasted: the reference goes alone, and a selection of removed lines that large sends nothing.
+
 ## Safe while agents keep working
 
 Agents keep editing while you review. Each hunk action first checks that the file, or the index, is exactly what the diff was made from, by its full git blob id. If anything changed in the meantime, nothing is touched: Next Term tells you, refreshes the diff, and you try again on what is really there. (Plain `git apply` would place a stale hunk at an offset instead of failing.)

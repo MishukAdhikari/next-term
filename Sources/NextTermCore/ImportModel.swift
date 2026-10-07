@@ -35,6 +35,7 @@ public enum KeymapPreset: String, CaseIterable, Codable, Sendable {
                 "goToFile:": KeyChord(key: "o", command: true, shift: true),
                 "saveDocument:": KeyChord(key: "s", command: true, option: true),
                 "saveAllDocuments:": cmd("s"),      // ⌘S saves everything in JetBrains IDEs
+                "replaceInFile:": cmd("r"),
                 "splitRight:": cmd("\\"),          // ⌘D is Duplicate Line there
                 "indentSelection:": none,          // ⌘] and ⌘[ are Forward and Back there; ⇥ and ⇧⇥ indent
                 "outdentSelection:": none,

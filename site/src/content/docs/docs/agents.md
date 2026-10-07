@@ -64,6 +64,7 @@ Send to Agent hands your context to the agent in a tab, in that agent’s own sy
 **What you can send:**
 
 - **Lines in the editor:** select them and press <kbd>⌥⌘K</kbd> (**Edit › Send to Agent**). With nothing selected, the whole file is sent.
+- **Lines in a diff:** select them on the new side of a [side-by-side diff](/docs/diffs/#send-lines-to-your-agent) and press <kbd>⌥⌘K</kbd>. With nothing selected, the file is sent.
 - **Files and folders in the sidebar:** select them and press <kbd>⌥⌘K</kbd>, or right-click and choose **Send to Agent** (“Send 3 Items to Agent” for several).
 
 **Which agent receives it:** the agent in the front tab if one is running there; otherwise the agent tab you used most recently. If no agent is running in the window, Next Term says so.
@@ -76,11 +77,11 @@ Send to Agent hands your context to the agent in a tab, in that agent’s own sy
 | Gemini CLI, Qwen Code, Copilot CLI | `@app/User.php (lines 10-20)` | `@app/User.php (line 10)` | `app/ (folder)` |
 | Codex and every other agent | `app/User.php:10-20` | `app/User.php:10` | `app/ (folder)` |
 
-Several items go on one line for agents that use @-mentions; for the others they become a short “Context:” list. A path with spaces is quoted. When Claude is connected through the IDE link, files go in as real @-mentions instead of typed text.
+Several items go on one line for agents that use @-mentions; for the others they become a short “Context:” list. A path with spaces is quoted. When Claude is connected through the IDE link, files go in as real @-mentions instead of typed text. A reference with a note, such as “(unsaved changes in the editor)” or “(as staged)”, is still typed: a mention carries only the file and its lines.
 
 **Unsaved changes:** if the file has edits you have not saved, the reference says “(unsaved changes in the editor)” and the selected code is pasted after it as a fenced code block, so the agent sees what you see.
 
-**It never presses Return.** You read what was typed, add your instruction, and send it yourself. The text arrives as a bracketed paste with control characters removed, and never starts with a character an agent treats as a command (`!`, `/`, `$`, `&`, `?` or `#`).
+**It never presses Return.** You read what was typed, add your instruction, and send it yourself. The text arrives as a bracketed paste: code keeps its line breaks and tabs, every other control character is removed, and the text never starts with a character an agent treats as a command (`!`, `/`, `$`, `&`, `?` or `#`).
 
 ## Turning the link off
 

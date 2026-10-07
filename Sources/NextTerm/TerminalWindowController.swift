@@ -630,7 +630,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(showChanges(_:)) {
             return editorArea.activePath != nil || sidebar.selection.contains { !$0.isFolder } || sidebar.selectedDeleted.contains { !$0.isDirectory }
         }
-        if item.action == #selector(sendToAgent(_:)) { return agentTab != nil && (editorArea.activePath != nil || !sidebar.selection.isEmpty) }
+        if item.action == #selector(sendToAgent(_:)) {
+            let sendable = editorArea.activePath != nil && editorArea.activeDiff?.proposal == nil
+            return agentTab != nil && (sendable || !sidebar.selection.isEmpty)
+        }
         if item.action == #selector(toggleEditorFocus(_:)) {
             item.title = isEditorFocused ? "Focus Terminal" : "Focus Editor"
             return editorArea.activeTextView != nil
@@ -1122,7 +1125,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
     }
 
-    /// The editor's selection as lines of its file (or the whole file when nothing is selected).
+    /// The editor's selection as lines of its file (or the whole file when nothing is selected), and the
+    /// same from a diff's new side.
     func sendEditorSelection() {
         if let editor = editorArea.activeEditor {
             let document = editor.document
@@ -1152,6 +1156,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             send([database.contextItem()]) // the table, and the selected rows when they are few
         } else if let data = editorArea.activeData {
             send([data.contextItem()]) // the file, at the selected rows' lines
+        } else if let diff = editorArea.activeDiff {
+            // The file, at the new side's selected lines; never into an agent's prompt while it waits on its proposal.
+            guard let item = diff.contextItem() else { return NSSound.beep() }
+            send([item])
         }
     }
 
@@ -1178,8 +1186,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         show(tab)
         defer { window.makeFirstResponder(tab.view) }
-        // Claude connected to Next Term: the mentions go into its prompt directly, as from VS Code.
-        if let client = AppDelegate.shared.claudeClient(for: tab), items.allSatisfy({ !$0.isFolder && $0.code == nil }) {
+        // Claude connected to Next Term: the mentions go into its prompt directly, as from VS Code. A mention
+        // carries only the file and its lines, so anything with more to say ("as staged", "deleted") is typed.
+        if let client = AppDelegate.shared.claudeClient(for: tab), items.allSatisfy({ !$0.isFolder && $0.code == nil && $0.note == nil }) {
             for item in items {
                 var params: [String: Any] = ["filePath": canonicalPath(item.path)]
                 if let lines = item.lines {
@@ -1192,7 +1201,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         let dialect = AgentDialect.forProgram(tab.status.program)
         let segments = AgentPrompt.segments(instruction: "", items: relative, dialect: dialect)
-        for segment in segments { tab.view.typeIn(segment) }
+        // Inside a bracketed paste a line break is text, never Return, so code keeps its lines and tabs.
+        // An agent that doesn't take pastes gets the references alone, on one line: a line break would send.
+        let pasted = tab.view.getTerminal().bracketedPasteMode
+        for (index, segment) in segments.enumerated() {
+            if pasted { tab.view.typeText(segment) } else if index == 0 { tab.view.typeIn(segment) }
+        }
     }
 
     /// For the self-test: what `send` would type into `tab`.
@@ -1207,6 +1221,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let fromEditor = isEditorFocused || window?.firstResponder !== sidebar.outline
         // A database file has no lines to compare, and one too large for the editor is too large to compare.
         if fromEditor, editorArea.activeDatabase != nil || editorArea.activeData?.isTooLargeForEditor == true { return NSSound.beep() }
+        // A diff of the file's changes is in front already: it stays on All Changes, Unstaged or Staged, as chosen.
+        if fromEditor, let diff = editorArea.activeDiff, diff.proposal == nil, diff.commit == nil { return diff.reload() }
         if let path = editorArea.activePath, fromEditor {
             return showChanges(of: URL(fileURLWithPath: path))
         }

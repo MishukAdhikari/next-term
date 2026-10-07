@@ -198,8 +198,22 @@ final class CodeTextView: NSTextView {
         replaceLines(in: selectedLineRange()) { EditorLanguage.toggleComment($0, style: style) }
     }
 
+    /// ⌥⌘F (Edit › Find › Replace…): the find bar with its Replace field. Only the editor has this action,
+    /// so the menu item is off in the terminal, notebooks and diffs, and behind a sheet or panel.
+    @objc func replaceInFile(_ sender: Any?) {
+        guard isEditable, !isBehindKeyWindow else { return NSSound.beep() }
+        let action = NSMenuItem()
+        action.tag = NSTextFinder.Action.showReplaceInterface.rawValue
+        performFindPanelAction(action)
+    }
+
+    /// A sheet or panel in front has the keyboard (the commit sheet, Go to File, the branch popup). The menu
+    /// still finds this view, down the main window's responder chain, and would act on the editor behind it.
+    private var isBehindKeyWindow: Bool { NSApp.keyWindow.map { $0 !== window } ?? false }
+
     override func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleComment(_:)) { return EditorLanguage.commentStyle(for: document?.language) != nil && isEditable }
+        if item.action == #selector(replaceInFile(_:)) { return isEditable && !isBehindKeyWindow }
         return super.validateMenuItem(item)
     }
 

@@ -43,6 +43,16 @@ enum SelfTest {
         try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
     }
 
+    /// Whether Edit › Find › Replace… is on with `responder` holding the window's keyboard, as AppKit enables
+    /// the menu item. Nil when the app is not in front: with no key window nothing is on.
+    static func replaceIsOn(with responder: NSResponder, in window: NSWindow) -> Bool? {
+        guard NSApp.isActive, window.isKeyWindow,
+              let item = KeyboardShortcuts.shared.commands.first(where: { $0.id == "replaceInFile:" })?.item else { return nil }
+        window.makeFirstResponder(responder)
+        item.menu?.update()
+        return item.isEnabled
+    }
+
     private static func runAll() async {
         guard let c = AppDelegate.shared.controllers.first, let window = c.window else {
             check(false, "a window opens at launch")
@@ -944,6 +954,8 @@ enum SelfTest {
         check(item("goToFile:")?.keyEquivalent == "o" && item("goToFile:")?.keyEquivalentModifierMask == [.command, .shift]
               && item("saveAllDocuments:")?.keyEquivalentModifierMask == .command && item("indentSelection:")?.keyEquivalent == "",
               "JetBrains keys: Go to File ⇧⌘O, Save All ⌘S, Indent has no key")
+        check(item("replaceInFile:")?.keyEquivalent == "r" && item("replaceInFile:")?.keyEquivalentModifierMask == .command,
+              "JetBrains keys: Replace… ⌘R")
         check(item("goToLine:")?.keyEquivalentModifierMask == [.command, .control], "your own shortcut changes stay on top of a preset")
         // ⌘P still opens Go to File under JetBrains keys, until a command takes ⌘P; then it's that command's.
         check(shortcuts.goToFileAliasActive, "with JetBrains keys, ⌘P still opens Go to File")
@@ -975,6 +987,8 @@ enum SelfTest {
         check(item("replaceInFiles:")?.keyEquivalent == "r" && item("goToFile:")?.keyEquivalentModifierMask == .command
               && !shortcuts.goToFileAliasActive,
               "back to Next Term's keys (⌘P is Go to File's own key again, no alias)")
+        check(item("replaceInFile:")?.keyEquivalent == "f" && item("replaceInFile:")?.keyEquivalentModifierMask == [.command, .option],
+              "and Replace… is ⌥⌘F again")
 
         // Every command an imported shortcut can land on is a real menu command.
         let ids = Set(shortcuts.commands.map(\.id))
@@ -1124,6 +1138,7 @@ enum SelfTest {
             .usingColorSpace(.sRGB).map { String(format: "%02X%02X%02X", Int(round($0.redComponent * 255)), Int(round($0.greenComponent * 255)), Int(round($0.blueComponent * 255))) }
         check(defColor == "CF8E6D", "code cells are coloured in the kernel's language", defColor ?? "none")
         check(!notebook.textView.isEditable && notebook.textView.usesFindBar, "read-only, with ⌘F")
+        if let window = c.window, let on = replaceIsOn(with: notebook.textView, in: window) { check(!on, "and no Replace…") }
         await screenshot(c, suffix: "-notebook")
 
         // An agent adds a cell: the view follows the file.
@@ -1516,7 +1531,18 @@ enum SelfTest {
             check(diff?.matches(root: canonicalPath(proj.path), path: "src/gone.txt") == true, "it opens as a diff of what was removed")
             check(await wait(5) { diff?.sideTexts.0.contains("2\n") == true && diff?.sideTexts.1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true },
                   "with the old lines on the left and nothing on the right", "\(diff?.sideTexts.0.count ?? -1) | \(diff?.sideTexts.1.count ?? -1)")
-            if let diff { c.editorArea.close(diff) }
+            check(diff?.contextItem()?.note == "deleted", "and Send to Agent from it says the file is gone", diff?.contextItem()?.note ?? "no note")
+            if let diff {
+                // A removed line, selected on the old side: no file has it any more, so it goes along as code.
+                let old = diff.oldSideView
+                c.window?.makeFirstResponder(old)
+                old.setSelectedRange((old.string as NSString).range(of: "2\n"))
+                let item = diff.contextItem()
+                check(item?.code == "2" && item?.note == "deleted" && item?.lines == nil, "and the removed lines selected on the old side as code",
+                      "\(String(describing: item))")
+                old.setSelectedRange(NSRange(location: 0, length: 0))
+                c.editorArea.close(diff)
+            }
         }
 
         // Back as committed: the rows go, and the file's own row returns.
@@ -2038,6 +2064,8 @@ enum SelfTest {
         let diffTitle = "log-side.txt @ " + side.prefix(7)
         check(await wait(8) { c.editorArea.activeDiff?.title == diffTitle && (c.editorArea.activeDiff?.changedLineCount ?? 0) > 0 },
               "a changed file opens as its diff in that commit", c.editorArea.activeDiff?.title ?? "no diff in front")
+        let commitNote = c.editorArea.activeDiff?.contextItem()?.note
+        check(commitNote == "as of commit " + side.prefix(7), "Send to Agent from it names the commit", commitNote ?? "no note")
         if let diff = c.editorArea.activeDiff { c.editorArea.close(diff) }
 
         // showCommit, with a filter that hides the commit: the filter goes, the commit is selected.
@@ -3012,6 +3040,42 @@ enum SelfTest {
         view.toggleComment(nil)
         check(doc.text == text as String, "and back in")
 
+        // Edit › Find › Replace… (⌥⌘F): the find bar grows its Replace row. Only the editor has the action, and
+        // a sheet in front of it turns the item off (the menu would otherwise find the editor behind the sheet).
+        if let inEditor = replaceIsOn(with: view, in: window), let inTerminal = replaceIsOn(with: c.activeTab?.view ?? tab.view, in: window) {
+            check(inEditor && !inTerminal, "Replace… is on in the editor, off in the terminal", "editor \(inEditor), terminal \(inTerminal)")
+            window.makeFirstResponder(view)
+            let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 80), styleMask: [.titled], backing: .buffered, defer: false)
+            window.beginSheet(sheet) { _ in }
+            _ = await wait(3) { sheet.isKeyWindow }
+            let replaceItem = KeyboardShortcuts.shared.commands.first { $0.id == "replaceInFile:" }?.item
+            replaceItem?.menu?.update()
+            check(sheet.isKeyWindow && replaceItem?.isEnabled == false, "and off while a sheet in front of the editor has the keyboard")
+            window.endSheet(sheet)
+            _ = await wait(3) { window.isKeyWindow }
+        } else {
+            note("skipped Replace…'s menu item checks: the app is not frontmost")
+        }
+        check(KeyboardShortcuts.shared.commands.first { $0.id == "replaceInFile:" }?.defaultChord == KeyChord(key: "f", command: true, option: true),
+              "Replace… is ⌥⌘F")
+        func finderAction(_ action: NSTextFinder.Action) -> NSMenuItem {
+            let item = NSMenuItem()
+            item.tag = action.rawValue
+            return item
+        }
+        let scroll = view.enclosingScrollView
+        window.makeFirstResponder(view)
+        view.performFindPanelAction(finderAction(.showFindInterface))
+        _ = await wait(3) { scroll?.isFindBarVisible == true && (scroll?.findBarView?.frame.height ?? 0) > 0 }
+        let findHeight = scroll?.findBarView?.frame.height ?? 0
+        check(findHeight > 0, "⌘F's find bar opens first", "\(findHeight) points high")
+        view.replaceInFile(nil)
+        check(await wait(3) { (scroll?.findBarView?.frame.height ?? 0) > findHeight + 4 }, "⌥⌘F opens the find bar with its Replace field",
+              "find bar \(findHeight) then \(scroll?.findBarView?.frame.height ?? 0) points high")
+        view.performFindPanelAction(finderAction(.hideFindInterface))
+        _ = await wait(2) { scroll?.isFindBarVisible == false }
+        window.makeFirstResponder(view)
+
         // Save keeps the file's CRLF line endings.
         view.setSelectedRange(NSRange(location: 0, length: 0))
         view.insertText("// saved\n", replacementRange: NSRange(location: 0, length: 0))
@@ -3080,6 +3144,66 @@ enum SelfTest {
             check(await wait(4) { agentTab.screenTail(4).joined().contains("@src/main.php#L3-4") }, "Send to Agent types the selection's lines in Claude's syntax",
                   agentTab.screenTail(3).joined(separator: " | "))
             check(c.activeTab === agentTab && window.firstResponder === agentTab.view, "and the agent's tab takes the keyboard for the instruction")
+        }
+        // From a diff: the selected lines of its new side (a file git doesn't know yet: every line is new).
+        let fresh = proj.appendingPathComponent("src/send-diff.txt")
+        if let git = GitRunner.locateGit() {
+            func run(_ args: String...) {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: git)
+                p.arguments = ["-C", proj.path] + args
+                p.standardOutput = FileHandle.nullDevice
+                p.standardError = FileHandle.nullDevice
+                try? p.run()
+                p.waitUntilExit()
+            }
+            try? "one\ntwo\nthree\nfour\n".write(to: fresh, atomically: true, encoding: .utf8)
+            c.showChanges(of: fresh)
+            let freshDiff = area.activeDiff
+            _ = await wait(5) { freshDiff?.hunkCount == 1 }
+            if let freshDiff, let side = freshDiff.focusView as? NSTextView {
+                let text = side.string as NSString
+                let from = text.range(of: "two"), to = text.range(of: "three\n")
+                if from.location != NSNotFound, to.location != NSNotFound {
+                    side.setSelectedRange(NSRange(location: from.location, length: NSMaxRange(to) - from.location))
+                }
+                window.makeFirstResponder(side)
+                c.sendEditorSelection()
+                check(await wait(4) { agentTab.screenTail(4).joined().contains("@src/send-diff.txt#L2-3") },
+                      "Send to Agent from a diff types the new side's selected lines", agentTab.screenTail(3).joined(separator: " | "))
+
+                // From Staged the lines are the index's, not the file's: they go along as code, line by line, to an
+                // agent that takes pastes (as every agent does; the tty under cat says it does).
+                try? "one\nstaged two\nstaged three\nfour\n".write(to: fresh, atomically: true, encoding: .utf8)
+                run("add", "src/send-diff.txt")
+                try? "one\ntwo\nthree\nfour\n".write(to: fresh, atomically: true, encoding: .utf8)
+                freshDiff.base = .staged
+                _ = await wait(5) { freshDiff.sideTexts.1.contains("staged two\nstaged three\n") }
+                let staged = side.string as NSString
+                let start = staged.range(of: "staged two"), end = staged.range(of: "staged three\n")
+                if start.location != NSNotFound, end.location != NSNotFound {
+                    side.setSelectedRange(NSRange(location: start.location, length: NSMaxRange(end) - start.location))
+                }
+                window.makeFirstResponder(side)
+                let code = freshDiff.contextItem()?.code
+                agentTab.view.feed(text: "\u{1b}[?2004h")
+                c.sendEditorSelection()
+                // The fence as the tty echoes it: each line on a row of its own, after the ``` row.
+                func onTheirOwnRows() -> Bool {
+                    let rows = agentTab.screenTail(10)
+                    guard let at = rows.firstIndex(of: "staged two"), rows.indices.contains(at + 1) else { return false }
+                    return rows[at + 1] == "staged three" && rows[..<at].joined().contains("```")
+                }
+                let pasted = await wait(4) { onTheirOwnRows() }
+                check(code == "staged two\nstaged three" && pasted, "from Staged, the selected lines reach the agent with their line breaks",
+                      "\(code.debugDescription) | " + agentTab.screenTail(6).joined(separator: " | "))
+                agentTab.view.feed(text: "\u{1b}[?2004l")
+                run("reset", "-q", "--", "src/send-diff.txt")
+                area.close(freshDiff)
+            } else {
+                check(false, "a new file opens as a diff", area.activeName ?? "nothing in front")
+            }
+            try? FileManager.default.removeItem(at: fresh)
         }
         c.sidebar(c.sidebar, sendToAgent: [(proj.appendingPathComponent("src"), true)])
         check(await wait(4) { agentTab.screenTail(4).joined().contains("@src/") }, "a folder from the sidebar goes in as @src/")
@@ -3385,6 +3509,33 @@ enum SelfTest {
               "old on the left, new on the right, rows aligned")
         await screenshot(c, suffix: "-diff")
 
+        // Send to Agent from the diff: the file, at the new side's selected lines.
+        check(c.editorArea.activePath == file.path && diff.contextItem() == ContextItem(path: file.path),
+              "Send to Agent from a diff sends its file when nothing is selected", c.editorArea.activePath ?? "nothing in front")
+        if let side = diff.focusView as? NSTextView {
+            let text = side.string as NSString
+            let from = text.range(of: "line two"), to = text.range(of: "line 3\n")
+            if from.location != NSNotFound, to.location != NSNotFound {
+                side.setSelectedRange(NSRange(location: from.location, length: NSMaxRange(to) - from.location))
+            }
+            let item = diff.contextItem()
+            check(item == ContextItem(path: file.path, lines: 2...3), "and the new side's lines when some are selected", "\(String(describing: item))")
+            side.setSelectedRange(NSRange(location: 0, length: 0))
+            // The same rows selected on the old side: the new side's lines in them.
+            let old = diff.oldSideView, oldText = old.string as NSString
+            let oldFrom = oldText.range(of: "line 2"), oldTo = oldText.range(of: "line 3\n")
+            if oldFrom.location != NSNotFound, oldTo.location != NSNotFound {
+                old.setSelectedRange(NSRange(location: oldFrom.location, length: NSMaxRange(oldTo) - oldFrom.location))
+            }
+            c.window?.makeFirstResponder(old)
+            let fromOld = diff.contextItem()
+            check(fromOld == ContextItem(path: file.path, lines: 2...3), "and from the old side, the new side's lines in the same rows",
+                  "\(String(describing: fromOld))")
+            old.setSelectedRange(NSRange(location: 0, length: 0))
+            c.window?.makeFirstResponder(side)
+        }
+        if let window = c.window, let on = replaceIsOn(with: diff.focusView, in: window) { check(!on, "Replace… is off in a diff") }
+
         // Stage one hunk; it moves to Staged. Unstage it again.
         diff.base = .unstaged
         _ = await wait(5) { diff.hunkCount == 2 }
@@ -3393,6 +3544,41 @@ enum SelfTest {
         diff.base = .staged
         check(await wait(5) { diff.hunkCount == 1 && diff.sideTexts.1.contains("line two") }, "Stage Hunk stages just that change",
               "\(diff.hunkCount) staged")
+        c.window?.makeFirstResponder(diff.focusView)
+        c.showChanges(nil)
+        check(diff.base == .staged && c.editorArea.activeDiff === diff, "⌥⌘G on the file's Staged diff leaves it on Staged",
+              "\(diff.title), \(c.editorArea.activeDiff?.title ?? "no diff in front")")
+        // The staged version is not the file on disk: Send to Agent says so and brings its lines along.
+        if let side = diff.focusView as? NSTextView {
+            let at = (side.string as NSString).range(of: "line two")
+            if at.location != NSNotFound { side.setSelectedRange(at) }
+            let item = diff.contextItem()
+            check(item?.lines == 2...2 && item?.note == "as staged" && item?.code == "line two",
+                  "from Staged, Send to Agent marks the lines as staged and sends them as code", "\(String(describing: item))")
+            side.setSelectedRange(NSRange(location: 0, length: 0))
+        }
+        // Both changes staged, and lines selected across them: the lines between, not shown, are marked.
+        diff.base = .unstaged
+        _ = await wait(5) { diff.hunkCount == 1 && diff.sideTexts.1.contains("line twelve") && !diff.sideTexts.1.contains("line two") }
+        diff.go(toHunk: 0)
+        diff.perform(.stage)
+        diff.base = .staged
+        if await wait(5, { diff.hunkCount == 2 }), let side = diff.focusView as? NSTextView {
+            let text = side.string as NSString
+            let from = text.range(of: "line two"), to = text.range(of: "line twelve")
+            if from.location != NSNotFound, to.location != NSNotFound {
+                side.setSelectedRange(NSRange(location: from.location, length: NSMaxRange(to) - from.location))
+            }
+            let item = diff.contextItem()
+            check(item?.lines == 2...12 && item?.code == "line two\nline 3\nline 4\nline 5\n⋯\nline 9\nline 10\nline 11\nline twelve",
+                  "a selection across two hunks marks the lines between them with ⋯", "\(String(describing: item))")
+            side.setSelectedRange(NSRange(location: 0, length: 0))
+            diff.go(toHunk: 1)
+            diff.perform(.unstage)
+            _ = await wait(5) { diff.hunkCount == 1 }
+        } else {
+            check(false, "Stage Hunk stages the second change too", "\(diff.hunkCount) staged")
+        }
         diff.go(toHunk: 0)
         diff.perform(.unstage)
         check(await wait(5) { diff.hunkCount == 0 }, "Unstage Hunk takes it back out")
@@ -3473,6 +3659,13 @@ enum SelfTest {
             check(mentioned && claude.last("at_mentioned")?["lineEnd"] as? Int == 2, "⌥⌘K sends the lines straight into Claude's prompt",
                   "\(claude.last("at_mentioned") ?? [:])")
             check(agentTab.screenTail(3).joined() == screenBefore, "and types nothing into the terminal")
+
+            // A mention carries only the file and its lines: one with a note ("deleted") is typed instead.
+            let mentions = claude.received.filter { $0["method"] as? String == "at_mentioned" }.count
+            c.send([ContextItem(path: proj.appendingPathComponent("src/removed.txt").path, note: "deleted")])
+            let typed = await wait(3) { agentTab.screenTail(4).joined().contains("@src/removed.txt (deleted)") }
+            check(typed && claude.received.filter { $0["method"] as? String == "at_mentioned" }.count == mentions,
+                  "with Claude connected, a deleted file is typed with its note, not mentioned", agentTab.screenTail(3).joined(separator: " | "))
         }
 
         await geminiLinkChecks(c)

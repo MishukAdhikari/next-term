@@ -78,7 +78,7 @@ public enum ImportZed {
         case "None":
             return (.nextTerm, SkippedItem("base_keymap", "Zed is set to use only your own shortcuts, so Next Term's shortcuts stay"))
         default:
-            // SublimeText, Atom, TextMate, Emacs, or a value a newer Zed added.
+            // Zed's other base keymaps, or a value a newer Zed added.
             return (.nextTerm, SkippedItem("base_keymap", "this keymap has no preset here, so Next Term's shortcuts stay"))
         }
     }

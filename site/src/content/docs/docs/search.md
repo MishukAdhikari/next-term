@@ -47,7 +47,7 @@ A file must match one of the plain masks (if there are any) and none of the `!` 
 
 ## Replace
 
-Press <kbd>⇧⌘R</kbd> (**Edit › Find › Replace in Files…**), or type in the **Replace with** field.
+Press <kbd>⇧⌘R</kbd> (**Edit › Find › Replace in Files…**), or type in the **Replace with** field. To replace only in the file you are editing, use **Edit › Find › Replace…** (<kbd>⌥⌘F</kbd>) instead.
 
 - **A preview of every replacement** appears in the results as you type, before anything is written. With regular expressions on, the replacement can use the captured groups as `$1`, `$2` and so on.
 - **Replace Selected** replaces only the matches you selected in the results; **Replace All** asks first and gives the count (“Replace 12 matches in 4 files?”).

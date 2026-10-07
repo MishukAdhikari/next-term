@@ -945,6 +945,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let find = NSMenu(title: "Find")
         edit.addItem(withTitle: "Find", action: nil, keyEquivalent: "").submenu = find
         findItem(find, "Find…", .showFindPanel, "f")
+        item(find, "Replace…", #selector(CodeTextView.replaceInFile(_:)), "f", [.command, .option])
         findItem(find, "Find Next", .next, "g")
         findItem(find, "Find Previous", .previous, "g", [.command, .shift])
         findItem(find, "Use Selection for Find", .setFindString, "e")
