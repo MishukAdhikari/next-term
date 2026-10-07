@@ -128,6 +128,25 @@ import Testing
         #expect(reasons(plan)["2 keybinds"] == "no matching Next Term command, or they send text to the terminal")
         #expect(!"\(plan)".contains("ghp_"), "text a keybind sends is never shown")
 
+        // A later line for the same key replaces an earlier one, however it spells the key; `unbind` leaves
+        // the key without a command.
+        let replaced = try self.plan("""
+            keybind = super+d=new_split:right
+            keybind = cmd+d=unbind
+            keybind = super+shift+t=new_tab
+            keybind = performable:shift+super+t=ignore
+            keybind = cmd+t=new_tab
+            keybind = command+t=new_window
+            """)
+        #expect(replaced.shortcuts.map(\.command) == ["newWindow:"])
+        #expect(replaced.shortcuts.first?.source == "keybind command+t → new_window")
+        #expect(reasons(replaced)["2 keybinds"] == "no matching Next Term command, or they send text to the terminal")
+        // The = key: Ghostty's first "=" that isn't followed by "+" or "=" ends the trigger.
+        let equals = try self.plan("keybind = super+==increase_font_size:1\nkeybind = =+super=reset_font_size")
+        #expect(equals.shortcuts.map(\.command) == ["increaseFontSize:"])
+        #expect(equals.shortcuts.first?.chord == KeyChord(key: "=", command: true))
+        #expect(ImportGhostty.triggerID("global:Shift+Super+bracket_left") == "cmd+shift+[")
+
         // `keybind = clear` drops the ones before it.
         #expect(try self.plan("keybind = cmd+d=new_split:right\nkeybind = clear").shortcuts.isEmpty)
         // Every action lands on a command an import may set (the self-test checks those are in the menus).

@@ -321,19 +321,27 @@ public enum ImportGhostty {
         "quote": "'", "apostrophe": "'", "backquote": "`", "grave_accent": "`", "return": "enter",
     ]
 
-    /// Each keybind with a matching command becomes one of the user's shortcuts; the rest are counted. Only
-    /// the action's name is ever shown: what follows it (text to send the terminal) is never looked at.
+    /// Each trigger's last keybind becomes one of the user's shortcuts when its action has a matching
+    /// command; the rest are counted. As in Ghostty, a later line for a trigger replaces an earlier one, so
+    /// `unbind`, `ignore` or text to send leaves that key without a command. Only the action's name is ever
+    /// shown: what follows it (text to send the terminal) is never looked at.
     static func addKeybinds(_ config: Config, usKeyboard: Bool, to plan: inout ImportPlan) {
         var unmatched = 0
+        var order: [String] = []
+        var binds: [String: (trigger: String, action: String)] = [:]
         for bind in config.keybinds {
-            // The first "=" ends the trigger: what an action sends can hold one too.
-            guard let equals = bind.firstIndex(of: "="), equals != bind.startIndex else {
+            guard let equals = separator(bind), equals != bind.startIndex else {
                 unmatched += 1
                 continue
             }
             let trigger = String(bind[..<equals]).trimmingCharacters(in: .whitespaces)
             let action = String(bind[bind.index(after: equals)...]).trimmingCharacters(in: .whitespaces)
-            guard let command = actions[action] else {
+            let id = triggerID(trigger)
+            if binds[id] == nil { order.append(id) }
+            binds[id] = (trigger, action)
+        }
+        for id in order {
+            guard let (trigger, action) = binds[id], let command = actions[action] else {
                 unmatched += 1
                 continue
             }
@@ -351,6 +359,34 @@ public enum ImportGhostty {
         }
     }
 
+    /// Where a keybind's trigger ends, found as Ghostty finds it: the first "=" that isn't the = key itself
+    /// (one followed by "+", or by the "=" that ends the trigger). What an action sends can hold one too.
+    static func separator(_ bind: String) -> String.Index? {
+        var from = bind.startIndex
+        while let equals = bind[from...].firstIndex(of: "=") {
+            let next = bind.index(after: equals)
+            guard next < bind.endIndex, bind[next] == "+" || bind[next] == "=" else { return equals }
+            from = next
+        }
+        return nil
+    }
+
+    static let flags = ["unconsumed:", "performable:", "all:", "global:"]
+
+    static let modifiers: [String: String] = ["super": "cmd", "cmd": "cmd", "command": "cmd", "ctrl": "ctrl", "control": "ctrl",
+                                              "alt": "alt", "opt": "alt", "option": "alt", "shift": "shift"]
+
+    /// A trigger as Ghostty tells them apart: without its flags (`global:` and the rest), each modifier by one
+    /// name in a set order, and the key by the name `key(_:usKeyboard:)` reads.
+    static func triggerID(_ trigger: String) -> String {
+        var text = trigger.lowercased()
+        while let flag = flags.first(where: { text.hasPrefix($0) }) { text.removeFirst(flag.count) }
+        var parts = text.split(separator: "+", omittingEmptySubsequences: false).map(String.init)
+        let key = parts.popLast() ?? ""
+        let names = Set(parts.map { modifiers[$0] ?? $0 }).sorted()
+        return (names + [keyNames[key] ?? key]).joined(separator: "+")
+    }
+
     /// A Ghostty trigger ("super+shift+d", "cmd+bracket_left") read the way VS Code's keys are. Key
     /// sequences and system-wide keys aren't supported.
     static func key(_ trigger: String, usKeyboard: Bool) -> ImportShortcuts.ParsedKey {
@@ -360,8 +396,6 @@ public enum ImportGhostty {
         if text.contains(">") { return .notSupported(ImportShortcuts.twoStep) }
         var parts = text.split(separator: "+", omittingEmptySubsequences: false).map(String.init)
         guard var key = parts.popLast(), !key.isEmpty else { return .notSupported(ImportShortcuts.notRecognised) }
-        let modifiers: [String: String] = ["super": "cmd", "cmd": "cmd", "command": "cmd", "ctrl": "ctrl", "control": "ctrl",
-                                           "alt": "alt", "opt": "alt", "option": "alt", "shift": "shift"]
         var names: [String] = []
         for part in parts {
             guard let name = modifiers[part] else { return .notSupported(ImportShortcuts.notRecognised) }
