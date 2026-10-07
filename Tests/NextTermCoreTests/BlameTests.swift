@@ -125,6 +125,11 @@ import Testing
         try sh("-c", "user.name=Ann", "-c", "user.email=a@x", "commit", "-qm", "Binary")
         #expect(GitRunner.blame(of: repo + "/bin.dat", git: git) == .binary)
         #expect(GitRunner.blame(of: "/tmp/nt-no-repo-\(UUID().uuidString)/x.txt", git: git) == .notInRepository)
+
+        // A blame that takes too long is remembered for this HEAD, not run again every few seconds.
+        let slow = BlameCache()
+        #expect(GitRunner.blame(of: repo + "/b.txt", git: git, timeout: 0, cache: slow) == .timedOut)
+        #expect(GitRunner.blame(of: repo + "/b.txt", git: git, cache: slow) == .timedOut && slow.count == 1)
     }
 
     func committed(_ shas: [String?]) -> Blame {

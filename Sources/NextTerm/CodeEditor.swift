@@ -731,6 +731,7 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         switch result {
         case .notInRepository: text = "\(name) is not in a git repository"
         case .tooLarge: text = "\(name) is too large to annotate"
+        case .timedOut: text = "\(name) took too long to annotate"
         case .binary, .failed: text = "git blame could not read \(name)"
         case .annotated, .notCommitted: return
         }

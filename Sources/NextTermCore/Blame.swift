@@ -149,22 +149,27 @@ extension GitRunner {
         case binary
         /// Bigger than the limit asked for.
         case tooLarge
+        /// git blame took longer than allowed (a very deep history). Cached like an answer: tried again
+        /// only after HEAD moves.
+        case timedOut
         case failed
     }
 
     /// The commit each line of a file comes from, as of the last commit, or with `workingTree` as the file
     /// is on disk (lines changed since the last commit are not committed). Lines moved within the file
     /// keep their commit (`-M`), and a renamed file is followed to its old name. Read-only.
-    /// With a `cache`, a file already blamed at this HEAD is not blamed again.
+    /// With a `cache`, a file already blamed at this HEAD is not blamed again. `timeout` is for git blame
+    /// itself; the quick questions before it get a few seconds.
     public static func blame(of path: String, git: String, workingTree: Bool = false, maxSize: Int = 2_000_000,
                              timeout: TimeInterval = 30, cache: BlameCache? = nil) -> BlameResult {
         let folder = (path as NSString).deletingLastPathComponent
         let name = (path as NSString).lastPathComponent
         let prefix = ["-C", folder, "--no-optional-locks"]
+        let quick: TimeInterval = 10
         // The root, whether the clone is shallow, and HEAD in one run; with no commit yet, only the root answers.
         let parse = prefix + ["rev-parse", "--show-toplevel", "--is-shallow-repository", "HEAD"]
-        guard let found = lines(run(git, parse, timeout: timeout)), found.count == 3 else {
-            if let root = lines(run(git, prefix + ["rev-parse", "--show-toplevel"], timeout: timeout))?.first { return .notCommitted(root: root) }
+        guard let found = lines(run(git, parse, timeout: quick)), found.count == 3 else {
+            if let root = lines(run(git, prefix + ["rev-parse", "--show-toplevel"], timeout: quick))?.first { return .notCommitted(root: root) }
             return .notInRepository
         }
         let (root, shallow, head) = (found[0], found[1] == "true", found[2])
@@ -183,7 +188,7 @@ extension GitRunner {
     private static func blame(_ name: String, prefix: [String], root: String, head: String, shallow: Bool, git: String,
                               workingTree: Bool, maxSize: Int, timeout: TimeInterval) -> BlameResult {
         // Its size in the commit, which also says whether it is there at all.
-        guard let size = lines(run(git, prefix + ["cat-file", "-s", head + ":./" + name], timeout: timeout))?.first.flatMap({ Int($0) }) else {
+        guard let size = lines(run(git, prefix + ["cat-file", "-s", head + ":./" + name], timeout: 10))?.first.flatMap({ Int($0) }) else {
             return .notCommitted(root: root)
         }
         guard size <= maxSize else { return .tooLarge }
@@ -194,8 +199,9 @@ extension GitRunner {
         var data = run(git, base + target, timeout: timeout)
         if data == nil, Date().timeIntervalSince(started) < timeout {
             // A blame.ignoreRevsFile in the user's config that this repository lacks makes git fail.
-            data = run(git, base + ["--no-ignore-revs-file"] + target, timeout: timeout)
+            data = run(git, base + ["--no-ignore-revs-file"] + target, timeout: timeout - Date().timeIntervalSince(started))
         }
+        if data == nil, Date().timeIntervalSince(started) >= timeout { return .timedOut }
         guard let data else { return .failed }
         guard var blame = Blame.parse(data) else { return .binary }
         guard !blame.lines.isEmpty || data.isEmpty else { return .failed } // output in a shape not understood
