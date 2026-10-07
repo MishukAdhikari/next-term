@@ -441,10 +441,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         groups.count == 1 && groups[0].panes.allSatisfy { pane in closing.contains { $0 === pane } }
     }
 
-    /// Closing `tab` would close the window while files in its editor are unsaved: the user is asked first.
+    /// Closing `tab` would close the window while files in its editor are unsaved: the user is asked first
+    /// (or is being asked now).
     func asksToSave(closing tab: TerminalTab) -> Bool {
+        guard closesWindow([tab]) else { return false }
+        if askingToSave { return true }
         let dirty = editorArea.dirtyDocuments
-        guard closesWindow([tab]), !dirty.isEmpty else { return false }
+        guard !dirty.isEmpty else { return false }
         // Answered before End Session: asked again only about a file edited since.
         guard let answered = saveAnswered, answered.tab === tab else { return true }
         return !dirty.allSatisfy { doc in answered.edits.contains { $0.0 === doc && $0.1 == doc.text } }
