@@ -884,7 +884,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             terminalRail.bottomAnchor.constraint(equalTo: terminalPane.bottomAnchor),
         ])
         terminalRail.onExpand = { [weak self] in self?.expandTerminal() }
-        terminalRail.onSelect = { [weak self] index in self?.select(index) }
+        // Opened first, so the tab's coming forward is an ordinary focus change, not what unfolds the terminal.
+        terminalRail.onSelect = { [weak self] index in
+            self?.expandTerminal()
+            self?.select(index)
+        }
     }
 
     /// The tab bar's tabs as the rail's marks: the same state, the title and state as the tooltip.
