@@ -737,9 +737,11 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         delegate?.tabDidChange(self)
     }
 
-    /// `waitStatus` is the raw status from waitpid, as SwiftTerm passes it on.
-    func processTerminated(source: TerminalView, exitCode waitStatus: Int32?) {
+    /// `reported` is the raw status from waitpid, as SwiftTerm passes it on: a 0 it may have read before
+    /// the process could be reaped is read again.
+    func processTerminated(source: TerminalView, exitCode reported: Int32?) {
         guard !exited else { return }
+        let waitStatus = ExitStatus.confirmed(reported, pid: view.process.shellPid)
         if let remote {
             RemoteConnection.doneConnecting(self)
             let raw = waitStatus ?? 0
