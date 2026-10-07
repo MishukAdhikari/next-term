@@ -1181,7 +1181,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         let dialect = AgentDialect.forProgram(tab.status.program)
         let segments = AgentPrompt.segments(instruction: "", items: relative, dialect: dialect)
-        for segment in segments { tab.view.typeIn(segment) }
+        // Inside a bracketed paste a line break is text, never Return, so code keeps its lines and tabs.
+        // An agent that doesn't take pastes gets the references alone, on one line: a line break would send.
+        let pasted = tab.view.getTerminal().bracketedPasteMode
+        for (index, segment) in segments.enumerated() {
+            if pasted { tab.view.typeText(segment) } else if index == 0 { tab.view.typeIn(segment) }
+        }
     }
 
     /// For the self-test: what `send` would type into `tab`.

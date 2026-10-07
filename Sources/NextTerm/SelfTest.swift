@@ -2353,7 +2353,16 @@ enum SelfTest {
         }
         // From a diff: the selected lines of its new side (a file git doesn't know yet: every line is new).
         let fresh = proj.appendingPathComponent("src/send-diff.txt")
-        if GitRunner.locateGit() != nil {
+        if let git = GitRunner.locateGit() {
+            func run(_ args: String...) {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: git)
+                p.arguments = ["-C", proj.path] + args
+                p.standardOutput = FileHandle.nullDevice
+                p.standardError = FileHandle.nullDevice
+                try? p.run()
+                p.waitUntilExit()
+            }
             try? "one\ntwo\nthree\nfour\n".write(to: fresh, atomically: true, encoding: .utf8)
             c.showChanges(of: fresh)
             let freshDiff = area.activeDiff
@@ -2368,6 +2377,34 @@ enum SelfTest {
                 c.sendEditorSelection()
                 check(await wait(4) { agentTab.screenTail(4).joined().contains("@src/send-diff.txt#L2-3") },
                       "Send to Agent from a diff types the new side's selected lines", agentTab.screenTail(3).joined(separator: " | "))
+
+                // From Staged the lines are the index's, not the file's: they go along as code, line by line, to an
+                // agent that takes pastes (as every agent does; the tty under cat says it does).
+                try? "one\nstaged two\nstaged three\nfour\n".write(to: fresh, atomically: true, encoding: .utf8)
+                run("add", "src/send-diff.txt")
+                try? "one\ntwo\nthree\nfour\n".write(to: fresh, atomically: true, encoding: .utf8)
+                freshDiff.base = .staged
+                _ = await wait(5) { freshDiff.sideTexts.1.contains("staged two\nstaged three\n") }
+                let staged = side.string as NSString
+                let start = staged.range(of: "staged two"), end = staged.range(of: "staged three\n")
+                if start.location != NSNotFound, end.location != NSNotFound {
+                    side.setSelectedRange(NSRange(location: start.location, length: NSMaxRange(end) - start.location))
+                }
+                window.makeFirstResponder(side)
+                let code = freshDiff.contextItem()?.code
+                agentTab.view.feed(text: "\u{1b}[?2004h")
+                c.sendEditorSelection()
+                // The fence as the tty echoes it: each line on a row of its own, after the ``` row.
+                func onTheirOwnRows() -> Bool {
+                    let rows = agentTab.screenTail(10)
+                    guard let at = rows.firstIndex(of: "staged two"), rows.indices.contains(at + 1) else { return false }
+                    return rows[at + 1] == "staged three" && rows[..<at].joined().contains("```")
+                }
+                let pasted = await wait(4) { onTheirOwnRows() }
+                check(code == "staged two\nstaged three" && pasted, "from Staged, the selected lines reach the agent with their line breaks",
+                      "\(code.debugDescription) | " + agentTab.screenTail(6).joined(separator: " | "))
+                agentTab.view.feed(text: "\u{1b}[?2004l")
+                run("reset", "-q", "--", "src/send-diff.txt")
                 area.close(freshDiff)
             } else {
                 check(false, "a new file opens as a diff", area.activeName ?? "nothing in front")
