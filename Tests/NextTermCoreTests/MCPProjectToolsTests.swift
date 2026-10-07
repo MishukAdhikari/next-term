@@ -90,7 +90,7 @@ func json(_ result: MCPServer.CallResult) -> [String: Any] {
                      "config/credentials.yml.enc", ".npmrc", ".netrc", "infra/terraform.tfstate", "secrets.json", "id_rsa"] {
             #expect(MCPProjects.secretReason(path) != nil, "\(path)")
         }
-        for path in ["README.md", "src/id_utils.py", "src/env.ts", "environment.yml", "docs/keys.md", "token.swift", "id_rsa.pub"] {
+        for path in ["README.md", "src/id_utils.py", "src/env.ts", "environment.yml", "docs/keys.md", "token.swift", "id_rsa.pub", ".env.example"] {
             #expect(MCPProjects.secretReason(path) == nil, "\(path)")
         }
     }
