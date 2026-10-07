@@ -52,7 +52,10 @@ extension SelfTest {
         check(done?.content.body == "claude is waiting for you" && done?.content.title == title,
               "notifications: an agent finishing in a background tab notifies while Next Term is in front",
               done.map { "\($0.content.title) | \($0.content.body)" } ?? "nothing posted")
-        check(done?.content.subtitle == (place == title ? "" : place) && done?.content.sound != nil && done?.content.userInfo["tab"] as? String == back.id.uuidString,
+        let subtitle = place == title ? "" : place
+        let opens = done?.content.userInfo["tab"] as? String
+        let audible = done?.content.sound != nil
+        check(done?.content.subtitle == subtitle && audible && opens == back.id.uuidString,
               "naming the window's project, with a sound, and clicking it opens the tab", done?.content.subtitle ?? "nothing posted")
         check(posted(agent("claude", after: 60), active: true) == nil, "the same notification from a tab is held back for 10 seconds")
         defaults.set(false, forKey: NotificationSettings.Key.agentFinished)
@@ -122,8 +125,9 @@ extension SelfTest {
         NotificationSettings.Key.all.forEach(defaults.removeObject(forKey:))
         let view = NotificationSettingsView(frame: .zero)
         let boxes = [view.decisions, view.agentFinished, view.programAlerts, view.sound]
-        check(boxes.allSatisfy { $0.state == .on } && view.commands.titleOfSelectedItem == "Only when I’m in another app"
-              && view.threshold.titleOfSelectedItem == "5 seconds",
+        let allOn = boxes.allSatisfy { $0.state == .on }
+        let choices = [view.commands.titleOfSelectedItem, view.threshold.titleOfSelectedItem]
+        check(allOn && choices == ["Only when I’m in another app", "5 seconds"],
               "Settings › Notifications: everything on, commands only from another app, 5 seconds",
               "\(boxes.map(\.state.rawValue)) \(view.commands.titleOfSelectedItem ?? "") \(view.threshold.titleOfSelectedItem ?? "")")
         check(view.commands.itemTitles == CommandNotifications.allCases.map(\.title) && view.threshold.itemTitles == WorkThreshold.allCases.map(\.title),
@@ -143,8 +147,9 @@ extension SelfTest {
         check(NotificationSettings(defaults: defaults) == expected, "each control saves its choice, read at the next notice",
               "\(NotificationSettings(defaults: defaults))")
         let reopened = NotificationSettingsView(frame: .zero)
-        check(reopened.decisions.state == .off && reopened.sound.state == .off && reopened.commands.titleOfSelectedItem == CommandNotifications.always.title
-              && reopened.threshold.titleOfSelectedItem == WorkThreshold.fiveMinutes.title, "and shows it again")
+        let reopenedOff = [reopened.decisions, reopened.agentFinished, reopened.programAlerts, reopened.sound].allSatisfy { $0.state == .off }
+        let reopenedChoices = [reopened.commands.titleOfSelectedItem, reopened.threshold.titleOfSelectedItem]
+        check(reopenedOff && reopenedChoices == [CommandNotifications.always.title, WorkThreshold.fiveMinutes.title], "and shows it again")
 
         // What macOS allows, and a test notification (captured, silent as set).
         check(await wait(3) { !view.permission.stringValue.isEmpty }, "it says whether macOS lets Next Term notify", view.permission.stringValue)

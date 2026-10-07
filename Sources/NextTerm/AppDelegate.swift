@@ -932,7 +932,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    /// Show banners even while Next Term is in front (decisions in tabs you are not looking at).
+    /// Show banners even while Next Term is in front (decisions and finished agents in tabs you are not looking at).
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler([.banner, .sound, .list])
