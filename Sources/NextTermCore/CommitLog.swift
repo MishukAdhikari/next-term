@@ -81,6 +81,69 @@ public struct Commit: Equatable, Sendable {
 
     public var shortSHA: String { String(sha.prefix(7)) }
     public var isMerge: Bool { parents.count > 1 }
+
+    func with(parents: [String]) -> Commit {
+        Commit(sha: sha, parents: parents, authorName: authorName, authorEmail: authorEmail, authorDate: authorDate, committerName: committerName,
+               committerEmail: committerEmail, committerDate: committerDate, refs: refs, subject: subject)
+    }
+}
+
+/// The commits a query lists, in order (newest first, each after its children), as `git rev-list`
+/// gives them: only their ids, kept as bytes (a million commits in about 40 MB), with, for a log
+/// limited to paths, each one's parents there, the nearest listed ancestors, which only the walk knows.
+public struct CommitOrder: Equatable, Sendable {
+    /// The ids one after another, each `width` hex digits (40, or 64 in a SHA-256 repository).
+    private let bytes: [UInt8]
+    private let width: Int
+    /// "parent parent", by place; only for a log limited to paths.
+    private let rewritten: [String]?
+    public let count: Int
+
+    public init(ids: [String], parents: [[String]]? = nil) {
+        let width = ids.first?.utf8.count ?? 40
+        let ids = ids.filter { $0.utf8.count == width }
+        self.width = width
+        bytes = ids.flatMap { Array($0.lowercased().utf8) }
+        count = ids.count
+        rewritten = parents.map { $0.prefix(ids.count).map { $0.joined(separator: " ") } }
+    }
+
+    /// `git rev-list` output: an id a line, followed by its parents with `--parents`.
+    init(revList data: Data, withParents: Bool) {
+        var bytes: [UInt8] = [], parents: [String] = []
+        var width = 0, count = 0
+        bytes.reserveCapacity(data.count)
+        for line in data.split(separator: UInt8(ascii: "\n")) {
+            let id = line.prefix { $0 != UInt8(ascii: " ") }
+            if width == 0 { width = id.count }
+            guard id.count == width, width > 0 else { continue }
+            bytes += id
+            count += 1
+            if withParents { parents.append(String(decoding: line.dropFirst(width + 1), as: UTF8.self)) }
+        }
+        self.bytes = bytes
+        self.width = max(width, 1)
+        self.count = count
+        rewritten = withParents ? parents : nil
+    }
+
+    public func id(at index: Int) -> String { String(decoding: bytes[(index * width)..<((index + 1) * width)], as: UTF8.self) }
+
+    public func ids(_ range: Range<Int>) -> [String] { range.map(id(at:)) }
+
+    /// Limited to paths, the parents the log shows for the commit here; nil otherwise.
+    func parents(at index: Int) -> [String]? { rewritten.map { $0[index].split(separator: " ").map(String.init) } }
+
+    /// Where the commit with this id, or the first whose id starts with it, is listed.
+    public func index(of sha: String) -> Int? {
+        let prefix = Array(sha.lowercased().utf8)
+        guard count > 0, !prefix.isEmpty, prefix.count <= width else { return nil }
+        return bytes.withUnsafeBufferPointer { all in
+            prefix.withUnsafeBufferPointer { wanted in
+                (0..<count).first { memcmp(all.baseAddress! + $0 * width, wanted.baseAddress!, wanted.count) == 0 }
+            }
+        }
+    }
 }
 
 /// What the log lists.
@@ -148,10 +211,9 @@ public struct CommitQuery: Equatable, Sendable {
         return trimmed
     }
 
-    /// The `git log` options and revisions after `log`, for one page.
-    func arguments(skip: Int, limit: Int, includeHead: Bool) -> [String] {
-        var args = ["--topo-order", "--decorate=full", "--no-color", "--encoding=UTF-8", "-z", "--format=" + CommitLog.format,
-                    "--skip=\(skip)", "--max-count=\(limit)"]
+    /// The `git rev-list` options and revisions after `rev-list`: the ids the query lists, in order.
+    func arguments(includeHead: Bool) -> [String] {
+        var args = ["--topo-order"]
         let text = self.text.trimmingCharacters(in: .whitespaces), author = self.author.trimmingCharacters(in: .whitespaces)
         // --fixed-strings covers --author as well, so with any regular expression (the text's, or the
         // anchored one for a whole name) the other part is escaped instead.
@@ -264,23 +326,49 @@ public enum CommitLog {
         ["-C", root, "--no-optional-locks", "--literal-pathspecs", "-c", "log.showSignature=false", "-c", "log.follow=false", "-c", "core.quotepath=off"]
     }
 
-    /// One page of the log, or nil when git fails (not a repository, a bad revision). A query whose
-    /// text is a hash prefix of a commit lists that commit alone.
-    public static func page(_ query: CommitQuery, skip: Int = 0, limit: Int = pageSize, in root: String, git: String,
-                            timeout: TimeInterval = 30) -> [Commit]? {
-        if let prefix = query.hashPrefix, let sha = resolve(prefix, in: root, git: git) {
-            guard skip == 0 else { return [] }
-            return GitRunner.run(git, base(root) + ["log", "--decorate=full", "--no-color", "--encoding=UTF-8", "-z", "--format=" + format,
-                                                    "--max-count=1", "--end-of-options", sha, "--"], timeout: timeout).map(parse)
-        }
+    /// Every commit the query lists, in order, as ids; nil when git fails (not a repository, a bad
+    /// revision). A query whose text is a hash prefix of a commit lists that commit alone. One walk of
+    /// the history, however long: pages then read their commits by id, so none walks it again.
+    public static func order(_ query: CommitQuery, in root: String, git: String, timeout: TimeInterval = 60) -> CommitOrder? {
+        if let prefix = query.hashPrefix, let sha = resolve(prefix, in: root, git: git) { return CommitOrder(ids: [sha]) }
         // HEAD only when there is a commit: on an unborn branch, naming it is an error.
         let hasHead = query.scope != .all || resolve("HEAD", in: root, git: git) != nil
-        guard let data = GitRunner.run(git, base(root) + ["log"] + query.arguments(skip: skip, limit: limit, includeHead: hasHead), timeout: timeout,
+        guard let data = GitRunner.run(git, base(root) + ["rev-list"] + query.arguments(includeHead: hasHead), timeout: timeout,
                                        environment: query.environment) else {
             // A repository without a single commit has nothing to list.
-            return hasHead || query.scope != .all ? nil : []
+            return hasHead || query.scope != .all ? nil : CommitOrder(ids: [])
         }
-        return parse(data)
+        return CommitOrder(revList: data, withParents: !query.paths.isEmpty)
+    }
+
+    /// The commits at these places in the order, in full: `git log --no-walk` on their ids, which reads
+    /// only those commits. Nil when git fails. Each git run lists up to ten pages: reading the refs for
+    /// the branch and tag badges is most of its time when a repository has thousands of them.
+    public static func commits(_ range: Range<Int>, of order: CommitOrder, in root: String, git: String, timeout: TimeInterval = 30) -> [Commit]? {
+        let range = range.clamped(to: 0..<order.count)
+        var commits: [Commit] = []
+        commits.reserveCapacity(range.count)
+        for start in stride(from: range.lowerBound, to: range.upperBound, by: pageSize * 10) {
+            let part = start..<min(start + pageSize * 10, range.upperBound)
+            let ids = order.ids(part)
+            // The ids on standard input (from a file): ten thousand would make a long command line.
+            let args = ["log", "--no-walk=unsorted", "--decorate=full", "--no-color", "--encoding=UTF-8", "-z", "--format=" + format, "--stdin"]
+            guard let data = GitRunner.run(git, base(root) + args, timeout: timeout, input: Data(ids.joined(separator: "\n").utf8 + [10])) else { return nil }
+            let page = parse(data)
+            // As asked, one for one; anything else means the repository changed under us.
+            guard page.map(\.sha) == ids else { return nil }
+            commits += zip(page, part).map { commit, index in order.parents(at: index).map { commit.with(parents: $0) } ?? commit }
+        }
+        return commits
+    }
+
+    /// One page of the log, reading the order first: for a single read. The Git Log keeps the order
+    /// and asks `commits` for each page.
+    public static func page(_ query: CommitQuery, skip: Int = 0, limit: Int = pageSize, in root: String, git: String,
+                            timeout: TimeInterval = 30) -> [Commit]? {
+        guard let order = order(query, in: root, git: git, timeout: timeout) else { return nil }
+        let start = min(skip, order.count)
+        return commits(start..<min(order.count, start + limit), of: order, in: root, git: git, timeout: timeout)
     }
 
     /// Whether git reads `text` as a date. Words it does not know it takes for the moment it runs, so a

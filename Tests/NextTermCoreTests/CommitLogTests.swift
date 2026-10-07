@@ -54,19 +54,32 @@ import Testing
     }
 
     @Test func queryArguments() {
-        let all = CommitQuery().arguments(skip: 0, limit: 10, includeHead: true)
+        let all = CommitQuery().arguments(includeHead: true)
         #expect(Array(all.suffix(6)) == ["--branches", "--remotes", "--tags", "--end-of-options", "HEAD", "--"])
-        #expect(all.contains("--topo-order") && all.contains("--max-count=10") && all.last == "--")
+        #expect(all.first == "--topo-order" && all.last == "--")
         let filtered = CommitQuery(scope: .ref("refs/heads/main"), text: "a.b", regex: true, author: "Ann (QA)", since: "2 weeks ago", paths: ["src", "x y"])
-            .arguments(skip: 1000, limit: 1000, includeHead: false)
+            .arguments(includeHead: false)
         #expect(filtered.contains("--extended-regexp") && filtered.contains("--grep=a.b") && filtered.contains("--author=Ann \\(QA\\)"))
-        #expect(filtered.contains("--since=2 weeks ago") && filtered.contains("--parents") && filtered.contains("--skip=1000"))
+        #expect(filtered.contains("--since=2 weeks ago") && filtered.contains("--parents"))
         #expect(Array(filtered.suffix(5)) == ["--end-of-options", "refs/heads/main", "--", "src", "x y"])
-        let fixed = CommitQuery(text: "a.b", author: "Ann").arguments(skip: 0, limit: 1, includeHead: true)
+        let fixed = CommitQuery(text: "a.b", author: "Ann").arguments(includeHead: true)
         #expect(fixed.contains("--fixed-strings") && fixed.contains("--regexp-ignore-case") && fixed.contains("--author=Ann") && !fixed.contains("--parents"))
         // A whole name: anchored, so the text is escaped to match as it is.
-        let whole = CommitQuery(text: "a.b", author: "Ann (QA)", exactAuthor: true).arguments(skip: 0, limit: 1, includeHead: true)
+        let whole = CommitQuery(text: "a.b", author: "Ann (QA)", exactAuthor: true).arguments(includeHead: true)
         #expect(whole.contains("--extended-regexp") && whole.contains("--grep=a\\.b") && whole.contains("--author=^Ann \\(QA\\) <"))
+    }
+
+    @Test func orderOfIds() {
+        let a = String(repeating: "a", count: 40), b = "b" + String(repeating: "0", count: 39), c = "b" + String(repeating: "1", count: 39)
+        let order = CommitOrder(revList: Data("\(a) \(b) \(c)\n\(b)\n\(c) \(b)\n".utf8), withParents: true)
+        #expect(order.count == 3 && order.ids(0..<3) == [a, b, c] && order.id(at: 1) == b)
+        #expect(order.parents(at: 0) == [b, c] && order.parents(at: 1) == [] && order.parents(at: 2) == [b])
+        #expect(order.index(of: a) == 0 && order.index(of: "B1") == 2 && order.index(of: "b") == 1 && order.index(of: "c") == nil)
+        #expect(order.index(of: a + "0") == nil && order.index(of: "") == nil)
+        let plain = CommitOrder(revList: Data("\(a)\n\(b)\n".utf8), withParents: false)
+        #expect(plain.count == 2 && plain.parents(at: 0) == nil && CommitOrder(ids: []).index(of: "a") == nil)
+        let sha256 = String(repeating: "e", count: 64)
+        #expect(CommitOrder(revList: Data("\(sha256)\n".utf8), withParents: false).ids(0..<1) == [sha256])
     }
 
     /// main: one, then x by Ann; feat: a rename; a merge of feat; a tag on the first commit.
@@ -128,10 +141,14 @@ import Testing
         let rows = graph.add(all)
         #expect(rows[0].isMerge && rows.map(\.width).max() == 2 && rows.last?.column == 0 && graph.openLanes == 0)
 
-        // Paging.
+        // Paging: the order once, then commits by place, the same as one page of them all.
         let first = try #require(CommitLog.page(CommitQuery(), skip: 0, limit: 2, in: work, git: git))
         let second = try #require(CommitLog.page(CommitQuery(), skip: 2, limit: 2, in: work, git: git))
         #expect((first + second).map(\.sha) == all.map(\.sha))
+        let order = try #require(CommitLog.order(CommitQuery(), in: work, git: git))
+        #expect(order.count == 4 && order.index(of: String(x.prefix(8))) == all.firstIndex { $0.sha == x })
+        #expect(CommitLog.commits(1..<3, of: order, in: work, git: git) == Array(all[1..<3]))
+        #expect(CommitLog.commits(3..<9, of: order, in: work, git: git)?.count == 1 && CommitLog.page(CommitQuery(), skip: 9, in: work, git: git) == [])
 
         // Filters.
         #expect(CommitLog.page(CommitQuery(author: "ANN"), in: work, git: git)?.map(\.sha) == [x])

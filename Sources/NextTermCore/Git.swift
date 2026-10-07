@@ -356,9 +356,9 @@ public enum GitRunner {
     /// Output goes to a temporary file, not a pipe. A pipe's end is inherited by any process started at
     /// the same moment (another git, or a new tab's shell, which can live for days), and the end of the
     /// output would never arrive while it is open. A file has no end to wait for: the exit is enough.
-    /// `environment` is added last, over the defaults.
+    /// `environment` is added last, over the defaults. `input` is the standard input, from a file too.
     static func run(_ executable: String, _ arguments: [String], timeout: TimeInterval,
-                    acceptedStatus: Set<Int32> = [0], environment: [String: String] = [:]) -> Data? {
+                    acceptedStatus: Set<Int32> = [0], environment: [String: String] = [:], input: Data? = nil) -> Data? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -379,18 +379,28 @@ public enum GitRunner {
         guard FileManager.default.createFile(atPath: outputURL.path, contents: nil, attributes: [.posixPermissions: 0o600]),
               let output = try? FileHandle(forWritingTo: outputURL) else { return nil }
         defer { try? FileManager.default.removeItem(at: outputURL) }
+        let inputURL = FileManager.default.temporaryDirectory.appendingPathComponent("next-term-in-\(UUID().uuidString)")
+        var inputFile: FileHandle?
+        if let input {
+            guard FileManager.default.createFile(atPath: inputURL.path, contents: input, attributes: [.posixPermissions: 0o600]),
+                  let handle = try? FileHandle(forReadingFrom: inputURL) else { return nil }
+            inputFile = handle
+        }
+        defer { if input != nil { try? FileManager.default.removeItem(at: inputURL) } }
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
+        process.standardInput = inputFile ?? FileHandle.nullDevice
         let exited = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in exited.signal() }
         do {
             try process.run()
         } catch {
             try? output.close()
+            try? inputFile?.close()
             return nil
         }
         try? output.close() // the child has its own copy
+        try? inputFile?.close()
         if exited.wait(timeout: .now() + timeout) == .timedOut {
             process.terminate()
             if exited.wait(timeout: .now() + 2) == .timedOut {

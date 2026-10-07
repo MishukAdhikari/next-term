@@ -17,6 +17,8 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     private(set) var commits: [Commit] = []
     private(set) var rows: [GraphRow] = []
     private var graph = CommitGraph()
+    /// Every commit the query lists, as ids, read with the first page; the pages read their commits by place.
+    private(set) var order: CommitOrder?
     private(set) var isLoading = false
     /// Every commit the query lists is loaded.
     private(set) var isComplete = false
@@ -24,9 +26,10 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     private var generation = 0
     /// HEAD's commit, ringed in the graph.
     private var headSHA: String?
-    /// A commit to select once a page lists it: kept over a refresh, or asked for by `select(sha:)`.
-    /// Pages load until it is found (up to `pagesLeft` more); then, with `orFilter`, the log shows it alone.
-    private var wanted: (sha: String, pagesLeft: Int, orFilter: Bool)?
+    /// A commit to select once it is loaded: kept over a refresh, or asked for by `select(sha:)`. The
+    /// order says where it is, and the pages down to it load at once; with `orFilter`, one the query
+    /// does not list is then shown alone.
+    private var wanted: (sha: String, orFilter: Bool)?
     private var lanesShown = 1
     /// Who commits here (`user.name`), for "Me" in the author filter.
     private var me: String?
@@ -93,19 +96,21 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         generation += 1
         commits = []
         rows = []
+        order = nil
         graph = CommitGraph(maxColumns: GitLogStyle.maxLanes, connected: query.isConnected)
         isLoading = false
         isComplete = false
         failure = nil
         lanesShown = 1
         graphColumn.width = GitLogStyle.graphWidth(lanes: 1)
-        if let keep, wanted?.sha != keep { wanted = (keep, 2, false) }
+        if let keep, wanted?.sha != keep { wanted = (keep, false) }
         table.reloadData()
         updateStatus()
         loadMore()
     }
 
-    /// The next page, unless one is loading or all are loaded.
+    /// The next page (with the order, for the first), or every page down to the wanted commit; unless
+    /// one is loading or all are loaded.
     func loadMore() {
         guard !isLoading, !isComplete, failure == nil else { return }
         guard let git = Self.git else {
@@ -119,29 +124,41 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         }
         isLoading = true
         updateStatus()
-        let token = generation, skip = commits.count, query = self.query, root = self.root
+        let token = generation, skip = commits.count, query = self.query, root = self.root, known = order, start = graph, sha = wanted?.sha
         Self.queue.async { [weak self] in
-            let page = CommitLog.page(query, skip: skip, in: root, git: git)
+            let order = known ?? CommitLog.order(query, in: root, git: git)
             let head = skip == 0 ? CommitLog.resolve("HEAD", in: root, git: git) : nil
+            let page = order.flatMap { CommitLog.commits(skip..<Self.end(of: $0, from: skip, through: sha), of: $0, in: root, git: git) }
+            // The lanes too, off the main thread: down to a commit far down, that is many pages.
+            var graph = start
+            let added = page.map { graph.add($0) } ?? []
             DispatchQueue.main.async {
                 guard let self, token == self.generation else { return }
                 self.isLoading = false
                 if skip == 0 { self.headSHA = head }
-                guard let page else {
+                guard let order, let page else {
                     self.failure = "Git could not read the log here."
                     return self.updateStatus()
                 }
-                self.append(page)
+                self.order = order
+                self.graph = graph
+                self.append(page, rows: added)
             }
         }
     }
 
-    private func append(_ page: [Commit]) {
+    /// Where a load from `skip` ends: a page on, or half a page past the commit wanted, if the order lists it.
+    private static func end(of order: CommitOrder, from skip: Int, through sha: String?) -> Int {
+        var end = skip + CommitLog.pageSize
+        if let sha, let index = order.index(of: sha) { end = max(end, index + CommitLog.pageSize / 2) }
+        return min(end, order.count)
+    }
+
+    private func append(_ page: [Commit], rows added: [GraphRow]) {
         let start = commits.count
         commits += page
-        let added = graph.add(page)
         rows += added
-        isComplete = page.count < CommitLog.pageSize
+        isComplete = commits.count >= (order?.count ?? 0)
         let widest = added.map(\.width).max() ?? 1
         if widest > lanesShown {
             lanesShown = widest
@@ -149,7 +166,7 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         }
         if start == 0 {
             table.reloadData()
-        } else {
+        } else if !page.isEmpty {
             table.insertRows(at: IndexSet(integersIn: start..<commits.count), withAnimation: [])
         }
         updateStatus()
@@ -157,36 +174,34 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     }
 
     private func findWanted() {
-        guard let wanted else { return }
+        guard let wanted, let order else { return }
         if let index = commits.firstIndex(where: { Self.matches($0, wanted.sha) }) {
             self.wanted = nil
-            select(row: index)
-        } else if !isComplete, wanted.pagesLeft > 0 {
-            self.wanted?.pagesLeft -= 1
-            loadMore()
-        } else {
-            self.wanted = nil
-            // A filter left the selected commit out: its details go too.
-            if selectedCommit == nil, let shown = details.shown, Self.matches(shown, wanted.sha) { details.show(nil) }
-            guard wanted.orFilter else { return }
-            // Not on the branches listed (or too far down): the log shows that commit alone.
-            searchField.stringValue = wanted.sha
-            query = CommitQuery(text: wanted.sha)
-            self.wanted = (wanted.sha, 0, false)
-            updateFilterTitles()
-            reload(keepSelection: false)
+            return select(row: index)
         }
+        // Further down (asked for while a page was on its way): the pages down to it.
+        if !isComplete, order.index(of: wanted.sha) != nil { return loadMore() }
+        self.wanted = nil
+        // A filter left the selected commit out: its details go too.
+        if selectedCommit == nil, let shown = details.shown, Self.matches(shown, wanted.sha) { details.show(nil) }
+        guard wanted.orFilter else { return }
+        // Not on the branches listed: the log shows that commit alone.
+        searchField.stringValue = wanted.sha
+        query = CommitQuery(text: wanted.sha)
+        self.wanted = (wanted.sha, false)
+        updateFilterTitles()
+        reload(keepSelection: false)
     }
 
-    /// Selects a commit (by its id, or the start of it), loading up to ten more pages until it is found;
-    /// one that no branch lists, or one further down, is shown alone.
+    /// Selects a commit (by its id, or the start of it), loading the pages down to it at once; one that
+    /// no branch lists is shown alone.
     func select(sha: String) {
         let sha = sha.trimmingCharacters(in: .whitespaces).lowercased()
         // Lines not committed yet have no commit (blame gives them an id of zeros).
         guard sha.count >= 6, sha.contains(where: { $0 != "0" }) else { return NSSound.beep() }
         if let index = commits.firstIndex(where: { Self.matches($0, sha) }) { return select(row: index) }
-        wanted = (sha, 10, true)
-        if query.isFiltered || query.scope != .all {
+        wanted = (sha, true)
+        if query.isFiltered || query.scope != .all || failure != nil {
             // Filters could hide it: look in the whole history.
             query = CommitQuery()
             searchField.stringValue = ""
@@ -194,8 +209,8 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             updateFilterTitles()
             return reload(keepSelection: false)
         }
-        if isComplete || failure != nil { return findWanted() }
-        if !isLoading { loadMore() } // else the page on its way looks for it
+        // Else the load on its way looks for it.
+        if !isLoading { findWanted() }
     }
 
     /// The commit with this id, or whose id starts with it.
@@ -207,7 +222,6 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     }
 
     private func updateStatus() {
-        let count = commits.count.formatted()
         if let failure {
             status.stringValue = ""
             message.stringValue = failure
@@ -215,7 +229,8 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             status.stringValue = isLoading ? "Loading…" : ""
             message.stringValue = isLoading ? "" : (query.isFiltered || query.scope != .all ? "No commits match." : "No commits yet.")
         } else {
-            status.stringValue = isComplete ? "\(count) commit\(commits.count == 1 ? "" : "s")" : "\(count)+ commits"
+            let total = order?.count ?? commits.count
+            status.stringValue = "\(total.formatted()) commit\(total == 1 ? "" : "s")"
             message.stringValue = ""
         }
         message.isHidden = message.stringValue.isEmpty
