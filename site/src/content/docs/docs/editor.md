@@ -77,7 +77,7 @@ When you share your screen or record it, the editor can draw the values in your 
 - **Which files:** `.env`, `.env.*` (such as `.env.local` or `.env.example`), `*.env` (such as `prod.env`) and `.flaskenv`.
 - **What is hidden:** everything after the first `=` on a `KEY=value` line, quotes included, and every line of a quoted value that runs over several lines, such as a private key. Keys, comments, and a `# comment` after a value stay visible.
 - **Only the drawing changes.** Copy, Find, save and undo work on the real values, and the file on disk stays as it is. Soft wrap, line numbers, blame and the change marks stay where they were.
-- **Typing is not blind.** Click or type in a line and it shows its value while the caret is on it. A file you open, or come back to, shows no values until you do.
+- **Typing is not blind.** Click or type in a line and it shows its value while the caret is on it; on a private key, only that one line of it. When the editor loses the keyboard, to another window or another app such as your screen-share app, the line hides again. A file you open, or come back to, shows no values until you click or type.
 - **One file:** **View › Show .env Values** shows the values of the file in front, and **View › Hide .env Values** hides them again. Changing the setting applies it to every open file again.
 
 Only the editor hides them: the terminal, side-by-side diffs and Find in Files results show the values as they are.

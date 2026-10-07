@@ -79,6 +79,20 @@ final class CodeTextView: NSTextView {
         didSet { if caretPlacedByUser != oldValue { needsDisplay = true } }
     }
 
+    private var keyObserver: NSObjectProtocol?
+
+    /// The window keeps its first responder when another window or app takes the keyboard (a switch to
+    /// a screen-share app), so that counts as losing it too: the caret's line hides again.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let keyObserver { NotificationCenter.default.removeObserver(keyObserver) }
+        keyObserver = nil
+        guard let window else { return }
+        keyObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) { [weak self] _ in
+            self?.caretPlacedByUser = false
+        }
+    }
+
     override func mouseDown(with event: NSEvent) {
         caretPlacedByUser = true
         super.mouseDown(with: event)

@@ -110,11 +110,12 @@ extension CodeEditorView {
         return EnvFile.ranges(ranges, showing: shown)
     }
 
-    /// The caret's line, when its value shows: the editor has the keyboard, nothing is selected, and you
-    /// clicked or typed in it since it got the keyboard.
+    /// The caret's line, when its value shows: the editor has the keyboard (in the key window), nothing
+    /// is selected, and you clicked or typed in it since it got the keyboard.
     private func caretLineShown() -> NSRange? {
         let selection = textView.selectedRange()
-        guard textView.caretPlacedByUser, selection.length == 0, textView.window?.firstResponder === textView else { return nil }
+        guard textView.caretPlacedByUser, selection.length == 0, let window = textView.window else { return nil }
+        guard window.isKeyWindow, window.firstResponder === textView else { return nil }
         return document.lines.range(ofLine: document.lines.line(at: min(selection.location, document.storage.length)))
     }
 
