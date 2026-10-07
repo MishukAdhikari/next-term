@@ -61,4 +61,4 @@ Your `PATH` order decides between them. Next Term never adds a folder to `PATH` 
 - Next Term only ever replaces a link it made itself. It never touches someone else’s `nxtrm`, and when another `nxtrm` comes first on your `PATH`, it adds none of its own.
 - It links only a copy in a permanent place such as Applications. A copy running from the disk image would leave the link pointing at nothing once the image is ejected, so Next Term asks you to move it first.
 - If you move the app, the next launch points the link at the new place, when it can do so without a password.
-- The link is the only file it adds. Delete it to remove the command from your other terminals.
+- The link is the only file it adds. Delete it to remove the command from your other terminals: Next Term leaves it out from then on, and **Next Term › Install Command Line Tool (nxtrm)…** puts it back.

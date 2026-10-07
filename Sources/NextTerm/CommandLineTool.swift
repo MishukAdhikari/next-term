@@ -156,11 +156,29 @@ enum CommandLineTool {
     static func registerQuietly() {
         guard let script = script?.path, isInStableLocation else { return }
         DispatchQueue.global(qos: .utility).async {
-            let chosen = plan(for: script)
-            if case .link(let path) = chosen, !link(path, to: script) { NSLog("Next Term: could not link \(path)") }
-            guard chosen == .unavailable else { return }
+            guard register(script, path: searchPath) == .unavailable else { return }
             DispatchQueue.main.async { offer() }
         }
+    }
+
+    /// The link a launch made without asking: once the user deletes it, no launch makes another.
+    static let linkedKey = "commandLineToolLink"
+
+    /// A launch's part: links as `plan` says, except that once the link a launch made is deleted, no new
+    /// one is made (Install Command Line Tool… puts it back). A link of Next Term's is still repointed.
+    @discardableResult
+    static func register(_ script: String, path: [String], home: String = NSHomeDirectory()) -> CommandLineLink.Plan {
+        let chosen = plan(for: script, path: path, home: home)
+        guard case .link(let candidate) = chosen else { return chosen }
+        if entry(at: candidate) == .nothing, let made = UserDefaults.standard.string(forKey: linkedKey), entry(at: made) == .nothing {
+            return chosen
+        }
+        if link(candidate, to: script) {
+            UserDefaults.standard.set(candidate, forKey: linkedKey)
+        } else {
+            NSLog("Next Term: could not link \(candidate)")
+        }
+        return chosen
     }
 
     // MARK: the first-launch offer

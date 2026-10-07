@@ -729,6 +729,24 @@ enum SelfTest {
         let made = sh(fresh) == 0 && CommandLineTool.entry(at: admin) == .link(moved)
         check(refused && made, "nxtrm: where nothing was, the password route links it, and replaces nothing that turned up since", fresh)
 
+        // A launch links it once: deleted, it stays deleted until the menu command puts it back.
+        let defaults = UserDefaults.standard
+        let savedLink = defaults.object(forKey: CommandLineTool.linkedKey)
+        defer { defaults.set(savedLink, forKey: CommandLineTool.linkedKey) }
+        defaults.removeObject(forKey: CommandLineTool.linkedKey)
+        let away = home + "/launch", awayLink = away + "/.local/bin/nxtrm"
+        try? fm.createDirectory(atPath: away + "/.local/bin", withIntermediateDirectories: true)
+        let launch = [away + "/.local/bin", "/usr/bin", "/bin"]
+        let launched = CommandLineTool.register(moved, path: launch, home: away)
+        let remembered = defaults.string(forKey: CommandLineTool.linkedKey)
+        check(launched == .link(awayLink) && CommandLineTool.entry(at: awayLink) == .link(moved) && remembered == awayLink,
+              "nxtrm: a launch links it in a free command folder, and remembers where", "\(launched), \(remembered ?? "nothing remembered")")
+        try? fm.removeItem(atPath: awayLink)
+        CommandLineTool.register(moved, path: launch, home: away)
+        check(CommandLineTool.entry(at: awayLink) == .nothing, "nxtrm: once deleted, the next launch leaves it out", "\(CommandLineTool.entry(at: awayLink))")
+        let putBack = CommandLineTool.link(awayLink, to: moved) && CommandLineTool.register(moved, path: launch, home: away) == .linked(awayLink)
+        check(putBack, "nxtrm: the menu command puts it back, and launches keep it", "\(CommandLineTool.entry(at: awayLink))")
+
         let none = CommandLineTool.plan(for: script, path: [own, "/usr/bin", "/bin"], home: home)
         check(none == .unavailable && CommandLineTool.entry(at: own + "/nxtrm") == .nothing,
               "nxtrm: with no writable command folder on PATH, nothing is written", "\(none)")
