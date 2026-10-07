@@ -49,6 +49,23 @@ final class DiffPane: NSView {
         let oldPath: String?
     }
     private(set) var commit: CommitChange?
+
+    /// A file as a branch changed it since it parted from what is checked out (Compare with Current):
+    /// their merge base on the left, the branch on the right. Read-only.
+    struct BranchChange {
+        /// "refs/heads/feat/x".
+        let branch: String
+        /// Where a renamed file came from.
+        let oldPath: String?
+    }
+    private(set) var branchChange: BranchChange?
+    /// Show Diff with Working Tree (base `.ref`): where the branch has a file that was renamed on disk.
+    private var renamedFrom: String?
+    /// The branch the file on disk is compared with (base `.ref`).
+    var workingTreeBranch: String? {
+        if case let .ref(name) = base { return name }
+        return nil
+    }
     /// Called once with the decision (true: accepted, with the proposed text).
     var onDecision: ((Bool, String) -> Void)?
     private var decided = false
@@ -72,6 +89,8 @@ final class DiffPane: NSView {
     var title: String {
         if let proposal { return (path as NSString).lastPathComponent + " ✻ " + proposal.author }
         if let commit { return (path as NSString).lastPathComponent + " @ " + commit.sha.prefix(7) }
+        if let branchChange { return (path as NSString).lastPathComponent + " @ " + BranchCompare.displayName(branchChange.branch) }
+        if let branch = workingTreeBranch { return (path as NSString).lastPathComponent + " ↔ " + BranchCompare.displayName(branch) }
         return (path as NSString).lastPathComponent + " ↔ " + ["HEAD", "Index", "HEAD"][Self.bases.firstIndex(of: base) ?? 0]
     }
     var tooltip: String {
@@ -79,6 +98,14 @@ final class DiffPane: NSView {
         if let commit {
             let from = commit.oldPath.map { ", renamed from \($0)" } ?? ""
             return "\(path) in commit \(commit.sha.prefix(7))\(from), against " + (commit.parent.map { "its parent \($0.prefix(7))" } ?? "nothing (the first commit)")
+        }
+        if let branchChange {
+            let from = branchChange.oldPath.map { ", renamed from \($0)" } ?? ""
+            return "\(path) as \(BranchCompare.displayName(branchChange.branch)) changed it\(from), since the commit it shares with HEAD"
+        }
+        if let branch = workingTreeBranch {
+            let from = renamedFrom.map { " (\($0) there)" } ?? ""
+            return "\(path): \(BranchCompare.displayName(branch))’s version\(from) on the left, the file on disk on the right"
         }
         return "Changes in \(path) — " + ["working tree against HEAD", "working tree against the index (unstaged)", "index against HEAD (staged)"][Self.bases.firstIndex(of: base) ?? 0]
     }
@@ -89,9 +116,17 @@ final class DiffPane: NSView {
     /// For the self-test: the hunks shown and the text of each side.
     var hunkCount: Int { hunkRows.count }
     var sideTexts: (String, String) { (left.textView.string, right.textView.string) }
+    /// For the self-test: what is said instead of the two sides ("" while they show).
+    var messageText: String { message.isHidden ? "" : message.stringValue }
 
-    func matches(root: String, path: String) -> Bool { proposal == nil && commit == nil && self.root == root && self.path == path }
+    func matches(root: String, path: String) -> Bool {
+        proposal == nil && commit == nil && branchChange == nil && workingTreeBranch == nil && self.root == root && self.path == path
+    }
     func matches(root: String, path: String, commit sha: String) -> Bool { commit?.sha == sha && self.root == root && self.path == path }
+    func matches(root: String, path: String, branch: String) -> Bool { branchChange?.branch == branch && self.root == root && self.path == path }
+    func matches(root: String, path: String, workingTreeAgainst branch: String) -> Bool {
+        workingTreeBranch == branch && self.root == root && self.path == path
+    }
 
     /// An agent's proposal for `absolutePath`.
     init(proposalFor absolutePath: String, proposal: Proposal) {
@@ -137,10 +172,29 @@ final class DiffPane: NSView {
         reload()
     }
 
-    init(root: String, path: String, base: GitRunner.DiffBase) {
+    /// `path` as `change.branch` changed it since it parted from HEAD.
+    init(root: String, path: String, branchChange change: BranchChange) {
+        self.root = root
+        self.path = path
+        base = .head
+        branchChange = change
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = Theme.background.cgColor
+        build()
+        reload()
+    }
+
+    /// `path` on disk against its version on `branch`, which had it at `renamedFrom` when it was renamed since.
+    convenience init(root: String, path: String, workingTreeAgainst branch: String, renamedFrom: String?) {
+        self.init(root: root, path: path, base: .ref(branch), renamedFrom: renamedFrom)
+    }
+
+    init(root: String, path: String, base: GitRunner.DiffBase, renamedFrom: String? = nil) {
         self.root = root
         self.path = path
         self.base = base
+        self.renamedFrom = renamedFrom
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = Theme.background.cgColor
@@ -213,6 +267,15 @@ final class DiffPane: NSView {
             text.append(Typography.gap(8, font: .systemFont(ofSize: 12)))
             text.append(NSAttributedString(string: "@ " + commit.sha.prefix(7), attributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: 11.5, weight: .medium), .foregroundColor: Theme.textDim,
+            ]))
+            pathLabel.attributedStringValue = Typography.truncating(text, .byTruncatingMiddle)
+            pathLabel.toolTip = tooltip
+            header.setViews([pathLabel, counts, NSView(), previous, position, next], in: .leading)
+        } else if let branch = branchChange?.branch ?? workingTreeBranch {
+            // Which branch, after the name: "@ feat/x" for its change, "↔ feat/x" for the disk against it.
+            text.append(Typography.gap(8, font: .systemFont(ofSize: 12)))
+            text.append(NSAttributedString(string: (branchChange != nil ? "@ " : "↔ ") + BranchCompare.displayName(branch), attributes: [
+                .font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: Theme.textDim,
             ]))
             pathLabel.attributedStringValue = Typography.truncating(text, .byTruncatingMiddle)
             pathLabel.toolTip = tooltip
@@ -296,6 +359,30 @@ final class DiffPane: NSView {
             }
             return
         }
+        if let change = branchChange {
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let diff = Self.git.flatMap { BranchCompare.diff(of: path, oldPath: change.oldPath, branch: change.branch, in: root, git: $0) }
+                DispatchQueue.main.async {
+                    guard let self, token == self.generation else { return }
+                    self.show(diff, message: diff == nil ? "This change could not be read from git." : nil, token: token)
+                }
+            }
+            return
+        }
+        if workingTreeBranch != nil {
+            // Tracked or not doesn't matter here: the list came from the branch's files and the disk's.
+            let renamedFrom = self.renamedFrom
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let diff = Self.git.flatMap { GitRunner.diff(of: path, in: root, git: $0, base: base, oldPath: renamedFrom) }
+                let stamps = (FileStamp(path: absolute), FileStamp(path: (root as NSString).appendingPathComponent(".git/index")))
+                DispatchQueue.main.async {
+                    guard let self, token == self.generation else { return }
+                    self.stamps = stamps
+                    self.show(diff, message: nil, token: token)
+                }
+            }
+            return
+        }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let git = Self.git else { return DispatchQueue.main.async { self?.show(nil, message: "Git is not installed.", token: token) } }
             let tracked = GitRunner.isTracked(path, in: root, git: git)
@@ -311,7 +398,7 @@ final class DiffPane: NSView {
 
     /// The file or the index changed (an agent, a commit, a stage): diff again.
     func refreshIfChanged() {
-        guard proposal == nil, commit == nil else { return } // a commit never changes
+        guard proposal == nil, commit == nil, branchChange == nil else { return } // a commit never changes
         let now = (FileStamp(path: absolutePath), FileStamp(path: (root as NSString).appendingPathComponent(".git/index")))
         if now.0 != stamps.file || now.1 != stamps.index { reload() }
     }
@@ -331,6 +418,12 @@ final class DiffPane: NSView {
             message.stringValue = "This commit deleted the file, which was empty."
         } else if empty, commit != nil {
             message.stringValue = "This commit changed the file’s name or mode, not its lines."
+        } else if empty, let branch = (branchChange?.branch).map(BranchCompare.displayName) {
+            message.stringValue = Self.emptyBranchChange(diff, on: branch)
+        } else if empty, let branch = workingTreeBranch.map(BranchCompare.displayName) {
+            // Renamed since: the same as the file under its name there.
+            let there = renamedFrom.map { "\($0) on" } ?? "on"
+            message.stringValue = "The file on disk is the same as \(there) \(branch)."
         } else if empty {
             message.stringValue = ["No changes against the last commit.", "No unstaged changes.", "No staged changes."][Self.bases.firstIndex(of: base) ?? 0]
         }
@@ -368,9 +461,17 @@ final class DiffPane: NSView {
 
     // MARK: hunks
 
+    /// Why a branch's change to a file has no lines to show.
+    private static func emptyBranchChange(_ diff: FileDiff?, on branch: String) -> String {
+        guard let diff, diff.oldPath != nil || diff.newPath != nil else { return "\(branch) no longer changes this file." }
+        if diff.oldPath == nil { return "\(branch) added the file, empty." }
+        if diff.newPath == nil { return "\(branch) deleted the file, which was empty." }
+        return "\(branch) changed the file’s name or mode, not its lines."
+    }
+
     private func updateButtons() {
         let has = !hunkRows.isEmpty
-        if proposal != nil || commit != nil {
+        if proposal != nil || commit != nil || branchChange != nil || workingTreeBranch != nil {
             for button in [previous, next] { button.isEnabled = has }
             position.stringValue = has ? "\(currentHunk + 1) of \(hunkRows.count)" : ""
             return

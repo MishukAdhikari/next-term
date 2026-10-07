@@ -293,6 +293,28 @@ final class EditorArea: NSView, TabBarViewDelegate {
         select(activeIndex)
     }
 
+    /// A file as `change.branch` changed it since it parted from HEAD, read-only (or brings that diff to the front).
+    func openBranchDiff(root: String, path: String, change: DiffPane.BranchChange) {
+        if let index = panes.firstIndex(where: { ($0 as? DiffPane)?.matches(root: root, path: path, branch: change.branch) == true }) {
+            return select(index)
+        }
+        let diff = DiffPane(root: root, path: path, branchChange: change)
+        diff.onTitleChange = { [weak self] in self?.refresh() }
+        insert(diff)
+        select(activeIndex)
+    }
+
+    /// A file on disk against its version on `branch` (or brings that diff to the front).
+    func openWorkingTreeDiff(root: String, path: String, branch: String, renamedFrom: String?) {
+        if let index = panes.firstIndex(where: { ($0 as? DiffPane)?.matches(root: root, path: path, workingTreeAgainst: branch) == true }) {
+            return select(index)
+        }
+        let diff = DiffPane(root: root, path: path, workingTreeAgainst: branch, renamedFrom: renamedFrom)
+        diff.onTitleChange = { [weak self] in self?.refresh() }
+        insert(diff)
+        select(activeIndex)
+    }
+
     // MARK: history
 
     /// The commit history of the repository whose top folder is `root` (or brings its tab to the front).
