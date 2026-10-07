@@ -28,7 +28,8 @@ A remote tab has a small server before its title. Tabs on your Mac have none, so
 |---|---|
 | Filled green dot | Connected |
 | Amber ring | Connecting, logging in, or waiting for another tab’s login to the same server |
-| Red dot with a bar, the server faded | Disconnected |
+| Red dot with a bar, the server faded | Disconnected: <kbd>↩︎</kbd> connects again |
+| Grey dot with a bar, the server faded | The shell on the server ended, and the tab says why; <kbd>⌘W</kbd> closes it |
 
 The dots differ in shape as well as colour, so they read without colour too. The agent’s own mark (the spinner, the check, the “!”) keeps its place at the start of the tab, before the server.
 

@@ -412,9 +412,15 @@ import Testing
 }
 
 @Suite struct RemoteLinkTests {
-    @Test func aLostOrEndedConnectionWinsOverEverythingElse() {
+    @Test func aLostConnectionWinsOverEverythingElse() {
         #expect(RemoteLink(exited: false, disconnected: true, waiting: false, loginPrompt: true, connected: false) == .disconnected)
-        #expect(RemoteLink(exited: true, disconnected: false, waiting: false, loginPrompt: false, connected: true) == .disconnected)
+    }
+
+    @Test func aShellThatEndedIsNotADroppedConnection() {
+        // `exit 1` on the host: the tab stays to show why, but Return has nothing to reconnect.
+        #expect(RemoteLink(exited: true, disconnected: false, waiting: false, loginPrompt: false, connected: true) == .ended)
+        #expect(RemoteLink(exited: true, disconnected: true, waiting: false, loginPrompt: false, connected: false) == .ended)
+        #expect(RemoteLink.ended.titleNote == nil && RemoteLink.ended.phrase == "ended" && !RemoteLink.ended.isOnItsWay)
     }
 
     @Test func onItsWayUntilTheHostProvesTheLogin() {
@@ -427,14 +433,19 @@ import Testing
 
     @Test func titleNotesAndPhrases() {
         // The title keeps the notes the docs name; a connection that is simply up adds none.
-        #expect(RemoteLink.allCases.map(\.titleNote) == [nil, "connecting", "waiting", "log in", "disconnected"])
+        #expect(RemoteLink.allCases.map(\.titleNote) == [nil, "connecting", "waiting", "log in", "disconnected", nil])
         #expect(RemoteLink.logIn.phrase == "waiting for you to log in")
         #expect(RemoteLink.connected.phrase == "connected")
     }
 
     @Test func aSplitTabShowsItsWeakestPane() {
         #expect(RemoteLink.weakest([.connected, .disconnected, .connecting]) == .disconnected)
+        #expect(RemoteLink.weakest([.ended, .disconnected]) == .disconnected) // the one Return brings back
+        #expect(RemoteLink.weakest([.connected, .ended, .logIn]) == .ended)
         #expect(RemoteLink.weakest([.connected, .logIn]) == .logIn)
+        // A login waiting for you outranks a pane that is only on its way, whatever the pane order.
+        #expect(RemoteLink.weakest([.connecting, .logIn]) == .logIn)
+        #expect(RemoteLink.weakest([.waiting, .connecting]) == .connecting)
         #expect(RemoteLink.weakest([.connected, .connected]) == .connected)
         #expect(RemoteLink.weakest([]) == nil)
     }

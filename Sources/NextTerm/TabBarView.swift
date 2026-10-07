@@ -836,8 +836,8 @@ private final class StatusDotView: NSView {
 
 /// A remote tab's server mark: a server with the connection's dot cut into its corner. The dot says it
 /// by shape as well as colour: filled green when connected, an amber ring while on its way (connecting,
-/// a login), red with a bar when lost, and the server fades then. Local tabs have none: remote is the
-/// exception that stands out.
+/// a login), red with a bar when lost, grey with a bar once the shell ended, and the server fades then.
+/// Local tabs have none: remote is the exception that stands out.
 final class RemoteMarkView: NSView {
     /// The 11 pt glyph's image is 16 × 13; the dot reaches 3 pt past its corner.
     static let size = NSSize(width: 19, height: 17)
@@ -859,8 +859,12 @@ final class RemoteMarkView: NSView {
     }
 
     static func dotColor(for link: RemoteLink) -> NSColor {
-        if link == .connected { return Theme.done }
-        return link == .disconnected ? Theme.failed : Theme.attention
+        switch link {
+        case .connected: return Theme.done
+        case .disconnected: return Theme.failed
+        case .ended: return Theme.textDim // nothing to reconnect: the status mark says how it ended
+        case .connecting, .waiting, .logIn: return Theme.attention
+        }
     }
 
     /// Draws into a flipped context: the tab's view, or a menu's image.
@@ -875,9 +879,9 @@ final class RemoteMarkView: NSView {
         // The dot is cut into the server, so it reads on any background (a tab, its hover, a menu).
         context.saveGState()
         context.beginTransparencyLayer(auxiliaryInfo: nil)
-        // Faded when disconnected, but not below 3:1 against the bar: it still says "a server".
-        glyph.draw(in: glyphRect, from: .zero, operation: .sourceOver, fraction: link == .disconnected ? 0.7 : 1,
-                   respectFlipped: true, hints: nil)
+        // Faded when disconnected or ended, but not below 3:1 against the bar: it still says "a server".
+        let gone = link == .disconnected || link == .ended
+        glyph.draw(in: glyphRect, from: .zero, operation: .sourceOver, fraction: gone ? 0.7 : 1, respectFlipped: true, hints: nil)
         context.setBlendMode(.clear)
         context.fillEllipse(in: dot.insetBy(dx: -1.5, dy: -1.5))
         context.endTransparencyLayer()
@@ -892,7 +896,7 @@ final class RemoteMarkView: NSView {
         }
         color.setFill()
         NSBezierPath(ovalIn: dot).fill()
-        if link == .disconnected {
+        if gone {
             NSColor.white.setFill()
             NSRect(x: dot.minX + 1.75, y: dot.midY - 0.65, width: d - 3.5, height: 1.3).fill()
         }

@@ -137,9 +137,9 @@ extension SelfTest {
         let plain = c.addRemoteTab(RemoteTab(host: host))
         check(!plain.remoteConnected && plain.title.hasPrefix("selftest: "), "remote: a new tab is named after its host and counts as connecting", plain.title)
         // Its tab: the server mark, with the connection's state on it, in words for VoiceOver too.
-        func shownMark() -> (link: RemoteLink?, spoken: String) {
+        func shownMark(_ tab: TerminalTab? = nil) -> (link: RemoteLink?, spoken: String) {
             c.refresh()
-            let index = c.groups.firstIndex { $0.contains(plain) } ?? -1
+            let index = c.groups.firstIndex { $0.contains(tab ?? plain) } ?? -1
             return (c.tabBar.shownRemoteLink(at: index), c.tabBar.spokenLabel(at: index) ?? "")
         }
         let early = shownMark()
@@ -194,6 +194,10 @@ extension SelfTest {
         exiting.view.send(txt: "exit 255\r")
         check(await wait(10) { exiting.exited }, "remote: a shell that exits 255 ends its tab like any shell (not 'connection lost')",
               exiting.screenTail(4).joined(separator: " | "))
+        let endedMark = shownMark(exiting)
+        check(endedMark.link == .ended && !endedMark.spoken.lowercased().contains("disconnected") && !exiting.title.contains("("),
+              "remote: its server mark says the shell ended, not that the connection dropped (Return would not reconnect it)",
+              "\(endedMark.link?.rawValue ?? "no mark") / \(exiting.title) / \(endedMark.spoken)")
         c.remove(exiting)
 
         // MCP: hosts and remote tabs, as an orchestrating agent sees them.

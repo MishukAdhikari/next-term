@@ -573,9 +573,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     /// Where a remote tab's connection stands, when it is not simply up: for the title and list_tabs.
-    var connectionNote: String? {
-        exited ? nil : remoteLink?.titleNote
-    }
+    var connectionNote: String? { remoteLink?.titleNote }
 
     /// A folder or program name keeps both ends, like Finder; a title a program sets is prose and gives
     /// way at the end.
@@ -627,7 +625,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     var tooltip: String {
         var lines = [title]
         if let remoteMark { lines.append(remoteMark.summary) }
-        if remoteLink == nil || remoteLink == .connected || exited { lines.append(stateDescription) }
+        if remoteLink == nil || remoteLink == .connected || remoteLink == .ended { lines.append(stateDescription) }
         if status.running && !status.command.isEmpty { lines.append(String(status.command.prefix(300))) }
         lines.append(remote == nil ? directory : "Folder on the host: \(directory)")
         if let servedURL { lines.append("Serving \(servedURL.absoluteString)") }

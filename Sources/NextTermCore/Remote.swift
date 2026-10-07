@@ -46,11 +46,15 @@ public enum RemoteLink: String, Sendable, CaseIterable {
     case waiting
     /// ssh is asking in this tab: a password, a passphrase, a host key.
     case logIn = "log in"
+    /// The connection dropped or could not be made: Return connects again.
     case disconnected
+    /// The shell on the host ended (`exit 1`) and the tab stays to show why: nothing to reconnect.
+    case ended
 
-    /// A tab whose ssh has ended for good is not connected either.
     public init(exited: Bool, disconnected: Bool, waiting: Bool, loginPrompt: Bool, connected: Bool) {
-        if exited || disconnected {
+        if exited {
+            self = .ended
+        } else if disconnected {
             self = .disconnected
         } else if waiting {
             self = .waiting
@@ -61,25 +65,27 @@ public enum RemoteLink: String, Sendable, CaseIterable {
         }
     }
 
-    /// The tab title's note, "(connecting)": nothing while the connection is simply up.
-    public var titleNote: String? { self == .connected ? nil : rawValue }
+    /// The tab title's note, "(connecting)": nothing while the connection is simply up, or once the shell
+    /// ended (the tab says why on its screen, and its status mark is the failure's).
+    public var titleNote: String? { self == .connected || self == .ended ? nil : rawValue }
 
     /// For the tooltip and VoiceOver: "Remote: web-1 (deploy@203.0.113.5), connected".
     public var phrase: String {
         switch self {
-        case .connected, .connecting, .disconnected: return rawValue
+        case .connected, .connecting, .disconnected, .ended: return rawValue
         case .waiting: return "waiting for another tab’s login"
         case .logIn: return "waiting for you to log in"
         }
     }
 
-    /// The dot: filled when up, a ring while on its way, barred when lost.
+    /// The dot: filled when up, a ring while on its way, barred when lost or ended.
     public var isOnItsWay: Bool { self == .connecting || self == .waiting || self == .logIn }
 
-    /// A split tab shows its weakest pane: lost, then on its way, then up.
+    /// A split tab shows its weakest pane: lost (Return brings it back), ended, then on its way, the login
+    /// that waits for you first.
     public static func weakest(_ links: [RemoteLink]) -> RemoteLink? {
-        if links.contains(.disconnected) { return .disconnected }
-        return links.first { $0.isOnItsWay } ?? links.first
+        for link in [RemoteLink.disconnected, .ended, .logIn, .connecting, .waiting] where links.contains(link) { return link }
+        return links.first
     }
 }
 
