@@ -235,12 +235,31 @@ enum CommandLineTool {
                         style: .warning, in: window)
         }
         DispatchQueue.global(qos: .userInitiated).async {
-            let chosen = plan(for: script.path)
-            DispatchQueue.main.async { install(script.path, as: chosen, from: window) }
+            let path = searchPath
+            let chosen = plan(for: script.path, path: path)
+            let onPath = CommandLineLink.folders(path).contains((installPath as NSString).deletingLastPathComponent)
+            DispatchQueue.main.async { install(script.path, as: chosen, onPath: onPath, from: window) }
         }
     }
 
-    private static func install(_ script: String, as plan: CommandLineLink.Plan, from window: NSWindow?) {
+    /// The command the password route runs as root to link `path`: only where nothing is, or over a link
+    /// Next Term made. Nil over anything else, which is never replaced.
+    static func rootCommand(linking path: String, to script: String) -> String? {
+        let flags: String
+        switch entry(at: path) {
+        case .nothing:
+            flags = "-sh" // fails, rather than replaces, if something turns up meanwhile
+        case .link(let target), .brokenLink(let target):
+            guard target == script || isOurs(target) else { return nil }
+            flags = "-sfh"
+        case .file:
+            return nil
+        }
+        let directory = (path as NSString).deletingLastPathComponent
+        return "/bin/mkdir -p \(ShellQuote.quote(directory)) && /bin/ln \(flags) \(ShellQuote.quote(script)) \(ShellQuote.quote(path))"
+    }
+
+    private static func install(_ script: String, as plan: CommandLineLink.Plan, onPath: Bool, from window: NSWindow?) {
         let name = CommandLineOpen.toolName
         switch plan {
         case .linked(let path):
@@ -253,16 +272,20 @@ enum CommandLineTool {
         case .unavailable:
             break
         }
-        if let current = installedTarget, !isOurs(current) {
+        // Every login shell has /usr/local/bin on PATH, unless a startup file sets PATH from scratch.
+        let directory = (installPath as NSString).deletingLastPathComponent
+        let offPath = onPath ? "" : " \(directory) is not on your shell’s PATH, though: add it there for other terminals to find “\(name)”."
+        guard let shell = rootCommand(linking: installPath, to: script) else {
             return tell("Another “\(name)” is installed", "\(installPath) is not Next Term’s; remove it first.", style: .warning, in: window)
         }
-        let directory = (installPath as NSString).deletingLastPathComponent
+        if entry(at: installPath) == .link(script) {
+            return tell("“\(name)” is installed", "\(installPath) opens this Next Term." + offPath, in: window)
+        }
         var installed = false
         if FileManager.default.isWritableFile(atPath: directory) {
             installed = link(installPath, to: script)
         } else {
             // One password prompt, as editors do for their command line tools.
-            let shell = "/bin/mkdir -p \(ShellQuote.quote(directory)) && /bin/ln -sfh \(ShellQuote.quote(script)) \(ShellQuote.quote(installPath))"
             let escaped = shell.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
             var error: NSDictionary?
             NSAppleScript(source: "do shell script \"\(escaped)\" with administrator privileges")?.executeAndReturnError(&error)
@@ -270,7 +293,7 @@ enum CommandLineTool {
             if let error, (error[NSAppleScript.errorNumber] as? Int) == -128 { return } // cancelled
         }
         if installed {
-            tell("“\(name)” is installed", usage, in: window)
+            tell("“\(name)” is installed", onPath ? usage : "As \(installPath)." + offPath, in: window)
         } else {
             tell("“\(name)” could not be installed", "Next Term could not write \(installPath).", style: .warning, in: window)
         }

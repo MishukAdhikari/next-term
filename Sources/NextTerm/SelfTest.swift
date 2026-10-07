@@ -702,6 +702,33 @@ enum SelfTest {
         check(lookalike == .taken(tools + "/nxtrm") && !replaced && CommandLineTool.entry(at: tools + "/nxtrm") == .link(other),
               "nxtrm: a link into another app laid out like Next Term is someone else's", "\(lookalike)")
 
+        // The password route runs as root: it links only where nothing is, or over a link of Next Term's.
+        func sh(_ command: String) -> Int32 {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/sh")
+            p.arguments = ["-c", command]
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            guard (try? p.run()) != nil else { return -1 }
+            p.waitUntilExit()
+            return p.terminationStatus
+        }
+        let admin = home + "/admin/nxtrm"
+        try? fm.createDirectory(atPath: home + "/admin", withIntermediateDirectories: true)
+        fm.createFile(atPath: admin, contents: Data("#!/bin/sh\n".utf8))
+        let overFile = CommandLineTool.rootCommand(linking: admin, to: moved)
+        let overTheirs = CommandLineTool.rootCommand(linking: tools + "/nxtrm", to: moved)
+        let overOurs = CommandLineTool.rootCommand(linking: local + "/nxtrm", to: script) ?? ""
+        check(overFile == nil && overTheirs == nil && overOurs.contains(" -sfh "),
+              "nxtrm: the password route never replaces someone else's file or link", overOurs)
+        try? fm.removeItem(atPath: admin)
+        let fresh = CommandLineTool.rootCommand(linking: admin, to: moved) ?? "false"
+        fm.createFile(atPath: admin, contents: Data("#!/bin/sh\n".utf8)) // turns up before the command runs
+        let refused = sh(fresh) != 0 && CommandLineTool.entry(at: admin) == .file
+        try? fm.removeItem(atPath: admin)
+        let made = sh(fresh) == 0 && CommandLineTool.entry(at: admin) == .link(moved)
+        check(refused && made, "nxtrm: where nothing was, the password route links it, and replaces nothing that turned up since", fresh)
+
         let none = CommandLineTool.plan(for: script, path: [own, "/usr/bin", "/bin"], home: home)
         check(none == .unavailable && CommandLineTool.entry(at: own + "/nxtrm") == .nothing,
               "nxtrm: with no writable command folder on PATH, nothing is written", "\(none)")
