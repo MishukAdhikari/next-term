@@ -39,8 +39,10 @@ final class TerminalRail: NSView {
     /// "+3": the tabs there is no room for. A click opens the terminal.
     private let moreButton = HoverButton()
     private let glow = CALayer()
-    private var hovering = false { didSet { needsDisplay = true } }
+    private var hovering = false { didSet { if hovering != oldValue { needsDisplay = true } } }
     private var pressed = false { didSet { needsDisplay = true } }
+    /// A press that began on the rail itself (not on the title bar strip): letting go inside opens the terminal.
+    private var tracking = false
 
     /// Reduce Motion as System Settings has it; the self-test stands in for the setting.
     static var reducesMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
@@ -187,23 +189,39 @@ final class TerminalRail: NSView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
+                                       owner: self))
     }
 
-    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseEntered(with event: NSEvent) { hover(event) }
+    override func mouseMoved(with event: NSEvent) { hover(event) }
     override func mouseExited(with event: NSEvent) { hovering = false }
+    private func hover(_ event: NSEvent) { hovering = !isTitleBar(convert(event.locationInWindow, from: nil)) }
     // Gone with the pointer on it (a click opened the terminal): next time it starts plain.
     override func viewDidHide() {
         super.viewDidHide()
         hovering = false
         pressed = false
+        tracking = false
     }
 
+    /// Under the traffic lights the strip above the arrow is title bar: it moves the window, as the tab bars do.
+    func isTitleBar(_ point: NSPoint) -> Bool { point.y < topInset }
+
     // Like a button: it opens on letting go inside, so a press can still be dragged away.
-    override func mouseDown(with event: NSEvent) { pressed = true }
-    override func mouseDragged(with event: NSEvent) { pressed = bounds.contains(convert(event.locationInWindow, from: nil)) }
+    override func mouseDown(with event: NSEvent) {
+        if isTitleBar(convert(event.locationInWindow, from: nil)) { return TabBarView.titleBarMouseDown(event, in: window) }
+        tracking = true
+        pressed = true
+    }
+    override func mouseDragged(with event: NSEvent) {
+        guard tracking else { return }
+        pressed = bounds.contains(convert(event.locationInWindow, from: nil))
+    }
     override func mouseUp(with event: NSEvent) {
+        guard tracking else { return }
         let inside = bounds.contains(convert(event.locationInWindow, from: nil))
+        tracking = false
         pressed = false
         if inside { onExpand?() }
     }

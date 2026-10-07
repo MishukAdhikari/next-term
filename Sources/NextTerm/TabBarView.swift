@@ -342,8 +342,13 @@ final class TabBarView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         guard dragsWindow else { return }
+        Self.titleBarMouseDown(event, in: window)
+    }
+
+    /// A press on the title bar strip: it drags the window, and a double-click does what double-clicking
+    /// any title bar does (System Settings > Desktop & Dock decides).
+    static func titleBarMouseDown(_ event: NSEvent, in window: NSWindow?) {
         if event.clickCount == 2 {
-            // Same as double-clicking any title bar: System Settings > Desktop & Dock decides.
             switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
             case "Minimize": window?.performMiniaturize(nil)
             case "None": break
