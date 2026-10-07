@@ -120,7 +120,8 @@ extension CodeEditorView {
         return document.lines.range(ofLine: document.lines.line(at: min(selection.location, document.storage.length)))
     }
 
-    /// For the self-test: a line as it is drawn, hidden characters as “•”, without its line break.
+    /// For the self-test: a line with the characters the layout manager is given to hide as “•”, without
+    /// its line break. (What it really draws, the self-test reads from the pixels.)
     func drawnText(line: Int) -> String {
         let range = document.lines.range(ofLine: line)
         var units = Array((document.text as NSString).substring(with: range).utf16)
