@@ -1472,8 +1472,8 @@ enum SelfTest {
             try? FileManager.default.removeItem(at: folder)
         }
         let long = String(repeating: "abcdefghij", count: 30) // wraps
-        let lines = ["# shared on screen", "API_KEY=sk-live-0123456789 # rotate monthly", "export DB_URL=\"postgres://u:p@h/db\"",
-                     "LONG=" + long, "EMPTY="]
+        let lines: [String] = ["# shared on screen", "API_KEY=sk-live-0123456789 # rotate monthly", "export DB_URL=\"postgres://u:p@h/db\"",
+                               "LONG=" + long, "EMPTY="]
         let original = lines.joined(separator: "\n") + "\n"
         let url = folder.appendingPathComponent(".env")
         try? original.write(to: url, atomically: true, encoding: .utf8)
@@ -1490,7 +1490,11 @@ enum SelfTest {
         let lineEnd = NSMaxRange(text.range(of: "# rotate monthly"))
         view.setSelectedRange(NSRange(location: lineEnd, length: 0))
         func bullets(_ count: Int) -> String { String(repeating: "•", count: count) }
-        let hidden = [lines[0], "API_KEY=" + bullets(18) + " # rotate monthly", "export DB_URL=" + bullets(21), "LONG=" + bullets(300), "EMPTY="]
+        var hidden: [String] = [lines[0]]
+        hidden.append("API_KEY=" + bullets(18) + " # rotate monthly")
+        hidden.append("export DB_URL=" + bullets(21))
+        hidden.append("LONG=" + bullets(300))
+        hidden.append("EMPTY=")
         let drawn = (0..<5).map { editor.drawnText(line: $0) }
         check(drawn == hidden, ".env values are drawn as bullets; keys, comments and the caret's line too until you type",
               drawn.joined(separator: " | "))
@@ -1542,10 +1546,10 @@ enum SelfTest {
 
         // Typing on a line shows that line's value, and only that line's.
         view.setSelectedRange(NSRange(location: lineEnd, length: 0))
-        if let key = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                                      windowNumber: window.windowNumber, context: nil, characters: "9", charactersIgnoringModifiers: "9",
-                                      isARepeat: false, keyCode: 25) {
-            view.keyDown(with: key)
+        if let press = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                        windowNumber: window.windowNumber, context: nil, characters: "9", charactersIgnoringModifiers: "9",
+                                        isARepeat: false, keyCode: 25) {
+            view.keyDown(with: press)
         }
         check(view.caretPlacedByUser, "a key in the editor counts as typing there")
         if doc.text == original {
