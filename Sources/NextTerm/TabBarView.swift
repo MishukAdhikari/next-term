@@ -698,13 +698,15 @@ enum StatusGlyph {
     }
 }
 
-private final class StatusDotView: NSView {
+final class StatusDotView: NSView {
     private let ring = CAShapeLayer()
     private let glyph = NSImageView()
 
     var state: TabState = .idle {
         didSet { if state != oldValue { apply() } }
     }
+    /// The amber mark pulses until it is seen. The terminal rail's does not: the rail pulsed already.
+    var pulsesForAttention = true
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -750,7 +752,7 @@ private final class StatusDotView: NSView {
             }
         case .done, .failed, .attention:
             glyph.image = StatusGlyph.image(for: state, size: 11)
-            if state == .attention, !reduceMotion {
+            if state == .attention, pulsesForAttention, !reduceMotion {
                 let pulse = CABasicAnimation(keyPath: "opacity")
                 pulse.fromValue = 1
                 pulse.toValue = 0.35
