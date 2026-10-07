@@ -494,6 +494,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             if window.isMiniaturized { window.deminiaturize(nil) } else { window.makeKeyAndOrderFront(nil) }
             return false
         }
+        // Only the Welcome window, minimized: it comes back (opening the last project would close it).
+        if let window = welcome?.window, window.isMiniaturized {
+            window.deminiaturize(nil)
+            return false
+        }
         // No windows open: back to the last project, else a terminal.
         if let path = recent.existing().first { openWindow(directory: path, project: path) } else { newWindow(nil) }
         return true
