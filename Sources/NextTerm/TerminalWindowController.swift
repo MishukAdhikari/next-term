@@ -1323,6 +1323,29 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     @objc func gitNewBranch(_ sender: Any?) { withGit { $0.askNewBranch(base: nil) } }
     @objc func showGitCommands(_ sender: Any?) { GitCommandsWindowController.shared.present() }
 
+    /// ⌥⌘L: the commit history of the project's repository, in an editor tab.
+    @objc func showGitLog(_ sender: Any?) {
+        guard let folder = sidebar.git.snapshot?.root ?? editorArea.activeGitLog?.root ?? editorArea.gitLogs.first?.root else { return NSSound.beep() }
+        openGitLog(root: folder)
+    }
+
+    /// The Git Log of the repository containing `root`, in front; nil outside a repository.
+    @discardableResult
+    func openGitLog(root: String) -> GitLogPane? {
+        let top = canonicalPath(ProjectRoot.find(from: root))
+        guard FileManager.default.fileExists(atPath: (top as NSString).appendingPathComponent(".git")) else {
+            NSSound.beep()
+            return nil
+        }
+        return editorArea.openGitLog(root: top)
+    }
+
+    /// Opens the Git Log at one commit (from a line's blame, say): pages load until it is listed, and a
+    /// commit no branch or tag lists is shown alone.
+    func showCommit(sha: String, root: String) {
+        openGitLog(root: root)?.select(sha: sha)
+    }
+
     @objc func selectTabByNumber(_ sender: NSMenuItem) {
         // ⌘1…⌘8 pick that tab; ⌘9 is always the last one, as in browsers.
         select(sender.tag == 9 ? groups.count - 1 : sender.tag - 1)

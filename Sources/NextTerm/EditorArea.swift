@@ -17,17 +17,20 @@ final class EditorArea: NSView, TabBarViewDelegate {
     private let container = NSView()
     private let banner = EditorBanner()
     private var bannerHeight: NSLayoutConstraint!
-    /// Tabs in order: files being edited (CodeEditorView), diffs (DiffPane) and notebooks (NotebookPane).
+    /// Tabs in order: files being edited (CodeEditorView), diffs (DiffPane), notebooks (NotebookPane)
+    /// and commit histories (GitLogPane).
     private(set) var panes: [NSView] = []
     private(set) var activeIndex = 0
 
     var editors: [CodeEditorView] { panes.compactMap { $0 as? CodeEditorView } }
     var diffs: [DiffPane] { panes.compactMap { $0 as? DiffPane } }
     var notebooks: [NotebookPane] { panes.compactMap { $0 as? NotebookPane } }
+    var gitLogs: [GitLogPane] { panes.compactMap { $0 as? GitLogPane } }
     var activePane: NSView? { panes[safe: activeIndex] }
     var activeEditor: CodeEditorView? { activePane as? CodeEditorView }
     var activeDiff: DiffPane? { activePane as? DiffPane }
     var activeNotebook: NotebookPane? { activePane as? NotebookPane }
+    var activeGitLog: GitLogPane? { activePane as? GitLogPane }
     /// The file in front: the one being edited, or the notebook being read.
     var activePath: String? { activeEditor?.document.path ?? activeNotebook?.path }
     var activeName: String? { activeEditor?.document.name ?? activeNotebook?.name }
@@ -179,6 +182,8 @@ final class EditorArea: NSView, TabBarViewDelegate {
             window?.makeFirstResponder(diff.focusView)
         } else if let notebook = panes[index] as? NotebookPane, focus {
             window?.makeFirstResponder(notebook.textView)
+        } else if let log = panes[index] as? GitLogPane, focus {
+            window?.makeFirstResponder(log.focusView)
         }
         refresh()
         delegate?.editorAreaSelectionChanged(self)
@@ -233,6 +238,22 @@ final class EditorArea: NSView, TabBarViewDelegate {
         diff.onTitleChange = { [weak self] in self?.refresh() }
         insert(diff)
         select(activeIndex)
+    }
+
+    // MARK: history
+
+    /// The commit history of the repository whose top folder is `root` (or brings its tab to the front).
+    @discardableResult
+    func openGitLog(root: String) -> GitLogPane {
+        if let index = panes.firstIndex(where: { ($0 as? GitLogPane)?.root == root }), let log = panes[index] as? GitLogPane {
+            select(index)
+            return log
+        }
+        let log = GitLogPane(root: root)
+        log.onTitleChange = { [weak self] in self?.refresh() }
+        insert(log)
+        select(activeIndex)
+        return log
     }
 
     // MARK: closing
@@ -369,6 +390,11 @@ final class EditorArea: NSView, TabBarViewDelegate {
             if let diff = pane as? DiffPane {
                 return TabBarItem(title: diff.title, state: .idle, tooltip: diff.tooltip, accessibilityStatus: "changes",
                                   icon: FileIcons.icon(for: URL(fileURLWithPath: diff.absolutePath), size: 16), modified: false)
+            }
+            if let log = pane as? GitLogPane {
+                // Two repositories' logs: each says whose.
+                let named = gitLogs.count > 1 ? log.title + " — " + (log.root as NSString).lastPathComponent : log.title
+                return TabBarItem(title: named, state: .idle, tooltip: log.tooltip, accessibilityStatus: "commit history", icon: GitLogPane.tabIcon, modified: false)
             }
             if let notebook = pane as? NotebookPane {
                 return TabBarItem(title: title(notebook.url), state: .idle, tooltip: RecentProjects.abbreviate(notebook.path) + " (notebook, read-only)",
