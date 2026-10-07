@@ -54,7 +54,7 @@ Yes. Run `codex` in a tab: its tab shows when it is working, done or asking for 
 
 ## Does Next Term send my code anywhere?
 
-No. The agent links listen only on your Mac (`127.0.0.1`), with a fresh secret token each launch, and never share `.env` files or keys. On its own, Next Term makes only the daily update check to GitHub and background `git fetch`es from your projects’ own remotes, and you can turn off either. A project’s databases are found by reading its files, and nothing connects to one until you choose a hand-off; remote tabs connect only to the servers you open them on, through your own ssh. Your agents talk to their own providers as they always do. See [Security and privacy](/docs/security-and-privacy/).
+No. The agent links listen only on your Mac (`127.0.0.1`), with a fresh secret token each launch, and never share `.env` files or keys. On its own, Next Term makes only the daily update check to GitHub and a background `git fetch` from your projects’ own remotes, and you can turn off either. A project’s databases are found by reading its files, and nothing connects to one until you choose a hand-off; remote tabs connect only to the servers you open them on, through your own ssh. Your agents talk to their own providers as they always do. See [Security and privacy](/docs/security-and-privacy/).
 
 ## Can one agent control the others?
 
