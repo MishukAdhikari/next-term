@@ -1,9 +1,10 @@
 // @ts-check
 import { readFileSync } from 'node:fs';
 import { defineConfig } from 'astro/config';
+import { unified } from '@astrojs/markdown-remark';
 import starlight from '@astrojs/starlight';
 import { ExpressiveCodeTheme } from '@astrojs/starlight/expressive-code';
-import { remarkFacts } from './src/lib/facts.ts';
+import { remarkFacts, FACTS } from './src/lib/facts.ts';
 
 // The site's address, in one place. Canonical URLs, Open Graph tags, the sitemap, robots.txt,
 // llms.txt and the JSON-LD all read it from here (as Astro's `site`). To move the site, change
@@ -19,8 +20,10 @@ const nextDark = ExpressiveCodeTheme.fromJSONString(
 export default defineConfig({
 	site: SITE,
 	trailingSlash: 'always',
-	// {{DOWNLOAD_SIZE}} and the other facts from src/config.ts, filled in on every Markdown page.
-	markdown: { remarkPlugins: [remarkFacts] },
+	// {{DOWNLOAD_SIZE}} and the other facts from src/config.ts, filled in on every Markdown page. They go
+	// in as the plugin's options, not only as an import, so changing one renders the pages again even
+	// when Astro's cache from the last build is still there.
+	markdown: { processor: unified({ remarkPlugins: [[remarkFacts, FACTS]] }) },
 	integrations: [
 		starlight({
 			title: 'Next Term',

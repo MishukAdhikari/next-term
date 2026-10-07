@@ -9,7 +9,8 @@ It fails (exit 1) on:
 - JSON-LD that does not parse, or a page missing the structured data it should have;
 - a page missing from the sitemap, or a sitemap entry with no page;
 - a missing IndexNow key file, or a canonical link on the not-found page;
-- a {{NAME}} fact from src/config.ts left unfilled on a page or in llms.txt or llms-full.txt;
+- a {{NAME}} fact from src/config.ts left unfilled on a page or in llms.txt or llms-full.txt, or a
+  page showing fewer of its value than its Markdown has {{NAME}}s (an old value kept from a build);
 - any resource loaded from another origin (scripts, styles, fonts, images, frames);
 - a <title> over 60 characters, a meta description over 155, no or several <h1>, a missing lang,
   an image without alt text;
@@ -332,6 +333,22 @@ def main() -> int:
     for file in html_files + [DIST / "llms.txt", DIST / "llms-full.txt"]:
         for token in sorted(set(re.findall(r"\{\{[A-Z][A-Z_]*\}\}", file.read_text(encoding="utf-8")))):
             error(page_url(file) if file.suffix == ".html" else file.name, f"{token} was not filled in")
+    # Nor filled in with an old value: Astro can keep a page's HTML from an earlier build. Each page
+    # must show a fact's value from src/config.ts at least as often as its Markdown writes the {{NAME}}.
+    config_ts = (ROOT / "src" / "config.ts").read_text(encoding="utf-8")
+    content = ROOT / "src" / "content" / "docs"
+    for source in sorted(content.rglob("*.md*")):
+        body = re.sub(r"\A---\n.*?\n---\n", "", source.read_text(encoding="utf-8"), flags=re.S)
+        slug = re.sub(r"(^|/)index$", "", source.relative_to(content).with_suffix("").as_posix())
+        page = pages.get(f"/{slug}/" if slug else "/")
+        for fact in sorted(set(re.findall(r"\{\{([A-Z][A-Z_]*)\}\}", body))):
+            value = re.search(rf"export const {fact} = '([^']+)'", config_ts)
+            if page is None or value is None:
+                continue
+            wanted = body.count("{{" + fact + "}}")
+            shown = "".join(page.text_runs).count(value.group(1))
+            if shown < wanted:
+                error(page.name, f"shows {fact} ({value.group(1)}) {shown} times, not {wanted}: an old build? Delete node_modules/.astro and build again")
 
     # The IndexNow key file: /<key>.txt holding exactly the key from src/config.ts.
     key = re.search(r"export const INDEXNOW_KEY = '([^']+)'", (ROOT / "src" / "config.ts").read_text(encoding="utf-8"))
