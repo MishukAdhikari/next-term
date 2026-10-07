@@ -2229,6 +2229,89 @@ enum SelfTest {
         let projects = await tool("list_projects")
         check((projects.json?["open"] as? [String])?.isEmpty == false, "MCP: list_projects", projects.text)
 
+        // Project files and git, as an agent reads them (the worker's tab opened proj as a project).
+        let readable = proj.appendingPathComponent("mcp-read.txt")
+        let secrets = proj.appendingPathComponent(".env.mcp")
+        try? "first\nsecond mcp-needle\nthird\n".write(to: readable, atomically: true, encoding: .utf8)
+        try? "TOKEN=sk-abcdefghijklmnopqrstuvwx mcp-needle\n".write(to: secrets, atomically: true, encoding: .utf8)
+        let page = await tool("read_file", ["path": "mcp-read.txt", "project": proj.path, "offset": 2, "limit": 1])
+        check(!page.isError && page.json?["text"] as? String == "second mcp-needle" && page.json?["total_lines"] as? Int == 3
+              && page.json?["next_offset"] as? Int == 3, "MCP: read_file reads a project file's lines from an offset", page.text)
+        let refusedSecret = await tool("read_file", ["path": ".env.mcp", "project": proj.path])
+        check(refusedSecret.isError && refusedSecret.text.contains("environment file"), "MCP: read_file refuses a secrets file and says why", refusedSecret.text)
+        let refusedOutside = await tool("read_file", ["path": "/etc/hosts"])
+        check(refusedOutside.isError && refusedOutside.text.contains("outside"), "MCP: read_file refuses files outside the open projects", refusedOutside.text)
+        let found = await tool("find_in_files", ["query": "mcp-needle", "project": proj.path], timeout: 60)
+        let hits = found.json?["matches"] as? [[String: Any]] ?? []
+        check(!found.isError && hits.count == 1 && hits.first?["path"] as? String == "mcp-read.txt" && hits.first?["line"] as? Int == 2,
+              "MCP: find_in_files gives file and line, and skips secrets files", found.text.prefix(400).description)
+        let status = await tool("git_status", ["project": proj.path], timeout: 30)
+        let changed = status.json?["files"] as? [[String: Any]] ?? []
+        check(!status.isError && (status.json?["branch"] is String || status.json?["detached"] as? Bool == true)
+              && changed.contains { $0["path"] as? String == "mcp-read.txt" && $0["state"] as? String == "untracked" },
+              "MCP: git_status gives the branch and each change", status.text.prefix(400).description)
+        let diff = await tool("get_diff", ["path": "mcp-read.txt", "project": proj.path], timeout: 30)
+        check(!diff.isError && (diff.json?["diff"] as? String)?.contains("+second mcp-needle") == true, "MCP: get_diff gives a file's unified diff",
+              diff.text.prefix(400).description)
+        try? FileManager.default.removeItem(at: readable)
+        try? FileManager.default.removeItem(at: secrets)
+
+        // answer_agent: picks a choice of an agent's question with the arrows and Return, guarded by the
+        // question's id. The stand-in agent draws its list with a cursor and moves it on ↑/↓, like Claude Code.
+        let agentBin = proj.deletingLastPathComponent().appendingPathComponent("mcp-agent-bin")
+        try? FileManager.default.createDirectory(at: agentBin, withIntermediateDirectories: true)
+        let asker = agentBin.appendingPathComponent("claude")
+        try? """
+        #!/bin/zsh
+        labels=("Yes" "Yes, and don't ask again this session" "No, and tell Claude what to do differently (esc)")
+        sel=1
+        draw() {
+          printf '\\033[2J\\033[H'
+          print -r -- 'Do you want to make this edit to b.txt?'
+          for i in 1 2 3; do
+            if (( i == sel )); then print -r -- "❯ $i. ${labels[$i]}"; else print -r -- "  $i. ${labels[$i]}"; fi
+          done
+        }
+        printf '\\342\\234\\273 Pondering\\342\\200\\246 (2s \\302\\267 esc to interrupt)\\n'; sleep 1
+        draw
+        while read -rsk1 key; do
+          if [[ $key == $'\\e' ]]; then
+            read -rsk2 rest
+            [[ $rest == '[B' ]] && (( sel < 3 )) && (( sel += 1 ))
+            [[ $rest == '[A' ]] && (( sel > 1 )) && (( sel -= 1 ))
+            draw
+          elif [[ $key == $'\\r' || $key == $'\\n' ]]; then
+            break
+          fi
+        done
+        printf '\\033[2J\\033[Hpicked %s\\n' "$sel"
+        while true; do sleep 1; done
+        """.write(to: asker, atomically: true, encoding: .utf8)
+        chmod(asker.path, 0o755)
+        let asking = await tool("new_tab", ["directory": proj.path, "command": "PATH=\(agentBin.path):$PATH claude", "title": "asker"])
+        let askerID = asking.json?["id"] as? String ?? ""
+        if let askerTab = AppDelegate.shared.controllers.flatMap(\.tabs).first(where: { $0.id.uuidString.lowercased() == askerID }) {
+            check(await wait(10) { askerTab.status.question == "Do you want to make this edit to b.txt?" }, "MCP: the stand-in agent asks its question",
+                  askerTab.status.question ?? askerTab.screenTail(6).joined(separator: " | "))
+            let read = await tool("read_tab", ["tab_id": askerID, "lines": 10])
+            let questionID = read.json?["question_id"] as? String ?? ""
+            check(questionID.hasPrefix("q_") && (read.json?["choices"] as? [String])?.count == 3,
+                  "MCP: read_tab gives the question's id and its choices", read.text.prefix(400).description)
+            let stale = await tool("answer_agent", ["tab_id": askerID, "question_id": "q_0000000000000000", "choice": 2])
+            check(stale.isError && stale.text.contains("gone"), "MCP: answer_agent refuses an answer meant for another question", stale.text)
+            let answered = await tool("answer_agent", ["tab_id": askerID, "question_id": questionID, "choice": 2])
+            check(!answered.isError && answered.json?["answered"] as? String == "Yes, and don't ask again this session",
+                  "MCP: answer_agent picks the choice", answered.text)
+            check(await wait(5) { askerTab.screenTail(10).contains { $0.contains("picked 2") } },
+                  "MCP: the agent got choice 2 (the arrows, then Return)", askerTab.screenTail(6).joined(separator: " | "))
+            let again = await tool("answer_agent", ["tab_id": askerID, "question_id": questionID, "choice": 1])
+            check(again.isError, "MCP: answering it again is refused (the question is gone)", again.text)
+            _ = await tool("close_tab", ["tab_id": askerID, "force": true])
+        } else {
+            check(false, "MCP: new_tab starts the stand-in agent", asking.text)
+        }
+        try? FileManager.default.removeItem(at: agentBin)
+
         let closed = await tool("close_tab", ["tab_id": workerID])
         check(!closed.isError && !AppDelegate.shared.controllers.flatMap(\.tabs).contains { $0 === worker }, "MCP: close_tab closes an idle tab", closed.text)
         if let editor = c.editorArea.editors.first(where: { $0.document.path == canonicalPath(file.path) }) { c.editorArea.close(editor) }

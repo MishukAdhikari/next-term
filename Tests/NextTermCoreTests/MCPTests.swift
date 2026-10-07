@@ -34,6 +34,16 @@ import Testing
         #expect(hints("new_tab")["destructiveHint"] as? Bool == true)
         #expect(hints("close_tab")["destructiveHint"] as? Bool == true)
         #expect(hints("open_in_editor")["destructiveHint"] as? Bool == false)
+        // Answering an agent's question decides for the user: clients ask first.
+        #expect(hints("answer_agent")["readOnlyHint"] as? Bool == false && hints("answer_agent")["destructiveHint"] as? Bool == true)
+        #expect(hints("answer_agent")["idempotentHint"] as? Bool == false)
+        // The project tools only read.
+        for name in ["read_file", "find_in_files", "git_status", "get_diff"] {
+            #expect(hints(name)["readOnlyHint"] as? Bool == true && hints(name)["destructiveHint"] as? Bool == false, "\(name)")
+            #expect(hints(name)["idempotentHint"] as? Bool == true, "\(name)")
+        }
+        let answer = try #require(tools.first { $0["name"] as? String == "answer_agent" }?["inputSchema"] as? [String: Any])
+        #expect(answer["required"] as? [String] == ["tab_id", "question_id"])
         // Only the tools that reach a server over ssh go beyond this Mac; everything else stays local.
         let remote: Set<String> = ["check_host", "new_remote_tab", "host_sessions", "host_changes"]
         #expect(tools.allSatisfy { (($0["annotations"] as? [String: Any])?["openWorldHint"] as? Bool) == remote.contains($0["name"] as? String ?? "") })

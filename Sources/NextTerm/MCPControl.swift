@@ -211,6 +211,8 @@ enum MCPControl {
         case "new_tab": newTab(arguments, caller: caller, reply: reply)
         case "send_to_tab": sendToTab(arguments, caller: caller, reply: reply)
         case "press_keys": pressKeys(arguments, caller: caller, reply: reply)
+        case "answer_agent": answerAgent(arguments, caller: caller, reply: reply)
+        case "read_file", "find_in_files", "git_status", "get_diff": projectTool(tool, arguments, caller: caller, reply: reply)
         case "show_tab": reply(withTab(arguments) { tab in showTab(tab) })
         case "close_tab": closeTab(arguments, caller: caller, reply: reply)
         case "open_in_editor": reply(openInEditor(arguments))
@@ -264,7 +266,7 @@ enum MCPControl {
             info["agent"] = tab.status.kind == .agent
             info["command"] = String(tab.status.command.prefix(300))
         }
-        if let question = tab.status.question { info["question"] = question }
+        info.merge(questionInfo(tab)) { $1 }
         if let code = tab.status.exitCode, tab.status.state == .failed { info["exit_code"] = Int(code) }
         if tab === caller { info["you"] = true }
         if let url = tab.servedURL { info["served_url"] = url.absoluteString } // a dev server's local address
@@ -309,7 +311,7 @@ enum MCPControl {
 
     private static func readTab(_ tab: TerminalTab, lines: Int) -> MCPServer.CallResult {
         var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab)]
-        if let question = tab.status.question { info["question"] = question }
+        info.merge(questionInfo(tab)) { $1 }
         info["screen"] = tab.screenTail(min(2000, max(1, lines))).joined(separator: "\n")
         return ok(info)
     }
@@ -323,7 +325,7 @@ enum MCPControl {
         let starting = !saw && isStarting(tab)
         if tab.exited || (!busy && !starting) || now >= deadline || controller(of: tab) == nil {
             var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab), "timed_out": busy || starting]
-            if let question = tab.status.question { info["question"] = question }
+            info.merge(questionInfo(tab)) { $1 }
             info["screen"] = tab.screenTail(40).joined(separator: "\n")
             return reply(ok(info))
         }
@@ -514,6 +516,128 @@ enum MCPControl {
         }
         sent(to: tab)
         press(0)
+    }
+
+    // MARK: answering
+
+    /// The id of the question the tab's agent asks now (nil: none).
+    static func questionID(_ tab: TerminalTab) -> String? {
+        tab.status.question.map { AgentScreen.questionID(tab: tab.id.uuidString, serial: tab.status.questionSerial, question: $0) }
+    }
+
+    /// The question, its choices as the screen lists them, and the id answer_agent takes back.
+    static func questionInfo(_ tab: TerminalTab) -> [String: Any] {
+        guard let question = tab.status.question, let id = questionID(tab) else { return [:] }
+        var info: [String: Any] = ["question": question, "question_id": id]
+        if let menu = AgentScreen.menu(screenLines: tab.screenTail()), menu.question == question { info["choices"] = menu.choices }
+        return info
+    }
+
+    /// Picks one of the choices of the question on screen, if it is still the one the caller saw:
+    /// the arrows to it, a look that the cursor landed there and the question is unchanged, then Return.
+    private static func answerAgent(_ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
+        let tab: TerminalTab
+        switch target(arguments, caller: caller) {
+        case .failure(let error): return reply(fail(error.text))
+        case .success(let found): tab = found
+        }
+        guard let given = arguments["question_id"] as? String, !given.isEmpty else {
+            return reply(fail("Give question_id: the one that came with the question from list_tabs, read_tab or wait_for_tab."))
+        }
+        let choice = arguments["choice"], answer = arguments["answer"]
+        if choice != nil && answer != nil { return reply(fail("Give choice or answer, not both.")) }
+        if let choice, choice is Bool || !(choice is Int) { return reply(fail("choice must be a whole number.")) }
+        if let answer, !(answer is String) { return reply(fail("answer must be text.")) }
+        tab.pollAgentScreen() // what the screen shows now, not at the last look
+        guard let question = tab.status.question, let current = questionID(tab) else {
+            return reply(fail("That tab is not asking anything now (state: \(state(tab))); nothing was typed. read_tab shows its screen."))
+        }
+        guard given == current else {
+            return reply(fail("That question is gone; nothing was typed. The tab now asks “\(question)” (question_id \(current)): answer that one only if you mean to."))
+        }
+        guard let menu = AgentScreen.menu(screenLines: tab.screenTail()), menu.question == question else {
+            return reply(fail("The choices for “\(question)” cannot be read on that screen; nothing was typed. read_tab shows it, and press_keys can answer."))
+        }
+        let index: Int
+        switch menu.index(choice: choice as? Int, answer: answer as? String) {
+        case .failure(let error): return reply(fail(error.text + " Nothing was typed."))
+        case .success(let found): index = found
+        }
+        guard let keys = menu.keys(toPick: index) else {
+            return reply(fail("That screen does not show which choice is selected, so the way to “\(menu.choices[index])” is unknown; nothing was typed. press_keys can answer."))
+        }
+        let id = tab.id.uuidString.lowercased()
+        let label = menu.choices[index]
+        // Still the same question, and (in a list) the cursor on the choice.
+        func ready() -> Bool {
+            tab.pollAgentScreen()
+            guard canType(tab), questionID(tab) == current else { return false }
+            guard menu.style == .list else { return true }
+            return AgentScreen.menu(screenLines: tab.screenTail())?.highlighted == index
+        }
+        func confirm(_ tries: Int) {
+            if ready() {
+                sent(to: tab)
+                tab.view.send(txt: "\r")
+                return settle(0)
+            }
+            // A y/n prompt that took the letter by itself has its answer already.
+            if menu.style == .yesNo, questionID(tab) != current { return settle(15) }
+            if tries < 10, canType(tab), questionID(tab) == current {
+                return DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { confirm(tries + 1) }
+            }
+            let why = questionID(tab) == current ? "the cursor did not reach “\(label)”" : "the question changed meanwhile"
+            reply(fail("Return was not pressed: \(why). read_tab shows the screen."))
+        }
+        // The agent takes the answer and moves on: report where it went (a new question, or work).
+        func settle(_ tries: Int) {
+            tab.pollAgentScreen()
+            if tries < 15, questionID(tab) == current {
+                return DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { settle(tries + 1) }
+            }
+            var info: [String: Any] = ["id": id, "answered": label, "choice": index + 1, "state_after": state(tab)]
+            if let after = questionID(tab) {
+                if after == current {
+                    info["note"] = "The question is still on screen; read_tab shows what the agent did with the answer."
+                } else {
+                    info["question_after"] = tab.status.question
+                    info["question_id_after"] = after
+                }
+            }
+            reply(ok(info))
+        }
+        // Gaps between keys, as press_keys has.
+        func press(_ position: Int) {
+            guard position < keys.count - 1 else {
+                return DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { confirm(0) }
+            }
+            guard canType(tab), let bytes = MCPServer.keyBytes(keys[position]) else {
+                return reply(fail("Stopped before answering: the tab can no longer take input."))
+            }
+            tab.view.send(txt: bytes)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { press(position + 1) }
+        }
+        press(0)
+    }
+
+    // MARK: project files and git
+
+    private static let git = GitRunner.locateGit()
+
+    /// read_file, find_in_files, git_status and get_diff: they read the disk and run git, so they run
+    /// off the main thread, within the projects open now.
+    private static func projectTool(_ tool: String, _ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
+        let preferred = caller.flatMap(controller(of:))?.project
+        let projects = MCPProjects(open: app.controllers.compactMap(\.project), preferred: preferred)
+        let git = Self.git
+        DispatchQueue.global(qos: .userInitiated).async {
+            switch tool {
+            case "read_file": reply(MCPProjectTools.readFile(arguments, in: projects))
+            case "find_in_files": reply(MCPProjectTools.findInFiles(arguments, in: projects, git: git))
+            case "git_status": reply(MCPProjectTools.gitStatus(arguments, in: projects, git: git))
+            default: reply(MCPProjectTools.getDiff(arguments, in: projects, git: git))
+            }
+        }
     }
 
     private static func showTab(_ tab: TerminalTab) -> MCPServer.CallResult {

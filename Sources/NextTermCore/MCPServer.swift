@@ -23,9 +23,11 @@ public enum MCPServer {
         work across projects: list_tabs shows every open project and tab with the state of the agent in it \
         (working, done, needs attention). Start an agent with new_tab (directory plus a command such as \
         "claude" or "codex"), give it a task with send_to_tab, then wait_for_tab until it stops and \
-        read_tab to see what it said. An agent that needs a decision shows state "attention" and the \
-        question; answer with send_to_tab or press_keys. Never type into your own tab ("you": true). \
-        get_editor_selection returns what the user has selected in the editor. Servers (VPSes) the user \
+        read_tab to see what it said. An agent that needs a decision shows state "attention", the \
+        question, its choices and a question_id; answer it with answer_agent (tab_id, question_id and the \
+        choice), which refuses if the question has changed since. Never type into your own tab ("you": true). \
+        read_file, find_in_files, git_status and get_diff read an open project's files and changes (what \
+        an agent did). get_editor_selection returns what the user has selected in the editor. Servers (VPSes) the user \
         connected are in list_hosts: new_remote_tab opens a tab on one (then use it like any tab), \
         host_sessions lists the sessions kept there, host_changes shows what changed in a git work tree there.
         """
@@ -49,12 +51,13 @@ public enum MCPServer {
     }
 
     private static let tabID = #""tab_id": {"type": "string", "description": "A tab's id from list_tabs."}"#
+    private static let projectRef = #""project": {"type": "string", "description": "An open project's folder (as list_projects gives it) or its name. Default: your window's project, or the only one open."}"#
     private static let hostRef = #""host": {"type": "string", "description": "A host's id or name from list_hosts."}"#
     private static let keepSchema = #""keep": {"type": "string", "enum": ["off", "tmux", "herdr"], "description": "How agents are kept running on the host: off (a plain ssh shell; what runs stops when the connection drops), tmux (sessions keep running on the host while this Mac is away; needs tmux there), herdr (the user's own herdr on the host). Next Term installs neither."}"#
 
     public static let tools: [Tool] = [
         Tool(name: "list_tabs", title: "List projects and tabs",
-             description: "Every Next Term window (one per project) and its terminal tabs: id, title, folder, the program running, and its state: idle, working (an agent is busy), done, failed, or attention (an agent waits for a decision; the question is included). Remote tabs also have their host, and can be connecting (ssh is logging in; login_prompt: the user must answer ssh in that tab) or disconnected. The tab you run in has \"you\": true.",
+             description: "Every Next Term window (one per project) and its terminal tabs: id, title, folder, the program running, and its state: idle, working (an agent is busy), done, failed, or attention (an agent waits for a decision; the question, its choices and a question_id for answer_agent are included). Remote tabs also have their host, and can be connecting (ssh is logging in; login_prompt: the user must answer ssh in that tab) or disconnected. The tab you run in has \"you\": true.",
              inputSchema: #"{"type": "object", "properties": {"project": {"type": "string", "description": "Only the window of this project folder."}}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "read_tab", title: "Read a tab's screen",
@@ -77,6 +80,22 @@ public enum MCPServer {
              description: "Files open in the editor, per window, with which one is in front and which have unsaved changes.",
              inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
+        Tool(name: "read_file", title: "Read a file in a project",
+             description: "Reads a text file in a project open in Next Term, as saved on disk. path is relative to the project, or absolute inside an open project; a symlink is followed only if it stays inside. Returns up to limit lines from offset (1-based) and total_lines; next_offset reads on. Binary files, files over 5 MB, and files that usually hold secrets (.env files, keys and certificates such as *.pem and *.key, ssh keys, credentials files, git's own folder) are refused with the reason. Values that look like tokens or passwords are replaced by •••.",
+             inputSchema: #"{"type": "object", "properties": {"path": {"type": "string", "description": "The file: relative to the project, or absolute."}, \#(projectRef), "offset": {"type": "integer", "minimum": 1, "description": "First line to return (1-based). Default 1."}, "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "description": "How many lines. Default 400."}}, "required": ["path"], "additionalProperties": false}"#,
+             readOnly: true, destructive: false, idempotent: true, timeout: 15),
+        Tool(name: "find_in_files", title: "Find in a project's files",
+             description: "Searches an open project's files the way Find in Files does: the files git tracks plus untracked ones it does not ignore (outside git, every file except dependency and build folders), skipping binaries, files over 5 MB and files that usually hold secrets. Returns each match's path, line and column (1-based) and the line's text, sorted by path, up to max_results, with the total found. Values that look like tokens or passwords are replaced by •••.",
+             inputSchema: #"{"type": "object", "properties": {"query": {"type": "string", "description": "The text to find, or a regular expression with regex: true."}, \#(projectRef), "regex": {"type": "boolean", "description": "query is a regular expression (ICU syntax). Default false."}, "case_sensitive": {"type": "boolean", "description": "Default false."}, "whole_word": {"type": "boolean", "description": "Default false."}, "glob": {"type": "string", "description": "File masks, comma-separated: \"*.ts\", \"src/**/*.swift\", and \"!*.min.js\" to leave files out."}, "max_results": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Default 50."}}, "required": ["query"], "additionalProperties": false}"#,
+             readOnly: true, destructive: false, idempotent: true, timeout: 60),
+        Tool(name: "git_status", title: "Git status of a project",
+             description: "An open project's git state: the branch, its upstream with commits ahead and behind, and each changed file with its state (modified, added, deleted, renamed, untracked, conflicted), whether it has staged and unstaged changes, and the lines added and removed. Reading it never takes git's index lock.",
+             inputSchema: #"{"type": "object", "properties": {\#(projectRef)}, "additionalProperties": false}"#,
+             readOnly: true, destructive: false, idempotent: true, timeout: 30),
+        Tool(name: "get_diff", title: "Diff of a project's changes",
+             description: "The changes to a file in an open project as a unified diff: against HEAD (staged and unstaged together, the default), only what is staged, or only what is not. Without path, every changed file in the project. Cut at max_chars. Files that usually hold secrets are left out (the answer says which), and values that look like tokens or passwords are replaced by •••. Reading it never takes git's index lock.",
+             inputSchema: #"{"type": "object", "properties": {"path": {"type": "string", "description": "The file: relative to the project, or absolute. Default: every changed file."}, \#(projectRef), "which": {"type": "string", "enum": ["head", "staged", "unstaged"], "description": "head: all changes against the last commit (default); staged: what the next commit holds; unstaged: what is not staged yet."}, "context": {"type": "integer", "minimum": 0, "maximum": 20, "description": "Unchanged lines around each change. Default 3."}, "max_chars": {"type": "integer", "minimum": 1000, "maximum": 200000, "description": "Longest diff to return. Default 60000."}}, "additionalProperties": false}"#,
+             readOnly: true, destructive: false, idempotent: true, timeout: 30),
         Tool(name: "open_project", title: "Open a project",
              description: "Opens a folder as a project in its own window (or brings it to the front if open) and returns its tabs.",
              inputSchema: #"{"type": "object", "properties": {"path": {"type": "string", "description": "Absolute folder path."}}, "required": ["path"], "additionalProperties": false}"#,
@@ -92,6 +111,10 @@ public enum MCPServer {
         Tool(name: "press_keys", title: "Press keys in a tab",
              description: "Presses keys in a tab, in order: enter, escape, tab, shift+tab, up, down, left, right, backspace, space, ctrl+c, ctrl+d, or a single character such as \"1\" or \"y\". For menus and confirmations in an agent's screen.",
              inputSchema: #"{"type": "object", "properties": {\#(tabID), "keys": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 20}}, "required": ["tab_id", "keys"], "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: false, timeout: 15),
+        Tool(name: "answer_agent", title: "Answer an agent's question",
+             description: "Answers the question an agent in a tab is asking (state \"attention\"): picks one of its choices the way the agent's screen takes it (the arrow keys to the choice, then Return; y or n and Return for a y/n prompt). Give the question_id that came with the question from list_tabs, read_tab or wait_for_tab: if the tab has moved on to another question, or asks nothing, nothing is typed and the answer says what it shows now. Returns the choice picked and the tab's state after.",
+             inputSchema: #"{"type": "object", "properties": {\#(tabID), "question_id": {"type": "string", "description": "The question_id that came with the question."}, "choice": {"type": "integer", "minimum": 1, "description": "The choice's number in choices (1 is the first)."}, "answer": {"type": "string", "description": "Instead of choice: the choice's words, such as \"Yes\" (or y or n for a y/n prompt)."}}, "required": ["tab_id", "question_id"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: false, timeout: 15),
         Tool(name: "show_tab", title: "Show a tab",
              description: "Brings a tab and its window to the front, for the user to see.",
