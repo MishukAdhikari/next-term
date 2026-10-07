@@ -308,6 +308,9 @@ enum SelfTest {
         c.select(0)
         check(await wait(5) { second.status.question == "Do you want to make this edit to a.txt?" }, "its question is read too",
               second.status.question ?? "none")
+        // Posted as it is read; the self-test keeps it (AppDelegate.testNotifications) instead of showing it.
+        check(await wait(2) { AppDelegate.shared.testNotifications.contains { $0.identifier == second.id.uuidString && $0.content.body == "Do you want to make this edit to a.txt?" } },
+              "and a notification quotes it", "\(AppDelegate.shared.testNotifications.map(\.content.body))")
         check(second.status.state == .attention && second.stateDescription.hasPrefix("Needs your decision"), "and shows as a decision",
               second.stateDescription)
         second.view.send(txt: "1\r")
@@ -673,6 +676,7 @@ enum SelfTest {
         AppDelegate.shared.fontSize = size
 
         await linkChecks(c)
+        await notificationChecks(c)
 
         try? FileManager.default.removeItem(at: dir)
     }
