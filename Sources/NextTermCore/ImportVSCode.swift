@@ -248,7 +248,7 @@ public enum ImportVSCode {
     /// workbench.colorCustomizations keys for the terminal, by slot: the 16 ANSI colours, then text,
     /// background, cursor and selection.
     static let terminalColourKeys: [String] = {
-        let names = TerminalPalette.ansiNames.map { $0.prefix(1).uppercased() + $0.dropFirst() }
+        let names: [String] = TerminalPalette.ansiNames.map { name in String(name.prefix(1)).uppercased() + String(name.dropFirst()) }
         let normal = names.map { "terminal.ansi" + $0 }
         let bright = names.map { "terminal.ansiBright" + $0 }
         let others = ["terminal.foreground", "terminal.background", "terminalCursor.foreground", "terminal.selectionBackground"]
