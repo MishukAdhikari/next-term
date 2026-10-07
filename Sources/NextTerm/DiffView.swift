@@ -52,7 +52,7 @@ final class DiffPane: NSView {
 
     /// A file as a branch changed it since it parted from what is checked out (Compare with Current):
     /// their merge base on the left, the branch on the right. Read-only.
-    struct BranchChange: Equatable {
+    struct BranchChange {
         /// "refs/heads/feat/x".
         let branch: String
         /// Where a renamed file came from.
@@ -399,6 +399,24 @@ final class DiffPane: NSView {
                 self.show(diff, message: nil, token: token)
             }
         }
+    }
+
+    /// Opened again from a comparison read since (the branch moved): its change as that list has it now,
+    /// from its merge base and the file's old name there, read again.
+    func reopen(_ change: BranchChange) {
+        guard branchChange != nil else { return }
+        branchChange = change
+        pathLabel.toolTip = tooltip
+        reload()
+    }
+
+    /// Opened again from a list read since (base `.ref`): read again, with where the branch has the file
+    /// as that list says.
+    func reopen(renamedFrom: String?) {
+        guard workingTreeBranch != nil else { return }
+        self.renamedFrom = renamedFrom
+        pathLabel.toolTip = tooltip
+        reload()
     }
 
     /// The file or the index changed (an agent, a commit, a stage): diff again.

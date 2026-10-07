@@ -1876,6 +1876,22 @@ enum SelfTest {
         run("update-ref", "refs/heads/feat", later)
         check(await wait(10) { compare.rowTitles.contains("Later on feat") && compare.rowTitles.first == "# Only on feat · 4 commits, 1 also on main" },
               "the comparison reads again when the branch moves", compare.rowTitles.prefix(3).joined(separator: " | "))
+        // A file's diff, opened again after the branch changed the file once more, is read again: the
+        // same tab, as the branch has it now.
+        if let index = compare.rowTitles.firstIndex(of: "A f.txt") {
+            compare.open(row: index)
+            let first = c.editorArea.activeDiff
+            let opened = await wait(8) { first?.title == "f.txt @ feat" && (first?.sideTexts.1 ?? "").contains("feat") }
+            run("switch", "-q", "feat")
+            write("f.txt", "feat\nmore on feat\n")
+            run("commit", "-qam", "More on feat")
+            run("switch", "-q", "main")
+            let moved = await wait(10) { compare.rowTitles.contains("More on feat") }
+            if let again = compare.rowTitles.firstIndex(of: "A f.txt") { compare.open(row: again) }
+            let reread = await wait(8) { c.editorArea.activeDiff === first && (first?.sideTexts.1 ?? "").contains("more on feat") }
+            check(opened && moved && reread, "a file opened again after the branch moved shows its change as it is now", sides(c.editorArea.activeDiff))
+            if let first { c.editorArea.close(first) }
+        }
         c.editorArea.close(compare)
 
         // The files on disk against the branch: changed, missing, new here, renamed; each opens side by side.

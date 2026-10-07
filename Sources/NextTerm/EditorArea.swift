@@ -298,9 +298,12 @@ final class EditorArea: NSView, TabBarViewDelegate {
         select(activeIndex)
     }
 
-    /// A file as `change.branch` changed it since it parted from HEAD, read-only (or brings that diff to the front).
+    /// A file as `change.branch` changed it since it parted from HEAD, read-only (or brings that diff to the
+    /// front, read again: the branch may have moved since it opened).
     func openBranchDiff(root: String, path: String, change: DiffPane.BranchChange) {
-        if let index = panes.firstIndex(where: { ($0 as? DiffPane)?.matches(root: root, path: path, branch: change.branch) == true }) {
+        if let index = panes.firstIndex(where: { ($0 as? DiffPane)?.matches(root: root, path: path, branch: change.branch) == true }),
+           let diff = panes[index] as? DiffPane {
+            diff.reopen(change)
             return select(index)
         }
         let diff = DiffPane(root: root, path: path, branchChange: change)
@@ -309,9 +312,12 @@ final class EditorArea: NSView, TabBarViewDelegate {
         select(activeIndex)
     }
 
-    /// A file on disk against its version on `branch` (or brings that diff to the front).
+    /// A file on disk against its version on `branch` (or brings that diff to the front, read again: the
+    /// branch may have moved since it opened).
     func openWorkingTreeDiff(root: String, path: String, branch: String, renamedFrom: String?) {
-        if let index = panes.firstIndex(where: { ($0 as? DiffPane)?.matches(root: root, path: path, workingTreeAgainst: branch) == true }) {
+        if let index = panes.firstIndex(where: { ($0 as? DiffPane)?.matches(root: root, path: path, workingTreeAgainst: branch) == true }),
+           let diff = panes[index] as? DiffPane {
+            diff.reopen(renamedFrom: renamedFrom)
             return select(index)
         }
         let diff = DiffPane(root: root, path: path, workingTreeAgainst: branch, renamedFrom: renamedFrom)
