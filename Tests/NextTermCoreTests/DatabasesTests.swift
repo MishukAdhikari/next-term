@@ -31,11 +31,19 @@ final class FixtureProject {
 
 /// Every string the UI could show about a database, for "no secret anywhere" checks.
 func visibleText(_ scan: DatabaseScan) -> String {
-    scan.databases.map { db in
-        [db.id, db.name, db.masked, db.note ?? "", db.host ?? "", db.user ?? "", db.database ?? "", db.socket ?? "",
-         db.sources.map { $0.file + " " + $0.keys.joined(separator: " ") }.joined(separator: " "), String(describing: db),
-         String(reflecting: db), db.tools.joined(separator: " ")].joined(separator: "\n")
-    }.joined(separator: "\n") + String(describing: scan)
+    // Built step by step: one long expression takes older compilers too long to type-check.
+    var parts: [String] = []
+    for db in scan.databases {
+        let fields: [String?] = [db.id, db.name, db.masked, db.note, db.host, db.user, db.database, db.socket]
+        parts.append(fields.map { $0 ?? "" }.joined(separator: "\n"))
+        let sources: [String] = db.sources.map { source in source.file + " " + source.keys.joined(separator: " ") }
+        parts.append(sources.joined(separator: " "))
+        parts.append(String(describing: db))
+        parts.append(String(reflecting: db))
+        parts.append(db.tools.joined(separator: " "))
+    }
+    parts.append(String(describing: scan))
+    return parts.joined(separator: "\n")
 }
 
 @Suite struct DatabasesTests {
