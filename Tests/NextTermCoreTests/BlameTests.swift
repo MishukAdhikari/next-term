@@ -103,6 +103,15 @@ import Testing
         guard case .annotated(let disk) = GitRunner.blame(of: repo + "/b.txt", git: git, workingTree: true) else { return #expect(Bool(false)) }
         #expect(disk.lines.map(\.isCommitted) == [true, true, false, true])
 
+        // Cached by file and HEAD: blamed again only after a commit.
+        let cache = BlameCache(limit: 2)
+        let first = GitRunner.blame(of: repo + "/b.txt", git: git, cache: cache)
+        #expect(first == .annotated(blame) && cache.count == 1)
+        #expect(GitRunner.blame(of: repo + "/b.txt", git: git, cache: cache) == first && cache.count == 1)
+        try sh("-c", "user.name=Dee", "-c", "user.email=d@x", "commit", "-qam", "Third")
+        guard case .annotated(let after) = GitRunner.blame(of: repo + "/b.txt", git: git, cache: cache) else { return #expect(Bool(false)) }
+        #expect(after.commit(after.lines[2])?.author == "Dee" && cache.count == 2)
+
         try write("new.txt", "x\n")
         #expect(GitRunner.blame(of: repo + "/new.txt", git: git) == .notCommitted(root: repo)) // untracked
         #expect(GitRunner.blame(of: repo + "/b.txt", git: git, maxSize: 4) == .tooLarge)

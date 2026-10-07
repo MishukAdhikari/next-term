@@ -139,22 +139,33 @@ extension GitRunner {
     /// The commit each line of a file comes from, as of the last commit, or with `workingTree` as the file
     /// is on disk (lines changed since the last commit are not committed). Lines moved within the file
     /// keep their commit (`-M`), and a renamed file is followed to its old name. Read-only.
+    /// With a `cache`, a file already blamed at this HEAD is not blamed again.
     public static func blame(of path: String, git: String, workingTree: Bool = false, maxSize: Int = 2_000_000,
-                             timeout: TimeInterval = 30) -> BlameResult {
+                             timeout: TimeInterval = 30, cache: BlameCache? = nil) -> BlameResult {
         let folder = (path as NSString).deletingLastPathComponent
         let name = (path as NSString).lastPathComponent
         let prefix = ["-C", folder, "--no-optional-locks"]
-        func text(_ data: Data?) -> [String]? {
-            data.flatMap { String(data: $0, encoding: .utf8) }?.split(separator: "\n").map(String.init)
-        }
         // The root and HEAD in one run; with no commit yet, only the root answers.
-        guard let found = text(run(git, prefix + ["rev-parse", "--show-toplevel", "HEAD"], timeout: timeout)), found.count == 2 else {
-            if let root = text(run(git, prefix + ["rev-parse", "--show-toplevel"], timeout: timeout))?.first { return .notCommitted(root: root) }
+        guard let found = lines(run(git, prefix + ["rev-parse", "--show-toplevel", "HEAD"], timeout: timeout)), found.count == 2 else {
+            if let root = lines(run(git, prefix + ["rev-parse", "--show-toplevel"], timeout: timeout))?.first { return .notCommitted(root: root) }
             return .notInRepository
         }
         let (root, head) = (found[0], found[1])
+        let key = workingTree ? nil : path + "\0" + head
+        if let key, let known = cache?[key] { return known }
+        let result = blame(name, prefix: prefix, root: root, head: head, git: git, workingTree: workingTree, maxSize: maxSize, timeout: timeout)
+        if let key, result != .failed { cache?[key] = result }
+        return result
+    }
+
+    private static func lines(_ data: Data?) -> [String]? {
+        data.flatMap { String(data: $0, encoding: .utf8) }?.split(separator: "\n").map(String.init)
+    }
+
+    private static func blame(_ name: String, prefix: [String], root: String, head: String, git: String, workingTree: Bool,
+                              maxSize: Int, timeout: TimeInterval) -> BlameResult {
         // Its size in the commit, which also says whether it is there at all.
-        guard let size = text(run(git, prefix + ["cat-file", "-s", head + ":./" + name], timeout: timeout))?.first.flatMap({ Int($0) }) else {
+        guard let size = lines(run(git, prefix + ["cat-file", "-s", head + ":./" + name], timeout: timeout))?.first.flatMap({ Int($0) }) else {
             return .notCommitted(root: root)
         }
         guard size <= maxSize else { return .tooLarge }
@@ -246,5 +257,37 @@ public struct EditedBlame: Sendable {
         let span = newest.timeIntervalSince(oldest)
         guard span > 0 else { return 1 }
         return max(0, min(1, commit.authorTime.timeIntervalSince(oldest) / span))
+    }
+}
+
+/// Blames already read, by file and HEAD: a file is blamed again only after a commit or a checkout.
+public final class BlameCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var results: [String: GitRunner.BlameResult] = [:]
+    private var order: [String] = []
+    private let limit: Int
+
+    public init(limit: Int = 32) { self.limit = limit }
+
+    subscript(key: String) -> GitRunner.BlameResult? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return results[key]
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            order.removeAll { $0 == key }
+            results[key] = newValue
+            if newValue != nil { order.append(key) }
+            while order.count > limit { results[order.removeFirst()] = nil }
+        }
+    }
+
+    public var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return results.count
     }
 }
