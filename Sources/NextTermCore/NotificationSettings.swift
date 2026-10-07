@@ -101,14 +101,16 @@ public struct NotificationSettings: Equatable, Sendable {
 
     /// Whether `notice` becomes a notification. Never for the tab you are looking at (`tabVisible`: the
     /// active tab of the key window, its terminal on screen); `appActive` is whether Next Term is in front.
-    public func shouldNotify(_ notice: TabNotice, appActive: Bool, tabVisible: Bool) -> Bool {
+    /// `drivenByAgent`: another agent drives the tab over MCP and waits for its work, so while you are in
+    /// Next Term its agent finishing is that agent's news, not yours. Its decisions still come.
+    public func shouldNotify(_ notice: TabNotice, appActive: Bool, tabVisible: Bool, drivenByAgent: Bool = false) -> Bool {
         if tabVisible { return false }
         let longEnough = notice.duration >= threshold.seconds
         switch notice.topic {
         case .decision:
             return decisions
         case .agentFinished:
-            return agentFinished && longEnough
+            return agentFinished && longEnough && (!appActive || !drivenByAgent)
         case .commandFinished:
             guard longEnough else { return false }
             switch commands {

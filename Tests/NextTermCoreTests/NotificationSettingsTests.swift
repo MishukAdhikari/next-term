@@ -76,6 +76,19 @@ import Testing
         #expect(inside(s, decision))
     }
 
+    @Test func agentsAnotherAgentDrivesNotifyOnlyFromAnotherApp() {
+        // An orchestrator gives a worker tab its prompts over MCP and waits for it: in Next Term, the worker
+        // finishing is the orchestrator's news.
+        let s = NotificationSettings()
+        let done = agentDone(after: 60)
+        #expect(!s.shouldNotify(done, appActive: true, tabVisible: false, drivenByAgent: true))
+        #expect(s.shouldNotify(done, appActive: true, tabVisible: false, drivenByAgent: false))
+        #expect(s.shouldNotify(done, appActive: false, tabVisible: false, drivenByAgent: true))
+        // Its decisions still come.
+        #expect(s.shouldNotify(decision, appActive: true, tabVisible: false, drivenByAgent: true))
+        #expect(!s.shouldNotify(done, appActive: false, tabVisible: true, drivenByAgent: true))
+    }
+
     @Test func commandsByDefaultOnlyFromAnotherApp() {
         var s = NotificationSettings()
         for state in [TabState.done, .failed] {
