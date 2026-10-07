@@ -136,7 +136,26 @@ extension SelfTest {
         // A plain remote shell: ssh in the tab's pty, the host's prompt, status from the host.
         let plain = c.addRemoteTab(RemoteTab(host: host))
         check(!plain.remoteConnected && plain.title.hasPrefix("selftest: "), "remote: a new tab is named after its host and counts as connecting", plain.title)
+        // Its tab: the server mark, with the connection's state on it, in words for VoiceOver too.
+        func shownMark() -> (link: RemoteLink?, spoken: String) {
+            c.refresh()
+            let index = c.groups.firstIndex { $0.contains(plain) } ?? -1
+            return (c.tabBar.shownRemoteLink(at: index), c.tabBar.spokenLabel(at: index) ?? "")
+        }
+        let early = shownMark()
+        check(plain.remoteConnected || early.link?.isOnItsWay == true, "remote: the tab's server mark shows the connection on its way",
+              "\(early.link?.rawValue ?? "no mark") / \(early.spoken)")
         check(await wait(20) { plain.remoteConnected }, "remote: the host proves this tab's own login (its connection token)")
+        let up = shownMark()
+        check(up.link == .connected && up.spoken.contains("Remote: selftest (nt@selftest.invalid), connected"),
+              "remote: once connected, the tab's mark and its spoken label say so", "\(up.link?.rawValue ?? "no mark") / \(up.spoken)")
+        check(!c.sidebar.remoteNote.isHidden && c.sidebar.remoteNote.shown?.host == "selftest"
+              && (c.isEditorFocused || c.window?.title.contains("— on selftest —") == true),
+              "remote: the sidebar says its files are this Mac's, and the window title names the host",
+              "\(c.sidebar.remoteNote.shown?.host ?? "no note") / \(c.window?.title ?? "")")
+        let local = c.groups.firstIndex { $0.focused.remote == nil }
+        check(local.map { c.tabBar.shownRemoteLink(at: $0) == nil && !(c.tabBar.spokenLabel(at: $0) ?? "").contains("Remote") } ?? true,
+              "remote: a tab on this Mac has no server mark")
         check(await wait(20) { plain.remoteReady }, "remote: the host reports the tab's shell at its prompt",
               plain.screenTail(6).joined(separator: " | "))
         check(!plain.view.opensFiles, "remote: ⌘-click does not open this Mac's files from a remote tab")
@@ -160,6 +179,10 @@ extension SelfTest {
         check(await wait(10) { plain.disconnected }, "remote: a dropped connection keeps the tab, marked disconnected")
         check(plain.screenTail(4).joined().contains("Return opens a new shell") && plain.title.contains("(disconnected)"),
               "remote: and says so, in the tab and its title", plain.title + " / " + plain.screenTail(4).joined(separator: " | "))
+        let down = shownMark()
+        check(down.link == .disconnected && down.spoken.contains("Remote: selftest (nt@selftest.invalid), disconnected")
+              && c.sidebar.remoteNote.shown?.link == .disconnected,
+              "remote: and on its server mark (and the sidebar's)", "\(down.link?.rawValue ?? "no mark") / \(down.spoken)")
         check(MCPControl.canType(plain) == false, "remote MCP: nothing is typed into a disconnected tab")
         master.start()
         plain.view.send(txt: "\r")
