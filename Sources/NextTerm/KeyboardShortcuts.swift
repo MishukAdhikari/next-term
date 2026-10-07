@@ -469,6 +469,7 @@ final class EditorSettingsView: NSView {
     private let lineHeight = NSSlider(value: 1.35, minValue: 1.0, maxValue: 2.0, target: nil, action: nil)
     private let lineHeightValue = NSTextField(labelWithString: "")
     private let wrap = NSButton(checkboxWithTitle: "Wrap long lines at the edge", target: nil, action: nil)
+    private let singleClick = NSButton(checkboxWithTitle: "Open files with a single click", target: nil, action: nil)
     private let dotIcons = NSButton(checkboxWithTitle: "Icons on configuration folders (.github, .claude, .idea…)", target: nil, action: nil)
     private let claude = NSButton(checkboxWithTitle: "Agents in a tab see the editor (Claude Code, Gemini CLI, Qwen Code)", target: nil, action: nil)
     private let control = NSButton(checkboxWithTitle: "Let agents control Next Term (MCP: projects, tabs, prompts, the editor)", target: nil, action: nil)
@@ -488,6 +489,9 @@ final class EditorSettingsView: NSView {
         lineHeightValue.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         wrap.target = self
         wrap.action = #selector(wrapChanged)
+        singleClick.target = self
+        singleClick.action = #selector(singleClickChanged)
+        singleClick.toolTip = "A click opens the file in a preview tab that the next click reuses. Edit the file or double-click its tab to keep it. Off: a double-click opens, as in Finder."
         dotIcons.target = self
         dotIcons.action = #selector(dotIconsChanged)
         claude.target = self
@@ -522,7 +526,8 @@ final class EditorSettingsView: NSView {
             row("Font size:", [fontSize, fontSizeValue]),
             row("Line height:", [lineHeight, lineHeightValue]),
             row("", [wrap]),
-            row("Sidebar:", [dotIcons]),
+            row("Sidebar:", [singleClick]),
+            row("", [dotIcons]),
             row("Agents:", [claude]),
             row("", [control]),
             row("", [controlStatus]),
@@ -558,6 +563,7 @@ final class EditorSettingsView: NSView {
         lineHeight.doubleValue = Double(app.editorLineHeight)
         lineHeightValue.stringValue = String(format: "%.2f×", app.editorLineHeight)
         wrap.state = app.softWrap ? .on : .off
+        singleClick.state = app.sidebarSingleClickOpens ? .on : .off
         dotIcons.state = app.iconsOnDotFolders ? .on : .off
         claude.state = app.shareWithClaude ? .on : .off
         control.state = app.agentControl ? .on : .off
@@ -586,6 +592,11 @@ final class EditorSettingsView: NSView {
 
     @objc private func controlChanged() {
         AppDelegate.shared.agentControl = control.state == .on
+        refresh()
+    }
+
+    @objc private func singleClickChanged() {
+        AppDelegate.shared.sidebarSingleClickOpens = singleClick.state == .on
         refresh()
     }
 

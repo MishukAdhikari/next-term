@@ -51,10 +51,14 @@ enum LayoutMenu {
         return menu
     }
 
-    /// The sidebar's ⋯: its side, and hiding it.
+    /// The sidebar's ⋯: its side, how a click opens files, and hiding it.
     static func sidebar() -> NSMenu {
         let menu = NSMenu(title: "Project")
         sidebarItems(into: menu)
+        let singleClick = menu.addItem(withTitle: "Open Files with a Single Click", action: #selector(AppDelegate.toggleSidebarSingleClick(_:)),
+                                       keyEquivalent: "")
+        singleClick.target = AppDelegate.shared
+        singleClick.state = AppDelegate.shared.sidebarSingleClickOpens ? .on : .off // and AppDelegate.validateMenuItem keeps it so
         menu.addItem(.separator())
         let hide = menu.addItem(withTitle: "Hide Project Sidebar", action: #selector(TerminalWindowController.toggleProjectSidebar(_:)), keyEquivalent: "")
         // Shows the user's shortcut for it, whatever it is now.
