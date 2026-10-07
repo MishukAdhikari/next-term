@@ -21,7 +21,7 @@ VS Code is Microsoft’s free code editor for macOS, Windows and Linux, with the
 | Agents from other vendors | ✓ Any agent that runs in a terminal; 20 recognised by name | ✓ Claude and Codex as agent harnesses; Anthropic’s Claude Code extension; Copilot CLI sessions |
 | Several agents at once | ✓ Tabs and split panes | ✓ The sessions list and the Agents window, with worktrees |
 | Status of each agent | ✓ On every tab: working, done, waiting (with the question), failed | ✓ In the sessions list: in progress, waiting for input, done |
-| Status of agents in the terminal | ✓ Read from each agent’s own screen | Partly: terminal tabs show a bell, and a check or a cross for tasks |
+| Status of agents in the terminal | ✓ Read from the agent’s own screen for Claude Code, Codex, Command Code and Gemini CLI, and from output timing for other agents | Partly: terminal tabs show a bell, and a check or a cross for tasks |
 | Notifications | ✓ Quote the agent’s question; Dock badge | ✓ When a chat session needs input or responds, by default while the window is in the background |
 | MCP | ✓ An MCP server: one agent starts, prompts, waits for and reads the others | ✓ An MCP client for the servers you add |
 | Code intelligence | — | ✓ IntelliSense and refactoring, built in for JavaScript and TypeScript, more through extensions |
@@ -58,7 +58,7 @@ If VS Code is your editor, keep it: VS Code for the code, Next Term for the agen
 
 ### Can’t I just run Claude Code in VS Code’s terminal?
 
-Yes, and it connects to VS Code for diffs and diagnostics. Next Term adds an overview of every agent you run in a terminal: a status mark on each tab read from the agent’s own screen, notifications that quote each agent’s question, and an MCP server through which one agent runs the others.
+Yes, and it connects to VS Code for diffs and diagnostics. Next Term adds an overview of every agent you run in a terminal: a status mark on each agent’s tab, with nothing to set up, notifications that quote each agent’s question, and an MCP server through which one agent runs the others.
 
 ### Does VS Code show the status of several agents?
 
