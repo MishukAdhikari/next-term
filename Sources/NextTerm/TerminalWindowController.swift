@@ -493,11 +493,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     /// "Alertable.php — xCloud" while editing, "zsh — xCloud" in the terminal, "claude — on web-1 — xCloud"
-    /// in a remote tab (the Window menu, Mission Control and VoiceOver say where it runs).
+    /// in a remote tab (the Window menu, Mission Control and VoiceOver say where it runs), but "web-1: app —
+    /// xCloud" when the tab's name says it already.
     func updateTitle() {
         let name = project.map { ($0 as NSString).lastPathComponent }
         let focus = isEditorFocused ? editorArea.activeName : activeTab?.title
-        let host = isEditorFocused ? nil : activeTab?.remote.map { "on \($0.host.name)" }
+        let host = isEditorFocused ? nil : activeTab?.remote.flatMap { remote -> String? in
+            focus?.hasPrefix(remote.host.name + ": ") == true ? nil : "on \(remote.host.name)"
+        }
         window?.title = [focus, host, name, "Next Term"].compactMap { $0 }.joined(separator: " — ")
     }
 

@@ -192,10 +192,12 @@ extension SelfTest {
         let up = shownMark()
         check(up.link == .connected && up.spoken.contains("Remote: selftest (nt@selftest.invalid), connected"),
               "remote: once connected, the tab's mark and its spoken label say so", "\(up.link?.rawValue ?? "no mark") / \(up.spoken)")
+        // The window title names the host once: "selftest: app — …", or "sleep — on selftest — …" (below).
+        let windowTitle = c.window?.title ?? ""
         check(!c.sidebar.remoteNote.isHidden && c.sidebar.remoteNote.shown?.host == "selftest"
-              && (c.isEditorFocused || c.window?.title.contains("— on selftest —") == true),
-              "remote: the sidebar says its files are this Mac's, and the window title names the host",
-              "\(c.sidebar.remoteNote.shown?.host ?? "no note") / \(c.window?.title ?? "")")
+              && (c.isEditorFocused || windowTitle.hasPrefix("selftest: ") != windowTitle.contains("— on selftest —")),
+              "remote: the sidebar says its files are this Mac's, and the window title names the host once",
+              "\(c.sidebar.remoteNote.shown?.host ?? "no note") / \(windowTitle)")
         let local = c.groups.firstIndex { $0.focused.remote == nil }
         check(local.map { c.tabBar.shownRemoteLink(at: $0) == nil && !(c.tabBar.spokenLabel(at: $0) ?? "").contains("Remote") } ?? true,
               "remote: a tab on this Mac has no server mark")
@@ -205,6 +207,9 @@ extension SelfTest {
         plain.view.send(txt: "sleep 4\r")
         check(await wait(8) { plain.status.running && plain.status.program == "sleep" }, "remote: what runs in front on the host is seen",
               "\(plain.status.running) \(plain.status.program)")
+        c.refresh()
+        check(c.isEditorFocused || c.activeTab !== plain || c.window?.title.contains(" — on selftest — ") == true,
+              "remote: while a program runs, the window title says on which host", c.window?.title ?? "")
         check(await wait(10) { !plain.status.running }, "remote: and when it ends")
         plain.view.send(txt: "sleep 60 &\r")
         check(await wait(8) { plain.closeWarning?.contains("sleep") == true }, "remote: closing warns about the shell's background jobs on the host",
