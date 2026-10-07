@@ -9,8 +9,10 @@ protocol ProjectSidebarDelegate: AnyObject {
     func sidebar(_ sidebar: ProjectSidebarView, openTabIn directory: String)
     /// Open this folder as a project (window choice is up to the app).
     func sidebar(_ sidebar: ProjectSidebarView, openProject directory: String)
-    /// Open a file (double-click, ⌘↓).
+    /// Open a file (double-click, ⌘↓, Open in the right-click menu).
     func sidebar(_ sidebar: ProjectSidebarView, openFile url: URL)
+    /// Open a file in the preview tab, the keyboard staying in the tree (a single click, when clicks open files).
+    func sidebar(_ sidebar: ProjectSidebarView, previewFile url: URL)
     /// A file or folder was renamed or moved (open editors follow it).
     func sidebar(_ sidebar: ProjectSidebarView, didMove from: String, to: String)
     /// Hand these files or folders to the agent in a tab.
@@ -25,11 +27,25 @@ protocol ProjectSidebarDelegate: AnyObject {
 enum DatabaseAction { case open, tablePlus, terminal, vercel }
 
 /// Outline view with the keys a file tree needs: Return renames (as in Finder), ⌘⌫ moves to the Trash,
-/// ⌘↓ opens.
+/// ⌘↓ opens. It notes how each click began, for "Open files with a single click".
 final class SidebarOutlineView: NSOutlineView {
     var onRename: (() -> Void)?
     var onTrash: (() -> Void)?
     var onOpen: (() -> Void)?
+    /// The row the last click went down on (a click released over another row dragged across rows).
+    private(set) var mouseDownRow = -1
+    /// A rename was going on when the last click went down: that click only ends it.
+    private(set) var mouseDownWhileRenaming = false
+    /// A file drag began from the last click.
+    var dragBegan = false
+
+    override func mouseDown(with event: NSEvent) {
+        mouseDownRow = row(at: convert(event.locationInWindow, from: nil))
+        let responder = window?.firstResponder as? NSView
+        mouseDownWhileRenaming = responder is NSTextView && responder?.isDescendant(of: self) == true
+        dragBegan = false
+        super.mouseDown(with: event) // sends the action on mouse-up, and the double action on a double-click
+    }
 
     override func keyDown(with event: NSEvent) {
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
@@ -111,6 +127,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         outline.dataSource = self
         outline.delegate = self
         outline.target = self
+        outline.action = #selector(clicked)
         outline.doubleAction = #selector(doubleClicked)
         outline.registerForDraggedTypes([.fileURL])
         outline.setDraggingSourceOperationMask([.copy], forLocal: false)
@@ -581,6 +598,32 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         item is FileNode || item is DeletedEntry || item is DatabaseItem
     }
 
+    /// A click, sent on mouse-up (the first click of a double-click too). With "Open files with a single
+    /// click" on, a plain click on one file the editor can show cheaply opens it in the preview tab and
+    /// leaves the keyboard in the tree. Every other click only selects, as it does with the setting off.
+    @objc private func clicked() {
+        guard AppDelegate.shared.sidebarSingleClickOpens, let event = NSApp.currentEvent else { return }
+        let row = outline.clickedRow
+        let item = row >= 0 ? outline.item(atRow: row) : nil
+        let isMouseUp = event.type == .leftMouseUp
+        let flags = event.modifierFlags
+        let click = SidebarClick.Click(isMouseUp: isMouseUp, clickCount: isMouseUp ? event.clickCount : 0,
+                                       command: flags.contains(.command), shift: flags.contains(.shift),
+                                       option: flags.contains(.option), control: flags.contains(.control),
+                                       row: row, mouseDownRow: outline.mouseDownRow, selection: outline.selectedRowIndexes,
+                                       dragBegan: outline.dragBegan, wasRenaming: outline.mouseDownWhileRenaming, kind: kind(of: item))
+        guard SidebarClick.outcome(of: click) == .open, let node = item as? FileNode,
+              SidebarClick.opensOnSingleClick(node.url.path) else { return }
+        delegate?.sidebar(self, previewFile: node.url)
+    }
+
+    private func kind(of item: Any?) -> SidebarClick.Row {
+        if let node = item as? FileNode { return node === root ? .root : node.isDirectory ? .folder : .file }
+        if item is DeletedEntry { return .deleted }
+        if item is DatabaseItem || item is DatabasesGroup { return .database }
+        return .other
+    }
+
     @objc private func doubleClicked() {
         if let entry = outline.item(atRow: outline.clickedRow) as? DeletedEntry { return openDeleted(entry) }
         if let item = outline.item(atRow: outline.clickedRow) as? DatabaseItem { return openDatabase(item.database) }
@@ -892,6 +935,12 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
         guard let node = item as? FileNode, node !== root else { return nil }
         return node.url as NSURL
+    }
+
+    /// The click that starts a drag opens nothing, even with single clicks opening files.
+    func outlineView(_ outlineView: NSOutlineView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint,
+                     forItems draggedItems: [Any]) {
+        outline.dragBegan = true
     }
 
     private func droppedURLs(_ info: NSDraggingInfo) -> [URL] {

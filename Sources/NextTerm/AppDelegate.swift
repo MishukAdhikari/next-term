@@ -219,6 +219,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    /// One click on a file in the project sidebar opens it, in a preview tab (off: a double-click does, as
+    /// in Finder). Read at each click, so it applies to every window at once. Turning it off keeps every
+    /// preview as an ordinary tab.
+    var sidebarSingleClickOpens: Bool {
+        get { UserDefaults.standard.bool(forKey: "sidebarSingleClickOpens") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "sidebarSingleClickOpens")
+            if !newValue { controllers.forEach { $0.editorArea.keepPreview() } }
+        }
+    }
+
+    @objc func toggleSidebarSingleClick(_ sender: Any?) {
+        sidebarSingleClickOpens.toggle()
+    }
+
     /// Long lines in the editor wrap at the edge (on unless turned off).
     var softWrap: Bool {
         get { UserDefaults.standard.object(forKey: "softWrap") as? Bool ?? true }
@@ -769,6 +784,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             item.state = item.representedObject as? String == terminalPosition.rawValue ? .on : .off
         }
         if item.action == #selector(toggleSidebarSide(_:)) { item.state = sidebarSide == .right ? .on : .off }
+        if item.action == #selector(toggleSidebarSingleClick(_:)) { item.state = sidebarSingleClickOpens ? .on : .off }
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = softWrap ? .on : .off }
         if item.action == #selector(toggleBlameAnnotations(_:)) { item.state = blameAnnotations ? .on : .off }
         if item.action == #selector(toggleCurrentLineBlame(_:)) { item.state = currentLineBlame ? .on : .off }

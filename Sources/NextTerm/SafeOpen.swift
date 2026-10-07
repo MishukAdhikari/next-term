@@ -4,11 +4,18 @@ import UniformTypeIdentifiers
 /// Opening a file from the terminal or the project tree should never quietly run code: a cloned repo
 /// carries no quarantine flag, so Gatekeeper would not ask. Apps, scripts and executables get a prompt.
 enum SafeOpen {
+    /// Files handed to their app (or to the warning first), counted for the self-test.
+    nonisolated(unsafe) private(set) static var handOffs = 0
+    /// The self-test turns this off: hand-offs are counted, and nothing opens.
+    nonisolated(unsafe) static var launches = true
+
     static func open(_ url: URL, from window: NSWindow?) {
         guard url.isFileURL else {
             NSWorkspace.shared.open(url)
             return
         }
+        handOffs += 1
+        guard launches else { return }
         guard let target = target(of: url) else { return NSSound.beep() }
         guard let reason = runsCode(target) else {
             NSWorkspace.shared.open(target)
