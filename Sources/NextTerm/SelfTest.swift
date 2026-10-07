@@ -641,6 +641,7 @@ enum SelfTest {
         await sessionChecks(proj: proj)
 
         await lastTabChecks()
+        await dockReopenChecks(c)
 
         // Font size.
         let size = AppDelegate.shared.fontSize

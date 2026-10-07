@@ -3,7 +3,7 @@ import NextTermCore
 
 /// The window's last tab takes the window with it, so a file unsaved in its editor is asked about first, as
 /// closing the window asks, whichever way the tab goes (⌘W, `exit`, an agent's close_tab), and nothing is
-/// lost.
+/// lost. And a Dock click while every window is minimized brings one back rather than opening another.
 extension SelfTest {
     static func lastTabChecks() async {
         let app = AppDelegate.shared!
@@ -107,6 +107,31 @@ extension SelfTest {
             let closed = await wait(3) { !app.controllers.contains { $0 === u } }
             check(!asked && closed, "with nothing unsaved, closing the last tab closes its window at once", "asked \(asked), closed \(closed)")
         }
+    }
+
+    /// Every window minimized, then a click on the Dock icon: the window used last comes back, and no other
+    /// window opens (it used to open a second one for the same project).
+    static func dockReopenChecks(_ c: TerminalWindowController) async {
+        let app = AppDelegate.shared!
+        guard let window = c.window else { return }
+        let windows = app.controllers.compactMap(\.window)
+        window.makeKeyAndOrderFront(nil)
+        for other in windows where other !== window { other.miniaturize(nil) }
+        window.miniaturize(nil) // last, so it is the one used last
+        guard await wait(8, { windows.allSatisfy(\.isMiniaturized) }) else {
+            windows.forEach { $0.deminiaturize(nil) }
+            return note("the windows did not minimize, so the Dock click was not checked")
+        }
+        let count = app.controllers.count
+        let handled = app.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
+        let back = await wait(5) { !window.isMiniaturized && window.isVisible }
+        let others = windows.filter { $0 !== window && !$0.isMiniaturized }.count
+        check(back && others == 0 && app.controllers.count == count && !handled,
+              "a Dock click with every window minimized brings back the one used last, and opens no other",
+              "back \(back), others back \(others), windows \(count) → \(app.controllers.count), AppKit's reopen \(handled)")
+        for other in windows where other !== window { other.deminiaturize(nil) }
+        _ = await wait(5) { windows.allSatisfy { !$0.isMiniaturized } }
+        window.makeKeyAndOrderFront(nil)
     }
 
     /// The words in the sheet over `window`: an alert's title and text.
