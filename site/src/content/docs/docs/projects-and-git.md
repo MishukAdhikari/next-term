@@ -29,7 +29,7 @@ Next Term reads only titles, dates, branches and models from each agent’s own 
 
 A window nobody has used yet simply becomes the project’s window. Otherwise Next Term asks whether to open the project in a **New Window** or in **This Window** (in place of its tabs), with **Remember my choice**. Change the choice later in **Shell › Open Projects In**: **Ask Each Time**, **This Window** or **New Window**. Replacing tabs that are still running something asks first and names what would stop.
 
-A window without a project is a plain terminal window. Its sidebar follows the active tab: the tab’s git work tree, or its folder outside one.
+A window without a project is a plain terminal window. Its sidebar follows the active tab: the tab’s git work tree, or its folder outside one. A [remote tab](/docs/remote/)’s folder is on its server, so the sidebar stays on your Mac’s files, and a line under its header says “Files on this Mac”.
 
 ## The project sidebar
 

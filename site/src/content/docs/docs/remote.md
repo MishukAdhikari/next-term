@@ -20,6 +20,25 @@ A remote tab is a terminal tab on one of your servers. Start Claude Code or Code
 
 The tab is named after the host and folder, such as “web-1: app”. While it connects, the title says so: **(connecting)**, **(log in)** when ssh is asking you for something in that tab, **(waiting)** when another tab is logging in to the same server, and **(disconnected)**.
 
+## Which tabs are remote
+
+A remote tab has a small server before its title. Tabs on your Mac have none, so the remote ones stand out. The dot on the server’s corner is the connection:
+
+| Mark | Connection |
+|---|---|
+| Filled green dot | Connected |
+| Amber ring | Connecting, logging in, or waiting for another tab’s login to the same server |
+| Red dot with a bar, the server faded | Disconnected |
+
+The dots differ in shape as well as colour, so they read without colour too. The agent’s own mark (the spinner, the check, the “!”) keeps its place at the start of the tab, before the server.
+
+- **Hover over a tab** for where it runs, such as “Remote: web-1 (deploy@203.0.113.5), connected”. VoiceOver says the same.
+- **A narrow tab** drops the “(connecting)” note first, then “web-1: ”, and shows “app”: the mark says the rest.
+- **A split tab** shows the weakest connection among its panes.
+- **The » menu** of tabs that do not fit shows the same marks.
+- **The project sidebar** stays on your Mac’s files while a remote tab is active (the tab’s folder is on the server). A line under its header says “Files on this Mac”, with the server and its name on the other side.
+- **The window title** names the host, as in “claude — on web-1 — Next Term”, for the Window menu, Mission Control and VoiceOver.
+
 ## Your ssh, as you have it set up
 
 Next Term runs the system’s `/usr/bin/ssh`, so everything in your `~/.ssh/config` applies: `Host` aliases, keys, `ProxyJump`, `UseKeychain` and agents such as 1Password, Secretive or gpg-agent. ssh gets the `PATH` and `SSH_AUTH_SOCK` your login shell sets, so a remote tab connects the way `ssh web-1` does in a local tab.
