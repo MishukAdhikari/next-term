@@ -33,12 +33,12 @@ extension SelfTest {
         ]
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: TabBarView.height), styleMask: [.borderless],
                               backing: .buffered, defer: true)
-        func bar(width: CGFloat) -> TabBarView {
+        func bar(width: CGFloat, with others: [TabBarItem]? = nil, selected: Int = 0) -> TabBarView {
             let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: width, height: TabBarView.height))
             bar.leadingInset = 12
             window.setContentSize(bar.frame.size)
             window.contentView = bar
-            bar.update(items: items, selectedIndex: 0)
+            bar.update(items: others ?? items, selectedIndex: selected)
             bar.layoutSubtreeIfNeeded()
             return bar
         }
@@ -58,6 +58,21 @@ extension SelfTest {
             return Set((1..<items.count).map { tabs.shownShortcut(at: $0) == nil }).count > 1 // the unselected ones
         }
         check(uneven.isEmpty, "remote tabs: in a narrow bar, local and remote tabs show their ⌘N alike", "they differ at tab widths \(uneven)")
+        // Selecting a tab (or pointing at it, which shows its × the same way) does not change its words: the
+        // tab you look at says what it says among the others.
+        let connected = TabBarItem(title: "web-1: app", state: .idle, tooltip: "", accessibilityStatus: "", shortcut: "⌘5",
+                                   remote: mark(.connected), shorterTitles: ["app"])
+        let all = items + [connected]
+        let changing = stride(from: TabBarView.minTabWidth, through: TabBarView.maxTabWidth, by: 2).flatMap { tabWidth -> [String] in
+            let width = 12 + 36 + 24 + tabWidth * CGFloat(all.count)
+            let unselected = bar(width: width, with: all)
+            let shown = (1..<all.count).map { unselected.shownTitle(at: $0) ?? "" }
+            return (1..<all.count).compactMap { index -> String? in
+                let selected = bar(width: width, with: all, selected: index).shownTitle(at: index) ?? ""
+                return selected == shown[index - 1] ? nil : "\(Int(tabWidth)) pt: \(shown[index - 1]) / \(selected)"
+            }
+        }
+        check(changing.isEmpty, "remote tabs: a selected tab keeps the words it has unselected", changing.prefix(4).joined(separator: ", "))
         window.contentView = nil
     }
 

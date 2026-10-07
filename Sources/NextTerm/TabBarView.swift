@@ -535,7 +535,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         guard newItem != item || isSelected != selected else { return }
         if newItem.title != item?.title || newItem.shorterTitles != item?.shorterTitles {
             label.stringValue = newItem.title
-            if !newItem.shorterTitles.isEmpty { needsLayout = true } // fitTitle may shorten it
+            if !newItem.shorterTitles.isEmpty { needsLayout = true } // layout may shorten it
         }
         if label.lineBreakMode != newItem.truncation { label.lineBreakMode = newItem.truncation }
         let tip = newItem.tooltip + (newItem.shortcut.map { "\n\($0) switches to this tab" } ?? "")
@@ -597,20 +597,34 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         let remoteLabelX = remoteMark.frame.maxX + 3
         let labelX: CGFloat = remoteMark.isHidden ? 29 : remoteLabelX
         let labelHeight = label.intrinsicContentSize.height
-        var labelEnd = bounds.width - 28
         // The shortcut: in the close button's place while that is hidden, else just before it, as long as
         // the title keeps room to be read.
         let hintWidth = hint.stringValue.isEmpty ? 0 : ceil(hint.intrinsicContentSize.width)
-        let hintEnd = closeButton.isHidden ? bounds.width - 9 : bounds.width - 27
         let titleStart = barHasRemote ? remoteLabelX : labelX
-        hint.isHidden = hintWidth == 0 || hintEnd - hintWidth - 6 - titleStart < (closeButton.isHidden ? 40 : 56)
-        if !hint.isHidden {
-            let hintHeight = hint.intrinsicContentSize.height
-            hint.frame = NSRect(x: hintEnd - hintWidth, y: (h - hintHeight) / 2, width: hintWidth, height: hintHeight)
-            labelEnd = min(labelEnd, hint.frame.minX - 6)
+        func hintEnd(closeShown: Bool) -> CGFloat? {
+            let end = closeShown ? bounds.width - 27 : bounds.width - 9
+            return hintWidth == 0 || end - hintWidth - 6 - titleStart < (closeShown ? 56 : 40) ? nil : end
         }
-        label.frame = NSRect(x: labelX, y: (h - labelHeight) / 2, width: max(0, labelEnd - labelX), height: labelHeight)
-        fitTitle()
+        func titleWidth(hintEnd: CGFloat?) -> CGFloat {
+            max(0, min(bounds.width - 28, hintEnd.map { $0 - hintWidth - 6 } ?? .infinity) - labelX)
+        }
+        // A remote tab's words are picked for the tab without its × (as most tabs are) and stay when the ×
+        // shows, selected or under the pointer: its ⌘N gives way to them. Else the tab you are looking at
+        // would say less, and a pointer passing over it would drop and add "web-1: " or "(connecting)".
+        let restWidth = titleWidth(hintEnd: hintEnd(closeShown: false))
+        let words = fittedTitle(within: restWidth)
+        var shownHintEnd = hintEnd(closeShown: !closeButton.isHidden)
+        if item?.shorterTitles.isEmpty == false, let words, fits(words, within: restWidth),
+           !fits(words, within: titleWidth(hintEnd: shownHintEnd)) {
+            shownHintEnd = nil
+        }
+        hint.isHidden = shownHintEnd == nil
+        if let shownHintEnd {
+            let hintHeight = hint.intrinsicContentSize.height
+            hint.frame = NSRect(x: shownHintEnd - hintWidth, y: (h - hintHeight) / 2, width: hintWidth, height: hintHeight)
+        }
+        label.frame = NSRect(x: labelX, y: (h - labelHeight) / 2, width: titleWidth(hintEnd: shownHintEnd), height: labelHeight)
+        if let words, label.stringValue != words { label.stringValue = words }
         renameField?.frame = NSRect(x: labelX - 3, y: (h - 22) / 2, width: max(40, bounds.width - labelX - 26), height: 22)
     }
 
@@ -619,12 +633,14 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     /// the mark says it by shape), leaving "app", as a narrow local tab shows "ne…rm". The note goes last:
     /// it is the one thing the tab says in words that colour-blind users would otherwise have to read off a
     /// 7 pt dot.
-    private func fitTitle() {
-        guard let item else { return }
-        func fits(_ title: String) -> Bool { (title as NSString).size(withAttributes: [.font: label.font as Any]).width + 4 <= label.frame.width }
-        var shown = item.title
-        if !fits(shown) { shown = item.shorterTitles.first(where: fits) ?? item.shorterTitles.last ?? shown }
-        if label.stringValue != shown { label.stringValue = shown }
+    private func fittedTitle(within width: CGFloat) -> String? {
+        guard let item else { return nil }
+        if fits(item.title, within: width) { return item.title }
+        return item.shorterTitles.first { fits($0, within: width) } ?? item.shorterTitles.last ?? item.title
+    }
+
+    private func fits(_ title: String, within width: CGFloat) -> Bool {
+        (title as NSString).size(withAttributes: [.font: label.font as Any]).width + 4 <= width
     }
 
     /// For the self-test: the title as the tab shows it, shortened to fit.
