@@ -24,9 +24,9 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
   Go and templ, Rust, Elixir, YAML, SQL and more. Line numbers, adjustable line height, soft wrap, auto-indent, ⌘/ to comment, ⌘L to go to a line, find, undo. Files keep
   their encoding, line endings and permissions. When an agent changes a file you have open, the editor
   follows; if you have unsaved edits it asks first.
-- **Jupyter notebooks, read-only.** A `.ipynb` opens as cells, each coloured in the kernel's language,
-  with the outputs saved in the file: text, tables, images and errors. Nothing runs (there is no kernel);
-  Open as JSON shows the file itself.
+- **Jupyter notebooks, read-only.** A `.ipynb` opens as cells: Markdown laid out, code coloured in the
+  kernel's language, and the outputs saved in the file (text, tables as text, images and errors). Nothing
+  runs (there is no kernel); Open as JSON shows the file itself.
 - **Large data files.** A JSON Lines, CSV or TSV file over 2 MB opens in a read-only head view: its first
   1,000 rows as a table, as fast for a 2 GB file as for a small one, with Load More, search and Copy As.
   Logs and other text files over 32 MB open there too.
@@ -78,7 +78,8 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
 - **Databases.** A Databases group in the sidebar lists the databases a project's own files name (Laravel
   and Herd `DB_*` keys, `DATABASE_URL`, Prisma, Drizzle, Supabase, Vercel-linked projects, SQLite files),
   found by reading them, without running project code; local or remote by host, passwords masked. SQLite
-  files open in a read-only viewer; the others hand off to TablePlus, or to `mysql` or `psql` in a tab.
+  files open in a read-only viewer; other connections open in TablePlus when it is installed (libSQL
+  aside), and local and development ones (Docker, OrbStack) in `mysql` or `psql` in a new tab.
 - **Branches in one popup.** Click the branch (⌥⌘B): search branches and actions, check out, branch,
   update, commit, push, rebase and merge. It asks before changing files under a working agent, keeps
   uncommitted changes in a named stash, and logs every git command exactly as typed (Git › Git Commands).
