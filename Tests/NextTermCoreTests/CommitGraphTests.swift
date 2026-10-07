@@ -87,9 +87,28 @@ import Testing
         let rows = layout([("a", ["p"]), ("b", ["r"]), ("c", ["x"]), ("p", ["r", "x"]), ("x", [])], maxColumns: 2)
         let c = rows[2], p = rows[3], x = rows[4]
         #expect(c.isOverflow && c.column == 2 && c.width == 3)
-        #expect(!p.isOverflow && p.column == 0 && p.bottom.contains(Line(from: 0, to: 2, color: c.color)) && p.width == 3)
+        #expect(!p.isOverflow && p.column == 0 && p.bottom.contains(Line(from: 0, to: 2, color: c.color, isCut: true)) && p.width == 3)
         #expect((p.top + p.bottom).allSatisfy { min($0.from, $0.to) < 2 })
         #expect(x.isOverflow && x.column == 2 && x.top.map(\.from) == [0, 1] && x.bottom.map(\.from) == [0, 1])
+        // Lines into its dot, in the overflow column, end in the dot: they are not cut.
+        #expect(!(x.top + x.bottom).contains { $0.isCut })
+    }
+
+    /// p's line to x, which waits in lane 2, and the line into q from e's lane 3 both end at the overflow
+    /// column, on the edge between their rows: they stop short of it, or they would look like one line.
+    @Test func linesCutAtTheOverflowStopShortOfTheEdge() {
+        let rows = layout([("a", ["p"]), ("b", ["q"]), ("c", ["x"]), ("e", ["q"]), ("p", ["r", "x"]), ("q", ["r"]), ("x", ["r"]), ("r", [])], maxColumns: 2)
+        let c = rows[2], e = rows[3], p = rows[4], q = rows[5]
+        #expect(c.isOverflow && e.isOverflow && !p.isOverflow && !q.isOverflow)
+        #expect(p.bottom.contains(Line(from: 0, to: 2, color: c.color, isCut: true)))
+        #expect(q.top.contains(Line(from: 2, to: 1, color: e.color, isCut: true)))
+        // No line reaches a row's edge in the overflow column; every other line does, where the next goes on.
+        for row in rows {
+            #expect(row.top.allSatisfy { $0.isCut == ($0.from == 2) })
+            #expect(row.bottom.allSatisfy { $0.isCut == ($0.to == 2 && $0.from != 2) })
+        }
+        let lanes: [(String, [String])] = (0..<6).map { ("t\($0)", ["r"]) } + [("r", [])]
+        #expect(layout(lanes, maxColumns: 24).allSatisfy { row in !(row.top + row.bottom).contains { $0.isCut } })
     }
 
     @Test func pagesCarryTheLanesOver() {

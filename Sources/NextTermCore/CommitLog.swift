@@ -227,7 +227,12 @@ public struct CommitQuery: Equatable, Sendable {
         if !text.isEmpty { args.append("--grep=" + (regex ? text : escape(text))) }
         // git matches the author against "Name <email> time zone".
         if !author.isEmpty { args.append("--author=" + (exact ? "^" + escape(author) + " <" : escape(author))) }
-        if let since, !since.isEmpty { args.append("--since=" + since) }
+        // git knows no "today": it takes it for now, as it does any word it does not know, and since
+        // now lists nothing. Since today is since midnight (until today, until now, is right as it is).
+        if let since, !since.isEmpty {
+            let today = since.trimmingCharacters(in: .whitespaces).lowercased() == "today"
+            args.append("--since=" + (today ? "midnight" : since))
+        }
         if let until, !until.isEmpty { args.append("--until=" + until) }
         // Limited to paths, parents are rewritten to the nearest listed ancestors, so lines still join.
         if !paths.isEmpty { args.append("--parents") }
@@ -275,6 +280,8 @@ public struct CommitDetails: Equatable, Sendable {
     public var truncated = false
     /// The files' lines were counted (not in a partial clone without their contents).
     public var isCounted = true
+    /// The files were listed: not when git could not read the commit's trees (a treeless clone, offline).
+    public var isListed = true
 
     public init(commit: Commit, message: String, files: [ChangedFile] = [], truncated: Bool = false) {
         self.commit = commit
@@ -291,6 +298,38 @@ public struct CommitDetails: Equatable, Sendable {
 
     public var totals: LineStats {
         files.reduce(LineStats()) { LineStats(added: $0.added + ($1.added ?? 0), removed: $0.removed + ($1.removed ?? 0), files: $0.files + 1) }
+    }
+}
+
+/// Which of a run of requests is the newest, readable from any thread. Work queued for an older one is
+/// skipped if a newer one came before it started: the Git Log reads one commit's details at a time, and
+/// a read can take half a minute (a treeless clone whose remote does not answer), so clicking through
+/// three commits waits for at most the one being read, then the last one, not all three.
+public final class NewestRequest: @unchecked Sendable {
+    private let lock = NSLock()
+    private var newest = 0
+
+    public init() {}
+
+    /// A new request, now the newest: its token.
+    public func next() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        newest += 1
+        return newest
+    }
+
+    public func isNewest(_ token: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return token == newest
+    }
+
+    /// Runs `work` on `queue` unless, by the time its turn comes, a newer request has been made.
+    public func async(on queue: DispatchQueue, for token: Int, _ work: @escaping @Sendable () -> Void) {
+        queue.async {
+            if self.isNewest(token) { work() }
+        }
     }
 }
 
@@ -321,9 +360,25 @@ public enum CommitLog {
         return commits
     }
 
-    /// Paths are file names, never patterns: `[1].txt` is that file, and `:weird.txt` too.
+    /// Paths are file names, never patterns: `[1].txt` is that file, and `:weird.txt` too. Process hands
+    /// git its arguments decomposed (“ü” as “u” and two dots); git composes them again, as the text,
+    /// names, branches and paths it stores almost always are, only with core.precomposeUnicode, which a
+    /// repository from elsewhere may not have. (Where git has no such setting, it ignores it.)
     private static func base(_ root: String) -> [String] {
-        ["-C", root, "--no-optional-locks", "--literal-pathspecs", "-c", "log.showSignature=false", "-c", "log.follow=false", "-c", "core.quotepath=off"]
+        ["-C", root, "--no-optional-locks", "--literal-pathspecs", "-c", "log.showSignature=false", "-c", "log.follow=false", "-c", "core.quotepath=off",
+         "-c", "core.precomposeUnicode=true"]
+    }
+
+    /// Runs git on `paths` composed, then, when a path beyond ASCII matched nothing, as stored: a name
+    /// a git that did not compose names added (an old one on HFS+) is stored decomposed, and composed it
+    /// matches nothing. The later `-c` wins.
+    private static func run(_ git: String, _ args: [String], paths: [String], in root: String, timeout: TimeInterval,
+                            environment: [String: String] = [:]) -> Data? {
+        guard let data = GitRunner.run(git, base(root) + args, timeout: timeout, environment: environment) else { return nil }
+        let beyondASCII = paths.contains { path in path.unicodeScalars.contains { !$0.isASCII } }
+        guard data.isEmpty, beyondASCII else { return data }
+        let stored = base(root) + ["-c", "core.precomposeUnicode=false"] + args
+        return GitRunner.run(git, stored, timeout: timeout, environment: environment) ?? data
     }
 
     /// Every commit the query lists, in order, as ids; nil when git fails (not a repository, a bad
@@ -333,8 +388,8 @@ public enum CommitLog {
         if let prefix = query.hashPrefix, let sha = resolve(prefix, in: root, git: git) { return CommitOrder(ids: [sha]) }
         // HEAD only when there is a commit: on an unborn branch, naming it is an error.
         let hasHead = query.scope != .all || resolve("HEAD", in: root, git: git) != nil
-        guard let data = GitRunner.run(git, base(root) + ["rev-list"] + query.arguments(includeHead: hasHead), timeout: timeout,
-                                       environment: query.environment) else {
+        guard let data = run(git, ["rev-list"] + query.arguments(includeHead: hasHead), paths: query.paths, in: root, timeout: timeout,
+                             environment: query.environment) else {
             // A repository without a single commit has nothing to list.
             return hasHead || query.scope != .all ? nil : CommitOrder(ids: [])
         }
@@ -406,18 +461,30 @@ public enum CommitLog {
         // The first commit is compared with nothing (--root, an option, so before --end-of-options).
         let against = commit.parents.first.map { ["--end-of-options", $0, commit.sha] } ?? ["--root", "--end-of-options", commit.sha]
         // Counting lines and finding renames read the files. In a partial clone, those not downloaded
-        // stay so (reading a commit must not fetch); the files are then listed without counts.
+        // stay so (reading a commit must not fetch them); the files are then listed without counts.
         let noFetch = ["GIT_NO_LAZY_FETCH": "1"]
         let options = ["diff-tree", "-r", "--no-commit-id", "--raw", "-z", "--no-ext-diff", "--no-textconv"]
+        let listing = base(root) + options + against + ["--"]
         if let changes = GitRunner.run(git, base(root) + options + ["-M", "--numstat"] + against + ["--"], timeout: 30, environment: noFetch) {
             details.files = parseChanges(changes)
-        } else if let changes = GitRunner.run(git, base(root) + options + against + ["--"], timeout: 30, environment: noFetch) {
+        } else if let changes = GitRunner.run(git, listing, timeout: 30, environment: noFetch) ?? GitRunner.run(git, listing, timeout: 30) {
+            // The second run is for a treeless clone: listing the files needs the two trees, which git
+            // then downloads (trees only, never the files in them).
             details.files = parseChanges(changes)
             details.isCounted = false
+        } else {
+            details.isListed = false
         }
         details.truncated = details.files.count > fileLimit
         details.files = Array(details.files.prefix(fileLimit))
         return details
+    }
+
+    /// A commit's whole message alone, without reading its files (which a treeless clone would download).
+    public static func message(of sha: String, in root: String, git: String) -> String? {
+        let args = ["log", "--no-color", "--encoding=UTF-8", "--format=%B", "--max-count=1", "--end-of-options", sha, "--"]
+        guard let data = GitRunner.run(git, base(root) + args, timeout: 15) else { return nil }
+        return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// `diff-tree --raw --numstat -z`: the raw records (":100644 100644 a b M NUL path NUL", a rename
@@ -469,8 +536,7 @@ public enum CommitLog {
                        "--src-prefix=a/", "--dst-prefix=b/"]
         let against = parent.map { ["--end-of-options", $0, commit] } ?? ["--root", "--end-of-options", commit]
         let paths = [oldPath, path].compactMap { $0 }
-        guard let data = GitRunner.run(git, ["-C", root, "--no-optional-locks", "--literal-pathspecs", "-c", "core.quotepath=off", "diff-tree", "-r", "--no-commit-id"]
-                                       + options + against + ["--"] + paths, timeout: 15) else { return nil }
+        guard let data = run(git, ["diff-tree", "-r", "--no-commit-id"] + options + against + ["--"] + paths, paths: paths, in: root, timeout: 15) else { return nil }
         let files = UnifiedDiff.parse(String(decoding: data, as: UTF8.self))
         let new = files.first { $0.newPath == path }, old = files.first { $0.oldPath == path }
         // A file that became a link (or a link that became a file) is two patches, the old one deleted

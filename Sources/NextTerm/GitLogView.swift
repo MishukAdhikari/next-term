@@ -775,7 +775,7 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         guard let git = Self.git else { return }
         let root = self.root
         Self.queue.async { [weak self] in
-            let message = CommitLog.details(of: commit.sha, in: root, git: git, fileLimit: 0)?.message ?? commit.subject
+            let message = CommitLog.message(of: commit.sha, in: root, git: git) ?? commit.subject
             DispatchQueue.main.async { self?.copy(message, saying: "the message") }
         }
     }

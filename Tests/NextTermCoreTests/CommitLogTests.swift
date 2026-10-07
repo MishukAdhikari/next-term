@@ -179,6 +179,7 @@ import Testing
         // Details: the whole message, files with status and counts; a merge against its first parent.
         let renamed = try #require(CommitLog.details(of: rename, in: work, git: git))
         #expect(renamed.message == "Rename a to b\n\nKeeps the lines, adds one." && renamed.body == "Keeps the lines, adds one.")
+        #expect(CommitLog.message(of: rename, in: work, git: git) == renamed.message)
         #expect(renamed.commit.subject == "Rename a to b" && renamed.commit.refs.contains { $0.name == "feat" })
         #expect(renamed.files == [ChangedFile(path: "b.txt", oldPath: "a.txt", status: .renamed, added: 1, removed: 0)])
         #expect(CommitLog.details(of: merge, in: work, git: git)?.files.map(\.path) == ["b.txt"])
@@ -201,6 +202,29 @@ import Testing
         sh(["switch", "-q", "same"])
         #expect(CommitLog.refsSignature(in: work, git: git) != signature)
         #expect(CommitLog.resolve("v1", in: work, git: git) == one && CommitLog.resolve("nope", in: work, git: git) == nil)
+    }
+
+    /// git takes "today" for now, as it takes any word it does not know: since today is since midnight,
+    /// and until today is until now.
+    @Test func sinceTodayIsSinceMidnight() throws {
+        #expect(CommitQuery(since: " Today").arguments(includeHead: true).contains("--since=midnight"))
+        #expect(CommitQuery(until: "today").arguments(includeHead: true).contains("--until=today"))
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        try repo.write("a.txt", "a\n")
+        repo.sh(["add", "-A"])
+        let earlier = "\(Int(Date().timeIntervalSince1970) - 2 * 86_400) +0000"
+        repo.sh(["commit", "-qm", "Two days ago"], environment: ["GIT_COMMITTER_DATE": earlier, "GIT_AUTHOR_DATE": earlier])
+        // Half a minute ago, so not in the same second as the query (which git's "now" would include).
+        let recent = "\(Int(Date().timeIntervalSince1970) - 30) +0000"
+        try repo.write("b.txt", "b\n")
+        repo.sh(["add", "-A"])
+        repo.sh(["commit", "-qm", "Today"], environment: ["GIT_COMMITTER_DATE": recent, "GIT_AUTHOR_DATE": recent])
+        let today = repo.sh(["rev-parse", "HEAD"])
+        // Just after midnight, half a minute ago was yesterday.
+        guard Date().timeIntervalSince(Calendar.current.startOfDay(for: Date())) > 120 else { return }
+        #expect(CommitLog.page(CommitQuery(since: "Today"), in: repo.work, git: repo.git)?.map(\.sha) == [today])
+        #expect(CommitLog.page(CommitQuery(until: "today"), in: repo.work, git: repo.git)?.count == 2)
     }
 
     /// Paths are file names: brackets, stars and a leading colon are not pattern syntax.
@@ -235,6 +259,62 @@ import Testing
         }
     }
 
+    /// Process hands git its arguments decomposed (“ü” as “u” and two dots), and git composes them again
+    /// only with core.precomposeUnicode, which a repository from elsewhere may not have. Text, names,
+    /// branches and paths beyond ASCII, stored composed as almost everything is, are found all the same.
+    @Test func composedTextIsFoundWithoutPrecomposeUnicode() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        // Made the way git elsewhere makes them: the message from a file, the name and the path composed.
+        repo.sh(["config", "core.precomposeUnicode", "true"])
+        try repo.write("école.txt", "a\n")
+        repo.sh(["add", "-A"])
+        try repo.write("message.txt", "Über alles\n")
+        repo.sh(["commit", "-q", "-F", "message.txt", "--author=Zoë Ärger <z@x>", "--", "école.txt"])
+        // A packed branch is found by its name's bytes (a loose one, by the file system's lookup).
+        repo.sh(["branch", "fünf"])
+        repo.sh(["pack-refs", "--all"])
+        try FileManager.default.removeItem(atPath: repo.work + "/message.txt")
+        let sha = repo.sh(["rev-parse", "HEAD"])
+        let reads: [[String]] = [["log", "-1", "--format=%an %s"], ["ls-tree", "--name-only", "HEAD"], ["for-each-ref", "--format=%(refname)", "refs/heads"]]
+        let stored = reads.map { repo.sh(["-c", "core.quotepath=off"] + $0) }.joined(separator: " ")
+        let marks = stored.unicodeScalars.filter { (0x300...0x36F).contains($0.value) }
+        try #require(marks.isEmpty && stored.contains("Zoë Ärger Über alles école.txt") && stored.contains("refs/heads/fünf"), "stored composed: \(stored)")
+        // As a repository made on Linux, or copied from there, has it.
+        repo.sh(["config", "core.precomposeUnicode", "false"])
+        let queries: [CommitQuery] = [CommitQuery(text: "über"), CommitQuery(text: "ÜBER", regex: true), CommitQuery(author: "zoë"), CommitQuery(author: "Zoë Ärger", exactAuthor: true),
+                       CommitQuery(paths: ["école.txt"]), CommitQuery(scope: .ref("refs/heads/fünf"))]
+        for query in queries {
+            #expect(CommitLog.page(query, in: repo.work, git: repo.git)?.map(\.sha) == [sha], "\(query)")
+        }
+        let diff = CommitLog.diff(of: "école.txt", commit: sha, parent: nil, in: repo.work, git: repo.git)
+        #expect(diff?.isNew == true && diff?.hunks.first?.added == 1)
+    }
+
+    /// A name stored decomposed, as a git that did not compose names (an old one on HFS+) added it, is
+    /// found too, and its diff is its lines: composed, it would match nothing.
+    @Test func aPathStoredDecomposedIsFound() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        repo.sh(["config", "core.precomposeUnicode", "false"])
+        // Foundation names the file decomposed, and git without the setting stores it as it reads it.
+        try repo.write("école.txt", "a\n")
+        let sha = repo.commit("Add")
+        try repo.write("other.txt", "b\n")
+        repo.commit("Other")
+        let stored = repo.sh(["-c", "core.quotepath=off", "ls-tree", "--name-only", sha])
+        try #require(stored.unicodeScalars.contains { $0.value == 0x301 }, "stored decomposed: \(stored)")
+        let path = try #require(CommitLog.details(of: sha, in: repo.work, git: repo.git)?.files.first?.path)
+        for setting in ["false", "true"] {
+            repo.sh(["config", "core.precomposeUnicode", setting])
+            for name in [path, "école.txt"] {
+                #expect(CommitLog.page(CommitQuery(paths: [name]), in: repo.work, git: repo.git)?.map(\.sha) == [sha], "\(setting)")
+                let diff = CommitLog.diff(of: name, commit: sha, parent: nil, in: repo.work, git: repo.git)
+                #expect(diff?.isNew == true && diff?.hunks.first?.added == 1, "\(setting)")
+            }
+        }
+    }
+
     /// In a partial clone, reading a commit's files downloads nothing: they are listed without counts.
     @Test func aPartialCloneIsNotFetchedFrom() throws {
         let repo = try #require(ScratchRepo())
@@ -255,6 +335,65 @@ import Testing
         #expect(details.files.map(\.path) == ["a.txt", "b.txt"] && details.files.map(\.status) == [.modified, .added])
         #expect(!details.isCounted && packs() == before)
         #expect(CommitLog.details(of: two, in: repo.work, git: repo.git)?.isCounted == true)
+    }
+
+    /// A treeless clone has no trees to list a commit's files from: it downloads the two it compares,
+    /// and none of the files in them. Without the remote, the files are not known, which is not "none".
+    @Test func aTreelessCloneFetchesOnlyTrees() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        try FileManager.default.createDirectory(atPath: repo.work + "/d/e", withIntermediateDirectories: true)
+        try repo.write("d/e/a.txt", "one\n")
+        repo.commit("One")
+        try repo.write("d/e/a.txt", "two\n")
+        let two = repo.commit("Two")
+        let blobs = ["\(two):d/e/a.txt", "\(two)~1:d/e/a.txt"].map { repo.sh(["rev-parse", $0]) }
+        let clone = repo.work + "-treeless"
+        defer { try? FileManager.default.removeItem(atPath: clone) }
+        repo.sh(["config", "uploadpack.allowFilter", "true"])
+        repo.sh(["clone", "-q", "--filter=tree:0", "--no-checkout", "file://" + repo.work, clone])
+        let local = ScratchRepo(existing: clone, git: repo.git)
+        try #require(local.sh(["cat-file", "-t", two]) == "commit")
+        let missing = { (id: String) in local.status(["cat-file", "-e", id], environment: ["GIT_NO_LAZY_FETCH": "1"]) != 0 }
+        // The message alone (Copy Message) downloads nothing.
+        #expect(CommitLog.message(of: two, in: clone, git: repo.git) == "Two" && missing(two + "^{tree}"))
+        let details = try #require(CommitLog.details(of: two, in: clone, git: repo.git))
+        #expect(details.files == [ChangedFile(path: "d/e/a.txt", status: .modified)] && !details.isCounted && details.isListed)
+        // The trees came, the files' contents did not.
+        #expect(!missing(two + "^{tree}") && blobs.allSatisfy(missing))
+
+        // Another commit, with the remote gone: its trees cannot come, so its files are not listed.
+        let again = ScratchRepo(existing: repo.work + "-treeless-2", git: repo.git)
+        defer { again.remove() }
+        repo.sh(["clone", "-q", "--filter=tree:0", "--no-checkout", "file://" + repo.work, again.work])
+        again.sh(["remote", "set-url", "origin", "file://" + repo.work + "-gone"])
+        let unknown = try #require(CommitLog.details(of: two, in: again.work, git: repo.git))
+        #expect(unknown.files.isEmpty && !unknown.isListed)
+        #expect(CommitLog.details(of: two, in: repo.work, git: repo.git)?.isListed == true)
+    }
+
+    /// Reads queued behind a slow one, for commits already left, are skipped: only the read under way
+    /// and the newest one run.
+    @Test func readsForCommitsAlreadyLeftAreSkipped() {
+        let requests = NewestRequest(), queue = DispatchQueue(label: "nt-test-newest")
+        let started = DispatchSemaphore(value: 0), slow = DispatchSemaphore(value: 0)
+        // Written on the serial queue alone, and read once it is empty.
+        final class Ran: @unchecked Sendable { var tokens: [Int] = [] }
+        let ran = Ran()
+        let first = requests.next()
+        requests.async(on: queue, for: first) {
+            started.signal()
+            slow.wait()
+            ran.tokens.append(first)
+        }
+        started.wait()
+        for _ in 0..<3 {
+            let token = requests.next()
+            requests.async(on: queue, for: token) { ran.tokens.append(token) }
+        }
+        slow.signal()
+        queue.sync {}
+        #expect(ran.tokens == [1, 4] && requests.isNewest(4) && !requests.isNewest(3))
     }
 
     /// A file that became a link shows both sides; an added empty file is new, with nothing in it.
@@ -290,23 +429,39 @@ struct ScratchRepo {
         sh(["init", "-q"])
     }
 
+    /// A repository already there (a clone), or to be made there.
+    init(existing work: String, git: String) {
+        self.git = git
+        self.work = work
+    }
+
     func remove() { try? FileManager.default.removeItem(atPath: work) }
 
-    @discardableResult func sh(_ args: [String], name: String = "T", email: String = "t@t") -> String {
+    @discardableResult func sh(_ args: [String], name: String = "T", email: String = "t@t", environment: [String: String] = [:]) -> String {
+        run(args, name: name, email: email, environment: environment).output
+    }
+
+    /// The exit status alone.
+    func status(_ args: [String], environment: [String: String] = [:]) -> Int32 { run(args, environment: environment).status }
+
+    private func run(_ args: [String], name: String = "T", email: String = "t@t", environment: [String: String] = [:]) -> (output: String, status: Int32) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: git)
         p.arguments = ["-C", work, "-c", "user.name=\(name)", "-c", "user.email=\(email)", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false",
                        "-c", "tag.gpgsign=false"] + args
+        if !environment.isEmpty { p.environment = ProcessInfo.processInfo.environment.merging(environment) { $1 } }
         let out = FileManager.default.temporaryDirectory.appendingPathComponent("nt-log-out-\(UUID().uuidString)")
         FileManager.default.createFile(atPath: out.path, contents: nil)
         defer { try? FileManager.default.removeItem(at: out) }
         let handle = try? FileHandle(forWritingTo: out)
         p.standardOutput = handle
         p.standardError = FileHandle.nullDevice
-        try? p.run()
+        p.standardInput = FileHandle.nullDevice
+        do { try p.run() } catch { return ("", -1) }
         p.waitUntilExit()
         try? handle?.close()
-        return ((try? String(contentsOf: out, encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let output = ((try? String(contentsOf: out, encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return (output, p.terminationStatus)
     }
 
     func write(_ path: String, _ text: String) throws {

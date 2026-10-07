@@ -10,6 +10,8 @@ enum GitLogStyle {
     static let graphInset: CGFloat = 6
     /// Lanes drawn in full; those further right share one more column (CommitGraph.maxColumns).
     static let maxLanes = 20
+    /// How far from a row's middle toward its edge a line cut at that column runs, of the half row.
+    static let cutReach: CGFloat = 0.55
 
     static func lane(_ index: Int) -> NSColor { lanes[((index % lanes.count) + lanes.count) % lanes.count] }
 
@@ -109,8 +111,11 @@ final class GitGraphView: NSView {
             GitLogStyle.lane(line.color).setStroke()
             path.stroke()
         }
-        for line in row.top { stroke(line, from: 0, to: mid) }
-        for line in row.bottom { stroke(line, from: mid, to: bottom) }
+        // A line cut at the overflow column stops short of the row's edge, so the cut line of the next
+        // row there, from another lane, does not seem to go on from it.
+        let short = mid * (1 - GitLogStyle.cutReach)
+        for line in row.top { stroke(line, from: line.isCut ? short : 0, to: mid) }
+        for line in row.bottom { stroke(line, from: mid, to: line.isCut ? bottom - short : bottom) }
 
         let center = NSPoint(x: Self.x(row.column), y: mid)
         let color = GitLogStyle.lane(row.color)

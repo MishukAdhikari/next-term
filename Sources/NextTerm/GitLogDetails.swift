@@ -14,7 +14,8 @@ final class GitLogDetailsView: NSView, NSTextViewDelegate, NSTableViewDataSource
     private(set) var details: CommitDetails?
     private(set) var shown: Commit?
     private(set) var isLoading = false
-    private var generation = 0
+    /// The commit shown is the newest request: a read still queued for one already left is skipped.
+    private let requests = NewestRequest()
     private var pending: DispatchWorkItem?
     private static let queue = DispatchQueue(label: "nextterm.git-log-details", qos: .userInitiated)
 
@@ -43,7 +44,7 @@ final class GitLogDetailsView: NSView, NSTextViewDelegate, NSTableViewDataSource
 
     /// Shows a commit: what the log row knows at once, the rest when git has read it.
     func show(_ commit: Commit?) {
-        generation += 1
+        let token = requests.next()
         pending?.cancel()
         shown = commit
         details = nil
@@ -57,13 +58,15 @@ final class GitLogDetailsView: NSView, NSTextViewDelegate, NSTableViewDataSource
         render(CommitDetails(commit: commit, message: commit.subject))
         filesHeader.stringValue = "Reading the changed files…"
         isLoading = true
-        let token = generation, root = self.root
-        // Moving through the list with the arrow keys reads only where it stops.
+        let root = self.root, requests = self.requests
+        // Moving through the list with the arrow keys reads only where it stops. One read at a time,
+        // and one can take half a minute (a treeless clone fetching from a remote that does not answer):
+        // those queued behind it for commits already left are skipped.
         let work = DispatchWorkItem {
-            Self.queue.async { [weak self] in
+            requests.async(on: Self.queue, for: token) { [weak self] in
                 let read = CommitLog.details(of: commit.sha, in: root, git: git)
                 DispatchQueue.main.async {
-                    guard let self, token == self.generation else { return }
+                    guard let self, requests.isNewest(token) else { return }
                     self.isLoading = false
                     guard let read else {
                         self.filesHeader.stringValue = "Git could not read this commit."
@@ -209,7 +212,9 @@ final class GitLogDetailsView: NSView, NSTextViewDelegate, NSTableViewDataSource
         if details.truncated {
             header.append(NSAttributedString(string: " · the first \(details.files.count.formatted()) shown", attributes: [.font: NSFont.systemFont(ofSize: 11.5), .foregroundColor: Theme.textDim]))
         }
-        if totals.files == 0 { header.setAttributedString(NSAttributedString(string: "No files changed", attributes: [.font: NSFont.systemFont(ofSize: 11.5), .foregroundColor: Theme.textDim])) }
+        // Git could not read the commit's trees (a treeless clone, offline): not the same as no files.
+        let none = details.isListed ? "No files changed" : "Could not list the files"
+        if totals.files == 0 { header.setAttributedString(NSAttributedString(string: none, attributes: [.font: NSFont.systemFont(ofSize: 11.5), .foregroundColor: Theme.textDim])) }
         filesHeader.attributedStringValue = Typography.truncating(header, .byTruncatingTail)
     }
 

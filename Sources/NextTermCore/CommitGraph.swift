@@ -9,11 +9,16 @@ public struct GraphRow: Equatable, Sendable {
         public let to: Int
         /// An index into the palette (0..<CommitGraph.colorCount).
         public let color: Int
+        /// Its end at the row's edge is in a lane too far right to draw, moved into the overflow column,
+        /// where the lane does not go on: it stops short of the edge. Drawn to it, it would meet the cut
+        /// line of the next row there, from another lane, and the two would look like one line.
+        public let isCut: Bool
 
-        public init(from: Int, to: Int, color: Int) {
+        public init(from: Int, to: Int, color: Int, isCut: Bool = false) {
             self.from = from
             self.to = to
             self.color = color
+            self.isCut = isCut
         }
     }
 
@@ -51,8 +56,8 @@ public struct GraphRow: Equatable, Sendable {
 public struct CommitGraph: Sendable {
     public static let colorCount = 8
     /// Lanes drawn in full. Those further right share one more column, the overflow, where only their
-    /// dots and the ends of lines from the lanes on the left show: lines between them would join
-    /// unrelated commits into one false line.
+    /// dots and the ends of lines from the lanes on the left show (short of the rows' edges): lines
+    /// between them would join unrelated commits into one false line.
     public let maxColumns: Int
     /// Without lines (a log filtered by message or author, where parents are mostly not listed):
     /// every commit is a dot in the first column.
@@ -123,20 +128,25 @@ public struct CommitGraph: Sendable {
             lanes.removeLast()
             colors.removeLast()
         }
-        let shownTop = visible(top), shownBottom = visible(bottom)
+        let shownTop = visible(top, edge: \.from), shownBottom = visible(bottom, edge: \.to)
         let widest = (shownTop + shownBottom).reduce(min(column, maxColumns)) { max($0, $1.from, $1.to) }
         return GraphRow(column: min(column, maxColumns), color: color, isMerge: parents.count > 1, top: shownTop, bottom: shownBottom,
                         width: widest + 1, isOverflow: column >= maxColumns)
     }
 
     /// The lines with an end in a lane drawn in full, the other end moved into the overflow column if it
-    /// is further right; each once (lanes in the overflow would repeat the same line many times).
-    private func visible(_ lines: [GraphRow.Line]) -> [GraphRow.Line] {
+    /// is further right; each once (lanes in the overflow would repeat the same line many times). A line
+    /// whose end at the row's edge (`edge`: `from` in the top half, `to` in the bottom one) was moved is cut.
+    private func visible(_ lines: [GraphRow.Line], edge: KeyPath<GraphRow.Line, Int>) -> [GraphRow.Line] {
         let overflow = maxColumns
         var seen = Set<GraphRow.Line>()
-        return lines.filter { min($0.from, $0.to) < overflow }
-            .map { GraphRow.Line(from: min($0.from, overflow), to: min($0.to, overflow), color: $0.color) }
-            .filter { seen.insert($0).inserted }
+        var shown: [GraphRow.Line] = []
+        for line in lines where min(line.from, line.to) < overflow {
+            let cut = line[keyPath: edge] >= overflow
+            let moved = GraphRow.Line(from: min(line.from, overflow), to: min(line.to, overflow), color: line.color, isCut: cut)
+            if seen.insert(moved).inserted { shown.append(moved) }
+        }
+        return shown
     }
 
     /// The first free lane, or a new one at the right.
