@@ -22,7 +22,7 @@ Run five agents in five tabs and the hard part is no longer the typing. It is kn
 
 Each mark is a shape as well as a colour, so it reads without colour vision too. A mark clears when you look at the tab.
 
-The spinner is reserved for AI agents, and it runs only while the agent itself says it is working. A build or a test run shows no spinner while it runs; it ends with a check or a cross. A dev server or an editor never shows one at all.
+The spinner is reserved for AI agents. It runs while the agent says it is working, or, for an agent whose screen hints are not known yet, while it prints (see [How Next Term knows](#how-next-term-knows)). A build or a test run shows no spinner while it runs; it ends with a check or a cross. A dev server or an editor never shows one at all.
 
 ## Decisions come to you
 

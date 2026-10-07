@@ -9,10 +9,11 @@ agents are working, which are done, and which are waiting on your decision.
 **[Download for macOS](https://github.com/MishukAdhikari/next-term/releases/latest/download/NextTerm.dmg)** ·
 website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)**
 
-- **Agent status, in step with the agent.** A spinner shows only while an agent is really working, read
-  from the agent's own screen ("esc to interrupt"), so it stops the moment Claude or Codex stops. A green
-  check means done and waiting for your next prompt, an amber "!" means it is asking you something.
-  Plain commands show no spinner and end with a check or a red cross. Marks clear when you look at the tab.
+- **Agent status, in step with the agent.** A spinner shows while an agent is working, read from the
+  agent's own screen ("esc to interrupt") for Claude Code, Codex, Command Code and Gemini CLI, so it stops
+  the moment they stop; other agents go by output timing. A green check means done and waiting for your
+  next prompt, an amber "!" means it is asking you something. Plain commands show no spinner and end
+  with a check or a red cross. Marks clear when you look at the tab.
 - **Decisions come to you.** When an agent asks for permission ("Do you want to make this edit…?"),
   a notification says so with the question; click it to land on that tab. Works however you start the
   agent: directly, through an alias or a shell function, `npx`, or `cd app && claude`.
