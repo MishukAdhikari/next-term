@@ -328,6 +328,22 @@ import Testing
         #expect(FetchSchedule.outcome(status: 124, output: "Stopped after 3 minutes.") == .failed)
     }
 
+    /// A fetch typed through an alias counts too: zsh hands over the line with its aliases expanded.
+    @Test func fetchesTypedThroughAnAlias() {
+        var status = TabStatus()
+        status.commandStarted("gl", expanded: "git pull", at: 0)
+        #expect(status.command == "gl" && status.expandedCommand == "git pull")
+        #expect(!FetchSchedule.isFetchCommand(status.command) && FetchSchedule.isFetching(status))
+        status.commandFinished(exitCode: 0, at: 1)
+        #expect(!FetchSchedule.isFetching(status), "it ended")
+        status.commandStarted("gst", expanded: "git status", at: 2)
+        #expect(!FetchSchedule.isFetching(status))
+        status.commandFinished(exitCode: 0, at: 3)
+        // Typed in full, with nothing expanded (the integration sends no expanded line then).
+        status.commandStarted("git fetch origin", expanded: nil, at: 4)
+        #expect(status.expandedCommand.isEmpty && FetchSchedule.isFetching(status))
+    }
+
     @Test func fetchesTypedInATab() {
         for line in ["git fetch", "git pull --rebase", "git -C app pull", "cd app && git fetch --all", "git -c http.proxy=x fetch origin",
                      "git remote update", "GIT_TRACE=1 git pull", "time git fetch"] {

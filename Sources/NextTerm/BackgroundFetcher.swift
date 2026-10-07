@@ -138,12 +138,13 @@ final class BackgroundFetcher {
         return GitWriter.repository(of: test.root) == repository
     }
 
-    /// A fetch or pull Next Term runs for you in the repository, or one typed in a tab in it.
+    /// A fetch or pull Next Term runs for you in the repository, or one typed in a tab in it (through an
+    /// alias too).
     private func otherFetchRunning(_ repository: String) -> Bool {
         if GitWriter.shared.isTalkingToRemote(repository: repository) { return true }
         let tabs = AppDelegate.shared?.controllers.flatMap(\.tabs) ?? []
         return tabs.contains { tab in
-            guard tab.remote == nil, tab.status.running, FetchSchedule.isFetchCommand(tab.status.command) else { return false }
+            guard tab.remote == nil, FetchSchedule.isFetching(tab.status) else { return false }
             return GitWriter.repository(of: tab.liveDirectory) == repository
         }
     }

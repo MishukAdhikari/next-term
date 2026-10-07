@@ -258,6 +258,12 @@ public struct FetchSchedule: Sendable {
         }
     }
 
+    /// Whether the command running in a tab fetches, as typed or with its aliases expanded (oh-my-zsh's
+    /// `gl`, `gf` and `gup` are `git pull`, `git fetch` and `git pull --rebase`).
+    public static func isFetching(_ status: TabStatus) -> Bool {
+        status.running && (isFetchCommand(status.command) || isFetchCommand(status.expandedCommand))
+    }
+
     /// Whether a command line typed in a tab fetches: `git fetch`, `git pull`, `git remote update`, also
     /// with git's own options first (`git -C app pull`) or after `cd x &&`.
     public static func isFetchCommand(_ line: String) -> Bool {
