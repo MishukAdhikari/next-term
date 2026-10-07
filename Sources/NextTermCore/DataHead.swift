@@ -45,8 +45,8 @@ public struct DataRecord: Sendable, Equatable {
     /// Why it could not be read: not JSON, a quote that is never closed, too long.
     public var error: String?
     public var isTruncated = false
-    /// It has more than `DataHead.maxFields` fields (CSV and TSV) or keys (JSON Lines). Only the first
-    /// ones are in `fields` and `keys`; `raw` has them all.
+    /// CSV and TSV: it has more than `DataHead.maxFields` fields. Only the first ones are in `fields`;
+    /// `raw` has them all. A JSON line keeps every key, since its cells are found by name.
     public var hasMoreFields = false
 
     public init(line: Int, raw: String, fields: [String] = [], keys: [String] = [], error: String? = nil, isTruncated: Bool = false) {
@@ -154,8 +154,9 @@ public enum DataHead {
     public static let pageSize = 1000
     /// A record longer than this is cut (an embedding row is about 16 KB; a whole minified file is not a row).
     public static let maxRecordBytes = 1 << 20
-    /// A record keeps its first this many fields (or keys): a sparse matrix with 100,000 columns would
-    /// otherwise cost ten times its size, and the table shows only 200.
+    /// A CSV or TSV record keeps its first this many fields: a sparse matrix with 100,000 columns would
+    /// otherwise cost ten times its size, and the table shows only 200. A JSON line keeps all its keys:
+    /// the columns are the first 200 keys seen in any line, which can come after its 1,000th.
     public static let maxFields = 1000
     /// A page stops early past this many bytes, so 1,000 huge records cannot fill memory.
     public static let maxPageBytes = 64 << 20
@@ -314,7 +315,14 @@ public enum DataHead {
         var current = [0, 0, 0]
         var inQuotes = false
         var lines = 0
-        for byte in head {
+        // Every comma in the lines counted sits between two digits, as decimal commas do ("1,5"). Decided
+        // line by line: the sample can end partway through a line, and that one is not counted. The first
+        // line is left out too: a header's commas are text ("Preis, EUR"), whatever the separator.
+        var decimalCommas = true
+        var lineDecimal = true
+        let bytes = Array(head)
+        for i in bytes.indices {
+            let byte = bytes[i]
             if byte == 0x22 {
                 inQuotes.toggle()
                 continue
@@ -322,11 +330,14 @@ public enum DataHead {
             if inQuotes { continue }
             if byte == 0x0A {
                 for k in 0..<3 { counts[k].append(current[k]) }
+                if lines > 0, !lineDecimal { decimalCommas = false }
                 current = [0, 0, 0]
+                lineDecimal = true
                 lines += 1
                 if lines == 20 { break }
             } else if let k = candidates.firstIndex(of: byte) {
                 current[k] += 1
+                if byte == 0x2C, !isDecimalComma(bytes, at: i) { lineDecimal = false }
             }
         }
         if lines == 0 { for k in 0..<3 { counts[k].append(current[k]) } } // one line, no newline yet
@@ -341,10 +352,19 @@ public enum DataHead {
             for count in used { frequency[count, default: 0] += 1 }
             let top = frequency.max { a, b in a.value == b.value ? a.key < b.key : a.value < b.value }!
             let candidate = SeparatorCount(delimiter: candidates[k], consistent: top.value, mode: top.key)
-            if let current = best, !candidate.beats(current, sampled: sampled, fallback: fallback) { continue }
+            if let current = best, !candidate.beats(current, sampled: sampled, fallback: fallback, decimalCommas: decimalCommas) { continue }
             best = candidate
         }
         return best?.delimiter ?? fallback
+    }
+
+    private static func isDecimalComma(_ bytes: [UInt8], at i: Int) -> Bool {
+        guard i > 0, i + 1 < bytes.count else { return false }
+        return isDigit(bytes[i - 1]) && isDigit(bytes[i + 1])
+    }
+
+    private static func isDigit(_ byte: UInt8) -> Bool {
+        byte >= 0x30 && byte <= 0x39
     }
 
     /// How a separator shows in a CSV's first lines: how many lines have its most common count, and that count.
@@ -353,18 +373,21 @@ public enum DataHead {
         var consistent: Int
         var mode: Int
 
-        /// Tab, then semicolon, over comma.
-        var rank: Int {
+        /// Tab over the others: commas in text are far more common than a fixed number of tabs. Semicolon
+        /// over comma only when the commas are decimal commas ("1,5;2,3"); a comma file can have a
+        /// semicolon in a text column of every row ("1,a;b").
+        func rank(decimalCommas: Bool) -> Int {
             if delimiter == 0x09 { return 2 }
-            return delimiter == 0x3B ? 1 : 0
+            return delimiter == 0x3B && decimalCommas ? 1 : 0
         }
 
-        /// The more consistent one. When both are in every line the same number of times, the rank:
-        /// decimal commas fill a semicolon file ("1,5;2,3"), and commas in text are far more common than
-        /// a fixed number of tabs or semicolons. Otherwise (one line says little) the one used more.
-        func beats(_ other: SeparatorCount, sampled: Int, fallback: UInt8) -> Bool {
+        /// The more consistent one. When both are in every line the same number of times, the rank.
+        /// Otherwise (one line says little, or the rank does not choose) the one used more.
+        func beats(_ other: SeparatorCount, sampled: Int, fallback: UInt8, decimalCommas: Bool) -> Bool {
             if consistent != other.consistent { return consistent > other.consistent }
-            if sampled > 1, consistent == sampled { return rank > other.rank }
+            let mine = rank(decimalCommas: decimalCommas)
+            let theirs = other.rank(decimalCommas: decimalCommas)
+            if sampled > 1, consistent == sampled, mine != theirs { return mine > theirs }
             if mode != other.mode { return mode > other.mode }
             return delimiter == fallback
         }
@@ -411,7 +434,6 @@ public enum DataHead {
         if let object = topLevelFields(bytes) {
             record.keys = object.keys
             record.fields = object.values
-            record.hasMoreFields = object.more
         } else {
             record.fields = [record.raw.trimmingCharacters(in: .whitespaces)] // an array, or a single value
         }
@@ -434,10 +456,9 @@ public enum DataHead {
         return decoded as? String ?? json
     }
 
-    /// The keys and values of a valid JSON object, as written, up to `limit` of them (`more`: it has
-    /// others); nil for anything else.
-    static func topLevelFields(_ bytes: [UInt8], limit: Int = maxFields) -> (keys: [String], values: [String], more: Bool)? {
-        bytes.withUnsafeBufferPointer { b -> (keys: [String], values: [String], more: Bool)? in
+    /// The keys and values of a valid JSON object, as written; nil for anything else.
+    static func topLevelFields(_ bytes: [UInt8]) -> (keys: [String], values: [String])? {
+        bytes.withUnsafeBufferPointer { b -> (keys: [String], values: [String])? in
             let n = b.count
             var i = skipSpace(b, from: 0)
             guard i < n, b[i] == 0x7B else { return nil } // {
@@ -453,7 +474,6 @@ public enum DataHead {
                     continue
                 }
                 guard b[i] == 0x22 else { return nil }
-                if keys.count == limit { return (keys, values, true) }
                 let keyStart = i
                 i = stringEnd(b, from: i)
                 keys.append(displayValue(String(decoding: UnsafeBufferPointer(rebasing: b[keyStart..<i]), as: UTF8.self)))
@@ -464,7 +484,7 @@ public enum DataHead {
                 i = valueEnd(b, from: i)
                 values.append(String(decoding: UnsafeBufferPointer(rebasing: b[valueStart..<i]), as: UTF8.self))
             }
-            return (keys, values, false)
+            return (keys, values)
         }
     }
 
@@ -529,6 +549,26 @@ public enum DataHead {
             }
         }
         return columns
+    }
+
+    /// JSON Lines: each record's values of `columns`, as `value(for:)` finds them (the first of a repeated
+    /// key), from one pass over its keys. `value(for:)` goes through them for every column, which on lines
+    /// of thousands of keys holds up a copy of a few hundred rows for seconds.
+    public static func values(of records: [DataRecord], columns: [String]) -> [[String?]] {
+        var index: [String: Int] = [:]
+        for (i, column) in columns.enumerated() where index[column] == nil { index[column] = i }
+        let first = columns.indices.map { index[columns[$0]] ?? $0 } // a repeated column reads the first
+        return records.map { record in
+            var row = [String?](repeating: nil, count: columns.count)
+            var left = index.count
+            for (k, key) in record.keys.enumerated() where k < record.fields.count {
+                guard let i = index[key], row[i] == nil else { continue }
+                row[i] = record.fields[k]
+                left -= 1
+                if left == 0 { break }
+            }
+            return first.map { row[$0] }
+        }
     }
 
     /// A CSV or TSV record's fields, all of them: split again from `raw` when it has more than it keeps.
@@ -813,7 +853,14 @@ struct RecordScanner {
 
     /// What a record's fields and keys cost beyond its text, which the page limit counts too.
     private static func overhead(_ record: DataRecord) -> Int {
-        (record.fields.count + record.keys.count) * MemoryLayout<String>.stride
+        record.fields.reduce(0) { $0 + cost($1) } + record.keys.reduce(0) { $0 + cost($1) }
+    }
+
+    /// A String's place in an array, and its own allocation when it has one: one over 15 UTF-8 bytes keeps
+    /// them on the heap, behind a 32-byte header.
+    private static func cost(_ string: String) -> Int {
+        let count = string.utf8.count
+        return MemoryLayout<String>.stride + (count > 15 ? count + 32 : 0)
     }
 
     /// Adds the record (a blank line is not one) and starts the next at `next`.
@@ -859,6 +906,13 @@ public enum DataExport {
     /// Rows as CSV with a header line, quoted where needed.
     public static func csv(columns: [String], rows: [[String?]]) -> String {
         TableExport.csv(columns: columns, rows: rows.map(values))
+    }
+
+    /// JSON Lines rows as CSV: a column for each key, the values shown as cells show them.
+    public static func csv(jsonLines records: [DataRecord]) -> String {
+        let columns = DataHead.columns(of: records)
+        let rows = DataHead.values(of: records, columns: columns).map { row in row.map { $0.map(DataHead.displayValue) } }
+        return csv(columns: columns, rows: rows)
     }
 
     private static func values(_ row: [String?]) -> [SQLiteValue] {

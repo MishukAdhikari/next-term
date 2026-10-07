@@ -489,12 +489,13 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
                 text.width = 4000
                 grid.addTableColumn(text)
             }
-            let sample = records.prefix(50)
+            let sample = Array(records.prefix(50))
+            let found = kind == .jsonLines ? DataHead.values(of: sample, columns: names) : []
             for (i, name) in names.enumerated() {
                 let column = NSTableColumn(identifier: .init("c\(i)"))
                 column.title = name
                 column.headerToolTip = name
-                let longest = sample.map { cellText($0, column: i).prefix(41).count }.max() ?? 0
+                let longest = sample.indices.map { cellText(sample[$0], column: i, values: found[safe: $0]).prefix(41).count }.max() ?? 0
                 column.width = min(320, max(60, CGFloat(max(longest, name.count)) * Self.charWidth + 16))
                 column.minWidth = 40
                 grid.addTableColumn(column)
@@ -586,8 +587,9 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
         modeChanged()
     }
 
-    /// What a table cell shows: a CSV field, or a JSON value (a string without its quotes).
-    func cellText(_ record: DataRecord, column: Int) -> String {
+    /// What a table cell shows: a CSV field, or a JSON value (a string without its quotes). `values` is
+    /// a JSON line's values of `columns`, when they were looked up already (`DataHead.values`).
+    func cellText(_ record: DataRecord, column: Int, values: [String?]? = nil) -> String {
         switch kind {
         case .lines:
             return record.raw
@@ -597,7 +599,8 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
             if let error = record.error { return column == 0 ? error : "" }
             guard column < columns.count else { return "" }
             if columns[column] == "(value)", record.keys.isEmpty { return record.fields.first ?? "" }
-            return record.value(for: columns[column]).map(DataHead.displayValue) ?? ""
+            let value = values == nil ? record.value(for: columns[column]) : values?[column]
+            return value.map(DataHead.displayValue) ?? ""
         }
     }
 
@@ -635,11 +638,7 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
     /// The chosen rows as CSV with a header line. JSON values are shown as cells show them.
     func exportCSV() -> String {
         let chosen = chosenRows
-        if kind == .jsonLines {
-            let keys = DataHead.columns(of: chosen)
-            let rows = chosen.map { record in keys.map { record.value(for: $0).map(DataHead.displayValue) } }
-            return DataExport.csv(columns: keys, rows: rows)
-        }
+        if kind == .jsonLines { return DataExport.csv(jsonLines: chosen) }
         let fields = chosen.map(allFields)
         let names = csvColumns(fields)
         let rows = fields.map { row in names.indices.map { $0 < row.count ? row[$0] : nil } }

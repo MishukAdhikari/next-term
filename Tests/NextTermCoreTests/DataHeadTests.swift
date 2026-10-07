@@ -111,6 +111,20 @@ import Testing
         #expect(all[6000].line == 12_000 && all.last?.line == 15_001)
     }
 
+    /// Semicolon rows of decimal commas with no header, so wide that the 64 KB the separator is found in
+    /// ends partway through one, right after a decimal comma.
+    @Test func wideRowsWithDecimalCommas() throws {
+        let row = (0..<820).map { "\($0 % 13),\($0 % 10)" }.joined(separator: ";")
+        let text = String(repeating: row + "\n", count: 20)
+        let bytes = Array(text.utf8)
+        try #require(bytes.count > DataHead.headLength && bytes[DataHead.headLength - 1] == 0x2C)
+        let project = FixtureProject()
+        project.write("wide.csv", text)
+        let page = try DataHead.page(at: project.root + "/wide.csv", kind: .delimited)
+        #expect(page.delimiter == 0x3B && page.records.count == 20 && page.records[0].fields.count == 820)
+        withExtendedLifetime(project) {}
+    }
+
     @Test func delimitersAndHeaders() {
         #expect(DataHead.detectDelimiter(Array("a,b,c\n1,2,3\n".utf8), fallback: 0x09) == 0x2C)
         #expect(DataHead.detectDelimiter(Array("a\tb\tc\n1\t2,5\t3\n".utf8), fallback: 0x2C) == 0x09)
@@ -123,6 +137,15 @@ import Testing
         // One line says too little for that: the separator it has most.
         #expect(DataHead.detectDelimiter(Array("a;b,c,d".utf8), fallback: 0x09) == 0x2C)
         #expect(DataHead.detectDelimiter(Array("id,tags\n1,a;b\n2,c;d\n".utf8), fallback: 0x2C) == 0x2C)
+        // The same with no header: commas that are not between digits are not decimal commas.
+        #expect(DataHead.detectDelimiter(Array("1,a;b\n2,c;d\n3,e;f\n".utf8), fallback: 0x2C) == 0x2C)
+        #expect(DataHead.detectDelimiter(Array("1,5,a;b\n2,5,c;d\n".utf8), fallback: 0x2C) == 0x2C)
+        #expect(DataHead.detectDelimiter(Array("1,5;\"a, b\"\n2,5;\"c, d\"\n".utf8), fallback: 0x2C) == 0x3B) // quoted ones do not count
+        // The sample ends partway through a line: its commas are not counted, so they say nothing either.
+        #expect(DataHead.detectDelimiter(Array("1,5;2,3\n4,5;6,7\n8,".utf8), fallback: 0x2C) == 0x3B)
+        #expect(DataHead.detectDelimiter(Array("1,5;2,3\n4,5;6,7\nab, c".utf8), fallback: 0x2C) == 0x3B)
+        // Nor do a header's: they are text, in a semicolon file too.
+        #expect(DataHead.detectDelimiter(Array("Name;Preis, EUR\nApfel;1,50\nBirne;2,30\n".utf8), fallback: 0x2C) == 0x3B)
         #expect(DataHead.looksLikeHeader([["id", "score"], ["1", "0.5"], ["2", "0.7"]]))
         #expect(DataHead.looksLikeHeader([["", "question", "answer"], ["0", "Why?", "Because."]]))
         #expect(!DataHead.looksLikeHeader([["1", "0.5"], ["2", "0.7"]]))
@@ -186,9 +209,15 @@ import Testing
         #expect(all.count == width && all[997 * 19] == "\(997 * 19)" && all[1] == "")
         #expect(!Self.scan("a,b\n", kind: .delimited, chunk: 1)[0].hasMoreFields)
 
+        // A JSON line keeps every key: its cells are found by name, not by place.
         let object = "{" + (0..<5000).map { #""k\#($0)": \#($0)"# }.joined(separator: ", ") + "}"
         let json = Self.scan(object + "\n", kind: .jsonLines, chunk: 100_000)[0]
-        #expect(json.error == nil && json.keys.count == DataHead.maxFields && json.hasMoreFields && json.value(for: "k999") == "999")
+        #expect(json.error == nil && json.keys.count == 5000 && !json.hasMoreFields && json.value(for: "k4999") == "4999")
+        let reversed = "{" + (0..<5000).reversed().map { #""k\#($0)": \#($0)"# }.joined(separator: ", ") + "}"
+        let lines = Self.scan(object + "\n" + reversed + "\n", kind: .jsonLines, chunk: 100_000)
+        let columns = DataHead.columns(of: lines)
+        let blank = columns.filter { lines[1].value(for: $0) == nil }
+        #expect(columns.count == 200 && blank.isEmpty && lines[1].value(for: "k0") == "0", "\(blank.count) blank cells")
 
         // A page of such rows costs about its size, not ten times it.
         let project = FixtureProject()
@@ -204,6 +233,24 @@ import Testing
         #expect(page.records.count == 500 && page.isAtEnd)
         #expect(grew < 64 << 20, "memory grew by \(grew >> 20) MB")
         withExtendedLifetime(project) {}
+    }
+
+    /// Keys and values too long to fit in a String's own bytes each have an allocation of their own,
+    /// and a page counts it: a full page of such JSON lines costs about its 64 MB, not three times it.
+    @Test func longKeysCountTowardThePage() {
+        let pairs = (0..<2000).map { i -> String in
+            let n = String(format: "%06d", i)
+            return #""feature_name_\#(n)": "value_text_\#(n)""#
+        }
+        let line = Data(("{" + pairs.joined(separator: ", ") + "}\n").utf8)
+        let before = Self.footprint()
+        var scanner = RecordScanner(kind: .jsonLines, delimiter: 0x2C, start: .start, limit: .max)
+        while !scanner.isFull { autoreleasepool { scanner.feed(line) } } // as DataHead.page reads
+        let grew = Int64(Self.footprint()) - Int64(before)
+        let count = scanner.records.count
+        #expect(count > 100 && scanner.records[0].keys.count == 2000, "\(count) records")
+        #expect(grew < 128 << 20, "\(count) records, memory grew by \(grew >> 20) MB")
+        withExtendedLifetime(scanner) {}
     }
 
     /// A log that grows still has what was read; a file written again in place (same inode, larger)
@@ -264,6 +311,27 @@ import Testing
         #expect(DataExport.objects(columns: ["q"], rows: [["1"]]) == "[\n  {\"q\": \"1\"}\n]\n")
         #expect(DataHead.displayValue("\"tab\\there\"") == "tab\there" && DataHead.displayValue("[1,2]") == "[1,2]")
         #expect(DataFileKind(path: "/x/a.NDJSON") == .jsonLines && DataFileKind(path: "b.tsv") == .delimited && DataFileKind(path: "c.log") == .lines)
+    }
+
+    /// Copy As CSV of JSON lines: a column for each key, the first of a repeated key, strings without
+    /// their quotes. A line's keys are looked through once for all the columns, so copying a page of
+    /// lines with thousands of keys in another order takes a fraction of a second, not seconds.
+    @Test func jsonLinesCopyAsCSV() {
+        let a = DataRecord(line: 1, raw: "", fields: ["1", #""x, y""#, "true"], keys: ["id", "q", "ok"])
+        let b = DataRecord(line: 2, raw: "", fields: ["false", "2", "3", #""dup""#], keys: ["ok", "id", "id", "extra"])
+        #expect(DataExport.csv(jsonLines: [a, b]) == "id,q,ok,extra\n1,\"x, y\",true,\n2,,false,dup\n")
+        #expect(DataHead.values(of: [b], columns: ["id", "q", "id"]) == [["2", nil, "2"]])
+
+        let keys = (0..<5000).map { "key_\($0)" }
+        let first = DataRecord(line: 1, raw: "", fields: keys.indices.map { "\($0)" }, keys: keys)
+        let reversed = DataRecord(line: 2, raw: "", fields: first.fields.reversed(), keys: keys.reversed())
+        let page = [first] + Array(repeating: reversed, count: 99)
+        let started = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) // this thread's time: other tests run alongside
+        let csv = DataExport.csv(jsonLines: page)
+        let elapsed = Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - started) / 1e9
+        let row = (0..<200).map { "\($0)" }.joined(separator: ",")
+        #expect(csv.hasSuffix("\n" + row + "\n" + row + "\n"))
+        #expect(elapsed < 1, "the copy took \(elapsed) s")
     }
 
     /// A 200 MB file: the first page comes back fast without reading the rest, and the line count streams.
