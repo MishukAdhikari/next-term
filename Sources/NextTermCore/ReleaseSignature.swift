@@ -86,3 +86,25 @@ public enum ReleaseSignature {
         return hex.count == 64 && hex.allSatisfy({ "0123456789abcdef".contains($0) }) ? hex : nil
     }
 }
+
+/// What the updater does about a release whose checksum is not signed yet, each time a try finds it so.
+/// Each release is signed a few minutes after it is published, so a recent one is waited for, for a while.
+public enum SignatureWait: Equatable, Sendable {
+    /// Try again later.
+    case wait
+    /// Published more than `signingDelay` ago and still not signed: it never will be. Refused.
+    case tooOld
+    /// Waited `limit` since the install was asked for: given up.
+    case gaveUp
+
+    public static let signingDelay: TimeInterval = 24 * 60 * 60
+    public static let limit: TimeInterval = 2 * 60 * 60
+
+    /// `published` is unknown when GitHub's API is rate-limited (the release came from the releases
+    /// page's redirect): then only `limit` ends the wait. `since` is when the install was asked for.
+    public static func decide(published: Date?, since: Date, now: Date,
+                              signingDelay: TimeInterval = SignatureWait.signingDelay, limit: TimeInterval = SignatureWait.limit) -> SignatureWait {
+        if let published, now.timeIntervalSince(published) >= signingDelay { return .tooOld }
+        return now.timeIntervalSince(since) < limit ? .wait : .gaveUp
+    }
+}

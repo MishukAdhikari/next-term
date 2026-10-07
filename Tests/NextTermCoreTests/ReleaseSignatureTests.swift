@@ -113,6 +113,27 @@ import Testing
         #expect(!ReleaseSignature.verify(Data("\(sha)  NextTerm.dmg\n".utf8), signature: signature))
     }
 
+    /// A release not signed yet: waited for while it is under a day old, for two hours from the click.
+    @Test func aReleaseNotSignedYetIsWaitedForAWhile() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let minute: TimeInterval = 60, hour = 60 * minute
+        func decide(published: TimeInterval?, since: TimeInterval) -> SignatureWait {
+            SignatureWait.decide(published: published.map { now.addingTimeInterval(-$0) }, since: now.addingTimeInterval(-since), now: now)
+        }
+        #expect(decide(published: 5 * minute, since: 0) == .wait)
+        // A day after it was published, a release the key never signed is refused at once.
+        #expect(decide(published: 23 * hour + 59 * minute, since: 0) == .wait)
+        #expect(decide(published: 24 * hour + minute, since: 0) == .tooOld)
+        #expect(decide(published: 24 * hour + minute, since: 3 * hour) == .tooOld)
+        // Two hours after the install was asked for, the wait ends.
+        #expect(decide(published: 2 * hour, since: hour + 59 * minute) == .wait)
+        #expect(decide(published: 2 * hour, since: 2 * hour + minute) == .gaveUp)
+        // No date (GitHub's API rate-limited): only the two hours count.
+        #expect(decide(published: nil, since: 0) == .wait)
+        #expect(decide(published: nil, since: hour + 59 * minute) == .wait)
+        #expect(decide(published: nil, since: 2 * hour + minute) == .gaveUp)
+    }
+
     let v080Signature = """
     U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgiexu/H9+3fK0YL3MCUziFI6qpU
     rLRf3gCHvuYPMCd4YAAAARbmV4dC10ZXJtLXJlbGVhc2UAAAAAAAAABnNoYTUxMgAAAFMA

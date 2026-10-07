@@ -244,12 +244,10 @@ final class Updater {
     // MARK: download, verify, stage
 
     /// A release whose checksum is not signed yet (each is signed a few minutes after it is published):
-    /// the install that was asked for is tried again, quietly, every `signatureRetry` for `signatureWait`.
+    /// the install that was asked for is tried again, quietly, every `signatureRetry` for as long as
+    /// `SignatureWait` says.
     private var awaitingSignature: (tag: String, since: Date, timer: Timer)?
     static let signatureRetry: TimeInterval = 10 * 60
-    static let signatureWait: TimeInterval = 2 * 60 * 60
-    /// Published longer ago than this and still not signed: refused, not waited for.
-    static let signingDelay: TimeInterval = 24 * 60 * 60
     /// A download, or the signature check before it, is under way.
     private var installing = false
 
@@ -289,7 +287,7 @@ final class Updater {
                 hideProgress()
                 if let refusal = error as? ReleaseSignature.Refusal { return refuse(release, Self.text(of: refusal)) }
                 // A quiet try that could not reach GitHub: the next one may.
-                if beforeDownload { return waitForSignature(release, since: waitingSince ?? Date(), quietly: true) }
+                if beforeDownload { return waitForSignature(release, since: waitingSince ?? Date(), quietly: true, unreachable: true) }
                 var message = (error as? UpdateError)?.text ?? error.localizedDescription
                 if let failure = error as? ReleaseSignature.Unavailable { message = "GitHub did not answer (HTTP \(failure.status))." }
                 let alert = NSAlert()
@@ -317,16 +315,11 @@ final class Updater {
 
     /// No signature yet. One published in the last day is about to be signed: say so (once) and try
     /// again every 10 minutes without a word, for two hours. One published before that is refused.
-    /// Each try fetches only the checksum and its signature.
-    private func waitForSignature(_ release: ReleaseInfo, since: Date, quietly: Bool) {
-        let now = Date()
-        let recent = release.published.map { now.timeIntervalSince($0) < Self.signingDelay } ?? true
-        guard recent else {
-            return refuse(release, "The release has no signature from the Next Term release key, so it was not installed.")
-        }
-        guard now.timeIntervalSince(since) < Self.signatureWait else {
-            return refuse(release, "The release is still not signed with the Next Term release key, so it was not installed. Try again later.")
-        }
+    /// Each try fetches only the checksum and its signature. `unreachable`: this try got no answer from
+    /// GitHub (offline, or an error page), so whether the release is signed by now is not known.
+    private func waitForSignature(_ release: ReleaseInfo, since: Date, quietly: Bool, unreachable: Bool = false) {
+        let outcome = SignatureWait.decide(published: release.published, since: since, now: Date())
+        if let text = Self.endOfWait(outcome, unreachable: unreachable) { return refuse(release, text) }
         let timer = Timer(timeInterval: Self.signatureRetry, repeats: false) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
@@ -343,6 +336,14 @@ final class Updater {
         if quietly { return }
         tell("Next Term \(release.version) is not signed yet",
              "Each release is signed with the Next Term release key a few minutes after it is published, and only a signed one is installed. Next Term checks again every 10 minutes for the next two hours, and downloads it once it is signed.")
+    }
+
+    /// Why the wait for a release's signature ended, or nil while it goes on.
+    static func endOfWait(_ outcome: SignatureWait, unreachable: Bool) -> String? {
+        guard outcome != .wait else { return nil }
+        if unreachable { return "GitHub did not answer, so the release's signature could not be checked and it was not installed. Try again later." }
+        if outcome == .tooOld { return "The release has no signature from the Next Term release key, so it was not installed." }
+        return "The release is still not signed with the Next Term release key, so it was not installed. Try again later."
     }
 
     private static func text(of refusal: ReleaseSignature.Refusal) -> String {
