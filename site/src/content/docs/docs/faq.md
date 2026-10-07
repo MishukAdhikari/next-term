@@ -34,7 +34,7 @@ In one line, from the terminal:
 curl -fsSL https://next-term.mishuk.me/install.sh | bash
 ```
 
-It checks that the release’s checksum is signed with the Next Term release key and that the download matches it, then copies Next Term to Applications, with no `sudo` and no first-launch prompt. Or download the disk image and drag Next Term to Applications. See [Install and get started](/docs/getting-started/).
+It checks that the release’s checksum is signed with the Next Term release key and that the download matches it, then copies Next Term to Applications, with no `sudo`, and macOS doesn’t ask you to allow the first launch. Or download the disk image and drag Next Term to Applications. See [Install and get started](/docs/getting-started/).
 
 ## Why does macOS block the first launch?
 

@@ -46,11 +46,13 @@ If Next Term is not running, `nxtrm` starts it with your request instead of reop
 - `/opt/homebrew/bin`, Homebrew’s folder on Apple silicon
 - `/usr/local/bin`, when Homebrew has made it yours
 
-Your `PATH` order decides between them. Next Term never adds a folder to `PATH` or edits your shell’s startup files, and never adds a link to any other folder on `PATH`, such as a version manager’s.
+Your `PATH` order decides between them. Next Term never adds a folder to `PATH` or edits your shell’s startup files, and never adds a link to any other folder on `PATH`, such as a version manager’s. If your shell takes more than 5 seconds to start, that launch does nothing, and a later one decides.
 
-**When none of them will do**, as on a Mac without Homebrew, where `/usr/local/bin` belongs to the system, the first launch asks **Install the “nxtrm” command?**
+A `PATH` entry that starts with `~` doesn’t count, because zsh never looks there: the quotes in `export PATH="~/.local/bin:$PATH"` keep the `~`, so write `$HOME/.local/bin` instead.
 
-- **Install…** links `/usr/local/bin/nxtrm` and asks for your administrator password once, as other editors do for their commands.
+**When none of them will do**, as on a Mac without Homebrew, where `/usr/local/bin` belongs to the system, the first launch asks **Install the “nxtrm” command?** on the first project window, once you are past the folder chooser, Import or the Welcome window.
+
+- **Install…** links `/usr/local/bin/nxtrm` and asks for your administrator password once, as other editors do for their commands. If your `PATH` leaves out `/usr/local/bin`, it says so.
 - **Not Now** asks again after the next update.
 - **Don’t Ask Again** stops asking.
 
@@ -60,5 +62,5 @@ Your `PATH` order decides between them. Next Term never adds a folder to `PATH` 
 
 - Next Term only ever replaces a link it made itself. It never touches someone else’s `nxtrm`, and when another `nxtrm` comes first on your `PATH`, it adds none of its own.
 - It links only a copy in a permanent place such as Applications. A copy running from the disk image would leave the link pointing at nothing once the image is ejected, so Next Term asks you to move it first.
-- If you move the app, the next launch points the link at the new place, when it can do so without a password.
+- If you move the app, or open another copy, that launch points `nxtrm` at it. When Next Term’s link still opens the other copy and needs a password to change, it asks, as above, rather than add a link later on `PATH` that the shell would never reach.
 - The link is the only file it adds. Delete it to remove the command from your other terminals: Next Term leaves it out from then on, and **Next Term › Install Command Line Tool (nxtrm)…** puts it back.

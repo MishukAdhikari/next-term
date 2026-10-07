@@ -106,9 +106,10 @@ In one line, from the terminal:
 curl -fsSL https://next-term.mishuk.me/install.sh | bash
 ```
 
-It downloads the latest release, checks its SHA-256, the bundle and the signature, copies it to
-Applications and links `nxtrm` into a folder on your PATH that you can write, with no `sudo` and no
-first-launch prompt ([the script](site/src/install.sh)). Or
+It downloads the latest release, checks its SHA-256, the bundle and the signature, and copies it to
+Applications. When a folder on your PATH takes `nxtrm` without a password, it links it there too;
+otherwise Next Term offers it when it opens. It never uses `sudo`, and macOS doesn't ask you to allow the
+first launch ([the script](site/src/install.sh)). Or
 download `NextTerm-x.y.z.dmg` from [Releases](../../releases), open it, and drag **Next Term** to
 Applications. After that, Next Term updates itself (Next Term > Check for Updates).
 

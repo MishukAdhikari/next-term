@@ -104,7 +104,7 @@ The one-line installer (`curl -fsSL https://next-term.mishuk.me/install.sh | bas
 - **the disk image holds Next Term at that version,** with an intact code signature, checked again after the copy;
 - **“latest” is not older than this site’s version,** so an older signed release cannot be passed off as the newest.
 
-It never uses `sudo` and never replaces a Next Term that is running. Besides the app, it adds only the `nxtrm` command: a link in a folder already on your `PATH` that you can write (see [The nxtrm command](/docs/command-line/#installing-it)). It never changes your `PATH`, and never replaces anyone else’s `nxtrm`. [Read the script](https://github.com/MishukAdhikari/next-term/blob/main/site/src/install.sh) before you run it, if you like.
+It never uses `sudo` and never replaces a Next Term that is running. Besides the app, it adds at most the `nxtrm` command: a link in a folder already on your `PATH` that you can write (see [The nxtrm command](/docs/command-line/#installing-it)). It never changes your `PATH`, and never replaces anyone else’s `nxtrm`. [Read the script](https://github.com/MishukAdhikari/next-term/blob/main/site/src/install.sh) before you run it, if you like.
 
 ## The first launch warning
 
