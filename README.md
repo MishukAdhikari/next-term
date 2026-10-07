@@ -37,10 +37,12 @@ website and documentation: **[next-term.mishuk.me](https://next-term.mishuk.me)*
   Codex, Gemini CLI, Qwen Code, Cursor, opencode, Copilot CLI, Amp, Junie and Command Code. One agent can
   run the others. It sees every project and tab with each agent's state (working, done, waiting for a
   decision and the question), opens projects, starts an agent in a new tab, gives it a prompt, waits
-  until it stops, reads its screen, answers its questions, and uses the editor (the selection, open
-  files, opening a file at a line). Next Term adds itself to the agents it finds, with nothing to run;
-  Settings turns it off and removes it again. The tools are marked honestly, so agents ask you before
-  they type into a tab. Local only: a private socket, no network port.
+  until it stops, reads its screen, answers its questions (only the question it saw, never a newer one),
+  reads the projects' files, searches them and sees their git status and diffs (secrets files refused,
+  secret-looking values masked), and uses the editor (the selection, open files, opening a file at a
+  line). Next Term adds itself to the agents it finds, with nothing to run; Settings turns it off and
+  removes it again. The tools are marked honestly, so agents ask you before they type into a tab. Local
+  only: a private socket, no network port.
 - **Pick up any agent's conversation.** The Welcome window lists your projects; choose one and every
   conversation Claude Code, Codex and Command Code kept for it is there, newest first, with its title,
   branch and model, including the ones started in its subfolders. Resume runs it again in a new tab, in
@@ -226,8 +228,10 @@ agent would), then writes a report and screenshots.
 ```
 Sources/NextTermCore/   platform-neutral logic, no AppKit: TabStatus, AgentScreen, CommandClassifier,
                         ShellIntegration, Git, Diff, HunkOps, FileTree and FileOps, ProjectSearch, TextFile
-                        and LineIndex, EditorLanguage, CommandLineOpen, KeyChord, Updates, MCPServer and
-                        MCPRegistrar (the agent-facing MCP server and its registration in each agent)
+                        and LineIndex, EditorLanguage, CommandLineOpen, KeyChord, Updates, MCPServer,
+                        MCPProjectTools, MCPRedaction and MCPRegistrar (the agent-facing MCP server, its
+                        file, search and git tools with their path and secrets rules, and its
+                        registration in each agent)
 Sources/NextTerm/       the macOS app: windows, tabs, sidebar, editor, projects, menus, shortcuts, updates,
                         notifications, self-test
 Resources/Highlighting/ the shipped grammars (scripts/update-highlighting.py) and the Next Dark theme

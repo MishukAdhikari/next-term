@@ -108,10 +108,15 @@ const mcpTools = [
 	'list_projects',
 	'get_editor_selection',
 	'get_open_files',
+	'read_file',
+	'find_in_files',
+	'git_status',
+	'get_diff',
 	'open_project',
 	'new_tab',
 	'send_to_tab',
 	'press_keys',
+	'answer_agent',
 	'show_tab',
 	'close_tab',
 	'open_in_editor',
@@ -309,11 +314,11 @@ const faq = [
 				</li>
 				<li>
 					<h3>Acts as you would</h3>
-					<p>Opens projects, starts agents in new tabs or split panes, types prompts, presses keys, waits until an agent stops, reads its screen.</p>
+					<p>Opens projects, starts agents in new tabs or split panes, types prompts, waits until an agent stops, reads its screen, answers its questions.</p>
 				</li>
 				<li>
 					<h3>Uses the editor</h3>
-					<p>Your selection, the open files, and any file opened at a line, for agents with no editor link of their own.</p>
+					<p>Your selection, the open files, any file opened at a line, and each project’s files, search and git changes, with secrets left out.</p>
 				</li>
 				<li>
 					<h3>Set up for you</h3>
@@ -324,14 +329,14 @@ const faq = [
 				</li>
 				<li>
 					<h3>Asks before it acts</h3>
-					<p>Typing into a tab and closing one are marked as destructive, so agents ask first. No agent can type into its own tab.</p>
+					<p>Typing into a tab, answering an agent and closing a tab are marked as destructive, so agents ask first. No agent can type into its own tab.</p>
 				</li>
 				<li>
 					<h3>Private</h3>
 					<p>A socket only you can open, and no network port. Settings turns it off and removes the entries.</p>
 				</li>
 			</ul>
-			<ul class="tools" aria-label="The 13 MCP tools">
+			<ul class="tools" aria-label="The 18 MCP tools">
 				{mcpTools.map((tool) => <li><code>{tool}</code></li>)}
 			</ul>
 			<p class="more"><a href="/docs/orchestration/">Orchestrate agents (MCP)</a></p>

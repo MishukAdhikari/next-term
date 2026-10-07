@@ -29,7 +29,9 @@ Next Term turns on Gemini CLI’s and Qwen Code’s IDE mode by changing exactly
 Agents can drive Next Term through its MCP server ([Orchestrate agents](/docs/orchestration/)). It is built to the same standard:
 
 - **No network port.** The app listens on a Unix socket, `~/Library/Application Support/Next Term/mcp.sock`, with mode `0600`, and checks that every connection comes from your own user. That is the reach your own shell already has.
-- **Honest tool descriptions:** typing into a tab, pressing keys, opening and closing tabs are marked destructive, so agents ask before they use them.
+- **Honest tool descriptions:** typing into a tab, pressing keys, answering an agent’s question, opening and closing tabs are marked destructive, so agents ask before they use them.
+- **Questions are answered once:** an answer names the question it is for, and is refused if the agent has moved on to another one.
+- **Project files stay inside, and secrets stay out:** the file, search and git tools read only inside the projects open in Next Term, with symlinks resolved first. `.env` files, keys and certificates, ssh keys, credentials files and `.git` are refused, and secret-looking values in what they return are masked as `•••`. Nothing is written.
 - **No self-control:** an agent cannot type into, or close, the tab it runs in.
 - **Busy tabs are protected:** closing a tab that runs something needs an explicit `force`.
 - **Your files are respected:** registering in an agent writes only Next Term’s own `next-term` entry, keeps comments and every other server, and never touches an entry it did not write.
