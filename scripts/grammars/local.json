@@ -24,6 +24,18 @@
       "embeddedLangs": ["yaml", "jinja"],
       "injectTo": [],
       "aliases": []
+    },
+    {
+      "id": "python-prompt-template",
+      "displayName": "Prompt templates in Python strings",
+      "scopeName": "inline.prompt-template.python",
+      "file": "python-prompt-template.tmLanguage.json",
+      "source": "Next Term's own (scripts/grammars/python-prompt-template.tmLanguage.json)",
+      "spdx": "MIT",
+      "licenseFile": "../../LICENSE",
+      "embeddedLangs": ["jinja"],
+      "injectTo": ["source.python"],
+      "aliases": []
     }
   ]
 }

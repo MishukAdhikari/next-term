@@ -1350,13 +1350,31 @@
    ],
    "displayName": "Python",
    "embeddedIn": [],
-   "embeddedLangs": [],
+   "embeddedLangs": [
+    "python-prompt-template"
+   ],
    "embeddedLangsLazy": [],
    "id": "python",
    "injectTo": [],
    "kind": "grammar",
    "resource": "grammars/python.json",
    "scopeName": "source.python"
+  },
+  {
+   "aliases": [],
+   "displayName": "Prompt templates in Python strings",
+   "embeddedIn": [],
+   "embeddedLangs": [
+    "jinja"
+   ],
+   "embeddedLangsLazy": [],
+   "id": "python-prompt-template",
+   "injectTo": [
+    "source.python"
+   ],
+   "kind": "injection",
+   "resource": "grammars/python-prompt-template.json",
+   "scopeName": "inline.prompt-template.python"
   },
   {
    "aliases": [],

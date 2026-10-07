@@ -85,6 +85,7 @@ scripts/grammars (pinned upstream copies, and Next Term's own). Each grammar kee
 | proto | MIT | https://github.com/zxh0/vscode-proto3/blob/274be763ecae7055505354b44f4892a2669e1da8/syntaxes/proto3.tmLanguage.json |
 | pug | MIT | https://github.com/microsoft/vscode/blob/6ac83c7c7dda9f27ca1fe9d98675253e010b75d1/extensions/pug/syntaxes/pug.tmLanguage.json |
 | python | MIT | https://github.com/microsoft/vscode/blob/cf4c9e469d521fa5f33353737e8157eb0789ad02/extensions/python/syntaxes/MagicPython.tmLanguage.json |
+| python-prompt-template | MIT; text in licenses/python-prompt-template-LICENSE.txt | Next Term's own (scripts/grammars/python-prompt-template.tmLanguage.json) |
 | r | MIT | https://github.com/posit-dev/positron/blob/c4d6bab60dd914427a2d47a4b64e75e025d94059/extensions/positron-r/syntaxes/r.tmGrammar.gen.json |
 | razor | MIT | https://github.com/dotnet/razor/blob/743f32a68c61809b22fd84e8748c3686ef1bb8b8/src/Razor/src/Microsoft.VisualStudio.RazorExtension/EmbeddedGrammars/aspnetcorerazor.tmLanguage.json |
 | regexp | MIT | https://github.com/MagicStack/MagicPython/blob/c9b3409deb69acec31bbf7913830e93a046b30cc/grammars/MagicRegExp.tmLanguage |

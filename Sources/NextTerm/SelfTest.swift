@@ -859,9 +859,10 @@ enum SelfTest {
         _ = await wait(8) { row("gone.txt") == nil && row("olddir") == nil }
     }
 
-    /// What a RAG project is made of reads at a glance: prompt placeholders in Python strings and Jinja
-    /// files, keys in pyproject.toml and .env, docstrings, decorators, and code inside README fences.
-    /// A skill's front matter and its fences colour whatever was opened before.
+    /// What a RAG project is made of reads at a glance: prompt placeholders and templates in Python strings
+    /// and Jinja files, keys in pyproject.toml and .env, docstrings, decorators, code inside README fences,
+    /// requirements, Prompty, Mermaid and the data and query files. A skill's front matter and its fences
+    /// colour whatever was opened before.
     private static func ragColorChecks(_ c: TerminalWindowController, proj: URL) async {
         let folder = proj.appendingPathComponent("rag")
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -900,6 +901,21 @@ enum SelfTest {
                 + "system:\nAnswer from the documents.\n\nuser:\n{{question}}\n",
              [("name:", "C77DBB", "a Prompty front-matter key"), ("${env", "C77DBB", "an ${env:…} reference in it"),
               ("user:", "CF8E6D", "a Prompty role line"), ("question}}", "C77DBB", "a {{variable}} in a Prompty message")]),
+            ("templates.py", #"""
+                HAYSTACK = """{% for doc in documents %}{{ doc.content }}{% endfor %}"""
+                MUSTACHE = "Hello {{name}}, {{ today | upper }}"
+                JSON = """Return JSON: {{"nodes": [], "q": "{question}"}}"""
+                def render(choices):
+                    """Fills {{ x }} in."""
+                    return '{%s}' % choices
+                after = 1
+
+                """#,
+             [("{% for", "CF8E6D", "a Jinja tag in a Python string"), ("documents %}", "C77DBB", "and its variable"),
+              ("name}}", "C77DBB", "a Mustache variable in a Python string"),
+              (#"{{"nodes"#, "C77DBB", "str.format's escaped braces stay a placeholder"),
+              (#""nodes""#, "6AAB73", "with the JSON in them still a string"), ("{{ x }} in", "5F826B", "a docstring stays a docstring"),
+              ("after =", "BCBEC4", "and code after '{%s}' % x is still code")]),
         ]
         if luaWasLoaded { note("Lua was loaded before SKILL.md opened: its fence check does not prove the preload") }
         for file in files {

@@ -52,8 +52,12 @@ LICENSE_TEXT = {"sparql": "stardog-rdf-grammars-LICENSE.txt", "turtle": "stardog
 # Grammars a language always loads with it, on top of the ones shiki-swift lists. Next Term tokenizes a
 # line at a time, and shiki-swift guesses lazy embeds from that one line, so front matter (which needs
 # both `---` lines in one string) would only colour if YAML happened to be loaded already. Mermaid
-# colours Markdown fences as an injection, which only works once it is loaded.
-EAGER = {"markdown": ["yaml", "mermaid"], "mdx": ["yaml"]}
+# colours Markdown fences, and python-prompt-template the Jinja in Python strings, as injections, which
+# only work once loaded. Measured cost of the prompt templates (2026-10-07, line by line as the editor
+# does): about 20 ms once per session, for jinja and the HTML grammars it pulls in; then about a fifth
+# more time on a 21,000-line file of ordinary Python (0.63 -> 0.77 s), about half more on a 20,000-line
+# file with a template every five lines (0.71 -> 1.09 s).
+EAGER = {"markdown": ["yaml", "mermaid"], "mdx": ["yaml"], "python": ["python-prompt-template"]}
 # Scopes an injection grammar is injected into, where its file does not say (shiki-swift reads the file).
 INJECT_TO = {"mermaid": ["text.html.markdown"]}
 # Grammars with an injectionSelector that inject nowhere, knowingly. angular-expression: the other
