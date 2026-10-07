@@ -88,6 +88,8 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Collapse Terminal or Expand Terminal | <kbd>⌘J</kbd> |
 | Terminal Position › Bottom, Right, Left, Top | — |
 | Show Changes | <kbd>⌥⌘G</kbd> |
+| Annotate with Git Blame (who last changed each line, beside the numbers) | — |
+| Current Line Blame (a note after the caret line; off by default) | — |
 | Soft Wrap | — |
 | Line Height › 1.0 to 2.0 | — |
 | Project Sidebar on the Right | — |

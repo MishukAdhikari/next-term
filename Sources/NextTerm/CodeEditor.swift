@@ -27,6 +27,32 @@ final class CodeTextView: NSTextView {
         guard line.intersects(rect) else { return }
         Self.currentLine.setFill()
         line.fill()
+        drawLineNote(at: caret)
+    }
+
+    /// A note after the caret line's text (the commit that last changed it), when there is one.
+    var lineNote: ((_ line: Int) -> String?)?
+
+    private func drawLineNote(at caret: Int) {
+        guard let document, let layoutManager else { return }
+        let line = document.lines.line(at: caret)
+        let range = document.lines.range(ofLine: line)
+        guard range.length > 0, let note = lineNote?(line) else { return }
+        // After the line's last row of text.
+        let last = NSMaxRange(range) - 1
+        let glyph = layoutManager.glyphIndexForCharacter(at: last)
+        let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        let used = layoutManager.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
+        let font = self.font ?? EditorDocument.font
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: Theme.blameNote,
+                                                         .paragraphStyle: Typography.paragraph(.byTruncatingTail)]
+        let x = used.maxX + textContainerOrigin.x + (" " as NSString).size(withAttributes: [.font: font]).width * 4
+        let size = (note as NSString).size(withAttributes: attributes)
+        let width = min(size.width, visibleRect.maxX - x - 8)
+        guard width > 40 else { return }
+        let y = fragment.minY + textContainerOrigin.y + (fragment.height - size.height) / 2
+        (note as NSString).draw(with: NSRect(x: x, y: y, width: width, height: size.height),
+                                options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: attributes)
     }
 
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
@@ -191,6 +217,22 @@ final class LineNumberRuler: NSRulerView {
     }
     /// A change mark was clicked.
     var onMarkClick: ((_ line: Int) -> Void)?
+    /// Who last changed each line, in a column left of the numbers (View › Annotate with Git Blame).
+    var showsBlame = false {
+        didSet {
+            guard showsBlame != oldValue else { return }
+            updateThickness()
+            needsDisplay = true
+            if !showsBlame { setBlameToolTips([]) }
+        }
+    }
+    var blameSource: (() -> EditedBlame?)?
+    /// A commit in the blame column was clicked: its hash and the repository's root.
+    var onBlameClick: ((_ sha: String, _ root: String) -> Void)?
+    /// The blame column's hover areas, one per run of lines from a commit on screen, and whether
+    /// installing them is already queued (once per turn of the run loop, however often it scrolls).
+    var blameToolTipRects: [NSRect] = []
+    var blameToolTipsQueued = false
     static let added = NSColor(hex: 0x549159)
     static let modified = NSColor(hex: 0x375FAD)
     static let deleted = NSColor(hex: 0xC75450)
@@ -209,9 +251,15 @@ final class LineNumberRuler: NSRulerView {
 
     override var isOpaque: Bool { true }
 
-    /// A click on a change bar opens the file's changes side by side.
+    /// A click on a change bar opens the file's changes side by side; one in the blame column, the commit.
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if showsBlame, point.x < blameWidth {
+            if let line = line(at: point), let blame = blameSource?(), let commit = blame.commit(at: line) {
+                onBlameClick?(commit.sha, blame.blame.root)
+            }
+            return
+        }
         guard point.x >= ruleThickness - 10, let view = codeView, let document = view.document, let layoutManager = view.layoutManager,
               let container = view.textContainer else { return super.mouseDown(with: event) }
         let inText = view.convert(event.locationInWindow, from: nil)
@@ -224,16 +272,21 @@ final class LineNumberRuler: NSRulerView {
         }
     }
 
-    private var numberFont: NSFont {
+    /// Right-click: blame on or off, and on a commit's lines, that commit.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        blameMenu(at: convert(event.locationInWindow, from: nil))
+    }
+
+    var numberFont: NSFont {
         let size = max(9, (codeView?.font?.pointSize ?? 13) - 1.5)
         return .monospacedDigitSystemFont(ofSize: size, weight: .regular)
     }
 
-    /// Wide enough for the largest line number, with room either side.
+    /// Wide enough for the largest line number, with room either side, and the blame column when shown.
     func updateThickness() {
         guard let document = codeView?.document else { return }
         let digits = max(3, String(document.lines.count).count)
-        let width = ceil(("8" as NSString).size(withAttributes: [.font: numberFont]).width * CGFloat(digits)) + 22
+        let width = ceil(("8" as NSString).size(withAttributes: [.font: numberFont]).width * CGFloat(digits)) + 22 + (showsBlame ? blameWidth : 0)
         if abs(width - ruleThickness) > 0.5 { ruleThickness = width }
     }
 
@@ -254,6 +307,9 @@ final class LineNumberRuler: NSRulerView {
         let offset = convert(NSPoint.zero, from: view).y
 
         let marks = self.marks
+        let blame = showsBlame ? blameSource?() : nil
+        let blameStyle = blame.map { _ in BlameStyle(font: numberFont, width: blameWidth) }
+        var tipRects: [NSRect] = []
         func draw(_ line: Int, fragment: NSRect) {
             let label = "\(line + 1)" as NSString
             let attributes = line == caretLine ? bright : dim
@@ -262,6 +318,15 @@ final class LineNumberRuler: NSRulerView {
             let top = fragment.minY + view.textContainerOrigin.y + offset
             let y = top + (fragment.height - size.height) / 2
             guard top + fragment.height > bounds.minY, top < bounds.maxY else { return }
+            if let blame, let blameStyle, blame.line(line) != nil {
+                // The whole line, all of its rows when it wraps.
+                let end = line + 1 < index.count ? index.starts[line + 1] - 1 : text.length - 1
+                let last = layoutManager.lineFragmentRect(forGlyphAt: layoutManager.glyphIndexForCharacter(at: max(index.starts[line], end)),
+                                                          effectiveRange: nil, withoutAdditionalLayout: true)
+                let rect = NSRect(x: 0, y: top, width: blameStyle.width, height: max(fragment.height, last.maxY - fragment.minY))
+                drawBlame(blame, line: line, in: rect, rowHeight: fragment.height, style: blameStyle)
+                if blame.isBlockStart(line) || tipRects.isEmpty { tipRects.append(rect) } else { tipRects[tipRects.count - 1] = tipRects[tipRects.count - 1].union(rect) }
+            }
             label.draw(at: NSPoint(x: ruleThickness - size.width - 12, y: y), withAttributes: attributes)
             // The change bar, between the numbers and the code (a wrapped line's rows all get it).
             if let mark = marks.lines[line] {
@@ -302,6 +367,7 @@ final class LineNumberRuler: NSRulerView {
             draw(line, fragment: fragment)
             line += 1
         }
+        if blame != nil { setBlameToolTips(tipRects) }
     }
 }
 
@@ -394,6 +460,12 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
             self?.restyleReplacedLines()
             self?.scheduleChangeMarks(after: 0)
         }
+        document.onLinesEdited = { [weak self] old, newLast in self?.shiftBlame(old, newLast) }
+        ruler.blameSource = { [weak self] in self?.editedBlame }
+        ruler.onBlameClick = { [weak self] sha, root in
+            (self?.window?.windowController as? TerminalWindowController)?.showCommit(sha: sha, root: root)
+        }
+        textView.lineNote = { [weak self] line in self?.blameNote(forLine: line) }
 
         scrollView.verticalRulerView = ruler
         scrollView.hasVerticalRuler = true
@@ -539,11 +611,14 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
 
     // MARK: change marks
 
-    /// The file as of the last commit (nil: not committed, or not in a repository).
+    /// The file as of the last commit (nil: not committed, or not in a repository), and that commit.
     private var baseline: String?
+    private var baselineHead: String?
     private var baselineLoaded = false
     private var marksWork: DispatchWorkItem?
     private static let marksQueue = DispatchQueue(label: "nextterm.change-marks", qos: .utility)
+    /// Blame has its own queue: a slow one never holds up the change marks.
+    private static let blameQueue = DispatchQueue(label: "nextterm.blame", qos: .utility)
     private static let git = GitRunner.locateGit()
     /// For the self-test.
     var changeMarks: LineChanges.Marks { ruler.marks }
@@ -554,42 +629,191 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
     }
 
     /// Reads the committed version again (after a save, a commit, or coming back to the window), then
-    /// redraws the marks.
-    func refreshBaseline() {
-        guard let git = Self.git, document.storage.length <= 2_000_000 else { return }
+    /// redraws the marks. With blame on, the file's blame too, unless it is known for this HEAD; with
+    /// `blame` false, only once the file is in front again (`refreshBlameIfStale`).
+    func refreshBaseline(blame: Bool = true) {
+        guard let git = Self.git else { return }
+        guard document.storage.length <= Self.maxGitSize else { return announceBlame(.tooLarge) }
+        blameStale = !blame && Self.blameWanted
         let path = document.path
+        let format = document.format
         Self.marksQueue.async { [weak self] in
-            let text = GitRunner.headText(of: path, git: git)
+            guard self != nil else { return } // closed meanwhile
+            // One commit for the text and its blame, so a commit between the two reads cannot mix them.
+            let head = GitRunner.headCommit(of: path, git: git)
+            // As the editor holds the file (CRLF made LF), or every line would differ from it.
+            let text = head.flatMap { GitRunner.headText(of: path, git: git, revision: $0) }.map(format.editorText)
             DispatchQueue.main.async {
                 guard let self else { return }
-                let changed = !self.baselineLoaded || text != self.baseline
+                let changed = !self.baselineLoaded || text != self.baseline || head != self.baselineHead
                 self.baseline = text
+                self.baselineHead = head
                 self.baselineLoaded = true
                 if changed { self.scheduleChangeMarks(after: 0) }
+                if blame { self.refreshBlame(at: head) }
             }
         }
     }
 
-    /// Recomputes the marks a moment after typing stops (git diff on the text as it is, unsaved edits too).
+    /// Recomputes the marks a moment after typing stops (git diff on the text as it is, unsaved edits too),
+    /// and with them the blame of each line.
     func scheduleChangeMarks(after delay: TimeInterval = 0.35) {
         guard baselineLoaded, let git = Self.git else { return }
         marksWork?.cancel()
+        // A blame of another commit than the baseline's (a new one is being read): the one shown stays,
+        // moving with edits, until the new one comes.
+        let keepsBlame = blameResult != nil && blameHead != baselineHead
         guard let baseline else {
             ruler.marks = LineChanges.Marks() // new or untracked: nothing to compare with
+            if keepsBlame { return }
+            if case .notCommitted(let root)? = blameResult {
+                editedBlame = .notCommitted(lineCount: gitLineCount, root: root)
+            } else {
+                editedBlame = nil
+            }
             return
         }
         let current = document.text
+        let head = baselineHead
+        let committed: Blame? = if case .annotated(let blame)? = blameResult, !keepsBlame { blame } else { nil }
         let work = DispatchWorkItem { [weak self] in
-            let marks = baseline == current ? LineChanges.Marks()
-                : GitRunner.diff(old: baseline, new: current, git: git, context: 0).map(LineChanges.marks(from:)) ?? LineChanges.Marks()
+            guard self != nil else { return }
+            let diff = baseline == current ? nil : GitRunner.diff(old: baseline, new: current, git: git, context: 0)
+            let marks = diff.map(LineChanges.marks(from:)) ?? LineChanges.Marks()
+            // The blame is of the same commit as the baseline (same lines), carried over by the same diff.
+            let aligned = committed.flatMap { blame -> EditedBlame? in
+                guard blame.head == head, blame.lines.count == EditedBlame.lineCount(of: baseline) else { return nil }
+                guard diff != nil || baseline == current else { return nil }
+                return EditedBlame(blame, diff: diff, lineCount: EditedBlame.lineCount(of: current))
+            }
             DispatchQueue.main.async {
                 guard let self, self.document.text == current else { return } // typed on since: a newer run follows
                 self.ruler.marks = marks
+                if !keepsBlame { self.editedBlame = aligned }
             }
         }
         marksWork = work
         Self.marksQueue.asyncAfter(deadline: .now() + delay, execute: work)
     }
+
+    // MARK: blame
+
+    /// Files larger than this get no change marks and no blame.
+    private static let maxGitSize = 2_000_000
+    private static let blameCache = BlameCache()
+    private static var blameWanted: Bool {
+        AppDelegate.shared?.blameAnnotations == true || AppDelegate.shared?.currentLineBlame == true
+    }
+    /// What git blame said about the file as of the last commit; nil while blame is off.
+    private var blameResult: GitRunner.BlameResult?
+    /// The commit `blameResult` was read for (nil: no commit yet, or outside git).
+    private var blameHead: String?
+    /// The blame being read, for which commit, and whether another commit asked for one meanwhile.
+    private var blameReading: (head: String?, again: Bool)?
+    /// HEAD moved while the file was not in front: its blame is read when it is.
+    private var blameStale = false
+    /// Say once, after blame was turned on, when the file has none.
+    private var blameAnnouncement = false
+    /// Each line's commit; kept in step with edits between diffs.
+    private(set) var editedBlame: EditedBlame? {
+        didSet { showBlame() }
+    }
+
+    /// Reads the file's blame as of `head` in the background, one at a time: a refresh while one is
+    /// being read waits for it, and the cache answers at once for a commit already read.
+    private func refreshBlame(at head: String?) {
+        guard Self.blameWanted, let git = Self.git else { return }
+        if let reading = blameReading {
+            if reading.head != head { blameReading?.again = true }
+            return
+        }
+        blameReading = (head, false)
+        let path = document.path
+        Self.blameQueue.async { [weak self] in
+            guard self != nil else { return } // closed meanwhile
+            let blame = GitRunner.blame(of: path, git: git, revision: head, maxSize: Self.maxGitSize, cache: Self.blameCache)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let again = self.blameReading?.again == true
+                self.blameReading = nil
+                if Self.blameWanted { // not turned off meanwhile
+                    let changed = blame != self.blameResult || head != self.blameHead
+                    self.blameResult = blame
+                    self.blameHead = head
+                    self.announceBlame(blame)
+                    if changed { self.scheduleChangeMarks(after: 0) }
+                }
+                if again { self.refreshBlame(at: self.baselineHead) }
+            }
+        }
+    }
+
+    /// The file came to the front: the blame put off while it was behind is read now.
+    func refreshBlameIfStale() {
+        guard blameStale else { return }
+        blameStale = false
+        refreshBaseline()
+    }
+
+    private func showBlame() {
+        ruler.showsBlame = AppDelegate.shared?.blameAnnotations == true && editedBlame != nil
+        ruler.needsDisplay = true
+        textView.needsDisplay = true // the caret line's note
+    }
+
+    /// Lines as git counts them in the text being edited (none after a final newline).
+    private var gitLineCount: Int {
+        let lines = document.lines
+        return lines.starts.last == lines.length ? lines.count - 1 : lines.count
+    }
+
+    /// The View menu turned the blame column or the caret line's note on or off. A file not in front
+    /// (`now` false) is blamed when it comes to the front.
+    func applyBlame(announce: Bool = false, now: Bool = true) {
+        guard Self.blameWanted else {
+            blameResult = nil
+            blameHead = nil
+            blameStale = false
+            editedBlame = nil
+            return
+        }
+        blameAnnouncement = announce
+        showBlame() // the column or the note alone may have changed
+        refreshBaseline(blame: now)
+    }
+
+    private func announceBlame(_ result: GitRunner.BlameResult) {
+        guard blameAnnouncement else { return }
+        blameAnnouncement = false
+        let name = "“\(document.name)”"
+        let text: String
+        switch result {
+        case .notInRepository: text = "\(name) is not in a git repository"
+        case .tooLarge: text = "\(name) is too large to annotate"
+        case .timedOut: text = "\(name) took too long to annotate"
+        case .binary, .failed: text = "git blame could not read \(name)"
+        case .annotated, .notCommitted: return
+        }
+        GitToast.show(text, in: window)
+    }
+
+    /// An edit: the lines after it move along, and the edited lines are not committed (until the next
+    /// diff says exactly which changed).
+    private func shiftBlame(_ old: ClosedRange<Int>, _ newLast: Int) {
+        editedBlame?.edit(lines: old, nowEndingAt: newLast, lineCount: gitLineCount)
+    }
+
+    /// The caret line's note: “Ann, 3 days ago · Fix login”.
+    private func blameNote(forLine line: Int) -> String? {
+        guard AppDelegate.shared?.currentLineBlame == true, let entry = editedBlame?.line(line) else { return nil }
+        guard let commit = editedBlame?.blame.commit(entry) else { return "Not committed yet" }
+        if editedBlame?.blame.isShallowBoundary(commit) == true { return "Before the clone’s history · \(commit.shortSHA) or earlier" }
+        return "\(commit.shortAuthor), \(BlameText.relative(commit.authorTime)) · \(commit.summary)"
+    }
+
+    /// For the self-test: the blame column's text on a line ("" when it shows none), and the note.
+    func blameColumnText(line: Int) -> String? { ruler.showsBlame ? editedBlame.map { BlameText.column($0, line: line) } : nil }
+    func blameNoteText(line: Int) -> String? { blameNote(forLine: line) }
 
     func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString text: String?) -> Bool {
         textView.isEditable

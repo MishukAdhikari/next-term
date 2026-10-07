@@ -230,6 +230,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         controllers.forEach { $0.editorArea.applyWrap() }
     }
 
+    /// Who last changed each line, in a column beside the line numbers (off unless turned on).
+    var blameAnnotations: Bool {
+        get { UserDefaults.standard.bool(forKey: "blameAnnotations") }
+        set { UserDefaults.standard.set(newValue, forKey: "blameAnnotations") }
+    }
+
+    @objc func toggleBlameAnnotations(_ sender: Any?) {
+        blameAnnotations.toggle()
+        applyBlame(announce: blameAnnotations)
+    }
+
+    /// The caret line's last commit, dimmed after its text (off unless turned on).
+    var currentLineBlame: Bool {
+        get { UserDefaults.standard.bool(forKey: "currentLineBlame") }
+        set { UserDefaults.standard.set(newValue, forKey: "currentLineBlame") }
+    }
+
+    @objc func toggleCurrentLineBlame(_ sender: Any?) {
+        currentLineBlame.toggle()
+        applyBlame(announce: currentLineBlame)
+    }
+
+    /// Turning blame on says so when the file in front has none (outside git, too large).
+    private func applyBlame(announce: Bool) {
+        controllers.forEach { $0.editorArea.applyBlame(announce: announce && $0.window?.isKeyWindow == true) }
+    }
+
     @objc func toggleSidebarSide(_ sender: Any?) {
         sidebarSide = sidebarSide == .left ? .right : .left
         controllers.forEach { $0.applyLayout() }
@@ -743,6 +770,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         if item.action == #selector(toggleSidebarSide(_:)) { item.state = sidebarSide == .right ? .on : .off }
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = softWrap ? .on : .off }
+        if item.action == #selector(toggleBlameAnnotations(_:)) { item.state = blameAnnotations ? .on : .off }
+        if item.action == #selector(toggleCurrentLineBlame(_:)) { item.state = currentLineBlame ? .on : .off }
         if item.action == #selector(setLineHeight(_:)), let value = item.representedObject as? Double {
             item.state = abs(CGFloat(value) - editorLineHeight) < 0.001 ? .on : .off
         }
@@ -931,6 +960,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         view.addItem(withTitle: "Terminal Position", action: nil, keyEquivalent: "").submenu = positions
         item(view, "Show Changes", #selector(TerminalWindowController.showChanges(_:)), "g", [.command, .option])
+        item(view, "Annotate with Git Blame", #selector(toggleBlameAnnotations(_:)), "", target: self)
+        item(view, "Current Line Blame", #selector(toggleCurrentLineBlame(_:)), "", target: self)
         view.addItem(.separator())
         item(view, "Soft Wrap", #selector(toggleSoftWrap(_:)), "", target: self)
         let heights = NSMenu(title: "Line Height")

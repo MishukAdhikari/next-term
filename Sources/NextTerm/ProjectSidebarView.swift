@@ -58,6 +58,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// Watches the repository's .git when the tree shows a folder inside it (commits, checkouts).
     private var gitDirWatcher: DirectoryWatcher?
     let git = GitMonitor()
+    /// HEAD moved (a commit, a checkout): open files compare against the new commit.
+    var onHeadChange: (() -> Void)?
+    private var lastHead: String?
     private var hiddenRows: [ObjectIdentifier: HiddenEntries] = [:]
     private var loading: Set<ObjectIdentifier> = []
     /// Each folder's rows (its entries on disk, the deleted ones in their place, "… N more"), built once
@@ -382,6 +385,10 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     private func gitChanged(_ snapshot: GitSnapshot?) {
         header.show(snapshot)
+        if let head = snapshot?.head, head != lastHead {
+            if lastHead != nil { onHeadChange?() }
+            lastHead = head
+        }
         // A folder inside a repository: its watcher cannot see .git, so watch that too.
         if let snapshot, let root, canonicalPath(snapshot.root) != root.path {
             let dotGit = canonicalPath(snapshot.root) + "/.git"

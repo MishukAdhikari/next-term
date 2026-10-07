@@ -48,12 +48,21 @@ public enum LineChanges {
 }
 
 extension GitRunner {
-    /// A file's text in the last commit, or nil when it is not there (new, untracked, or outside a
-    /// repository). Read-only: `git show` takes no index lock.
-    public static func headText(of path: String, git: String) -> String? {
+    /// The commit HEAD points at in the repository a file is in; nil with no commit yet, or outside one.
+    public static func headCommit(of path: String, git: String) -> String? {
+        let folder = (path as NSString).deletingLastPathComponent
+        let data = run(git, ["-C", folder, "--no-optional-locks", "rev-parse", "--verify", "--quiet", "HEAD"], timeout: 10)
+        let sha = data.flatMap { String(data: $0, encoding: .utf8) }?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return sha?.isEmpty == false ? sha : nil
+    }
+
+    /// A file's text in the last commit (or in `revision`), or nil when it is not there (new, untracked,
+    /// or outside a repository). Read-only: `git show` takes no index lock.
+    public static func headText(of path: String, git: String, revision: String = "HEAD") -> String? {
         let folder = (path as NSString).deletingLastPathComponent
         let name = (path as NSString).lastPathComponent
-        guard let data = run(git, ["-C", folder, "--no-optional-locks", "show", "--no-textconv", "HEAD:./" + name], timeout: 10),
+        let object = revision + ":./" + name
+        guard let data = run(git, ["-C", folder, "--no-optional-locks", "show", "--no-textconv", object], timeout: 10),
               !data.prefix(8000).contains(0) else { return nil }
         return String(data: data, encoding: .utf8)
     }

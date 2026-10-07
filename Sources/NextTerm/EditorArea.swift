@@ -20,6 +20,9 @@ final class EditorArea: NSView, TabBarViewDelegate {
     /// Tabs in order: files being edited (CodeEditorView), diffs (DiffPane), notebooks (NotebookPane)
     /// and commit histories (GitLogPane).
     private(set) var panes: [NSView] = []
+    /// The 5-second recheck of the open file's committed text (off in the self-test, to prove that a
+    /// commit is noticed on its own).
+    var periodicBaselineChecks = true
     private(set) var activeIndex = 0
 
     var editors: [CodeEditorView] { panes.compactMap { $0 as? CodeEditorView } }
@@ -199,6 +202,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
         for (i, pane) in panes.enumerated() { pane.isHidden = i != index }
         if let editor = panes[index] as? CodeEditorView {
             editor.document.lastFocused = Date()
+            editor.refreshBlameIfStale()
             if focus { window?.makeFirstResponder(editor.textView) }
         } else if let diff = panes[index] as? DiffPane, focus {
             window?.makeFirstResponder(diff.focusView)
@@ -373,7 +377,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
         for database in databases { database.refreshIfChanged() }
         // The file being edited against the last commit: a commit (yours or an agent's) moves the marks.
         checks += 1
-        if checks % 5 == 0 { activeEditor?.refreshBaseline() }
+        if periodicBaselineChecks, checks % 5 == 0 { activeEditor?.refreshBaseline() }
     }
 
     private var checks = 0
@@ -459,6 +463,18 @@ final class EditorArea: NSView, TabBarViewDelegate {
 
     func applyWrap() {
         editors.forEach { $0.applyWrap() }
+    }
+
+    /// Blame was turned on or off (View menu); `announce` says when the file in front has none. Only
+    /// the file in front is blamed now; the others when they come to the front.
+    func applyBlame(announce: Bool = false) {
+        editors.forEach { $0.applyBlame(announce: announce && $0 === activeEditor, now: $0 === activeEditor) }
+    }
+
+    /// A commit or a checkout: every open file's change marks follow at once. Blame is read now for the
+    /// file in front only, and for the others when they come to the front.
+    func headMoved() {
+        editors.forEach { $0.refreshBaseline(blame: $0 === activeEditor) }
     }
 
     // MARK: TabBarViewDelegate

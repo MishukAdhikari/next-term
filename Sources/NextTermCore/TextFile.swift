@@ -16,6 +16,12 @@ public struct TextFormat: Equatable, Sendable {
         self.encoding = encoding
         self.lineEnding = lineEnding
     }
+
+    /// Another copy of the file (the last commit's) as the editor holds this one: with "\n" line endings
+    /// when this file uses "\r\n" throughout. Lines are counted the same either way.
+    public func editorText(_ stored: String) -> String {
+        lineEnding == .crlf ? stored.replacingOccurrences(of: "\r\n", with: "\n") : stored
+    }
 }
 
 /// Reading and writing source files for the editor.

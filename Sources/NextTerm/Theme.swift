@@ -26,6 +26,13 @@ enum Theme {
     static let linesAdded = NSColor(hex: 0x73C27A)
     static let linesRemoved = NSColor(hex: 0xE5736F)
 
+    // Git blame in the editor: the column's text, and the shade of the newest lines (older ones fade
+    // towards the background).
+    static let blameText = NSColor(hex: 0x8C8F96)
+    static let blameHash = NSColor(hex: 0x62666E)
+    static let blameRecent = NSColor(hex: 0x5C86D1)
+    static let blameNote = NSColor(hex: 0x5F636B)
+
     static func color(for change: GitChange?) -> NSColor {
         switch change {
         case .modified?, .renamed?: return gitModified

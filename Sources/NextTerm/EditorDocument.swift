@@ -28,6 +28,8 @@ final class EditorDocument: NSObject, NSTextStorageDelegate {
     var onChange: ((EditorDocument) -> Void)?
     /// Text was replaced from disk (not typed): the editor restyles those lines.
     var onTextReplaced: (() -> Void)?
+    /// Lines `old` (0-based, as they were) became lines `old.lowerBound...newLast`, typed or not.
+    var onLinesEdited: ((_ old: ClosedRange<Int>, _ newLast: Int) -> Void)?
 
     enum Conflict: Equatable { case changedOnDisk, deletedOnDisk }
 
@@ -120,6 +122,7 @@ final class EditorDocument: NSObject, NSTextStorageDelegate {
         lines.replace(oldRange, with: (textStorage.string as NSString).substring(with: editedRange))
         let newLast = lines.line(at: editedRange.location + editedRange.length)
         highlighter?.textEdited(oldLineRange: oldFirst...oldLast, newLineCount: lines.count, firstLine: oldFirst, lastLineNow: newLast)
+        onLinesEdited?(oldFirst...oldLast, newLast)
         let edited = oldFirst...max(oldFirst, newLast)
         indentPending = indentPending.map { min($0.lowerBound, edited.lowerBound)...max($0.upperBound, edited.upperBound) } ?? edited
         if !isDirty, !isLoading {

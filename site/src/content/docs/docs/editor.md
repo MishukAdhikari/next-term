@@ -1,6 +1,6 @@
 ---
 title: Code editor
-description: "The editor above your terminal: Go to File (⌘P), 112 languages, line height, soft wrap, ⌘/ comments, ⌘L, and files that follow your agents’ edits."
+description: "The editor above your terminal: Go to File (⌘P), 112 languages, line height, soft wrap, git blame, ⌘/ comments, ⌘L, and files that follow your agents’ edits."
 head:
   - tag: title
     content: A native macOS terminal with a code editor — Next Term
@@ -113,3 +113,15 @@ Beside the line numbers, a thin bar marks every line that differs from the last 
 - **A red wedge** between two lines: lines were deleted there.
 
 Click a mark to open the file’s changes side by side. After a commit (yours or an agent’s) the marks clear on their own. Files outside git, or not committed yet, show none.
+
+## Git blame
+
+**View › Annotate with Git Blame** shows who last changed each line, in a column beside the line numbers. It is also on the gutter’s right-click menu, and it stays on for every file until you turn it off.
+
+- **On the first line of each commit’s lines:** the author’s first name, how long ago in a few letters (`3d`, `2w`, `5mo`), and the short hash.
+- **Shading:** the newer the commit, the brighter its lines, so recent work stands out.
+- **Not committed:** lines changed since the last commit, saved or not, say so. While you type, the annotations move with your edits.
+- **Hover** over a commit’s lines for its full summary, author, date and hash. **Click** to show the commit; the right-click menu also has **Show Commit** and **Copy Commit Hash**.
+- **The current line:** **View › Current Line Blame** (off by default) adds a dim note after the line with the caret, such as “Ann, 3 days ago · Fix login”.
+
+Blame is read in the background, once per file and commit, and follows a file back through renames. After a commit or a checkout it updates by itself. A file outside git shows no column, a file not committed yet is all “Not committed”, and files over 2 MB are not annotated. In a shallow clone, lines from before its oldest commit say “Earlier history”, since the clone does not know who wrote them.
