@@ -119,6 +119,10 @@ public struct CommitQuery: Equatable, Sendable {
 
     public var isFiltered: Bool { !isConnected || since != nil || until != nil || !paths.isEmpty }
 
+    /// Searching text or names: a UTF-8 locale, so ignoring case covers “Ü” and “É”, not only A to Z
+    /// (GitRunner reads everything else in the C locale).
+    var environment: [String: String] { isConnected ? [:] : ["LC_ALL": "en_US.UTF-8"] }
+
     /// The text, when it could be the start of a commit id (6 to 40 hex digits).
     public var hashPrefix: String? {
         let trimmed = text.trimmingCharacters(in: .whitespaces).lowercased()
@@ -184,6 +188,8 @@ public struct CommitDetails: Equatable, Sendable {
     public var files: [ChangedFile]
     /// More files changed than are listed.
     public var truncated = false
+    /// The files' lines were counted (not in a partial clone without their contents).
+    public var isCounted = true
 
     public init(commit: Commit, message: String, files: [ChangedFile] = [], truncated: Bool = false) {
         self.commit = commit
@@ -246,7 +252,8 @@ public enum CommitLog {
         }
         // HEAD only when there is a commit: on an unborn branch, naming it is an error.
         let hasHead = query.scope != .all || resolve("HEAD", in: root, git: git) != nil
-        guard let data = GitRunner.run(git, base(root) + ["log"] + query.arguments(skip: skip, limit: limit, includeHead: hasHead), timeout: timeout) else {
+        guard let data = GitRunner.run(git, base(root) + ["log"] + query.arguments(skip: skip, limit: limit, includeHead: hasHead), timeout: timeout,
+                                       environment: query.environment) else {
             // A repository without a single commit has nothing to list.
             return hasHead || query.scope != .all ? nil : []
         }
@@ -276,12 +283,18 @@ public enum CommitLog {
         var details = CommitDetails(commit: commit, message: message)
         // The first commit is compared with nothing (--root, an option, so before --end-of-options).
         let against = commit.parents.first.map { ["--end-of-options", $0, commit.sha] } ?? ["--root", "--end-of-options", commit.sha]
-        if let changes = GitRunner.run(git, base(root) + ["diff-tree", "-r", "-M", "--no-commit-id", "--raw", "--numstat", "-z", "--no-ext-diff",
-                                                          "--no-textconv"] + against + ["--"], timeout: 30) {
-            let files = parseChanges(changes)
-            details.files = Array(files.prefix(fileLimit))
-            details.truncated = files.count > fileLimit
+        // Counting lines and finding renames read the files. In a partial clone, those not downloaded
+        // stay so (reading a commit must not fetch); the files are then listed without counts.
+        let noFetch = ["GIT_NO_LAZY_FETCH": "1"]
+        let options = ["diff-tree", "-r", "--no-commit-id", "--raw", "-z", "--no-ext-diff", "--no-textconv"]
+        if let changes = GitRunner.run(git, base(root) + options + ["-M", "--numstat"] + against + ["--"], timeout: 30, environment: noFetch) {
+            details.files = parseChanges(changes)
+        } else if let changes = GitRunner.run(git, base(root) + options + against + ["--"], timeout: 30, environment: noFetch) {
+            details.files = parseChanges(changes)
+            details.isCounted = false
         }
+        details.truncated = details.files.count > fileLimit
+        details.files = Array(details.files.prefix(fileLimit))
         return details
     }
 

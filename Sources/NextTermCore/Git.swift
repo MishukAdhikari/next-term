@@ -356,8 +356,9 @@ public enum GitRunner {
     /// Output goes to a temporary file, not a pipe. A pipe's end is inherited by any process started at
     /// the same moment (another git, or a new tab's shell, which can live for days), and the end of the
     /// output would never arrive while it is open. A file has no end to wait for: the exit is enough.
+    /// `environment` is added last, over the defaults.
     static func run(_ executable: String, _ arguments: [String], timeout: TimeInterval,
-                    acceptedStatus: Set<Int32> = [0]) -> Data? {
+                    acceptedStatus: Set<Int32> = [0], environment: [String: String] = [:]) -> Data? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -371,6 +372,7 @@ public enum GitRunner {
         env["GIT_CONFIG_COUNT"] = "1"
         env["GIT_CONFIG_KEY_0"] = "core.fsmonitor"
         env["GIT_CONFIG_VALUE_0"] = "false"
+        env.merge(environment) { $1 }
         process.environment = env
 
         let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("next-term-out-\(UUID().uuidString)")

@@ -197,10 +197,15 @@ final class GitLogDetailsView: NSView, NSTextViewDelegate, NSTableViewDataSource
         ])
         if commitIsMerge { header.append(NSAttributedString(string: " (against the first parent)", attributes: [.font: NSFont.systemFont(ofSize: 11.5), .foregroundColor: Theme.textDim])) }
         let counts: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .medium)]
-        header.append(Typography.gap(10, font: .systemFont(ofSize: 11.5)))
-        header.append(NSAttributedString(string: "+\(totals.added)", attributes: counts.merging([.foregroundColor: Theme.linesAdded]) { $1 }))
-        header.append(Typography.gap(6, font: .systemFont(ofSize: 11.5)))
-        header.append(NSAttributedString(string: "−\(totals.removed)", attributes: counts.merging([.foregroundColor: Theme.linesRemoved]) { $1 }))
+        if details.isCounted {
+            header.append(Typography.gap(10, font: .systemFont(ofSize: 11.5)))
+            header.append(NSAttributedString(string: "+\(totals.added)", attributes: counts.merging([.foregroundColor: Theme.linesAdded]) { $1 }))
+            header.append(Typography.gap(6, font: .systemFont(ofSize: 11.5)))
+            header.append(NSAttributedString(string: "−\(totals.removed)", attributes: counts.merging([.foregroundColor: Theme.linesRemoved]) { $1 }))
+        } else {
+            // A partial clone: the contents to count lines in are not downloaded.
+            header.append(NSAttributedString(string: " · lines not counted", attributes: [.font: NSFont.systemFont(ofSize: 11.5), .foregroundColor: Theme.textDim]))
+        }
         if details.truncated {
             header.append(NSAttributedString(string: " · the first \(details.files.count.formatted()) shown", attributes: [.font: NSFont.systemFont(ofSize: 11.5), .foregroundColor: Theme.textDim]))
         }

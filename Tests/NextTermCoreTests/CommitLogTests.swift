@@ -188,6 +188,42 @@ import Testing
         let diff = CommitLog.diff(of: ":weird.txt", commit: weird, parent: nil, in: repo.work, git: repo.git)
         #expect(diff?.isNew == true && diff?.hunks.first?.added == 1)
     }
+
+    /// Ignoring case covers letters beyond A to Z, in the message and in names. (A Cyrillic name: Process
+    /// passes “ë” decomposed, and git would keep a name given with -c that way.)
+    @Test func searchIgnoresCaseBeyondASCII() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        try repo.write("a.txt", "a\n")
+        let sha = repo.commit("Über alles: ÉCOLE fix", name: "Жанна Ли", email: "zh@x")
+        try repo.write("b.txt", "b\n")
+        repo.commit("Other")
+        for query in [CommitQuery(text: "über"), CommitQuery(text: "école"), CommitQuery(text: "^über", regex: true), CommitQuery(author: "жанна л")] {
+            #expect(CommitLog.page(query, in: repo.work, git: repo.git)?.map(\.sha) == [sha], "\(query)")
+        }
+    }
+
+    /// In a partial clone, reading a commit's files downloads nothing: they are listed without counts.
+    @Test func aPartialCloneIsNotFetchedFrom() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        try repo.write("a.txt", "one\n")
+        repo.commit("One")
+        try repo.write("a.txt", "two\n")
+        try repo.write("b.txt", "b\n")
+        let two = repo.commit("Two")
+        let clone = repo.work + "-partial"
+        defer { try? FileManager.default.removeItem(atPath: clone) }
+        repo.sh(["config", "uploadpack.allowFilter", "true"]) // read by the serving side
+        repo.sh(["clone", "-q", "--filter=blob:none", "--no-checkout", "file://" + repo.work, clone])
+        let packs = { (try? FileManager.default.contentsOfDirectory(atPath: clone + "/.git/objects/pack"))?.sorted() ?? [] }
+        let before = packs()
+        try #require(!before.isEmpty)
+        let details = try #require(CommitLog.details(of: two, in: clone, git: repo.git))
+        #expect(details.files.map(\.path) == ["a.txt", "b.txt"] && details.files.map(\.status) == [.modified, .added])
+        #expect(!details.isCounted && packs() == before)
+        #expect(CommitLog.details(of: two, in: repo.work, git: repo.git)?.isCounted == true)
+    }
 }
 
 /// A repository in a temporary folder, removed with `remove()`.
