@@ -1,0 +1,719 @@
+import Foundation
+
+/// How a large data file splits into records, for the read-only head view.
+public enum DataFileKind: String, Sendable, Equatable {
+    /// One JSON value per line: .jsonl, .ndjson.
+    case jsonLines
+    /// Comma, semicolon or tab separated values: .csv, .tsv. A quoted field can hold newlines.
+    case delimited
+    /// Plain lines: a log, or any text file too big for the editor.
+    case lines
+
+    public init(path: String) {
+        switch (path as NSString).pathExtension.lowercased() {
+        case "jsonl", "ndjson": self = .jsonLines
+        case "csv", "tsv": self = .delimited
+        default: self = .lines
+        }
+    }
+}
+
+/// Where a page starts: a byte offset at a record boundary, and the 1-based line there.
+public struct DataPosition: Sendable, Equatable {
+    public var offset: UInt64
+    public var line: Int
+
+    public init(offset: UInt64 = 0, line: Int = 1) {
+        self.offset = offset
+        self.line = line
+    }
+
+    public static let start = DataPosition()
+}
+
+/// One record: a line, or a CSV row (which can span lines).
+public struct DataRecord: Sendable, Equatable {
+    /// The 1-based line it starts on.
+    public var line: Int
+    /// Its text as in the file, without the line ending. Cut at `DataHead.maxRecordBytes`.
+    public var raw: String
+    /// CSV and TSV: its fields, unquoted. JSON Lines: the values of `keys` as written (a string keeps its
+    /// quotes), or the whole value when the line is not an object.
+    public var fields: [String] = []
+    /// JSON Lines: the object's top-level keys, in the order the line has them.
+    public var keys: [String] = []
+    /// Why it could not be read: not JSON, a quote that is never closed, too long.
+    public var error: String?
+    public var isTruncated = false
+
+    public init(line: Int, raw: String, fields: [String] = [], keys: [String] = [], error: String? = nil, isTruncated: Bool = false) {
+        self.line = line
+        self.raw = raw
+        self.fields = fields
+        self.keys = keys
+        self.error = error
+        self.isTruncated = isTruncated
+    }
+
+    /// JSON Lines: the value of a top-level key, as written.
+    public func value(for key: String) -> String? {
+        keys.firstIndex(of: key).flatMap { $0 < fields.count ? fields[$0] : nil }
+    }
+}
+
+/// Some records from the start of a file, or from where the last page ended.
+public struct DataPage: Sendable, Equatable {
+    public var records: [DataRecord]
+    /// CSV and TSV: the separator found in the first lines (or the one passed in).
+    public var delimiter: UInt8?
+    /// Where the next page starts.
+    public var end: DataPosition
+    /// Nothing follows `end`, as of this read.
+    public var isAtEnd: Bool
+    /// The file's size when it was read.
+    public var fileSize: UInt64
+}
+
+public enum DataHeadError: Error, LocalizedError, Equatable {
+    case notAFile, binary, utf16, unreadable
+
+    public var errorDescription: String? {
+        switch self {
+        case .notAFile: return "This is not a regular file."
+        case .binary: return "This file is not text."
+        case .utf16: return "This file is UTF-16 text, which the head view does not read."
+        case .unreadable: return "This file could not be read."
+        }
+    }
+}
+
+/// Lets a background count stop early (the tab closed, the file changed).
+public final class DataCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    public init() {}
+
+    public func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+
+    public var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+}
+
+/// Reads the first records of a file of any size without loading all of it: a page of 1,000 at a time,
+/// through a FileHandle, 256 KB at a time. Never writes.
+public enum DataHead {
+    public static let pageSize = 1000
+    /// A record longer than this is cut (an embedding row is about 16 KB; a whole minified file is not a row).
+    public static let maxRecordBytes = 1 << 20
+    /// A page stops early past this many bytes, so 1,000 huge records cannot fill memory.
+    public static let maxPageBytes = 64 << 20
+    static let chunkSize = 256 << 10
+    /// How much of the start is looked at for a BOM, binary content and the CSV separator.
+    static let headLength = 64 << 10
+
+    /// Up to `limit` records from `start` (the start of the file, or a page's `end`). For CSV and TSV,
+    /// pass the first page's `delimiter` to later pages.
+    public static func page(at path: String, kind: DataFileKind, from start: DataPosition = .start,
+                            limit: Int = pageSize, delimiter: UInt8? = nil) throws -> DataPage {
+        guard isRegularFile(path) else { throw DataHeadError.notAFile } // a named pipe would block forever
+        guard let handle = FileHandle(forReadingAtPath: path) else { throw DataHeadError.unreadable }
+        defer { try? handle.close() }
+        do {
+            let size = try handle.seekToEnd()
+            var position = start
+            var separator = delimiter
+            if start.offset == 0 {
+                try handle.seek(toOffset: 0)
+                let head = try handle.read(upToCount: headLength) ?? Data()
+                if head.starts(with: [0xFF, 0xFE]) || head.starts(with: [0xFE, 0xFF]) { throw DataHeadError.utf16 }
+                if head.prefix(TextFile.sniffLength).contains(0) { throw DataHeadError.binary }
+                if head.starts(with: [0xEF, 0xBB, 0xBF]) { position.offset = 3 }
+                if kind == .delimited, separator == nil {
+                    separator = detectDelimiter(head.dropFirst(Int(position.offset)), fallback: defaultDelimiter(for: path))
+                }
+            }
+            try handle.seek(toOffset: position.offset)
+            var scanner = RecordScanner(kind: kind, delimiter: separator ?? defaultDelimiter(for: path), start: position, limit: limit)
+            while !scanner.isFull {
+                let chunk = try handle.read(upToCount: chunkSize) ?? Data()
+                if chunk.isEmpty {
+                    scanner.finish()
+                    break
+                }
+                scanner.feed(chunk)
+            }
+            let end = scanner.position
+            return DataPage(records: scanner.records, delimiter: kind == .delimited ? separator : nil,
+                            end: end, isAtEnd: end.offset >= size, fileSize: size)
+        } catch let error as DataHeadError {
+            throw error
+        } catch {
+            throw DataHeadError.unreadable
+        }
+    }
+
+    /// Whether the head view can read the file: no NUL byte early on and not UTF-16.
+    public static func isText(_ path: String) -> Bool {
+        guard isRegularFile(path), let handle = FileHandle(forReadingAtPath: path) else { return false }
+        defer { try? handle.close() }
+        guard let head = try? handle.read(upToCount: TextFile.sniffLength) else { return false }
+        if head.starts(with: [0xFF, 0xFE]) || head.starts(with: [0xFE, 0xFF]) { return false }
+        return !head.contains(0)
+    }
+
+    // MARK: counting
+
+    /// Counts a file's lines, 4 MB at a time, without keeping any of it. Calls `progress` with the bytes
+    /// and lines so far after each read. Nil when cancelled or unreadable.
+    public static func countLines(_ path: String, cancellation: DataCancellation? = nil,
+                                  progress: ((UInt64, Int) -> Void)? = nil) -> Int? {
+        guard isRegularFile(path), let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+        let size = 4 << 20
+        let buffer = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 16)
+        defer { buffer.deallocate() }
+        var lines = 0
+        var total: UInt64 = 0
+        var last: UInt8 = 0x0A
+        while true {
+            if cancellation?.isCancelled == true { return nil }
+            let n = read(handle.fileDescriptor, buffer, size)
+            if n < 0 {
+                if errno == EINTR { continue }
+                return nil
+            }
+            if n == 0 { break }
+            var p = UnsafeRawPointer(buffer)
+            var remaining = n
+            while remaining > 0, let hit = memchr(p, 0x0A, remaining) {
+                lines += 1
+                let advance = p.distance(to: UnsafeRawPointer(hit)) + 1
+                p += advance
+                remaining -= advance
+            }
+            last = buffer.load(fromByteOffset: n - 1, as: UInt8.self)
+            total += UInt64(n)
+            progress?(total, lines)
+        }
+        return lines + (last == 0x0A ? 0 : 1)
+    }
+
+    /// About how many records the whole file holds, from how many lines (or bytes) the ones read so far took.
+    public static func estimatedTotal(records: Int, through end: DataPosition, fileSize: UInt64, lineCount: Int?) -> Int {
+        guard records > 0, end.offset > 0 else { return records }
+        let linesRead = end.line - 1
+        if let lineCount, linesRead > 0 {
+            let perLine = Double(records) / Double(linesRead)
+            return max(records, Int((perLine * Double(lineCount)).rounded()))
+        }
+        let perByte = Double(records) / Double(end.offset)
+        return max(records, Int((perByte * Double(fileSize)).rounded()))
+    }
+
+    // MARK: CSV
+
+    static func defaultDelimiter(for path: String) -> UInt8 {
+        (path as NSString).pathExtension.lowercased() == "tsv" ? 0x09 : 0x2C
+    }
+
+    /// The separator a CSV's first lines use most consistently: comma, tab or semicolon (European
+    /// spreadsheets write "1,5;2,3"). Quoted text does not count.
+    public static func detectDelimiter<Bytes: Collection>(_ head: Bytes, fallback: UInt8) -> UInt8 where Bytes.Element == UInt8 {
+        let candidates: [UInt8] = [0x2C, 0x09, 0x3B]
+        var counts: [[Int]] = [[], [], []]
+        var current = [0, 0, 0]
+        var inQuotes = false
+        var lines = 0
+        for byte in head {
+            if byte == 0x22 {
+                inQuotes.toggle()
+                continue
+            }
+            if inQuotes { continue }
+            if byte == 0x0A {
+                for k in 0..<3 { counts[k].append(current[k]) }
+                current = [0, 0, 0]
+                lines += 1
+                if lines == 20 { break }
+            } else if let k = candidates.firstIndex(of: byte) {
+                current[k] += 1
+            }
+        }
+        if lines == 0 { for k in 0..<3 { counts[k].append(current[k]) } } // one line, no newline yet
+        var best: (delimiter: UInt8, consistent: Int, mode: Int)?
+        for k in 0..<3 {
+            let used = counts[k].filter { $0 > 0 }
+            guard !used.isEmpty else { continue }
+            var frequency: [Int: Int] = [:]
+            for count in used { frequency[count, default: 0] += 1 }
+            let top = frequency.max { a, b in a.value == b.value ? a.key < b.key : a.value < b.value }!
+            let candidate = (delimiter: candidates[k], consistent: top.value, mode: top.key)
+            guard let current = best else {
+                best = candidate
+                continue
+            }
+            if candidate.consistent > current.consistent
+                || (candidate.consistent == current.consistent && candidate.mode > current.mode)
+                || (candidate.consistent == current.consistent && candidate.mode == current.mode && candidate.delimiter == fallback) {
+                best = candidate
+            }
+        }
+        return best?.delimiter ?? fallback
+    }
+
+    /// Whether the first row names the columns: no numbers in it, no repeats, and either a column of
+    /// numbers under a name or names short enough to be names. A guess: the view lets you turn it off.
+    public static func looksLikeHeader(_ rows: [[String]]) -> Bool {
+        guard let first = rows.first, !first.isEmpty else { return false }
+        let names = first.map { $0.trimmingCharacters(in: .whitespaces) }
+        if names.contains(where: isNumber) { return false }
+        let named = names.filter { !$0.isEmpty }
+        // One empty name is allowed: pandas writes its index column without one.
+        if named.isEmpty || named.count < names.count - 1 || Set(named).count != named.count { return false }
+        let body = rows.dropFirst().prefix(50)
+        for column in names.indices {
+            let values = body.compactMap { column < $0.count ? $0[column].trimmingCharacters(in: .whitespaces) : nil }.filter { !$0.isEmpty }
+            if !values.isEmpty, values.allSatisfy(isNumber) { return true }
+        }
+        return named.allSatisfy { $0.count <= 64 }
+    }
+
+    static func isNumber(_ text: String) -> Bool {
+        guard let first = text.unicodeScalars.first, "0123456789+-.".unicodeScalars.contains(first) else { return false }
+        return Double(text) != nil
+    }
+
+    // MARK: JSON Lines
+
+    /// A line of a JSON Lines file: checked with JSONSerialization, then split into its top-level keys
+    /// and values in the order the line has them (JSONSerialization does not keep the order).
+    static func jsonRecord(_ bytes: [UInt8], line: Int, truncated: Bool) -> DataRecord {
+        var record = DataRecord(line: line, raw: decode(bytes, truncated: truncated), isTruncated: truncated)
+        if truncated {
+            record.error = "Longer than 1 MB, so it is cut here and not read as JSON."
+            return record
+        }
+        do {
+            _ = try JSONSerialization.jsonObject(with: Data(bytes), options: [.fragmentsAllowed])
+        } catch {
+            record.error = jsonError(error)
+            return record
+        }
+        if let (keys, values) = topLevelFields(bytes) {
+            record.keys = keys
+            record.fields = values
+        } else {
+            record.fields = [record.raw.trimmingCharacters(in: .whitespaces)] // an array, or a single value
+        }
+        return record
+    }
+
+    static func jsonError(_ error: Error) -> String {
+        guard var detail = (error as NSError).userInfo[NSDebugDescriptionErrorKey] as? String, !detail.isEmpty else {
+            return "Not valid JSON."
+        }
+        detail = detail.replacingOccurrences(of: "around line 1, column", with: "at column")
+        return "Not valid JSON: " + detail
+    }
+
+    /// A JSON value as a cell shows it: a string without its quotes and escapes, anything else as written.
+    public static func displayValue(_ json: String) -> String {
+        guard json.hasPrefix("\""), json.count >= 2 else { return json }
+        if !json.contains("\\") { return String(json.dropFirst().dropLast()) }
+        let decoded = try? JSONSerialization.jsonObject(with: Data(json.utf8), options: [.fragmentsAllowed])
+        return decoded as? String ?? json
+    }
+
+    /// The keys and values of a valid JSON object, as written; nil for anything else.
+    static func topLevelFields(_ bytes: [UInt8]) -> ([String], [String])? {
+        bytes.withUnsafeBufferPointer { b -> ([String], [String])? in
+            let n = b.count
+            var i = skipSpace(b, from: 0)
+            guard i < n, b[i] == 0x7B else { return nil } // {
+            i += 1
+            var keys: [String] = []
+            var values: [String] = []
+            while true {
+                i = skipSpace(b, from: i)
+                guard i < n else { return nil }
+                if b[i] == 0x7D { break } // }
+                if b[i] == 0x2C { // ,
+                    i += 1
+                    continue
+                }
+                guard b[i] == 0x22 else { return nil }
+                let keyStart = i
+                i = stringEnd(b, from: i)
+                keys.append(displayValue(String(decoding: UnsafeBufferPointer(rebasing: b[keyStart..<i]), as: UTF8.self)))
+                i = skipSpace(b, from: i)
+                guard i < n, b[i] == 0x3A else { return nil } // :
+                i = skipSpace(b, from: i + 1)
+                let valueStart = i
+                i = valueEnd(b, from: i)
+                values.append(String(decoding: UnsafeBufferPointer(rebasing: b[valueStart..<i]), as: UTF8.self))
+            }
+            return (keys, values)
+        }
+    }
+
+    private static func skipSpace(_ b: UnsafeBufferPointer<UInt8>, from start: Int) -> Int {
+        var i = start
+        while i < b.count, b[i] == 0x20 || b[i] == 0x09 || b[i] == 0x0D || b[i] == 0x0A { i += 1 }
+        return i
+    }
+
+    /// Just past the closing quote of the string starting at `start`.
+    private static func stringEnd(_ b: UnsafeBufferPointer<UInt8>, from start: Int) -> Int {
+        var i = start + 1
+        while i < b.count {
+            if b[i] == 0x5C { // backslash
+                i += 2
+                continue
+            }
+            if b[i] == 0x22 { return i + 1 }
+            i += 1
+        }
+        return b.count
+    }
+
+    /// Just past the value starting at `start`.
+    private static func valueEnd(_ b: UnsafeBufferPointer<UInt8>, from start: Int) -> Int {
+        guard start < b.count else { return start }
+        let first = b[start]
+        if first == 0x22 { return stringEnd(b, from: start) }
+        if first == 0x7B || first == 0x5B { // { [
+            var depth = 0
+            var i = start
+            while i < b.count {
+                switch b[i] {
+                case 0x22:
+                    i = stringEnd(b, from: i)
+                    continue
+                case 0x7B, 0x5B:
+                    depth += 1
+                case 0x7D, 0x5D:
+                    depth -= 1
+                    if depth == 0 { return i + 1 }
+                default:
+                    break
+                }
+                i += 1
+            }
+            return b.count
+        }
+        var i = start
+        while i < b.count, b[i] != 0x2C, b[i] != 0x7D, b[i] != 0x20, b[i] != 0x09, b[i] != 0x0D, b[i] != 0x0A { i += 1 }
+        return i
+    }
+
+    /// The columns for JSON Lines rows: every top-level key, in the order first seen.
+    public static func columns(of records: [DataRecord], limit: Int = 200) -> [String] {
+        var seen = Set<String>()
+        var columns: [String] = []
+        for record in records {
+            for key in record.keys where seen.insert(key).inserted {
+                columns.append(key)
+                if columns.count == limit { return columns }
+            }
+        }
+        return columns
+    }
+
+    /// Text from bytes. A cut record can end inside a character: that half character goes.
+    static func decode(_ bytes: [UInt8], truncated: Bool) -> String {
+        let text = String(decoding: bytes, as: UTF8.self)
+        guard truncated, text.unicodeScalars.last == "\u{FFFD}" else { return text }
+        return String(text.unicodeScalars.dropLast())
+    }
+}
+
+/// Splits bytes into records as they arrive, a chunk at a time, and knows where the next record starts.
+struct RecordScanner {
+    let kind: DataFileKind
+    let delimiter: UInt8
+    let limit: Int
+    private(set) var records: [DataRecord] = []
+    /// Where the record after the last one returned starts.
+    private(set) var position: DataPosition
+
+    /// The absolute offset of the next chunk.
+    private var offset: UInt64
+    /// The line being read.
+    private var line: Int
+    private var recordLine: Int
+    /// The record's bytes from earlier chunks (and, for CSV, up to its last field), at most maxRecordBytes.
+    private var carry: [UInt8] = []
+    private var truncated = false
+    private var pageBytes = 0
+
+    // CSV and TSV
+    private var fields: [String] = []
+    private var field: [UInt8] = []
+    private var recordBytes = 0
+    private var fieldStarted = false
+    private var inQuotes = false
+    /// In quotes, the last byte was a quote: it closes the field unless another follows.
+    private var quotePending = false
+    /// The record ended with "\r": a "\n" next belongs to it.
+    private var crPending = false
+    /// The record ran past maxRecordBytes: skip to the end of its line.
+    private var skipping = false
+    private var recordError: String?
+
+    init(kind: DataFileKind, delimiter: UInt8, start: DataPosition, limit: Int) {
+        self.kind = kind
+        self.delimiter = delimiter
+        self.limit = limit
+        position = start
+        offset = start.offset
+        line = start.line
+        recordLine = start.line
+    }
+
+    var isFull: Bool { records.count >= limit || pageBytes >= DataHead.maxPageBytes }
+
+    mutating func feed(_ chunk: Data) {
+        chunk.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            let bytes = raw.bindMemory(to: UInt8.self)
+            if kind == .delimited { feedDelimited(bytes) } else { feedLines(bytes) }
+        }
+        offset += UInt64(chunk.count)
+    }
+
+    /// The end of the file: what is left is the last record.
+    mutating func finish() {
+        if kind != .delimited {
+            if !carry.isEmpty || truncated { endLine(next: offset) }
+            return
+        }
+        if crPending {
+            crPending = false
+            line += 1
+            return emit(next: offset)
+        }
+        if quotePending {
+            quotePending = false
+            inQuotes = false
+        }
+        guard !carry.isEmpty || fieldStarted || !fields.isEmpty || inQuotes || skipping else { return }
+        if inQuotes { recordError = "A quote is not closed before the end of the file." }
+        endField()
+        emit(next: offset)
+    }
+
+    // MARK: lines
+
+    private mutating func feedLines(_ bytes: UnsafeBufferPointer<UInt8>) {
+        guard let base = bytes.baseAddress else { return }
+        let n = bytes.count
+        var i = 0
+        while i < n, !isFull {
+            guard let hit = memchr(base + i, 0x0A, n - i) else {
+                append(UnsafeBufferPointer(rebasing: bytes[i..<n]))
+                return
+            }
+            let j = UnsafeRawPointer(base).distance(to: UnsafeRawPointer(hit))
+            append(UnsafeBufferPointer(rebasing: bytes[i..<j]))
+            endLine(next: offset + UInt64(j + 1))
+            i = j + 1
+        }
+    }
+
+    private mutating func endLine(next: UInt64) {
+        let start = line
+        line += 1
+        if !truncated, carry.last == 0x0D { carry.removeLast() }
+        let blank = kind == .jsonLines && carry.allSatisfy { $0 == 0x20 || $0 == 0x09 || $0 == 0x0D }
+        if !blank {
+            if kind == .jsonLines {
+                records.append(DataHead.jsonRecord(carry, line: start, truncated: truncated))
+            } else {
+                records.append(DataRecord(line: start, raw: DataHead.decode(carry, truncated: truncated), isTruncated: truncated))
+            }
+            pageBytes += carry.count
+        }
+        carry.removeAll(keepingCapacity: true)
+        truncated = false
+        position = DataPosition(offset: next, line: line)
+    }
+
+    private mutating func append(_ slice: UnsafeBufferPointer<UInt8>) {
+        let room = DataHead.maxRecordBytes - carry.count
+        if slice.count <= room {
+            carry.append(contentsOf: slice)
+        } else {
+            if room > 0 { carry.append(contentsOf: slice.prefix(room)) }
+            truncated = true
+        }
+    }
+
+    // MARK: CSV and TSV
+
+    private mutating func feedDelimited(_ bytes: UnsafeBufferPointer<UInt8>) {
+        let n = bytes.count
+        var segment = 0 // where this chunk's part of the record starts
+        var i = 0
+        while i < n {
+            let byte = bytes[i]
+            if crPending {
+                crPending = false
+                line += 1
+                if byte == 0x0A {
+                    emit(next: offset + UInt64(i + 1))
+                    i += 1
+                    segment = i
+                    if isFull { return }
+                    continue
+                }
+                emit(next: offset + UInt64(i)) // an old Mac line ending: "\r" alone
+                segment = i
+                if isFull { return }
+            }
+            if skipping {
+                guard let base = bytes.baseAddress, let hit = memchr(base + i, 0x0A, n - i) else { return }
+                let j = UnsafeRawPointer(base).distance(to: UnsafeRawPointer(hit))
+                line += 1
+                endField()
+                emit(next: offset + UInt64(j + 1))
+                i = j + 1
+                segment = i
+                if isFull { return }
+                continue
+            }
+            if inQuotes {
+                if quotePending {
+                    quotePending = false
+                    if byte == 0x22 {
+                        addFieldByte(0x22) // "" inside quotes is one quote
+                        i += 1
+                        continue
+                    }
+                    inQuotes = false // the quote before closed the field
+                } else {
+                    if byte == 0x22 {
+                        quotePending = true
+                    } else {
+                        if byte == 0x0A { line += 1 }
+                        addFieldByte(byte)
+                    }
+                    i += 1
+                    if recordBytes > DataHead.maxRecordBytes {
+                        startSkipping(bytes, from: segment, to: i)
+                        segment = i
+                    }
+                    continue
+                }
+            }
+            switch byte {
+            case delimiter:
+                endField()
+            case 0x0A:
+                endField()
+                appendRaw(bytes, from: segment, to: i)
+                line += 1
+                emit(next: offset + UInt64(i + 1))
+                segment = i + 1
+                if isFull { return }
+            case 0x0D:
+                endField()
+                appendRaw(bytes, from: segment, to: i)
+                segment = i + 1
+                crPending = true
+            case 0x22 where !fieldStarted:
+                inQuotes = true
+                fieldStarted = true
+            default:
+                addFieldByte(byte)
+            }
+            i += 1
+            if recordBytes > DataHead.maxRecordBytes {
+                startSkipping(bytes, from: segment, to: i)
+                segment = i
+            }
+        }
+        if !skipping { appendRaw(bytes, from: segment, to: n) }
+    }
+
+    /// The record is too long (an unclosed quote, or no line breaks at all): keep what was read, then
+    /// skip to the end of the line, ignoring quotes.
+    private mutating func startSkipping(_ bytes: UnsafeBufferPointer<UInt8>, from start: Int, to end: Int) {
+        appendRaw(bytes, from: start, to: end)
+        truncated = true
+        if inQuotes { recordError = "Longer than 1 MB inside quotes: a quote may not be closed." }
+        inQuotes = false
+        quotePending = false
+        skipping = true
+    }
+
+    private mutating func addFieldByte(_ byte: UInt8) {
+        recordBytes += 1
+        fieldStarted = true
+        if recordBytes <= DataHead.maxRecordBytes { field.append(byte) }
+    }
+
+    private mutating func endField() {
+        fields.append(String(decoding: field, as: UTF8.self))
+        field.removeAll(keepingCapacity: true)
+        fieldStarted = false
+        recordBytes += 1
+    }
+
+    private mutating func appendRaw(_ bytes: UnsafeBufferPointer<UInt8>, from start: Int, to end: Int) {
+        guard end > start else { return }
+        append(UnsafeBufferPointer(rebasing: bytes[start..<end]))
+    }
+
+    /// Adds the record (a blank line is not one) and starts the next at `next`.
+    private mutating func emit(next: UInt64) {
+        let blank = carry.isEmpty && fields.count <= 1 && (fields.first?.isEmpty ?? true) && recordError == nil
+        if !blank {
+            records.append(DataRecord(line: recordLine, raw: DataHead.decode(carry, truncated: truncated), fields: fields,
+                                      error: recordError, isTruncated: truncated))
+            pageBytes += carry.count
+        }
+        carry.removeAll(keepingCapacity: true)
+        fields = []
+        field.removeAll(keepingCapacity: true)
+        recordBytes = 0
+        fieldStarted = false
+        inQuotes = false
+        quotePending = false
+        skipping = false
+        truncated = false
+        recordError = nil
+        recordLine = line
+        position = DataPosition(offset: next, line: line)
+    }
+}
+
+/// Copying rows of the head view.
+public enum DataExport {
+    /// JSON Lines rows as JSON: the line itself for one row, an array of them for several.
+    public static func jsonLines(_ raws: [String]) -> String {
+        if raws.count == 1 { return raws[0] + "\n" }
+        if raws.isEmpty { return "[]\n" }
+        return "[\n  " + raws.joined(separator: ",\n  ") + "\n]\n"
+    }
+
+    /// Rows as JSON objects keyed by the column names. Values are text: a CSV has no types.
+    public static func objects(columns: [String], rows: [[String?]]) -> String {
+        TableExport.json(columns: columns, rows: rows.map(values))
+    }
+
+    /// Rows as CSV with a header line, quoted where needed.
+    public static func csv(columns: [String], rows: [[String?]]) -> String {
+        TableExport.csv(columns: columns, rows: rows.map(values))
+    }
+
+    private static func values(_ row: [String?]) -> [SQLiteValue] {
+        row.map { cell in cell.map { SQLiteValue.text($0, truncated: false) } ?? .null }
+    }
+}
