@@ -261,6 +261,32 @@ public final class FuzzyIndex: @unchecked Sendable {
     }
 }
 
+/// The files you opened lately in a folder that Go to File lists, as paths relative to it, newest first:
+/// the catalog's own, and the ones the catalog leaves out (git ignores them, as it does `.env`) while
+/// they are still files on disk. A file you opened is yours to open again, whatever git says.
+public struct RecentFiles: Sendable, Equatable {
+    /// Every one of them: what the list shows with nothing typed.
+    public let listed: [String]
+    /// The ones the catalog leaves out, searched along with it.
+    public let outside: [String]
+
+    /// `recent`: absolute paths, newest first. `inCatalog` takes a relative path, `isFile` an absolute one.
+    public init(_ recent: [String], root: String, inCatalog: (String) -> Bool, isFile: (String) -> Bool) {
+        var listed: [String] = [], outside: [String] = []
+        for path in recent where path.hasPrefix(root + "/") {
+            let relative = String(path.dropFirst(root.count + 1))
+            if inCatalog(relative) {
+                listed.append(relative)
+            } else if isFile(path) {
+                listed.append(relative)
+                outside.append(relative)
+            }
+        }
+        self.listed = listed
+        self.outside = outside
+    }
+}
+
 /// Files under a folder for Go to File when git cannot list them: a quick walk that leaves out hidden
 /// folders and the usual dependency and build folders, and stops at a limit.
 public enum FileWalker {

@@ -2891,6 +2891,27 @@ enum SelfTest {
         check(await wait(5) { finder.shownPaths.first == "src/main.php" }, "with nothing typed, recently opened files come first",
               finder.shownPaths.prefix(3).joined(separator: ", "))
         finder.close()
+        // A file git ignores (.env here) is left out, until you open it: then it is listed with the recent files.
+        let exclude = proj.appendingPathComponent(".git/info/exclude")
+        let excluded = try? String(contentsOf: exclude, encoding: .utf8)
+        try? ((excluded ?? "") + "\n.env\n").write(to: exclude, atomically: true, encoding: .utf8)
+        let env = proj.appendingPathComponent(".env")
+        try? "APP_NAME=selftest\n".write(to: env, atomically: true, encoding: .utf8)
+        finder.show(root: proj.path, recent: c.recentFiles, over: window)
+        finder.query = "env"
+        await pause(1)
+        check(!finder.shownPaths.contains(".env"), "⌘P leaves out a file git ignores", finder.shownPaths.prefix(3).joined(separator: ", "))
+        finder.close()
+        c.openFile(env)
+        finder.show(root: proj.path, recent: c.recentFiles, over: window)
+        check(await wait(5) { finder.shownPaths.first == ".env" }, "once opened, it comes first with nothing typed",
+              finder.shownPaths.prefix(3).joined(separator: ", "))
+        finder.query = "env"
+        check(await wait(5) { finder.shownPaths.first == ".env" }, "and its name finds it", finder.shownPaths.prefix(3).joined(separator: ", "))
+        finder.close()
+        if let editor = c.editorArea.editors.first(where: { $0.document.path == canonicalPath(env.path) }) { c.editorArea.close(editor) }
+        try? FileManager.default.removeItem(at: env)
+        if let excluded { try? excluded.write(to: exclude, atomically: true, encoding: .utf8) } else { try? FileManager.default.removeItem(at: exclude) }
         // Selected text starts the search, as for Find.
         c.openFile(proj.appendingPathComponent("docs/user-guide.md"))
         if let editor = c.editorArea.activeEditor, editor.document.path.hasSuffix("user-guide.md") {

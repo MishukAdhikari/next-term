@@ -87,6 +87,19 @@ import Testing
         #expect(elapsed < 3, "50,000 paths took \(elapsed) s in a debug build")
     }
 
+    @Test func recentFilesStayEvenWhenGitIgnoresThem() {
+        let root = "/p"
+        let recent = ["/p/.env", "/p/src/a.php", "/elsewhere/b.php", "/p/gone.txt", "/p/src/old.php"]
+        let catalog: Set<String> = ["src/a.php", "src/old.php", "README.md"]
+        let onDisk: Set<String> = ["/p/.env", "/p/src/a.php"]
+        let files = RecentFiles(recent, root: root, inCatalog: { catalog.contains($0) }, isFile: { onDisk.contains($0) })
+        // .env is ignored by git, so not in the catalog, but you opened it: it stays, in its place.
+        #expect(files.listed == [".env", "src/a.php", "src/old.php"])
+        #expect(files.outside == [".env"])
+        // Gone from the disk and from the catalog: left out. Another folder's files: left out.
+        #expect(!files.listed.contains("gone.txt"))
+    }
+
     @Test func walkerSkipsHiddenAndDependencyFolders() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("nt-walk-\(UUID().uuidString)").path
         defer { try? FileManager.default.removeItem(atPath: root) }
