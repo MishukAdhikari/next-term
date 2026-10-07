@@ -19,8 +19,10 @@ public enum ImportWarp {
     static let font = Key(table: "appearance.text", key: "font_name")
     static let size = Key(table: "appearance.text", key: "font_size")
     static let theme = Key(table: "appearance.themes", key: "theme")
+    static let systemTheme = Key(table: "appearance.themes", key: "system_theme")
+    static let systemThemes = Key(table: "appearance.themes", key: "selected_system_themes")
     static let meta = Key(table: "terminal.input", key: "extra_meta_keys")
-    static let allowlist: Set<Key> = [font, size, theme, meta]
+    static let allowlist: Set<Key> = [font, size, theme, systemTheme, systemThemes, meta]
 
     struct Key: Hashable {
         let table: String
@@ -63,7 +65,7 @@ public enum ImportWarp {
             }
         }
         if let raw = scan.values[meta] { addMeta(raw, usKeyboard: usKeyboard, to: &plan) }
-        if let raw = scan.values[theme] { addTheme(raw, folder: base, to: &plan) }
+        addThemes(scan, folder: base, to: &plan)
         for table in scan.neverRead where !SecretGuard.looksSecret(table) {
             plan.skipped.append(SkippedItem("[\(table)]", "never imported: can hold secrets or configures agents"))
         }
@@ -92,13 +94,32 @@ public enum ImportWarp {
 
     // MARK: themes
 
+    /// The theme Warp shows: `theme`, or, when it follows the system's light and dark (`system_theme`), the
+    /// dark one of `selected_system_themes` (Next Term is dark, as with Ghostty's `dark:`).
+    static func addThemes(_ scan: Scan, folder: String, to plan: inout ImportPlan) {
+        let followsSystem = scan.values[systemTheme].flatMap(TOML.bool) ?? false
+        guard followsSystem else {
+            if let raw = scan.values[theme] { addTheme(raw, folder: folder, to: &plan) }
+            return
+        }
+        guard let raw = scan.values[systemThemes].flatMap({ TOML.inlineValue($0, key: "dark") }) else {
+            plan.skipped.append(SkippedItem("system_theme", "Warp's own dark theme is inside Warp, so it can't be read"))
+            return
+        }
+        addTheme(raw, label: "dark theme", note: "Warp follows the system's light and dark; Next Term is dark", folder: folder, to: &plan)
+    }
+
     /// A custom theme's colours, from its YAML file in `~/.warp/themes`. Warp's built-in themes live inside
     /// Warp, so they can't be read.
-    static func addTheme(_ raw: String, folder: String, to plan: inout ImportPlan) {
+    static func addTheme(_ raw: String, label: String = "theme", note: String? = nil, folder: String, to plan: inout ImportPlan) {
         let themes = (folder as NSString).appendingPathComponent("themes")
         guard let file = themeFile(raw, themes: themes) else {
-            let name = TOML.string(raw).flatMap { SecretGuard.looksSecret($0) || $0.count > 80 ? nil : $0 }
-            plan.skipped.append(SkippedItem(name.map { "theme \($0)" } ?? "theme", "Warp's built-in themes are inside Warp, so they can't be read"))
+            // `{ Custom = { name, path } }` names a file of the user's own; a plain name is one of Warp's.
+            let custom = raw.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{")
+            let given = custom ? TOML.inlineString(raw, key: "name") : TOML.string(raw)
+            let name = given.flatMap { SecretGuard.looksSecret($0) || $0.count > 80 ? nil : $0 }
+            let reason = custom ? "custom theme file not found in ~/.warp/themes" : "Warp's built-in themes are inside Warp, so they can't be read"
+            plan.skipped.append(SkippedItem(name.map { "\(label) \($0)" } ?? label, reason))
             return
         }
         let yaml = YAML(ImportFile.text(file) ?? "")
@@ -118,30 +139,54 @@ public enum ImportWarp {
         }
         palette.foreground = colour("foreground")
         palette.background = colour("background")
-        palette.cursor = colour("cursor")
+        // A theme without a cursor colour has Warp draw the cursor in its accent.
+        palette.cursor = colour("cursor") ?? colour("accent")
         let fileName = (file as NSString).lastPathComponent
-        if let row = ImportColours.row(palette, source: "theme \(fileName)") { plan.settings.append(row) }
+        if let row = ImportColours.row(palette, source: "\(label) \(fileName)", note: note) { plan.settings.append(row) }
         for path in unreadable { plan.skipped.append(SkippedItem("theme \(path)", "only #rrggbb colours are read")) }
     }
 
-    /// The theme's file: a name (`theme = "solarized_dark"`, or `name = …` in a table) matched to a file in
-    /// the themes folder, or a `path` there. Nothing outside that folder is opened.
+    /// The theme's file: a `path` anywhere inside the themes folder, or a name (`theme = "solarized_dark"`,
+    /// or `name = …` in a table) matched to a file in that folder or one of its subfolders (Warp's own
+    /// themes repository, cloned there, keeps them in `standard/` and `base16/`). Nothing outside the
+    /// themes folder is opened.
     static func themeFile(_ raw: String, themes: String) -> String? {
+        let folder = canonicalPath(themes)
+        if let path = TOML.inlineString(raw, key: "path"), path.hasPrefix("/"), isUsableName(path) {
+            let file = canonicalPath(path)
+            let yaml = ["yaml", "yml"].contains((file as NSString).pathExtension.lowercased())
+            if yaml, file.hasPrefix(folder + "/"), isRegularFile(file) { return file }
+        }
         var candidates: [String] = []
         if let name = TOML.string(raw) { candidates.append(name) }
         for key in ["name", "path"] { if let value = TOML.inlineString(raw, key: key) { candidates.append(value) } }
-        let folder = canonicalPath(themes)
-        for candidate in candidates where !candidate.isEmpty && candidate.count <= 200 && !candidate.contains("\0") {
+        let folders = [folder] + subfolders(of: folder)
+        for candidate in candidates where isUsableName(candidate) {
             let base = ((candidate as NSString).lastPathComponent as NSString).deletingPathExtension
             let names = [base, base.lowercased().replacingOccurrences(of: " ", with: "_")]
-            for name in names where !name.hasPrefix(".") {
-                for suffix in [".yaml", ".yml"] {
-                    let path = canonicalPath((folder as NSString).appendingPathComponent(name + suffix))
-                    if path.hasPrefix(folder + "/"), isRegularFile(path) { return path }
+            for directory in folders {
+                for name in names where !name.hasPrefix(".") {
+                    for suffix in [".yaml", ".yml"] {
+                        let path = canonicalPath((directory as NSString).appendingPathComponent(name + suffix))
+                        if path.hasPrefix(folder + "/"), isRegularFile(path) { return path }
+                    }
                 }
             }
         }
         return nil
+    }
+
+    static func isUsableName(_ text: String) -> Bool { !text.isEmpty && text.count <= 200 && !text.contains("\0") }
+
+    /// The themes folder's own subfolders, not hidden ones (`.git`), at most 64: a name is looked for in
+    /// these too. One level only, so the search stays small.
+    static func subfolders(of folder: String) -> [String] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? []
+        let visible = names.filter { !$0.hasPrefix(".") }.sorted().prefix(64)
+        return visible.map { (folder as NSString).appendingPathComponent($0) }.filter { path in
+            var directory: ObjCBool = false
+            return FileManager.default.fileExists(atPath: path, isDirectory: &directory) && directory.boolValue
+        }
     }
 
     // MARK: reading
@@ -246,11 +291,24 @@ enum TOML {
         return nil
     }
 
-    static func number(_ raw: String) -> Double? {
-        var text = raw.trimmingCharacters(in: .whitespaces)
+    /// A bare value (a number or true/false) without the comment after it.
+    static func bare(_ raw: String) -> String {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if let comment = text.firstIndex(of: "#") { text = String(text[..<comment]).trimmingCharacters(in: .whitespaces) }
-        guard let value = Double(text.replacingOccurrences(of: "_", with: "")), value.isFinite else { return nil }
+        return text
+    }
+
+    static func number(_ raw: String) -> Double? {
+        guard let value = Double(bare(raw).replacingOccurrences(of: "_", with: "")), value.isFinite else { return nil }
         return value
+    }
+
+    static func bool(_ raw: String) -> Bool? {
+        switch bare(raw) {
+        case "true": return true
+        case "false": return false
+        default: return nil
+        }
     }
 
     /// `["left_alt", "right_alt"]`; nil unless every element is a string.
@@ -268,6 +326,66 @@ enum TOML {
         guard raw.trimmingCharacters(in: .whitespaces).hasPrefix("{"),
               let range = raw.range(of: #"\b\#(key)\s*=\s*"#, options: .regularExpression) else { return nil }
         return string(String(raw[range.upperBound...]))
+    }
+
+    /// The raw text of `key`'s value at the top level of an inline table: `"dark"` from
+    /// `{ dark = "dark", light = "x" }`, or `{ Custom = { … } }` when the value is a table of its own.
+    static func inlineValue(_ raw: String, key: String) -> String? {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.hasPrefix("{") else { return nil }
+        for entry in entries(text) {
+            guard let equals = entry.firstIndex(of: "=") else { continue }
+            let name = entry[..<equals].trimmingCharacters(in: CharacterSet(charactersIn: " \t\"'"))
+            guard name == key else { continue }
+            return entry[entry.index(after: equals)...].trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return nil
+    }
+
+    /// An inline table's `key = value` entries, split at its own commas only (not inside strings or the
+    /// tables and arrays it holds). Comments are dropped.
+    static func entries(_ table: String) -> [String] {
+        var entries: [String] = []
+        var current = ""
+        var depth = 0
+        var quote: Character?
+        var escaped = false
+        var comment = false
+        for character in table {
+            if comment {
+                comment = !character.isNewline
+                continue
+            }
+            if let open = quote {
+                current.append(character)
+                if escaped { escaped = false } else if character == "\\" && open == "\"" { escaped = true } else if character == open { quote = nil }
+                continue
+            }
+            switch character {
+            case "#":
+                comment = true
+                continue
+            case "\"", "'":
+                quote = character
+            case "{", "[":
+                depth += 1
+                if depth == 1 { continue } // the table's own brace
+            case "}", "]":
+                depth -= 1
+            case ",":
+                if depth == 1 {
+                    entries.append(current)
+                    current = ""
+                    continue
+                }
+            default:
+                break
+            }
+            if depth <= 0 { break } // the table's closing brace
+            current.append(character)
+        }
+        entries.append(current)
+        return entries.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
     }
 }
 

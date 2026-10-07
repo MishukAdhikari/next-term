@@ -32,7 +32,7 @@ Choose an app and the preview lists what it would bring, each item a checkbox wi
 | Zed | `buffer_font_family`, and `terminal.font_family` | — |
 | iTerm2 | The default profile’s font | The default profile’s colours, its Dark Mode ones when it keeps both |
 | Ghostty | `font-family` | Your `theme` by name, then your own `palette`, `background`, `foreground`, `cursor-color` and `selection-background` |
-| Warp | `font_name` | A custom theme in `~/.warp/themes` |
+| Warp | `font_name` | A custom theme in `~/.warp/themes` or a folder inside it; when Warp follows the system’s light and dark, the dark one |
 | Terminal | The default profile’s font | The default profile’s colours |
 
 A built-in colour scheme or theme lives inside its app, so it can’t be read; the preview says so. Change either one later in **Settings › Editor › Font**, **Settings › Terminal › Font** and **Settings › Terminal › Colours**, where **Next Term default** goes back to Next Term’s own and imported colours stay in the menu to choose again.
