@@ -86,7 +86,7 @@ func json(_ result: MCPServer.CallResult) -> [String: Any] {
         #expect(p.file("keys/server.pem", project: "api").failureText?.contains(".pem") == true)
         #expect(p.file("id_ed25519", project: "api").failureText?.contains("ssh") == true)
         #expect(p.file("id_rsa.pub", project: "api").isSuccess) // a public key is fine
-        for path in [".env.local", "app/.env.production", "deploy/prod.env", "certs/tls.key", "a/.ssh/config", ".git/config",
+        for path in [".env.local", "app/.env.production", "deploy/prod.env", "app/.flaskenv", "certs/tls.key", "a/.ssh/config", ".git/config",
                      "config/credentials.yml.enc", ".npmrc", ".netrc", "infra/terraform.tfstate", "secrets.json", "id_rsa"] {
             #expect(MCPProjects.secretReason(path) != nil, "\(path)")
         }
