@@ -223,7 +223,7 @@ import Testing
 
     /// Settings in the user's git config that change what blame reads, or stop it.
     @Test func blameIgnoresConfigThatWouldChangeIt() throws {
-        guard let repo = try ScratchRepo() else { return }
+        guard let repo = try BlameScratchRepo() else { return }
         defer { repo.remove() }
         try repo.write("f.txt", "one\ntwo\n")
         try repo.commit("Ann", "First")
@@ -242,7 +242,7 @@ import Testing
     }
     /// A repository with SHA-256 object names: 64-character hashes, and 64 zeros for lines not committed.
     @Test func blameOfASHA256Repository() throws {
-        guard let repo = try ScratchRepo(["--object-format=sha256"]) else { return }
+        guard let repo = try BlameScratchRepo(["--object-format=sha256"]) else { return }
         defer { repo.remove() }
         try repo.write("f.txt", "one\ntwo\n")
         try repo.commit("Ann", "First")
@@ -258,7 +258,7 @@ import Testing
     /// A shallow clone has no history before its oldest commit: lines git puts there are marked as such,
     /// and a full repository's first commit is not.
     @Test func blameOfAShallowClone() throws {
-        guard let repo = try ScratchRepo() else { return }
+        guard let repo = try BlameScratchRepo() else { return }
         let clone = repo.path + "-shallow"
         defer { repo.remove(); try? FileManager.default.removeItem(atPath: clone) }
         try repo.write("f.txt", "one\ntwo\nthree\n")
@@ -283,7 +283,7 @@ import Testing
 }
 
 /// A repository in a temporary folder, for tests that run git.
-struct ScratchRepo {
+struct BlameScratchRepo {
     let path: String
     let gitPath: String
 
