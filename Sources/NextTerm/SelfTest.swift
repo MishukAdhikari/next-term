@@ -1983,7 +1983,10 @@ enum SelfTest {
               rail.markButtons[safe: backIndex]?.toolTip ?? "none")
         await screenshot(c, suffix: "-rail")
 
-        // The tab in front fails while folded: nobody sees it, so its mark says so and the rail pulses a few times.
+        // The tab in front fails while folded: nobody sees it, so its mark says so and the rail pulses a few times
+        // (with motion, whatever Reduce Motion is on this Mac).
+        let reducesMotion = TerminalRail.reducesMotion
+        TerminalRail.reducesMotion = { false }
         let noticed = rail.changesNoticed
         front.view.send(txt: "sleep 0.3; false\r")
         let frontIndex = c.groups.firstIndex { $0.contains(front) } ?? 0
@@ -1993,7 +1996,6 @@ enum SelfTest {
         await screenshot(c, suffix: "-rail-pulse")
         check(await wait(4) { !rail.isPulsing } && rail.marks[safe: frontIndex]?.state == .failed, "a few times, then it stays still with the mark")
         // With Reduce Motion the mark just appears.
-        let reducesMotion = TerminalRail.reducesMotion
         TerminalRail.reducesMotion = { true }
         let noticedBefore = rail.changesNoticed
         back.view.send(txt: "sleep 0.3\r")
