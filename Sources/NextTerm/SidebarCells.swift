@@ -237,31 +237,37 @@ final class SidebarHeaderView: NSView {
         // leaves them a little high.
         let summaryHeight = summary.intrinsicContentSize.height
         let summaryY = titleY + title.firstBaselineOffsetFromTop - summary.firstBaselineOffsetFromTop
-        // The text cell needs about 4 pt of its own margin beyond the text, or it truncates.
-        let summaryWidth = min(ceil(summary.intrinsicContentSize.width) + 6, bounds.width * 0.5)
         moreButton.frame = NSRect(x: bounds.width - 30, y: (h - 24) / 2, width: 26, height: 24)
         hideButton.frame = NSRect(x: bounds.width - 56, y: (h - 24) / 2, width: 26, height: 24)
+        // When room is short, the branch name keeps its own first, then the sync button shortens ("↓152"),
+        // then the line counts give way (they are in the tooltip, and on the tree's rows).
+        let nameStart = inset + 4 + (branchIcon.isHidden ? 0 : 18)
+        let chevronWidth: CGFloat = chevron.isHidden ? 0 : 12
+        // The cell's own size, not the text's: it needs a few points of margin, or even "dev" truncates to "…".
+        let nameNeeded = ceil(title.cell?.cellSize.width ?? title.intrinsicContentSize.width + 4) + 1
+        let nameKept = nameStart + min(nameNeeded, 64) + chevronWidth + 6
+        // The text cell needs about 4 pt of its own margin beyond the text, or it truncates.
+        let summaryText = summary.attributedStringValue.length > 0 ? ceil(summary.intrinsicContentSize.width) + 6 : 0
         var right = bounds.width - 60
         if !syncButton.isHidden {
-            // The words when the branch name keeps room for a few letters; the arrow and count when not.
-            let nameStart = inset + 4 + (branchIcon.isHidden ? 0 : 18)
-            let fixed = summaryWidth + 6 + (chevron.isHidden ? 0 : 12) + 6 + 48
-            syncButton.compact = right - syncButton.width(compact: false) - 4 - fixed < nameStart
+            let spare = right - nameStart - nameNeeded - chevronWidth - 6 - summaryText - 4
+            syncButton.compact = syncButton.width(compact: false) > spare
             let width = syncButton.width(compact: syncButton.compact)
             syncButton.frame = NSRect(x: right - width, y: (h - SyncButton.height) / 2, width: width, height: SyncButton.height)
             right = syncButton.frame.minX - 4
         }
+        var summaryWidth = min(summaryText, max(0, right - nameKept))
+        if summaryWidth < 28 { summaryWidth = 0 } // an ellipsis alone says nothing
+        summary.isHidden = summaryWidth == 0
         summary.frame = NSRect(x: right - summaryWidth, y: summaryY, width: summaryWidth, height: summaryHeight)
         var x = inset + 4
         if !branchIcon.isHidden {
             branchIcon.frame = NSRect(x: x, y: (h - 14) / 2, width: 14, height: 14)
             x += 18
         }
-        // The name as wide as it is (the chevron right after it), up to the counts.
-        let room = max(0, summary.frame.minX - x - 6 - (chevron.isHidden ? 0 : 12))
-        // The cell's own size, not the text's: it needs a few points of margin, or even "dev" truncates to "…".
-        let needed = ceil(title.cell?.cellSize.width ?? title.intrinsicContentSize.width + 4) + 1
-        title.frame = NSRect(x: x, y: titleY, width: min(room, needed), height: titleHeight)
+        // The name as wide as it is (the chevron right after it), up to the counts or the button.
+        let room = max(0, (summary.isHidden ? right : summary.frame.minX) - x - 6 - chevronWidth)
+        title.frame = NSRect(x: x, y: titleY, width: min(room, nameNeeded), height: titleHeight)
         chevron.frame = NSRect(x: title.frame.maxX + 2, y: (h - 10) / 2, width: 10, height: 10)
         window?.invalidateCursorRects(for: self)
     }

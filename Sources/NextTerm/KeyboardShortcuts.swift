@@ -145,17 +145,22 @@ final class KeyboardShortcuts {
     func apply() {
         let bindings = self.bindings
         let preset = self.preset
+        var chords: [(NSMenuItem, KeyChord?)] = []
         for command in commands {
             guard let item = command.item else { continue }
             let base = preset.chord(for: command.id, default: command.defaultChord)
             var chord = bindings.chord(for: command.id, default: base)
             if let saved = chord, !saved.isUsable { chord = base }
-            Self.set(chord, on: item)
+            chords.append((item, chord))
         }
+        // Every key comes off before any goes on: AppKit leaves a menu item without its key when another
+        // item still holds it, so a key moving between commands (or from ⌘P's alias) would be lost.
+        goToFileAliasItem.map { Self.set(nil, on: $0) }
+        for (item, _) in chords { Self.set(nil, on: item) }
+        for (item, chord) in chords { Self.set(chord, on: item) }
         // ⌘P stays Go to File while no command has it.
-        if let alias = goToFileAliasItem {
-            let taken = commands.contains { $0.item.flatMap(Self.chord(of:)) == Self.goToFileKey }
-            Self.set(taken ? nil : Self.goToFileKey, on: alias)
+        if let alias = goToFileAliasItem, !chords.contains(where: { $0.1 == Self.goToFileKey }) {
+            Self.set(Self.goToFileKey, on: alias)
         }
     }
 

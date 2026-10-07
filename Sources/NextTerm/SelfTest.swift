@@ -639,21 +639,27 @@ enum SelfTest {
     }
 
     /// Agent sessions: listed per project on the Welcome window and in ⌥⌘O, resumed in a tab in their folder.
-    /// The header's "Pull 152": the words, what a click does, and the spinner while git talks to a remote.
+    /// The header's "Pull 152": the words, what a click does, the spinner while git talks to a remote, and
+    /// what gives way in a narrow sidebar.
     private static func syncButtonChecks(_ c: TerminalWindowController, _ real: GitSnapshot) async {
         let header = c.sidebar.header
+        let frame = header.frame
+        func layOut(width: CGFloat) {
+            header.setFrameSize(NSSize(width: width, height: frame.height))
+            header.needsLayout = true
+            header.layoutSubtreeIfNeeded()
+        }
         var fake = real
         fake.upstream = "origin/main"
         fake.behind = 152
         fake.lastFetch = Date(timeIntervalSinceNow: -18 * 60)
         header.show(fake)
-        header.layoutSubtreeIfNeeded()
+        layOut(width: 460)
         check(header.syncText == "Pull 152" && !header.syncButton.busy, "152 commits behind shows “Pull 152” in the header", header.syncText)
+        check(!header.summaryIsTruncated && !header.titleIsTruncated, "beside the branch and its line counts, all in full", "\(header.syncButton.frame)")
         let tip = header.syncButton.toolTip ?? ""
         check(tip.contains("152 commits") && tip.contains("Last fetched 18 minutes ago"),
               "its tooltip says they are commits and when it last fetched", tip)
-        let fits = !header.summaryIsTruncated && !header.titleIsTruncated && !header.syncButton.frame.intersects(header.hideButton.frame)
-        check(fits, "the button fits beside the branch and the counts", "\(header.syncButton.frame)")
         var asked: Bool?
         let onSync = header.onSync
         header.onSync = { asked = $0 }
@@ -662,15 +668,23 @@ enum SelfTest {
         fake.ahead = 3
         fake.behind = 0
         header.show(fake)
+        header.layoutSubtreeIfNeeded()
         asked = nil
         header.syncButton.performClick(nil)
         check(header.syncText == "Push 3" && asked == false, "3 commits ahead shows “Push 3”, and a click pushes", header.syncText)
         fake.behind = 152
         header.show(fake)
+        header.layoutSubtreeIfNeeded()
         check(header.syncText == "↓152 ↑3", "both ways shows both counts", header.syncText)
         header.onSync = onSync
-        // A fetch running here: the sync arrow spins, and a click does nothing until it ends.
+        // Narrow (this window's sidebar, with the window buttons beside the branch): the name stays whole.
         fake.ahead = 0
+        header.show(fake)
+        layOut(width: frame.width)
+        let clear = !header.syncButton.frame.intersects(header.hideButton.frame) && header.syncButton.frame.minX > 0
+        check(header.syncText == "↓152" && !header.titleIsTruncated && clear,
+              "in a narrow sidebar it shortens to “↓152” and the branch name stays whole", "\(header.syncText) \(header.syncButton.frame) width \(frame.width)")
+        // A fetch running here: the sync arrow spins, and a click does nothing until it ends.
         fake.behind = 0
         header.show(fake)
         check(header.syncText.isEmpty, "up to date: no button", header.syncText)
@@ -679,6 +693,7 @@ enum SelfTest {
               "while fetching, the header says so with a spinning sync arrow", header.syncText)
         GitWriter.shared.setActivity(nil, in: real.root)
         check(await wait(2) { header.syncText.isEmpty }, "and it goes when the fetch ends", header.syncText)
+        header.frame = frame
         header.show(c.sidebar.git.snapshot)
     }
 
@@ -785,6 +800,16 @@ enum SelfTest {
               "alias active: \(shortcuts.goToFileAliasActive), Go to Line: “\(lineItem?.keyEquivalent ?? "nil")” \(lineItem?.keyEquivalentModifierMask.rawValue ?? 0), Go to File: “\(item("goToFile:")?.keyEquivalent ?? "nil")”")
         shortcuts.set(KeyChord(key: "l", command: true, control: true), for: "goToLine:")
         check(shortcuts.goToFileAliasActive, "and ⌘P goes back to Go to File when that command gives it up")
+        // Two commands trading keys both end up with them (AppKit won't give an item a key another still holds).
+        let fileKey = KeyChord(key: "o", command: true, shift: true), lineKey = KeyChord(key: "l", command: true, control: true)
+        shortcuts.set(fileKey, for: "goToLine:")
+        shortcuts.set(lineKey, for: "goToFile:")
+        let traded = item("goToLine:").flatMap(KeyboardShortcuts.chord(of:)) == fileKey && item("goToFile:").flatMap(KeyboardShortcuts.chord(of:)) == lineKey
+        check(traded, "two commands can trade keys", "Go to Line: \(item("goToLine:").flatMap(KeyboardShortcuts.chord(of:))?.display ?? "none"), Go to File: \(item("goToFile:").flatMap(KeyboardShortcuts.chord(of:))?.display ?? "none")")
+        shortcuts.set(lineKey, for: "goToLine:")
+        shortcuts.set(fileKey, for: "goToFile:")
+        check(item("goToFile:").flatMap(KeyboardShortcuts.chord(of:)) == fileKey && item("goToLine:").flatMap(KeyboardShortcuts.chord(of:)) == lineKey,
+              "and trade them back")
         // ⌘K leaves the editor alone under a preset.
         c.openFile(proj.appendingPathComponent("gutter.txt"))
         if let editor = c.editorArea.activeEditor, let clear = item("clearBuffer:") {
