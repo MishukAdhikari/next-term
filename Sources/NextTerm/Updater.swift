@@ -171,8 +171,10 @@ final class Updater {
         }
     }
 
-    /// Forgets the available update (a test's, or one that was withdrawn).
+    /// Forgets the available update (a test's, or one that was withdrawn), and stops waiting for its signature.
     func withdraw() {
+        awaitingSignature?.timer.invalidate()
+        awaitingSignature = nil
         prompt?.dismiss()
         prompt = nil
         availableNotes = []
@@ -246,15 +248,15 @@ final class Updater {
     /// A release whose checksum is not signed yet (each is signed a few minutes after it is published):
     /// the install that was asked for is tried again, quietly, every `signatureRetry` for as long as
     /// `SignatureWait` says.
-    private var awaitingSignature: (tag: String, since: Date, timer: Timer)?
+    private(set) var awaitingSignature: (tag: String, since: Date, timer: Timer)?
     static let signatureRetry: TimeInterval = 10 * 60
     /// A download, or the signature check before it, is under way.
-    private var installing = false
+    private(set) var installing = false
 
     /// `quietly`: a retry of an install asked for earlier (maybe hours ago), which opens nothing until it
     /// is done or fails: no progress window, and no offer to relaunch, only the Update button reading
     /// Relaunch to Update. Whatever is being typed stays where it is.
-    private func download(_ release: ReleaseInfo, quietly: Bool = false) {
+    func download(_ release: ReleaseInfo, quietly: Bool = false) {
         guard let dmgURL = release.dmgURL, release.checksumURL != nil, !installing else { return }
         let waitingSince = awaitingSignature?.tag == release.tag ? awaitingSignature?.since : nil
         awaitingSignature?.timer.invalidate()

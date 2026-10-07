@@ -65,6 +65,44 @@ extension SelfTest {
         check(unsignedResult == "accepted: nil", "a release whose signature is not up yet is waited for", unsignedResult)
     }
 
+    /// A retry of an install asked for earlier, run by a timer while someone may be typing: a release still
+    /// not signed, or GitHub not answering, is tried again later, and nothing opens.
+    static func updateWaitChecks() async {
+        let updater = Updater.shared
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nt-update-wait-\(getpid())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let page = URL(string: "https://github.com/MishukAdhikari/next-term/releases/tag/v99.1.0")!
+        // A checksum and no signature yet.
+        let dmg = root.appendingPathComponent("NextTerm-99.1.0.dmg")
+        let checksum = URL(fileURLWithPath: dmg.path + ".sha256")
+        try? Data("\(String(repeating: "ab", count: 32))  NextTerm-99.1.0.dmg\n".utf8).write(to: checksum)
+        let unsigned = ReleaseInfo(version: AppVersion("99.1.0")!, tag: "v99.1.0", pageURL: page, dmgURL: dmg,
+                                   checksumURL: checksum, notes: "", published: Date())
+        // Nothing listens on port 9 here: the try fails before anything is downloaded, as it does offline.
+        let offline = URL(string: "https://127.0.0.1:9/NextTerm-99.2.0.dmg")!
+        let unreachable = ReleaseInfo(version: AppVersion("99.2.0")!, tag: "v99.2.0", pageURL: page, dmgURL: offline,
+                                      checksumURL: URL(string: offline.absoluteString + ".sha256"), notes: "", published: Date())
+        let tries = [(unsigned, "a quiet try of a release not signed yet"), (unreachable, "a quiet try that cannot reach GitHub")]
+        for (release, name) in tries {
+            let shown = Set(NSApp.windows.filter(\.isVisible).map(ObjectIdentifier.init))
+            updater.download(release, quietly: true)
+            let done = await wait(10) { !updater.installing }
+            let opened = NSApp.windows.filter { $0.isVisible && !shown.contains(ObjectIdentifier($0)) }.map(\.title)
+            check(done && updater.awaitingSignature?.tag == release.tag && opened.isEmpty && NSApp.modalWindow == nil,
+                  "\(name) opens nothing and is tried again later", "\(done) \(updater.awaitingSignature?.tag ?? "no retry") \(opened)")
+        }
+        updater.withdraw()
+        check(updater.awaitingSignature == nil, "forgetting the update stops the tries")
+
+        let network = Updater.endOfWait(.gaveUp, unreachable: true) ?? ""
+        check(network.hasPrefix("GitHub did not answer") && !network.contains("not signed"),
+              "two hours of tries GitHub did not answer blame GitHub, not the signature", network)
+        let unsignedText = Updater.endOfWait(.gaveUp, unreachable: false) ?? ""
+        check(unsignedText.contains("still not signed") && Updater.endOfWait(.wait, unreachable: true) == nil,
+              "two hours with no signature say so, and nothing is said before", unsignedText)
+    }
+
     private static func sshKeygen(_ arguments: [String]) -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh-keygen")
