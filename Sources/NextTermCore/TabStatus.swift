@@ -43,6 +43,9 @@ public struct TabStatus {
     /// Only notify for work that took at least this long: the shortest choice in Settings › Notifications,
     /// which can ask for longer (NotificationSettings).
     public static let notifyAfter: TimeInterval = 5
+    /// An agent's screen must say it stopped for this long before its notice goes out: one frame without
+    /// the working hint (drawn halfway between two chunks, or the hint cut short in a narrow pane) is not a stop.
+    public static let stopSettles: TimeInterval = 1
 
     /// The user is looking at this tab (active tab of the key window).
     public private(set) var visible = false
@@ -82,6 +85,9 @@ public struct TabStatus {
     /// Kernel name of the polled foreground process, to notice when it changes.
     private var polledName = ""
     private var pendingNotice: TabNotice?
+    /// The agent's screen said it stopped: when, since when it had worked, and the notice that waits for
+    /// `stopSettles` (see tick()). Working again before then is the same turn.
+    private var lastStop: (at: TimeInterval, since: TimeInterval, notice: TabNotice?)?
 
     public init() {}
 
@@ -130,6 +136,7 @@ public struct TabStatus {
         busy = false
         question = nil // whatever asked it is gone with the shell
         screenSynced = false
+        lastStop = nil
         jobs = 0
         jobSummary = ""
         polledName = ""
@@ -139,6 +146,7 @@ public struct TabStatus {
     public mutating func shellExited(code: Int32?) {
         running = false
         busy = false
+        lastStop = nil
         exitCode = code
         mark(.failed, duration: 0)
     }
@@ -191,18 +199,22 @@ public struct TabStatus {
     /// Call a few times a second for a running agent with what its screen shows.
     public mutating func observe(agentScreen activity: AgentActivity, at now: TimeInterval) {
         guard running, kind == .agent else { return }
+        settleStop(at: now)
         switch activity {
         case .working:
             screenSynced = true
             answered()
             if !busy {
                 busy = true
-                busySince = now
+                // Within a second of a stop: one frame without the hint, and the same turn goes on.
+                busySince = lastStop?.since ?? now
                 if unseen == .done { unseen = nil }
             }
+            lastStop = nil
         case .asking(let asked):
             screenSynced = true
             if busy { busy = false }
+            lastStop = nil // a decision, not a finish
             guard question != asked else { return }
             question = asked
             questionSerial += 1
@@ -214,7 +226,7 @@ public struct TabStatus {
             answered()
             if busy {
                 busy = false
-                mark(.done, duration: now - busySince)
+                lastStop = (now, busySince, marked(.done, duration: now - busySince))
             }
         }
     }
@@ -268,9 +280,18 @@ public struct TabStatus {
 
     /// Call a few times a second.
     public mutating func tick(at now: TimeInterval) {
+        settleStop(at: now)
         guard busy, !screenSynced, now - lastOutputAt >= Self.quietAfter else { return }
         busy = false
         if running && kind == .agent { mark(.done, duration: lastOutputAt - busySince) }
+    }
+
+    /// The screen has said the agent stopped for `stopSettles`: the stop is real, and its notice goes out
+    /// (unless you have looked at the tab since).
+    private mutating func settleStop(at now: TimeInterval) {
+        guard let stop = lastStop, now - stop.at >= Self.stopSettles else { return }
+        lastStop = nil
+        if let notice = stop.notice, !visible { pendingNotice = notice }
     }
 
     public mutating func setVisible(_ isVisible: Bool) {
@@ -294,6 +315,7 @@ public struct TabStatus {
         kind = newKind
         startedAt = now
         busy = false
+        lastStop = nil
         question = nil
         screenSynced = false
         exitCode = nil
@@ -304,6 +326,7 @@ public struct TabStatus {
         let finishedKind = kind
         running = false
         busy = false
+        lastStop = nil // the agent exited: that is the news, not its last stop
         question = nil
         exitCode = code
         // Leaving vim or ssh is not news.
@@ -313,14 +336,18 @@ public struct TabStatus {
 
     /// Something happened the user should know about. Ignored while they are looking at the tab.
     private mutating func mark(_ newState: TabState, duration: TimeInterval, fromProgram: Bool = false) {
-        guard !visible else { return }
+        if let notice = marked(newState, duration: duration, fromProgram: fromProgram) { pendingNotice = notice }
+    }
+
+    /// Marks the tab, and returns the notice it is worth (nil: none), for the caller to post or hold.
+    private mutating func marked(_ newState: TabState, duration: TimeInterval, fromProgram: Bool = false) -> TabNotice? {
+        guard !visible else { return nil }
         let wasAttention = unseen == .attention
         if !wasAttention || newState == .attention { unseen = newState }
         // Attention notifies once until seen: a program ringing the bell in a loop is one notice, not 500.
         let notify = newState == .attention ? !wasAttention : duration >= Self.notifyAfter
-        if notify {
-            pendingNotice = TabNotice(state: newState, command: command, program: program, kind: kind, stillRunning: running,
-                                      duration: duration, fromProgram: fromProgram)
-        }
+        guard notify else { return nil }
+        return TabNotice(state: newState, command: command, program: program, kind: kind, stillRunning: running,
+                         duration: duration, fromProgram: fromProgram)
     }
 }

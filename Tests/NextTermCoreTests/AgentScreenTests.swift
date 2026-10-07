@@ -279,6 +279,80 @@ import Testing
         #expect(s.takeNotice()?.stillRunning == true) // 29 s of work: notify
     }
 
+    @Test func oneFrameWithoutTheHintIsNotAFinish() {
+        // A frame drawn halfway between two chunks, or the hint cut short in a narrow pane: idle for one look.
+        var s = TabStatus()
+        s.commandStarted("claude", at: 0)
+        for t in stride(from: 0.0, through: 10, by: 0.25) {
+            s.observe(agentScreen: .working, at: t)
+            s.tick(at: t)
+        }
+        s.observe(agentScreen: .idle, at: 10)
+        s.tick(at: 10)
+        #expect(s.takeNotice() == nil)
+        s.observe(agentScreen: .working, at: 10.25)
+        s.tick(at: 10.25)
+        s.tick(at: 12)
+        #expect(s.takeNotice() == nil && s.state == .working)
+        // Stopped for good: one notice a second later, for the whole turn.
+        s.observe(agentScreen: .idle, at: 30)
+        s.tick(at: 30)
+        #expect(s.state == .done && s.takeNotice() == nil)
+        s.observe(agentScreen: .idle, at: 31)
+        s.tick(at: 31)
+        let notice = s.takeNotice()
+        #expect(notice?.duration == 30 && notice?.stillRunning == true)
+        s.tick(at: 32)
+        #expect(s.takeNotice() == nil)
+    }
+
+    @Test func aStopHeldBackGivesWayToWhatCameAfter() {
+        var s = TabStatus()
+        s.commandStarted("claude", at: 0)
+        s.observe(agentScreen: .working, at: 0)
+        s.observe(agentScreen: .idle, at: 10)
+        s.tick(at: 10)
+        s.tick(at: 11)
+        #expect(s.takeNotice()?.duration == 10)
+
+        // It asked a question instead: the decision, not "waiting for you".
+        s.observe(agentScreen: .working, at: 20)
+        s.observe(agentScreen: .idle, at: 30)
+        s.observe(agentScreen: .asking("Do you want to make this edit to a.ts?"), at: 30.25)
+        #expect(s.takeNotice()?.question != nil)
+        s.tick(at: 32)
+        #expect(s.takeNotice() == nil)
+
+        // It exited (`claude -p`): "finished", not "waiting for you".
+        var p = TabStatus()
+        p.commandStarted("claude -p fix", at: 0)
+        p.observe(agentScreen: .working, at: 1)
+        p.observe(agentScreen: .idle, at: 20)
+        p.commandFinished(exitCode: 0, at: 20.25)
+        #expect(p.takeNotice()?.stillRunning == false)
+        p.tick(at: 22)
+        #expect(p.takeNotice() == nil)
+
+        // A bell as it stops (Claude Code's terminal_bell) is its own notice, and the stop's still comes.
+        var rang = TabStatus()
+        rang.commandStarted("claude", at: 0)
+        rang.observe(agentScreen: .working, at: 0)
+        rang.observe(agentScreen: .idle, at: 10)
+        rang.bell()
+        #expect(rang.takeNotice()?.topic == .programAlert)
+        rang.tick(at: 11)
+        #expect(rang.takeNotice()?.topic == .agentFinished)
+
+        // Looked at in the meantime: seen, so nothing.
+        var seen = TabStatus()
+        seen.commandStarted("claude", at: 0)
+        seen.observe(agentScreen: .working, at: 0)
+        seen.observe(agentScreen: .idle, at: 10)
+        seen.setVisible(true)
+        seen.tick(at: 11)
+        #expect(seen.takeNotice() == nil)
+    }
+
     @Test func decisionsNotifyWithTheQuestion() {
         var s = TabStatus()
         s.commandStarted("codex", at: 0)

@@ -161,6 +161,7 @@ import Testing
         #expect(agent.takeNotice()?.topic == .decision)
         agent.observe(agentScreen: .working, at: 4)
         agent.observe(agentScreen: .idle, at: 64)
+        agent.tick(at: 65)
         let done = agent.takeNotice()
         #expect(done?.topic == .agentFinished && done?.duration == 60)
 
