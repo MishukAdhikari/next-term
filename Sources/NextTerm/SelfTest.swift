@@ -1842,9 +1842,16 @@ enum SelfTest {
         log.showBackground = false
         let hidden = !log.text.contains("--no-write-fetch-head")
         log.showBackground = true
-        let listed = log.text.contains("git fetch --no-write-fetch-head --no-auto-maintenance --porcelain origin")
+        let porcelain = FetchSchedule.hasPorcelainFetch(GitWriter.version)
+        let command = GitWriter.commandLine(FetchSchedule.arguments(remote: "origin", porcelain: porcelain))
+        let listed = log.text.contains(command)
         log.showBackground = shown
         check(hidden && listed, "Git Commands lists background fetches only with “Show background fetches” on", "hidden \(hidden), listed \(listed)")
+        // --porcelain only where git knows it (2.41 or later; macOS 13 and 14 have 2.39), submodules never.
+        let version = GitWriter.version.map { $0.map(String.init).joined(separator: ".") } ?? "not read"
+        let fits = GitWriter.version != nil && command.contains("--porcelain") == porcelain && command.contains("--no-recurse-submodules")
+        let worked = log.entries.contains { $0.background && $0.command == command && $0.status == 0 }
+        check(fits && worked, "the background fetch fits the installed git, and works with it", "git \(version): \(command), worked \(worked)")
 
         // The setting, in Settings › Editor.
         let choices = EditorSettingsView().backgroundFetch

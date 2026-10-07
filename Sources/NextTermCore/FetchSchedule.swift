@@ -194,9 +194,19 @@ public struct FetchSchedule: Sendable {
     // MARK: the commands
 
     /// One remote's background fetch. FETCH_HEAD is left as it is (a `git pull` in a tab reads it between
-    /// its own fetch and merge), and no maintenance starts behind your back.
-    public static func arguments(remote: String) -> [String] {
-        ["fetch", "--no-write-fetch-head", "--no-auto-maintenance", "--porcelain", remote]
+    /// its own fetch and merge), no maintenance starts behind your back, and submodules are not fetched
+    /// (their remotes are other servers). `porcelain` (git 2.41 or later, see `hasPorcelainFetch`) makes
+    /// the output one line per ref; nothing reads it but you, in Git Commands.
+    public static func arguments(remote: String, porcelain: Bool) -> [String] {
+        let options = ["--no-write-fetch-head", "--no-auto-maintenance", "--no-recurse-submodules"]
+        return ["fetch"] + options + (porcelain ? ["--porcelain"] : []) + [remote]
+    }
+
+    /// Whether git of this version (GitRunner.version) knows `git fetch --porcelain`: 2.41 or later. The
+    /// Command Line Tools of macOS 13 and 14 have 2.39, which refuses the option and fetches nothing.
+    public static func hasPorcelainFetch(_ version: [Int]?) -> Bool {
+        guard let version else { return false }
+        return !version.lexicographicallyPrecedes([2, 41])
     }
 
     /// The remotes some local branch tracks, from `git for-each-ref --format=%(upstream:remotename)

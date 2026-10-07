@@ -278,6 +278,23 @@ public enum GitRunner {
         return (try? FileManager.default.attributesOfItem(atPath: common + "/FETCH_HEAD"))?[.modificationDate] as? Date
     }
 
+    /// The installed git's version as numbers, [2, 39, 5], from `git version`; nil if it can't be read.
+    public static func version(git: String) -> [Int]? {
+        run(git, ["version"], timeout: 10).flatMap { version(String(decoding: $0, as: UTF8.self)) }
+    }
+
+    /// The numbers in `git version`'s output: "git version 2.39.5 (Apple Git-154)" is [2, 39, 5].
+    public static func version(_ output: String) -> [Int]? {
+        let words = output.split(whereSeparator: \.isWhitespace)
+        guard words.count >= 3, words[0] == "git", words[1] == "version" else { return nil }
+        var numbers: [Int] = []
+        for part in words[2].split(separator: ".").prefix(3) {
+            guard let number = Int(part) else { break } // "2.41.0.windows.1", "2.42.0-rc1"
+            numbers.append(number)
+        }
+        return numbers.isEmpty ? nil : numbers
+    }
+
     /// The git folder that a work tree's refs live in, read from the files (no git run): `.git` itself, or
     /// for a linked worktree (whose `.git` is a file naming its own folder) the folder its commondir names.
     public static func commonGitDir(root: String) -> String? {

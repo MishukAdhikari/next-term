@@ -114,8 +114,27 @@ import Testing
         #expect(schedule.decision(for: repo, .timer, now: at(0), active: true) == .fetch)
     }
 
-    @Test func theCommandLeavesFetchHeadAlone() {
-        #expect(FetchSchedule.arguments(remote: "origin") == ["fetch", "--no-write-fetch-head", "--no-auto-maintenance", "--porcelain", "origin"])
+    @Test func theCommandLeavesFetchHeadAndSubmodulesAlone() {
+        let options = ["fetch", "--no-write-fetch-head", "--no-auto-maintenance", "--no-recurse-submodules"]
+        #expect(FetchSchedule.arguments(remote: "origin", porcelain: true) == options + ["--porcelain", "origin"])
+        #expect(FetchSchedule.arguments(remote: "origin", porcelain: false) == options + ["origin"])
+    }
+
+    /// `git fetch --porcelain` came with git 2.41; the Command Line Tools of macOS 13 and 14 have 2.39.
+    @Test func porcelainOnlyWithGit241OrLater() {
+        #expect(GitRunner.version("git version 2.39.5 (Apple Git-154)\n") == [2, 39, 5])
+        #expect(GitRunner.version("git version 2.50.1 (Apple Git-155)") == [2, 50, 1])
+        #expect(GitRunner.version("git version 2.41.0.windows.1") == [2, 41, 0])
+        #expect(GitRunner.version("git version 2.42.0-rc1") == [2, 42])
+        #expect(GitRunner.version("usage: git [-v | --version]") == nil)
+        #expect(GitRunner.version("") == nil)
+        #expect(!FetchSchedule.hasPorcelainFetch([2, 39, 5]) && !FetchSchedule.hasPorcelainFetch([2, 40, 9]))
+        #expect(FetchSchedule.hasPorcelainFetch([2, 41, 0]) && FetchSchedule.hasPorcelainFetch([2, 41]))
+        #expect(FetchSchedule.hasPorcelainFetch([2, 50, 1]) && FetchSchedule.hasPorcelainFetch([3]))
+        #expect(!FetchSchedule.hasPorcelainFetch(nil)) // not known: the form every git takes
+        // What 2.39 says to --porcelain. Nothing in it reads as a password prompt, so it would only ever fail.
+        let refused = "error: unknown option `porcelain'\nusage: git fetch [<options>] [<repository> [<refspec>...]]"
+        #expect(FetchSchedule.outcome(status: 129, output: refused) == .failed)
     }
 
     @Test func checksTheScheduleATenthOfTheIntervalApart() {
@@ -150,13 +169,73 @@ import Testing
         sh(["branch", "local-only"], in: work)
         #expect(FetchSchedule.trackedRemotes(at: work, git: git) == ["origin"])
         // Someone else's commit lands on the remote.
-        let theirs = sh(["commit-tree", "main^{tree}", "-p", "main", "-m", "theirs"], in: remote)
-        sh(["update-ref", "refs/heads/main", theirs], in: remote)
-        let output = sh(FetchSchedule.arguments(remote: "origin"), in: work)
-        #expect(output.hasSuffix("refs/remotes/origin/main") && output.contains(theirs), "\(output)")
-        #expect(sh(["rev-parse", "origin/main"], in: work) == theirs)
+        func theirs(_ message: String) -> String {
+            let commit = sh(["commit-tree", "main^{tree}", "-p", "main", "-m", message], in: remote)
+            sh(["update-ref", "refs/heads/main", commit], in: remote)
+            return commit
+        }
+        // The form every git takes brings it in.
+        let first = theirs("theirs")
+        sh(FetchSchedule.arguments(remote: "origin", porcelain: false), in: work)
+        #expect(sh(["rev-parse", "origin/main"], in: work) == first)
+        var behind = 1
+        // With git 2.41 or later, --porcelain too: a line for each ref.
+        if FetchSchedule.hasPorcelainFetch(GitRunner.version(git: git)) {
+            let second = theirs("theirs again")
+            let output = sh(FetchSchedule.arguments(remote: "origin", porcelain: true), in: work)
+            #expect(output.hasSuffix("refs/remotes/origin/main") && output.contains(second), "\(output)")
+            #expect(sh(["rev-parse", "origin/main"], in: work) == second)
+            behind = 2
+        }
         #expect(!FileManager.default.fileExists(atPath: work + "/.git/FETCH_HEAD"))
-        #expect(GitRunner.snapshot(for: work, git: git)?.behind == 1)
+        #expect(GitRunner.snapshot(for: work, git: git)?.behind == behind)
+    }
+
+    /// A submodule's remote is another server: the background fetch leaves it alone, in both forms, where
+    /// a plain `git fetch` would fetch it as well.
+    @Test func submodulesAreNotFetched() throws {
+        guard let git = GitRunner.locateGit() else { return } // no git on this machine
+        let base = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path))
+            .appendingPathComponent("nt-bgfetch-sub-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: base) }
+        @discardableResult func sh(_ args: [String], in dir: String) -> String {
+            let config = ["-c", "user.name=T", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false",
+                          "-c", "protocol.file.allow=always"]
+            let out = GitRunner.run(git, ["-C", dir] + config + args, timeout: 20)
+            #expect(out != nil, "git \(args.joined(separator: " "))")
+            return out.map { String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
+        }
+        for folder in ["lib", "app"] { try FileManager.default.createDirectory(atPath: "\(base)/\(folder)", withIntermediateDirectories: true) }
+        sh(["init", "-q", "--bare", "lib.git"], in: base)
+        sh(["init", "-q", "--bare", "app.git"], in: base)
+        sh(["init", "-q"], in: "\(base)/lib")
+        sh(["commit", "-q", "--allow-empty", "-m", "lib one"], in: "\(base)/lib")
+        sh(["push", "-q", "\(base)/lib.git", "main"], in: "\(base)/lib")
+        sh(["init", "-q"], in: "\(base)/app")
+        sh(["submodule", "-q", "add", "\(base)/lib.git", "lib"], in: "\(base)/app")
+        sh(["commit", "-q", "-m", "app one"], in: "\(base)/app")
+        sh(["push", "-q", "\(base)/app.git", "main"], in: "\(base)/app")
+        sh(["clone", "-q", "--recurse-submodules", "\(base)/app.git", "clone"], in: base)
+        let clone = "\(base)/clone", sub = "\(base)/clone/lib"
+        // The library moves on, and the app's remote points at its new commit.
+        sh(["commit", "-q", "--allow-empty", "-m", "lib two"], in: "\(base)/lib")
+        sh(["push", "-q", "\(base)/lib.git", "main"], in: "\(base)/lib")
+        sh(["-C", "lib", "pull", "-q", "\(base)/lib.git", "main"], in: "\(base)/app")
+        sh(["commit", "-q", "-am", "app two"], in: "\(base)/app")
+        sh(["push", "-q", "\(base)/app.git", "main"], in: "\(base)/app")
+        let before = sh(["rev-parse", "origin/main"], in: sub), appBefore = sh(["rev-parse", "origin/main"], in: clone)
+        var forms = [false]
+        if FetchSchedule.hasPorcelainFetch(GitRunner.version(git: git)) { forms.append(true) }
+        for porcelain in forms {
+            sh(["update-ref", "refs/remotes/origin/main", appBefore], in: clone)
+            sh(FetchSchedule.arguments(remote: "origin", porcelain: porcelain), in: clone)
+            #expect(sh(["rev-parse", "origin/main"], in: clone) != appBefore, "the app's own remote is fetched")
+            #expect(sh(["rev-parse", "origin/main"], in: sub) == before, "porcelain \(porcelain): the submodule is left alone")
+        }
+        // A plain fetch of the same change would have fetched the submodule too.
+        sh(["update-ref", "refs/remotes/origin/main", appBefore], in: clone)
+        sh(["fetch", "-q", "origin"], in: clone)
+        #expect(sh(["rev-parse", "origin/main"], in: sub) != before, "a plain git fetch reaches the submodule's remote")
     }
 
     @Test func theRemotesLocalBranchesTrack() {

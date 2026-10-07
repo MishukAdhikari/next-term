@@ -8,6 +8,8 @@ import NextTermCore
 final class GitWriter {
     static let shared = GitWriter()
     static let git = GitRunner.locateGit()
+    /// That git's version, read once (on the first background fetch's queue, not the main thread).
+    static let version = git.flatMap { GitRunner.version(git: $0) }
 
     struct Result {
         let status: Int32
@@ -128,7 +130,7 @@ final class GitWriter {
         writeQueue(for: repository).async {
             var results: [Result] = []
             for remote in remotes where !run.isStopped {
-                let args = FetchSchedule.arguments(remote: remote)
+                let args = FetchSchedule.arguments(remote: remote, porcelain: FetchSchedule.hasPorcelainFetch(Self.version))
                 let started = Date()
                 var result = Self.execute(git, ["-C", directory] + args, environment: Self.backgroundEnvironment, timeout: 180,
                                           started: run.started)
