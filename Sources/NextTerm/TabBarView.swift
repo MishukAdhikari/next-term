@@ -363,8 +363,13 @@ final class TabBarView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         guard dragsWindow else { return }
+        Self.titleBarMouseDown(event, in: window)
+    }
+
+    /// A press on the title bar strip: it drags the window, and a double-click does what double-clicking
+    /// any title bar does (System Settings > Desktop & Dock decides).
+    static func titleBarMouseDown(_ event: NSEvent, in window: NSWindow?) {
         if event.clickCount == 2 {
-            // Same as double-clicking any title bar: System Settings > Desktop & Dock decides.
             switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
             case "Minimize": window?.performMiniaturize(nil)
             case "None": break
@@ -803,13 +808,15 @@ enum StatusGlyph {
     }
 }
 
-private final class StatusDotView: NSView {
+final class StatusDotView: NSView {
     private let ring = CAShapeLayer()
     private let glyph = NSImageView()
 
     var state: TabState = .idle {
         didSet { if state != oldValue { apply() } }
     }
+    /// The amber mark pulses until it is seen. The terminal rail's does not: the rail pulsed already.
+    var pulsesForAttention = true
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -855,7 +862,7 @@ private final class StatusDotView: NSView {
             }
         case .done, .failed, .attention:
             glyph.image = StatusGlyph.image(for: state, size: 11)
-            if state == .attention, !reduceMotion {
+            if state == .attention, pulsesForAttention, !reduceMotion {
                 let pulse = CABasicAnimation(keyPath: "opacity")
                 pulse.fromValue = 1
                 pulse.toValue = 0.35

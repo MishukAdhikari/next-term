@@ -86,7 +86,7 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 |---|---|
 | Hide or Show Project Sidebar | <kbd>⌘B</kbd> |
 | Focus Editor or Focus Terminal | <kbd>⌃&#96;</kbd> |
-| Collapse Terminal or Expand Terminal | <kbd>⌘J</kbd> |
+| Collapse Terminal or Expand Terminal (to its tab bar, or beside the editor to a rail with each tab’s mark) | <kbd>⌘J</kbd> |
 | Terminal Position › Bottom, Right, Left, Top | — |
 | Show Changes | <kbd>⌥⌘G</kbd> |
 | Annotate with Git Blame (who last changed each line, beside the numbers) | — |

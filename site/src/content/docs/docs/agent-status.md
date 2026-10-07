@@ -20,7 +20,7 @@ Run five agents in five tabs and the hard part is no longer the typing. It is kn
 | <span class="nt-mark nt-mark--attention">!</span> amber | An agent is waiting on your decision (the question is in the tooltip), or a program rang the bell |
 | <span class="nt-mark nt-mark--failed">✕</span> red cross | A command exited with an error (the exit code is in the tooltip) |
 
-Each mark is a shape as well as a colour, so it reads without colour vision too. A mark clears when you look at the tab.
+Each mark is a shape as well as a colour, so it reads without colour vision too. A mark clears when you look at the tab. With the terminal folded to its rail beside the editor, no tab is on screen: the tab in front gets its mark, notifications and VoiceOver announcements like any other.
 
 The spinner is reserved for AI agents. It runs while the agent says it is working, or, for an agent whose screen hints are not known yet, while it prints (see [How Next Term knows](#how-next-term-knows)). A build or a test run shows no spinner while it runs; it ends with a check or a cross. A dev server or an editor never shows one at all.
 

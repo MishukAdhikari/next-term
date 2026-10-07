@@ -497,6 +497,7 @@ enum SelfTest {
         await editorChecks(c, proj: proj, tab: inProject)
         await goToFileChecks(c, proj: proj)
         await gutterAndCollapseChecks(c, proj: proj)
+        await railChecks(c, proj: proj)
         await blameChecks(c, proj: proj)
         await deletedFileChecks(c, proj: proj)
         await notebookChecks(c, proj: proj)
@@ -2722,6 +2723,189 @@ enum SelfTest {
         check(await wait(5) { editor.changeMarks.isEmpty }, "the marks go once the file matches the commit again")
         c.editorArea.close(editor)
         _ = window
+    }
+
+    /// Beside the editor, ⌘J folds the terminal to a rail at the window's edge: the arrow back, each tab's
+    /// mark, a few pulses when one finishes (none with Reduce Motion), a click on a mark opening its tab.
+    private static func railChecks(_ c: TerminalWindowController, proj: URL) async {
+        guard let window = c.window, let app = AppDelegate.shared, let pane = c.tabBar.superview else { return }
+        let file = proj.appendingPathComponent("rail.txt")
+        try? "rail\n".write(to: file, atomically: true, encoding: .utf8)
+        c.openFile(file)
+        guard let editor = c.editorArea.activeEditor, editor.document.path.hasSuffix("rail.txt") else { return check(false, "rail.txt opens") }
+        let savedPosition = app.terminalPosition
+        let rail = c.terminalRail
+        // One tab in front, and one opened behind it (as an agent would).
+        let front = c.addTab(directory: proj.path)
+        let back = c.addTab(directory: proj.path, select: false)
+        _ = await wait(20) { front.status.integrated && back.status.integrated }
+        app.terminalPosition = .right
+        c.applyLayout()
+        window.layoutIfNeeded()
+        let width = pane.frame.width
+        let columns = front.view.getTerminal().cols
+        // History that a squeeze to a few columns would rewrap past the scrollback's end.
+        front.view.send(txt: "echo rail-top; seq -f '%070g' 1 400\r")
+        _ = await wait(5) { !front.status.running && front.screenTail(4).contains { $0.hasSuffix("0400") } }
+        await pause(0.3) // and the prompt after it
+        let lastRow = front.lastTextRow()
+        window.makeFirstResponder(front.view)
+        c.toggleTerminalCollapsed(nil)
+        window.layoutIfNeeded()
+        check(c.terminalRailed && abs(pane.frame.width - TerminalRail.width) < 2 && !rail.isHidden && c.tabBar.isHidden && rail.pointsLeft,
+              "beside the editor, ⌘J folds the terminal to a rail at the window's edge", "\(width) → \(pane.frame.width)")
+        check(window.firstResponder === editor.textView, "folding gives the keyboard to the editor")
+        check(front.view.getTerminal().cols == columns && lastRow != nil && front.lastTextRow() == lastRow,
+              "folding to the rail never squeezes the terminals: their width and scrollback stay whole",
+              "\(columns) → \(front.view.getTerminal().cols) columns, last row \(lastRow ?? -1) → \(front.lastTextRow() ?? -1)")
+        // Dragging the line out of the rail: where the drag would leave the terminal (it is on the right).
+        if let split = pane.superview as? NSSplitView {
+            let room = split.bounds.width - split.dividerThickness
+            let dragged = [60, 150, 400].map { (room - c.splitView(split, constrainSplitPosition: room - $0, ofSubviewAt: 0)).rounded() }
+            check(dragged == [TerminalRail.width, 240, 400], "dragged out of the rail, the terminal is the rail or its usual width, never a few columns",
+                  "60, 150, 400 → \(dragged)")
+        }
+        let states = c.tabBar.items.map(\.state)
+        check(rail.marks.count == c.groups.count && rail.marks.map(\.state) == states && rail.marks[safe: c.activeIndex]?.selected == true,
+              "the rail has a mark for each tab, in order, as the tab bar has them", "\(rail.marks.map(\.state)) vs \(states)")
+        let backIndex = c.groups.firstIndex { $0.contains(back) } ?? 0
+        let backButton = rail.markButtons[safe: backIndex]
+        let backLabel = backButton?.accessibilityLabel() ?? ""
+        // VoiceOver goes into a group, not into a button: the arrow and the marks are buttons side by side in it.
+        let railChildren = rail.accessibilityChildren() ?? []
+        let expandButton = railChildren.lazy.compactMap { $0 as? NSAccessibilityElement }.first { $0.accessibilityLabel() == "Expand terminal" }
+        check(rail.accessibilityRole() == .group && expandButton?.accessibilityRole() == .button
+              && railChildren.contains { ($0 as? NSButton) === backButton } && backButton?.isAccessibilityElement() == true
+              && backButton?.accessibilityRole() == .button && backLabel.hasPrefix(back.title),
+              "VoiceOver: the folded terminal is a group, an Expand terminal button and a button for each tab", backLabel)
+        check(rail.markButtons[safe: backIndex]?.toolTip == back.title + "\n" + back.stateDescription, "a mark's tooltip is its tab's title and state",
+              rail.markButtons[safe: backIndex]?.toolTip ?? "none")
+        await screenshot(c, suffix: "-rail")
+        // ⌘W with the keyboard outside the editor (in the sidebar): the tab in front is folded away, so nothing closes.
+        window.makeFirstResponder(c.sidebar.outline)
+        let tabCount = c.groups.count
+        let closeItem = NSMenuItem(title: "Close Tab", action: #selector(TerminalWindowController.closeTab(_:)), keyEquivalent: "w")
+        c.closeTab(nil)
+        check(!c.validateMenuItem(closeItem) && c.groups.count == tabCount && c.terminalRailed,
+              "folded to the rail, ⌘W outside the editor closes no terminal tab out of sight", "\(tabCount) → \(c.groups.count) tabs")
+        // More tabs than the rail has room for: its last place is "+N" for the rest.
+        let realMarks = rail.marks
+        let extraTabs = (0..<Int(rail.bounds.height / 24)).map { _ in NSObject() }
+        rail.update(marks: realMarks + extraTabs.map {
+            TerminalRail.Mark(id: ObjectIdentifier($0), state: .idle, toolTip: "zsh", label: "zsh, Idle", selected: false)
+        })
+        rail.layoutSubtreeIfNeeded()
+        let shownMarks = rail.markButtons.filter { !$0.isHidden }
+        let more = rail.overflowButton
+        let lastShown = shownMarks.map(\.frame.maxY).max() ?? 0
+        check(shownMarks.count < rail.marks.count && !more.isHidden && more.title == "+\(rail.marks.count - shownMarks.count)"
+              && more.frame.minY >= lastShown && more.frame.maxY <= rail.bounds.height,
+              "more tabs than the rail has room for: its last place is +N for the rest", "\(shownMarks.count) of \(rail.marks.count), \(more.title)")
+        c.refresh()
+        window.layoutIfNeeded()
+        check(rail.marks.count == c.groups.count && more.isHidden, "and with room for them all it goes", more.title)
+
+        // The tab in front fails while folded: nobody sees it, so its mark says so and the rail pulses a few times
+        // (with motion, whatever Reduce Motion is on this Mac).
+        let reducesMotion = TerminalRail.reducesMotion
+        TerminalRail.reducesMotion = { false }
+        let noticed = rail.changesNoticed
+        front.view.send(txt: "sleep 0.3; false\r")
+        let frontIndex = c.groups.firstIndex { $0.contains(front) } ?? 0
+        check(await wait(5) { rail.marks[safe: frontIndex]?.state == .failed }, "the tab in front failing behind the rail shows on its mark",
+              rail.marks[safe: frontIndex]?.state.rawValue ?? "none")
+        check(rail.changesNoticed > noticed && rail.isPulsing, "and the rail pulses", "noticed \(rail.changesNoticed - noticed)")
+        await screenshot(c, suffix: "-rail-pulse")
+        check(await wait(4) { !rail.isPulsing } && rail.marks[safe: frontIndex]?.state == .failed, "a few times, then it stays still with the mark")
+        // With Reduce Motion the mark just appears.
+        TerminalRail.reducesMotion = { true }
+        let noticedBefore = rail.changesNoticed
+        back.view.send(txt: "sleep 0.3\r")
+        check(await wait(5) { rail.marks[safe: backIndex]?.state == .done } && rail.changesNoticed > noticedBefore && !rail.isPulsing,
+              "with Reduce Motion the mark appears and nothing moves", "pulsing \(rail.isPulsing)")
+        // Done, busy, done again (an agent pausing in its output): the rail pulsed for it once, and stays still.
+        let started = front.status.commandsStarted
+        front.view.send(txt: "sleep 0.3\r")
+        _ = await wait(5) { front.status.commandsStarted > started && rail.marks[safe: frontIndex]?.state == .done }
+        let noticedDone = rail.changesNoticed
+        front.view.send(txt: "sleep 1\r")
+        let busy = await wait(3) { rail.marks[safe: frontIndex]?.state != .done } // running, the mark clears
+        let doneAgain = await wait(5) { rail.marks[safe: frontIndex]?.state == .done }
+        check(busy && doneAgain && rail.changesNoticed == noticedDone, "a tab done again behind the rail does not pulse again",
+              "busy \(busy), done \(doneAgain), noticed \(rail.changesNoticed - noticedDone) more")
+        TerminalRail.reducesMotion = reducesMotion
+
+        // A click on a mark opens the terminal on that tab, at its size.
+        rail.clickMark(backIndex)
+        window.layoutIfNeeded()
+        check(!c.terminalCollapsed && rail.isHidden && !c.tabBar.isHidden && c.activeIndex == backIndex && abs(pane.frame.width - width) < 2,
+              "clicking a mark expands the terminal and selects that tab", "active \(c.activeIndex) of \(backIndex), width \(pane.frame.width)")
+        check(window.firstResponder === back.view, "with the keyboard in it")
+        // ⌘J folds and opens it again at the size it had; selecting a tab (⌃Tab, ⌘1) opens it too.
+        c.toggleTerminalCollapsed(nil)
+        c.toggleTerminalCollapsed(nil)
+        window.layoutIfNeeded()
+        check(!c.terminalCollapsed && rail.isHidden && abs(pane.frame.width - width) < 2, "⌘J brings the folded terminal back at its size",
+              "\(width) → \(pane.frame.width)")
+        // Pressing the rail itself: a click on it below the arrow, or VoiceOver's Expand terminal button.
+        c.toggleTerminalCollapsed(nil)
+        window.layoutIfNeeded()
+        let onRail = rail.convert(NSPoint(x: rail.bounds.midX, y: rail.bounds.maxY - 8), to: nil)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            guard let event = NSEvent.mouseEvent(with: type, location: onRail, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                                 context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { continue }
+            if type == .leftMouseDown { rail.mouseDown(with: event) } else { rail.mouseUp(with: event) }
+        }
+        window.layoutIfNeeded()
+        check(!c.terminalCollapsed && rail.isHidden && abs(pane.frame.width - width) < 2, "a click on the rail brings the terminal back at its size",
+              "\(width) → \(pane.frame.width)")
+        c.toggleTerminalCollapsed(nil)
+        let pressed = expandButton?.accessibilityPerformPress() == true
+        window.layoutIfNeeded()
+        check(pressed && !c.terminalCollapsed && abs(pane.frame.width - width) < 2, "and so does VoiceOver's Expand terminal button",
+              "\(width) → \(pane.frame.width)")
+        c.toggleTerminalCollapsed(nil)
+        c.cycleTab(by: 1)
+        check(!c.terminalCollapsed && rail.isHidden, "switching tabs from the keyboard opens the rail")
+
+        // On the left, the arrow points right and the editor's tabs take the corner.
+        app.terminalPosition = .left
+        c.applyLayout()
+        c.toggleTerminalCollapsed(nil)
+        window.layoutIfNeeded()
+        let railFrame = pane.convert(pane.bounds, to: nil), editorFrame = c.editorArea.convert(c.editorArea.bounds, to: nil)
+        check(c.terminalRailed && !rail.pointsLeft && railFrame.maxX <= editorFrame.minX + 1 && abs(railFrame.width - TerminalRail.width) < 2,
+              "with the terminal on the left, the rail is at the left edge", "rail \(railFrame.integral)")
+        await screenshot(c, suffix: "-rail-left")
+        // At the window's top-left corner (the sidebar hidden) the traffic lights keep their strip: a press there
+        // moves the window, as on the tab bars; the arrow and the marks come below it.
+        let sidebarShown = c.isSidebarVisible
+        c.setSidebarVisible(false)
+        window.layoutIfNeeded()
+        let firstMark = rail.markButtons.first { !$0.isHidden }
+        check(rail.topInset == TabBarView.height && rail.isTitleBar(NSPoint(x: 12, y: rail.topInset - 4))
+              && !rail.isTitleBar(NSPoint(x: 12, y: rail.topInset + 4)) && (firstMark?.frame.minY ?? 0) >= rail.topInset + TabBarView.height,
+              "under the traffic lights the rail's top strip is title bar, with the arrow and the marks below it",
+              "inset \(rail.topInset), first mark at \(firstMark?.frame.minY ?? -1)")
+        c.setSidebarVisible(sidebarShown)
+        c.toggleTerminalCollapsed(nil)
+
+        // Above or below the editor, folding is as it was: down to the tab bar.
+        for position in [AppDelegate.TerminalPosition.top, .bottom] {
+            app.terminalPosition = position
+            c.applyLayout()
+            c.toggleTerminalCollapsed(nil)
+            window.layoutIfNeeded()
+            check(c.terminalCollapsed && !c.terminalRailed && rail.isHidden && !c.tabBar.isHidden && abs(pane.frame.height - TabBarView.height) < 2,
+                  "terminal on the \(position.rawValue): folding still leaves its tab bar", "\(pane.frame.height)")
+            c.toggleTerminalCollapsed(nil)
+        }
+
+        app.terminalPosition = savedPosition
+        c.applyLayout()
+        for tab in [front, back] { tab.status.setVisible(true); c.requestClose(tab) }
+        c.editorArea.close(editor)
+        try? FileManager.default.removeItem(at: file)
     }
 
     /// View › Annotate with Git Blame: who last changed each line, beside the numbers; edited lines are not
