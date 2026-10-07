@@ -164,6 +164,7 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | Rename tab | ⌥⌘R, or double-click the tab |
 | Project sidebar | ⌘B |
 | Find / next / previous | ⌘F / ⌘G / ⌘⇧G |
+| Replace in the open file | ⌥⌘F |
 | Find in Files / Replace in Files | ⌘⇧F / ⌘⇧R |
 | Clear | ⌘K |
 | Font size | ⌘+ / ⌘- / ⌘0 |
