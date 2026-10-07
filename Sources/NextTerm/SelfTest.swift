@@ -1083,6 +1083,14 @@ enum SelfTest {
         check(question == "What is \"RAG\" in row 0?\nTwo lines." && row.fields[2] == "It retrieves, then generates." && row.line == 2,
               "a quoted field keeps its newline, comma and quotes", row.fields.joined(separator: " | "))
         check(table.records[2].line == 4 && table.grid.numberOfRows == 999, "the next row starts after it, and the header is not a row")
+        table.show(lines: true)
+        table.grid.selectAll(nil)
+        let copied = table.exportCSV()
+        check(table.grid.numberOfRows == 1000 && table.rowsText.hasPrefix("\(1000.formatted()) rows"),
+              "Lines lists the header line too, and counts it", table.rowsText)
+        check(copied.hasPrefix("id,question,answer\n0,") && table.exportJSON().hasPrefix("[\n  {\"id\": \"0\""),
+              "but Copy As CSV and JSON do not copy it as a row", String(copied.prefix(60)))
+        table.show(lines: false)
         table.onOpenInEditor?(table.url)
         let editor = area.activeEditor
         check(editor?.document.path == canonicalPath(csv.path), "Open in Editor opens it in the editor, which can take it")

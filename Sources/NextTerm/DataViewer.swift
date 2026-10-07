@@ -33,7 +33,8 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
     private(set) var records: [DataRecord] = []
     /// The table's columns (not counting the line number).
     private(set) var columns: [String] = []
-    /// The records the grid shows, as indexes into `records`: the header row and search misses are left out.
+    /// The records the grid shows, as indexes into `records`: search misses are left out, and the header
+    /// row too in the table (the Lines view lists it).
     private(set) var visible: [Int] = []
     private(set) var end = DataPosition.start
     private(set) var isAtEnd = false
@@ -268,13 +269,15 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
     /// The data rows read so far: the header row is not one.
     var rowCount: Int { max(0, records.count - (headerRow ? 1 : 0)) }
     private var headerRow: Bool { kind == .delimited && hasHeader && !records.isEmpty }
+    /// The rows the grid lists before a search: in the Lines view the header line is one of them.
+    private var listedCount: Int { showsLines ? records.count : rowCount }
 
-    /// About how many rows the whole file holds; exact once it is all read.
+    /// About how many rows the whole file holds (as the grid lists them); exact once it is all read.
     var estimatedTotal: Int? {
-        if isAtEnd { return rowCount }
+        if isAtEnd { return listedCount }
         guard !records.isEmpty else { return nil }
         let total = DataHead.estimatedTotal(records: records.count, through: end, fileSize: fileSize, lineCount: lineCount)
-        return max(rowCount, total - (headerRow ? 1 : 0))
+        return max(listedCount, total - (records.count - listedCount))
     }
 
     /// "1,000 rows loaded of about 1,240,000", "All 312 rows", "12 of 1,000 loaded rows match".
@@ -283,10 +286,10 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
         if records.isEmpty { return isLoading ? "Reading…" : "No rows" }
         let unit = kind == .lines ? "line" : "row"
         if matches != nil, !search.stringValue.isEmpty {
-            return "\(visible.count.formatted()) of \(rowCount.formatted()) loaded \(unit)s match"
+            return "\(visible.count.formatted()) of \(listedCount.formatted()) loaded \(unit)s match"
         }
-        if isAtEnd { return rowCount == 1 ? "1 \(unit)" : "All \(rowCount.formatted()) \(unit)s" }
-        var text = "\(rowCount.formatted()) \(unit)s loaded"
+        if isAtEnd { return listedCount == 1 ? "1 \(unit)" : "All \(listedCount.formatted()) \(unit)s" }
+        var text = "\(listedCount.formatted()) \(unit)s loaded"
         if let total = estimatedTotal { text += " of about \(total.formatted())" }
         if isCounting, fileSize > 0 {
             let percent = Int(Double(countedBytes) / Double(fileSize) * 100)
@@ -605,6 +608,13 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
         grid.selectedRowIndexes.compactMap { visible[safe: $0] }.map { records[$0] }
     }
 
+    /// The chosen rows that are data, for Copy As JSON and CSV: the Lines view lists the header line,
+    /// which names the columns rather than being one more row.
+    var chosenRows: [DataRecord] {
+        let indexes = grid.selectedRowIndexes.compactMap { visible[safe: $0] }
+        return indexes.filter { !headerRow || $0 != 0 }.map { records[$0] }
+    }
+
     /// A right-click on a row outside the selection selects it, so the menu copies what it points at.
     func menuNeedsUpdate(_ menu: NSMenu) {
         let row = grid.clickedRow
@@ -614,7 +624,7 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
 
     /// The chosen rows as JSON: JSON Lines as written, CSV rows as objects keyed by the header.
     func exportJSON() -> String {
-        let chosen = chosenRecords
+        let chosen = chosenRows
         if kind == .jsonLines { return DataExport.jsonLines(chosen.map(\.raw)) }
         let fields = chosen.map(allFields)
         let names = csvColumns(fields)
@@ -624,7 +634,7 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
 
     /// The chosen rows as CSV with a header line. JSON values are shown as cells show them.
     func exportCSV() -> String {
-        let chosen = chosenRecords
+        let chosen = chosenRows
         if kind == .jsonLines {
             let keys = DataHead.columns(of: chosen)
             let rows = chosen.map { record in keys.map { record.value(for: $0).map(DataHead.displayValue) } }
@@ -667,8 +677,8 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
         NSPasteboard.general.setString(text, forType: .string)
     }
 
-    @objc func copyJSON() { copy(chosenRecords.isEmpty ? "" : exportJSON()) }
-    @objc func copyCSV() { copy(chosenRecords.isEmpty ? "" : exportCSV()) }
+    @objc func copyJSON() { copy(chosenRows.isEmpty ? "" : exportJSON()) }
+    @objc func copyCSV() { copy(chosenRows.isEmpty ? "" : exportCSV()) }
     @objc func copyLines() { copy(exportLines()) }
 
     @objc private func openInEditor() { onOpenInEditor?(url) }
