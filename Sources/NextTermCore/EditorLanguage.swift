@@ -24,7 +24,7 @@ public enum EditorLanguage {
         "php": "php", "phtml": "php", "html": "html", "htm": "html", "xhtml": "html", "css": "css", "scss": "scss",
         "less": "less", "js": "javascript", "mjs": "javascript", "cjs": "javascript", "ts": "typescript",
         "mts": "typescript", "cts": "typescript", "tsx": "tsx", "jsx": "jsx", "json": "json", "jsonc": "jsonc",
-        "json5": "json5", "jsonl": "jsonl", "ndjson": "jsonl", "md": "markdown", "markdown": "markdown",
+        "json5": "json5", "jsonl": "jsonl", "ndjson": "jsonl", "ipynb": "json", "md": "markdown", "markdown": "markdown",
         "yml": "yaml", "yaml": "yaml", "toml": "toml", "sh": "shellscript", "bash": "shellscript",
         "zsh": "shellscript", "command": "shellscript", "fish": "fish", "ps1": "powershell", "psm1": "powershell",
         "py": "python", "pyi": "python", "pyw": "python", "go": "go", "rs": "rust", "swift": "swift", "sql": "sql",

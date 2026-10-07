@@ -485,6 +485,7 @@ enum SelfTest {
         await goToFileChecks(c, proj: proj)
         await gutterAndCollapseChecks(c, proj: proj)
         await deletedFileChecks(c, proj: proj)
+        await notebookChecks(c, proj: proj)
         await updateChecks(c)
         await platformLinkChecks(c)
         await branchChecks(c, proj: proj)
@@ -793,6 +794,99 @@ enum SelfTest {
 
     /// A deleted file keeps a row where it was (struck through, with its −N), so a folder's count always
     /// has a row that explains it; it opens as what was removed. A folder deleted whole has one too.
+    /// A Jupyter notebook opens read-only as cells (never as raw JSON, never run), Open as JSON edits the
+    /// file, and the view follows the file on disk.
+    private static func notebookChecks(_ c: TerminalWindowController, proj: URL) async {
+        let area = c.editorArea
+        let file = proj.appendingPathComponent("rag.ipynb")
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAYAAAC09K7GAAAAEklEQVR4nGM4EaDxHxkzEBQAAKyxGvWvi7wBAAAAAElFTkSuQmCC"
+        func cell(_ type: String, _ source: String, count: Int? = nil, outputs: [[String: Any]] = []) -> [String: Any] {
+            var cell: [String: Any] = ["cell_type": type, "metadata": [String: Any](), "source": source]
+            if type == "code" { cell["execution_count"] = count ?? NSNull(); cell["outputs"] = outputs }
+            return cell
+        }
+        func write(_ cells: [[String: Any]], to url: URL) {
+            let notebook: [String: Any] = ["cells": cells, "nbformat": 4, "nbformat_minor": 5, "metadata": [
+                "kernelspec": ["display_name": "Python 3 (ipykernel)", "language": "python", "name": "python3"]]]
+            try? JSONSerialization.data(withJSONObject: notebook).write(to: url)
+        }
+        var cells = [
+            cell("markdown", "# RAG over a blog post\n\nLoad, split, **retrieve**."),
+            cell("code", "def answer(question):\n    return retrieve(question)\n\nprint(\"Total characters: 43047\")", count: 1,
+                 outputs: [["output_type": "stream", "name": "stdout", "text": "Total characters: 43047\n"]]),
+            cell("code", "graph.invoke({\"query\": \"What is Task Decomposition?\"})", count: 2, outputs: [[
+                "output_type": "error", "ename": "KeyError", "evalue": "'question'",
+                "traceback": ["\u{1B}[0;31mKeyError\u{1B}[0m                Traceback (most recent call last)", "\u{1B}[0;31mKeyError\u{1B}[0m: 'question'"],
+            ]]),
+            cell("code", "display(Image(graph.get_graph().draw_mermaid_png()))", count: 3,
+                 outputs: [["output_type": "display_data", "data": ["image/png": png, "text/plain": "<Image>"], "metadata": [String: Any]()]]),
+        ]
+        write(cells, to: file)
+        let editorsBefore = area.editors.count
+        c.openFile(file)
+        guard let notebook = area.activeNotebook else { return check(false, "an .ipynb opens as a notebook", area.activeName ?? "nothing") }
+        check(notebook.name == "rag.ipynb" && area.editors.count == editorsBefore, "an .ipynb opens as a notebook, not as text")
+        check(area.tabBar.items.last { $0.title == "rag.ipynb" }?.icon?.accessibilityDescription == "jupyter", "its tab has the notebook icon")
+        check(await wait(5) { notebook.isSettled }, "the notebook is read and coloured", notebook.loadError ?? "")
+        let text = notebook.textView.string as NSString
+        check(notebook.notebook?.cells.count == 4 && notebook.notebook?.language == "python", "its four cells, in Python",
+              "\(notebook.notebook?.cells.count ?? -1) \(notebook.notebook?.language ?? "nil")")
+        check(text.contains("RAG over a blog post") && text.contains("def answer(question):"), "Markdown and code show as text")
+        check(text.contains("Total characters: 43047\n"), "a cell's printed output shows below it")
+        let error = text.range(of: "KeyError: 'question'")
+        let errorColor = error.location == NSNotFound ? nil : notebook.textView.textStorage?.attribute(.foregroundColor, at: error.location, effectiveRange: nil) as? NSColor
+        check(errorColor == NotebookRenderer.errorText && !text.contains("\u{1B}"), "an error shows in red, its colour codes stripped")
+        var images = 0
+        notebook.textView.textStorage?.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, _, _ in
+            if (value as? NSTextAttachment)?.attachmentCell is NotebookImageCell { images += 1 }
+        }
+        check(images == 1, "an image output is shown", "\(images) images")
+        let def = text.range(of: "def answer")
+        let defColor = (notebook.textView.layoutManager?.temporaryAttribute(.foregroundColor, atCharacterIndex: def.location, effectiveRange: nil) as? NSColor)?
+            .usingColorSpace(.sRGB).map { String(format: "%02X%02X%02X", Int(round($0.redComponent * 255)), Int(round($0.greenComponent * 255)), Int(round($0.blueComponent * 255))) }
+        check(defColor == "CF8E6D", "code cells are coloured in the kernel's language", defColor ?? "none")
+        check(!notebook.textView.isEditable && notebook.textView.usesFindBar, "read-only, with ⌘F")
+        await screenshot(c, suffix: "-notebook")
+
+        // An agent adds a cell: the view follows the file.
+        cells.append(cell("code", "len(all_splits)", count: 4, outputs: [["output_type": "execute_result", "execution_count": 4,
+                                                                          "data": ["text/plain": "66"], "metadata": [String: Any]()]]))
+        write(cells, to: file)
+        check(await wait(5) { notebook.notebook?.cells.count == 5 && notebook.isSettled }, "a change on disk shows up in the notebook")
+
+        // Open as JSON: the file itself, in the editor, beside the notebook.
+        notebook.openAsJSONClicked()
+        let json = area.activeEditor
+        check(json?.document.path == canonicalPath(file.path) && json?.document.language == "json" && area.notebooks.count == 1,
+              "Open as JSON opens the file in the editor, as JSON", json?.document.language ?? "no editor")
+        if let json { area.close(json) }
+        // Opening it again shows the notebook tab already open; a search result's line opens the JSON there.
+        c.openFile(file)
+        check(area.activeNotebook === notebook && area.notebooks.count == 1, "opening it again shows its tab")
+        c.openFile(file, line: 3)
+        check(area.activeEditor?.document.path == canonicalPath(file.path), "a line in it opens the JSON at that line")
+        if let editor = area.activeEditor { area.close(editor) }
+
+        // Renamed in the sidebar: the tab follows.
+        c.sidebar.rename(file, to: "renamed.ipynb")
+        check(notebook.name == "renamed.ipynb" && !notebook.isDeletedOnDisk, "a renamed notebook stays open under its new name", notebook.name)
+        await pause(1.2)
+        check(notebook.notebook?.cells.count == 5 && notebook.loadError == nil, "and is not reported as deleted")
+        area.close(notebook)
+
+        // Past the editor's 4 MiB highlighting limit (a big image): still a notebook.
+        let big = proj.appendingPathComponent("big.ipynb")
+        let heavy = png + String(repeating: "A", count: 5 * 1024 * 1024)
+        write([cell("code", "plt.show()", count: 1, outputs: [["output_type": "display_data", "data": ["image/png": heavy], "metadata": [String: Any]()]])], to: big)
+        c.openFile(big)
+        let large = area.activeNotebook
+        check(large?.name == "big.ipynb", "a 5 MB notebook opens as a notebook", area.activeName ?? "nothing")
+        check(await wait(10) { large?.isSettled == true && large?.notebook?.cells.count == 1 }, "and is read", large?.loadError ?? "")
+        if let large { area.close(large) }
+        try? FileManager.default.removeItem(at: big)
+        try? FileManager.default.removeItem(at: proj.appendingPathComponent("renamed.ipynb"))
+    }
+
     private static func deletedFileChecks(_ c: TerminalWindowController, proj: URL) async {
         guard let git = GitRunner.locateGit(), let root = c.sidebar.root else { return }
         func run(_ args: String...) {
