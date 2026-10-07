@@ -1907,6 +1907,14 @@ enum SelfTest {
         run("checkout", "-q", "--", "a.txt")
         check(await wait(10) { disk.rowTitles.first == "# On disk, different from feat · 3 files" && !disk.rowTitles.contains("M a.txt") },
               "the list follows the files on disk", disk.rowTitles.joined(separator: " | "))
+        // Rewritten with the same text (git lists it until it reads it again), and m.txt gone: only m.txt
+        // leaves the list.
+        write("a.txt", "1\n2\n3\nfix\n")
+        try? FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(60)], ofItemAtPath: repo.appendingPathComponent("a.txt").path)
+        try? FileManager.default.removeItem(at: repo.appendingPathComponent("m.txt"))
+        check(await wait(10) { disk.rowTitles.first == "# On disk, different from feat · 2 files" && !disk.rowTitles.contains("M a.txt") },
+              "a file rewritten with the branch's text is not listed", disk.rowTitles.joined(separator: " | "))
+        run("checkout", "-q", "--", "m.txt")
         c.editorArea.close(disk)
 
         // Nothing to show is said plainly.

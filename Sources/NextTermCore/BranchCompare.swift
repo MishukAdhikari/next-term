@@ -104,9 +104,10 @@ public enum BranchCompare {
     }
 
     /// The files on disk (tracked ones) that differ from `branch`: the branch's tree against the working
-    /// tree. Untracked files are not listed.
+    /// tree. Untracked files are not listed. Raw, not `--name-status`: the blob ids tell a changed file
+    /// from one git hasn't looked at since it was touched (see workingTreeFiles).
     public static func workingTreeArguments(branch: String) -> [String] {
-        ["diff-index", "-z", "--name-status", "-M", "--end-of-options", branch, "--"]
+        ["diff-index", "-z", "-M", "--end-of-options", branch, "--"]
     }
 
     // MARK: parsing
@@ -121,6 +122,48 @@ public enum BranchCompare {
             return ComparedCommit(side: side, sha: f[1], shortSHA: f[2], authorName: f[3], authorDate: Date(timeIntervalSince1970: Double(f[4]) ?? 0),
                                   subject: f[5], isEquivalent: f[0] == "=")
         }
+    }
+
+    /// A line of raw diff output: the file, with the modes and blob ids on either side.
+    public struct RawChange: Equatable, Sendable {
+        public let file: ChangedFile
+        public let oldMode: String
+        public let newMode: String
+        public let oldID: String
+        /// All zeros for a file on disk that git would have to read to know its id.
+        public let newID: String
+
+        /// A plain file on disk that may be listed as modified only because git hasn't read it since it
+        /// was touched.
+        var mayBeUnchanged: Bool {
+            guard file.status == .modified, oldMode == newMode, oldMode.hasPrefix("100") else { return false }
+            return newID.allSatisfy { $0 == "0" } && !file.path.contains("\n")
+        }
+    }
+
+    /// Raw `diff-index -z`: ":100644 100644 <id> <id> M NUL path NUL", and for a rename or copy
+    /// "... R100 NUL old NUL new NUL".
+    public static func parseRaw(_ data: Data) -> [RawChange] {
+        let records = data.split(separator: 0, omittingEmptySubsequences: false).map { String(decoding: $0, as: UTF8.self) }
+        var changes: [RawChange] = []
+        var i = 0
+        while i < records.count {
+            let header = records[i].split(separator: " ").map(String.init)
+            i += 1
+            guard header.count == 5, header[0].hasPrefix(":"), let letter = header[4].first, i < records.count else { continue }
+            let status = ChangedFile.Status(rawValue: String(letter)) ?? .unknown
+            let file: ChangedFile
+            if status == .renamed || status == .copied {
+                guard i + 1 < records.count else { break }
+                file = ChangedFile(path: records[i + 1], oldPath: records[i], status: status)
+                i += 2
+            } else {
+                file = ChangedFile(path: records[i], status: status)
+                i += 1
+            }
+            changes.append(RawChange(file: file, oldMode: String(header[0].dropFirst()), newMode: header[1], oldID: header[2], newID: header[3]))
+        }
+        return changes
     }
 
     /// `rev-list --left-right --count`: "current TAB branch".
@@ -192,7 +235,22 @@ public enum BranchCompare {
 
     /// The tracked files on disk that differ from `branch`; nil when git fails.
     public static func workingTreeFiles(against branch: String, in root: String, git: String, timeout: TimeInterval = 30) -> [ChangedFile]? {
-        GitRunner.run(git, base(root) + workingTreeArguments(branch: branch), timeout: timeout).map(parseNameStatus)
+        guard let data = GitRunner.run(git, base(root) + workingTreeArguments(branch: branch), timeout: timeout) else { return nil }
+        let changes = parseRaw(data)
+        // diff-index never refreshes the index (that would write it), so a file touched or rewritten
+        // with the same text is listed as modified. Hash those (one run, writing nothing) and leave out
+        // the ones whose text is the branch's.
+        let unsure = changes.filter(\.mayBeUnchanged)
+        guard !unsure.isEmpty else { return changes.map(\.file) }
+        let paths = unsure.map(\.file.path).joined(separator: "\n") + "\n"
+        guard let hashed = GitRunner.run(git, base(root) + ["hash-object", "--stdin-paths"], timeout: timeout, input: Data(paths.utf8)) else {
+            return changes.map(\.file)
+        }
+        let ids = String(decoding: hashed, as: UTF8.self).split(separator: "\n").map(String.init)
+        guard ids.count == unsure.count else { return changes.map(\.file) }
+        var same = Set<String>()
+        for (change, id) in zip(unsure, ids) where id == change.oldID { same.insert(change.file.path) }
+        return changes.filter { !($0.mayBeUnchanged && same.contains($0.file.path)) }.map(\.file)
     }
 
     /// One file's change on `branch` since it parted from HEAD; nil when git fails.

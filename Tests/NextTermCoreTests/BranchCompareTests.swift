@@ -5,14 +5,16 @@ import Testing
 @Suite struct BranchCompareTests {
     @Test func commitsWithTheirMarks() {
         let a = String(repeating: "a", count: 40), b = String(repeating: "b", count: 40), c = String(repeating: "c", count: 40)
-        let lines = [
+        let fields: [[String]] = [
             ["<", a, "aaaaaaa", "Ann", "1700000000", "Only here"],
             ["=", b, "bbbbbbb", "Bo", "1700000100", "Picked: same change on the other side"],
             [">", c, "ccccccc", "Cy", "1700000200", "Tab\tin it, and a CR\r"],
             ["<", "abc", "abc", "Short", "1", "not a full id"],
             ["?", a, "a", "No mark", "1", "x"],
             ["<", a, "only four fields"],
-        ].map { $0.joined(separator: "\0") }.joined(separator: "\n") + "\n"
+        ]
+        let records: [String] = fields.map { $0.joined(separator: "\0") }
+        let lines = records.joined(separator: "\n") + "\n"
         let commits = BranchCompare.parseLog(Data(lines.utf8), side: .current)
         #expect(commits.map(\.sha) == [a, b, c])
         #expect(commits.allSatisfy { $0.side == .current })
@@ -20,7 +22,8 @@ import Testing
         #expect(commits[0] == ComparedCommit(side: .current, sha: a, shortSHA: "aaaaaaa", authorName: "Ann",
                                              authorDate: Date(timeIntervalSince1970: 1_700_000_000), subject: "Only here"))
         // A subject keeps its tab, and a "\r" before the line's end doesn't join two commits.
-        #expect(commits[2].subject == "Tab\tin it, and a CR\r" && commits[2].authorName == "Cy")
+        #expect(commits[2].subject == "Tab\tin it, and a CR\r")
+        #expect(commits[2].authorName == "Cy")
         #expect(BranchCompare.parseLog(Data(), side: .branch).isEmpty)
     }
 
@@ -38,6 +41,37 @@ import Testing
         #expect(BranchCompare.parseNameStatus(Data()).isEmpty)
         // Cut short: what is whole is kept.
         #expect(BranchCompare.parseNameStatus(Data("M\0a.txt\0R090\0old.txt".utf8)) == [ChangedFile(path: "a.txt", status: .modified)])
+    }
+
+    @Test func rawWithRenamesAndIDs() {
+        let a = String(repeating: "a", count: 40), b = String(repeating: "b", count: 40), zero = String(repeating: "0", count: 40)
+        let records: [String] = [
+            ":100644 100644 \(a) \(zero) M", "touched.txt",
+            ":100644 100644 \(a) \(b) M", "staged.txt",
+            ":100644 100755 \(a) \(zero) M", "now executable",
+            ":100644 100644 \(a) \(a) R100", "old name.txt", "new name.txt",
+            ":000000 100644 \(zero) \(zero) A", "added.txt",
+            ":100644 000000 \(a) \(zero) D", "gone.txt",
+            ":120000 120000 \(a) \(zero) M", "link",
+            "",
+        ]
+        let changes = BranchCompare.parseRaw(Data(records.joined(separator: "\0").utf8))
+        #expect(changes.map(\.file) == [
+            ChangedFile(path: "touched.txt", status: .modified),
+            ChangedFile(path: "staged.txt", status: .modified),
+            ChangedFile(path: "now executable", status: .modified),
+            ChangedFile(path: "new name.txt", oldPath: "old name.txt", status: .renamed),
+            ChangedFile(path: "added.txt", status: .added),
+            ChangedFile(path: "gone.txt", status: .deleted),
+            ChangedFile(path: "link", status: .modified),
+        ])
+        #expect(changes[0] == BranchCompare.RawChange(file: changes[0].file, oldMode: "100644", newMode: "100644", oldID: a, newID: zero))
+        // Only a plain file with the same mode and no id on disk may be unchanged: the rest are changes.
+        #expect(changes.map(\.mayBeUnchanged) == [true, false, false, false, false, false, false])
+        #expect(BranchCompare.parseRaw(Data()).isEmpty)
+        // Cut short: what is whole is kept.
+        let short = ":100644 100644 \(a) \(b) M\0a.txt\0:100644 100644 \(a) \(a) R100\0old.txt"
+        #expect(BranchCompare.parseRaw(Data(short.utf8)).map(\.file) == [ChangedFile(path: "a.txt", status: .modified)])
     }
 
     @Test func counts() {
@@ -62,10 +96,11 @@ import Testing
         #expect(Array(one.suffix(6)) == ["--end-of-options", "HEAD", "refs/heads/x", "--", "old.txt", "new.txt"])
         #expect(one.contains("--src-prefix=a/") && one.contains("-U3") && one.contains("--no-ext-diff"))
         #expect(BranchCompare.fileDiffArguments(path: "a.txt", branch: "refs/heads/x").suffix(2) == ["--", "a.txt"])
-        #expect(BranchCompare.workingTreeArguments(branch: "refs/heads/x") == ["diff-index", "-z", "--name-status", "-M", "--end-of-options", "refs/heads/x", "--"])
+        #expect(BranchCompare.workingTreeArguments(branch: "refs/heads/x") == ["diff-index", "-z", "-M", "--end-of-options", "refs/heads/x", "--"])
         // Paths are names, not patterns; reads never take a lock.
         #expect(BranchCompare.base("/r") == ["-C", "/r", "--no-optional-locks", "--literal-pathspecs", "-c", "core.quotepath=off", "-c", "log.showSignature=false"])
-        #expect(BranchCompare.displayName("refs/heads/feat/x") == "feat/x" && BranchCompare.displayName("refs/remotes/origin/x") == "origin/x")
+        #expect(BranchCompare.displayName("refs/heads/feat/x") == "feat/x")
+        #expect(BranchCompare.displayName("refs/remotes/origin/x") == "origin/x")
         #expect(BranchRef(name: "origin/x", isRemote: true, sha: "").fullName == "refs/remotes/origin/x")
         #expect(BranchRef(name: "feat/x", isRemote: false, sha: "").fullName == "refs/heads/feat/x")
     }
@@ -121,11 +156,16 @@ import Testing
         let indexBefore = try Data(contentsOf: index)
         let c = try #require(BranchCompare.compare("refs/heads/feat", in: work, git: git))
         #expect(c.current == "main" && c.mergeBase == base && !c.isSameCommit)
-        #expect(c.branchOnly.map(\.subject) == ["Rename", "The fix", "Feat only"] && c.branchCount == 3)
-        #expect(c.currentOnly.map(\.subject) == ["The fix", "Main only"] && c.currentCount == 2)
+        #expect(c.branchOnly.map(\.subject) == ["Rename", "The fix", "Feat only"])
+        #expect(c.branchCount == 3)
+        #expect(c.currentOnly.map(\.subject) == ["The fix", "Main only"])
+        #expect(c.currentCount == 2)
         // The cherry-pick is marked on both sides, each on its own side.
-        #expect(c.branchOnly.filter(\.isEquivalent).map(\.sha) == [fix] && c.currentOnly.filter(\.isEquivalent).map(\.sha) == [picked])
-        #expect(c.branchOnly.allSatisfy { $0.side == .branch } && c.currentOnly.allSatisfy { $0.side == .current })
+        let pickedOnBranch: [String] = c.branchOnly.filter(\.isEquivalent).map(\.sha)
+        let pickedHere: [String] = c.currentOnly.filter(\.isEquivalent).map(\.sha)
+        #expect(pickedOnBranch == [fix] && pickedHere == [picked])
+        #expect(c.branchOnly.allSatisfy { $0.side == .branch })
+        #expect(c.currentOnly.allSatisfy { $0.side == .current })
         #expect(c.files == [
             ChangedFile(path: "a.txt", status: .modified),
             ChangedFile(path: "f.txt", status: .added),
@@ -133,7 +173,8 @@ import Testing
         ])
         // At a limit of one a side, each lists one and counts them all.
         let limited = try #require(BranchCompare.compare("refs/heads/feat", in: work, git: git, limit: 1))
-        #expect(limited.branchOnly.count == 1 && limited.branchCount == 3 && limited.currentOnly.count == 1 && limited.currentCount == 2)
+        #expect(limited.branchOnly.count == 1 && limited.branchCount == 3)
+        #expect(limited.currentOnly.count == 1 && limited.currentCount == 2)
 
         // One file's change on the branch: since the merge base, a rename as one.
         let renamed = try #require(BranchCompare.diff(of: "new.txt", oldPath: "old.txt", branch: "refs/heads/feat", in: work, git: git))
@@ -153,24 +194,40 @@ import Testing
         // A file's diff: the branch's version first, the disk's second.
         let file = try #require(GitRunner.diff(of: "a.txt", in: work, git: git, base: .ref("refs/heads/feat")))
         let lines = file.hunks.flatMap(\.lines)
-        #expect(lines.filter { $0.kind == .removed }.map(\.text) == ["1", "2", "3", "fix"] && lines.filter { $0.kind == .added }.map(\.text) == ["on disk"])
+        let removed: [String] = lines.filter { $0.kind == .removed }.map(\.text)
+        let added: [String] = lines.filter { $0.kind == .added }.map(\.text)
+        #expect(removed == ["1", "2", "3", "fix"])
+        #expect(added == ["on disk"])
         let back = try #require(GitRunner.diff(of: "old.txt", in: work, git: git, base: .ref("refs/heads/feat"), oldPath: "new.txt"))
         #expect(back.oldPath == "new.txt" && back.newPath == "old.txt")
         #expect(GitRunner.diffs(in: work, git: git, base: .ref("refs/heads/feat"))?.map(\.path).sorted() == ["a.txt", "f.txt", "m.txt", "old.txt"])
         #expect(try Data(contentsOf: index) == indexBefore, "reading rewrote the index")
         sh("checkout", "-q", "--", "a.txt")
         #expect(BranchCompare.workingTreeFiles(against: "refs/heads/main", in: work, git: git) == [])
+        // Rewritten with the same text, later: git lists it until it reads it again, which it doesn't
+        // here (that would write the index). It is left out, and a real change still shows.
+        try write("a.txt", "1\n2\n3\nfix\n")
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(60)], ofItemAtPath: root.appendingPathComponent("a.txt").path)
+        let raw = try #require(GitRunner.run(git, BranchCompare.base(work) + BranchCompare.workingTreeArguments(branch: "refs/heads/main"), timeout: 10))
+        #expect(BranchCompare.parseRaw(raw).map(\.file.path) == ["a.txt"], "the file git hasn't read again is listed by diff-index")
+        #expect(BranchCompare.workingTreeFiles(against: "refs/heads/main", in: work, git: git) == [])
+        try write("m.txt", "changed\n")
+        #expect(BranchCompare.workingTreeFiles(against: "refs/heads/main", in: work, git: git) == [ChangedFile(path: "m.txt", status: .modified)])
+        sh("checkout", "-q", "--", "m.txt")
 
         // The same commit: nothing either way, no files.
         sh("branch", "same")
         let same = try #require(BranchCompare.compare("refs/heads/same", in: work, git: git))
-        #expect(same.isSameCommit && same.files.isEmpty && same.mergeBase == picked)
+        #expect(same.isSameCommit && same.files.isEmpty)
+        #expect(same.mergeBase == picked)
         // Nothing in common: the commits, and no merge base to compare files from.
         sh("switch", "-q", "--orphan", "lonely")
         sh("commit", "-q", "--allow-empty", "-m", "Lonely")
         sh("switch", "-qf", "main")
         let lonely = try #require(BranchCompare.compare("refs/heads/lonely", in: work, git: git))
-        #expect(lonely.mergeBase == nil && lonely.files.isEmpty && lonely.branchOnly.map(\.subject) == ["Lonely"] && lonely.currentCount == 3)
+        #expect(lonely.mergeBase == nil && lonely.files.isEmpty)
+        #expect(lonely.branchOnly.map(\.subject) == ["Lonely"])
+        #expect(lonely.currentCount == 3)
         // Detached, HEAD is the current side.
         sh("switch", "-q", "--detach", "feat")
         #expect(BranchCompare.compare("refs/heads/main", in: work, git: git)?.current == nil)
