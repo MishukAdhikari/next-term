@@ -70,6 +70,7 @@ To one at a time. A `claude` started in a Next Term tab connects to Next Term. R
 
 - [Agents and the IDE link](/docs/agents/)
 - [Code editor](/docs/editor/) (the languages, including Python and Jinja)
+- [Next Term for LangChain and LangGraph](/docs/langchain-and-langgraph/)
 - [Layouts and split panes](/docs/layouts/)
 - [Orchestrate agents (MCP)](/docs/orchestration/)
 - [Next Term vs JetBrains IDEs](/compare/jetbrains/)

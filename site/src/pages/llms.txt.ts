@@ -18,6 +18,7 @@ export const GET: APIRoute = async ({ site }) => {
 		['Agents', ['docs/agent-status', 'docs/agents', 'docs/orchestration']],
 		['Editor and diffs', ['docs/editor', 'docs/diffs', 'docs/search', 'docs/layouts']],
 		['Projects and git', ['docs/projects-and-git', 'docs/remote', 'docs/command-line']],
+		['Guides', ['docs/langchain-and-langgraph']],
 		['Reference', ['docs/keyboard-shortcuts', 'docs/settings', 'docs/security-and-privacy', 'docs/faq']],
 		['Compared with other tools', comparisons.map((entry) => entry.id)],
 	];

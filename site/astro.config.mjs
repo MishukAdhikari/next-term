@@ -91,6 +91,10 @@ export default defineConfig({
 					items: [{ slug: 'docs/projects-and-git' }, { slug: 'docs/remote' }, { slug: 'docs/command-line' }],
 				},
 				{
+					label: 'Guides',
+					items: [{ slug: 'docs/langchain-and-langgraph' }],
+				},
+				{
 					label: 'Reference',
 					items: [
 						{ slug: 'docs/keyboard-shortcuts' },
