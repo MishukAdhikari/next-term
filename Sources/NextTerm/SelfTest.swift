@@ -490,6 +490,7 @@ enum SelfTest {
         await platformLinkChecks(c)
         await branchChecks(c, proj: proj)
         await gitLogChecks(c, proj: proj)
+        await gitLogPagingChecks(c)
         await ragColorChecks(c, proj: proj)
         await importChecks(c, proj: proj)
 
@@ -1210,7 +1211,10 @@ enum SelfTest {
               log.commits.map(\.subject).joined(separator: " | "))
         log.apply { $0.text = String(side.prefix(8)) }
         check(await wait(8) { !log.isLoading && log.commits.map(\.sha) == [side] }, "a hash prefix finds its commit")
-        log.apply { $0.text = "" }
+        log.apply { $0.text = "fix("; $0.regex = true }
+        check(await wait(5) { log.failure?.hasPrefix("This is not a valid regular expression") == true },
+              "a pattern with a typo says so, rather than that git failed", log.failure ?? "no message")
+        log.apply { $0.text = ""; $0.regex = false }
         _ = await wait(8) { !log.isLoading && log.commits.count >= 4 }
 
         // Details, and a changed file's diff in that commit.
@@ -1239,6 +1243,14 @@ enum SelfTest {
               "one branch shows its own history", log.commits.map(\.subject).joined(separator: " | "))
         check(await wait(5) { log.refs.rowTitles.contains { $0.trimmingCharacters(in: .whitespaces) == "side" } }, "the branch tree lists branches in folders",
               log.refs.rowTitles.joined(separator: " | "))
+        // Selecting a branch in the tree shows its history.
+        log.show(ref: nil)
+        _ = await wait(8) { !log.isLoading && log.query.scope == .all && log.commits.first?.sha == merge }
+        if let row = log.refs.rowTitles.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "side" }) {
+            log.refs.outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
+        check(await wait(8) { log.query.scope == .ref("refs/heads/log/side") && !log.isLoading && log.commits.first?.sha == side },
+              "selecting a branch in the tree shows its history", "\(log.query.scope), " + log.refs.rowTitles.joined(separator: " | "))
         c.showBranches(nil)
         check(await wait(5) { c.branchPopup.isVisible && c.branchPopup.rowTitles.contains("Git Log") }, "the branch popup has a Git Log row",
               c.branchPopup.rowTitles.prefix(8).joined(separator: " | "))
@@ -1250,6 +1262,87 @@ enum SelfTest {
         run(["rm", "-q", "log-side.txt", "log-main.txt"])
         run(["commit", "-qm", "git log checks done"])
         c.sidebar.git.refresh()
+    }
+
+    /// The Git Log of a history longer than a page, in a repository of its own: the second page, with
+    /// the graph's line going on into it; a commit's menu with a remote branch and origin/HEAD; a new
+    /// commit refreshing the log in place; and showCommit of a commit no branch lists.
+    private static func gitLogPagingChecks(_ c: TerminalWindowController) async {
+        guard let git = GitRunner.locateGit() else { return }
+        let repo = URL(fileURLWithPath: canonicalPath(NSTemporaryDirectory())).appendingPathComponent("nt-selftest-log-\(getpid())")
+        try? FileManager.default.removeItem(at: repo)
+        try? FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        @discardableResult func run(_ args: [String], input: URL? = nil) -> String {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: git)
+            p.arguments = ["-C", repo.path, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main"] + args
+            let out = Pipe()
+            p.standardOutput = out
+            p.standardError = FileHandle.nullDevice
+            p.standardInput = input.flatMap { try? FileHandle(forReadingFrom: $0) } ?? FileHandle.nullDevice
+            try? p.run()
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        run(["init", "-q"])
+        // 1,050 commits in one line of history, made at once, and a remote branch with its HEAD.
+        var stream = ""
+        for i in 1...1050 {
+            let message = "Commit \(i)\n"
+            stream += "commit refs/heads/main\nmark :\(i)\ncommitter T <t@t> \(1_700_000_000 + i * 60) +0000\ndata \(message.utf8.count)\n\(message)"
+            stream += (i > 1 ? "from :\(i - 1)\n" : "") + "\n"
+        }
+        let streamFile = repo.appendingPathComponent(".git/nt-import")
+        try? stream.write(to: streamFile, atomically: true, encoding: .utf8)
+        run(["fast-import", "--quiet"], input: streamFile)
+        try? FileManager.default.removeItem(at: streamFile)
+        run(["update-ref", "refs/remotes/origin/main", "main"])
+        run(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"])
+
+        guard let log = c.openGitLog(root: repo.path) else { return check(false, "the Git Log opens on a history of 1,050 commits") }
+        check(await wait(10) { !log.isLoading && log.commits.count == 1000 && log.order?.count == 1050 },
+              "a long history lists its first 1,000 commits, of the 1,050 in its order", "\(log.commits.count) of \(log.order?.count ?? 0) \(log.failure ?? "")")
+
+        // Scrolling near the end loads the next page, and the line goes on across the seam.
+        log.table.scrollRowToVisible(990)
+        log.table.displayIfNeeded()
+        check(await wait(10) { log.isComplete && log.commits.count == 1050 && log.rows.count == 1050 }, "scrolling near the end loads the next page",
+              "\(log.commits.count) commits, \(log.rows.count) rows")
+        let seam = log.rows.count == 1050 && log.rows[999].bottom.count == 1 && log.rows[1000].top.count == 1
+        let ends = log.commits.first?.subject == "Commit 1050" && log.commits.last?.subject == "Commit 1" && log.rows.last?.bottom.isEmpty == true
+        check(seam && ends && log.rows.allSatisfy { $0.column == 0 }, "the graph's line goes on from the first page into the second",
+              log.rows.dropFirst(998).prefix(3).map { "\($0.top.count)/\($0.bottom.count)" }.joined(separator: " "))
+
+        // The menu of the commit at the top: its remote branch to check out, and not origin/HEAD.
+        let menu = NSMenu()
+        log.fill(menu, for: log.commits[0])
+        let titles = menu.items.map(\.title)
+        check(titles.contains("Copy Hash") && titles.contains("Checkout “origin/main”") && titles.contains("Checkout…") && !titles.contains { $0.contains("origin/HEAD") },
+              "a commit's menu offers its remote branch, and not origin/HEAD", titles.joined(separator: " | "))
+
+        // A new commit refreshes the log in place: the same commit selected, far down, and the same one at the top of the view.
+        log.table.selectRowIndexes(IndexSet(integer: 600), byExtendingSelection: false)
+        log.table.scrollRowToVisible(580)
+        log.table.displayIfNeeded()
+        let selected = log.selectedCommit?.sha
+        let top = log.commits[safe: log.table.rows(in: log.table.visibleRect).location]?.sha
+        run(["commit", "--allow-empty", "-qm", "refreshed"])
+        check(await wait(10) { log.commits.first?.subject == "refreshed" && !log.isLoading }, "a new commit shows in the log without a click",
+              log.commits.first?.subject ?? "nothing listed")
+        check(selected != nil && log.selectedCommit?.sha == selected && log.commits.count == 1051, "the refresh keeps the commit selected 600 rows down",
+              "\(log.selectedCommit?.subject ?? "nothing selected"), \(log.commits.count) commits")
+        let nowTop = log.commits[safe: log.table.rows(in: log.table.visibleRect).location]?.sha
+        check(top != nil && nowTop == top, "and keeps the same commit at the top of the view",
+              "\(log.commits.first { $0.sha == top }?.subject ?? "-") then \(log.commits.first { $0.sha == nowTop }?.subject ?? "-")")
+
+        // A commit no branch or tag lists: shown alone, and selected.
+        let orphan = run(["commit-tree", "HEAD^{tree}", "-m", "orphan"])
+        c.showCommit(sha: orphan, root: repo.path)
+        check(await wait(10) { log.commits.map(\.sha) == [orphan] && log.selectedCommit?.sha == orphan && log.query.text == orphan },
+              "showCommit of a commit no branch lists shows it alone", log.commits.prefix(3).map(\.subject).joined(separator: " | "))
+        c.editorArea.close(log)
     }
 
     /// The links agent platforms print (LangGraph's dev server, LangSmith, Weave, MLflow) are found whole:

@@ -1366,8 +1366,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return editorArea.openGitLog(root: top)
     }
 
-    /// Opens the Git Log at one commit (from a line's blame, say): pages load until it is listed, and a
-    /// commit no branch or tag lists is shown alone.
+    /// Opens the Git Log at one commit (from a line's blame, say): the pages down to it load at once, and
+    /// a commit no branch or tag lists is shown alone.
     func showCommit(sha: String, root: String) {
         openGitLog(root: root)?.select(sha: sha)
     }
