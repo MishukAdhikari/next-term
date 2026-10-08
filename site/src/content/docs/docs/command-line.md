@@ -34,7 +34,7 @@ nxtrm -n ~/Code/api       # in a new window
 - **`path:line` and `path:line:column`**, the form compilers, linters and agents print, open the file at that spot. A folder has no lines, so `nxtrm src:12` is an error.
 - **A new file** in an existing folder is created empty and opened, so you can write it.
 
-If Next Term is not running, `nxtrm` starts it with your request instead of reopening your last session. If it is running, the request goes to it and the app comes to the front.
+If Next Term is not running, `nxtrm` starts it with your request instead of showing the Welcome window or reopening your projects. If it is running, the request goes to it and the app comes to the front.
 
 ## Installing it
 
@@ -50,7 +50,7 @@ Your `PATH` order decides between them. Next Term never adds a folder to `PATH` 
 
 A `PATH` entry that starts with `~` doesn’t count, because zsh never looks there: the quotes in `export PATH="~/.local/bin:$PATH"` keep the `~`, so write `$HOME/.local/bin` instead.
 
-**When none of them will do**, as on a Mac without Homebrew, where `/usr/local/bin` belongs to the system, the first launch asks **Install the “nxtrm” command?** on the first project window, once you are past the folder chooser, Import or the Welcome window.
+**When none of them will do**, as on a Mac without Homebrew, where `/usr/local/bin` belongs to the system, the first launch asks **Install the “nxtrm” command?** on the first project window, once you are past Import or the Welcome window.
 
 - **Install…** links `/usr/local/bin/nxtrm` and asks for your administrator password once, as other editors do for their commands. If your `PATH` leaves out `/usr/local/bin`, it says so.
 - **Not Now** asks again after the next update.

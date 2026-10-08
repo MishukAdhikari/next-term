@@ -1,9 +1,9 @@
 ---
 title: Projects and git
-description: "Projects that reopen at launch, git at a glance, background fetch, the branch popup, the commit graph, file operations with undo, a project’s databases."
+description: "Projects and the Welcome window, git at a glance, background fetch, the branch popup, the commit graph, file operations with undo, a project’s databases."
 ---
 
-A project is a folder that a window is about. Its files stay in the sidebar, new tabs start in it, and Next Term brings it back the next time you launch. The sidebar is also where you see, at a glance, what your agents have changed.
+A project is a folder that a window is about. Its files stay in the sidebar, new tabs start in it, and the Welcome window lists it the next time you launch, or Next Term reopens it if you choose. The sidebar is also where you see, at a glance, what your agents have changed.
 
 ![The project sidebar: branch main with +3 −1 at the top, the folder src marked +3 −1, the changed file app.txt in blue with +3 −1, and AGENTS.md and README.md with their file icons.](../../../assets/screenshots/sidebar-git.webp)
 
@@ -11,7 +11,8 @@ A project is a folder that a window is about. Its files stay in the sidebar, new
 
 - **Open a project:** **File › Open Project…** (<kbd>⌘O</kbd>) and choose a folder. Agents can open projects too, through [MCP](/docs/orchestration/). From another terminal, run `nxtrm .` (see [The nxtrm command](/docs/command-line/)). You can also drop a folder on Next Term’s Dock icon, or run `open -a "Next Term" ~/Code/app`.
 - **New tabs open in the project** by default (**Settings › Terminal › New tabs** changes it). You can still `cd` anywhere.
-- **Reopen at launch:** Next Term reopens the project windows that were open when you quit. On the very first launch it asks for a folder.
+- **At launch:** a launch that names a folder or file, from `nxtrm`, a drop on the Dock icon or Finder’s **Open With**, opens it directly. Any other launch shows the **Welcome** window, or, with **Reopen the projects that were open** in [Settings › General](/docs/settings/#general), the project windows that were open when you quit and still exist. With every window closed, a click on the Dock icon does the same, except that it reopens only the most recent project.
+- **At quit:** with project windows open, Next Term asks whether to reopen them next time, and the answer becomes the setting. When it already asks about unsaved files or about work that quitting stops, the question is a checkbox in that dialog; otherwise **Reopen these projects next time?** asks on its own, with **Don’t ask again**. **Cancel** keeps Next Term open.
 - **Open Recent** (in the File menu) lists your recent projects, with **Clear Menu**. The Dock icon’s menu lists them too, with **New Window**.
 - **Close Project** (in the File menu) closes the window, asking first if something is still running in it. When the last project closes, or the last window goes with its last tab, the **Welcome** window appears. Open it any time from **Window › Welcome to Next Term**.
 
