@@ -28,10 +28,14 @@ public struct ContextItem: Equatable, Sendable {
 public enum AgentDialect: String, Sendable {
     /// Claude Code: `@src/a.ts#L42-58 ` (and opencode). Contents are attached by the agent.
     case atHash
-    /// `@src/a.ts` with the lines in prose: Copilot CLI (line syntax unknown), and Gemini / Qwen Code,
-    /// which read the whole file for `@path` and drop any line suffix before the model sees it.
-    /// Folders stay plain paths: `@folder` reads everything in it, recursively.
+    /// `@src/a.ts` with the lines in prose: Gemini / Qwen Code, which read the whole file for `@path` and
+    /// drop any line suffix before the model sees it. Folders stay plain paths: `@folder` reads everything
+    /// in it, recursively.
     case atProse
+    /// Copilot CLI: `@src/a.ts:42-58` (`@src/a.ts:42` for one line), the form it types itself for an
+    /// editor's selection. Its @-mentions end at a space, so a path with spaces is quoted, without the `@`,
+    /// and its lines go in prose. Folders stay plain paths, as for Gemini.
+    case atColon
     /// Everyone else, and unknown agents: `src/a.ts:42-58`. Every model reads it; no agent turns it into
     /// a mode switch or an inlined file.
     case plain
@@ -39,7 +43,8 @@ public enum AgentDialect: String, Sendable {
     public static func forProgram(_ name: String) -> AgentDialect {
         switch name {
         case "claude", "claude-code", "claude.exe", "opencode": return .atHash
-        case "copilot", "gemini", "gemini-cli", "qwen", "qwen-code": return .atProse
+        case "copilot": return .atColon
+        case "gemini", "gemini-cli", "qwen", "qwen-code": return .atProse
         default: return .plain
         }
     }
@@ -76,6 +81,16 @@ public enum AgentPrompt {
                 ref = "@" + quoted
                 if let lines = item.lines { ref += lines.count == 1 ? " (line \(lines.lowerBound))" : " (lines \(lines.lowerBound)-\(lines.upperBound))" }
             }
+        case .atColon:
+            if item.isFolder {
+                ref = item.path + (item.path.hasSuffix("/") ? "" : "/") + " (folder)"
+            } else if item.path.contains(" ") {
+                ref = quoted
+                if let lines = item.lines { ref += lines.count == 1 ? " (line \(lines.lowerBound))" : " (lines \(lines.lowerBound)-\(lines.upperBound))" }
+            } else {
+                ref = "@" + item.path
+                if let lines = item.lines { ref += lines.count == 1 ? ":\(lines.lowerBound)" : ":\(lines.lowerBound)-\(lines.upperBound)" }
+            }
         case .plain:
             ref = item.path + (item.isFolder && !item.path.hasSuffix("/") ? "/" : "")
             if let lines = item.lines { ref += lines.count == 1 ? ":\(lines.lowerBound)" : ":\(lines.lowerBound)-\(lines.upperBound)" }
@@ -91,7 +106,7 @@ public enum AgentPrompt {
         var head = sanitize(instruction).trimmingCharacters(in: .whitespacesAndNewlines)
         let refs = items.map { reference($0, dialect: dialect) }
         switch dialect {
-        case .atHash, .atProse:
+        case .atHash, .atProse, .atColon:
             // One line, mentions separated by spaces, and a space after the last mention so a completion
             // popup does not take the developer's Enter.
             let joined = refs.joined(separator: " ")
