@@ -68,10 +68,13 @@ extension SelfTest {
                       "Insert Path in Terminal", "Copy Path", "Copy Relative Path", "Refresh"]
         let shown = keys(menu(forRow: fileRow()))
         let listed = titles.map { "\($0) \(shown[$0] ?? "missing")" }
-        let expected = ["Open ⌘↓", "Open Folder in New Tab none", "Reveal in Finder ⌥⌘R", "New File ⌥⌘N", "New Folder ⇧⌘N", "Rename… ↩",
+        let expected = ["Open ⌘↓", "Open Folder in New Tab none", "Reveal in Finder ⌥⌘R", "New File ⌥⌘N", "New Folder ⇧⌘N", "Rename… none",
                         "Move to Trash ⌘⌫", "Send to Agent ⌥⌘K", "Insert Path in Terminal none", "Copy Path ⌥⌘C", "Copy Relative Path ⌥⇧⌘C",
                         "Refresh none"]
         check(listed == expected, "sidebar menu keys: a file's right-click menu shows each command's key", listed.joined(separator: ", "))
+        // ↩, a key without ⌘ or ⌃, is named in Rename…'s tooltip: on the item it could be the open menu's own key.
+        let renameTip = menu(forRow: fileRow()).items.first { $0.title == "Rename…" }?.toolTip ?? "none"
+        check(renameTip == "Rename (↩)", "sidebar menu keys: Rename…'s ↩ is in its tooltip, not on the item", renameTip)
 
         // Every row's menu (the project's, folders', files', deleted files', Databases', Agent Sessions'): each item is a
         // command and shows its key now. Only the agents' Continue Latest after the first are none: one key does one.
@@ -83,7 +86,11 @@ extension SelfTest {
                     if !item.title.hasPrefix("Continue Latest") || key != nil { wrong.append("\(row): \(item.title) is no command") }
                     continue
                 }
-                if key != shortcuts.chord(for: id) { wrong.append("\(row): \(item.title) shows \(key?.display ?? "none")") }
+                // A key without ⌘ or ⌃ is in the tooltip instead.
+                let chord = shortcuts.chord(for: id)
+                let shown = chord?.isUsable == false ? nil : chord
+                let named = chord?.isUsable != false || item.toolTip?.contains(chord?.display ?? "") == true
+                if key != shown || !named { wrong.append("\(row): \(item.title) shows \(key?.display ?? "none")") }
             }
         }
         for row in 0..<outline.numberOfRows { audit(menu(forRow: row), "row \(row)") }

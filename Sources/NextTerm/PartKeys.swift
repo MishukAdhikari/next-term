@@ -34,9 +34,17 @@ extension KeyboardShortcuts {
     /// now, shown as the menu bar shows one; none while it has none. Only shown: AppKit looks for keys in the menu bar
     /// alone, never in a view's menu, so the key still goes to the command's own handler (the sidebar's, or the menu
     /// bar's for a menu command), and only where that handler answers it. Menus built when they open show a change at once.
+    /// A key without ⌘ or ⌃ (the sidebar's ↩ for Rename) is named in the item's tooltip instead, "Rename (↩)": on the
+    /// item it could be the open menu's own key, and ↩ there chooses the highlighted item.
     static func show(_ command: String, on item: NSMenuItem) {
         item.identifier = NSUserInterfaceItemIdentifier(command)
-        set(shared.chord(for: command), on: item)
+        let chord = shared.chord(for: command)
+        if let chord, !chord.isUsable {
+            set(nil, on: item)
+            item.toolTip = shared.hint(shared.title(of: command), command: command)
+        } else {
+            set(chord, on: item)
+        }
     }
 }
 
