@@ -37,13 +37,17 @@ import Testing
         #expect(PrivateFolder.isPrivate(one.url.path))
     }
 
-    @Test func itGoesInTheTemporaryFolderUnlessToldOtherwise() throws {
-        let folder = try PrivateFolder.make(prefix: "nt-private-test-")
-        defer { folder.remove() }
-        let parent: String = folder.url.deletingLastPathComponent().standardizedFileURL.path
-        let temporary: String = FileManager.default.temporaryDirectory.standardizedFileURL.path
-        #expect(parent == temporary)
+    @Test func aParentNotThereYetIsMadeOnlyThisUserCanReach() throws {
+        let top = try makeParent()
+        defer { try? FileManager.default.removeItem(at: top) }
+        let parent = top.appendingPathComponent("Next Term").appendingPathComponent("Updates")
+        let folder = try PrivateFolder.make(in: parent, prefix: "NextTerm-update-")
+        #expect(folder.url.deletingLastPathComponent().path == parent.path)
+        #expect(PrivateFolder.isPrivate(parent.path))
         #expect(PrivateFolder.isPrivate(folder.url.path))
+        // A parent already there is used as it is.
+        let again = try PrivateFolder.make(in: parent, prefix: "NextTerm-update-")
+        #expect(again.url != folder.url)
     }
 
     @Test func onlyARealFolderOfThisUsersThatNoOneElseCanReachIsPrivate() throws {
@@ -132,6 +136,11 @@ import Testing
         #expect(!PrivateFolder.isOwnFile(link.path))
         #expect(!PrivateFolder.isOwnFile(parent.path))
         #expect(!PrivateFolder.isOwnFile(parent.appendingPathComponent("missing.dmg").path))
+        // A file with a second name: whoever holds the other one could change it.
+        let linked = parent.appendingPathComponent("linked.dmg")
+        try Data("image".utf8).write(to: linked)
+        try FileManager.default.linkItem(at: linked, to: parent.appendingPathComponent("elsewhere.dmg"))
+        #expect(!PrivateFolder.isOwnFile(linked.path))
     }
 
     @Test func foldersLeftBehindAreThoseOfTheNameThatArePrivateAndOld() throws {

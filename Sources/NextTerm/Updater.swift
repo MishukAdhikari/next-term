@@ -423,21 +423,29 @@ final class Updater {
 
     /// The disk image's name in its private folder.
     private nonisolated static let diskImageName = "NextTerm-update.dmg"
-    /// The start of the private folders' names, in the temporary folder.
+    /// The start of the private folders' names.
     private nonisolated static let folderPrefix = "NextTerm-update-"
+    /// Where the private folders are made: Next Term's own folder in Application Support, out of the temporary folder
+    /// and the workspace, which sandboxed agents in a tab can write.
+    private nonisolated static var downloadsFolder: URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return support.appendingPathComponent("Next Term/Updates", isDirectory: true)
+    }
 
-    /// Downloads the disk image into a new private folder (`diskImageName` in it), out of the shared temporary folder,
-    /// where nothing else can swap it between the checksum check and the mount. The caller removes the folder.
+    /// Downloads the disk image and copies it into a new private folder (`diskImageName` in it), where nothing else can
+    /// swap it between the checksum check and the mount. The caller removes the folder.
     private func fetch(_ url: URL) async throws -> PrivateFolder {
         let (file, response) = try await URLSession.shared.download(from: url, delegate: progress)
-        // URLSession leaves the downloaded file where it is: it goes when this returns, unless moved into the folder.
+        // URLSession leaves the downloaded file in the temporary folder: it goes when this returns.
         defer { try? FileManager.default.removeItem(at: file) }
         if let http = response as? HTTPURLResponse, http.statusCode != 200 { throw UpdateError("The download failed (HTTP \(http.statusCode)).") }
-        let folder = try PrivateFolder.make(prefix: Self.folderPrefix)
+        let folder = try PrivateFolder.make(in: Self.downloadsFolder, prefix: Self.folderPrefix)
         let dmg = folder.url.appendingPathComponent(Self.diskImageName)
         do {
-            try FileManager.default.moveItem(at: file, to: dmg)
-            // Hashed and then mounted by its path: a plain file of this user's, never a link that leads elsewhere.
+            // A copy, not the downloaded file: a new file only this folder names, which a link or an open handle to the
+            // download, made in the temporary folder, can't change after its check. Hashed and mounted by its path, so a
+            // plain file of this user's.
+            try FileManager.default.copyItem(at: file, to: dmg)
             guard PrivateFolder.isOwnFile(dmg.path) else { throw UpdateError("The download could not be kept for its check.") }
         } catch {
             folder.remove()
@@ -452,7 +460,7 @@ final class Updater {
     nonisolated static func removeLeftovers() {
         DispatchQueue.global(qos: .utility).async {
             let cutoff = Date(timeIntervalSinceNow: -60 * 60)
-            for folder in PrivateFolder.leftovers(prefix: folderPrefix, madeBefore: cutoff) {
+            for folder in PrivateFolder.leftovers(in: downloadsFolder, prefix: folderPrefix, madeBefore: cutoff) {
                 let mount = folder.url.appendingPathComponent("mount").path
                 if PrivateFolder.isMountPoint(mount) {
                     _ = try? runTool("/usr/bin/hdiutil", ["detach", mount, "-force", "-quiet"])
