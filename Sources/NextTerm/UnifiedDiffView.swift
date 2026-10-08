@@ -392,8 +392,10 @@ final class UnifiedRuler: NSRulerView {
         let offset = convert(NSPoint.zero, from: text).y
         let visible = column.contentView.bounds
         let top = text.textContainerInset.height
-        let first = max(0, Int((visible.minY - top) / height))
-        let last = min(column.rows.count - 1, Int((visible.maxY - top) / height) + 1)
+        // The rows in view and in the rect asked for (on the All files page the column is as tall as its rows).
+        let from = max(visible.minY, rect.minY - offset), to = min(visible.maxY, rect.maxY - offset)
+        let first = max(0, Int((from - top) / height))
+        let last = min(column.rows.count - 1, Int((to - top) / height) + 1)
         guard first <= last else { return }
         let font = NSFont.monospacedDigitSystemFont(ofSize: max(9, EditorDocument.font.pointSize - 1.5), weight: .regular)
         for index in first...last {

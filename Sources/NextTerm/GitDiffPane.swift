@@ -189,6 +189,8 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
                     self.commits = page
                 }
                 self.apply(diffs: diffs)
+                // The file selected went (another scope, or it is no longer changed): All files needs its diffs.
+                if !wantsDiffs, set != nil, self.selectedPath == nil { self.reload(quietly: true) }
             }
         }
     }
@@ -260,10 +262,12 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
     private func showScopes() {
         var rows: [GitDiffListView.ScopeRow] = []
         let all = effectiveScope == .all ? changes?.totals : nil
+        // Counted file by file when shown (the repository's state counts a new folder as one entry).
+        let pending = uncommitted == nil ? nil : (effectiveScope == .uncommitted ? changes?.totals ?? uncommitted : uncommitted)
         let onBase = context.map { $0.effective(.all) == .uncommitted } ?? false
-        rows.append(.all(onBase ? uncommitted : all))
+        rows.append(.all(onBase ? pending : all))
         // Uncommitted while there is any, and while it is the one shown.
-        if !onBase, uncommitted != nil || scope == .uncommitted { rows.append(.uncommitted(uncommitted)) }
+        if !onBase, pending != nil || scope == .uncommitted { rows.append(.uncommitted(pending)) }
         rows += commits.map { .commit($0) }
         if context?.head == nil, context != nil { rows.append(.note("No commits yet")) }
         list.show(scopes: rows, selected: listScope, count: order?.count)
