@@ -253,10 +253,10 @@ public enum PathCompletion {
 public final class PathLister: @unchecked Sendable {
     private let lock = NSLock()
     private var busy = false
-    private let read: @Sendable (String) -> PathCompletion.Listing
+    private let read: (String) -> PathCompletion.Listing
     private let queue = DispatchQueue(label: "nextterm.tab-completion", qos: .userInitiated)
 
-    public init(read: @escaping @Sendable (String) -> PathCompletion.Listing = { PathCompletion.list($0) }) {
+    public init(read: @escaping (String) -> PathCompletion.Listing = { PathCompletion.list($0) }) {
         self.read = read
     }
 
@@ -268,7 +268,7 @@ public final class PathLister: @unchecked Sendable {
 
     /// Lists `folder` off the calling thread and hands the listing to `done` (on that queue). False, and
     /// nothing started, while the last listing is still running.
-    public func start(_ folder: String, done: @escaping @Sendable (PathCompletion.Listing) -> Void) -> Bool {
+    public func start(_ folder: String, done: @escaping (PathCompletion.Listing) -> Void) -> Bool {
         lock.lock()
         if busy {
             lock.unlock()

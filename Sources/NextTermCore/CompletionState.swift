@@ -75,6 +75,12 @@ public struct CompletionState: Sendable {
         reset(to: .disarmed)
     }
 
+    /// The shell was replaced: what its hook last said no longer holds.
+    public mutating func forget() {
+        arm = nil
+        reset(to: .disarmed)
+    }
+
     private mutating func reset(to next: Phase) {
         phase = next
         holding = false

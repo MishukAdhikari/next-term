@@ -180,17 +180,23 @@ import Testing
                 FileManager.default.createFile(atPath: dir.appendingPathComponent("file-\(i).txt").path, contents: nil)
             }
         }
-        // The best of three runs: other work on the machine only ever adds time.
+        // This thread's CPU time, the best of three runs: tests running beside it, and other work on the machine,
+        // only ever add wall time.
+        func cpu() -> Double {
+            var now = timespec()
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now)
+            return Double(now.tv_sec) * 1000 + Double(now.tv_nsec) / 1_000_000
+        }
         var elapsed = Double.infinity
         var listing = PathCompletion.Listing(folder: dir.path, entries: [])
         var result = PathCompletion.Result()
         for _ in 0..<3 {
-            let started = DispatchTime.now().uptimeNanoseconds
+            let started = cpu()
             listing = PathCompletion.list(dir.path)
             result = PathCompletion.Prepared(listing, foldersOnly: false, hidden: false).candidates("fo1")
-            elapsed = min(elapsed, Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000)
+            elapsed = min(elapsed, cpu() - started)
         }
-        print("Tab completion: 1,000 entries listed and ranked in \(String(format: "%.1f", elapsed)) ms")
+        print("Tab completion: 1,000 entries listed and ranked in \(String(format: "%.1f", elapsed)) ms of CPU time")
         #expect(listing.entries.count == 1000 && !result.candidates.isEmpty)
         // Under 20 ms on a Mac; CI machines are slower and busier.
         #expect(elapsed < (ProcessInfo.processInfo.environment["CI"] == nil ? 20 : 200))

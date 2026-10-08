@@ -334,7 +334,10 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         // Off by default: on most non-US layouts Option types # @ | [ ] { } ~ \. Toggle in the File menu.
         view.optionAsMetaKey = Preferences.optionAsMeta
 
-        view.onOutput = { [weak self] in self?.status.output(at: Self.now) }
+        view.onOutput = { [weak self] in
+            self?.status.output(at: Self.now)
+            self?.completion.output()
+        }
         view.onInput = { [weak self] in self?.status.input(at: Self.now) }
         view.onKeyboard = { [weak self] in if let self { MCPControl.typedByUser(self) } }
         view.onBell = { [weak self] in self?.attention() }
@@ -423,7 +426,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             guard let self, !self.exited else { return }
             self.programTitle = nil
             self.status.shellReplaced()
-            self.completion.disarm()
+            self.completion.shellReplaced()
             self.delegate?.tabDidChange(self)
         }
         watcher.resume()
@@ -757,6 +760,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         lines.append(remote == nil ? directory : "Folder on the host: \(directory)")
         if let servedURL { lines.append("Serving \(servedURL.absoluteString)") }
         if let remote { lines.append("Sessions kept: \(remote.keep.label)") }
+        lines.append(completion.engineLabel)
         return lines.joined(separator: "\n")
     }
 
@@ -795,6 +799,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {
         // Programs redraw after a resize; that is not work.
         status.resized(at: Self.now)
+        completion.viewChanged()
     }
 
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
@@ -1043,7 +1048,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         // Apps opened from Finder get no LANG; without it zsh and most CLIs mangle UTF-8.
         if env["LANG"]?.isEmpty ?? true { env["LANG"] = "en_US.UTF-8" }
         if shellName == "zsh", let zdotdir = AppSupport.zshIntegrationDirectory {
-            env["NEXTTERM_USER_ZDOTDIR"] = env["ZDOTDIR"] ?? ""
+            env["NEXTTERM_USER_ZDOTDIR"] = Self.userZDOTDIR(env)
             env["ZDOTDIR"] = zdotdir.path
             env[ShellIntegration.nonceVariable] = nonce // the shell removes it from its environment at once
             if CompletionPreferences.isOn { env[ShellIntegration.completionVariable] = "1" } // Tab completion's hook loads

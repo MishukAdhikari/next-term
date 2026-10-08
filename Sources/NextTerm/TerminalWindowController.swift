@@ -125,6 +125,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         window.onControlTab = { [weak self] backwards in self?.cycleTab(by: backwards ? -1 : 1) }
         window.onTerminalKey = { [weak self] event, view in self?.completions.handle(event, in: view) ?? false }
         window.onFirstResponderChange = { [weak self] responder in
+            self?.completions.responderChanged()
             guard let self, let view = responder as? NextTermView, let tab = self.tabs.first(where: { $0.view === view }) else { return }
             if self.terminalRailed { self.expandTerminal() } // typing into a terminal behind the rail: it opens
             self.paneFocused(tab)
