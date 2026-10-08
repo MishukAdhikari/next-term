@@ -522,6 +522,7 @@ enum SelfTest {
         try? FileManager.default.removeItem(at: notes)
 
         await editorChecks(c, proj: proj, tab: inProject)
+        await lineEditChecks(c, proj: proj, tab: inProject)
         await emptyEditorChecks(c, proj: proj, tab: inProject)
         await goToFileChecks(c, proj: proj)
         await gutterAndCollapseChecks(c, proj: proj)
