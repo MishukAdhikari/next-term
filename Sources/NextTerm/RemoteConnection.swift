@@ -254,8 +254,11 @@ enum RemoteConnection {
                 return
             }
             if let stdin, let input {
-                stdin.fileHandleForWriting.write(input)
-                try? stdin.fileHandleForWriting.close()
+                // An ssh that is already gone is no SIGPIPE, and no exception, for Next Term.
+                let writer = stdin.fileHandleForWriting
+                _ = fcntl(writer.fileDescriptor, F_SETNOSIGPIPE, 1)
+                try? writer.write(contentsOf: input)
+                try? writer.close()
             }
             var timedOut = false
             let deadline = DispatchWorkItem { [weak process] in
