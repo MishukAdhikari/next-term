@@ -262,7 +262,8 @@ extension SelfTest {
             panel.submit()
             let answered = await wait(30) { CommandSuggestionPanel.current == nil || panel.stage != .waiting }
             let onLine = CommandSuggestionPanel.current == nil && promptLine(tab).count > 2
-            check(answered && (onLine || panel.suggestion != nil || !panel.statusShown.isEmpty) && tab.status.commandsStarted == before,
+            // A command, on the line or waiting in the box: an error message is no answer.
+            check(answered && (onLine || panel.suggestion != nil) && tab.status.commandsStarted == before,
                   "Suggest a Command: the on-device model answers, and nothing runs", onLine ? promptLine(tab) : panel.statusShown)
             CommandSuggestionPanel.current?.panel.close()
             await clearLine(tab)
