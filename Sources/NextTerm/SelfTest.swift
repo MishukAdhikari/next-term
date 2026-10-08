@@ -63,7 +63,8 @@ enum SelfTest {
 
     /// Brings the app to the front with `window` key, as a hand's keys and clicks need (and as a window is
     /// "used"), asking again while another app keeps taking the front. False when it could not have it within
-    /// `seconds`: the caller skips what needs it, with a note.
+    /// `seconds`: the caller skips what needs it, with a note. With the app in front and the window still not
+    /// key (a sheet left over it), that is the app's own doing: a failed check, not only a skip.
     static func bringToFront(_ window: NSWindow, within seconds: Double = 6) async -> Bool {
         let deadline = Date().addingTimeInterval(seconds)
         repeat {
@@ -72,6 +73,10 @@ enum SelfTest {
             window.makeKeyAndOrderFront(nil)
             if await wait(1.5, { NSApp.isActive && window.isKeyWindow }) { return true }
         } while Date() < deadline
+        if NSApp.isActive {
+            check(false, "the window takes the keyboard with the app in front",
+                  notFrontmost(window) + (window.attachedSheet != nil ? ", a sheet is up" : ""))
+        }
         return false
     }
 
@@ -700,7 +705,10 @@ enum SelfTest {
         for tab in extra { c.requestClose(tab) }
         check(await wait(3) { extra.allSatisfy { tab in !c.tabs.contains { $0 === tab } } } && window.attachedSheet == nil,
               "the extra tabs close at once, nothing running in them", window.attachedSheet.map { _ in "a sheet asks" } ?? "\(c.tabs.count) tabs")
-        if let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .alertFirstButtonReturn) } // not left for the checks after
+        while let sheet = window.attachedSheet { // not left for the checks after (each busy tab queues its own)
+            window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+            _ = await wait(2) { window.attachedSheet !== sheet }
+        }
         window.setFrame(savedFrame, display: true)
         c.tabBar.layoutSubtreeIfNeeded()
         check(!c.tabBar.isOverflowing, "and stops overflowing when they fit again")
@@ -4783,7 +4791,6 @@ enum SelfTest {
         guard let i = args.firstIndex(of: "--self-test"), i + 1 < args.count else { return nil }
         return args[i + 1]
     }
-
 
     private static func finish() {
         ClaudeIDEServer.shared.stop() // remove the test run's lock file

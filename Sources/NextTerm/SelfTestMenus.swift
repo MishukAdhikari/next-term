@@ -240,6 +240,7 @@ extension SelfTest {
         w.select(0)
         _ = run("Split Down", in: w.terminalTabMenu(at: 1) ?? NSMenu())
         check(w.activeIndex == 1 && w.groups[1].panes.count == 2, "menus: Split Down splits the tab clicked")
+        _ = await wait(20) { w.groups[safe: 1]?.panes.last?.status.integrated == true }
 
         // Close Other Tabs asks once when one of them is busy, as closing it alone would.
         let last = w.addTab(directory: folder.path)

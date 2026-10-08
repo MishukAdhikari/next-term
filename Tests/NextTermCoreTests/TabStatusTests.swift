@@ -72,6 +72,21 @@ import Testing
 }
 
 @Suite struct TabStatusTests {
+    @Test func startupCommandsAreNotCommandsRun() {
+        var s = TabStatus()
+        s.observe(ForegroundProcess(isShell: false, name: "mkdir"), at: 0) // a theme's mkdir as the shell starts
+        s.observe(ForegroundProcess(isShell: true, name: "zsh"), at: 0.5)
+        #expect(s.commandsStarted == 1)
+        s.commandFinished(exitCode: 0, at: 1) // the first prompt
+        #expect(s.commandsRun == 0)
+        s.commandStarted("ls", at: 2)
+        s.commandFinished(exitCode: 0, at: 3)
+        #expect(s.commandsRun == 1)
+        var plain = TabStatus() // no integration: every command polling sees counts
+        plain.observe(ForegroundProcess(isShell: false, name: "vim"), at: 0)
+        #expect(plain.commandsRun == 1)
+    }
+
     @Test func commandInBackgroundTabFinishesDone() {
         var s = TabStatus()
         s.commandStarted("make", at: 0)
