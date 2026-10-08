@@ -49,9 +49,10 @@ enum RemoteCompletionConsent {
     /// Saved hosts with the hook on, for Settings.
     static var allowedHosts: [RemoteHost] { RemoteHosts.all.filter { state($0) == .allowed } }
 
-    /// A new tab on this host starts its shell through the hook (herdr has none).
+    /// A new tab on this host starts its shell through the hook: allowed there, and Tab completion on, as a zsh tab on
+    /// this Mac loads the hook only then (herdr has none).
     static func startsHooked(_ remote: RemoteTab) -> Bool {
-        remote.keep != .herdr && state(remote.host) == .allowed
+        CompletionPreferences.isOn && remote.keep != .herdr && state(remote.host) == .allowed
     }
 
     private static func set(_ host: RemoteHost, _ entry: [String: String]?) {

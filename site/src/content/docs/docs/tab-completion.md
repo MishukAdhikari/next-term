@@ -73,7 +73,7 @@ For the server’s own completions (git branches, your own completions, zsh’s 
 
 - writes a few small files to `~/.cache/next-term/completion/` on the server: the same hook as on your Mac, and a launch command that starts your login shell through it. Your own files stay as they are;
 - only where the login shell is zsh. A hook for bash isn’t here yet, so a bash server keeps the folders and files above;
-- for new tabs. A session kept in tmux gets it when its shell restarts.
+- for new tabs, while Tab completion is on, as on your Mac. A session kept in tmux gets it when its shell restarts.
 
 With the hook, a server tab works as a zsh tab on your Mac does: zsh’s own list, and zsh quotes the name you pick. The hook sends only Tab completion’s marks, never the commands you run, under a secret made for that server, which reaches it on the connection’s input and never on a command line. It runs nothing by itself. Inside a tmux of your own on the server it stays silent.
 
