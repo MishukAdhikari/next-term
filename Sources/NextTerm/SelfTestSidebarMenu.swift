@@ -9,9 +9,13 @@ extension SelfTest {
         guard let window = c.window, c.isSidebarVisible else { return note("sidebar menu keys: the sidebar is hidden, so not checked") }
         let shortcuts = KeyboardShortcuts.shared
         let savedBindings = shortcuts.bindings, savedPreset = shortcuts.preset
+        // The copy checks clear the clipboard: what was on it goes back.
+        let savedClipboard = NSPasteboard.general.string(forType: .string)
         defer {
             shortcuts.bindings = savedBindings
             shortcuts.preset = savedPreset // applies both
+            NSPasteboard.general.clearContents()
+            if let savedClipboard { NSPasteboard.general.setString(savedClipboard, forType: .string) }
         }
         shortcuts.preset = .nextTerm
         shortcuts.resetAll()
