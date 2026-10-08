@@ -39,8 +39,19 @@ final class TerminalRail: NSView {
     /// "+3": the tabs there is no room for. A click opens the terminal.
     private let moreButton = HoverButton()
     private let glow = CALayer()
-    private var hovering = false { didSet { if hovering != oldValue { needsDisplay = true } } }
-    private var pressed = false { didSet { needsDisplay = true } }
+    private var hovering = false {
+        didSet {
+            if hovering != oldValue { needsDisplay = true }
+            expandHint.backdrop = fill
+        }
+    }
+    private var pressed = false {
+        didSet {
+            needsDisplay = true
+            expandHint.backdrop = fill
+        }
+    }
+    private var fill: NSColor { pressed ? Theme.background : hovering ? Theme.tabHover : Theme.bar }
     /// A press that began on the rail itself (not on the title bar strip): letting go inside opens the terminal.
     private var tracking = false
 
@@ -50,6 +61,16 @@ final class TerminalRail: NSView {
     private(set) var changesNoticed = 0
     /// "Expand the terminal (⌘J)", with the key Settings gives it.
     private var expandTip: ShortcutToolTip?
+    /// "⌘J" just under the arrow, as a tab shows "⌘1", while every mark keeps its place below it; without,
+    /// while the pointer is on the arrow, over the first mark.
+    private lazy var expandHint = KeyHint(#selector(TerminalWindowController.toggleTerminalCollapsed(_:)), for: nil)
+    /// The hint's height while it shows: the marks start that much lower.
+    private var hintRow: CGFloat = 0
+    /// The arrow's key as it shows now, nil once it gave way (for the self-test).
+    var shownKey: String? {
+        layoutSubtreeIfNeeded()
+        return expandHint.shownKey
+    }
     /// The states each tab pulsed for since the rail showed: an agent that goes done, working, done again
     /// (pauses in its output) pulses once, not every few seconds.
     private var pulsedFor: [ObjectIdentifier: Set<TabState>] = [:]
@@ -66,6 +87,7 @@ final class TerminalRail: NSView {
         moreButton.action = #selector(expandClicked)
         moreButton.isHidden = true
         addSubview(moreButton)
+        addSubview(expandHint)
         expandTip = ShortcutToolTip(self, "Expand the terminal", #selector(TerminalWindowController.toggleTerminalCollapsed(_:)))
         // A group, not a button: VoiceOver does not go into a button, and the tabs' buttons are in here.
         setAccessibilityElement(true)
@@ -132,8 +154,23 @@ final class TerminalRail: NSView {
 
     // MARK: layout
 
-    /// Where the marks start: under the arrow, which sits in the tab bars' strip along the top.
-    private var marksTop: CGFloat { topInset + TabBarView.height + 4 }
+    /// Where the marks start: under the arrow, which sits in the tab bars' strip along the top, and its key.
+    private var marksTop: CGFloat { topInset + TabBarView.height + 4 + hintRow }
+
+    /// The key shows under the arrow only if it fits across the rail and every mark shown without it still is.
+    private func placeExpandHint() {
+        let height = ceil(expandHint.intrinsicContentSize.height)
+        hintRow = 0
+        let without = shownCount
+        hintRow = height
+        let fits = !expandHint.key.isEmpty && expandHint.keyWidth <= bounds.width - 2 && shownCount == without
+        hintRow = fits ? height : 0
+        let width = expandHint.keyWidth
+        let strip = topInset + TabBarView.height // the arrow's, with the tab bars' line: the key's margin stays under it
+        expandHint.overlayBounds = NSRect(x: 0, y: strip, width: bounds.width, height: max(0, bounds.height - strip))
+        expandHint.place(NSRect(x: ((bounds.width - width) / 2).rounded(), y: strip + 2, width: width, height: height),
+                         shown: fits)
+    }
 
     /// How many marks fit; when some do not, the last place is the "+3".
     private var shownCount: Int {
@@ -147,6 +184,7 @@ final class TerminalRail: NSView {
         CATransaction.setDisableActions(true)
         glow.frame = bounds
         CATransaction.commit()
+        placeExpandHint()
         let shown = shownCount
         for (i, view) in markViews.enumerated() {
             view.isHidden = i >= shown
@@ -172,7 +210,7 @@ final class TerminalRail: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        (pressed ? Theme.background : hovering ? Theme.tabHover : Theme.bar).setFill()
+        fill.setFill()
         bounds.fill()
         // The tab bars' bottom line runs on across the rail.
         Theme.border.setFill()
@@ -197,8 +235,16 @@ final class TerminalRail: NSView {
 
     override func mouseEntered(with event: NSEvent) { hover(event) }
     override func mouseMoved(with event: NSEvent) { hover(event) }
-    override func mouseExited(with event: NSEvent) { hovering = false }
-    private func hover(_ event: NSEvent) { hovering = !isTitleBar(convert(event.locationInWindow, from: nil)) }
+    override func mouseExited(with event: NSEvent) {
+        hovering = false
+        expandHint.pointer(onIcon: false)
+    }
+    /// On the arrow, its key shows under it even when it gave way.
+    private func hover(_ event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        hovering = !isTitleBar(point)
+        expandHint.pointer(onIcon: arrowRect.contains(point))
+    }
     // Gone with the pointer on it (a click opened the terminal): next time it starts plain.
     override func viewDidHide() {
         super.viewDidHide()

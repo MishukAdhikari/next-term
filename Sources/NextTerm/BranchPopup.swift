@@ -779,6 +779,10 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         fetch.toolTip = "Fetch from all remotes (⌘R)"
         fetch.target = self
         fetch.action = #selector(fetchClicked)
+        // "⌘R" before it, as a tab shows "⌘1": the popup's own key, so it never changes. VoiceOver hears the
+        // key as the button's help, so its label carries the words the tooltip has.
+        let fetchHint = KeyHint(key: "⌘R", for: fetch)
+        fetch.setAccessibilityLabel("Fetch from all remotes")
 
         let rule = NSBox()
         rule.boxType = .custom
@@ -816,7 +820,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         hints.font = .systemFont(ofSize: 11)
         hints.textColor = Theme.textDim
 
-        for view in [glass, field, fetch, rule, scroll, footer, hints] as [NSView] {
+        for view in [glass, field, fetchHint, fetch, rule, scroll, footer, hints] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             background.addSubview(view)
         }
@@ -826,7 +830,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             glass.widthAnchor.constraint(equalToConstant: 14),
             field.topAnchor.constraint(equalTo: background.topAnchor, constant: 11),
             field.leadingAnchor.constraint(equalTo: glass.trailingAnchor, constant: 8),
-            field.trailingAnchor.constraint(equalTo: fetch.leadingAnchor, constant: -8),
+            field.trailingAnchor.constraint(equalTo: fetchHint.leadingAnchor, constant: -8),
             fetch.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -10),
             fetch.centerYAnchor.constraint(equalTo: field.centerYAnchor),
             fetch.widthAnchor.constraint(equalToConstant: 24),
@@ -843,7 +847,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             footer.trailingAnchor.constraint(lessThanOrEqualTo: hints.leadingAnchor, constant: -10),
             hints.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -14),
             hints.firstBaselineAnchor.constraint(equalTo: footer.firstBaselineAnchor),
-        ])
+        ] + fetchHint.constraintsBeforeIcon())
         column.width = Self.width
     }
 
