@@ -1,12 +1,12 @@
 ---
 title: Orchestrate agents (MCP)
-description: "Next Term as an MCP server: one agent starts others in tabs, prompts them, reads their screens, answers their questions and reads files. 18 local tools."
+description: "Next Term as an MCP server: one agent runs others in tabs, reads their screens and files, and edits, commits and arranges panes once you approve."
 head:
   - tag: title
     content: Orchestrate AI coding agents over MCP — Next Term
 ---
 
-Next Term is an MCP server, so one agent can run the others. An orchestrator — Claude Code, Codex, Gemini CLI or any other agent that speaks MCP — sees every project and tab with the state of the agent in it, opens projects, starts agents in new tabs or panes, gives them prompts, waits until they stop, reads what they said, answers their questions, reads the projects’ files and changes, and uses the editor. You watch it happen in Next Term’s tabs, and can step in at any moment.
+Next Term is an MCP server, so one agent can run the others. An orchestrator — Claude Code, Codex, Gemini CLI or any other agent that speaks MCP — sees every project and tab with the state of the agent in it, opens projects, starts agents in new tabs or panes, gives them prompts, waits until they stop, reads what they said, answers their questions, reads the projects’ files and changes, and uses the editor. With your approval on the Mac it also edits files, stages and commits, arranges panes and the layout, and changes a few settings. You watch it happen in Next Term’s tabs, and can step in at any moment.
 
 ## Nothing to set up
 
@@ -83,6 +83,51 @@ Add a stdio server that runs `nxtrm mcp`. `nxtrm` is on the `PATH` in Next Term�
 
 Seven more tools work with your servers: `list_hosts`, `add_host`, `remove_host`, `check_host`, `new_remote_tab`, `host_sessions` and `host_changes`. They are described in [Remote tabs: for agents](/docs/remote/#for-agents-mcp). Of these, only `list_hosts` only reads; the others are marked so that your agent’s client asks you first.
 
+Every tool also carries Next Term’s own tag, `read` or `write`, in its `_meta` as `next-term/scope`: `read` for the tools that only look (the host tools that run a check over ssh among them), `write` for the ones that act on your Mac.
+
+## Tools that change things
+
+Twelve more tools edit files, stage and commit, and control panes, the layout and a few settings, so an agent can drive Next Term completely. Each one that changes something waits for your answer on the Mac first (see [Approving changes](#approving-changes)).
+
+| Tool | What it does | Changes anything? |
+|---|---|---|
+| `propose_edit` | Opens a change to a file as a proposal in the editor’s side-by-side diff, for you to **Accept** or **Reject**, as Claude Code’s edits are. Give the whole new text (`content`), or `old_text` and `new_text` to replace the one place where `old_text` appears. It never writes the file. The answer is `accepted` or `rejected`, or `pending` with a `proposal_id` after about 50 seconds; closing the proposal rejects it. | Only if you accept, and then the agent writes it |
+| `write_file` | Replaces the text of an existing file in an open project, keeping its encoding, line endings and permissions. | Only if you approve |
+| `create_file` | Creates a new text file in an open project, and any folders missing on its path. | Only if you approve |
+| `stage` | `git add` of exactly the named files, with new files and deletions; no patterns. | Only if you approve |
+| `commit` | Stages the named files and commits them with `message`. The repository’s hooks run as for any commit. Never pushes, never amends. Returns the new commit’s id. | Only if you approve |
+| `focus_tab` | Puts a tab, or a pane of a split tab, in front of its window with that window’s keyboard. Unlike `show_tab`, the window and Next Term stay where they are. | Only if you approve |
+| `split_pane` | Opens a new pane beside a tab’s pane, to its right or below it (`direction: "down"`), without taking the keyboard. Returns the new pane’s id. | Only if you approve |
+| `close_pane` | Closes one pane of a split tab; the tab and its other panes stay. A pane with something running needs `force`. | Only if you approve |
+| `zoom_pane` | Makes one pane fill its tab, as **Window › Maximize Pane** does, or brings the panes back with `zoomed: false`. | Only if you approve |
+| `set_layout` | `terminal_position` and `sidebar_side` for every window, as the View menu sets them; `sidebar` (`shown` or `hidden`) and `terminal_folded` for one window. | Only if you approve |
+| `settings_get` | The settings `settings_set` may change, with their values and what each takes. | No |
+| `settings_set` | Changes a few settings: `font_size`, `line_height`, `soft_wrap`, `terminal_position`, and the notification switches `notify_decisions`, `notify_agent_finished`, `notify_program_alerts` and `notification_sound`. | Only if you approve |
+
+A call that would change nothing, such as `set_layout` with the layout as it is, answers at once without asking. `write_file`, `stage`, `commit` and `close_pane` are marked destructive, since they can replace a file’s text, the staging you chose or a running program; the others are not.
+
+### Approving changes
+
+Each change opens a small window on your Mac. It says what the agent asks to do, which tab asked (or that the request came from outside Next Term’s tabs), the agent’s `reason` in its own words, and what would change: the lines added and removed with the first of them, a commit’s branch, files and message, or each setting before and after. It has three buttons:
+
+- **Approve** makes the change. Just before, Next Term checks that what you saw still holds: if the file changed meanwhile, or the staged files or the branch did, the change is refused.
+- **Decline** changes nothing, and the agent is told so.
+- **Decline and Stop Asking** also refuses that agent’s further changes, without a window, until Next Term quits.
+
+Like the skills window, it does not take the keyboard and has no Return button, so typing meant for a terminal never answers it. One change waits at a time: another agent asking meanwhile is told to try again. With no answer in about 50 seconds the window closes and the change is refused, so the agent’s call never hangs.
+
+After you accept a `propose_edit`, the agent writes the file with `write_file` (or `create_file`) and exactly that text. That write does not ask again, for 10 minutes and while the file is as it was when you saw the proposal.
+
+### What is refused
+
+- **Files outside the open projects,** with symlinks resolved first, and files that usually hold secrets: `.env` files, keys and certificates, ssh keys, credentials files and `.git`, as for [reading](#files-search-and-changes). The answer says why.
+- **Binary files and files over 5 MB.**
+- **A file open in the editor with unsaved edits:** your edits win. The agent can propose its change instead.
+- **A path that exists already, for `create_file`.** It never writes over a file.
+- **A commit that would take more than the agent named:** when other changes are staged already, `commit` refuses them unless the agent passes `include_staged: true`, and the window then lists them as “staged already”. A commit is also refused during a merge, rebase, cherry-pick or revert, and on a detached HEAD. Folders and secrets files can’t be staged.
+- **Settings outside the list:** never “Let agents control Next Term”, the IDE links, updates or keyboard shortcuts.
+- **Your own pane:** an agent cannot close the pane it runs in.
+
 ### Waiting
 
 `wait_for_tab` waits up to 50 seconds by default, because some clients give up on a tool after a minute; `timeout_seconds` raises it to 300. When it returns with `"timed_out": true`, the agent is still working: call it again to keep waiting. Input that a tool has just sent counts as work, so a wait right after `send_to_tab` waits for the job it started, however quickly it begins.
@@ -131,7 +176,8 @@ A question’s `question_id` changes whenever the agent asks a new question, eve
 - **Local only.** The app listens on a Unix socket, `~/Library/Application Support/Next Term/mcp.sock`, readable and writable only by you (mode `0600`). Every connection is checked to come from your user. There is no network port.
 - **The same reach as your own shell.** Anything that can connect can already run commands as you; the server gives an agent no power you have not given it by running it.
 - **Agents ask before they act,** because typing into a tab, answering an agent’s question, opening tabs and closing them are marked destructive.
-- **Files are read, never written,** only inside the open projects, and never the ones that hold secrets.
+- **Changes wait for you on the Mac:** files, commits, panes, the layout and settings change only after you click **Approve**, and no answer is a no.
+- **Files are read and written only inside the open projects,** and never the ones that hold secrets.
 - **An agent cannot type into its own tab or close it.**
 - **A busy tab closes only with `force`,** and the error says what is running.
 - **Text is typed as a paste,** so it is never run before the Return the tool presses.
