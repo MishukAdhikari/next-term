@@ -11,6 +11,13 @@ extension KeyboardShortcuts {
         KeyBindings.partCommands.map { Command(id: $0.id, title: $0.title, path: $0.part.name, defaultChord: $0.chord, item: nil) }
     }
 
+    /// "Copy Path (Project Sidebar)": a command's title, with its part for a key outside the menus, so it reads apart from
+    /// File › Copy Path (Settings' clash alert, VoiceOver, the import's preview).
+    func placedTitle(of id: String) -> String {
+        guard let part = KeyBindings.partCommands.first(where: { $0.id == id })?.part else { return title(of: id) }
+        return "\(title(of: id)) (\(part.name))"
+    }
+
     /// The command of `part` that `event` presses (with its key as set in Settings), if any.
     func partCommand(for event: NSEvent, in part: KeyBindings.Part) -> String? {
         guard event.type == .keyDown, let pressed = Self.chord(from: event) else { return nil }

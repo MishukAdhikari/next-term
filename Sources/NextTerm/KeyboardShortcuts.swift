@@ -784,7 +784,7 @@ final class ShortcutRecorder: NSButton {
     private func showCurrent() {
         let shortcuts = KeyboardShortcuts.shared
         title = shortcuts.chord(for: commandID)?.display ?? "—"
-        setAccessibilityLabel("Shortcut for \(shortcuts.title(of: commandID)): \(title)")
+        setAccessibilityLabel("Shortcut for \(shortcuts.placedTitle(of: commandID)): \(title)")
         toolTip = shortcuts.sharing(commandID)
     }
 
@@ -822,10 +822,10 @@ final class ShortcutRecorder: NSButton {
         // terminal command on ⌘D. A command for everywhere on ⌘D clashes with both.
         let owners = chord.map { shortcuts.bindings.owners(of: $0, defaults: shortcuts.defaults, except: commandID) } ?? []
         if let chord, !owners.isEmpty {
-            let names = owners.map { "“\(shortcuts.title(of: $0))”" }.joined(separator: " and ")
+            let names = owners.map { "“\(shortcuts.placedTitle(of: $0))”" }.joined(separator: " and ")
             let alert = NSAlert()
             alert.messageText = "\(chord.display) is used by \(names)."
-            alert.informativeText = "Use it for “\(shortcuts.title(of: commandID))” instead? \(names) \(owners.count == 1 ? "is" : "are") left without a shortcut."
+            alert.informativeText = "Use it for “\(shortcuts.placedTitle(of: commandID))” instead? \(names) \(owners.count == 1 ? "is" : "are") left without a shortcut."
             alert.addButton(withTitle: "Use It Here")
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return showCurrent() }

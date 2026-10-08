@@ -140,6 +140,14 @@ extension SelfTest {
               "\(gaveWay), \(dispatched)")
         shortcuts.resetAll()
 
+        // Settings' clash alert, VoiceOver and the import's preview name a key outside the menus with its part, apart from
+        // the menu command of the same name.
+        let names = [shortcuts.placedTitle(of: "copyFilePath:"), shortcuts.placedTitle(of: "sidebar.copyPath"),
+                     ImportWindowController.presetLines(.vsCode).first { $0.hasPrefix("New Folder") } ?? "missing"]
+        check(names == ["Copy Path", "Copy Path (Project Sidebar)", "New Folder (Project Sidebar)   ⇧⌘N → no key"],
+              "sidebar menu keys: a sidebar command is named with its part, apart from the menu command of the same name",
+              names.joined(separator: " | "))
+
         // ⌥⌘N: a new file beside the selected one (its rename ended at once, keeping the name).
         func untitled() -> [String] {
             ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).filter { $0.hasPrefix("untitled") }.sorted()
