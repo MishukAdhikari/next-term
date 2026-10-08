@@ -22,6 +22,12 @@ import Glibc
 /// propose_edit takes the policy too, but its ask is its proposal: under either policy the change opens
 /// in the editor's side-by-side diff for the user to Accept or Reject, and the tool never writes.
 /// settings_get only reads, and asks nothing.
+///
+/// A grant for these tools can make code run on the Mac. The tools never write a git hook (commit would
+/// run it), but a commit runs the repository's hooks, which often run the project's own scripts and
+/// tests, and an agent's settings file in a project (hooks, allowed commands) runs what it lists the next
+/// time an agent starts there. So “Next Term's write tools” without asking is no weaker than typing into
+/// a shell, and is to be offered as such.
 public enum MCPApproval: Equatable, Sendable {
     /// The change waits for the user's Approve in Next Term's approval window, which shows what would
     /// change and who asks. Decline, closing it, or no answer within the wait changes nothing.
