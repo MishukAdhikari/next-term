@@ -4,8 +4,8 @@ import NextTermCore
 /// Pane headers: in a tab split into panes, each pane has a header with its mark and title, and a × that
 /// closes that pane alone, asking first when something runs there. A click on a header gives its pane the
 /// keyboard, a double-click renames it. One pane, or a maximized one, has no header, and a header never
-/// takes the terminal's rows. Splitting keeps a pane's history. The pane you type in keeps the keyboard
-/// whatever happens to the panes beside it.
+/// takes the terminal's rows. Splitting keeps a pane's history and resizes a terminal once at most; the
+/// pane you type in keeps the keyboard whatever happens to the panes beside it.
 extension SelfTest {
     static func paneHeaderChecks(_ c: TerminalWindowController) async {
         guard let window = c.window, let base = c.activeTab, let group = c.activeGroup, !group.isSplit else {
@@ -21,6 +21,22 @@ extension SelfTest {
             return pane.bounds.height - tab.view.frame.maxY
         }
         check(header(base).isHidden && abs(terminalTop(base) - 4) < 1, "pane headers: a tab of one pane has none", "\(terminalTop(base))")
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("nt-pane-headers-\(getpid())")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // The resizes a pane's program is told of, counted by its shell: a WINCH trap adds a line for each.
+        func winchFile(_ tab: TerminalTab) -> String { dir.appendingPathComponent("winch-\(tab.id.uuidString)").path }
+        func countResizes(_ tab: TerminalTab) async {
+            tab.view.send(txt: "\u{15}trap 'echo w >> \"\(winchFile(tab))\"' WINCH; : > \"\(winchFile(tab))\"\r")
+            _ = await wait(5) { FileManager.default.fileExists(atPath: winchFile(tab)) }
+            await pause(0.3) // and the prompt after it
+        }
+        func resizes(_ tab: TerminalTab) -> Int {
+            ((try? String(contentsOfFile: winchFile(tab), encoding: .utf8)) ?? "").split(separator: "\n").count
+        }
+        await countResizes(base)
+        defer { base.view.send(txt: "\u{15}trap - WINCH\r") }
 
         // History the pane has before it is split, to find whole after each split. Short lines: one row at any
         // pane's width, a dozen at the two columns a squeeze would rewrap them to, far past the scrollback's
@@ -41,9 +57,17 @@ extension SelfTest {
         guard let other = c.split(vertical: true, from: base) else { return check(false, "pane headers: Split Right adds a pane") }
         _ = await wait(20) { other.status.integrated }
         check(history(base) == before, "Split Right keeps the pane's history", "\(before) → \(history(base)) lines")
+        await countResizes(other)
+        let resized = (base: resizes(base), other: resizes(other))
         guard let third = c.split(vertical: false, from: base) else { return check(false, "pane headers: Split Down adds a pane") }
         _ = await wait(20) { third.status.integrated }
         check(history(base) == before, "a pane split down beside another keeps its history", "\(before) → \(history(base)) lines")
+        // The pane split has half its rows: one resize. The pane beside it has the room it had: none.
+        _ = await wait(3) { resizes(base) > resized.base }
+        await pause(0.3)
+        check(resizes(base) - resized.base == 1 && resizes(other) == resized.other,
+              "a split resizes the pane it splits once, and the pane beside it not at all",
+              "\(resizes(base) - resized.base), \(resizes(other) - resized.other)")
         c.refresh()
         let all = [base, other, third]
         check(all.allSatisfy { !header($0).isHidden }, "a split shows a header on each pane")
@@ -56,9 +80,6 @@ extension SelfTest {
               "the tab bar still shows one tab for the split", c.tabBar.items[safe: c.activeIndex]?.title ?? "")
 
         // Marks: an agent at work in one pane shows on that pane's header, not on the others'.
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("nt-pane-headers-\(getpid())")
-        defer { try? FileManager.default.removeItem(at: dir) }
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try? "#!/bin/sh\nwhile true; do printf '\\r\\342\\234\\273 Working (esc to interrupt) %s' $(date +%S); sleep 0.3; done\n"
             .write(to: dir.appendingPathComponent("claude"), atomically: true, encoding: .utf8)
         chmod(dir.appendingPathComponent("claude").path, 0o755)

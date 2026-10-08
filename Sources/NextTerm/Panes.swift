@@ -72,9 +72,12 @@ final class PaneView: NSView {
     /// A pane is placed at no width or no height first, while its split is built, and has no height while
     /// the terminal is folded down to its tab bar. Its terminal keeps its size until the pane has one again:
     /// squeezed to two columns on the way, it would rewrap its history to fit them and lose most of it (a
-    /// Split Down in a tab already split side by side did).
+    /// Split Down in a tab already split side by side did). It keeps its size too while its split view is
+    /// still being placed (built at even shares, then its dividers put back): a split or a close resizes
+    /// the terminal once, to where it ends up, and not at all a terminal whose room stays the same. Each
+    /// resize is a redraw for the program in it.
     override func layout() {
-        guard bounds.width >= 1, bounds.height >= 1 else { return }
+        guard bounds.width >= 1, bounds.height >= 1, (superview as? PaneSplitView)?.applying != true else { return }
         super.layout()
     }
 
@@ -324,8 +327,14 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate {
 /// Between panes: a hairline that shows against the terminal background, easy to grab.
 final class PaneSplitView: NSSplitView, NSSplitViewDelegate {
     weak var split: PaneGroup.Split?
-    /// Set while the group lays itself out, so its own moves are not taken for the user's.
-    var applying = false
+    /// Set while the group lays itself out, so its own moves are not taken for the user's. Its panes size
+    /// their terminals once it is done (see PaneView.layout).
+    var applying = false {
+        didSet {
+            guard oldValue, !applying else { return }
+            for case let pane as PaneView in arrangedSubviews { pane.needsLayout = true }
+        }
+    }
 
     override var dividerColor: NSColor { WorkSplitView.line }
     override var dividerThickness: CGFloat { 1 }
