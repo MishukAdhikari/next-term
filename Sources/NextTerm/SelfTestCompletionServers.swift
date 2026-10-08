@@ -442,6 +442,30 @@ extension SelfTest {
         // Marks under another nonce are not taken.
         tab.view.feed(text: "\u{1b}]6973;deadbeef;arm;1;main;start;1;0;x;builtin;;0\u{7}")
         check(session.state.arm?.tabWidget != "x", "Tab completion, the server hook: a mark under another nonce is ignored")
+
+        // The connection drops: what the hook said goes with it. The hook is gone on the server too by the time it
+        // comes back, so the shell it reconnects to is plain, and a Tab there never sends the private key.
+        try? fm.removeItem(at: cache.appendingPathComponent("completion"))
+        master.stop()
+        tab.view.send(txt: "exit 255\r")
+        check(await wait(5) { tab.disconnected } && session.state.arm == nil && session.usesScreen,
+              "Tab completion, the server hook: a dropped connection forgets what the hook said", "\(session.state.phase)")
+        master.start()
+        tab.reconnect()
+        if await wait(20, { tab.remoteConnected && tab.remoteReady }), await wait(8, { session.screenReady }), await focus(c, tab) {
+            tab.view.send(txt: "ls ~/app/fo")
+            await pause(0.5)
+            pressKey(window, "\t", code: 48)
+            await pause(1)
+            var privateKey = false
+            if case .privateKey = session.lastTab { privateKey = true }
+            check(!privateKey && session.state.arm == nil && !tab.screenTail(3).joined().contains("6973"),
+                  "and a Tab in the plain shell it reconnects to sends no private key", "\(session.lastTab) | \(promptLine(tab))")
+            if popup.isVisible { pressKey(window, "\u{1b}", code: 53) }
+            tab.view.send(txt: "\u{15}")
+        } else {
+            check(false, "Tab completion, the server hook: the tab reconnects to the stand-in server", tab.screenTail(3).joined(separator: " | "))
+        }
         c.remove(tab)
 
         // Deleted on the server: the host says so, and the next tab starts plain. Never put back by Next Term.
