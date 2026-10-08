@@ -37,13 +37,17 @@ enum SkillsInstaller {
         /// Claude Code's plugins when this was fetched (read off the main thread): the candidates' keys in
         /// enabledPlugins, and the plugins installed or synced from claude.ai. Read only.
         var claude = SkillClaudeSettings.Snapshot()
+        /// The MCP server tables in ~/.codex/config.toml when this was fetched, for the review's Codex line.
+        /// Read only.
+        var codex = SkillServers.CodexConfig()
 
         func discard() { try? FileManager.default.removeItem(at: scratch) }
 
-        /// The same review, planned against the skill folders and Claude Code's plugins as they are now.
-        func with(inventory: SkillInventory, claude: SkillClaudeSettings.Snapshot) -> Fetched {
+        /// The same review, planned against the skill folders, Claude Code's plugins and Codex's config as
+        /// they are now.
+        func with(inventory: SkillInventory, claude: SkillClaudeSettings.Snapshot, codex: SkillServers.CodexConfig) -> Fetched {
             Fetched(resolved: resolved, info: info, scratch: scratch, candidates: candidates, lockPath: lockPath, inventory: inventory,
-                    editedSinceInstall: editedSinceInstall, projects: projects, claude: claude)
+                    editedSinceInstall: editedSinceInstall, projects: projects, claude: claude, codex: codex)
         }
     }
 
@@ -93,8 +97,9 @@ enum SkillsInstaller {
             let names = candidates.map(\.name)
             let edited = await editedSinceInstall(names, inventory: inventory, lockPath: lockPath, records: records)
             let claude = await claudeFacts(candidates)
+            let codex = await codexFacts()
             return Fetched(resolved: resolved, info: await info, scratch: scratch, candidates: candidates, lockPath: lockPath,
-                           inventory: inventory, editedSinceInstall: edited, projects: openProjects, claude: claude)
+                           inventory: inventory, editedSinceInstall: edited, projects: openProjects, claude: claude, codex: codex)
         } catch {
             try? FileManager.default.removeItem(at: scratch)
             throw error
@@ -186,6 +191,12 @@ enum SkillsInstaller {
         let home = SkillsStore.home
         let keys = candidates.compactMap { $0.review.package?.claude.map { SkillClaudeSettings.key($0.name) } }
         return await Task.detached { SkillClaudeSettings.snapshot(home: home, keys: keys) }.value
+    }
+
+    /// The MCP server tables in ~/.codex/config.toml, read off the main thread. Never written.
+    nonisolated static func codexFacts() async -> SkillServers.CodexConfig {
+        let home = SkillsStore.home
+        return await Task.detached { SkillServers.codexConfig(home: home) }.value
     }
 
     /// The Claude Code plugin names of skills installed together, by skill name.

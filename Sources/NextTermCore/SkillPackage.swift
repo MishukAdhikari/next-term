@@ -100,6 +100,8 @@ public struct SkillPackage: Equatable, Sendable {
         /// The command it runs, or what it does.
         public let detail: String
         public let file: String
+        /// `detail` is the command line it runs; otherwise it says what the part does ("sends a web request to …").
+        public var runsCommand = true
     }
 
     /// What a plugin also brings that loads with it but starts nothing by itself.
@@ -311,6 +313,12 @@ public struct SkillPackage: Equatable, Sendable {
         return items.dropLast().joined(separator: ", ") + " and " + last
     }
 
+    /// The items shown, then what the list leaves out: "a, b, and 3 more"; "a and b" when nothing is.
+    public static func list(_ shown: [String], hidden: Int) -> String {
+        guard let more = more(hidden) else { return list(shown) }
+        return (shown + [more]).joined(separator: ", ")
+    }
+
     static let agentPluginsSchema = "https://agent-plugins.org/schemas/"
     /// How many servers, parts, bin/ names and brought files are kept.
     static let cap = 20
@@ -347,9 +355,8 @@ extension SkillPackage {
 
     /// "“a”, “b” and 3 more", each name on one line.
     static func quotedNames(_ names: [String], limit: Int = 5) -> String {
-        var shown = names.prefix(limit).map { "“" + SkillReview.oneLine($0, limit: 60) + "”" }
-        if let more = more(names.count - shown.count) { shown.append(more) }
-        return list(shown)
+        let shown = names.prefix(limit).map { "“" + SkillReview.oneLine($0, limit: 60) + "”" }
+        return list(Array(shown), hidden: names.count - shown.count)
     }
 
     static func otherFlags(_ manifest: Manifest) -> [SkillReview.Flag] {
@@ -895,19 +902,21 @@ extension PackageReader {
                 found.couldNotRead(file)
                 continue
             }
-            found.parts.append(SkillPackage.Part(kind: .hook, name: name, detail: Self.hookDetail(hook), file: file))
+            let type = hook["type"] as? String ?? "command"
+            let command = type == "command" && hook["command"] is String
+            found.parts.append(SkillPackage.Part(kind: .hook, name: name, detail: Self.hookDetail(hook), file: file, runsCommand: command))
         }
     }
 
     static func hookDetail(_ hook: [String: Any]) -> String {
         let type = (hook["type"] as? String) ?? "command"
         switch type {
-        case "command": return (hook["command"] as? String) ?? "a command Next Term could not read"
+        case "command": return (hook["command"] as? String) ?? "runs a command Next Term could not read"
         case "http": return "sends a web request to " + ((hook["url"] as? String) ?? "an address")
         case "mcp_tool": return "calls the MCP tool " + ((hook["server"] as? String) ?? "?") + " " + ((hook["tool"] as? String) ?? "?")
         case "prompt": return "asks a model"
         case "agent": return "runs an agent"
-        default: return "a hook of the kind “\(type)”"
+        default: return "runs a hook of the kind “\(type)”"
         }
     }
 
@@ -954,8 +963,10 @@ extension PackageReader {
 
     static func commandPart(_ kind: SkillPackage.Part.Kind, _ config: [String: Any], key: String?, file: String) -> SkillPackage.Part {
         let name = (config["name"] as? String) ?? key ?? kind.rawValue
-        var line = [(config["command"] as? String) ?? "a command Next Term could not read"]
-        line += (config["args"] as? [Any])?.compactMap { $0 as? String } ?? []
+        guard let command = config["command"] as? String else {
+            return SkillPackage.Part(kind: kind, name: name, detail: "runs a command Next Term could not read", file: file, runsCommand: false)
+        }
+        let line = [command] + ((config["args"] as? [Any])?.compactMap { $0 as? String } ?? [])
         return SkillPackage.Part(kind: kind, name: name, detail: line.joined(separator: " "), file: file)
     }
 
@@ -1045,7 +1056,7 @@ extension PackageReader {
         case .unread(let unread): found.unread.append(unread)
         case .value(let value, let file):
             guard let object = value as? [String: Any] else { return found.couldNotRead(file, "it is not a JSON object") }
-            found.parts.append(SkillPackage.Part(kind: .settings, name: file, detail: Self.settingsDetail(object), file: file))
+            found.parts.append(SkillPackage.Part(kind: .settings, name: file, detail: Self.settingsDetail(object), file: file, runsCommand: false))
         }
     }
 

@@ -219,9 +219,11 @@ extension SelfTest {
             let resolved = SkillsGitHub.Resolved(source: source, commit: String(repeating: "0123456789", count: 4), date: nil, skills: [found], truncated: false)
             let top = scratch.appendingPathComponent("files/skills-0123456").path
             let candidates = SkillsInstaller.check([found], top: top, repo: "skills")
+            // The home facts, from the self-test's home, as a fetch reads them.
+            let claude = SkillClaudeSettings.snapshot(home: home, keys: [])
             return (SkillsInstaller.Fetched(resolved: resolved, info: nil, scratch: scratch, candidates: candidates,
                                             lockPath: SkillLock.path(home: home, environment: [:]), inventory: SkillsStore.inventory(),
-                                            editedSinceInstall: [], projects: []), folder)
+                                            editedSinceInstall: [], projects: [], claude: claude, codex: SkillServers.codexConfig(home: home)), folder)
         }
 
         // A hand-made copy of the name in Command Code's folder, and a lock file `npx skills` wrote.
@@ -244,6 +246,9 @@ extension SelfTest {
               "skills: the review sheet offers Replace for a name already used, and Return never installs",
               "\(sheet.installButton.title) key=\(sheet.installButton.keyEquivalent.debugDescription) enabled=\(sheet.installButton.isEnabled)")
         check(sheet.textView.string.contains("Use it well."), "skills: the review sheet shows SKILL.md as written")
+        check(!sheet.claudeLink.isHidden && sheet.choice.view.isHidden,
+              "skills: a plain skill gets the checkbox for Claude Code's link, and no plugin popup",
+              "checkbox hidden=\(sheet.claudeLink.isHidden) popup hidden=\(sheet.choice.view.isHidden)")
 
         guard let candidate else { return }
         if case .failure(let failure) = await SkillsInstaller.install([candidate], fetched: fetched, claude: ["demo-skill": .link]) {

@@ -7,8 +7,9 @@ import NextTermCore
 extension SelfTest {
     /// A download of `example-org/plugin` at one commit, built without the network: a skill folder that is
     /// also a Claude Code plugin with a server and hooks, and asks for MCP servers in Codex and Amp. The
-    /// home facts (Claude Code's plugins) are read from the self-test's home, as a fetch reads them.
-    static func pluginDownload(home: String) -> SkillsInstaller.Fetched {
+    /// home facts (Claude Code's plugins, Codex's config) are read from the self-test's home, as a fetch
+    /// reads them. `plain`: a plain skill, plain-notes, comes in the same download, after it.
+    static func pluginDownload(home: String, plain: Bool = false) -> SkillsInstaller.Fetched {
         let manager = FileManager.default
         let scratch = SkillsInstaller.downloads.appendingPathComponent(UUID().uuidString)
         let top = scratch.appendingPathComponent("files/plugin-0123456").path
@@ -32,14 +33,20 @@ extension SelfTest {
         write("servers.json", #"{"mcpServers": {"remote": {"command": "npx", "args": ["-y", "mcp-remote@latest", "https://mcp.example.com/mcp"]}}}"#)
         write("docs.mcpb", "PK")
         chmod(folder + "/scripts/run.sh", 0o755)
-        let found = SkillsGitHub.Found(path: "skills/demo-plugin", tree: GitHash.folder(folder) ?? "")
+        var skills = [SkillsGitHub.Found(path: "skills/demo-plugin", tree: GitHash.folder(folder) ?? "")]
+        if plain {
+            let notes = top + "/skills/plain-notes"
+            try? manager.createDirectory(atPath: notes, withIntermediateDirectories: true)
+            try? "---\nname: plain-notes\ndescription: Keeps notes.\n---\nWrite them down.\n".write(toFile: notes + "/SKILL.md", atomically: true, encoding: .utf8)
+            skills.append(SkillsGitHub.Found(path: "skills/plain-notes", tree: GitHash.folder(notes) ?? ""))
+        }
         let source = SkillSource(owner: "example-org", repo: "plugin", path: "skills/demo-plugin")
-        let resolved = SkillsGitHub.Resolved(source: source, commit: String(repeating: "0123456789", count: 4), date: nil, skills: [found], truncated: false)
-        let candidates = SkillsInstaller.check([found], top: top, repo: "plugin")
+        let resolved = SkillsGitHub.Resolved(source: source, commit: String(repeating: "0123456789", count: 4), date: nil, skills: skills, truncated: false)
+        let candidates = SkillsInstaller.check(skills, top: top, repo: "plugin")
         let claude = SkillClaudeSettings.snapshot(home: home, keys: [SkillClaudeSettings.key("demo-plugin")])
         return SkillsInstaller.Fetched(resolved: resolved, info: nil, scratch: scratch, candidates: candidates,
                                        lockPath: SkillLock.path(home: home, environment: [:]), inventory: SkillsStore.inventory(),
-                                       editedSinceInstall: [], projects: [], claude: claude)
+                                       editedSinceInstall: [], projects: [], claude: claude, codex: SkillServers.codexConfig(home: home))
     }
 
     static func pluginReviewChecks(home: String) async {
@@ -75,8 +82,66 @@ extension SelfTest {
         let read = claude == ["demo"] && codex == ["docs"] && amp == ["docs", "helper"]
         check(read && agents == ["Claude Code", "Codex", "Amp"],
               "skills plugins: the review reads the servers Claude Code, Codex and Amp would use", "\(claude) \(codex) \(amp) \(agents)")
+        pluginRowChecks(details)
         serverWarningChecks(details)
+        bothKindsChecks(home: home)
         await pluginChoiceChecks(home: home)
+    }
+
+    /// The review's rows: the plugin block with its lead line and what it would start, then "Needs MCP
+    /// servers" with each agent's line, for the default (left out of Claude Code).
+    static func pluginRowChecks(_ details: String) {
+        let lines = details.components(separatedBy: "\n")
+        let lead = "Also a Claude Code plugin, “demo-plugin” (.claude-plugin/plugin.json). If you add it to Claude Code, it starts the programs "
+            + "below every time Claude Code opens, without asking you. It starts on."
+        let server = "• An MCP server, a program or web service that gives the agent tools, from .mcp.json: “demo” runs the program `/usr/bin/true`."
+        let hook = "• A hook, a command that runs on Claude Code events, from hooks/hooks.json: SessionStart runs `/usr/bin/true`."
+        let block = lines.contains(lead) && lines.contains("It would start:") && lines.contains(server) && lines.contains(hook)
+        check(block, "skills plugins: the review leads with what the plugin starts, and lists each part with what it is", details)
+        let claudeLine = "• Claude Code, from .mcp.json: “demo” runs the program `/usr/bin/true`. Left out of Claude Code, so these don't start there."
+        let codexLine = "• Codex, from agents/openai.yaml: “docs” connects to https://mcp.example.com/mcp. If you name this skill with "
+            + "`$demo-plugin:demo-plugin` in Codex's own apps, Codex offers to add these to ~/.codex/config.toml."
+        let table = lines.contains("    [mcp_servers.docs]") && lines.contains("    url = \"https://mcp.example.com/mcp\"")
+        let amp = lines.contains { $0.hasPrefix("• Amp, from SKILL.md: “docs” connects to https://mcp.example.com/mcp; “helper” runs the program `/usr/bin/true`.") }
+        let row = lines.contains("Needs MCP servers:") && lines.contains(claudeLine) && lines.contains { $0.hasPrefix(codexLine) }
+        check(row && table && amp && lines.contains(SkillServers.closing),
+              "skills plugins: Needs MCP servers gives Claude Code's, Codex's (with the table it would add) and Amp's line", details)
+        check(!details.contains("the only choice is Claude Code's link"),
+              "skills plugins: the review no longer says Claude Code's link is the only choice", details)
+    }
+
+    /// A plain skill and a plugin folder in one review: the checkbox and the popup each cover their own
+    /// kind, and ticking a plugin folder that runs something sets the popup back to leaving it out.
+    static func bothKindsChecks(home: String) {
+        let fetched = pluginDownload(home: home, plain: true)
+        defer { fetched.discard() }
+        let sheet = SkillsReviewSheet(fetched: fetched) { _ in }
+        // A click on a row's box, as the user ticks or unticks it.
+        func click(_ row: Int) { (sheet.tableView(NSTableView(), viewFor: nil, row: row) as? NSButton)?.performClick(nil) }
+        func pickAdd() {
+            sheet.choice.popup.selectItem(at: 1)
+            _ = sheet.choice.popup.sendAction(sheet.choice.popup.action, to: sheet.choice.popup.target)
+        }
+        let names = fetched.candidates.map(\.name)
+        guard names == ["demo-plugin", "plain-notes"] else { return check(false, "skills plugins: the two-skill download is reviewed", "\(names)") }
+        let leave = "Leave it out of Claude Code"
+        let alone = !sheet.choice.view.isHidden && sheet.claudeLink.isHidden && sheet.choice.popup.titleOfSelectedItem == leave
+        check(alone, "skills plugins: with nothing ticked, the selected plugin folder gets the popup on “Leave it out of Claude Code”",
+              "\(String(describing: sheet.choice.popup.titleOfSelectedItem))")
+        click(0)
+        pickAdd()
+        click(1)
+        let both = !sheet.choice.view.isHidden && !sheet.claudeLink.isHidden
+        let kept = sheet.choice.popup.titleOfSelectedItem == "Add it to Claude Code as a plugin"
+        check(both && kept && sheet.installButton.title == "Install 2 Skills",
+              "skills plugins: a plain skill and a plugin folder ticked together show the checkbox and the popup",
+              "\(sheet.installButton.title) \(String(describing: sheet.choice.popup.titleOfSelectedItem))")
+        click(0)
+        let plainOnly = sheet.choice.view.isHidden && !sheet.claudeLink.isHidden
+        click(0)
+        check(plainOnly && sheet.choice.popup.titleOfSelectedItem == leave,
+              "skills plugins: ticking a plugin folder that runs something sets the popup back to leaving it out",
+              "\(String(describing: sheet.choice.popup.titleOfSelectedItem))")
     }
 
     /// Worth a look names each file that adds MCP servers or fetches server code outside the commit, and
@@ -148,6 +213,23 @@ extension SelfTest {
               && !details.contains("through the Claude Code link"),
               "skills plugins: a plugin folder that runs something is left out of Claude Code by default, and every agent that loads it is named",
               details)
+        let popup = sheet.choice.popup
+        let leftOut = !sheet.choice.view.isHidden && popup.titleOfSelectedItem == "Leave it out of Claude Code"
+            && popup.itemTitles == ["Leave it out of Claude Code", "Add it to Claude Code as a plugin"]
+        let notLinked = sheet.choice.line.stringValue == "demo-plugin: not linked. npx skills update may link it again."
+        check(leftOut && sheet.installButton.title == "Install" && notLinked,
+              "skills plugins: the popup offers leaving it out or adding it as a plugin, on “Leave it out”, and Install reads Install",
+              "\(popup.itemTitles) \(sheet.installButton.title) \(sheet.choice.line.stringValue)")
+        // Picking "Add it as a plugin" says what that starts beside the popup, and the review follows it.
+        popup.selectItem(at: 1)
+        _ = popup.sendAction(popup.action, to: popup.target)
+        let added = sheet.details.stringValue
+        let said = "demo-plugin: linked. It starts the programs below every time Claude Code opens, without asking you."
+        let follows = added.contains("it starts these every time Claude Code opens, without asking you, while “demo-plugin@skills-dir” is on.")
+            && added.contains("Claude Code (through its link)")
+        check(sheet.choice.line.stringValue == said && sheet.installButton.title == "Install" && follows,
+              "skills plugins: “Add it to Claude Code as a plugin” says beside the popup what it starts, and Install still reads Install",
+              sheet.choice.line.stringValue + "\n" + added)
         if case .failure(let failure) = await SkillsInstaller.install([candidate], fetched: first) {
             check(false, "skills plugins: Install with the default applies", failure.message)
         }
@@ -156,20 +238,32 @@ extension SelfTest {
               "skills plugins: Install leaves it out: no link, its .claude-plugin kept, and Claude Code's settings untouched")
         if case .failure(let failure) = await SkillsStore.undo() { check(false, "skills plugins: Undo of the install applies", failure.message) }
 
-        // Added as a plugin, on request: the link, and still no settings write.
+        // Added as a plugin from the review: the link, and still no settings write.
         let second = pluginDownload(home: home)
         defer { second.discard() }
-        if case .failure(let failure) = await SkillsInstaller.install(second.candidates, fetched: second, claude: ["demo-plugin": .link]) {
-            check(false, "skills plugins: Install as a plugin applies", failure.message)
-        }
+        var answered: [String]?? = .none
+        let addSheet = SkillsReviewSheet(fetched: second) { names in answered = .some(names) }
+        addSheet.choice.popup.selectItem(at: 1)
+        _ = addSheet.choice.popup.sendAction(addSheet.choice.popup.action, to: addSheet.choice.popup.target)
+        addSheet.installButton.performClick(nil)
+        _ = await wait(10) { answered != nil }
+        check(answered == .some(["demo-plugin"]), "skills plugins: Install from the review, with “Add it to Claude Code as a plugin” picked, applies",
+              "\(String(describing: answered))")
         check(exists(link) && manager.fileExists(atPath: manifest) && state(settings) == before && before?.hasSuffix(" 600") == true,
               "skills plugins: Add it as a plugin links it, and leaves Claude Code's settings byte for byte, mode 0600", state(settings) ?? "none")
         let linkedReview = pluginDownload(home: home)
         defer { linkedReview.discard() }
-        let linkedDetails = SkillsReviewSheet(fetched: linkedReview) { _ in }.details.stringValue
+        let linkedSheet = SkillsReviewSheet(fetched: linkedReview) { _ in }
+        let linkedDetails = linkedSheet.details.stringValue
         check(linkedDetails.contains("Agents that load it: Codex, Command Code, Claude Code (through its link), \(otherReaders). "
                                      + "Amp, Cursor, opencode and goose also find it through the Claude Code link."),
               "skills plugins: an update that keeps the link names Claude Code and the agents that find it through the link", linkedDetails)
+        // AE6: the same parts as the installed copy keep the link by default; leaving it out would remove it.
+        let linkedPopup = linkedSheet.choice.popup
+        let keeps = linkedPopup.itemTitles == ["Remove it from Claude Code", "Add it to Claude Code as a plugin"] && linkedPopup.indexOfSelectedItem == 1
+        check(keeps && linkedSheet.choice.line.stringValue.hasPrefix("demo-plugin: stays linked."),
+              "skills plugins: an update with the same parts keeps its link, and the popup offers to remove it",
+              "\(linkedPopup.itemTitles) \(linkedSheet.choice.line.stringValue)")
 
         // Removal names what may stay, and changes no other app's file: a Codex server with the skill's
         // address (as Codex would have added it), the plugin's parts and Amp's servers in open sessions.
