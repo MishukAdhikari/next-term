@@ -8,6 +8,8 @@ enum CommandLineTool {
     static func run(_ arguments: [String]) -> Never {
         // `nxtrm mcp`: the MCP server agents start (see MCPServer). A file named "mcp" is `nxtrm ./mcp`.
         if arguments == ["mcp"] { MCPBridge.run() }
+        // The self-test's stand-in for opencode, run from a tab (SelfTestIDELinks.swift).
+        if arguments.count == 3, arguments[0] == "--self-test-ide-client" { SelfTest.runIDEStandIn(port: arguments[1], output: arguments[2]) }
         switch CommandLineOpen.parse(arguments, cwd: FileManager.default.currentDirectoryPath) {
         case .help:
             print(CommandLineOpen.usage)
