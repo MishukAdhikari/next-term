@@ -11,6 +11,14 @@ import Testing
         #expect(CommandClassifier.programName("A=1 B=2") == "")
     }
 
+    @Test func programLine() {
+        #expect(CommandClassifier.programLine("sleep 30") == "sleep 30")
+        #expect(CommandClassifier.programLine("PATH=/tmp/bin:$PATH claude --resume abc") == "claude --resume abc")
+        #expect(CommandClassifier.programLine("cd web && npm run dev") == "npm run dev")
+        #expect(CommandClassifier.programLine("FOO=1 sudo npx @anthropic-ai/claude-code --resume") == "claude-code --resume")
+        #expect(CommandClassifier.programLine("A=1 B=2") == "")
+    }
+
     @Test func kinds() {
         #expect(CommandClassifier.kind(of: "claude") == .agent)
         #expect(CommandClassifier.kind(of: "codex --full-auto") == .agent)
