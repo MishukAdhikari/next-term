@@ -88,6 +88,40 @@ extension SelfTest {
         panel.close()
 
         await sidebarSessionChecks(holder, claudeTab: claudeTab, opened: &opened)
+        await runningAgentChecks(holder, claudeTab: claudeTab, home: home, project: project, opened: &opened)
+    }
+
+    /// A tab's agent as the sessions see it: its own process and folder, when it started by the wall clock,
+    /// and the session Claude Code's record says that process has open.
+    private static func runningAgentChecks(_ holder: TerminalWindowController, claudeTab: TerminalTab, home: String, project: String,
+                                           opened: inout [TerminalTab]) async {
+        let agent = SessionStore.runningAgents().first { $0.key == claudeTab.id.uuidString }
+        let pid = agent?.pid ?? 0
+        check(pid > 0 && pid != claudeTab.view.process.shellPid && agent.map { canonicalPath($0.directory) == project } == true,
+              "sessions: a tab's agent is known by its own process and folder", "pid \(pid), \(agent?.directory ?? "none")")
+        let age = agent.map { Date().timeIntervalSince($0.startedAt) } ?? -1
+        check(age >= 0 && age < 120, "and by when it started, on the wall clock", "\(age) s ago")
+
+        // `cd <folder> && agent`: the shell's folder is still the one the prompt was in; the agent's is not.
+        let elsewhere = holder.addTab(directory: project)
+        opened.append(elsewhere)
+        _ = await wait(20) { elsewhere.status.integrated }
+        elsewhere.view.send(txt: "cd " + ShellQuote.quote(home + "/bin") + " && ./gemini\r")
+        _ = await wait(10) { elsewhere.status.running && elsewhere.status.kind == .agent }
+        var folder = ""
+        _ = await wait(5) {
+            folder = SessionStore.runningAgents().first { $0.key == elsewhere.id.uuidString }.map { canonicalPath($0.directory) } ?? ""
+            return folder == canonicalPath(home + "/bin")
+        }
+        check(folder == canonicalPath(home + "/bin"), "an agent started as `cd bin && gemini` is looked for in bin", folder)
+
+        // Claude Code's record of the session a process has open (it follows /clear) wins over the command line.
+        let record = "{\"pid\": \(pid), \"sessionId\": \"s-old\"}"
+        write(record, to: home + "/.claude/sessions/\(pid).json")
+        let open = AgentSessions.openSessions(SessionStore.runningAgents(), home: home)
+        check(open["claude:s-old"] == claudeTab.id.uuidString && open["claude:" + openClaudeID] == nil,
+              "a Claude Code tab is in the session its process records, not the one its command named",
+              open.map { $0.key + " → " + $0.value }.sorted().joined(separator: ", "))
     }
 
     /// The sidebar's Agent Sessions group: the newest five, More…, "running", Continue Latest, resume.

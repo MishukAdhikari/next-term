@@ -30,8 +30,12 @@ enum SessionStore {
                   let agent = AgentKind(program: status.program) ?? AgentKind(program: CommandClassifier.programName(status.expandedCommand))
             else { return nil }
             let line = status.expandedCommand.isEmpty ? status.command : status.command + " ; " + status.expandedCommand
-            return RunningAgent(key: tab.id.uuidString, agent: agent, directory: tab.liveDirectory, commandLine: line,
-                                startedAt: startDate(of: tab, since: since))
+            // The agent leads the pty's foreground group: its folder is its own (`cd web && codex` runs in
+            // web), and by its process Claude Code and Copilot CLI say which session it has open.
+            let pgid = tcgetpgrp(tab.view.process.childfd)
+            let folder = (pgid > 0 ? ProcessInspector.currentDirectory(of: pgid) : nil) ?? tab.currentDirectory()
+            return RunningAgent(key: tab.id.uuidString, agent: agent, directory: folder, commandLine: line,
+                                startedAt: startDate(of: tab, since: since), pid: pgid > 0 ? pgid : nil)
         }
     }
 
