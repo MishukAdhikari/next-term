@@ -213,7 +213,8 @@ extension SelfTest {
 
         // From the menu, and from the sidebar header's counts, in the project's repository.
         let noteFile = proj.appendingPathComponent("git-diff-note.txt")
-        try? "a note\nfor the Git Diff checks\n".write(to: noteFile, atomically: true, encoding: .utf8)
+        // Long enough that the header has room to show its count (it hides one too short to read).
+        try? ((1...120).map { "note \($0)" }.joined(separator: "\n") + "\n").write(to: noteFile, atomically: true, encoding: .utf8)
         _ = await wait(8) {
             c.sidebar.git.snapshot?.files["git-diff-note.txt"] == .untracked && c.sidebar.root?.children?.contains { $0.name == "git-diff-note.txt" } == true
         }
