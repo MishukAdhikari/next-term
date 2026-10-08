@@ -485,26 +485,17 @@ final class Updater {
         if alert.runModal() == .alertFirstButtonReturn { NSApp.terminate(nil) }
     }
 
-    /// Called as Next Term quits: if an update is staged, a small script waits for this process to end,
-    /// swaps the apps (putting the old one back if anything fails) and starts the new one.
+    /// Called as Next Term quits: if an update is staged, a small script (see `InstallScript`) waits for
+    /// this process to end, swaps the apps (putting the old one back if anything fails) and starts the new one.
     func installStagedUpdateOnQuit() {
         guard let staged else { return }
-        let here = Bundle.main.bundleURL.path
-        let backup = staged.newApp.deletingLastPathComponent().appendingPathComponent("Next Term (previous).app").path
-        let script = """
-        while /bin/kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do /bin/sleep 0.2; done
-        if /bin/mv \(ShellQuote.quote(here)) \(ShellQuote.quote(backup)); then
-          if /bin/mv \(ShellQuote.quote(staged.newApp.path)) \(ShellQuote.quote(here)); then
-            /bin/rm -rf \(ShellQuote.quote(backup)) \(ShellQuote.quote(staged.newApp.deletingLastPathComponent().path))
-          else
-            /bin/mv \(ShellQuote.quote(backup)) \(ShellQuote.quote(here))
-          fi
-        fi
-        /usr/bin/open \(ShellQuote.quote(here))
-        """
+        let staging = staged.newApp.deletingLastPathComponent()
+        let backup = staging.appendingPathComponent("Next Term (previous).app").path
+        let script = InstallScript(pid: ProcessInfo.processInfo.processIdentifier, app: Bundle.main.bundleURL.path,
+                                   newApp: staged.newApp.path, backup: backup, staging: staging.path, relaunch: true)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = ["-c", script]
+        process.arguments = ["-c", script.text]
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
