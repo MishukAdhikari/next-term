@@ -40,6 +40,8 @@ typeset -gi __nextterm_cfd=-1
 typeset -g __nextterm_copen= __nextterm_cpath= __nextterm_cbase= __nextterm_crbuf= __nextterm_cword=
 typeset -g __nextterm_ck= __nextterm_cid=
 typeset -g __nextterm_cisearch=
+# What ^I runs in the keymap of the last `arm`.
+typeset -g __nextterm_ctabw=
 # The tab started with zsh-autocomplete's list as you type off (the integration's NEXTTERM_COMPLETION=q): see
 # __nextterm_cquietstart.
 typeset -g __nextterm_cstartq=
@@ -104,6 +106,7 @@ __nextterm_carm() {
   local km=${1:-${KEYMAP:-main}} bound=0 compsys=0 widget= plugins=
   __nextterm_cbound $km $__nextterm_ckey && [[ $REPLY == __nextterm_ckeywidget ]] && bound=1
   __nextterm_cbound $km '^I' && widget=${REPLY:0:64}
+  __nextterm_ctabw=$widget
   (( ${+functions[compdef]} && ${+functions[_main_complete]} )) && compsys=1
   (( ${+functions[.autocomplete:async:complete]} )) && plugins+=' autocomplete'
   (( ${+widgets[fzf-tab-complete]} )) && plugins+=' fzf-tab'
@@ -231,6 +234,17 @@ __nextterm_cplain() {
   [[ $__nextterm_cword == *('$('|'`'|'<('|'>('|'=(')* ]] && return 0
   # fzf's trigger (`vim **`) is fzf's.
   [[ $__nextterm_cword == *'**' ]] && return 0
+  # So is `kill ` where fzf's ^I widget lists processes for it with no trigger (fzf 0.30 and older; later ones give
+  # it zsh's own Tab): its command is the first word with a letter or digit and no `=`, as fzf reads it.
+  if [[ $LBUFFER == *' ' && $__nextterm_ctabw == fzf-completion && ${functions[fzf-completion]-} == *'= kill '* ]]; then
+    local w
+    for w in ${(z)LBUFFER}; do
+      w=${(Q)w}
+      [[ $w == *[[:alnum:]]* && $w != *=* ]] || continue
+      [[ $w == kill ]] && return 0
+      break
+    done
+  fi
   return 1
 }
 
