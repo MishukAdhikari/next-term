@@ -211,8 +211,8 @@ import Testing
     }
 
     @Test func theChoiceThatMatchesTheSettingIsTheDefault() {
-        // AE6: added first, it sits on the right and takes Return; "Cancel" next to it, as in the
-        // save-changes alert; the other choice last, on the left.
+        // AE6: added first, it is the default, on top of the stacked buttons, and takes Return. "Cancel" is
+        // added next, as in the save-changes alert, and sits at the bottom; the other choice last, between them.
         let welcome: [String] = titles(returnKeyReopens: false)
         let reopen: [String] = titles(returnKeyReopens: true)
         let welcomeOrder: Bool = welcome == ["Don’t Reopen", "Cancel", "Reopen"]
@@ -235,6 +235,14 @@ import Testing
             #expect(Set(buttons) == Set(QuitPromptButton.allCases), "\(buttons)")
             #expect(buttons.count == 3 && buttons[1] == .cancel, "\(buttons)")
         }
+    }
+
+    @Test func theOtherChoiceTakesACommandKey() {
+        // NSAlert gives the default Return and "Cancel" ⎋. The other choice, added last, is not left to a click:
+        // "Don’t Reopen" takes ⌘D, as "Don’t Save" does in the save-changes alert, and "Reopen" ⌘R.
+        #expect(QuitPromptButton.dontReopen.commandKey == "d")
+        #expect(QuitPromptButton.reopen.commandKey == "r")
+        #expect(QuitPromptButton.cancel.commandKey == nil)
     }
 
     /// The names `paths` lists, compared outside `#expect`.
@@ -260,14 +268,18 @@ import Testing
     }
 
     @Test func theListNamesFourAtMost() {
-        #expect(QuitPolicy.projectList([app]) == "app")
-        #expect(QuitPolicy.projectList([app, api]) == "app and api")
-        #expect(QuitPolicy.projectList([app, api, "/Users/x/Code/web"]) == "app, api and web")
+        // Each name in curly quotes, as the save-changes alert names a file, so a short one reads apart from
+        // the sentence around it.
+        #expect(QuitPolicy.projectList([app]) == "“app”")
+        #expect(QuitPolicy.projectList([app, api]) == "“app” and “api”")
+        #expect(QuitPolicy.projectList([app, api, "/Users/x/Code/web"]) == "“app”, “api” and “web”")
         let four: [String] = ["a", "b", "c", "d"].map { "/Users/x/Code/" + $0 }
-        #expect(QuitPolicy.projectList(four) == "a, b, c and d")
+        #expect(QuitPolicy.projectList(four) == "“a”, “b”, “c” and “d”")
         let six: [String] = ["a", "b", "c", "d", "e", "f"].map { "/Users/x/Code/" + $0 }
-        #expect(QuitPolicy.projectList(six) == "a, b, c, d and 2 more")
+        #expect(QuitPolicy.projectList(six) == "“a”, “b”, “c”, “d” and 2 more")
         let five: [String] = ["a", "b", "c", "d", "e"].map { "/Users/x/Code/" + $0 }
-        #expect(QuitPolicy.projectList(five) == "a, b, c, d and 1 more")
+        #expect(QuitPolicy.projectList(five) == "“a”, “b”, “c”, “d” and 1 more")
+        let alike: [String] = ["/Users/x/work/app", "/Users/x/home/app"]
+        #expect(QuitPolicy.projectList(alike) == "“work/app” and “home/app”")
     }
 }

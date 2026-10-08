@@ -129,6 +129,16 @@ public enum QuitPromptButton: CaseIterable, Sendable {
         }
     }
 
+    /// Its key with ⌘ when it is the other choice, added last: NSAlert gives the default Return and "Cancel" ⎋.
+    /// "Don’t Reopen" takes ⌘D, as "Don’t Save" does in the save-changes alert.
+    public var commandKey: String? {
+        switch self {
+        case .reopen: return "r"
+        case .cancel: return nil
+        case .dontReopen: return "d"
+        }
+    }
+
     /// What pressing it answers, with "Don’t ask again" as it was. Cancel has none: the quit is cancelled.
     public func answer(dontAskAgain: Bool) -> QuitAnswer? {
         switch self {
@@ -141,8 +151,9 @@ public enum QuitPromptButton: CaseIterable, Sendable {
 
 extension QuitPolicy {
     /// The prompt's buttons in the order they are added. The choice that matches the setting comes first, so it is
-    /// the default, on the right, and takes Return: Return never changes "When Next Term opens". "Cancel" comes
-    /// next, as it does in the save-changes alert, and the other choice last.
+    /// the default, on top of the stacked buttons, and takes Return: Return never changes "When Next Term opens".
+    /// "Cancel" comes next, as it does in the save-changes alert, and sits at the bottom; the other choice last,
+    /// between them.
     public static func promptButtons(returnKeyReopens: Bool) -> [QuitPromptButton] {
         returnKeyReopens ? [.reopen, .cancel, .dontReopen] : [.dontReopen, .cancel, .reopen]
     }
@@ -169,10 +180,11 @@ extension QuitPolicy {
         }
     }
 
-    /// "app", "app and api", "app, api and web", or "a, b, c, d and 2 more": four names at most.
+    /// "“app”", "“app” and “api”", "“app”, “api” and “web”", or "“a”, “b”, “c”, “d” and 2 more": four names at most,
+    /// each in curly quotes, as the save-changes alert names a file, so a short one reads apart from the sentence.
     public static func projectList(_ paths: [String]) -> String {
         let names = projectNames(paths)
-        let shown = Array(names.prefix(4))
+        let shown: [String] = names.prefix(4).map { (name: String) -> String in "“" + name + "”" }
         let rest = names.count - shown.count
         if rest > 0 { return shown.joined(separator: ", ") + " and \(rest) more" }
         guard let last = shown.last, shown.count > 1 else { return shown.first ?? "" }

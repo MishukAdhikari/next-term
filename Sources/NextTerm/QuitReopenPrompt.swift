@@ -12,12 +12,17 @@ final class QuitReopenPrompt {
     /// For the windows' projects, each once, in order.
     init(projects: [String], returnKeyReopens: Bool) {
         buttons = QuitPolicy.promptButtons(returnKeyReopens: returnKeyReopens)
-        let one = QuitPolicy.projectNames(projects).count == 1
-        alert.messageText = one ? "Reopen this project next time?" : "Reopen these projects next time?"
+        alert.messageText = "Reopen these projects next time?"
         alert.informativeText = "Next time Next Term opens, it can reopen \(QuitPolicy.projectList(projects)), or show the "
             + "Welcome window. You can change this in Settings › General."
-        // NSAlert gives the button titled "Cancel" the ⎋ key, and ⌘. presses it too: no keys of its own.
-        for button in buttons { alert.addButton(withTitle: button.title) }
+        // NSAlert gives the first button Return, and the button titled "Cancel" the ⎋ key, which ⌘. presses too. The
+        // other choice, last, takes ⌘D or ⌘R, as "Don’t Save" takes ⌘D.
+        for button in buttons {
+            let added = alert.addButton(withTitle: button.title)
+            guard button == buttons.last, let key = button.commandKey else { continue }
+            added.keyEquivalent = key
+            added.keyEquivalentModifierMask = .command
+        }
         alert.showsSuppressionButton = true
         alert.suppressionButton?.title = "Don’t ask again"
     }
@@ -41,8 +46,8 @@ final class QuitReopenPrompt {
     static func addCheckbox(to alert: NSAlert, checked: Bool, projects: [String]) -> NSButton {
         let checkbox = NSButton(checkboxWithTitle: "Reopen the open projects next time", target: nil, action: nil)
         checkbox.state = checked ? .on : .off
-        checkbox.toolTip = "On, Next Term reopens \(QuitPolicy.projectList(projects)) next time it opens. Off, it shows "
-            + "the Welcome window. You can change this in Settings › General."
+        checkbox.toolTip = "Checked: Next Term reopens \(QuitPolicy.projectList(projects)) next time it opens. Unchecked: it "
+            + "shows the Welcome window. You can change this in Settings › General."
         checkbox.sizeToFit()
         alert.accessoryView = checkbox
         alert.showsSuppressionButton = false
