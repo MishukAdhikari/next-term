@@ -223,10 +223,13 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
 
     /// A listed file that is no longer changed leaves the list: the selection moves to its neighbour (or
     /// All files when none is left). Another scope without the file shows All files. A file asked for by
-    /// name stays.
+    /// name (⌥⌘G) stays while it was never listed: its diff then says it has no changes.
     private func updateSelection(for set: ChangeSet, scopeChanged: Bool) {
-        guard let path = selectedPath, path != askedFor, set.file(at: path) == nil else { return }
-        if scopeChanged { return selectedPath = nil }
+        guard let path = selectedPath, set.file(at: path) == nil else { return }
+        if scopeChanged {
+            if path != askedFor { selectedPath = nil }
+            return
+        }
         let old = list.orderedFiles.map(\.path)
         guard old.contains(path) else { return }
         selectedPath = ChangeTree.neighbour(of: path, in: old, keeping: Set(set.files.map(\.path)))
