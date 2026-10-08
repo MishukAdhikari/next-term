@@ -260,6 +260,48 @@ import Testing
     }
 }
 
+/// What git writes that isn't plain: names it quotes, lines that aren't UTF-8.
+@Suite struct DiffTextTests {
+    @Test func namesGitQuotesAreReadBack() {
+        let text = #"""
+        diff --git "a/quote\"name.txt" "b/quote\"name.txt"
+        index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+        --- "a/quote\"name.txt"
+        +++ "b/quote\"name.txt"
+        @@ -1 +1 @@
+        -a
+        +b
+        diff --git "a/back\\slash.txt" "b/tab\there.txt"
+        similarity index 50%
+        rename from "back\\slash.txt"
+        rename to "tab\there.txt"
+        diff --git a/plain.txt "b/caf\303\251.txt"
+        similarity index 100%
+        rename from plain.txt
+        rename to "caf\303\251.txt"
+        diff --git "a/new\nline.bin" "b/new\nline.bin"
+        new file mode 100644
+        Binary files /dev/null and "b/new\nline.bin" differ
+        diff --git a/with space.txt b/with space.txt
+        --- a/with space.txt\#t
+        +++ b/with space.txt\#t
+        @@ -1 +1 @@
+        -x
+        +y
+
+        """#
+        let files = UnifiedDiff.parse(text)
+        #expect(files.map(\.path) == ["quote\"name.txt", "tab\there.txt", "café.txt", "new\nline.bin", "with space.txt"])
+        #expect(files[0].oldPath == "quote\"name.txt" && files[0].hunks.count == 1)
+        #expect(files[1].oldPath == #"back\slash.txt"# && files[1].isRename)
+        #expect(files[2].oldPath == "plain.txt")
+        #expect(files[3].isNew && files[3].isBinary)
+        #expect(files[4].oldPath == "with space.txt")
+        // The header stays as git wrote it, so a hunk's patch still applies.
+        #expect(UnifiedDiff.patch(for: files[0].hunks[0], in: files[0]).hasPrefix("diff --git \"a/quote\\\"name.txt\""))
+    }
+}
+
 /// The scopes on a real repository: a branch with commits since main, and uncommitted work on top.
 @Suite struct ChangeScopeTests {
     func run(_ git: String, _ root: URL, _ args: String...) -> String {
