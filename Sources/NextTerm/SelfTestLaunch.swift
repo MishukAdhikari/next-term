@@ -271,6 +271,13 @@ extension SelfTest {
         check(welcome && app.controllers.isEmpty && !welcomeHandled,
               "a Dock click with every window closed shows the Welcome window, and opens no project",
               "Welcome \(welcome), windows \(app.controllers.count), AppKit's reopen \(welcomeHandled)")
+        // Clear Menu while it shows: its list goes too. The recent project is put back for the next check.
+        let listed: [String] = app.welcomeController?.shownProjects ?? []
+        app.clearRecentProjects(nil)
+        let afterClear: [String] = app.welcomeController?.shownProjects ?? ["no Welcome window"]
+        check(listed == [folder] && afterClear.isEmpty, "Clear Menu under the Welcome window empties its list too",
+              "listed \(listed), after Clear Menu \(afterClear)")
+        app.setRecentProjects([folder])
 
         // "Reopen the projects that were open": the most recent project.
         app.welcomeController?.window?.close()

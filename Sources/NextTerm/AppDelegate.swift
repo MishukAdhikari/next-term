@@ -741,7 +741,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private var recent: RecentProjects {
         get { RecentProjects(UserDefaults.standard.stringArray(forKey: "recentProjects") ?? []) }
-        set { UserDefaults.standard.set(newValue.paths, forKey: "recentProjects") }
+        set {
+            UserDefaults.standard.set(newValue.paths, forKey: "recentProjects")
+            // A folder dropped as missing, Clear Menu, or an import under the Welcome window: it lists them as they are now.
+            if welcome?.window?.isVisible == true { welcome?.reloadProjects() }
+        }
     }
 
     var recentProjects: [String] { recent.existing() }
