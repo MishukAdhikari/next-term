@@ -17,6 +17,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// More are in the sheet behind Connect to Server…: the projects keep the room.
     static let serverLimit = 3
     private let projectsTable = NSTableView()
+    /// Open…, the panel to choose a folder: Return's button while no project is listed (`updateReturnKey`).
+    private let openPanelButton = NSButton(title: "Open…", target: nil, action: nil)
     private let sessionsTable = NSTableView()
     private let projectName = NSTextField(labelWithString: "")
     private let projectPath = NSTextField(labelWithString: "")
@@ -93,7 +95,9 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         let projectsLabel = Self.heading("Projects")
         configure(projectsTable, rowHeight: 44, action: #selector(projectClicked), double: #selector(openSelectedProject))
         let projectsScroll = Self.scroll(projectsTable)
-        let open = NSButton(title: "Open…", target: NSApp.delegate, action: #selector(AppDelegate.openProjectPanel(_:)))
+        let open = openPanelButton
+        open.target = NSApp.delegate
+        open.action = #selector(AppDelegate.openProjectPanel(_:))
         open.bezelStyle = .rounded
         openTip = ShortcutToolTip(open, "Open a folder as a project", #selector(AppDelegate.openProjectPanel(_:)))
         let terminal = NSButton(title: "New Terminal", target: self, action: #selector(newTerminal))
@@ -119,7 +123,6 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         projectPath.textColor = Theme.textDim
         Typography.singleLine(projectPath, truncation: .byTruncatingMiddle)
         openButton.bezelStyle = .rounded
-        openButton.keyEquivalent = "\r"
         openButton.target = self
         openButton.action = #selector(openSelectedProject)
         sessionsTitle.attributedStringValue = Self.headingText("Agent sessions")
@@ -269,6 +272,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         let open = AppDelegate.shared.controllers.compactMap(\.project)
         var seen = Set<String>()
         allProjects = (AppDelegate.shared.recentProjects + open).filter { seen.insert($0).inserted }
+        updateReturnKey()
         DispatchQueue.global(qos: .userInitiated).async { [allProjects] in
             var found: [String: String] = [:]
             for path in allProjects { found[path] = SessionStore.branch(of: path) }
@@ -279,6 +283,21 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
                 self.reselect()
             }
         }
+        applySearch()
+    }
+
+    /// Return opens the selected project, or with no project listed yet, the Open… panel. It never resumes a session: a
+    /// double-click on it or the Resume button does that.
+    private func updateReturnKey() {
+        let none = allProjects.isEmpty
+        openPanelButton.keyEquivalent = none ? "\r" : ""
+        openButton.keyEquivalent = none ? "" : "\r"
+    }
+
+    /// For the self-test: these projects listed instead of the recent and open ones.
+    func list(projects paths: [String]) {
+        allProjects = paths
+        updateReturnKey()
         applySearch()
     }
 
@@ -449,8 +468,6 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             }
             empty.stringValue = text
         }
-        resumeButton.keyEquivalent = none ? "" : "\r"
-        openButton.keyEquivalent = none ? "\r" : ""
         updateSessionButtons()
     }
 
