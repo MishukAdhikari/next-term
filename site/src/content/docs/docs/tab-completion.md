@@ -39,7 +39,7 @@ The list also closes when you click elsewhere, scroll, switch tab, pane or app, 
 
 The list opens only at a zsh prompt Next Term’s hook is ready at. <kbd>⇥</kbd> goes to the shell or program untouched:
 
-- while a program runs: Claude Code, Codex and every other agent get <kbd>⇥</kbd> themselves;
+- while a program runs: Claude Code, Codex and every other agent get <kbd>⇥</kbd> themselves, and so does a program a key binding starts, such as fzf’s <kbd>⌃T</kbd>;
 - in full-screen programs such as `less` and `vim`;
 - while an input method is composing text;
 - in vi command mode, during incremental search and in zsh’s own menu selection;
