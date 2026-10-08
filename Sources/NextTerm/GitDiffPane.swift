@@ -688,6 +688,15 @@ extension TerminalWindowController {
     }
 }
 
+extension DiffPane {
+    /// A file's diff under All changes compares with a commit, where the branch parted from its base (given
+    /// as the label): said so, "where this branch parted from main (1a2b3c4)", not as main's own version.
+    var partingPoint: String? {
+        guard let label = refLabel, let commit = workingTreeBranch else { return nil }
+        return "where this branch parted from \(label) (\(commit.prefix(7)))"
+    }
+}
+
 /// The project sidebar header's +N −M: a click (or VoiceOver's press) shows the changes in the Git Diff tab.
 final class HeaderCountsLabel: NSTextField {
     var onClick: (() -> Void)? {

@@ -65,7 +65,7 @@ Yes. iTerm2 is free software under GPL v2, supported by donations. Next Term is 
 ## Read more
 
 - [Agent status in every tab](/docs/agent-status/)
-- [Code editor](/docs/editor/) and [Side-by-side diffs](/docs/diffs/)
+- [Code editor](/docs/editor/) and [Diffs and Git Diff](/docs/diffs/)
 - [The nxtrm command](/docs/command-line/)
 - [Orchestrate agents (MCP)](/docs/orchestration/)
 - [Next Term compared with other tools](/compare/)

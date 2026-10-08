@@ -119,6 +119,7 @@ final class DiffPane: NSView {
         }
         if let branch = refName {
             let from = renamedFrom.map { " (\($0) there)" } ?? ""
+            if let point = partingPoint { return "\(path): \(renamedFrom ?? "the file") \(point) on the left, the file on disk on the right" }
             return "\(path): \(branch)’s version\(from) on the left, the file on disk on the right"
         }
         return "Changes in \(path) — " + ["working tree against HEAD", "working tree against the index (unstaged)", "index against HEAD (staged)"][Self.bases.firstIndex(of: base) ?? 0]
@@ -397,7 +398,8 @@ final class DiffPane: NSView {
                 DispatchQueue.main.async {
                     guard let self, token == self.generation else { return }
                     self.stamps = stamps
-                    let gone = "Git could not read \(BranchCompare.displayName(branch)): it may have been deleted."
+                    let gone = self.partingPoint.map { "Git could not read the file \($0)." }
+                        ?? "Git could not read \(BranchCompare.displayName(branch)): it may have been deleted."
                     self.show(diff, message: diff == nil ? gone : nil, token: token)
                 }
             }
@@ -461,7 +463,8 @@ final class DiffPane: NSView {
         } else if empty, let branch = refName {
             // Renamed since: the same as the file under its name there.
             let there = renamedFrom.map { "\($0) on" } ?? "on"
-            message.stringValue = "The file on disk is the same as \(there) \(branch)."
+            message.stringValue = partingPoint.map { "The file on disk is as \(renamedFrom ?? "it") was \($0)." }
+                ?? "The file on disk is the same as \(there) \(branch)."
         } else if empty {
             message.stringValue = ["No changes against the last commit.", "No unstaged changes.", "No staged changes."][Self.bases.firstIndex(of: base) ?? 0]
         }

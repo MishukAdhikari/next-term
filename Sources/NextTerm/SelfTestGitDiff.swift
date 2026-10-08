@@ -210,6 +210,9 @@ extension SelfTest {
         tab.select(path: "docs/readme.md")
         check(await wait(6) { c.editorArea.activeDiff?.sideTexts.1.contains("More.") == true && c.editorArea.activeDiff?.title == "readme.md ↔ main" },
               "selecting a file shows its side-by-side diff since main", c.editorArea.activeDiff?.title ?? "no diff")
+        let parted = c.editorArea.activeDiff?.tooltip ?? ""
+        check(parted.contains("where this branch parted from main (\(String(run("merge-base", "HEAD", "main").prefix(7))))"),
+              "its tooltip names where the branch parted from main, not main's version", parted)
 
         // A commit: its files only, and a file's diff as the commit made it.
         if let row = list.scopeRows.firstIndex(where: { if case let .commit(commit) = $0 { return commit.sha == featureCommit }; return false }) {
