@@ -479,6 +479,14 @@ public struct SkillRow: Equatable, Sendable {
         return load
     }
 
+    /// The `enabledPlugins` key ("<plugin>@skills-dir", set to false) that turns off the plugin of the copy
+    /// Claude Code loads, so Claude Code loads nothing from it (hand check H4); nil when none does.
+    public var claudePluginOffKey: String? {
+        guard let keys = offKeys[.claudeCode], let plugin = rawLoad(for: .claudeCode).used?.claudePluginName else { return nil }
+        let key = SkillClaudeSettings.key(plugin)
+        return keys.contains(key) ? key : nil
+    }
+
     func rawLoad(for agent: SkillAgent) -> Load {
         let readable = copies.filter { !$0.broken && $0.root.readers.contains(agent) }
         switch agent {

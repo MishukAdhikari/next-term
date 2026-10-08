@@ -390,6 +390,20 @@ import Testing
         #expect(try !row("writing-helper").load(for: .claudeCode).switchedOff)
     }
 
+    /// AE13: Settings › Skills names the plugin key that turns Claude Code's load off; a skill switched off
+    /// by its name in skillOverrides has none.
+    @Test func thePluginKeyThatTurnsItOffIsNamed() throws {
+        try skill(".agents/skills", "writing-helper", plugin: #"{"name": "writing-helper"}"#)
+        try link("writing-helper", to: "writing-helper")
+        try settings(#"{"enabledPlugins": {"writing-helper@skills-dir": false}}"#)
+        #expect(try row("writing-helper").claudePluginOffKey == "writing-helper@skills-dir")
+        try settings(#"{"skillOverrides": {"writing-helper": "off"}}"#)
+        let byName = try row("writing-helper")
+        #expect(byName.load(for: .claudeCode).switchedOff && byName.claudePluginOffKey == nil)
+        try settings(#"{"enabledPlugins": {"writing-helper@skills-dir": true}}"#)
+        #expect(try row("writing-helper").claudePluginOffKey == nil)
+    }
+
     /// The key follows the manifest's name (H2), and, for a manifest without a usable one, the link's name.
     @Test func theKeyFollowsTheManifestsNameElseTheLinksName() throws {
         try skill(".agents/skills", "probe", plugin: #"{"name": "probe-named"}"#)

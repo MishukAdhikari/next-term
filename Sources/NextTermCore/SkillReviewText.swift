@@ -249,6 +249,38 @@ public enum SkillReviewText {
         return "\(linked). It starts the programs below every time Claude Code opens, without asking you."
     }
 
+    // MARK: Settings › Skills
+
+    /// A question Settings › Skills asks before it acts: its title, its text, and the button that goes ahead.
+    public struct Question: Equatable, Sendable {
+        public let title: String
+        public let text: String
+        public let button: String
+    }
+
+    /// Link's last line, unless the user's key already keeps the plugin off.
+    public static let linkClosing = "Next Term changes none of Claude Code's settings: to keep an added plugin off, turn it off in Claude Code's /plugin."
+
+    /// What Link asks before it links a plugin folder for Claude Code (R10): the lead line, the plugins its
+    /// name meets, then what it would start. "Add with Its Programs" when it starts something (or may),
+    /// "Add as Plugin" when only a clash asks.
+    public static func linkQuestion(_ link: SkillInstall.PluginLink) -> Question {
+        var lines = [lead(link.plugin, start: link.start)]
+        for clash in link.clashes { lines.append((clash.warning ? "⚠︎ " : "• ") + clash.text) }
+        let starts = startsItems(link.plugin)
+        if !starts.isEmpty {
+            lines.append("It would start:")
+            lines += starts.map { "• " + $0 }
+        }
+        if link.start != .offByKey { lines.append(linkClosing) }
+        let title = "Add " + quoted(link.skill) + " to Claude Code?"
+        let button = link.plugin.startsPrograms ? "Add with Its Programs" : "Add as Plugin"
+        return Question(title: title, text: lines.joined(separator: "\n"), button: button)
+    }
+
+    /// Unify's step when the copy it keeps is a Claude Code plugin left out of Claude Code.
+    public static let unifyLeftOut = "Claude Code loses this skill: the copy kept is also a Claude Code plugin, left out of Claude Code"
+
     // MARK: words
 
     /// " from a and b", or nothing for no file.

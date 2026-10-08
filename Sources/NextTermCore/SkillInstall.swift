@@ -233,6 +233,70 @@ public enum SkillInstall {
         defaultClaudeLink(package: package, installed: installed, keptLink: plan.keptLink != nil, facts: facts, clashes: plan.clashes)
     }
 
+    // MARK: Settings › Skills' Link and Unify
+
+    /// A skill folder that is also a Claude Code plugin, as Settings › Skills' Link and Unify ask about
+    /// Claude Code's link to it (R10): the plugin, how it would start, the plugins its name meets, and the
+    /// review's default. Read from the disk; nothing is written for it but the link itself.
+    public struct PluginLink: Equatable, Sendable {
+        public let skill: String
+        public let plugin: SkillPackage.ClaudePlugin
+        public let start: SkillPackage.Start
+        public let clashes: [Clash]
+        /// What the review would offer first (defaultClaudeLink).
+        public let preset: ClaudeLink
+
+        /// Link asks first: the plugin runs something (or may: anything unread counts), or its name meets
+        /// another plugin. One that runs nothing and meets none is linked as before, with no question.
+        public var asks: Bool { !plugin.runsNothing || !clashes.isEmpty }
+    }
+
+    /// Some copies' packages, by real path, and Claude Code's plugins for their keys: what Link and Unify read
+    /// off the main thread before they ask. Read only.
+    public struct PluginFacts: Equatable, Sendable {
+        public var packages: [String: SkillPackage] = [:]
+        public var facts = SkillClaudeSettings.Snapshot()
+
+        public init() {}
+    }
+
+    /// Reads each copy's folder once (by its real path, under its entry's name, as Claude Code keys a manifest
+    /// without a usable name), and the keys of the plugins found. Copies that are no package are left out.
+    public static func pluginFacts(_ copies: [SkillCopy], home: String) -> PluginFacts {
+        var read = PluginFacts()
+        var keys: [String] = []
+        var seen = Set<String>()
+        for copy in copies where !copy.broken && seen.insert(copy.realPath).inserted {
+            guard let package = SkillPackage.read(folder: copy.realPath, folderName: copy.name, home: home) else { continue }
+            read.packages[copy.realPath] = package
+            if let plugin = package.claude { keys.append(SkillClaudeSettings.key(plugin.name)) }
+        }
+        read.facts = SkillClaudeSettings.snapshot(home: home, keys: keys)
+        return read
+    }
+
+    /// Claude Code's link to `skill` from `copy`, when that copy is also a Claude Code plugin (nil otherwise).
+    /// `loaded`: the package of the copy Claude Code loads now (Unify). When it is the same plugin, by its
+    /// key, with the same parts, the default keeps Claude Code loading it, as an update keeps its link.
+    public static func pluginLink(skill: String, copy: SkillCopy, read: PluginFacts, inventory: SkillInventory,
+                                  loaded: SkillPackage? = nil) -> PluginLink? {
+        guard let package = read.packages[copy.realPath], let plugin = package.claude else { return nil }
+        let clashes = Self.clashes(plugin: plugin, skill: skill, facts: read.facts, inventory: inventory)
+        let same = loaded?.claude?.name == plugin.name
+        let preset = defaultClaudeLink(package: package, installed: same ? loaded : nil, keptLink: same, facts: read.facts, clashes: clashes)
+        let start = plugin.start(key: read.facts.value(for: plugin.name))
+        return PluginLink(skill: skill, plugin: plugin, start: start, clashes: clashes, preset: preset)
+    }
+
+    /// What Settings › Skills' Link would link for `skill`: its shared copy, read now. Nil for a plain folder,
+    /// or none. Read again in the change's own turn, so a folder that changed since the question links nothing.
+    public static func pluginLink(skill: String, inventory: SkillInventory) -> PluginLink? {
+        let row = inventory.rows.first { $0.name == skill }
+        guard let shared = row?.copies.first(where: { $0.root.kind == .shared && !$0.broken }) else { return nil }
+        let read = pluginFacts([shared], home: inventory.home)
+        return pluginLink(skill: skill, copy: shared, read: read, inventory: inventory)
+    }
+
     // MARK: clashes
 
     /// The plugins `plugin` would meet in Claude Code: synced from claude.ai, installed from a marketplace,
@@ -444,5 +508,19 @@ public enum SkillInstall {
         let stays = one ? "It stays there, because you may use it for other things. Remove it there if you don't."
             : "They stay there, because you may use them for other things. Remove them there if you don't."
         return "Codex may have added \(servers) \(SkillPackage.list(named)) for this skill, in ~/.codex/config.toml. " + stays
+    }
+}
+
+extension SkillUnify {
+    /// What Unify asks about Claude Code's link when the copy it keeps, `winner`, is also a Claude Code plugin
+    /// and Claude Code had the skill in a folder of its own (otherwise Unify makes no link, and nil). `read`:
+    /// the row's copies (SkillInstall.pluginFacts). The default keeps Claude Code loading the plugin when the
+    /// copy it loads now is that plugin with the same parts; otherwise it is the review's.
+    public static func pluginLink(_ row: SkillRow, winner: SkillCopy, in inventory: SkillInventory,
+                                  read: SkillInstall.PluginFacts) -> SkillInstall.PluginLink? {
+        guard inventory.root(.claude) != nil, row.copies.contains(where: { $0.root.kind == .claude }) else { return nil }
+        let load = row.load(for: .claudeCode)
+        let loaded = load.switchedOff ? nil : load.used.flatMap { read.packages[$0.realPath] }
+        return SkillInstall.pluginLink(skill: row.name, copy: winner, read: read, inventory: inventory, loaded: loaded)
     }
 }

@@ -581,3 +581,180 @@ import Testing
         #expect(plan(.link, package: package).linksClaude)
     }
 }
+
+/// Settings › Skills' Link and Unify for a skill folder that is also a Claude Code plugin (R10): what they
+/// ask, and the default Unify's popup offers. Read only: Claude Code's files are never written.
+@Suite struct SkillPluginLinkTests {
+    let home: String
+    init() throws {
+        home = FileManager.default.temporaryDirectory.appendingPathComponent("nt-plugin-link-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: home + "/.claude/skills", withIntermediateDirectories: true)
+    }
+
+    static let server = SkillClaudeLinkTests.server
+    static let hooks = SkillClaudeLinkTests.hooks
+
+    func write(_ path: String, _ text: String) throws {
+        let full = (home as NSString).appendingPathComponent(path)
+        try FileManager.default.createDirectory(atPath: (full as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        try text.write(toFile: full, atomically: true, encoding: .utf8)
+    }
+
+    /// A skill folder `name` in `root`, a Claude Code plugin named `plugin` unless nil, with `files` beside SKILL.md.
+    func skill(_ root: String, name: String = "writing-helper", plugin: String? = "writing-helper", body: String = "Body",
+               _ files: [String: String] = [:]) throws {
+        let folder = root + "/" + name
+        try write(folder + "/SKILL.md", "---\nname: \(name)\ndescription: The \(name) skill.\n---\n\(body)\n")
+        if let plugin { try write(folder + "/.claude-plugin/plugin.json", "{\"name\": \"\(plugin)\"}") }
+        for (path, text) in files { try write(folder + "/" + path, text) }
+    }
+
+    func link(_ name: String = "writing-helper") throws {
+        try FileManager.default.createSymbolicLink(atPath: home + "/.claude/skills/" + name, withDestinationPath: "../../.agents/skills/" + name)
+    }
+
+    /// What Link asks about the shared copy of writing-helper now.
+    func question() -> SkillInstall.PluginLink? {
+        SkillInstall.pluginLink(skill: "writing-helper", inventory: SkillInventory.scan(home: home))
+    }
+
+    func row(_ inventory: SkillInventory) throws -> SkillRow {
+        try #require(inventory.rows.first { $0.name == "writing-helper" })
+    }
+
+    func makesLink(_ steps: [SkillStep]) -> Bool { steps.contains { if case .link = $0 { return true }; return false } }
+
+    // MARK: Link
+
+    /// R10: a plugin that runs something is asked about, with how it starts and the review's default.
+    @Test func linkAsksAboutAPluginThatRunsSomething() throws {
+        try skill(".agents/skills", [".mcp.json": Self.server, "hooks/hooks.json": Self.hooks])
+        let asked = try #require(question())
+        #expect(asked.asks && asked.skill == "writing-helper" && asked.plugin.name == "writing-helper" && asked.plugin.serverCount == 1)
+        #expect(asked.start == .on && asked.clashes.isEmpty && asked.preset == .skip)
+    }
+
+    /// A plain folder, or a plugin that runs nothing and meets no other plugin, is linked as before.
+    @Test func aPlainFolderOrAQuietPluginIsNotAsked() throws {
+        try skill(".agents/skills", plugin: nil)
+        #expect(question() == nil)
+        try write(".agents/skills/writing-helper/.claude-plugin/plugin.json", #"{"name": "writing-helper", "skills": ["./"]}"#)
+        let quiet = try #require(question())
+        #expect(!quiet.asks && quiet.preset == .link)
+        // No shared copy: nothing to link, nothing to ask.
+        #expect(SkillInstall.pluginLink(skill: "other", inventory: SkillInventory.scan(home: home)) == nil)
+    }
+
+    /// A clash makes even a plugin that runs nothing ask: another folder Claude Code reads with that plugin
+    /// name, or a plugin synced from claude.ai.
+    @Test func aClashMakesLinkAsk() throws {
+        try skill(".agents/skills")
+        try skill(".claude/skills", name: "other-helper", plugin: "Writing-Helper")
+        let asked = try #require(question())
+        #expect(asked.asks && asked.plugin.runsNothing && asked.clashes.map(\.kind) == [.skillsDir] && asked.preset == .skip)
+        try FileManager.default.removeItem(atPath: home + "/.claude/skills/other-helper")
+        try write(".claude/plugins/synced/user/writing-helper/.claude-plugin/plugin.json", #"{"name": "writing-helper"}"#)
+        let synced = try #require(question())
+        #expect(synced.asks && synced.clashes.map(\.kind) == [.synced])
+    }
+
+    /// The user's key is read, never written: turned off in /plugin, the default links it (Claude Code loads
+    /// nothing from it), and Link still asks, saying so.
+    @Test func theUsersKeyIsReadNotWritten() throws {
+        try skill(".agents/skills", [".mcp.json": Self.server])
+        let settings = "{\n  \"enabledPlugins\": {\"writing-helper@skills-dir\": false}\n}\n"
+        try write(".claude/settings.json", settings)
+        let asked = try #require(question())
+        #expect(asked.start == .offByKey && asked.preset == .link && asked.asks)
+        #expect(try String(contentsOfFile: home + "/.claude/settings.json", encoding: .utf8) == settings)
+    }
+
+    /// Read again after the folder changed, the question is another one: Link then links nothing.
+    @Test func aChangedFolderIsAnotherQuestion() throws {
+        try skill(".agents/skills", plugin: nil)
+        #expect(question() == nil)
+        try write(".agents/skills/writing-helper/.claude-plugin/plugin.json", #"{"name": "writing-helper"}"#)
+        let quiet = question()
+        #expect(quiet != nil)
+        try write(".agents/skills/writing-helper/hooks/hooks.json", Self.hooks)
+        #expect(question() != quiet)
+    }
+
+    // MARK: Unify
+
+    /// AE14: a hand-made copy in ~/.claude/skills without .claude-plugin, and the plugin folder in the
+    /// shared one. Keeping the shared copy asks, leaving it out by default, and Unify follows the choice;
+    /// keeping Claude Code's own copy asks nothing.
+    @Test func unifyAsksWhenTheKeptCopyIsAPlugin() throws {
+        try skill(".agents/skills", [".mcp.json": Self.server, "hooks/hooks.json": Self.hooks])
+        try skill(".claude/skills", plugin: nil, body: "hand-made")
+        let inventory = SkillInventory.scan(home: home)
+        let row = try row(inventory)
+        let read = SkillInstall.pluginFacts(row.distinctCopies, home: home)
+        let shared = try #require(row.copies.first { $0.root.kind == .shared })
+        let mine = try #require(row.copies.first { $0.root.kind == .claude })
+        let asked = try #require(SkillUnify.pluginLink(row, winner: shared, in: inventory, read: read))
+        #expect(asked.preset == .skip && asked.plugin.serverCount == 1 && asked.start == .on)
+        #expect(SkillUnify.pluginLink(row, winner: mine, in: inventory, read: read) == nil)
+        let claude = home + "/.claude/skills/writing-helper"
+        let left = SkillUnify.plan(row, winner: shared, in: inventory, claude: asked.preset)
+        #expect(left.contains(.trash(claude)) && !makesLink(left))
+        let added = SkillUnify.plan(row, winner: shared, in: inventory, claude: .link)
+        #expect(added.contains(.link(at: claude, to: home + "/.agents/skills/writing-helper")))
+    }
+
+    /// Claude Code already loads the same plugin with the same parts: Unify keeps it there by default, as an
+    /// update keeps its link. Another plugin name (another key) or new parts are not the same.
+    @Test func unifyKeepsClaudeCodeOnTheSamePlugin() throws {
+        try skill(".agents/skills", body: "shared", [".mcp.json": Self.server])
+        try skill(".claude/skills", body: "Claude Code's", [".mcp.json": Self.server])
+        func preset() throws -> SkillInstall.ClaudeLink? {
+            let inventory = SkillInventory.scan(home: home)
+            let row = try row(inventory)
+            let shared = try #require(row.copies.first { $0.root.kind == .shared })
+            let read = SkillInstall.pluginFacts(row.distinctCopies, home: home)
+            return SkillUnify.pluginLink(row, winner: shared, in: inventory, read: read)?.preset
+        }
+        #expect(try preset() == .link)
+        try write(".claude/skills/writing-helper/.claude-plugin/plugin.json", #"{"name": "other-name"}"#)
+        #expect(try preset() == .skip)
+        try write(".claude/skills/writing-helper/.claude-plugin/plugin.json", #"{"name": "writing-helper"}"#)
+        try write(".agents/skills/writing-helper/hooks/hooks.json", Self.hooks)
+        #expect(try preset() == .skip)
+    }
+
+    /// Already linked to the shared winner: the same copy, so the link stays by default.
+    @Test func unifyKeepsAnExistingLinkToTheKeptCopy() throws {
+        try skill(".agents/skills", [".mcp.json": Self.server])
+        try link()
+        try skill(".commandcode/skills", plugin: nil, body: "old")
+        let inventory = SkillInventory.scan(home: home)
+        let row = try row(inventory)
+        let shared = try #require(row.copies.first { $0.root.kind == .shared })
+        let read = SkillInstall.pluginFacts(row.distinctCopies, home: home)
+        #expect(SkillUnify.pluginLink(row, winner: shared, in: inventory, read: read)?.preset == .link)
+    }
+
+    /// Claude Code without the skill: Unify makes no link for it, so there is nothing to ask.
+    @Test func unifyAsksNothingWhenClaudeCodeDidNotHaveIt() throws {
+        try skill(".agents/skills", [".mcp.json": Self.server])
+        try skill(".codex/skills", plugin: nil, body: "codex")
+        let inventory = SkillInventory.scan(home: home)
+        let row = try row(inventory)
+        let shared = try #require(row.copies.first { $0.root.kind == .shared })
+        #expect(SkillUnify.pluginLink(row, winner: shared, in: inventory, read: SkillInstall.pluginFacts(row.distinctCopies, home: home)) == nil)
+    }
+
+    /// Each folder is read once, by its real path, with its plugin's key; a plain one has no package.
+    @Test func pluginFactsReadEachFolderOnce() throws {
+        try skill(".agents/skills", [".mcp.json": Self.server])
+        try link()
+        try skill(".commandcode/skills", plugin: nil)
+        try write(".claude/settings.json", #"{"enabledPlugins": {"writing-helper@skills-dir": true, "other@skills-dir": false}}"#)
+        let row = try row(SkillInventory.scan(home: home))
+        let read = SkillInstall.pluginFacts(row.copies, home: home)
+        let shared = try #require(row.copies.first { $0.root.kind == .shared })
+        #expect(read.packages.count == 1 && read.packages[shared.realPath]?.claude?.name == "writing-helper")
+        #expect(read.facts.values == ["writing-helper@skills-dir": true])
+    }
+}

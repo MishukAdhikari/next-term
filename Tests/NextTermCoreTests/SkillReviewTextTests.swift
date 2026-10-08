@@ -207,6 +207,45 @@ import Testing
             == "demo: linked as a plain skill. Claude Code doesn't load its plugin, because its plugin.json has no usable name (as of October 2026).")
     }
 
+    /// R10: Settings › Skills' Link asks with the lead line, then what the plugin would start.
+    @Test func theLinkQuestionSaysWhatItStarts() throws {
+        let plugin = try #require(try SkillReviewTextPluginTests.writingHelper().package?.claude)
+        let link = SkillInstall.PluginLink(skill: "writing-helper", plugin: plugin, start: .on, clashes: [], preset: .skip)
+        let question = SkillReviewText.linkQuestion(link)
+        #expect(question.title == "Add “writing-helper” to Claude Code?" && question.button == "Add with Its Programs")
+        #expect(question.text.components(separatedBy: "\n") == [
+            "Also a Claude Code plugin, “writing-helper” (.claude-plugin/plugin.json). " + SkillReviewTextPluginTests.adds + " It starts on.",
+            "It would start:",
+            "• An MCP server, a program or web service that gives the agent tools, from .mcp.json: “helper” runs the program `node server.js`.",
+            "• A hook, a command that runs on Claude Code events, from hooks/hooks.json: PostToolUse (Edit) runs `./fmt.sh`.",
+            SkillReviewText.linkClosing,
+        ])
+        // Turned off in /plugin: the lead says so, and the closing line is not repeated.
+        let off = SkillReviewText.linkQuestion(SkillInstall.PluginLink(skill: "writing-helper", plugin: plugin, start: .offByKey, clashes: [], preset: .link))
+        #expect(off.text.contains("so Claude Code loads nothing from it, not even its skill") && !off.text.contains(SkillReviewText.linkClosing))
+    }
+
+    /// A plugin that runs nothing is asked about only for a clash: the clash is named, and it is added as a plugin.
+    @Test func aClashAloneAsksToAddItAsAPlugin() throws {
+        let plugin = try #require(try SkillFixture("writing-helper").claudeManifest("writing-helper").package?.claude)
+        let synced = SkillInstall.Clash(kind: .synced, name: "writing-helper", text: "You have a plugin named “writing-helper” from claude.ai.")
+        let question = SkillReviewText.linkQuestion(SkillInstall.PluginLink(skill: "writing-helper", plugin: plugin, start: .on, clashes: [synced],
+                                                                           preset: .skip))
+        #expect(question.button == "Add as Plugin")
+        #expect(question.text.components(separatedBy: "\n") == [
+            "Also a Claude Code plugin, “writing-helper” (.claude-plugin/plugin.json). It declares nothing that starts by itself.",
+            "⚠︎ You have a plugin named “writing-helper” from claude.ai.",
+            SkillReviewText.linkClosing,
+        ])
+    }
+
+    /// Names from the folder stay on one line in the title.
+    @Test func theLinkQuestionsTitleStaysOnOneLine() throws {
+        let plugin = try #require(try SkillFixture().claudeManifest().package?.claude)
+        let question = SkillReviewText.linkQuestion(SkillInstall.PluginLink(skill: "a\nb", plugin: plugin, start: .on, clashes: [], preset: .link))
+        #expect(question.title == "Add “a⟦U+000A⟧b” to Claude Code?")
+    }
+
     @Test func thePopupItemsFollowTheCountAndTheLink() {
         #expect(SkillReviewText.choiceItems(count: 1, removesLink: false) == ["Leave it out of Claude Code", "Add it to Claude Code as a plugin"])
         #expect(SkillReviewText.choiceItems(count: 1, removesLink: true) == ["Remove it from Claude Code", "Add it to Claude Code as a plugin"])
