@@ -135,7 +135,7 @@ public enum AgentPrompt {
     /// The same on one line, for an agent that takes no pastes (a line break would send the prompt): the
     /// words joined by single spaces, never starting with a command marker.
     public static func quoteOnOneLine(_ text: String) -> String {
-        let words = sanitize(text).split { $0 == " " || $0 == "\n" || $0 == "\t" }
+        let words = sanitize(text).split(whereSeparator: \.isWhitespace)
         return defuseLeadingCommand(words.joined(separator: " "))
     }
 

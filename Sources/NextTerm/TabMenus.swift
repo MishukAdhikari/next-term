@@ -354,9 +354,11 @@ extension TerminalWindowController {
         case #selector(duplicateTab(_:)):
             return activeGroup != nil
         case #selector(closeOtherTabs(_:)):
-            return editing ? editorArea.panes.count > 1 : groups.count > 1 && !terminalRailed
+            if editing { return editorArea.panes.count > 1 }
+            return groups.count > 1 && !terminalRailed
         case #selector(closeTabsToTheRight(_:)):
-            return editing ? editorArea.activeIndex < editorArea.panes.count - 1 : activeIndex < groups.count - 1 && !terminalRailed
+            if editing { return editorArea.activeIndex + 1 < editorArea.panes.count }
+            return activeIndex + 1 < groups.count && !terminalRailed
         case #selector(revealInFinder(_:)), #selector(copyFilePath(_:)), #selector(copyRelativeFilePath(_:)):
             return editorArea.activePath != nil
         default:

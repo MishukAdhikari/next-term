@@ -348,8 +348,9 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// The saved hosts, the one connected to last first. With none, only Connect to Server… shows.
     private func reloadServers() {
         let last = UserDefaults.standard.string(forKey: "lastRemoteHost")
-        let hosts = RemoteHosts.all
-        servers = Array((hosts.filter { $0.id == last } + hosts.filter { $0.id != last }).prefix(Self.serverLimit))
+        var hosts = RemoteHosts.all
+        if let index = hosts.firstIndex(where: { $0.id == last }) { hosts.insert(hosts.remove(at: index), at: 0) }
+        servers = Array(hosts.prefix(Self.serverLimit))
         serverList.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for (index, host) in servers.enumerated() {
             let entry = ServerEntryButton(host: host)

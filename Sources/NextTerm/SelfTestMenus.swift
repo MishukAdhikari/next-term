@@ -191,8 +191,9 @@ extension SelfTest {
         let alone = w.terminalTabMenu(at: 0) ?? NSMenu()
         check(titles(alone) == ["Rename…", "Split Right", "Split Down", "Duplicate Tab", "Close Tab", "Close Other Tabs", "Close Tabs to the Right"],
               "menus: a terminal tab's menu", titles(alone).joined(separator: ", "))
-        check(alone.items.first { $0.title == "Close Other Tabs" }?.isEnabled == false && alone.items.first { $0.title == "Close Tabs to the Right" }?.isEnabled == false,
-              "menus: with one tab there are no others to close")
+        let others = alone.items.first { $0.title == "Close Other Tabs" }
+        let right = alone.items.first { $0.title == "Close Tabs to the Right" }
+        check(others?.isEnabled == false && right?.isEnabled == false, "menus: with one tab there are no others to close")
         check(w.tabBar.menu(forTabAt: 0) != nil && w.editorArea.tabBar.menu(forTabAt: 0) == nil, "menus: the tab bar asks its delegate for a tab's menu")
         commandsMatchTheMenuBar(alone, "a terminal tab")
 
@@ -342,8 +343,9 @@ extension SelfTest {
         check(welcome.shownServers.first == "selftest-welcome", "welcome: saved hosts are listed, the one used last first", welcome.shownServers.joined(separator: ", "))
         let button = welcome.connectServerButton
         let key = KeyboardShortcuts.shared.chord(for: "newRemoteTab:").map { " (\($0.display))" } ?? ""
-        check(button.title == "Connect to Server…" && button.action == #selector(AppDelegate.newRemoteTab(_:))
-              && button.toolTip == "Open a tab on one of your servers, over ssh" + key,
+        let tip = "Open a tab on one of your servers, over ssh" + key
+        let wired = button.action == #selector(AppDelegate.newRemoteTab(_:))
+        check(button.title == "Connect to Server…" && wired && button.toolTip == tip,
               "welcome: Connect to Server… beside Open… and New Terminal, naming its key", button.toolTip ?? "no tooltip")
 
         let target = NSApp.target(forAction: #selector(TerminalWindowController.newRemoteTab(_:)), to: nil, from: nil) as AnyObject?
