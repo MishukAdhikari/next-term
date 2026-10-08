@@ -166,6 +166,23 @@ public struct SkillPackage: Equatable, Sendable {
         /// then, and otherwise only the plain skill (hand check H2). The default still goes by
         /// `runsNothing` and `startsPrograms`, which don't count on it: a later version may load more.
         public var loadsAsPlugin: Bool { declaredName.map(SkillPackage.isUsableName) ?? false }
+
+        /// Whether Claude Code starts it on, given `"<name>@skills-dir"` in `enabledPlugins` (nil: not
+        /// there). The key wins; without it, the manifest's `defaultEnabled` decides.
+        public func start(key value: Bool?) -> Start {
+            if let value { return value ? .on : .offByKey }
+            return defaultEnabled ? .on : .offByManifest
+        }
+    }
+
+    /// How a Claude Code plugin starts once it is added.
+    public enum Start: Equatable, Sendable {
+        case on
+        /// Off only because its manifest says `"defaultEnabled": false`: a later version can change that.
+        case offByManifest
+        /// Off because the user's Claude Code settings hold `"<name>@skills-dir": false`. Claude Code then
+        /// loads nothing from the folder, not even its skill (hand check H4).
+        case offByKey
     }
 
     /// Readable names for Codex's namespace and Claude Code's plugin, read without the rest.

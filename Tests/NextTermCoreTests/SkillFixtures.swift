@@ -56,6 +56,9 @@ struct SkillFixture {
 
     var review: SkillReview { SkillReview.review(folder: root, folderName: name) }
 
+    /// The MCP servers each agent would use, as the review reads them.
+    var servers: SkillServers { review.servers }
+
     /// The temporary folder that holds the skill folder (stands in for a home folder or a sibling).
     var parent: String { (root as NSString).deletingLastPathComponent }
 

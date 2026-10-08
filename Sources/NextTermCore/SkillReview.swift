@@ -43,6 +43,9 @@ public struct SkillReview: Sendable {
     /// The plugin or extension the folder also is, with what its Claude Code plugin would start; nil for
     /// a plain skill.
     public let package: SkillPackage?
+    /// The MCP servers each agent would use: Claude Code's plugin, Codex's agents/openai.yaml, Amp's
+    /// front matter or mcp.json.
+    public let servers: SkillServers
 
     /// The licence as stated: SKILL.md's `license` field, else the skill's licence file.
     public var license: String? {
@@ -166,10 +169,15 @@ public struct SkillReview: Sendable {
         }
         let package = SkillPackage.read(folder: folder, folderName: folderName, home: home)
         flags += package?.flags ?? []
-        let said = capabilities(front: front, skillText: skillText, files: files, package: package)
+        let servers = SkillServers.read(folder: folder, skillText: skillText, skillFile: skillFile ?? "SKILL.md", package: package)
+        flags += servers.flags
+        // One server file can be read for two agents (Amp's mcp.json is also Cursor's): each flag once.
+        var seen = Set<String>()
+        flags = flags.filter { seen.insert("\($0.level.rawValue)\u{0}\($0.file)\u{0}\($0.text)").inserted }
+        let said = capabilities(front: front, skillText: skillText, files: files, package: package, servers: servers)
         return SkillReview(name: folderName, frontMatter: front, skillText: skillText, files: files.sorted { $0.path < $1.path },
                            flags: flags.sorted { $0.level > $1.level }, capabilities: said,
-                           urls: urls.sorted(), licenseFile: licenseFile, package: package)
+                           urls: urls.sorted(), licenseFile: licenseFile, package: package, servers: servers)
     }
 
     static let scriptExtensions: Set<String> = ["sh", "bash", "zsh", "fish", "py", "js", "mjs", "cjs", "ts", "rb", "pl", "php", "ps1", "command", "applescript", "scpt"]
@@ -472,8 +480,10 @@ public struct SkillReview: Sendable {
     }
 
     /// In plain words, what the skill may do once installed (Claude Code and Command Code honour
-    /// most of these), and which agent runs its parts by itself when it is also a package.
-    static func capabilities(front: SkillFrontMatter?, skillText: String, files: [File], package: SkillPackage? = nil) -> [String] {
+    /// most of these), and which agent runs its parts by itself when it is also a package, or when Amp
+    /// starts its servers.
+    static func capabilities(front: SkillFrontMatter?, skillText: String, files: [File], package: SkillPackage? = nil,
+                             servers: SkillServers? = nil) -> [String] {
         var items: [String] = []
         let keys = Set(front?.keys ?? [])
         if let tools = front?.allowedTools, !tools.isEmpty { items.append("Runs these tools without asking while it is used: \(tools)") }
@@ -481,17 +491,20 @@ public struct SkillReview: Sendable {
         if runsShellLines(skillText) { items.append("Runs shell commands before the agent reads it (!`…` lines or ```! blocks).") }
         if keys.contains("disable-model-invocation") { items.append("Is used only when you name it.") } else { items.append("The agent may use it on its own when the task fits its description.") }
         if keys.contains("context") || keys.contains("agent") { items.append("Runs in a separate agent context.") }
-        if keys.contains("mcpServers") { items.append("Asks for MCP servers.") }
         if let plugin = package?.claude, plugin.startsPrograms { items.append(claudeStartsLine(plugin)) }
+        // Of the agents checked, only Amp starts a skill's own servers: Claude Code ignores mcpServers in SKILL.md.
+        if servers?.hasAmp == true { items.append(ampLine) }
         let scripts = files.filter { $0.script || $0.executable || $0.binary }.count
         if scripts > 0 {
             let counted = "Brings \(scripts) file\(scripts == 1 ? "" : "s") that can run (scripts or programs)"
-            // Only the agent's own tools run them, unless a package's parts run by themselves.
-            let byItself = package?.runsPartsByItself ?? false
+            // Only the agent's own tools run them, unless a package's parts, or Amp's servers, run by themselves.
+            let byItself = package?.runsPartsByItself == true || servers?.ampRunsPrograms == true
             items.append(byItself ? counted + "." : counted + "; the agent runs them only through its own tools.")
         }
         return items
     }
+
+    static let ampLine = "Amp connects to the MCP servers it declares, and starts any program among them, when it finds the skill."
 
     /// Claude Code runs a skill's `` !`…` `` lines and ```` ```! ```` blocks in its shell before the agent
     /// reads the skill.

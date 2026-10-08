@@ -30,6 +30,18 @@ public struct SkillInstallPlan: Equatable, Sendable {
 }
 
 public enum SkillInstall {
+    /// What an install does about Claude Code's link to one skill. A folder that is also a Claude Code
+    /// plugin loads through that link as the plugin "<name>@skills-dir", whose servers and hooks start by
+    /// themselves, so the review asks: leave it out of Claude Code, or add it as a plugin. There is no
+    /// "add it turned off": with the plugin's key false, Claude Code loads nothing from the folder, not
+    /// even its skill (hand check H4), and Next Term changes no agent's settings for a skill.
+    public enum ClaudeLink: Equatable, Sendable {
+        /// No link: an existing link is removed for a plugin folder, and kept for a plain skill.
+        case skip
+        /// A link in ~/.claude/skills.
+        case link
+    }
+
     /// Claude Code's own slash commands: a skill with one of these names would hide the command.
     public static let claudeCommands: Set<String> = [
         "add-dir", "agents", "bashes", "bug", "clear", "compact", "config", "context", "cost", "doctor", "exit",

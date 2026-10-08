@@ -16,7 +16,7 @@ extension SelfTest {
             try? text.write(toFile: full, atomically: true, encoding: .utf8)
         }
         let skill = "---\nname: demo-plugin\ndescription: A skill that is also a plugin.\nlicense: MIT\n"
-            + "mcpServers:\n  docs:\n    url: https://mcp.example.com/mcp\n---\nUse it well.\n"
+            + "mcpServers:\n  docs:\n    url: https://mcp.example.com/mcp\n  helper:\n    command: /usr/bin/true\n---\nUse it well.\n"
         write("SKILL.md", skill)
         write(".claude-plugin/plugin.json", #"{"name": "demo-plugin", "description": "A demo plugin."}"#)
         write(".mcp.json", #"{"mcpServers": {"demo": {"command": "/usr/bin/true"}}}"#)
@@ -45,5 +45,21 @@ extension SelfTest {
         check(details.contains("Claude Code starts its MCP servers and hooks by itself") && details.contains("Brings 1 file that can run (scripts or programs).")
               && !details.contains("only through its own tools"),
               "skills plugins: What it may do says Claude Code starts its parts by itself, not only the agent's tools", details)
+
+        // The MCP servers each agent would use: read, never added or started.
+        check(details.contains("Amp connects to the MCP servers it declares, and starts any program among them, when it finds the skill.")
+              && !details.contains("Asks for MCP servers."),
+              "skills plugins: What it may do says Amp connects to the skill's own servers when it finds the skill", details)
+        check(details.contains("Declares an MCP server, “helper”, that runs a program. Amp starts it when it finds the skill."),
+              "skills plugins: Worth a look warns about a skill-level server that runs a program", details)
+        let servers = candidates.first?.review.servers
+        let lines = servers?.lines(choice: .skip, start: .on, codex: .init(), trigger: "$demo-plugin") ?? []
+        let claude: [String] = servers?.claude.map(\.name) ?? []
+        let codex: [String] = servers?.codex.map(\.name) ?? []
+        let amp: [String] = servers?.amp.map(\.name) ?? []
+        let agents = lines.map(\.agent)
+        let read = claude == ["demo"] && codex == ["docs"] && amp == ["docs", "helper"]
+        check(read && agents == ["Claude Code", "Codex", "Amp"],
+              "skills plugins: the review reads the servers Claude Code, Codex and Amp would use", "\(claude) \(codex) \(amp) \(agents)")
     }
 }
