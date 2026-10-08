@@ -71,7 +71,8 @@ extension SelfTest {
 
     #if DEBUG
     /// A zsh tab in `dir` whose own config is `zshrc` (in a fresh folder under `dir`), at its prompt, with the
-    /// keyboard. nil (and a failed check) when its hook never armed.
+    /// keyboard. nil when its hook never armed (a failed check), or when the app can't come in front for the real
+    /// key events the part presses (a note: a locked screen, another app keeping the front).
     static func completionTab(_ c: TerminalWindowController, in dir: URL, zshrc: String, name: String) async -> TerminalTab? {
         let zdotdir = dir.appendingPathComponent(".zdot-\(name)")
         try? FileManager.default.createDirectory(at: zdotdir, withIntermediateDirectories: true)
@@ -85,22 +86,31 @@ extension SelfTest {
             c.remove(tab)
             return nil
         }
-        guard await focus(c, tab) else {
-            check(false, "Tab completion (\(name)): the window has the keyboard for real key events")
+        guard await focus(c, tab, for: "Tab completion (\(name))") else {
             c.remove(tab)
             return nil
         }
         return tab
     }
 
-    /// The tab's window in front with the tab's terminal holding the keyboard.
-    static func focus(_ c: TerminalWindowController, _ tab: TerminalTab) async -> Bool {
+    /// The tab's window in front (SelfTest.bringToFront) with the tab's terminal holding the keyboard. With `part`,
+    /// what can't be had is reported: the app kept from the front skips that part, with a note; the app in front
+    /// with the keyboard elsewhere is the app's own doing, a failed check.
+    static func focus(_ c: TerminalWindowController, _ tab: TerminalTab, for part: String? = nil) async -> Bool {
         guard let window = c.window else { return false }
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
+        c.show(tab)
+        guard await bringToFront(window) else {
+            if let part { note("\(part): skipped, its real key events need the window in front, and \(notFrontmost(window))") }
+            return false
+        }
         c.show(tab)
         _ = window.makeFirstResponder(tab.view)
-        return await wait(3) { NSApp.isActive && NSApp.keyWindow === window && window.firstResponder === tab.view }
+        let focused = await wait(3) { NSApp.isActive && NSApp.keyWindow === window && window.firstResponder === tab.view }
+        if !focused, let part {
+            check(false, "\(part): the terminal has the keyboard for real key events",
+                  "first responder \(window.firstResponder.map { String(describing: type(of: $0)) } ?? "none")")
+        }
+        return focused
     }
 
     /// ^C, then the next prompt: a clean line.

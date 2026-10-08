@@ -142,9 +142,10 @@ extension SelfTest {
         let before = server.files()
         check(session.usesScreen && tab.tooltip.contains("server’s folders and files"), "Tab completion, servers: a tab with no hook reads its screen",
               tab.tooltip.replacingOccurrences(of: "\n", with: " | "))
-        guard await wait(8, { session.screenReady }), await focus(c, tab) else {
+        guard await wait(8, { session.screenReady }) else {
             return check(false, "Tab completion, servers: the tab is ready after two status reports", "\(session.reportsSinceReturn)")
         }
+        guard await focus(c, tab, for: "Tab completion, servers: the server's folders and files") else { return }
         func tabKey() { pressKey(window, "\t", code: 48) }
         /// ^U: the line is cleared without a Return (which would wait for two more reports).
         func clear() async {
@@ -290,14 +291,16 @@ extension SelfTest {
             let keptMaster = CompletionStandInMaster(path: RemoteConnection.controlPath(kept))
             keptMaster.start()
             let inTmux = c.addRemoteTab(RemoteTab(host: kept))
-            if await wait(20, { inTmux.remoteConnected && inTmux.remoteReady }), await wait(8, { inTmux.completion.screenReady }), await focus(c, inTmux) {
-                inTmux.view.send(txt: "ls fo")
-                await pause(0.6)
-                pressKey(window, "\t", code: 48)
-                check(await wait(4) { popup.isVisible && popup.shownTexts == ["foo", "food.txt"] },
-                      "Tab completion, servers: in tmux, `ls fo` lists the pane's folder", "\(popup.shownTexts)")
-                pressKey(window, "\u{1b}", code: 53)
-                inTmux.view.send(txt: "\u{15}")
+            if await wait(20, { inTmux.remoteConnected && inTmux.remoteReady }), await wait(8, { inTmux.completion.screenReady }) {
+                if await focus(c, inTmux, for: "Tab completion, servers: in tmux") {
+                    inTmux.view.send(txt: "ls fo")
+                    await pause(0.6)
+                    pressKey(window, "\t", code: 48)
+                    check(await wait(4) { popup.isVisible && popup.shownTexts == ["foo", "food.txt"] },
+                          "Tab completion, servers: in tmux, `ls fo` lists the pane's folder", "\(popup.shownTexts)")
+                    pressKey(window, "\u{1b}", code: 53)
+                    inTmux.view.send(txt: "\u{15}")
+                }
             } else {
                 check(false, "Tab completion, servers: a tmux tab on the stand-in server is ready", "\(inTmux.completion.reportsSinceReturn)")
             }
@@ -437,7 +440,7 @@ extension SelfTest {
         check(armed && !session.usesScreen && session.state.arm?.completionSystem == true,
               "Tab completion, the server hook: a new tab's zsh arms under the host's nonce", "\(session.state.phase)")
         check(!tab.status.integrated, "and sends no command marks: its status still comes from the status checks")
-        if armed, await focus(c, tab) {
+        if armed, await focus(c, tab, for: "Tab completion, the server hook: zsh's completions on the server (AE7)") {
             tab.view.send(txt: "git checkout ")
             await pause(0.5)
             pressKey(window, "\t", code: 48)
@@ -464,17 +467,19 @@ extension SelfTest {
               "Tab completion, the server hook: a dropped connection forgets what the hook said", "\(session.state.phase)")
         master.start()
         tab.reconnect()
-        if await wait(20, { tab.remoteConnected && tab.remoteReady }), await wait(8, { session.screenReady }), await focus(c, tab) {
-            tab.view.send(txt: "ls ~/app/fo")
-            await pause(0.5)
-            pressKey(window, "\t", code: 48)
-            await pause(1)
-            var privateKey = false
-            if case .privateKey = session.lastTab { privateKey = true }
-            check(!privateKey && session.state.arm == nil && !tab.screenTail(3).joined().contains("6973"),
-                  "and a Tab in the plain shell it reconnects to sends no private key", "\(session.lastTab) | \(promptLine(tab))")
-            if popup.isVisible { pressKey(window, "\u{1b}", code: 53) }
-            tab.view.send(txt: "\u{15}")
+        if await wait(20, { tab.remoteConnected && tab.remoteReady }), await wait(8, { session.screenReady }) {
+            if await focus(c, tab, for: "Tab completion, the server hook: a Tab in the plain shell it reconnects to") {
+                tab.view.send(txt: "ls ~/app/fo")
+                await pause(0.5)
+                pressKey(window, "\t", code: 48)
+                await pause(1)
+                var privateKey = false
+                if case .privateKey = session.lastTab { privateKey = true }
+                check(!privateKey && session.state.arm == nil && !tab.screenTail(3).joined().contains("6973"),
+                      "and a Tab in the plain shell it reconnects to sends no private key", "\(session.lastTab) | \(promptLine(tab))")
+                if popup.isVisible { pressKey(window, "\u{1b}", code: 53) }
+                tab.view.send(txt: "\u{15}")
+            }
             // Off, its status reports check nothing on the server (the hook deleted there still reads as on here); on
             // again, they do.
             CompletionPreferences.set(.off)
