@@ -125,6 +125,7 @@ Agents edit the files you have open. Next Term checks them about once a second:
 - **A file without unsaved edits follows the agent.** Only the changed part is replaced, so your caret, the scroll position and the colours of everything else stay put.
 - **A file with unsaved edits asks first.** A banner says the file changed on disk while you were editing it: **Keep My Changes** (your version is kept, and saving writes it) or **Reload from Disk**.
 - **A file that was deleted or moved** shows a banner too: **Keep My Changes** or **Close**.
+- **A save checks first.** When an agent saved the file a moment ago and the check hasn’t seen it yet, <kbd>⌘S</kbd> writes nothing and the banner asks, as above.
 - **Renames and moves in the sidebar** carry open files along.
 
 To see exactly what an agent changed, press <kbd>⌥⌘G</kbd>. See [Diffs and Git Diff](/docs/diffs/).

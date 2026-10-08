@@ -164,6 +164,13 @@ final class EditorDocument: NSObject, NSTextStorageDelegate {
     // MARK: disk
 
     func save() throws {
+        // A save on disk the once-a-second check hasn't seen yet (an agent's, just now) is not overwritten: the banner
+        // asks, as for one it saw. A file only touched saves as usual, and one gone from disk is made again.
+        if conflict == nil, let now = FileStamp(path: url.path), now != stamp {
+            checkDisk()
+            if conflict != nil { throw SafeWrite.Failure.changed }
+            if !isDirty { return } // it took the disk's text: nothing of ours to write
+        }
         let data = TextFile.encode(text, as: format)
         try TextFile.write(data, to: url)
         stamp = FileStamp(path: url.path)

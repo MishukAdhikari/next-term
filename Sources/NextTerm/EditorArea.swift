@@ -613,10 +613,16 @@ final class EditorArea: NSView, TabBarViewDelegate {
         } catch {
             let alert = NSAlert()
             alert.messageText = "“\(document.name)” could not be saved."
-            alert.informativeText = error.localizedDescription
+            alert.informativeText = Self.saveFailure(error, of: document)
             if let window { alert.beginSheetModal(for: window) } else { alert.runModal() }
             return false
         }
+    }
+
+    /// Why a save failed. One that found the file changed on disk leaves the choice to the banner above the file.
+    private static func saveFailure(_ error: Error, of document: EditorDocument) -> String {
+        guard error as? SafeWrite.Failure == .changed, document.conflict != nil else { return error.localizedDescription }
+        return "It changed on disk since it was opened or last saved, so nothing was written. Choose Keep My Changes above it and save again, or Reload from Disk."
     }
 
     func saveActive() {

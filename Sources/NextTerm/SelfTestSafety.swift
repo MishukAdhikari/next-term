@@ -8,6 +8,7 @@ extension SelfTest {
     static func safetyChecks(_ c: TerminalWindowController, proj: URL) async {
         partKeyChecks(c, proj: proj)
         await privateSaveChecks(c, proj: proj)
+        unseenSaveChecks(c, proj: proj)
         studioLinkChecks()
     }
 
@@ -132,6 +133,40 @@ extension SelfTest {
         check(saved && text == "token: made-up\nmore: 1\n" && mode == 0o600 && size == tag.count && leftovers.isEmpty,
               "a save keeps an owner-only file owner-only, with its extended attributes, and leaves nothing beside it",
               "saved \(saved), mode \(String(mode, radix: 8)), attribute \(size), left \(leftovers), \(text.debugDescription)")
+    }
+
+    /// ⌘S just after an agent saved the file, before the once-a-second check saw it: nothing is written, and the banner
+    /// asks. A file only touched (the same text) saves as usual. All in one turn of the run loop, so the check can't
+    /// come first.
+    private static func unseenSaveChecks(_ c: TerminalWindowController, proj: URL) {
+        let file = proj.appendingPathComponent("agent-saved.txt")
+        try? Data("one\n".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        c.openFile(file)
+        guard let editor = c.editorArea.activeEditor, editor.document.name == "agent-saved.txt" else {
+            return check(false, "unseen save: the file opens")
+        }
+        let document = editor.document
+        defer {
+            if document.isDirty || document.conflict != nil { document.reload() }
+            c.editorArea.close(editor)
+        }
+        func onDisk() -> String { (try? String(contentsOf: file, encoding: .utf8)) ?? "none" }
+        try? Data("one\n".utf8).write(to: file) // touched: the same text
+        editor.textView.insertText("mine\n", replacementRange: NSRange(location: 0, length: 0))
+        let touched = (try? document.save()) != nil && onDisk() == "mine\none\n"
+        try? Data("theirs\n".utf8).write(to: file, options: .atomic)
+        editor.textView.insertText("more\n", replacementRange: NSRange(location: 0, length: 0))
+        var failure: SafeWrite.Failure?
+        do { try document.save() } catch { failure = error as? SafeWrite.Failure }
+        let kept = onDisk()
+        check(touched && failure == .changed && document.conflict == .changedOnDisk && kept == "theirs\n" && document.isDirty,
+              "a save never overwrites an agent's save the editor hasn't seen yet: the banner asks",
+              "touched saved \(touched), \(failure.map { "\($0)" } ?? "saved"), \(String(describing: document.conflict)), disk \(kept.debugDescription)")
+        // Keep My Changes, then ⌘S again: yours.
+        document.keepMine()
+        let saved = (try? document.save()) != nil
+        check(saved && onDisk() == "more\nmine\none\n", "Keep My Changes then saves yours over it", onDisk().debugDescription)
     }
 
     /// Studio links leave Safari for a Chromium browser, only while the setting is on and Safari is the default; nothing opens.
