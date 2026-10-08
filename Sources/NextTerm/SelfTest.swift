@@ -1033,7 +1033,12 @@ enum SelfTest {
                   "in the folder the session was started in", forked.directory)
             holder.remove(forked)
         }
-        if let tab { app.controllers.first { $0.tabs.contains { $0 === tab } }?.remove(tab) }
+        if let tab, let owner = app.controllers.first(where: { $0.tabs.contains { $0 === tab } }) {
+            owner.remove(tab)
+            // Its last tab gone, its window closes, and leaves the app's windows a moment later: gone before the next
+            // checks open the project, which would find it still listed and add their tabs to a closed window.
+            _ = await wait(3) { !owner.tabs.isEmpty || !app.controllers.contains { $0 === owner } }
+        }
         _ = window
     }
 
@@ -4771,6 +4776,7 @@ enum SelfTest {
         guard let i = args.firstIndex(of: "--self-test"), i + 1 < args.count else { return nil }
         return args[i + 1]
     }
+
 
     private static func finish() {
         ClaudeIDEServer.shared.stop() // remove the test run's lock file
