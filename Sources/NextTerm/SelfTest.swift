@@ -578,6 +578,7 @@ enum SelfTest {
         await gitLogChecks(c, proj: proj)
         await gitLogPagingChecks(c)
         await gitLeftoverChecks(c)
+        await placeChecks(c)
         await branchCompareChecks(c)
         await gitDiffChecks(c, proj: proj)
         await backgroundFetchChecks(c)
