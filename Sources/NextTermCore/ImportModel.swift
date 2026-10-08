@@ -167,13 +167,14 @@ enum ImportRows {
         return PlannedSetting(setting, source: source, note: note)
     }
 
-    /// Where new tabs start. The other apps have no projects, so a fixed folder (the home folder too) is offered
-    /// unticked: ticked, it applies in a project window as well.
+    /// Where new tabs start. The other apps have no projects, so anything but the project's folder (the folder of
+    /// the tab in front, the home folder, a folder of your own) is offered unticked: ticked, it applies in a
+    /// project window as well.
     static func startFolder(_ folder: StartFolder, source: String) -> PlannedSetting {
         switch folder {
-        case .project, .current:
+        case .project:
             return PlannedSetting(.terminalStartFolder(folder.stored), source: source)
-        case .home, .folder:
+        case .current, .home, .folder:
             return PlannedSetting(.terminalStartFolder(folder.stored), source: source, ticked: false,
                                   note: "in project windows too, where new tabs otherwise open in the project's folder")
         }

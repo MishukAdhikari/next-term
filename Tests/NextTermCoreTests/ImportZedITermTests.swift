@@ -704,10 +704,11 @@ import Testing
         #expect(try plan(["Unlimited Scrollback": true]).settings
                 == [PlannedSetting(.terminalScrollback(100_000), source: "Unlimited Scrollback", note: "iTerm2 keeps all of it; Next Term keeps at most 100,000 lines")])
 
-        // The start folder: Recycle is the tab in front's (ticked); a folder of your own is offered unticked,
-        // since it would apply in project windows too; one that isn't on this Mac is named by its key only.
+        // The start folder: Recycle is the tab in front's, and a folder of your own the one given, both offered
+        // unticked, since they would apply in project windows too; one that isn't on this Mac is named by its key only.
         let recycle = try plan(["Custom Directory": "Recycle"]).settings
-        #expect(recycle.map(\.setting) == [.terminalStartFolder("current")] && recycle.first?.ticked == true)
+        #expect(recycle.map(\.setting) == [.terminalStartFolder("current")] && recycle.first?.ticked == false)
+        #expect(recycle.first?.note == "in project windows too, where new tabs otherwise open in the project's folder")
         let folder = try plan(["Custom Directory": "Yes", "Working Directory": home + "/Code"]).settings
         #expect(folder.map(\.setting) == [.terminalStartFolder(canonicalPath(home + "/Code"))] && folder.first?.ticked == false)
         #expect(folder.first?.note == "in project windows too, where new tabs otherwise open in the project's folder")
