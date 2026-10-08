@@ -33,9 +33,10 @@ public struct FileReference: Equatable, Sendable {
             }
             return reference
         }
-        // "src/a.ts:42:7", "tests/test_x.py:42:" (the numbers are part of the link).
-        if let range = link.range(of: #":[0-9]+(:[0-9]+)?:?$"#, options: .regularExpression) {
-            let numbers = link[range].split(separator: ":").compactMap { Int($0) }
+        // "src/a.ts:42:7", "tests/test_x.py:42:" (the numbers are part of the link), and "src/a.ts:42-48", lines
+        // as the editor's Copy Path with Line gives them, which opens at the first.
+        if let range = link.range(of: #":[0-9]+(:[0-9]+|-[0-9]+)?:?$"#, options: .regularExpression) {
+            let numbers = link[range].split(separator: ":").compactMap { Int($0.split(separator: "-").first ?? "") }
             let path = absolute(String(link[..<range.lowerBound]))
             if exists(path) { return FileReference(path: path, line: numbers.first, column: numbers.count > 1 ? numbers[1] : nil) }
         }

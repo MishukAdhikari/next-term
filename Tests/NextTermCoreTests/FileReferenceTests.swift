@@ -23,6 +23,9 @@ import Testing
         // When the terminal includes the numbers in the link itself.
         #expect(resolve("app.py:42:7:") == FileReference(path: "/p/app.py", line: 42, column: 7))
         #expect(resolve("tests/test_eval.py:42:") == FileReference(path: "/p/tests/test_eval.py", line: 42))
+        // Lines as Copy Path with Line gives them: the first one.
+        #expect(resolve("app.py:42-48") == FileReference(path: "/p/app.py", line: 42))
+        #expect(resolve("app.py", "see app.py:42-48") == FileReference(path: "/p/app.py", line: 42))
     }
 
     @Test func aLanggraphGraphReferenceNamesASymbol() {
