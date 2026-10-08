@@ -618,6 +618,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                               shorterTitles: tab.shorterTitles.map { $0 + others }, editableTitle: tab.editableTitle)
         }
         tabBar.update(items: items, selectedIndex: activeIndex)
+        refreshPaneHeaders()
         sidebar.showRemote(activeTab?.remoteMark) // the pane with the keyboard: the tree follows it
         updateRailMarks(items)
         announceBackgroundChanges()
