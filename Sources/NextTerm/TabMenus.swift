@@ -132,7 +132,7 @@ extension TerminalWindowController {
             alert.informativeText = "Send to Agent types up to \(AgentPrompt.maxInlineLines) lines (16 KB) of terminal text. Select less, or copy it."
             return alert.beginSheetModal(for: window)
         }
-        guard let agent = agentTab else { return noAgentAlert().beginSheetModal(for: window) }
+        guard let agent = agentTab(receivingFrom: tab) else { return noAgentAlert().beginSheetModal(for: window) }
         show(agent)
         // Inside a bracketed paste a line break is text; an agent that takes no pastes gets one line.
         if agent.view.getTerminal().bracketedPasteMode {
@@ -141,6 +141,13 @@ extension TerminalWindowController {
             agent.view.typeIn(AgentPrompt.quoteOnOneLine(text))
         }
         window.makeFirstResponder(agent.view)
+    }
+
+    /// The agent that text selected in `tab` goes to: another one than the agent whose output it is, the one
+    /// used last, when one runs; else as for anything sent to an agent.
+    func agentTab(receivingFrom tab: TerminalTab) -> TerminalTab? {
+        let others = tabs.filter { $0 !== tab && $0.remote == nil && $0.status.running && $0.status.kind == .agent }
+        return others.max { $0.lastSelected < $1.lastSelected } ?? agentTab
     }
 
     // MARK: terminal tabs

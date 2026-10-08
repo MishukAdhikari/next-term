@@ -186,8 +186,24 @@ extension SelfTest {
         check(w.validateMenuItem(sendItem), "menus: Edit › Send to Agent is on in a terminal with a selection")
         view.selectNone()
         check(!w.validateMenuItem(sendItem), "menus: and off without one")
-        agent.view.send(txt: "\u{03}")
-        _ = await wait(3) { !agent.status.running }
+
+        // Text from an agent's own output goes to another agent, not back to the one that printed it.
+        let other = w.addTab(directory: folder.path)
+        _ = await wait(20) { other.status.integrated }
+        other.view.send(txt: "\u{15}PATH=\(fakeBin.path):$PATH claude >/dev/null\r")
+        _ = await wait(5) { other.status.running && other.status.kind == .agent }
+        other.view.feed(text: "\u{1b}[?2004h")
+        w.show(agent)
+        agent.view.feed(text: "\u{1b}[2J\u{1b}[Hfrom the agent\r\n")
+        let agentTop = agent.view.getTerminal().buffer.yDisp
+        agent.view.selection.setSelection(start: Position(col: 0, row: agentTop), end: Position(col: 14, row: agentTop))
+        _ = run("Send Selection to Agent", in: w.terminalMenu(for: agent, link: nil))
+        let reached = await wait(4) { other.screenTail(10).contains { $0.hasSuffix("from the agent") } }
+        check(reached && w.activeTab === other, "menus: text selected in an agent's output goes to another agent, not back to it",
+              other.screenTail(6).joined(separator: " | "))
+        for tab in [agent, other] { tab.view.send(txt: "\u{03}") }
+        _ = await wait(3) { !agent.status.running && !other.status.running }
+        w.remove(other)
         w.remove(agent)
     }
 
