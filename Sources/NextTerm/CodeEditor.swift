@@ -263,12 +263,14 @@ final class CodeTextView: NSTextView {
     /// one shares with a terminal command (⌘D, Split Right) is the editor's only here: macOS lets one menu item
     /// hold a key, so the menus can't say which part it is for (KeyboardShortcuts keeps these items' keys off
     /// while the menus are closed).
+    /// A command that is off here (in a read-only editor, say) passes its key on: ⌘D then splits the terminal.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard window?.firstResponder === self, let item = KeyboardShortcuts.shared.editorItem(for: event), let action = item.action else {
+        guard window?.firstResponder === self, let item = KeyboardShortcuts.shared.editorItem(for: event), let action = item.action,
+              validateMenuItem(item) else {
             return super.performKeyEquivalent(with: event)
         }
         caretPlacedByUser = true
-        if validateMenuItem(item) { NSApp.sendAction(action, to: self, from: item) } else { NSSound.beep() }
+        NSApp.sendAction(action, to: self, from: item)
         return true
     }
 
