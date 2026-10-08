@@ -177,7 +177,7 @@ final class CompletionSession {
         let hold = DispatchWorkItem { [weak self] in self?.holdExpired(id) }
         holdTimer?.cancel()
         holdTimer = hold
-        DispatchQueue.main.asyncAfter(deadline: .now() + CompletionProtocol.answerWithin, execute: hold)
+        DispatchQueue.main.asyncAfter(deadline: .now() + answerWithin, execute: hold)
         if state.path == .completionSystem {
             let loading = DispatchWorkItem { [weak self] in self?.loadingDue(id) }
             loadingTimer?.cancel()
@@ -232,6 +232,8 @@ final class CompletionSession {
     private func engine(_ report: CompletionProtocol.TabReport) {
         guard let context = CompletionContext.analyze(report) else { return answer(report.id, .native) }
         let id = report.id
+        // A hooked server's shell: its folder is listed there, over the tab's connection.
+        if tab?.remote != nil { return serverEngine(id, context) }
         let started = lister.start(context.folder) { [weak self] listing in
             let prepared = PathCompletion.Prepared(listing, foldersOnly: context.kind == .folders, hidden: context.showsHidden)
             let result = listing.readable ? prepared.candidates(context.typed) : PathCompletion.Result()
@@ -272,6 +274,7 @@ final class CompletionSession {
                 if let id = state.openID, state.path != .screen { write(CompletionProtocol.close(id: id)) }
                 state.armed(arm)
                 listClosed()
+                syncWait()
             }
             syncQuiet()
         case .tab(let report):
@@ -474,11 +477,49 @@ extension CompletionSession {
     }
 
     /// A status report for this server tab (TerminalTab.applyRemote): what it says about the prompt, whether it
-    /// gave the shell's folder (not where there is no /proc), and that folder to prefetch.
+    /// gave the shell's folder (not where there is no /proc), and that folder to prefetch. A host whose hook is
+    /// allowed is checked for it now and then.
     func remoteReport(folder: Bool) {
         reportsSinceReturn += 1
         serverFolderKnown = folder
         if let tab, reportsSinceReturn >= 2 { RemoteCompletion.shared.prefetch(tab) }
+        if let host = tab?.remote?.host { RemoteCompletionConsent.verify(host) }
+    }
+
+    /// How long a Tab's answer may take: 120 ms on this Mac; on a hooked server, a little less than its hook waits
+    /// (the `w` config: two round trips and some, 150 to 600 ms).
+    fileprivate var answerWithin: TimeInterval {
+        guard let wait = serverWait else { return CompletionProtocol.answerWithin }
+        return wait - 0.05
+    }
+
+    private var serverWait: TimeInterval? {
+        guard let tab, tab.remote != nil else { return nil }
+        return min(0.6, max(0.15, 2 * RemoteCompletion.shared.roundTrip(for: tab) + 0.12))
+    }
+
+    /// A hooked server's shell at a new line: how long its Tab waits for an answer, from the connection's round trip.
+    fileprivate func syncWait() {
+        guard let wait = serverWait, state.isArmed else { return }
+        write(CompletionProtocol.wait(seconds: wait))
+    }
+
+    /// A hooked server's `tab` report: its folder listed on the server, over the tab's connection (one listing at a
+    /// time; none on a crowded connection), answered as Next Term's own engine answers.
+    fileprivate func serverEngine(_ id: Int, _ context: CompletionContext) {
+        guard let tab, let request = RemoteCompletion.shared.request(absolute: context.folder, in: tab) else { return answer(id, .native) }
+        let listing = RemoteCompletion.shared.list(request, for: tab) { [weak self] result in
+            guard let self else { return }
+            guard let result else {
+                self.answer(id, .native)
+                self.release()
+                return self.changed()
+            }
+            let prepared = PathCompletion.Prepared(result.listing, foldersOnly: context.kind == .folders, hidden: context.showsHidden,
+                                                   disk: result.disk)
+            self.engineAnswered(id, context: context, listing: result.listing, prepared: prepared, result: prepared.candidates(context.typed))
+        }
+        if !listing { answer(id, .native) }
     }
 
     /// A real Tab in a server tab with no hook. Keys typed until it is answered wait; one typed then sends the

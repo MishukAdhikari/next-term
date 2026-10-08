@@ -347,7 +347,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
         let terminal = view.getTerminal()
         terminal.registerOscHandler(code: ShellIntegration.oscCode) { [weak self] payload in
-            guard let self, let event = ShellIntegration.parse(payload, nonce: self.nonce) else { return }
+            guard let self, let event = ShellIntegration.parse(payload, nonce: self.nonce) ?? self.serverCompletionMark(payload) else { return }
             self.handle(event)
         }
         // OSC 52 clipboard. Reading is refused: any program, or a remote host over ssh, could harvest the
