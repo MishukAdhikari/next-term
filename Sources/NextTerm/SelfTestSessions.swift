@@ -156,7 +156,8 @@ extension SelfTest {
 
         // Every item of a session's menu, More…'s and the group's is a command showing its key; of the agents' Continue
         // Latest, the first agent's only.
-        let rows = ([group] + group.children).map { sidebar.outline.row(forItem: $0) }
+        let groupRows: [AnyObject] = [group] + group.children
+        let rows = groupRows.map { sidebar.outline.row(forItem: $0) }
         let menus = sidebarMenuKeyAudit(rows.map { (sidebarMenu(sidebar, row: $0), "row \($0)") })
         let continues = Set(menus.titles.filter { $0.hasPrefix("Continue Latest") })
         let unseen = ["Resume", "Go to Tab", "Fork", "Copy Resume Command", "Show All Sessions…", "Refresh Sessions"].filter { !menus.titles.contains($0) }

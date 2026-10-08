@@ -55,11 +55,7 @@ extension SelfTest {
         }
 
         // The menu a right-click on it shows, each item with its command's key as the menu bar shows one.
-        func menu(forRow row: Int) -> NSMenu {
-            let menu = NSMenu()
-            c.sidebar.fill(menu, forRow: row)
-            return menu
-        }
+        func menu(forRow row: Int) -> NSMenu { sidebarMenu(c.sidebar, row: row) }
         func keys(_ menu: NSMenu) -> [String: String] {
             var keys: [String: String] = [:]
             for item in menu.items where !item.isSeparatorItem { keys[item.title] = KeyboardShortcuts.chord(of: item)?.display ?? "none" }
@@ -135,7 +131,7 @@ extension SelfTest {
         shortcuts.set(optionCommandCChord, for: "copyFilePath:")
         dispatched = []
         optionCommandC()
-        let gaveWay = [shortcuts.chord(for: "sidebar.copyPath")?.display ?? "none", keys(menu(forRow: fileRow()))["Copy Path"] ?? "missing",
+        let gaveWay: [String] = [shortcuts.chord(for: "sidebar.copyPath")?.display ?? "none", keys(menu(forRow: fileRow()))["Copy Path"] ?? "missing",
                        barKey("copyFilePath:")] + shortcuts.bindings.owners(of: optionCommandCChord, defaults: shortcuts.defaults, except: "goToLine:")
         check(gaveWay == ["none", "none", "⌥⌘C", "copyFilePath:"] && dispatched.isEmpty,
               "sidebar menu keys: a key you gave a menu command before it was a sidebar command's default stays the menu command's",
@@ -144,7 +140,7 @@ extension SelfTest {
 
         // Settings' clash alert, VoiceOver and the import's preview name a key outside the menus with its part, apart from
         // the menu command of the same name.
-        let names = [shortcuts.placedTitle(of: "copyFilePath:"), shortcuts.placedTitle(of: "sidebar.copyPath"),
+        let names: [String] = [shortcuts.placedTitle(of: "copyFilePath:"), shortcuts.placedTitle(of: "sidebar.copyPath"),
                      ImportWindowController.presetLines(.vsCode).first { $0.hasPrefix("New Folder") } ?? "missing"]
         check(names == ["Copy Path", "Copy Path (Project Sidebar)", "New Folder (Project Sidebar)   ⇧⌘N → no key"],
               "sidebar menu keys: a sidebar command is named with its part, apart from the menu command of the same name",
@@ -205,6 +201,7 @@ extension SelfTest {
               "terminal (\(inTerminal)): \(terminalSaw); editor (\(editing)): \(fromEditor), \(untitled()), \(dispatched)")
         window.makeFirstResponder(terminal)
     }
+
     /// What is wrong with sidebar menus' keys, and every item's title: each item is a command (its identifier) showing the
     /// key that command has now, one without ⌘ or ⌃ named in its tooltip instead. Of the agents' Continue Latest, only the
     /// first is a command: one key does one of them.
