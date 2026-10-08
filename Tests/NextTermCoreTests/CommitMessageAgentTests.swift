@@ -52,6 +52,31 @@ import Testing
         #expect(CommitMessageAgent.recentSubjects(at: repo.work, git: repo.git) == ["One"])
     }
 
+    /// What goes to the agent goes on to its vendor: files that usually hold secrets are named, not sent,
+    /// and secret-looking values are masked, as get_diff gives changes to agents.
+    @Test func secretsStayOut() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        try repo.write("config.yml", "name: app\n")
+        repo.commit("One")
+        let key = "sk-ant-api03-" + String(repeating: "Ab3x", count: 12)
+        try repo.write(".env", "API_KEY=\(key)\n")
+        try repo.write("config.yml", "name: app\n  password: hunter2-hunter2\n")
+        try repo.write("id_ed25519", "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----\n")
+        try repo.write("notes.txt", "client_token = \"\(key)\"\n")
+        repo.sh(["add", ".env", "config.yml"])
+        let staged = CommitMessageAgent.changes(at: repo.work, git: repo.git, staged: true)
+        #expect(!staged.contains(key) && !staged.contains("hunter2"), "\(staged)")
+        #expect(staged.contains("Left out: .env (it is an environment file") && staged.contains("+  password: •••"), "\(staged)")
+        #expect(staged.contains("diff --git a/config.yml b/config.yml") && staged.contains(" name: app"))
+
+        repo.sh(["reset", "-q"])
+        let all = CommitMessageAgent.changes(at: repo.work, git: repo.git, staged: false, newFiles: [".env", "id_ed25519", "notes.txt"])
+        #expect(!all.contains(key) && !all.contains("b3BlbnNz") && !all.contains("hunter2"), "\(all)")
+        #expect(all.contains("New file: .env (left out: it is an environment file") && all.contains("New file: id_ed25519 (left out: it looks like an ssh private key)"), "\(all)")
+        #expect(all.contains("New file: notes.txt\nclient_token = \"•••\""), "\(all)")
+    }
+
     /// A stand-in agent: what it is given on standard input, and its answer; an error, a hang, a stop.
     @Test func runningAnAgent() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("nt-agent-\(UUID().uuidString)")

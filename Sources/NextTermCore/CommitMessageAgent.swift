@@ -78,31 +78,51 @@ public struct CommitMessageAgent: Equatable, Sendable {
     }
 
     /// What will be committed, as the agent reads it: the staged diff; with nothing staged, every change
-    /// (the tracked files against HEAD, then each new file with the start of its text). At most `limit`
-    /// bytes, with a line saying when the rest was cut.
+    /// (the tracked files against HEAD, then each new file with the start of its text). What the agent
+    /// reads goes on to its vendor, so the get_diff rules apply: files that usually hold secrets are named
+    /// and left out, and secret-looking values are masked. At most `limit` bytes, with a line saying when
+    /// the rest was cut.
     public static func changes(at root: String, git: String, staged: Bool, newFiles: [String] = [], limit: Int = 60_000) -> String {
         let options = ["--no-color", "--no-ext-diff", "--no-textconv", "-M"]
         let base = ["-C", root, "--no-optional-locks", "-c", "core.quotepath=off", "diff"]
-        var text: String
+        var text = "", rest = 0
+        // Masked as they go in, until the limit: the rest is only counted.
+        func add(_ piece: String) {
+            if text.utf8.count > limit { rest += piece.utf8.count } else { text += MCPRedaction.redact(piece).text }
+        }
+        let diff: Data?
         if staged {
-            text = GitRunner.run(git, base + ["--cached"] + options, timeout: 20).map { String(decoding: $0, as: UTF8.self) } ?? ""
+            diff = GitRunner.run(git, base + ["--cached"] + options, timeout: 20)
         } else {
             // Without a first commit there is no HEAD to compare with: the new files are all there is.
-            let tracked = GitRunner.run(git, base + options + ["HEAD", "--"], timeout: 20, acceptedStatus: [0, 128])
-            text = tracked.map { String(decoding: $0, as: UTF8.self) } ?? ""
+            diff = GitRunner.run(git, base + options + ["HEAD", "--"], timeout: 20, acceptedStatus: [0, 128])
+        }
+        for file in UnifiedDiff.parse(diff.map { String(decoding: $0, as: UTF8.self) } ?? "") {
+            add(shown(file))
+        }
+        if !staged {
             for path in newFiles.prefix(40) {
-                text += newFile(path, in: root)
+                add(newFile(path, in: root))
                 if text.utf8.count > limit { break }
             }
         }
         guard text.utf8.count > limit else { return text }
         let cut = String(decoding: Array(text.utf8.prefix(limit)), as: UTF8.self)
-        return cut + "\n[The rest of the changes is cut here: \(text.utf8.count - limit) more bytes.]\n"
+        return cut + "\n[The rest of the changes is cut here: \(text.utf8.count - limit + rest) more bytes.]\n"
     }
 
-    /// A new file, as the agent reads it: its name and the start of its text (a folder by its name).
+    /// A file's diff as the agent reads it, or only its name when it (or the name it had) usually holds secrets.
+    static func shown(_ file: FileDiff) -> String {
+        let reason = [file.newPath, file.oldPath].compactMap { $0 }.lazy.compactMap(MCPProjects.secretReason).first
+        guard let reason else { return UnifiedDiff.render(file) }
+        return "Left out: \(file.path) (it \(reason))\n"
+    }
+
+    /// A new file, as the agent reads it: its name and the start of its text (a folder by its name, and a
+    /// file that usually holds secrets by its name alone).
     static func newFile(_ path: String, in root: String) -> String {
         if path.hasSuffix("/") { return "\nNew folder: \(path)\n" }
+        if let reason = MCPProjects.secretReason(path) { return "\nNew file: \(path) (left out: it \(reason))\n" }
         let url = URL(fileURLWithPath: root).appendingPathComponent(path)
         guard let handle = try? FileHandle(forReadingFrom: url) else { return "\nNew file: \(path)\n" }
         defer { try? handle.close() }

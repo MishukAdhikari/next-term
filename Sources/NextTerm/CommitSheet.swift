@@ -80,7 +80,7 @@ final class CommitSheet: NSObject, NSTextViewDelegate {
         writeButton.isHidden = writer == nil
         if let writer {
             writeButton.toolTip = "Asks \(writer.agent.name) to write the message from the changes below, for you to read and edit. "
-                + "Nothing is committed, and the changes go to \(writer.agent.name) and nowhere else."
+                + "Nothing is committed, and the changes go to \(writer.agent.name) and nowhere else, without files that usually hold secrets."
         }
         spinner.style = .spinning
         spinner.controlSize = .small

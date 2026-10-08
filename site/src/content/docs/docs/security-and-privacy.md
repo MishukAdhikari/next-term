@@ -73,6 +73,7 @@ Opening a file from the sidebar, or with <kbd>⌘</kbd>-click in the terminal, a
 - **Every change you make through Next Term’s git tools is checked first:** a hunk is staged, unstaged or reverted only if the file still matches the diff you saw. See [Side-by-side diffs](/docs/diffs/#safe-while-agents-keep-working).
 - **Replace in Files** re-reads each file and skips anything that changed since the search.
 - **The Git Log and blame only read,** with `--no-optional-locks` as well. In a partial clone, the Git Log lists a commit’s files without downloading them.
+- **Write with Agent sends the changes, not their secrets:** the commit sheet’s agent runs in an empty folder of its own, without the repository’s settings or hooks, and only when you press the button. `.env` files, keys and certificates, ssh keys and credentials files are named but not sent, and secret-looking values in the rest are masked as `•••`, as the MCP tools do. See [Branches](/docs/projects-and-git/#branches).
 - **The branch popup asks before it acts behind an agent:** anything that would change files in a folder where an agent is working asks first, and uncommitted changes go into a named stash rather than being overwritten.
 - **Nothing in a notebook runs.** Next Term has no kernel; it shows the outputs saved in the file. The head view for large data files never writes to them.
 - **Import only reads,** on this Mac. It never writes to the other app, and never opens a file that can hold credentials.
