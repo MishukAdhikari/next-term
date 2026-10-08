@@ -131,7 +131,8 @@ extension SelfTest {
         func row() -> [String] {
             stride(from: 220, through: 520, by: 5).map { width -> String in
                 layOut(width)
-                return "\(width): \(header.titleIsTruncated) \(header.summaryIsShown) \(header.branchGlyphIsShown) \(header.syncText)"
+                let counts = header.summaryIsShown ? (header.summaryIsTruncated ? "cut" : "shown") : "hidden"
+                return "\(width): \(header.titleIsTruncated) \(counts) \(header.branchGlyphIsShown) \(header.syncText)"
             }
         }
         let withKey = row()
