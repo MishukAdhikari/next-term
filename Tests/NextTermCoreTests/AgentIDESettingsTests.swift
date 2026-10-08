@@ -70,4 +70,62 @@ import Testing
         try "{}".write(to: empty, atomically: true, encoding: .utf8)
         #expect(AgentIDESettings.ensureEnabled(empty) == .enabled)
     }
+
+    @Test func deepNestingAndRepeatedKeysAreLeftAlone() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let settings = home.appendingPathComponent(".gemini/settings.json")
+        // Deeper than JSONC.maxDepth: read without recursion, and skipped rather than a crash.
+        let deep = "{\"a\": " + String(repeating: "[", count: 5000) + String(repeating: "]", count: 5000) + "}"
+        try deep.write(to: settings, atomically: true, encoding: .utf8)
+        #expect(AgentIDESettings.ensureEnabled(settings) == .skipped)
+        #expect(try String(contentsOf: settings, encoding: .utf8) == deep)
+        // Within the limit it is read.
+        let deepish = "{\"a\": " + String(repeating: "[", count: 200) + String(repeating: "]", count: 200) + "}"
+        try deepish.write(to: settings, atomically: true, encoding: .utf8)
+        #expect(AgentIDESettings.ensureEnabled(settings) == .enabled)
+        // Gemini reads the last of two "ide" keys; an edit would go to the first.
+        let twice = "{\"ide\": {\"enabled\": false}, \"ide\": {\"enabled\": true}}"
+        try twice.write(to: settings, atomically: true, encoding: .utf8)
+        #expect(AgentIDESettings.ensureEnabled(settings, overridingOff: true) == .skipped)
+        #expect(try String(contentsOf: settings, encoding: .utf8) == twice)
+        // A trailing comma is not plain JSON.
+        try "{\"theme\": \"x\",}".write(to: settings, atomically: true, encoding: .utf8)
+        #expect(AgentIDESettings.ensureEnabled(settings) == .skipped)
+    }
+
+    @Test func onlyTheTopLevelIDESettingIsTheSwitch() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let settings = home.appendingPathComponent(".gemini/settings.json")
+        // An "ide" inside another setting, and in a string, come before the real one: neither is it.
+        let text = "{\n  \"note\": \"\\\"ide\\\": {\\\"enabled\\\": false}\",\n  \"mcpServers\": {\"x\": {\"ide\": {\"enabled\": false}}},\n  \"ide\": {\"enabled\": false}\n}\n"
+        try text.write(to: settings, atomically: true, encoding: .utf8)
+        #expect(AgentIDESettings.ensureEnabled(settings, overridingOff: true) == .enabled)
+        let after = try String(contentsOf: settings, encoding: .utf8)
+        #expect(after == text.replacingOccurrences(of: "\"ide\": {\"enabled\": false}\n}", with: "\"ide\": {\"enabled\": true}\n}"))
+        let servers = json(settings)?["mcpServers"] as? [String: Any]
+        #expect(((servers?["x"] as? [String: Any])?["ide"] as? [String: Any])?["enabled"] as? Bool == false)
+        // An "ide" that is not an object is not ours.
+        try "{\"ide\": true}".write(to: settings, atomically: true, encoding: .utf8)
+        #expect(AgentIDESettings.ensureEnabled(settings) == .skipped)
+    }
+
+    @Test func theFileKeepsItsPermissionsAndByteOrderMark() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let settings = home.appendingPathComponent(".gemini/settings.json")
+        try (Data([0xEF, 0xBB, 0xBF]) + Data("{\n  \"apiKey\": \"made-up\"\n}\n".utf8)).write(to: settings)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: settings.path)
+        #expect(AgentIDESettings.ensureEnabled(settings) == .enabled)
+        let data = try Data(contentsOf: settings)
+        #expect(data.starts(with: [0xEF, 0xBB, 0xBF]))
+        #expect((try FileManager.default.attributesOfItem(atPath: settings.path)[.posixPermissions] as? Int) == 0o600)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: settings.deletingLastPathComponent().path) == ["settings.json"])
+        // A new file is its owner's alone.
+        let qwen = home.appendingPathComponent(".qwen/settings.json")
+        try FileManager.default.createDirectory(at: qwen.deletingLastPathComponent(), withIntermediateDirectories: true)
+        #expect(AgentIDESettings.ensureEnabled(qwen) == .enabled)
+        #expect((try FileManager.default.attributesOfItem(atPath: qwen.path)[.posixPermissions] as? Int) == 0o600)
+    }
 }

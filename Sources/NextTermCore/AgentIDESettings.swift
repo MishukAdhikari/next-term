@@ -31,54 +31,66 @@ public enum AgentIDESettings {
             return .notInstalled
         }
         guard FileManager.default.fileExists(atPath: settings.path) else {
-            return write(Data("{\n  \"ide\": {\n    \"enabled\": true\n  }\n}\n".utf8), to: settings) ? .enabled : .skipped
+            return write("{\n  \"ide\": {\n    \"enabled\": true\n  }\n}\n", to: settings, over: nil) ? .enabled : .skipped
         }
-        guard isRegularFile(canonicalPath(settings.path)), let data = try? Data(contentsOf: settings),
+        guard isRegularFile(canonicalPath(settings.path)), let data = FileManager.default.contents(atPath: settings.path),
               let text = String(data: data, encoding: .utf8) else { return .skipped }
-        // Plain JSON only: a file with comments fails to parse, and is then not ours to rewrite.
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return .skipped }
-        if let ide = json["ide"] as? [String: Any] {
-            if let enabled = ide["enabled"] as? Bool {
-                if enabled { return .alreadyOn }
-                guard overridingOff else { return .leftOff }
-                // "enabled": false → true inside "ide" (other settings have "enabled" too), by text.
-                guard let ide = text.range(of: #""ide"\s*:\s*\{"#, options: .regularExpression),
-                      let close = text[ide.upperBound...].firstIndex(of: "}"),
-                      let range = text.range(of: #""enabled"\s*:\s*false"#, options: .regularExpression, range: ide.upperBound..<close)
-                else { return .skipped }
-                let updated = text.replacingCharacters(in: range, with: "\"enabled\": true")
-                return verifiedWrite(updated, to: settings) ? .enabled : .skipped
+        // Plain JSON only: a file with comments (or trailing commas) is not ours to rewrite. Read as MCP registration
+        // reads agents' files: without recursion, and no deeper than JSONC.maxDepth, so a file nested deeper is
+        // skipped rather than a crash. Repeated keys are skipped too: Gemini reads the last, an edit would go to the first.
+        guard let document = JSONC(text), !document.hasComments, !document.hasTrailingCommas,
+              case .object(let root)? = document.root, !root.hasRepeatedKeys else { return .skipped }
+        guard let ide = root.member("ide") else {
+            // No "ide" yet: it goes first in the top-level object, leaving the rest byte for byte.
+            let newline = document.lineEnding
+            return insert(into: root, of: document, spread: true, over: data, to: settings) { indent in
+                "\"ide\": {" + newline + indent + "  \"enabled\": true" + newline + indent + "}"
             }
-            // "ide" is there without "enabled": add it inside, by text, so nothing else moves.
-            guard let range = text.range(of: #""ide"\s*:\s*\{"#, options: .regularExpression),
-                  text.range(of: #""ide"\s*:"#, options: .regularExpression, range: range.upperBound..<text.endIndex) == nil else {
-                return .skipped
-            }
-            let inside = text[range.upperBound...].drop { $0 == " " || $0 == "\n" || $0 == "\r" || $0 == "\t" }
-            let addition = inside.first == "}" ? "\"enabled\": true" : "\"enabled\": true, "
-            let updated = text.replacingCharacters(in: range, with: text[range] + addition)
-            return verifiedWrite(updated, to: settings) ? .enabled : .skipped
         }
-        if json["ide"] != nil { return .skipped } // something unexpected: not ours
-        // No "ide" yet: insert it first in the top-level object, leaving the rest byte for byte.
-        guard let brace = text.firstIndex(of: "{") else { return .skipped }
-        let afterBrace = text[text.index(after: brace)...]
-        let isEmpty = afterBrace.drop { $0 == " " || $0 == "\n" || $0 == "\r" || $0 == "\t" }.first == "}"
-        let insertion = isEmpty ? "\n  \"ide\": {\n    \"enabled\": true\n  }\n" : "\n  \"ide\": {\n    \"enabled\": true\n  },"
-        var updated = text
-        updated.insert(contentsOf: insertion, at: text.index(after: brace))
-        return verifiedWrite(updated, to: settings) ? .enabled : .skipped
+        guard case .object(let object) = ide.value, !object.hasRepeatedKeys else { return .skipped } // something unexpected: not ours
+        guard let enabled = object.member("enabled") else {
+            // "ide" is there without "enabled": it goes first inside, so nothing else moves.
+            return insert(into: object, of: document, spread: false, over: data, to: settings) { _ in "\"enabled\": true" }
+        }
+        switch document.string(enabled.value.range) {
+        case "true":
+            return .alreadyOn
+        case "false":
+            guard overridingOff else { return .leftOff }
+            // This "enabled" only: other settings have one too.
+            var updated = text
+            updated.unicodeScalars.replaceSubrange(enabled.value.range, with: "true".unicodeScalars)
+            return verifiedWrite(updated, over: data, to: settings) ? .enabled : .skipped
+        default:
+            return .skipped
+        }
     }
 
-    /// Writes only if the result is valid JSON with the setting on (never leave a broken settings file).
-    private static func verifiedWrite(_ text: String, to url: URL) -> Bool {
-        let data = Data(text.utf8)
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              (json["ide"] as? [String: Any])?["enabled"] as? Bool == true else { return false }
-        return write(data, to: url)
+    /// The text with a member put first in `object` (`JSONC.insertion`), written if it checks out.
+    private static func insert(into object: JSONC.Object, of document: JSONC, spread: Bool, over data: Data, to url: URL,
+                               member: (_ indent: String) -> String) -> Result {
+        let insertion = document.insertion(into: object, spread: spread, member: member)
+        var updated = document.text
+        updated.unicodeScalars.insert(contentsOf: insertion.text.unicodeScalars, at: insertion.at)
+        return verifiedWrite(updated, over: data, to: url) ? .enabled : .skipped
     }
 
-    private static func write(_ data: Data, to url: URL) -> Bool {
-        (try? TextFile.write(data, to: url)) != nil
+    /// Writes only if the result is plain JSON with the setting on (never leave a broken settings file), and only over
+    /// the bytes it was made from.
+    private static func verifiedWrite(_ text: String, over data: Data, to url: URL) -> Bool {
+        guard let document = JSONC(text), !document.hasComments, !document.hasTrailingCommas,
+              case .object(let root)? = document.root, case .object(let ide)? = root.member("ide")?.value,
+              let enabled = ide.member("enabled"), document.string(enabled.value.range) == "true",
+              (try? JSONSerialization.jsonObject(with: Data(text.utf8))) != nil else { return false }
+        return write(text, to: url, over: data)
+    }
+
+    /// Through `SafeWrite`: the file's permissions kept (a new one is 0600), and a save by the agent since `data` was
+    /// read (nil: there was no file) is kept instead. A UTF-8 byte order mark stays.
+    private static func write(_ text: String, to url: URL, over data: Data?) -> Bool {
+        let mark = Data([0xEF, 0xBB, 0xBF])
+        var bytes = Data(text.utf8)
+        if data?.starts(with: mark) == true, !bytes.starts(with: mark) { bytes = mark + bytes }
+        return (try? SafeWrite.replace(url.path, with: bytes, expecting: data.map { .contents($0) } ?? .noFile)) != nil
     }
 }
