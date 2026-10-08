@@ -107,6 +107,11 @@ extension SelfTest {
         if let down = mouse(.leftMouseDown, on: header(base)) { header(base).mouseDown(with: down) }
         check(group.focused === base && window.firstResponder === base.view && header(base).focused && !header(third).focused,
               "clicking a header gives its pane the keyboard")
+        check(header(base).accessibilityLabel()?.hasSuffix(", has the keyboard") == true
+              && header(third).accessibilityLabel()?.contains("has the keyboard") == false,
+              "VoiceOver hears which pane has the keyboard", header(base).accessibilityLabel() ?? "")
+        let heard = header(base).accessibilityChildren() ?? []
+        check(heard.count == 1 && (heard.first as? NSButton) === header(base).closeButton, "and finds only the × in a header: its label says the rest")
 
         // Only the × of the pane with the keyboard names ⌘W's key, and it follows a change in Settings.
         let shortcuts = KeyboardShortcuts.shared

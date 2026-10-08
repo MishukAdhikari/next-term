@@ -139,7 +139,13 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate {
     private var renameField: NSTextField?
     private var hovering = false { didSet { if hovering != oldValue { refresh() } } }
     /// The pane has the keyboard: the selected tab's look, and its × always shows.
-    var focused = false { didSet { if focused != oldValue { refresh() } } }
+    var focused = false {
+        didSet {
+            guard focused != oldValue else { return }
+            refresh()
+            update() // VoiceOver hears it
+        }
+    }
     /// The ×'s tooltip with ⌘W's key, on the pane with the keyboard, following the key when it changes.
     private var closeTip: ShortcutToolTip?
     /// What the title was fitted from, so a refresh touches only what changed.
@@ -204,7 +210,8 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate {
         remoteMark.link = remote?.link
         remoteMark.isHidden = remote == nil
         if toolTip != tab.tooltip { toolTip = tab.tooltip }
-        let spoken = [title, tab.ownStateDescription ?? "", remote?.summary ?? ""].filter { !$0.isEmpty }.joined(separator: ", ")
+        let parts = [title, tab.ownStateDescription ?? "", remote?.summary ?? "", focused ? "has the keyboard" : ""]
+        let spoken = parts.filter { !$0.isEmpty }.joined(separator: ", ")
         if accessibilityLabel() != spoken { setAccessibilityLabel(spoken) }
         let closeLabel = "Close pane \(title)"
         if closeButton.accessibilityLabel() != closeLabel { closeButton.setAccessibilityLabel(closeLabel) }
@@ -221,6 +228,14 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate {
             if !focused { closeButton.toolTip = "Close pane" }
         }
         needsDisplay = true
+    }
+
+    /// VoiceOver finds the × while it shows, and the rename field while there is one; the mark, the title
+    /// and the server are in the header's own label.
+    override func accessibilityChildren() -> [Any]? {
+        var children: [NSView] = closeButton.isHidden ? [] : [closeButton]
+        if let renameField { children.insert(renameField, at: 0) }
+        return children
     }
 
     override func layout() {
