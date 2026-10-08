@@ -342,7 +342,9 @@ final class KeyHint: NSTextField {
         label.textColor = Theme.textDim
         label.alignment = .right
         Typography.singleLine(label, truncation: .byClipping)
-        label.setAccessibilityElement(false) // the tab's or the button's help says it
+        // The tab's or the button's help says it. VoiceOver is given the field's cell, not the field.
+        label.setAccessibilityElement(false)
+        label.cell?.setAccessibilityElement(false)
     }
 
     /// From the key to the icon, as from a tab's "⌘1" to its ×.

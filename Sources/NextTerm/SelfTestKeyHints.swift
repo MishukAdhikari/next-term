@@ -25,6 +25,14 @@ extension SelfTest {
         }
     }
 
+    /// Whether VoiceOver is given any of `fields` among `view`'s children. It gets a control's cell, not the
+    /// control, so a field that says it is no element is still heard while its cell is one.
+    private static func voiceOverHears(_ fields: [NSTextField], in view: NSView?) -> Bool {
+        let cells = fields.compactMap(\.cell)
+        let children = view?.accessibilityChildren() ?? []
+        return children.contains { child in cells.contains { $0 === child as AnyObject } }
+    }
+
     private static func tabBarKeyHintChecks() {
         let shortcuts = KeyboardShortcuts.shared
         func key(_ id: String) -> String? { shortcuts.chord(for: id)?.display }
@@ -43,8 +51,11 @@ extension SelfTest {
               "key hints: the tab bar's sidebar, + and fold buttons show their keys, as the tabs show ⌘1", "\(keys)")
         let hints = bar.subviews.compactMap { $0 as? KeyHint }
         let helped = bar.subviews.compactMap { $0 as? NSButton }.filter { $0.accessibilityHelp() == key("newTab:") }
-        check(hints.allSatisfy { !$0.isAccessibilityElement() } && helped.count == 1,
-              "key hints: VoiceOver hears a key once, as its button's help", "\(helped.count) buttons with it")
+        let tab = bar.tabView(at: 0)
+        let tabKey = tab?.subviews.compactMap { $0 as? NSTextField }.filter { !$0.isHidden && $0.stringValue == "⌘1" } ?? []
+        let heard = voiceOverHears(hints, in: bar) || tabKey.isEmpty || voiceOverHears(tabKey, in: tab)
+        check(!hints.isEmpty && !heard && helped.count == 1,
+              "key hints: VoiceOver hears a key once, as its button's or its tab's help", "heard \(heard), \(helped.count) buttons with ⌘T")
 
         // Settings changes a key: the hint follows at once, says nothing without one, and comes back.
         shortcuts.set(KeyChord(key: "j", command: true, control: true), for: "toggleTerminalCollapsed:")
@@ -112,8 +123,10 @@ extension SelfTest {
         check(key != nil && header.shownHideKey == key && !header.titleIsTruncated && header.summaryIsShown && header.syncText == "Pull 152",
               "key hints: the sidebar's hide button shows its key beside the branch, its counts and Pull, all in full",
               "\(header.shownHideKey ?? "none"), \(header.syncText)")
-        check(header.hideButton.accessibilityHelp() == key && header.hideButton.accessibilityLabel()?.contains("⌘") == false,
-              "key hints: the hide button's help names the key, its label does not", header.hideButton.accessibilityHelp() ?? "none")
+        let heard = voiceOverHears(header.subviews.compactMap { $0 as? KeyHint }, in: header)
+        check(header.hideButton.accessibilityHelp() == key && header.hideButton.accessibilityLabel()?.contains("⌘") == false && !heard,
+              "key hints: the hide button's help names the key, its label does not, and VoiceOver hears it there only",
+              "\(header.hideButton.accessibilityHelp() ?? "none"), heard beside it \(heard)")
 
         // Narrower and narrower: the branch name, the counts, the glyph and Pull fare as they would without
         // the key, which goes first.
