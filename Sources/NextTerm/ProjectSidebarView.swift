@@ -1138,7 +1138,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             DispatchQueue.main.async { [weak self] in self?.runHeld() }
         }
         guard !renameCancelled, newName != node.name else { return }
-        let byKey = NSApp.currentEvent?.type == .keyDown // Return, not a click on another row
+        // Return, as the field says it ended (not a click on another row): however the key came, which the
+        // event being handled need not say.
+        let byKey = (notification.userInfo?["NSTextMovement"] as? Int) == NSTextMovement.return.rawValue
         rename(node.url, to: newName)
         // Named with Return, it stays selected, as in Finder: the folder's new listing makes it a new node,
         // which the outline would otherwise drop from the selection.
