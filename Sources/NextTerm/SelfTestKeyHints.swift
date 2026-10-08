@@ -19,10 +19,8 @@ extension SelfTest {
         railKeyHintChecks()
         // The window's own arrow: VoiceOver hears what it does, and the key once, in its help.
         let arrow = c.tabBar.subviews.compactMap { $0 as? NSButton }.first { $0.accessibilityLabel()?.hasSuffix("the terminal") == true }
-        if let arrow {
-            check(arrow.accessibilityLabel()?.contains("⌘") == false && arrow.accessibilityHelp() == shortcuts.chord(for: "toggleTerminalCollapsed:")?.display,
-                  "key hints: the terminal's arrow names its key once, in its help", "\(arrow.accessibilityLabel() ?? "") | \(arrow.accessibilityHelp() ?? "none")")
-        }
+        check(arrow?.accessibilityLabel()?.contains("⌘") == false && arrow?.accessibilityHelp() == shortcuts.chord(for: "toggleTerminalCollapsed:")?.display,
+              "key hints: the terminal's arrow names its key once, in its help", "\(arrow?.accessibilityLabel() ?? "no arrow") | \(arrow?.accessibilityHelp() ?? "none")")
     }
 
     /// Whether VoiceOver is given any of `fields` among `view`'s children. It gets a control's cell, not the
