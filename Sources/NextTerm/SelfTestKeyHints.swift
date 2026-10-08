@@ -32,6 +32,24 @@ extension SelfTest {
         return children.contains { child in cells.contains { $0 === child as AnyObject } }
     }
 
+    /// The pointer coming onto a view or leaving it, as AppKit tells a tracking area's owner.
+    private static func crossing(_ type: NSEvent.EventType) -> NSEvent? {
+        NSEvent.enterExitEvent(with: type, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                               eventNumber: 0, trackingNumber: 0, userData: nil)
+    }
+
+    /// The pointer comes onto `hint`'s button in `view` (or leaves it), through the tracking area the hint keeps
+    /// on the button. False when there is none.
+    private static func pointer(onto hint: KeyHint?, in view: NSView, _ onto: Bool) -> Bool {
+        var area: NSTrackingArea?
+        for case let button as NSButton in view.subviews where area == nil {
+            area = button.trackingAreas.first { $0.owner === hint }
+        }
+        guard let owner = area?.owner as? NSResponder, let event = crossing(onto ? .mouseEntered : .mouseExited) else { return false }
+        if onto { owner.mouseEntered(with: event) } else { owner.mouseExited(with: event) }
+        return true
+    }
+
     private static func tabBarKeyHintChecks() {
         let shortcuts = KeyboardShortcuts.shared
         func key(_ id: String) -> String? { shortcuts.chord(for: id)?.display }
@@ -98,6 +116,32 @@ extension SelfTest {
         let changed = zip(withKeys, withoutKeys).filter { $0 != $1 }.map { "\($0) vs \($1)" }
         check(changed.isEmpty && shownAt == [false, true], "key hints: in a narrow tab bar they give way before a tab narrows or goes behind »",
               "shown at 420 and 1100: \(shownAt); " + changed.prefix(3).joined(separator: "; "))
+
+        // There, one that gave way shows while the pointer is on its button, and a click where it shows still
+        // reaches what is under it. The sidebar icon's shows after it: before it are the window's buttons.
+        bar.setFrameSize(NSSize(width: 420, height: TabBarView.height))
+        bar.needsLayout = true
+        bar.layoutSubtreeIfNeeded()
+        let plus = hints.first { $0.key == key("newTab:") }
+        let entered = pointer(onto: plus, in: bar, true)
+        let hovered = plus?.hoverKey
+        let box = plus?.hoverFrame ?? .zero
+        let spot = bar.convert(NSPoint(x: box.midX, y: box.midY), to: nil)
+        let through = bar.hitTest(spot)
+        _ = pointer(onto: plus, in: bar, false)
+        let under = bar.hitTest(spot)
+        let left = plus?.hoverKey
+        let clickedThrough = under != nil && through === under && !(through is KeyHintOverlay)
+        check(entered && bar.shownKeys.newTab == nil && hovered == key("newTab:") && left == nil && clickedThrough,
+              "key hints: in a narrow tab bar the +'s key shows while the pointer is on it, lets a click through, and goes as it leaves",
+              "\(hovered ?? "none"), then \(left ?? "none"); a click there reaches \(String(describing: through)), without it \(String(describing: under))")
+        let sidebar = hints.first { $0.key == key("toggleProjectSidebar:") }
+        _ = pointer(onto: sidebar, in: bar, true)
+        let sidebarKey = sidebar?.hoverKey
+        let sidebarBox = sidebar?.hoverFrame ?? .zero
+        _ = pointer(onto: sidebar, in: bar, false)
+        check(sidebarKey == key("toggleProjectSidebar:") && sidebarBox.minX >= bar.leadingInset,
+              "key hints: the sidebar icon's key shows clear of the window's buttons", "\(sidebarKey ?? "none") at \(sidebarBox)")
     }
 
     private static func headerKeyHintChecks() {
@@ -148,6 +192,29 @@ extension SelfTest {
         check(changed.isEmpty && narrow == nil, "key hints: in a narrow header the key gives way before anything in it is cut or shortened",
               "at 300: \(narrow ?? "none"); " + changed.prefix(3).joined(separator: "; "))
         check(removed == nil, "key hints: the header's goes when ⌘B is removed", removed ?? "none")
+
+        // There the key that gave way shows the moment the pointer is on the button, just before its icon,
+        // over the counts or Pull. Nothing in the header moves for it, and it goes as the pointer leaves.
+        layOut(300)
+        let hint = header.subviews.compactMap { $0 as? KeyHint }.first
+        let place = header.titleFrame
+        let entered = pointer(onto: hint, in: header, true)
+        let hovered = hint?.hoverKey
+        let box = hint?.hoverFrame ?? .zero
+        let held = header.titleFrame
+        let labels = header.subviews.compactMap { $0 as? KeyHintOverlay }.map(\.label)
+        let heardOver = labels.isEmpty || voiceOverHears(labels, in: header)
+        _ = pointer(onto: hint, in: header, false)
+        let left = hint?.hoverKey
+        let icon = header.hideButton.frame.midX - (header.hideButton.image?.size.width ?? 0) / 2
+        let beside = box.maxX <= icon && box.maxX >= icon - KeyHint.gap
+        let came = entered && key != nil && hovered == key
+        check(came && header.shownHideKey == nil && beside && left == nil,
+              "key hints: in a narrow header the hide button's key shows while the pointer is on it, just before its icon, and goes as it leaves",
+              "\(hovered ?? "none") at \(box), icon at \(icon); then \(left ?? "none")")
+        check(held == place && header.titleFrame == place && !heardOver && header.hideButton.accessibilityHelp() == key,
+              "key hints: the branch name keeps its place meanwhile, and VoiceOver hears the key in the button's help only",
+              "\(place), then \(held) and \(header.titleFrame); heard over the row \(heardOver)")
     }
 
     /// The branch popup's own ⌘R, before its fetch button.
@@ -188,5 +255,30 @@ extension SelfTest {
         KeyboardShortcuts.shared.reset("toggleTerminalCollapsed:")
         check(withKey == withoutKey && short == nil, "key hints: on a short rail it gives way before a tab's mark does",
               "at 150: \(short ?? "none"); \(withKey) vs \(withoutKey)")
+
+        // There it shows under the arrow while the pointer is on the arrow, over the first mark, which stays.
+        layOut(150)
+        let hint = rail.subviews.compactMap { $0 as? KeyHint }.first
+        let marks = rail.markButtons.map(\.frame)
+        let arrow = rail.convert(NSPoint(x: TerminalRail.width / 2, y: rail.topInset + TabBarView.height / 2), to: nil)
+        let below = rail.convert(NSPoint(x: TerminalRail.width / 2, y: rail.bounds.height - 10), to: nil)
+        let moves = [arrow, below].compactMap {
+            NSEvent.mouseEvent(with: .mouseMoved, location: $0, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                               eventNumber: 0, clickCount: 0, pressure: 0)
+        }
+        var seen: [String?] = []
+        for move in moves {
+            rail.mouseMoved(with: move)
+            seen.append(hint?.hoverKey)
+        }
+        if let move = moves.first { rail.mouseMoved(with: move) }
+        if let exit = crossing(.mouseExited) { rail.mouseExited(with: exit) }
+        let left = hint?.hoverKey
+        let onArrow = seen.first ?? nil
+        let lower = seen.last ?? nil
+        let stayed = rail.markButtons.map(\.frame) == marks
+        check(moves.count == 2 && rail.shownKey == nil && onArrow == key && lower == nil && left == nil && stayed,
+              "key hints: on a short rail the key shows while the pointer is on the arrow, and the marks stay put",
+              "on the arrow \(onArrow ?? "none"), lower \(lower ?? "none"), gone \(left ?? "none")")
     }
 }
