@@ -133,11 +133,10 @@ public struct SkillFrontMatter: Equatable, Sendable {
         while index < block.count {
             let line = block[index]
             index += 1
-            guard !line.hasPrefix(" "), !line.hasPrefix("\t"), let colon = line.firstIndex(of: ":") else { continue }
-            let key = String(line[..<colon]).trimmingCharacters(in: .whitespaces)
-            guard !key.isEmpty, !key.hasPrefix("#") else { continue }
+            guard !line.hasPrefix(" "), !line.hasPrefix("\t"), !line.hasPrefix("#"), let split = splitKey(line), !split.0.isEmpty else { continue }
+            let (key, rest) = split
             result.keys.append(key)
-            var value = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+            var value = rest.trimmingCharacters(in: .whitespaces)
             if value.hasPrefix("|") || value.hasPrefix(">") {
                 // A block scalar: the indented lines that follow.
                 let folded = value.hasPrefix(">")
@@ -173,6 +172,22 @@ public struct SkillFrontMatter: Equatable, Sendable {
             }
         }
         return result
+    }
+
+    /// A top-level `key: value` line's key and the text after its colon. A quoted key is the key itself,
+    /// as YAML reads it (`"hooks":` is `hooks`), so a colon inside the quotes is part of it.
+    static func splitKey(_ line: String) -> (String, Substring)? {
+        guard let quote = line.first, quote == "\"" || quote == "'" else {
+            guard let colon = line.firstIndex(of: ":") else { return nil }
+            return (String(line[..<colon]).trimmingCharacters(in: .whitespaces), line[line.index(after: colon)...])
+        }
+        let body = line.dropFirst()
+        guard let close = body.firstIndex(of: quote) else { return nil }
+        let after = body[body.index(after: close)...].drop { $0 == " " || $0 == "\t" }
+        guard after.first == ":" else { return nil }
+        let raw = String(body[..<close])
+        let key = quote == "\"" ? raw.replacingOccurrences(of: "\\\"", with: "\"") : raw.replacingOccurrences(of: "''", with: "'")
+        return (key, after.dropFirst())
     }
 
     /// Names Claude Code keeps for itself: `synced` is the folder claude.ai's skills arrive in.
@@ -218,8 +233,13 @@ public struct SkillCopy: Equatable, Sendable {
     /// SHA-256 over the folder's files (see SkillHash.folder), computed only when a name has more than
     /// one copy to compare; nil otherwise, and when broken.
     public var contentHash: String?
-    /// The plugin the folder also is (.claude-plugin/plugin.json): Codex then lists it as plugin:name.
+    /// Codex's namespace for the skill, from the first package manifest with a name in Codex's order (an
+    /// Agent Plugins plugin.json, then .codex-plugin, .claude-plugin, .cursor-plugin): Codex then lists it
+    /// as plugin:name.
     public var pluginName: String?
+    /// The Claude Code plugin the folder also is (.claude-plugin/plugin.json): its usable `name`, else
+    /// this entry's own name, which is what Claude Code keys it by ("<name>@skills-dir").
+    public var claudePluginName: String?
     /// The folder is a git clone (has .git): its history is part of what Unify would move.
     public var hasGit: Bool { FileManager.default.fileExists(atPath: (realPath as NSString).appendingPathComponent(".git")) }
     /// The folder holds files that run: scripts or executables (read when asked).
@@ -399,11 +419,10 @@ public struct SkillInventory: Sendable {
                 return SkillCopy(root: root, path: path, realPath: real, isLink: isLink, broken: true, frontMatter: nil, contentHash: nil)
             }
             let text = (try? String(contentsOfFile: skillFile, encoding: .utf8)) ?? ""
-            let plugin = (real as NSString).appendingPathComponent(".claude-plugin/plugin.json")
-            let pluginName = FileManager.default.contents(atPath: plugin)
-                .flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }?["name"] as? String
-            return SkillCopy(root: root, path: path, realPath: real, isLink: isLink, broken: false,
-                             frontMatter: SkillFrontMatter.parse(text), contentHash: nil, pluginName: pluginName)
+            let names = SkillPackage.names(folder: real)
+            let claudePlugin = names.claude ?? (names.isClaudePlugin ? name : nil)
+            return SkillCopy(root: root, path: path, realPath: real, isLink: isLink, broken: false, frontMatter: SkillFrontMatter.parse(text),
+                             contentHash: nil, pluginName: names.codex, claudePluginName: claudePlugin)
         }
     }
 }

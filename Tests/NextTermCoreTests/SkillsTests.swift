@@ -34,6 +34,15 @@ import Testing
         #expect(SkillFrontMatter.parse("# no front matter") == nil)
     }
 
+    /// YAML reads a quoted key as the key itself, colon and all.
+    @Test func quotedKeysAreKeys() throws {
+        let front = try #require(SkillFrontMatter.parse("---\nname: demo\n\"hooks\":\n  Stop: x\n'mcpServers': {}\n\"a:b\": c\n# note: no\n---\n"))
+        #expect(front.keys == ["name", "hooks", "mcpServers", "a:b"])
+        #expect(front.name == "demo")
+        let quotedName = try #require(SkillFrontMatter.parse("---\n\"name\": demo\n---\n"))
+        #expect(quotedName.name == "demo")
+    }
+
     @Test func theStandardsNameRules() {
         func problem(_ name: String?, folder: String, description: String? = "d") -> String? {
             var front = SkillFrontMatter()
@@ -247,6 +256,24 @@ import Testing
         let copy = try row("tidy-prose").copies[0]
         #expect(copy.trigger(for: .codex) == "$tidy-prose:tidy-prose")
         #expect(copy.trigger(for: .commandCode) == "/tidy-prose")
+    }
+
+    /// Codex names a skill after the first manifest in its own order; Claude Code keys its plugin by its
+    /// own manifest's name, else by the entry's name (a link's name in ~/.claude/skills).
+    @Test func pluginNamesFollowEachAgent() throws {
+        try skill(".agents/skills", "both", extra: [".codex-plugin/plugin.json": #"{"name": "a"}"#, ".claude-plugin/plugin.json": #"{"name": "b"}"#])
+        try skill(".agents/skills", "claude-only", extra: [".claude-plugin/plugin.json": #"{"name": "b"}"#])
+        try skill(".agents/skills", "nameless", extra: [".claude-plugin/plugin.json": "{}"])
+        try skill(".agents/skills", "plain")
+        try link(".claude/skills", "renamed", to: "../../.agents/skills/nameless")
+        let both = try row("both").copies[0]
+        #expect(both.trigger(for: .codex) == "$a:both" && both.claudePluginName == "b")
+        let claudeOnly = try row("claude-only").copies[0]
+        #expect(claudeOnly.trigger(for: .codex) == "$b:claude-only" && claudeOnly.claudePluginName == "b")
+        #expect(try row("nameless").copies[0].claudePluginName == "nameless")
+        #expect(try row("nameless").copies[0].trigger(for: .codex) == "$nameless")
+        #expect(try row("renamed").copies[0].claudePluginName == "renamed")
+        #expect(try row("plain").copies[0].claudePluginName == nil)
     }
 
     @Test func linksAreRelativeLikeTheSkillsCLIMakesThem() {

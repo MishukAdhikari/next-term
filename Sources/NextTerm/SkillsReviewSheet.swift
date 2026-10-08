@@ -21,7 +21,8 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
 
     private let list = NSTableView()
     private let heading = NSTextField(labelWithString: "")
-    private let details = NSTextField(wrappingLabelWithString: "")
+    /// What the review says about the selected skill (readable by the self-test).
+    private(set) var details = NSTextField(wrappingLabelWithString: "")
     private let fileChoice = NSPopUpButton()
     private(set) var textView: NSTextView!
     private let claudeLink = NSButton(checkboxWithTitle: "Link it for Claude Code (in ~/.claude/skills)", target: nil, action: nil)

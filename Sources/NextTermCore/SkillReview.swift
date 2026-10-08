@@ -40,6 +40,9 @@ public struct SkillReview: Sendable {
     public let urls: [String]
     /// The first line of the skill's own licence file (LICENSE, LICENSE.txt, …): "Apache License", say.
     public let licenseFile: String?
+    /// The plugin or extension the folder also is, with what its Claude Code plugin would start; nil for
+    /// a plain skill.
+    public let package: SkillPackage?
 
     /// The licence as stated: SKILL.md's `license` field, else the skill's licence file.
     public var license: String? {
@@ -56,8 +59,9 @@ public struct SkillReview: Sendable {
     public var refused: Bool { flags.contains { $0.level == .refuse } }
 
     /// Reads a skill folder that has been downloaded but not installed. `folderName` is the name it will
-    /// be installed under.
-    public static func review(folder: String, folderName: String) -> SkillReview {
+    /// be installed under; `home` expands `~` in a plugin manifest's paths (without it they count as
+    /// outside the folder).
+    public static func review(folder: String, folderName: String, home: String? = nil) -> SkillReview {
         let manager = FileManager.default
         var files: [File] = []
         var flags: [Flag] = []
@@ -160,9 +164,12 @@ public struct SkillReview: Sendable {
             let lines = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
             if let first = lines.first(where: { !$0.isEmpty }) { licenseFile = String(first.prefix(100)) }
         }
+        let package = SkillPackage.read(folder: folder, folderName: folderName, home: home)
+        flags += package?.flags ?? []
+        let said = capabilities(front: front, skillText: skillText, files: files, package: package)
         return SkillReview(name: folderName, frontMatter: front, skillText: skillText, files: files.sorted { $0.path < $1.path },
-                           flags: flags.sorted { $0.level > $1.level }, capabilities: capabilities(front: front, skillText: skillText, files: files),
-                           urls: urls.sorted(), licenseFile: licenseFile)
+                           flags: flags.sorted { $0.level > $1.level }, capabilities: said,
+                           urls: urls.sorted(), licenseFile: licenseFile, package: package)
     }
 
     static let scriptExtensions: Set<String> = ["sh", "bash", "zsh", "fish", "py", "js", "mjs", "cjs", "ts", "rb", "pl", "php", "ps1", "command", "applescript", "scpt"]
@@ -424,6 +431,29 @@ public struct SkillReview: Sendable {
         return String(out)
     }
 
+    /// Text from a skill's files on one line, for a row: hidden characters and line breaks written out
+    /// (⟦U+000A⟧), and cut at `limit` characters with "…", never inside a written-out character.
+    public static func oneLine(_ text: String, limit: Int = 200) -> String {
+        var out = String.UnicodeScalarView()
+        for scalar in revealHidden(text).unicodeScalars {
+            if lineBreaks.contains(scalar.value) {
+                out.append(contentsOf: String(format: "⟦U+%04X⟧", scalar.value).unicodeScalars)
+            } else {
+                out.append(scalar)
+            }
+        }
+        let line = String(out)
+        guard line.count > limit else { return line }
+        var cut = String(line.prefix(limit))
+        if let open = cut.range(of: "⟦", options: .backwards), !cut[open.upperBound...].contains("⟧") {
+            cut = String(cut[..<open.lowerBound])
+        }
+        return cut + "…"
+    }
+
+    /// Characters that break a line (revealHidden leaves them, as text needs them).
+    static let lineBreaks: Set<UInt32> = [0x0A, 0x0B, 0x0C, 0x0D, 0x85, 0x2028, 0x2029]
+
     /// The text with every hidden character written out, so the user sees it: ⟦U+200B⟧.
     public static func revealHidden(_ text: String) -> String {
         let scalars = Array(text.unicodeScalars)
@@ -442,18 +472,50 @@ public struct SkillReview: Sendable {
     }
 
     /// In plain words, what the skill may do once installed (Claude Code and Command Code honour
-    /// most of these).
-    static func capabilities(front: SkillFrontMatter?, skillText: String, files: [File]) -> [String] {
+    /// most of these), and which agent runs its parts by itself when it is also a package.
+    static func capabilities(front: SkillFrontMatter?, skillText: String, files: [File], package: SkillPackage? = nil) -> [String] {
         var items: [String] = []
         let keys = Set(front?.keys ?? [])
         if let tools = front?.allowedTools, !tools.isEmpty { items.append("Runs these tools without asking while it is used: \(tools)") }
         if keys.contains("hooks") { items.append("Adds hooks that run commands for the rest of the session (Claude Code).") }
-        if skillText.contains("!`") { items.append("Runs shell commands before the agent reads it (!`…` lines).") }
+        if runsShellLines(skillText) { items.append("Runs shell commands before the agent reads it (!`…` lines or ```! blocks).") }
         if keys.contains("disable-model-invocation") { items.append("Is used only when you name it.") } else { items.append("The agent may use it on its own when the task fits its description.") }
         if keys.contains("context") || keys.contains("agent") { items.append("Runs in a separate agent context.") }
         if keys.contains("mcpServers") { items.append("Asks for MCP servers.") }
+        if let plugin = package?.claude, plugin.startsPrograms { items.append(claudeStartsLine(plugin)) }
         let scripts = files.filter { $0.script || $0.executable || $0.binary }.count
-        if scripts > 0 { items.append("Brings \(scripts) file\(scripts == 1 ? "" : "s") that can run (scripts or programs); the agent runs them only through its own tools.") }
+        if scripts > 0 {
+            let counted = "Brings \(scripts) file\(scripts == 1 ? "" : "s") that can run (scripts or programs)"
+            // Only the agent's own tools run them, unless a package's parts run by themselves.
+            let byItself = package?.runsPartsByItself ?? false
+            items.append(byItself ? counted + "." : counted + "; the agent runs them only through its own tools.")
+        }
         return items
+    }
+
+    /// Claude Code runs a skill's `` !`…` `` lines and ```` ```! ```` blocks in its shell before the agent
+    /// reads the skill.
+    static func runsShellLines(_ text: String) -> Bool {
+        if text.contains("!`") { return true }
+        return text.split(whereSeparator: \.isNewline).contains { line in
+            line.drop { $0 == " " || $0 == "\t" }.hasPrefix("```!")
+        }
+    }
+
+    /// Who starts what in a Claude Code plugin: "Claude Code starts its MCP servers and hooks by itself …".
+    static func claudeStartsLine(_ plugin: SkillPackage.ClaudePlugin) -> String {
+        var started: [String] = []
+        if plugin.serverCount > 0 { started.append("MCP servers") }
+        if plugin.partCounts[.hook] != nil { started.append("hooks") }
+        if plugin.partCounts[.monitor] != nil { started.append("monitors") }
+        if plugin.partCounts[.lspServer] != nil { started.append("LSP servers") }
+        guard !started.isEmpty else {
+            // bin/ is not started: Claude Code puts it on its shell's PATH (hand check H6).
+            if plugin.programCount > 0 {
+                return "Claude Code puts the programs in its bin/ folder on its shell's PATH once it is added, so they run by name."
+            }
+            return "Claude Code loads its plugin parts by itself once it is added, outside the agent's tools."
+        }
+        return "Claude Code starts its \(SkillPackage.list(started)) by itself once it is added, outside the agent's tools."
     }
 }

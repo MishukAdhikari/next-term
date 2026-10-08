@@ -310,6 +310,8 @@ extension SelfTest {
 
         let window = SkillsWindowController()
         check(window.window?.title == "Skills" && SkillFeatured.list.count >= 10, "skills: Window › Skills opens with the Featured list")
+
+        await pluginReviewChecks(home: home)
     }
 
     /// Looks at the window the moment a skill change starts, for checks that hold only while it runs.
