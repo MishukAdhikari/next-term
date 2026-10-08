@@ -340,8 +340,8 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
         shownKey = key
     }
 
-    /// What the All files page of `scope` shows: the scope, and where All changes counts from.
-    private func pageKey(for scope: ChangeScope) -> String { "\(scope) \(context?.mergeBase ?? "")" }
+    /// What the All files page of `scope` shows: the scope, and for All changes where it counts from.
+    private func pageKey(for scope: ChangeScope) -> String { "\(scope) \(scope == .all ? context?.mergeBase ?? "" : "")" }
 
     /// What tells one file's diff from another's: the path, the scope and what it compares with. Nil while
     /// that is not known yet.
