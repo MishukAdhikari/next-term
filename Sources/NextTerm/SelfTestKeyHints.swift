@@ -156,7 +156,8 @@ extension SelfTest {
         let fetch = background?.subviews.compactMap { $0 as? NSButton }.first { $0.toolTip?.hasPrefix("Fetch") == true }
         let hints = background?.subviews.compactMap { $0 as? KeyHint } ?? []
         let heard = voiceOverHears(hints, in: background)
-        check(hints.map(\.key) == ["⌘R"] && !heard && fetch?.accessibilityLabel() == "Fetch from all remotes" && fetch?.accessibilityHelp() == "⌘R",
+        let named = fetch?.accessibilityLabel() == "Fetch from all remotes" && fetch?.accessibilityHelp() == "⌘R"
+        check(hints.map(\.key) == ["⌘R"] && !heard && named,
               "key hints: the branch popup's fetch button is heard by its words, with ⌘R once, in its help",
               "\(hints.map(\.key)), heard \(heard), \(fetch?.accessibilityLabel() ?? "no button") | \(fetch?.accessibilityHelp() ?? "none")")
     }
