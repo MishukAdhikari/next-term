@@ -423,21 +423,44 @@ final class Updater {
 
     /// The disk image's name in its private folder.
     private nonisolated static let diskImageName = "NextTerm-update.dmg"
+    /// The start of the private folders' names, in the temporary folder.
+    private nonisolated static let folderPrefix = "NextTerm-update-"
 
     /// Downloads the disk image into a new private folder (`diskImageName` in it), out of the shared temporary folder,
     /// where nothing else can swap it between the checksum check and the mount. The caller removes the folder.
     private func fetch(_ url: URL) async throws -> PrivateFolder {
         let (file, response) = try await URLSession.shared.download(from: url, delegate: progress)
+        // URLSession leaves the downloaded file where it is: it goes when this returns, unless moved into the folder.
+        defer { try? FileManager.default.removeItem(at: file) }
         if let http = response as? HTTPURLResponse, http.statusCode != 200 { throw UpdateError("The download failed (HTTP \(http.statusCode)).") }
-        // The temporary file goes away when this returns: keep it.
-        let folder = try PrivateFolder.make(prefix: "NextTerm-update-")
+        let folder = try PrivateFolder.make(prefix: Self.folderPrefix)
+        let dmg = folder.url.appendingPathComponent(Self.diskImageName)
         do {
-            try FileManager.default.moveItem(at: file, to: folder.url.appendingPathComponent(Self.diskImageName))
+            try FileManager.default.moveItem(at: file, to: dmg)
+            // Hashed and then mounted by its path: a plain file of this user's, never a link that leads elsewhere.
+            guard PrivateFolder.isOwnFile(dmg.path) else { throw UpdateError("The download could not be kept for its check.") }
         } catch {
             folder.remove()
             throw error
         }
         return folder
+    }
+
+    /// Removes the private folders a quit or a crash left mid-staging, in the background: only ones over an hour old,
+    /// as a newer one may be another Next Term's, staging now. A disk image still mounted in one is detached first; a
+    /// folder whose image stays mounted is kept.
+    nonisolated static func removeLeftovers() {
+        DispatchQueue.global(qos: .utility).async {
+            let cutoff = Date(timeIntervalSinceNow: -60 * 60)
+            for folder in PrivateFolder.leftovers(prefix: folderPrefix, madeBefore: cutoff) {
+                let mount = folder.url.appendingPathComponent("mount").path
+                if PrivateFolder.isMountPoint(mount) {
+                    _ = try? runTool("/usr/bin/hdiutil", ["detach", mount, "-force", "-quiet"])
+                    if PrivateFolder.isMountPoint(mount) { continue }
+                }
+                folder.remove()
+            }
+        }
     }
 
     private nonisolated static func sha256(of file: URL) throws -> String {
@@ -465,18 +488,24 @@ final class Updater {
         }
         let requirement = CodeSignature.updateRequirement(running: running, staged: image)
         let here = Bundle.main.bundleURL
-        let folder = try FileManager.default.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: here, create: true)
-        let target = folder.appendingPathComponent("Next Term.app")
-        guard try Self.runTool("/usr/bin/ditto", [source.path, target.path]) else { throw UpdateError("The new app could not be copied.") }
-        let info = Bundle(url: target)
-        guard info?.bundleIdentifier == Bundle.main.bundleIdentifier,
-              (info?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String).flatMap(AppVersion.init) == version else {
-            throw UpdateError("The disk image does not hold Next Term \(version).")
+        let staging = try FileManager.default.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: here, create: true)
+        do {
+            let target = staging.appendingPathComponent("Next Term.app")
+            guard try Self.runTool("/usr/bin/ditto", [source.path, target.path]) else { throw UpdateError("The new app could not be copied.") }
+            let info = Bundle(url: target)
+            guard info?.bundleIdentifier == Bundle.main.bundleIdentifier,
+                  (info?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String).flatMap(AppVersion.init) == version else {
+                throw UpdateError("The disk image does not hold Next Term \(version).")
+            }
+            guard try Self.runTool("/usr/bin/codesign", ["--verify", "--deep", "--strict", "-R", "=" + requirement, target.path]) else {
+                throw UpdateError("The new app's signature is broken.")
+            }
+            return (target, requirement, running.requirement)
+        } catch {
+            // Not staged: the copy goes with its folder. A staged one stays there until the quit installs it.
+            try? FileManager.default.removeItem(at: staging)
+            throw error
         }
-        guard try Self.runTool("/usr/bin/codesign", ["--verify", "--deep", "--strict", "-R", "=" + requirement, target.path]) else {
-            throw UpdateError("The new app's signature is broken.")
-        }
-        return (target, requirement, running.requirement)
     }
 
     private nonisolated static func runTool(_ path: String, _ arguments: [String]) throws -> Bool {

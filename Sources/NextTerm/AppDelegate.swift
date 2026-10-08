@@ -360,6 +360,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // `nxtrm` in other terminals: linked where that needs no password, else offered once with one.
         CommandLineTool.registerQuietly()
         MainActor.assumeIsolated { Updater.shared.start() }
+        // An update's disk image and folder that a quit or a crash left mid-staging.
+        Updater.removeLeftovers()
         if let command { handle(command) }
         let show = { [self] in
             openAtLaunch(kind: kind)
