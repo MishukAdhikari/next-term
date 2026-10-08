@@ -509,12 +509,24 @@ public enum MCPGitTools {
         return .success(Array(wanted.union(staged)).sorted())
     }
 
+    /// The files staged for the next commit, from the repository's top folder; nil when git can't say.
+    /// A staged rename lists both its paths (`--no-renames`): the commit takes the old one away too.
+    public static func staged(at root: String, git: String) -> [String]? {
+        let args = ["-C", root, "--no-optional-locks", "diff", "--cached", "--name-only", "--no-renames", "-z"]
+        guard let data = GitRunner.run(git, args, timeout: 10) else { return nil }
+        return data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    static let unreadIndex = MCPToolError("Could not read what is staged (git did not answer); nothing was committed.")
+
     /// stage: the repository and the files named.
     public static func prepareStage(_ arguments: [String: Any], in projects: MCPProjects, git: String) -> Result<MCPGitPlan, MCPToolError> {
         MCPFileTools.catching {
             let (folder, repository) = try locate(arguments, in: projects, git: git)
             let paths = try self.paths(arguments["paths"], required: true, project: folder, repository: repository, projects: projects).get()
-            return MCPGitPlan(repository: repository, paths: paths, staged: BranchModel.stagedFiles(at: repository.root, git: git), files: paths, message: nil)
+            // Staging adds to what is staged whatever it is, so an index git can't list refuses nothing here.
+            let staged = self.staged(at: repository.root, git: git) ?? []
+            return MCPGitPlan(repository: repository, paths: paths, staged: staged, files: paths, message: nil)
         }
     }
 
@@ -527,7 +539,7 @@ public enum MCPGitTools {
             let (folder, repository) = try locate(arguments, in: projects, git: git)
             if let refusal = commitRefusal(repository) { throw refusal }
             let paths = try self.paths(arguments["paths"], required: false, project: folder, repository: repository, projects: projects).get()
-            let staged = BranchModel.stagedFiles(at: repository.root, git: git)
+            guard let staged = self.staged(at: repository.root, git: git) else { throw unreadIndex }
             let files = try commitFiles(named: paths, staged: staged, includeStaged: includeStaged).get()
             return MCPGitPlan(repository: repository, paths: paths, staged: staged, files: files, message: message)
         }
@@ -548,7 +560,8 @@ public enum MCPGitTools {
             if now.branch != plan.repository.branch {
                 return MCPToolError("The branch changed to \(now.branch ?? "a detached HEAD") while the user was asked, so nothing was committed.")
             }
-            if Set(BranchModel.stagedFiles(at: now.root, git: git)) != Set(plan.staged) {
+            guard let staged = self.staged(at: now.root, git: git) else { return unreadIndex }
+            if Set(staged) != Set(plan.staged) {
                 return MCPToolError("The staged changes changed while the user was asked, so nothing was committed. Ask again.")
             }
         }

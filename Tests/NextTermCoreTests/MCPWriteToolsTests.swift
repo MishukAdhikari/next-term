@@ -346,4 +346,24 @@ import Testing
         p.waitUntilExit()
         #expect(MCPGitTools.changedSince(staged, git: git)?.text.contains("staged changes changed") == true)
     }
+
+    /// A staged rename is two paths: committing the new one alone would take the old one away unseen.
+    @Test func aStagedRenameListsBothPaths() throws {
+        guard let (fixture, projects, git) = try MCPGitToolsTests().repository() else { return }
+        defer { withExtendedLifetime(fixture) {} }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: git)
+        p.arguments = ["-C", fixture.base + "/repo", "mv", "edited.txt", "renamed.txt"]
+        try p.run()
+        p.waitUntilExit()
+        #expect(MCPGitTools.staged(at: fixture.base + "/repo", git: git)?.sorted() == ["edited.txt", "renamed.txt", "staged.txt"])
+        let refused = MCPGitTools.prepareCommit(["message": "m", "paths": ["renamed.txt", "staged.txt"]], in: projects, git: git)
+        #expect(refused.failureText?.contains("edited.txt") == true, "\(String(describing: refused.failureText))")
+        let plan = try MCPGitTools.prepareCommit(["message": "m", "paths": ["renamed.txt"], "include_staged": true], in: projects, git: git).get()
+        #expect(plan.files == ["edited.txt", "renamed.txt", "staged.txt"])
+        #expect(MCPGitTools.summary(plan).contains("edited.txt (staged already)"))
+        // An index git can't list refuses the commit; it never counts as nothing staged.
+        #expect(MCPGitTools.staged(at: fixture.base + "/not-a-repo", git: git) == nil)
+        #expect(MCPGitTools.unreadIndex.text.contains("nothing was committed"))
+    }
 }
