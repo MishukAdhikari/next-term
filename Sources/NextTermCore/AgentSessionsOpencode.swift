@@ -5,7 +5,8 @@ import Foundation
 /// `model` (JSON with its `id`), `parent_id` for a sub-agent's and `time_archived` for an archived one,
 /// neither listed. Until the agent names a session its title is "New session - <time>", so the first
 /// prompt (the first text part of its first user message) stands in; with no prompt either, the session
-/// is empty. Resume with `opencode --session <id>` in the same folder.
+/// is empty. Its newer runner keeps a session's messages in `session_message` instead (`type`, `seq`, and
+/// `data` with the `text`). Resume with `opencode --session <id>` in the same folder.
 struct OpencodeSessions: AgentSessionProvider {
     let home: String
     var agent: AgentKind { .opencode }
@@ -28,7 +29,7 @@ struct OpencodeSessions: AgentSessionProvider {
         return db.rows(sql, [folder, subfolders ? 1 : 0, after]).compactMap { row -> AgentSession? in
             guard let id = row[0], let directory = row[1] else { return nil }
             var title = row[2] ?? ""
-            if Self.isDefaultTitle(title) { title = Self.firstPrompt(db, session: id) ?? "" }
+            if Self.isDefaultTitle(title) { title = Self.firstPrompt(db, session: id) ?? Self.firstUserMessage(db, session: id) ?? "" }
             guard !title.isEmpty else { return nil } // nothing was asked
             let created = AgentStoreFiles.date(milliseconds: row[3])
             let updated = AgentStoreFiles.date(milliseconds: row[4]) ?? created ?? .distantPast
@@ -53,6 +54,14 @@ struct OpencodeSessions: AgentSessionProvider {
         guard let data = db.rows(sql, [id]).first?.first ?? nil,
               let part = (try? JSONSerialization.jsonObject(with: Data(data.utf8))) as? [String: Any],
               let text = part["text"] as? String else { return nil }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
+    }
+
+    /// The first prompt from the newer runner's `session_message` table, nil when there is no such table.
+    static func firstUserMessage(_ db: AgentStoreDatabase, session id: String) -> String? {
+        guard !db.columns("session_message").isEmpty else { return nil }
+        let sql = "SELECT json_extract(data, '$.text') FROM session_message WHERE session_id = ?1 AND type = 'user' ORDER BY seq LIMIT 1"
+        guard let text = db.rows(sql, [id]).first?.first ?? nil else { return nil }
         return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
     }
 

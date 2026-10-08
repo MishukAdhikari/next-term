@@ -170,6 +170,29 @@ import Testing
         #expect(found[0].resumeCommand() == "opencode --session ses_1" && found[0].resumeCommand(fork: true) == "opencode --session ses_1 --fork")
     }
 
+    @Test func opencodeFirstPromptFromItsNewerMessageTable() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let project = "/Users/me/Code/app"
+        // The newer runner keeps a session's messages in session_message only, `{"text": …}` with the type beside it.
+        let sql = """
+            CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT, title TEXT, model TEXT, time_created INTEGER,
+              time_updated INTEGER, time_archived INTEGER);
+            CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);
+            CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);
+            CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, time_created INTEGER,
+              time_updated INTEGER, data TEXT);
+            INSERT INTO session VALUES ('ses_n', NULL, '\(project)', 'New session - 2026-10-01T10:00:00.000Z', NULL, 1000, 9000, NULL);
+            INSERT INTO session_message VALUES ('m0', 'ses_n', 'synthetic', 1, 1, 1, '{"text":"context"}');
+            INSERT INTO session_message VALUES ('m2', 'ses_n', 'user', 3, 3, 3, '{"text":"Then the tests"}');
+            INSERT INTO session_message VALUES ('m1', 'ses_n', 'user', 2, 2, 2, '{"text":"Add pagination"}');
+            INSERT INTO session VALUES ('ses_e', NULL, '\(project)', 'New session - 2026-10-01T11:00:00.000Z', NULL, 1000, 8000, NULL);
+            """
+        try database(home + "/.local/share/opencode/opencode.db", sql)
+        let found = try OpencodeSessions(home: home).sessions(in: project, subfolders: false, since: nil)
+        #expect(found.map(\.id) == ["ses_n"] && found.first?.title == "Add pagination") // ses_e never had a prompt
+    }
+
     @Test func opencodeWithAnotherSchemaSaysSo() throws {
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
