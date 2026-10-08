@@ -42,7 +42,7 @@ When Claude wants to change a file, its change opens in a diff tab: your file on
 
 - **Accept** (<kbd>⌘↩︎</kbd>): Claude writes the file.
 - **Reject**: the file stays as it is.
-- **Closing the tab** counts as Reject.
+- **Closing the tab** counts as Reject. **Close Others** and **Close Tabs to the Right** ask first when a proposal is among the tabs they close.
 - **Answering in the terminal** works too, as it always has.
 
 Next Term never writes the file itself; the agent does, after you accept. You read every change before it lands, in the same window as the agent that made it. Step through the changes in a long proposal with the arrows in the header.
