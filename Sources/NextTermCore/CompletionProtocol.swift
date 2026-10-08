@@ -324,7 +324,7 @@ public enum CompletionProtocol {
         case tab = 0x74 // t
         /// The answer to `tab`: native, open, or insert with the new word (Next Term's own engine only).
         case answer = 0x61 // a
-        /// A row chosen, or the list closed.
+        /// A row chosen, or the list closed; or Suggest a Command's line.
         case take = 0x6B // k
         /// zsh's own list can't be shown: zsh runs its own Tab.
         case native = 0x6E // n
@@ -382,6 +382,8 @@ public enum CompletionProtocol {
     public static func takeMatch(id: Int, old: String, index: Int) -> [UInt8] { frame(.take, id: id, fields: ["m", old, String(index)]) }
     /// The list closed with nothing chosen: the shell stops reporting the line.
     public static func close(id: Int) -> [UInt8] { frame(.take, id: id, fields: ["c"]) }
+    /// Suggest a Command's answer: the whole line, replaced (one line or several). It never runs.
+    public static func takeLine(_ line: String) -> [UInt8] { frame(.take, id: 0, fields: ["l", line]) }
     /// A server's round trip: how long its hook waits for an answer to a `tab` report (150 to 600 ms).
     public static func wait(seconds: Double) -> [UInt8] {
         let milliseconds = min(600, max(150, Int((seconds * 1000).rounded())))

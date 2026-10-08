@@ -877,6 +877,23 @@ if plugins:
 else:
     skip("the plugin matrix: set NT_PLUGIN_DIR to a folder of plugin checkouts to run it")
 
+# 11b. Suggest a Command's line: `k` with `l` replaces the whole line, one line or several, and runs nothing.
+liner = Shell("suggest a command", hostile, cwd=tree)
+mark = len(liner.buf)
+liner.send("echo old", 0.3)
+liner.send(frame("k", 0, ["l", "ls -la; touch PWNED-$(whoami)"]), 0.6)
+check(drawn(liner, mark, "ls -la; touch PWNED-$(whoami)") and not os.path.exists(os.path.join(tree, "PWNED-" + os.environ.get("USER", ""))),
+      "[suggest a command] the line is replaced, and nothing runs", repr(liner.line(mark)))
+liner.send("\x03", 0.5)
+mark = len(liner.buf)
+liner.send(frame("k", 0, ["l", "cd /tmp\nls"]), 0.6)
+liner.send('\r', 1)
+check(any(k == "cmd" and base64.b64decode(f[0]).decode() == "cd /tmp\nls" for _, k, f in liner.marks(mark)),
+      "[suggest a command] several lines go on as one edit, and run only with Return", str([k for _, k, _ in liner.marks(mark)]))
+errors = liner.errors()
+check(not errors, "[suggest a command] no errors from the hook", str(errors[:2]))
+liner.close()
+
 # 12. Tab completion's hook on a server (RemoteCompletionHook), started the way a tab's launch command starts it,
 # under a fake home: completion marks only, with the host's nonce read from its file at each prompt, the `w`
 # config for the round trip, tmux's passthrough inside Next Term's own tmux, and silence inside any other.

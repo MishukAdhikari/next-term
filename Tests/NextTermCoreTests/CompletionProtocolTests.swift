@@ -122,6 +122,9 @@ import Testing
         #expect(decode(CompletionProtocol.takeMatch(id: 9, old: "", index: 12)) == Decoded(kind: "k", id: 9, fields: ["m", "", "12"]))
         #expect(decode(CompletionProtocol.close(id: 9)) == Decoded(kind: "k", id: 9, fields: ["c"]))
         #expect(decode(CompletionProtocol.frame(.config, id: 0, fields: ["q1"])) == Decoded(kind: "c", id: 0, fields: ["q1"]))
+        // Suggest a Command's whole line, several lines and a `;` in it, comes back as one field.
+        let line = "cd /tmp && ls; echo \"$HOME\"\nmake"
+        #expect(decode(CompletionProtocol.takeLine(line)) == Decoded(kind: "k", id: 0, fields: ["l", line]))
     }
 
     @Test func payloadsAreASCIIWithEscapes() {

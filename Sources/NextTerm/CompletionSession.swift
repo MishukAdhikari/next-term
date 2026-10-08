@@ -462,6 +462,22 @@ final class CompletionSession {
     }
 }
 
+// MARK: Suggest a Command's line
+
+extension CompletionSession {
+    /// The shell's hook is at its prompt here and takes a whole line (one edit, several lines too).
+    var takesLine: Bool {
+        state.arm != nil && (state.isArmed || state.phase == .steppedBack) && !state.holding
+    }
+
+    /// Puts `line` in place of the line being edited, through the hook. It never runs.
+    func takeLine(_ line: String) {
+        guard takesLine else { return }
+        closeList()
+        write(CompletionProtocol.takeLine(line))
+    }
+}
+
 // MARK: a server's screen
 
 extension CompletionSession {

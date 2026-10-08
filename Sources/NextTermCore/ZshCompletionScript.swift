@@ -181,7 +181,8 @@ __nextterm_ckeywidget() {
   __nextterm_cframe || return 0
   case $__nextterm_ck in
     (t) __nextterm_ctab $__nextterm_cid ;;
-    (k) [[ $__nextterm_cid == $__nextterm_copen ]] && __nextterm_ctake ;;
+    (k) if [[ ${__nextterm_cf[1]-} == l ]]; then __nextterm_ctakeline
+        elif [[ $__nextterm_cid == $__nextterm_copen ]]; then __nextterm_ctake; fi ;;
     (n) # Next Term can't show zsh's list: zsh's own Tab.
         if [[ $__nextterm_cid == $__nextterm_copen ]]; then __nextterm_cclose; zle -U $'\t'; fi ;;
     (c) __nextterm_cconfig ;;
@@ -450,6 +451,16 @@ __nextterm_credraw() { [[ -n $__nextterm_copen ]] && __nextterm_cline; return 0;
 __nextterm_cfinish() {
   [[ -n $__nextterm_copen ]] && __nextterm_cmark line $__nextterm_copen 1
   __nextterm_cclose
+  return 0
+}
+
+# A whole line from Suggest a Command (the user asked for it and submitted): it replaces the line being edited,
+# one line or several, with the cursor at its end. Nothing runs until the user presses Return.
+__nextterm_ctakeline() {
+  __nextterm_cclose
+  BUFFER=${__nextterm_cf[2]-}
+  CURSOR=${#BUFFER}
+  zle -R
   return 0
 }
 
