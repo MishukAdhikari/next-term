@@ -33,7 +33,7 @@ More about the editor in [Code editor](/docs/editor/), and about the agent link 
 | **Font** | Next Term default | The terminal’s font, from the monospaced fonts installed on this Mac. Its size is the editor’s. |
 | **Colours** | Next Term default | Your own terminal colours: the 16 ANSI colours, text, background, cursor and selection, shown as a row of swatches. An import brings them over; colours it doesn’t set keep Next Term’s. **Next Term default** goes back, and your colours stay in the menu to choose again. |
 | **Cursor** | Block, **Blink** on | **Block**, **Bar** or **Underline**, blinking or not, in every open terminal at once. A program can set its own cursor (vim’s bar while you type); when it puts the cursor back, or asks for a blinking block, which reads the same, yours returns. |
-| **Scrollback** | 10,000 lines | The lines each terminal keeps above the screen: 1,000, 5,000, 10,000, 25,000, 50,000 or 100,000. Open terminals change at once, and fewer lines drops the oldest. |
+| **Scrollback** | 10,000 lines | The lines each terminal keeps above the screen: 1,000, 5,000, 10,000, 25,000, 50,000 or 100,000, or the number an import brought. Open terminals change at once, and fewer lines drops the oldest. |
 | **New tabs** | In the project’s folder | Where <kbd>⌘T</kbd> opens a tab: **In the project’s folder** (in a window without a project, the current tab’s folder), **In the current tab’s folder**, **In your home folder**, or a folder you choose with **Choose Folder…**. A chosen folder that is gone falls back to the first. A split opens in the folder of the pane it splits from. |
 
 ## Notifications
