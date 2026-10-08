@@ -319,16 +319,19 @@ final class Updater {
                 }
                 signed = true
                 if quietly { downloading = true } // the Update button hides, as it does under the progress window
-                let dmg = try await fetch(dmgURL)
-                progress?.message = "Checking the download…"
-                let actual = try await Task.detached { try Self.sha256(of: dmg) }.value
-                guard actual == expected else {
-                    try? FileManager.default.removeItem(at: dmg)
-                    throw ReleaseSignature.Refusal.mismatch
+                let folder = try await fetch(dmgURL)
+                let app: (url: URL, requirement: String, oldRequirement: String)
+                do {
+                    // The folder and the disk image in it go once staging ends, whether it worked or not.
+                    defer { folder.remove() }
+                    progress?.message = "Checking the download…"
+                    let dmg = folder.url.appendingPathComponent(Self.diskImageName)
+                    let actual = try await Task.detached { try Self.sha256(of: dmg) }.value
+                    guard actual == expected else { throw ReleaseSignature.Refusal.mismatch }
+                    progress?.message = "Preparing…"
+                    let version = release.version
+                    app = try await Task.detached { try Self.stage(in: folder, version: version) }.value
                 }
-                progress?.message = "Preparing…"
-                let version = release.version
-                let app = try await Task.detached { try Self.stage(dmg: dmg, version: version) }.value
                 staged = (app.url, release.version, app.requirement, app.oldRequirement)
                 installing = false
                 hideProgress()
@@ -418,13 +421,23 @@ final class Updater {
 
     struct UpdateError: Error { let text: String; init(_ text: String) { self.text = text } }
 
-    private func fetch(_ url: URL) async throws -> URL {
+    /// The disk image's name in its private folder.
+    private nonisolated static let diskImageName = "NextTerm-update.dmg"
+
+    /// Downloads the disk image into a new private folder (`diskImageName` in it), out of the shared temporary folder,
+    /// where nothing else can swap it between the checksum check and the mount. The caller removes the folder.
+    private func fetch(_ url: URL) async throws -> PrivateFolder {
         let (file, response) = try await URLSession.shared.download(from: url, delegate: progress)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 { throw UpdateError("The download failed (HTTP \(http.statusCode)).") }
         // The temporary file goes away when this returns: keep it.
-        let kept = FileManager.default.temporaryDirectory.appendingPathComponent("NextTerm-update-\(UUID().uuidString).dmg")
-        try FileManager.default.moveItem(at: file, to: kept)
-        return kept
+        let folder = try PrivateFolder.make(prefix: "NextTerm-update-")
+        do {
+            try FileManager.default.moveItem(at: file, to: folder.url.appendingPathComponent(Self.diskImageName))
+        } catch {
+            folder.remove()
+            throw error
+        }
+        return folder
     }
 
     private nonisolated static func sha256(of file: URL) throws -> String {
@@ -435,17 +448,14 @@ final class Updater {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Copies the app out of the disk image into a folder on the same volume as this app, and checks
-    /// it is Next Term at the expected version with an intact signature that meets the requirement the
-    /// install script checks it against again (see `CodeSignature.updateRequirement`).
-    private nonisolated static func stage(dmg: URL, version: AppVersion) throws -> (url: URL, requirement: String, oldRequirement: String) {
-        let mount = FileManager.default.temporaryDirectory.appendingPathComponent("NextTerm-mount-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)
-        defer {
-            _ = try? Self.runTool("/usr/bin/hdiutil", ["detach", mount.path, "-force", "-quiet"])
-            try? FileManager.default.removeItem(at: mount)
-            try? FileManager.default.removeItem(at: dmg)
-        }
+    /// Copies the app out of the disk image in `folder`, mounted in that folder too, into a folder on the same volume as
+    /// this app, and checks it is Next Term at the expected version with an intact signature that meets the requirement
+    /// the install script checks it against again (see `CodeSignature.updateRequirement`). The caller removes `folder`.
+    private nonisolated static func stage(in folder: PrivateFolder, version: AppVersion) throws -> (url: URL, requirement: String, oldRequirement: String) {
+        let dmg = folder.url.appendingPathComponent(diskImageName)
+        let mount = folder.url.appendingPathComponent("mount")
+        try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: false)
+        defer { _ = try? Self.runTool("/usr/bin/hdiutil", ["detach", mount.path, "-force", "-quiet"]) }
         guard try Self.runTool("/usr/bin/hdiutil", ["attach", dmg.path, "-nobrowse", "-readonly", "-noautoopen", "-quiet", "-mountpoint", mount.path]) else {
             throw UpdateError("The disk image could not be opened.")
         }
