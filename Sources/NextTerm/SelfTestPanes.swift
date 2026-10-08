@@ -68,6 +68,12 @@ extension SelfTest {
         check(resizes(base) - resized.base == 1 && resizes(other) == resized.other,
               "a split resizes the pane it splits once, and the pane beside it not at all",
               "\(resizes(base) - resized.base), \(resizes(other) - resized.other)")
+        if let column = group.paneView(third).superview as? PaneSplitView, !column.isVertical, let top = column.arrangedSubviews.first {
+            let least = column.splitView(column, constrainMinCoordinate: 0, ofSubviewAt: 0) - top.frame.minY
+            check(least == PaneGroup.minimum + PaneHeaderView.height, "a pane above another keeps room for its header and a few rows", "\(least)")
+        } else {
+            check(false, "Split Down puts the panes one above the other")
+        }
         c.refresh()
         let all = [base, other, third]
         check(all.allSatisfy { !header($0).isHidden }, "a split shows a header on each pane")

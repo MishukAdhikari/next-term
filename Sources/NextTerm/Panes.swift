@@ -344,16 +344,18 @@ final class PaneSplitView: NSSplitView, NSSplitViewDelegate {
         isVertical ? drawnRect.insetBy(dx: -3, dy: 0) : drawnRect.insetBy(dx: 0, dy: -3)
     }
 
-    /// No pane narrower than a usable terminal.
+    /// No pane narrower than a usable terminal, nor, one above another, shorter than its header and one.
+    var minimum: CGFloat { PaneGroup.minimum + (isVertical ? 0 : PaneHeaderView.height) }
+
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {
         let previous = arrangedSubviews[index].frame
-        return (isVertical ? previous.minX : previous.minY) + PaneGroup.minimum
+        return (isVertical ? previous.minX : previous.minY) + minimum
     }
 
     func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {
         guard index + 1 < arrangedSubviews.count else { return proposed }
         let next = arrangedSubviews[index + 1].frame
-        return (isVertical ? next.maxX : next.maxY) - PaneGroup.minimum
+        return (isVertical ? next.maxX : next.maxY) - minimum
     }
 
     func splitViewDidResizeSubviews(_ notification: Notification) {
