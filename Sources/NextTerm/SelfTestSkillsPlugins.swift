@@ -112,9 +112,11 @@ extension SelfTest {
         let plugins = (home as NSString).appendingPathComponent(".claude/plugins")
         let shared = (home as NSString).appendingPathComponent(".agents/skills/demo-plugin")
         let link = (home as NSString).appendingPathComponent(".claude/skills/demo-plugin")
+        let codexConfig = (home as NSString).appendingPathComponent(".codex/config.toml")
         defer {
             try? manager.removeItem(atPath: settings)
             try? manager.removeItem(atPath: plugins)
+            try? manager.removeItem(atPath: codexConfig)
         }
         func state(_ path: String) -> String? {
             var info = stat()
@@ -142,8 +144,10 @@ extension SelfTest {
         let sheet = SkillsReviewSheet(fetched: first) { _ in }
         let details = sheet.details.stringValue
         check(SkillsInstaller.defaultClaudeLink(candidate, fetched: first) == .skip && sheet.claudeLink.isHidden
-              && details.contains("Loaded by Codex, Command Code."),
-              "skills plugins: a plugin folder that runs something is left out of Claude Code by default", details)
+              && details.contains("Goes to ~/.agents/skills/demo-plugin. Agents that load it: Codex, Command Code, \(otherReaders).")
+              && !details.contains("through the Claude Code link"),
+              "skills plugins: a plugin folder that runs something is left out of Claude Code by default, and every agent that loads it is named",
+              details)
         if case .failure(let failure) = await SkillsInstaller.install([candidate], fetched: first) {
             check(false, "skills plugins: Install with the default applies", failure.message)
         }
@@ -160,6 +164,21 @@ extension SelfTest {
         }
         check(exists(link) && manager.fileExists(atPath: manifest) && state(settings) == before && before?.hasSuffix(" 600") == true,
               "skills plugins: Add it as a plugin links it, and leaves Claude Code's settings byte for byte, mode 0600", state(settings) ?? "none")
+        let linkedReview = pluginDownload(home: home)
+        defer { linkedReview.discard() }
+        let linkedDetails = SkillsReviewSheet(fetched: linkedReview) { _ in }.details.stringValue
+        check(linkedDetails.contains("Agents that load it: Codex, Command Code, Claude Code (through its link), \(otherReaders). "
+                                     + "Amp, Cursor, opencode and goose also find it through the Claude Code link."),
+              "skills plugins: an update that keeps the link names Claude Code and the agents that find it through the link", linkedDetails)
+
+        // Removal names what may stay, and changes no other app's file: a Codex server with the skill's
+        // address (as Codex would have added it), the plugin's parts and Amp's servers in open sessions.
+        try? manager.createDirectory(atPath: (codexConfig as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        manager.createFile(atPath: codexConfig, contents: Data("[mcp_servers.docs]\nurl = \"https://mcp.example.com/mcp\"\n".utf8))
+        let configBefore = state(codexConfig)
+        await pluginLeftoverChecks(keyOff: false)
+        check(state(codexConfig) == configBefore && state(settings) == before,
+              "skills plugins: working out what removal leaves changes neither Codex's config nor Claude Code's settings")
 
         // The user turns it off in /plugin, which sets its key to false: Settings › Skills and list_skills
         // say "off", and the review offers the link, since Claude Code then loads nothing from it.
@@ -173,11 +192,16 @@ extension SelfTest {
         check(cell == "off" && agents?["claude-code"] == "off",
               "skills plugins: a plugin the user turned off in /plugin shows Claude Code as off", "\(cell) \(String(describing: agents))")
         let third = pluginDownload(home: home)
+        defer { third.discard() }
         if let again = third.candidates.first {
             check(SkillsInstaller.defaultClaudeLink(again, fetched: third) == .link,
                   "skills plugins: with its key false, the review offers the link (Claude Code loads nothing from it)")
         }
-        third.discard()
+        let offDetails = SkillsReviewSheet(fetched: third) { _ in }.details.stringValue
+        check(offDetails.contains("Agents that load it: Codex, Command Code, \(otherReaders). Claude Code loads nothing from it while its plugin is off."),
+              "skills plugins: with its key false, the review leaves Claude Code out of the agents that load it", offDetails)
+        await pluginLeftoverChecks(keyOff: true)
+        check(state(settings) == keyed, "skills plugins: working out what removal leaves keeps the user's key as it is")
 
         // Undo takes the link and the skill away, and leaves the settings as the user left them.
         if case .failure(let failure) = await SkillsStore.undo() { check(false, "skills plugins: Undo of the plugin install applies", failure.message) }
@@ -199,5 +223,31 @@ extension SelfTest {
               "skills plugins: a plugin synced from claude.ai with the same name is named, and the folder is left out", shown)
 
         check(state(realSettings) == realBefore, "skills plugins: the real ~/.claude/settings.json keeps its bytes and mode")
+    }
+
+    /// The agents besides Codex, Command Code and Claude Code that read ~/.agents/skills, as the review
+    /// names them.
+    static let otherReaders = "Gemini CLI, Qwen Code, Cursor, opencode, Copilot CLI, Amp, Junie and goose"
+
+    /// What removing the installed, linked demo-plugin says may stay. `keyOff`: the self-test home's
+    /// settings hold "demo-plugin@skills-dir": false, so its plugin never started.
+    static func pluginLeftoverChecks(keyOff: Bool) async {
+        let (steps, leftovers, installed) = await SkillsInstaller.removal("demo-plugin")
+        let said = leftovers.joined(separator: "\n")
+        let parts = "Its Claude Code plugin's MCP servers and hooks stop with it. Claude Code sessions open now keep them until they restart."
+        let amp = "Amp sessions open now keep its MCP servers until they restart."
+        let codex = "Codex may have added the MCP server “docs” (https://mcp.example.com/mcp) for this skill, in ~/.codex/config.toml. "
+            + "It stays there, because you may use it for other things. Remove it there if you don't."
+        let key = "~/.claude/settings.json keeps “demo-plugin@skills-dir”: false. It stays, and keeps any later folder with that plugin name "
+            + "turned off in Claude Code."
+        let named = installed && !steps.isEmpty && leftovers.contains(amp) && leftovers.contains(codex)
+            && !leftovers.contains("It asked for MCP servers: check your agents' MCP settings.")
+        if keyOff {
+            check(named && leftovers.contains(key) && !leftovers.contains(parts),
+                  "skills plugins: removing a plugin the user turned off names the key that stays, and no parts that ran", said)
+        } else {
+            check(named && leftovers.contains(parts) && !leftovers.contains(key),
+                  "skills plugins: removing a linked plugin names its parts, Amp's servers and the Codex server that may stay", said)
+        }
     }
 }

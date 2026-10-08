@@ -246,8 +246,9 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
         let plan = SkillsInstaller.plan(candidate, fetched: fetched, claude: claudeChoice(candidate), together: chosen)
         if let refusal = candidate.refusal { lines.append("⛔ Can't be installed: \(refusal)") }
         for flag in review.flags where flag.level == .refuse { lines.append("⛔ Can't be installed: \(flag.text)\(flag.file.isEmpty ? "" : " (\(flag.file))")") }
-        let names = plan.agents.map(\.title)
-        lines.append("Goes to ~/.agents/skills/\(candidate.name). Loaded by \(names.joined(separator: ", ")).")
+        let pluginOff = review.package?.claude.map { fetched.claude.value(for: $0.name) == false } ?? false
+        let readers = SkillReaders.loadedBy(plan.agents, linked: plan.linksClaude, pluginOff: pluginOff)
+        lines.append("Goes to ~/.agents/skills/\(candidate.name). " + readers)
         lines.append("Every agent that reads ~/.agents/skills loads it; the only choice is Claude Code's link.")
         switch plan.existing {
         case .none: break

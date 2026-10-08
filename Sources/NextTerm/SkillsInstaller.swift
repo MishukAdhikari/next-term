@@ -325,8 +325,13 @@ enum SkillsInstaller {
             steps.append(.recordEntry(path: recordsFile, name: name, record: nil))
             installed = true
         }
-        let front = inventory.rows.first { $0.name == name }?.copies.first { $0.root.kind == .shared }?.frontMatter
-        return (steps, SkillInstall.leftovers(frontMatter: front), installed)
+        let shared = inventory.rows.first { $0.name == name }?.copies.first { $0.root.kind == .shared }
+        let front = shared?.frontMatter
+        let folder = shared.flatMap { $0.broken ? nil : $0.path }
+        // Reads the installed copy's plugin and servers, Claude Code's settings and Codex's config: only read.
+        let home = SkillsStore.home
+        let leftovers = await Task.detached { SkillInstall.leftovers(frontMatter: front, folder: folder, home: home) }.value
+        return (steps, leftovers, installed)
     }
 
     // MARK: updates

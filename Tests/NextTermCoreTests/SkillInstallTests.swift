@@ -361,3 +361,223 @@ import Testing
         #expect(plan(.link, try stage(plugin: nil), facts: facts).clashes.isEmpty)
     }
 }
+
+/// What removal names as outliving a skill: servers another agent may have added for it, what open
+/// sessions keep, and Claude Code's key the user set. Read only: no other app's file is changed.
+@Suite struct SkillLeftoversTests {
+    let home: String
+    let folder: String
+    init() throws {
+        home = FileManager.default.temporaryDirectory.appendingPathComponent("nt-leftovers-\(UUID().uuidString)").path
+        folder = home + "/.agents/skills/writing-helper"
+        try FileManager.default.createDirectory(atPath: home + "/.claude/skills", withIntermediateDirectories: true)
+    }
+
+    static let linear = "dependencies:\n  tools:\n    - type: \"mcp\"\n      value: \"linear\"\n      description: \"Linear\"\n"
+        + "      transport: \"streamable_http\"\n      url: \"https://mcp.linear.app/mcp\"\n"
+    static let server = #"{"mcpServers": {"docs": {"command": "node", "args": ["server.js"]}}}"#
+    static let hooks = #"{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "./start.sh"}]}]}}"#
+    static let codexLine = "Codex may have added the MCP server “linear” (https://mcp.linear.app/mcp) for this skill, in ~/.codex/config.toml. "
+        + "It stays there, because you may use it for other things. Remove it there if you don't."
+    static let pluginLine = "Its Claude Code plugin's MCP servers and hooks stop with it. Claude Code sessions open now keep them until they restart."
+
+    func write(_ path: String, _ text: String) throws {
+        let full = (home as NSString).appendingPathComponent(path)
+        try FileManager.default.createDirectory(atPath: (full as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        try text.write(toFile: full, atomically: true, encoding: .utf8)
+    }
+
+    /// The installed copy, with `front` added to its front matter and `files` beside SKILL.md.
+    func skill(front: String = "", _ files: [String: String] = [:]) throws {
+        try write(".agents/skills/writing-helper/SKILL.md", "---\nname: writing-helper\ndescription: Helps you write.\n\(front)---\nBody\n")
+        for (path, text) in files { try write(".agents/skills/writing-helper/" + path, text) }
+    }
+
+    func link() throws {
+        try FileManager.default.createSymbolicLink(atPath: home + "/.claude/skills/writing-helper", withDestinationPath: "../../.agents/skills/writing-helper")
+    }
+
+    func leftovers() -> [String] {
+        let front = (try? String(contentsOfFile: folder + "/SKILL.md", encoding: .utf8)).flatMap(SkillFrontMatter.parse)
+        return SkillInstall.leftovers(frontMatter: front, folder: folder, home: home)
+    }
+
+    func codex(_ lines: [String]) -> [String] { lines.filter { $0.contains("Codex") } }
+
+    // MARK: Codex
+
+    /// AE11: a table with the dependency's address is named, with its file, and the config is not changed.
+    @Test func aCodexServerWithTheSkillsAddressIsNamedAndStays() throws {
+        try skill(["agents/openai.yaml": Self.linear])
+        let config = "model = \"o3\"\n\n[mcp_servers.linear]\nurl = \"https://mcp.linear.app/mcp\"\n"
+        try write(".codex/config.toml", config)
+        #expect(leftovers() == [Self.codexLine])
+        #expect(try String(contentsOfFile: home + "/.codex/config.toml", encoding: .utf8) == config)
+    }
+
+    /// Codex matches by address, never by name: a table of that name elsewhere is the user's own.
+    @Test func aTableWithOnlyTheSameNameIsNotNamed() throws {
+        try skill(["agents/openai.yaml": Self.linear])
+        try write(".codex/config.toml", "[mcp_servers.linear]\nurl = \"https://example.com/linear\"\n")
+        #expect(codex(leftovers()).isEmpty)
+        try write(".codex/config.toml", "model = \"o3\"\n")
+        #expect(codex(leftovers()).isEmpty)
+        try FileManager.default.removeItem(atPath: home + "/.codex/config.toml")
+        #expect(codex(leftovers()).isEmpty)
+    }
+
+    /// A table with the address under another name is named as the config names it; a program server by
+    /// its command; several in one line.
+    @Test func matchesAreNamedAsTheConfigNamesThem() throws {
+        let tools = Self.linear + "    - type: mcp\n      value: local\n      transport: stdio\n      command: npx\n"
+        try skill(["agents/openai.yaml": tools])
+        try write(".codex/config.toml", "[mcp_servers.linear-hosted]\nurl = \" https://mcp.linear.app/mcp \"\n\n[mcp_servers.local]\ncommand = \"npx\"\nargs = [\"-y\", \"x\"]\n")
+        let text = "Codex may have added the MCP servers “linear-hosted” (https://mcp.linear.app/mcp) and “local” (the program `npx`) for this skill, "
+            + "in ~/.codex/config.toml. They stay there, because you may use them for other things. Remove them there if you don't."
+        #expect(codex(leftovers()) == [text])
+    }
+
+    /// A config Next Term could not read in full: the dependencies are named, and the file is to be checked.
+    @Test func anUnreadConfigSaysCheckIt() throws {
+        try skill(["agents/openai.yaml": Self.linear])
+        try write(".codex/config.toml", "mcp_servers = { linear = { url = \"https://mcp.linear.app/mcp\" } }\n")
+        let text = "Codex may have added MCP servers for this skill (“linear”). Next Term could not read all of ~/.codex/config.toml: check it there."
+        #expect(codex(leftovers()) == [text])
+    }
+
+    /// An agents/openai.yaml Next Term could not read in full: never "none".
+    @Test func anUnreadDependencyFileSaysCheckIt() throws {
+        try skill(["agents/openai.yaml": "dependencies:\n  tools: [{type: mcp, value: linear}]\n"])
+        let text = "Next Term could not read every MCP entry in its agents/openai.yaml, so Codex may have added servers for it that aren't named here: "
+            + "check ~/.codex/config.toml."
+        #expect(codex(leftovers()) == [text])
+    }
+
+    // MARK: Claude Code and Amp
+
+    /// A plugin Claude Code loads: what it starts stops with it, after open sessions restart.
+    @Test func aLinkedPluginsPartsStopWithIt() throws {
+        try skill([".claude-plugin/plugin.json": #"{"name": "writing-helper"}"#, ".mcp.json": Self.server, "hooks/hooks.json": Self.hooks])
+        #expect(leftovers().isEmpty, "not linked: Claude Code never started them")
+        try link()
+        #expect(leftovers() == [Self.pluginLine])
+    }
+
+    /// Only bin/ (or a part Next Term can't name): the plugin goes, and open sessions keep what it started.
+    @Test func aPluginWithOtherPartsGoesWithIt() throws {
+        try skill([".claude-plugin/plugin.json": #"{"name": "writing-helper"}"#, "bin/tidy": "#!/bin/sh\n"])
+        try link()
+        #expect(leftovers() == ["Its Claude Code plugin goes with it. Claude Code sessions open now keep what it started until they restart."])
+    }
+
+    /// Off by the user's key, by its manifest, or not loaded as a plugin (no usable name, H2): nothing ran.
+    /// The key stays, and is named.
+    @Test func aPluginThatNeverStartedHasNoPartsLine() throws {
+        try skill([".claude-plugin/plugin.json": #"{"name": "writing-helper"}"#, ".mcp.json": Self.server])
+        try link()
+        try write(".claude/settings.json", "{\n  \"enabledPlugins\": {\n    \"writing-helper@skills-dir\": false\n  }\n}\n")
+        let key = "~/.claude/settings.json keeps “writing-helper@skills-dir”: false. It stays, and keeps any later folder with that plugin name "
+            + "turned off in Claude Code."
+        #expect(leftovers() == [key])
+        try write(".claude/settings.json", "{\"enabledPlugins\": {\"writing-helper@skills-dir\": true}}")
+        #expect(leftovers() == ["Its Claude Code plugin's MCP servers stop with it. Claude Code sessions open now keep them until they restart."])
+        try FileManager.default.removeItem(atPath: home + "/.claude/settings.json")
+        try write(".agents/skills/writing-helper/.claude-plugin/plugin.json", #"{"name": "writing-helper", "defaultEnabled": false}"#)
+        #expect(leftovers().isEmpty)
+        try write(".agents/skills/writing-helper/.claude-plugin/plugin.json", #"{"description": "No name."}"#)
+        #expect(leftovers().isEmpty)
+    }
+
+    /// H7: a plugin of the same name installed for the user wins, so the folder's parts never ran; one
+    /// installed for a project wins only there.
+    @Test func anInstalledPluginOfTheSameNameMeansNothingRan() throws {
+        try skill([".claude-plugin/plugin.json": #"{"name": "writing-helper"}"#, ".mcp.json": Self.server])
+        try link()
+        let installed = #"{"version": 2, "plugins": {"Writing-Helper@some-market": [{"scope": "user", "installPath": "/x"}]}}"#
+        try write(".claude/plugins/installed_plugins.json", installed)
+        #expect(leftovers().isEmpty)
+        let project = #"{"version": 2, "plugins": {"writing-helper@some-market": [{"scope": "project", "projectPath": "/p", "installPath": "/x"}]}}"#
+        try write(".claude/plugins/installed_plugins.json", project)
+        #expect(leftovers() == ["Its Claude Code plugin's MCP servers stop with it. Claude Code sessions open now keep them until they restart."])
+    }
+
+    /// Amp's servers: open sessions keep them, in place of the old "check your agents" line.
+    @Test func ampServersStayInOpenSessions() throws {
+        try skill(front: "mcpServers:\n  docs:\n    url: https://mcp.example.com/mcp\n")
+        #expect(leftovers() == ["Amp sessions open now keep its MCP servers until they restart."])
+        try FileManager.default.removeItem(atPath: folder + "/SKILL.md")
+        try skill(front: "", ["mcp.json": #"{"mcpServers": {"docs": {"command": "node", "args": ["x.js"]}}}"#])
+        #expect(leftovers() == ["Amp sessions open now keep its MCP servers until they restart."])
+    }
+
+    // MARK: as before
+
+    /// A plain skill gives today's lines, and nothing else.
+    @Test func aPlainSkillGivesTodaysLines() throws {
+        try skill(front: "hooks:\n  PreToolUse: []\nallowed-tools: Bash(git:*)\n", ["scripts/run.sh": "echo hi\n"])
+        #expect(leftovers() == ["Hooks it added stay active in Claude Code sessions that are open now, until they restart.",
+                                "It pre-approved these tools while it ran: Bash(git:*)."])
+        try skill(front: "")
+        #expect(leftovers().isEmpty)
+        #expect(SkillInstall.leftovers(frontMatter: nil, folder: nil, home: home).isEmpty)
+    }
+
+    /// Front matter that names mcpServers in a form the Amp reader doesn't reach keeps the old line.
+    @Test func mcpServersNoReaderReachesKeepTheOldLine() {
+        var front = SkillFrontMatter()
+        front.keys = ["name", "mcpServers"]
+        #expect(SkillInstall.leftovers(frontMatter: front, folder: nil, home: home) == ["It asked for MCP servers: check your agents' MCP settings."])
+    }
+}
+
+/// Who loads a skill from the shared folder, and through Claude Code's link (AE12).
+@Suite struct SkillReadersTests {
+    static let others = "Gemini CLI, Qwen Code, Cursor, opencode, Copilot CLI, Amp, Junie and goose"
+
+    @Test func withTheLink() {
+        let text = SkillReaders.loadedBy([.claudeCode, .codex, .commandCode], linked: true, pluginOff: false)
+        #expect(text == "Agents that load it: Codex, Command Code, Claude Code (through its link), \(Self.others). "
+            + "Amp, Cursor, opencode and goose also find it through the Claude Code link.")
+    }
+
+    @Test func withoutTheLink() {
+        #expect(SkillReaders.loadedBy([.codex, .commandCode], linked: false, pluginOff: false) == "Agents that load it: Codex, Command Code, \(Self.others).")
+        #expect(SkillReaders.loadedBy([.codex, .commandCode], linked: false, pluginOff: true) == "Agents that load it: Codex, Command Code, \(Self.others).")
+    }
+
+    /// Its plugin's key false: Claude Code loads nothing from it, though the others still find the link.
+    @Test func withThePluginOff() {
+        let text = SkillReaders.loadedBy([.claudeCode, .codex, .commandCode], linked: true, pluginOff: true)
+        #expect(text == "Agents that load it: Codex, Command Code, \(Self.others). Claude Code loads nothing from it while its plugin is off. "
+            + "Amp, Cursor, opencode and goose also find it through the Claude Code link.")
+    }
+
+    /// ~/.claude/skills linked to the shared folder as a whole: Claude Code reads it there, with no link of
+    /// its own.
+    @Test func throughALinkedFolder() {
+        #expect(SkillReaders.loadedBy([.claudeCode, .codex, .commandCode], linked: false, pluginOff: false)
+            == "Agents that load it: Codex, Command Code, Claude Code, \(Self.others).")
+    }
+
+    /// The plan says whether Claude Code reads it through a link: made, kept, or dropped.
+    @Test func thePlanSaysWhetherClaudeCodeHasALink() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("nt-readers-\(UUID().uuidString)").path
+        let staged = home + "/staging/notes"
+        try FileManager.default.createDirectory(atPath: staged, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: home + "/.claude/skills", withIntermediateDirectories: true)
+        func plan(_ claude: SkillInstall.ClaudeLink, package: SkillPackage? = nil) -> SkillInstallPlan {
+            SkillInstall.plan(name: "notes", staged: staged, staging: home + "/ready/notes", inventory: SkillInventory.scan(home: home),
+                              claude: claude, package: package, sameSource: true)
+        }
+        #expect(plan(.link).linksClaude && !plan(.skip).linksClaude)
+        try FileManager.default.createDirectory(atPath: home + "/.agents/skills/notes", withIntermediateDirectories: true)
+        try "---\nname: notes\ndescription: Notes.\n---\nBody\n".write(toFile: home + "/.agents/skills/notes/SKILL.md", atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(atPath: home + "/.claude/skills/notes", withDestinationPath: "../../.agents/skills/notes")
+        #expect(plan(.skip).linksClaude, "a plain skill keeps its link")
+        try FileManager.default.createDirectory(atPath: staged + "/.claude-plugin", withIntermediateDirectories: true)
+        try #"{"name": "notes"}"#.write(toFile: staged + "/.claude-plugin/plugin.json", atomically: true, encoding: .utf8)
+        let package = SkillPackage.read(folder: staged, folderName: "notes")
+        #expect(!plan(.skip, package: package).linksClaude, "a plugin left out loses it")
+        #expect(plan(.link, package: package).linksClaude)
+    }
+}

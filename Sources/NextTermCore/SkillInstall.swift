@@ -31,6 +31,14 @@ public struct SkillInstallPlan: Equatable, Sendable {
     /// Agents that will load the skill once installed.
     public let agents: [SkillAgent]
     public let steps: [SkillStep]
+
+    /// Claude Code will read the skill through a link in ~/.claude/skills: one the install makes, or one it
+    /// keeps.
+    public var linksClaude: Bool {
+        if steps.contains(where: { if case .link = $0 { return true }; return false }) { return true }
+        guard let keptLink else { return false }
+        return !steps.contains(.trash(keptLink.path))
+    }
 }
 
 public enum SkillInstall {
@@ -311,14 +319,130 @@ public enum SkillInstall {
         return steps
     }
 
-    /// What a skill asked for that outlives it in a running session or in settings: hooks, MCP servers
-    /// and pre-approved tools. Removal lists them, so the developer can check those places too.
-    public static func leftovers(frontMatter: SkillFrontMatter?) -> [String] {
-        guard let front = frontMatter else { return [] }
+    /// What a skill brought that outlives it, in a running session or in another app's settings: hooks,
+    /// what its Claude Code plugin started, Amp's and Codex's MCP servers, Claude Code's key for its plugin,
+    /// and pre-approved tools. Removal lists them, so the developer can check those places too; it removes
+    /// and edits none of them (KTD12). `folder`: the installed copy, read for its plugin and servers (nil:
+    /// none). `home`: for Claude Code's skills folder, settings and installed plugins in ~/.claude, and for
+    /// ~/.codex/config.toml, all read only.
+    public static func leftovers(frontMatter: SkillFrontMatter?, folder: String?, home: String) -> [String] {
+        let read = folder.map { installed(folder: $0, home: home) }
         var items: [String] = []
-        if front.keys.contains("hooks") { items.append("Hooks it added stay active in Claude Code sessions that are open now, until they restart.") }
-        if front.keys.contains("mcpServers") { items.append("It asked for MCP servers: check your agents' MCP settings.") }
-        if let tools = front.allowedTools, !tools.isEmpty { items.append("It pre-approved these tools while it ran: \(tools).") }
+        if frontMatter?.keys.contains("hooks") == true {
+            items.append("Hooks it added stay active in Claude Code sessions that are open now, until they restart.")
+        }
+        if let read { items += claudeLeftovers(read, home: home) }
+        if let servers = read?.servers, servers.hasAmp {
+            items.append("Amp sessions open now keep its MCP servers until they restart.")
+        } else if frontMatter?.keys.contains("mcpServers") == true {
+            items.append("It asked for MCP servers: check your agents' MCP settings.")
+        }
+        if let servers = read?.servers { items += codexLeftovers(servers, config: SkillServers.codexConfig(home: home)) }
+        if let tools = frontMatter?.allowedTools, !tools.isEmpty { items.append("It pre-approved these tools while it ran: \(tools).") }
         return items
+    }
+
+    /// An installed copy as removal reads it: its package, its servers, and whether Claude Code reads it (a
+    /// link in ~/.claude/skills to it, or that folder linked to the shared one).
+    struct InstalledCopy {
+        let package: SkillPackage?
+        let servers: SkillServers
+        let claudeReads: Bool
+    }
+
+    static func installed(folder: String, home: String) -> InstalledCopy {
+        let name = (folder as NSString).lastPathComponent
+        let real = SkillChanges.realPath(folder)
+        let skillFile = ["SKILL.md", "skill.md"].first { FileManager.default.fileExists(atPath: (real as NSString).appendingPathComponent($0)) }
+        let text = skillFile.flatMap { SkillClaudeSettings.read((real as NSString).appendingPathComponent($0)) }.map { String(decoding: $0, as: UTF8.self) }
+        let package = SkillPackage.read(folder: real, folderName: name, home: home)
+        let servers = SkillServers.read(folder: real, skillText: text ?? "", skillFile: skillFile ?? "SKILL.md", package: package)
+        let entry = ((home as NSString).appendingPathComponent(".claude/skills") as NSString).appendingPathComponent(name)
+        let claudeReads = SkillChanges.exists(entry) && SkillChanges.realPath(entry) == real
+        return InstalledCopy(package: package, servers: servers, claudeReads: claudeReads)
+    }
+
+    /// The Claude Code plugin's leftovers: what it started, while Claude Code loaded it as a plugin that
+    /// was on, and the key the user set to keep it off, which stays.
+    static func claudeLeftovers(_ installed: InstalledCopy, home: String) -> [String] {
+        guard let plugin = installed.package?.claude else { return [] }
+        let key = SkillClaudeSettings.key(plugin.name)
+        let facts = SkillClaudeSettings.snapshot(home: home, keys: [key])
+        let value = facts.values[key]
+        // A plugin of the same name installed for the user wins, even turned off: Claude Code never loaded
+        // this folder as a plugin (hand check H7).
+        let name = SkillPackage.normalized(plugin.name)
+        let shadowed = facts.installed.contains { $0.everywhere && SkillPackage.normalized($0.name) == name }
+        var items: [String] = []
+        if installed.claudeReads, plugin.loadsAsPlugin, plugin.startsPrograms, !shadowed, plugin.start(key: value) == .on {
+            items.append(partsLeftover(plugin))
+        }
+        if value == false {
+            let quoted = "“" + SkillReview.oneLine(key, limit: 80) + "”"
+            items.append("~/.claude/settings.json keeps \(quoted): false. It stays, and keeps any later folder with that plugin name turned off in Claude Code.")
+        }
+        return items
+    }
+
+    /// "Its Claude Code plugin's MCP servers and hooks stop with it. …", naming the kinds it has.
+    static func partsLeftover(_ plugin: SkillPackage.ClaudePlugin) -> String {
+        var kinds: [String] = []
+        if plugin.serverCount > 0 { kinds.append("MCP servers") }
+        if (plugin.partCounts[.hook] ?? 0) > 0 { kinds.append("hooks") }
+        if (plugin.partCounts[.monitor] ?? 0) > 0 { kinds.append("monitors") }
+        if (plugin.partCounts[.lspServer] ?? 0) > 0 { kinds.append("language servers") }
+        guard !kinds.isEmpty else {
+            return "Its Claude Code plugin goes with it. Claude Code sessions open now keep what it started until they restart."
+        }
+        return "Its Claude Code plugin's \(SkillPackage.list(kinds)) stop with it. Claude Code sessions open now keep them until they restart."
+    }
+
+    /// The servers in ~/.codex/config.toml that match the skill's agents/openai.yaml by address, as Codex
+    /// matches them (KTD7): Codex may have added them for this skill, or the user for other things, so they
+    /// are named and left. A config or a dependency file Next Term could not read in full says so.
+    static func codexLeftovers(_ servers: SkillServers, config: SkillServers.CodexConfig) -> [String] {
+        var items: [String] = []
+        let dependencies = servers.codex
+        if !dependencies.isEmpty, !config.complete {
+            var names: [String] = dependencies.prefix(SkillPackage.cap).map { quoted($0.name) }
+            if let more = SkillPackage.more(dependencies.count - SkillPackage.cap) { names.append(more) }
+            let text = "Codex may have added MCP servers for this skill (\(SkillPackage.list(names))). Next Term could not read all of "
+                + "~/.codex/config.toml: check it there."
+            items.append(text)
+        } else if !dependencies.isEmpty {
+            var matched: [SkillServers.CodexConfig.Table] = []
+            for dependency in dependencies {
+                for table in config.tables where SkillServers.matches(dependency, table) && !matched.contains(where: { $0.name == table.name }) {
+                    matched.append(table)
+                }
+            }
+            if let line = codexMatchedLine(matched) { items.append(line) }
+        }
+        if let file = servers.codexFile, servers.unread.contains(where: { $0.file == file }) {
+            let text = "Next Term could not read every MCP entry in its \(file), so Codex may have added servers for it that aren't named here: "
+                + "check ~/.codex/config.toml."
+            items.append(text)
+        }
+        return items
+    }
+
+    /// One line for the matching tables, named as the config names them, with their address.
+    static func codexMatchedLine(_ tables: [SkillServers.CodexConfig.Table]) -> String? {
+        guard !tables.isEmpty else { return nil }
+        var named: [String] = tables.prefix(SkillPackage.cap).map { table in
+            let address: String
+            if let url = SkillServers.trimmed(table.url) {
+                address = SkillReview.oneLine(url)
+            } else {
+                address = "the program `" + SkillReview.oneLine(SkillServers.trimmed(table.command) ?? "", limit: 120) + "`"
+            }
+            return quoted(table.name) + " (" + address + ")"
+        }
+        if let more = SkillPackage.more(tables.count - SkillPackage.cap) { named.append(more) }
+        let one = tables.count == 1
+        let servers = one ? "the MCP server" : "the MCP servers"
+        let stays = one ? "It stays there, because you may use it for other things. Remove it there if you don't."
+            : "They stay there, because you may use them for other things. Remove them there if you don't."
+        return "Codex may have added \(servers) \(SkillPackage.list(named)) for this skill, in ~/.codex/config.toml. " + stays
     }
 }
