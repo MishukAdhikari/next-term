@@ -65,7 +65,7 @@ It answers only when it can be sure what is on the line, and otherwise <kbd>⇥<
 - when the listing comes within 0.8 seconds. Keys you type while it lists go to the shell after its own <kbd>⇥</kbd>, in order;
 - on a connection that carries fewer than 7 tabs. sshd allows about 10 sessions on one connection, and every tab and every check is one, so a crowded connection, or one that refused a session in the last 30 seconds, is left alone.
 
-A listing is kept for ten seconds. When the server reports the folder of the tab in front (tmux, or a Linux server), Next Term lists it as soon as it changes, so the first <kbd>⇥</kbd> there answers at once. herdr tabs, and tabs where a program runs, keep the shell’s own <kbd>⇥</kbd>.
+Outside tmux a listing is kept for ten seconds, and on a Linux server, whose status checks report the shell’s folder, Next Term lists the folder of the tab in front as soon as it changes, so the first <kbd>⇥</kbd> there answers at once. In tmux each <kbd>⇥</kbd> lists afresh, after making sure the pane isn’t in tmux’s copy mode. herdr tabs, and tabs where a program runs, keep the shell’s own <kbd>⇥</kbd>.
 
 ### The hook for zsh on a server
 
