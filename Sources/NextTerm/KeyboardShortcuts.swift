@@ -56,12 +56,64 @@ final class KeyboardShortcuts {
     static let goToFileKey = KeyChord(key: "p", command: true)
     private weak var goToFileAliasItem: NSMenuItem?
 
-    /// Records the menus' commands and their default shortcuts, then applies the user's.
+    /// Records the menus' commands and their default shortcuts, then applies the user's. Called before the
+    /// menu is the menu bar: macOS then keeps only one item per key, and ⌘D is on two (Split Right, Duplicate Line).
     func capture(_ menu: NSMenu) {
         commands = []
         aliases = [:]
         walk(menu, path: [])
         apply()
+        guard trackingObservers.isEmpty else { return }
+        for (name, open) in [(NSMenu.didBeginTrackingNotification, true), (NSMenu.didEndTrackingNotification, false)] {
+            trackingObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                guard let self, let menu = note.object as? NSMenu, menu === NSApp.mainMenu else { return }
+                if open { self.menuBarOpened() } else { self.menuBarClosed() }
+            })
+        }
+    }
+
+    // MARK: the editor's own keys
+
+    /// The editor's commands (Edit › Line) on their keys. Their menu items hold no key while the menus are
+    /// closed: the editor answers these keys itself while it has the keyboard (CodeTextView.performKeyEquivalent),
+    /// and everywhere else a key goes where it would without them: to the terminal command that shares it (⌘D,
+    /// Split Right), or to the terminal or the sidebar (a disabled menu item would swallow it).
+    private(set) var editorKeys: [KeyChord: NSMenuItem] = [:]
+    /// The item of another command on the same key, which gives it up while the menus are open over the editor.
+    private var sharedKeys: [KeyChord: NSMenuItem] = [:]
+    private var trackingObservers: [NSObjectProtocol] = []
+    /// Whether the editor's items show their keys now (the menu bar is open).
+    private(set) var showsEditorKeys = false
+
+    /// The editor command `event` presses, if any: by the key as typed unshifted, or as the ⌘ layer of a
+    /// non-Latin layout gives it.
+    func editorItem(for event: NSEvent) -> NSMenuItem? {
+        guard !editorKeys.isEmpty, let chord = Self.chord(from: event) else { return nil }
+        if let item = editorKeys[chord] { return item }
+        guard let typed = event.charactersIgnoringModifiers?.lowercased(), typed.count == 1, typed != chord.key else { return nil }
+        return editorKeys[KeyChord(key: typed, command: chord.command, shift: chord.shift, option: chord.option, control: chord.control)]
+    }
+
+    /// The menu bar opened: the editor's items show their keys, and with the editor's keyboard a shared key is
+    /// shown on the editor's command only, since that is what it does there.
+    func menuBarOpened(editorHasKeyboard: Bool? = nil) {
+        let inEditor = editorHasKeyboard ?? (NSApp.keyWindow?.firstResponder is CodeTextView)
+        for (chord, item) in editorKeys {
+            if let other = sharedKeys[chord] {
+                guard inEditor else { continue }
+                Self.set(nil, on: other)
+            }
+            Self.set(chord, on: item)
+        }
+        showsEditorKeys = true
+    }
+
+    /// The menu bar closed: the editor's items give their keys back.
+    func menuBarClosed() {
+        guard showsEditorKeys else { return }
+        showsEditorKeys = false
+        for item in editorKeys.values { Self.set(nil, on: item) }
+        for (chord, other) in sharedKeys { Self.set(chord, on: other) }
     }
 
     private func walk(_ menu: NSMenu, path: [String]) {
@@ -167,7 +219,19 @@ final class KeyboardShortcuts {
         // item still holds it, so a key moving between commands (or from ⌘P's alias) would be lost.
         goToFileAliasItem.map { Self.set(nil, on: $0) }
         for (item, _) in chords { Self.set(nil, on: item) }
-        for (item, chord) in chords { Self.set(chord, on: item) }
+        // The editor's commands keep theirs off the menus while they are closed (`editorKeys`).
+        let editorIDs = KeyBindings.editorCommands
+        showsEditorKeys = false
+        editorKeys = [:]
+        sharedKeys = [:]
+        func isEditors(_ item: NSMenuItem) -> Bool { Self.id(of: item).map { editorIDs.contains($0) } ?? false }
+        for (item, chord) in chords where isEditors(item) {
+            if let chord { editorKeys[chord] = item }
+        }
+        for (item, chord) in chords where !isEditors(item) {
+            Self.set(chord, on: item)
+            if let chord, editorKeys[chord] != nil { sharedKeys[chord] = item }
+        }
         // ⌘P stays Go to File while no command has it.
         if let alias = goToFileAliasItem, !chords.contains(where: { $0.1 == Self.goToFileKey }) {
             Self.set(Self.goToFileKey, on: alias)
@@ -200,15 +264,15 @@ final class KeyboardShortcuts {
     }
 
     /// An import's shortcuts, saved as the user's own changes on top of the preset. A key another command
-    /// has moves, leaving that command without one (as when it is typed in Settings); a Control key without
-    /// ⌘ is never taken.
+    /// has moves, leaving that command without one (as when it is typed in Settings), unless the two can share
+    /// it (KeyBindings.canShareKey); a Control key without ⌘ is never taken.
     func setImported(_ shortcuts: [PlannedShortcut]) {
         var bindings = self.bindings
         let defaults = self.defaults
         for shortcut in shortcuts where shortcut.allowed && defaults[shortcut.command] != nil {
             if let chord = shortcut.chord {
                 guard chord.isUsable, !ImportShortcuts.isShellKey(chord) else { continue }
-                if let owner = bindings.owner(of: chord, defaults: defaults, except: shortcut.command) {
+                for owner in bindings.owners(of: chord, defaults: defaults, except: shortcut.command) {
                     bindings.set(nil, for: owner, default: defaults[owner] ?? nil)
                 }
             }
@@ -231,6 +295,15 @@ final class KeyboardShortcuts {
     }
 
     func isCustomised(_ id: String) -> Bool { bindings.overrides[id] != nil }
+
+    /// "⌘D is Duplicate Line while the editor has the keyboard, Split Right everywhere else", when the command's
+    /// key is shared that way (Settings says so on both).
+    func sharing(_ id: String) -> String? {
+        guard let chord = chord(for: id), let other = bindings.sharer(of: chord, defaults: defaults, except: id) else { return nil }
+        let editor = KeyBindings.editorCommands.contains(id) ? id : other
+        let elsewhere = editor == id ? other : id
+        return "\(chord.display) is \(title(of: editor)) while the editor has the keyboard, \(title(of: elsewhere)) everywhere else"
+    }
 }
 
 /// A view's tooltip that names a menu command's key as it is now ("New tab (⌘T)"), and follows it when
@@ -442,8 +515,10 @@ final class ShortcutRecorder: NSButton {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     private func showCurrent() {
-        title = KeyboardShortcuts.shared.chord(for: commandID)?.display ?? "—"
-        setAccessibilityLabel("Shortcut for \(KeyboardShortcuts.shared.title(of: commandID)): \(title)")
+        let shortcuts = KeyboardShortcuts.shared
+        title = shortcuts.chord(for: commandID)?.display ?? "—"
+        setAccessibilityLabel("Shortcut for \(shortcuts.title(of: commandID)): \(title)")
+        toolTip = shortcuts.sharing(commandID)
     }
 
     @objc private func startRecording() {
@@ -476,14 +551,18 @@ final class ShortcutRecorder: NSButton {
     private func commit(_ chord: KeyChord?) {
         stopRecording()
         let shortcuts = KeyboardShortcuts.shared
-        if let chord, let owner = shortcuts.bindings.owner(of: chord, defaults: shortcuts.defaults, except: commandID) {
+        // A key the editor's command and a terminal command share is no clash (KeyBindings.canShareKey); a
+        // command for both parts on ⌘D clashes with both.
+        let owners = chord.map { shortcuts.bindings.owners(of: $0, defaults: shortcuts.defaults, except: commandID) } ?? []
+        if let chord, !owners.isEmpty {
+            let names = owners.map { "“\(shortcuts.title(of: $0))”" }.joined(separator: " and ")
             let alert = NSAlert()
-            alert.messageText = "\(chord.display) is used by “\(shortcuts.title(of: owner))”."
-            alert.informativeText = "Use it for “\(shortcuts.title(of: commandID))” instead? “\(shortcuts.title(of: owner))” is left without a shortcut."
+            alert.messageText = "\(chord.display) is used by \(names)."
+            alert.informativeText = "Use it for “\(shortcuts.title(of: commandID))” instead? \(names) \(owners.count == 1 ? "is" : "are") left without a shortcut."
             alert.addButton(withTitle: "Use It Here")
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return showCurrent() }
-            shortcuts.set(nil, for: owner)
+            for owner in owners { shortcuts.set(nil, for: owner) }
         }
         shortcuts.set(chord, for: commandID)
         showCurrent()

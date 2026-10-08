@@ -235,6 +235,12 @@ final class CodeTextView: NSTextView {
     override func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleComment(_:)) { return EditorLanguage.commentStyle(for: document?.language) != nil && isEditable }
         if item.action == #selector(replaceInFile(_:)) { return isEditable && !isBehindKeyWindow }
+        let lineEdits = [#selector(duplicateLine(_:)), #selector(deleteLine(_:)), #selector(moveLineUp(_:)), #selector(moveLineDown(_:))]
+        if let action = item.action, lineEdits.contains(action) { return isEditable && !isBehindKeyWindow }
+        if item.action == #selector(copyPathWithLine(_:)) { return document != nil && !isBehindKeyWindow }
+        // With nothing selected, ⌘C and ⌘X take the caret's line.
+        if item.action == #selector(NSText.copy(_:)), copiesWholeLine { return true }
+        if item.action == #selector(NSText.cut(_:)), copiesWholeLine { return isEditable }
         return super.validateMenuItem(item)
     }
 
@@ -244,8 +250,108 @@ final class CodeTextView: NSTextView {
                               action: #selector(sendSelectionToAgent(_:)), keyEquivalent: "")
         send.target = self
         menu.insertItem(send, at: 0)
-        menu.insertItem(.separator(), at: 1)
+        let path = NSMenuItem(title: "Copy Path with Line", action: #selector(copyPathWithLine(_:)), keyEquivalent: "")
+        path.target = self
+        menu.insertItem(path, at: 1)
+        menu.insertItem(.separator(), at: 2)
         return menu
+    }
+
+    // MARK: Edit › Line
+
+    /// The editor's own commands answer their keys here, before the menu bar, while it has the keyboard. A key
+    /// one shares with a terminal command (⌘D, Split Right) is the editor's only here: macOS lets one menu item
+    /// hold a key, so the menus can't say which part it is for (KeyboardShortcuts keeps these items' keys off
+    /// while the menus are closed).
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard window?.firstResponder === self, let item = KeyboardShortcuts.shared.editorItem(for: event), let action = item.action else {
+            return super.performKeyEquivalent(with: event)
+        }
+        caretPlacedByUser = true
+        if validateMenuItem(item) { NSApp.sendAction(action, to: self, from: item) } else { NSSound.beep() }
+        return true
+    }
+
+    /// The text's lines, as the document keeps them (or counted afresh if they are not in step).
+    private var lineIndex: LineIndex {
+        if let lines = document?.lines, lines.length == (string as NSString).length { return lines }
+        return LineIndex(string)
+    }
+
+    /// One edit, undone in one step (named in Edit › Undo), then the selection it gives.
+    private func apply(_ edit: LineEdits.Edit, named name: String) {
+        guard shouldChangeText(in: edit.range, replacementString: edit.text) else { return }
+        breakUndoCoalescing() // typing just before is undone on its own
+        replaceCharacters(in: edit.range, with: edit.text)
+        didChangeText()
+        breakUndoCoalescing()
+        undoManager?.setActionName(name)
+        setSelectedRange(edit.selection)
+        scrollRangeToVisible(edit.selection)
+    }
+
+    /// Duplicate Line (⌘D while the editor has the keyboard): the line below itself, or a selection after itself.
+    @objc func duplicateLine(_ sender: Any?) {
+        apply(LineEdits.duplicate(selectedRange(), in: string as NSString, lineIndex), named: "Duplicate Line")
+    }
+
+    @objc func deleteLine(_ sender: Any?) {
+        guard let edit = LineEdits.delete(selectedRange(), in: string as NSString, lineIndex) else { return NSSound.beep() }
+        apply(edit, named: "Delete Line")
+    }
+
+    @objc func moveLineUp(_ sender: Any?) { moveLines(up: true) }
+    @objc func moveLineDown(_ sender: Any?) { moveLines(up: false) }
+
+    private func moveLines(up: Bool) {
+        // At the top or the bottom there is nowhere to go; held down, it stops there quietly.
+        guard let edit = LineEdits.move(selectedRange(), up: up, in: string as NSString, lineIndex) else { return }
+        apply(edit, named: up ? "Move Line Up" : "Move Line Down")
+    }
+
+    /// "src/app.ts:42", or "src/app.ts:42-48" for the selected lines: the path from the top of the sidebar's folder.
+    @objc func copyPathWithLine(_ sender: Any?) {
+        guard let document else { return NSSound.beep() }
+        let controller = window?.windowController as? TerminalWindowController
+        let root = controller.map { canonicalPath($0.sidebar.root?.path ?? $0.searchRoot) }
+        let lines = LineEdits.lines(touching: selectedRange(), in: lineIndex)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(LineEdits.pathWithLine(canonicalPath(document.path), root: root, lines: lines), forType: .string)
+    }
+
+    // MARK: whole-line copy and paste
+
+    /// Marks a copy of a whole line, so pasting it with nothing selected puts it above the caret's line.
+    static let wholeLineType = NSPasteboard.PasteboardType("me.mishuk.nextterm.whole-line")
+
+    /// Nothing selected (one caret): ⌘C and ⌘X take the caret's line.
+    private var copiesWholeLine: Bool { selectedRanges.count == 1 && selectedRange().length == 0 }
+
+    /// ⌘C with nothing selected copies the caret's line with its line break.
+    override func copy(_ sender: Any?) {
+        guard copiesWholeLine else { return super.copy(sender) }
+        let line = LineEdits.wholeLine(at: selectedRange().location, in: string as NSString, lineIndex)
+        let board = NSPasteboard.general
+        board.clearContents()
+        board.setString(line, forType: .string)
+        board.setString(line, forType: Self.wholeLineType)
+    }
+
+    /// ⌘X with nothing selected cuts the caret's line, as Delete Line takes it.
+    override func cut(_ sender: Any?) {
+        guard copiesWholeLine, isEditable else { return super.cut(sender) }
+        copy(sender)
+        if let edit = LineEdits.delete(selectedRange(), in: string as NSString, lineIndex) { apply(edit, named: "Cut") }
+    }
+
+    /// A whole line copied that way, pasted with nothing selected, goes in above the caret's line, whole.
+    override func paste(_ sender: Any?) {
+        let board = NSPasteboard.general
+        if copiesWholeLine, isEditable, let text = board.string(forType: .string), text.hasSuffix("\n"),
+           board.string(forType: Self.wholeLineType) == text {
+            return apply(LineEdits.pasteLines(text, at: selectedRange().location, lineIndex), named: "Paste")
+        }
+        super.paste(sender)
     }
 
     @objc func sendSelectionToAgent(_ sender: Any?) {

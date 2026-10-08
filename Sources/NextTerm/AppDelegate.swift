@@ -315,8 +315,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // open when the setting was turned off, and closed after Next Term.
         if agentControl { startAgentControl() } else { MCPRegistration.update(on: false, claudeAppOnly: true) }
         MCPRegistration.watchClaudeApp()
-        NSApp.mainMenu = buildMenu()
-        KeyboardShortcuts.shared.capture(NSApp.mainMenu!) // the menus as built are the defaults
+        // The menus as built are the defaults, read before they are the menu bar (which keeps one item per key).
+        let menu = buildMenu()
+        KeyboardShortcuts.shared.capture(menu)
+        NSApp.mainMenu = menu
         setUpNotifications()
         // Fetches the open repositories now and then (Settings › Editor › Git); in the self-test, only its own.
         BackgroundFetcher.shared.start()
@@ -1061,6 +1063,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(edit, "Comment Line", #selector(CodeTextView.toggleComment(_:)), "/")
         item(edit, "Indent", #selector(CodeTextView.indentSelection(_:)), "]")
         item(edit, "Outdent", #selector(CodeTextView.outdentSelection(_:)), "[")
+        // The editor's own: their keys work while it has the keyboard, so ⌘D splits the terminal everywhere else.
+        let line = NSMenu(title: "Line")
+        edit.addItem(withTitle: "Line", action: nil, keyEquivalent: "").submenu = line
+        let up = String(Character(UnicodeScalar(NSUpArrowFunctionKey)!)), down = String(Character(UnicodeScalar(NSDownArrowFunctionKey)!))
+        item(line, "Duplicate Line", #selector(CodeTextView.duplicateLine(_:)), "d")
+        item(line, "Delete Line", #selector(CodeTextView.deleteLine(_:)), "k", [.command, .shift])
+        item(line, "Move Line Up", #selector(CodeTextView.moveLineUp(_:)), up, [.command, .control])
+        item(line, "Move Line Down", #selector(CodeTextView.moveLineDown(_:)), down, [.command, .control])
+        line.addItem(.separator())
+        item(line, "Copy Path with Line", #selector(CodeTextView.copyPathWithLine(_:)), "")
         edit.addItem(.separator())
         item(edit, "Clear Buffer", #selector(TerminalWindowController.clearBuffer(_:)), "k")
 
