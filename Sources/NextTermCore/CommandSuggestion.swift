@@ -74,23 +74,9 @@ public enum CommandSuggestion {
     /// Recent output as sent: its end, secrets masked (command lines typed at a prompt are in it too).
     public static func redactedOutput(_ output: String) -> String { masked(String(output.suffix(maxOutput))) }
 
-    /// MCPRedaction's secrets, and two more a command line holds anywhere on it: a password typed after `-p` or
-    /// `--password=`, and the value given to a name like a secret's (`API_KEY=…`, `export TOKEN="…"`).
-    static func masked(_ text: String) -> String {
-        var result = MCPRedaction.redact(text).text
-        for pattern in [passwordOption, secretAssignment] {
-            result = pattern.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "$1" + MCPRedaction.mask)
-        }
-        return result
-    }
-
-    /// `mysql -pSecret`, `--password=Secret`: the value.
-    static let passwordOption = try! NSRegularExpression(pattern: #"((?:^|\s)(?:-p|--password=))(?!\s)[^\s•]+"#)
-
-    /// `API_KEY=sk-…`, `export GH_TOKEN="…"`: the value, quoted or not.
-    static let secretAssignment = try! NSRegularExpression(
-        pattern: #"((?:^|[\s;&|(])(?:export\s+)?"# + MCPRedaction.secretName + #"=)(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|)•]+)"#,
-        options: [.caseInsensitive, .anchorsMatchLines])
+    /// The command-line secret detector's masking (CommandSecrets): MCPRedaction's secrets, and the shapes secrets
+    /// take on a command line, such as `-p…`, `--password=…` and `API_KEY=…`.
+    static func masked(_ text: String) -> String { CommandSecrets.mask(text) }
 
     /// What the agent is asked: the sentence, the folder, the shell, the last command and how it ended (redacted),
     /// and recent output only when the user confirmed it (redacted too).
