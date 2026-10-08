@@ -31,6 +31,7 @@ extension SelfTest {
         await editorTabMenuChecks(w, folder: folder)
         await firstShellChecks(folder: folder)
         await tooltipRemapChecks(c)
+        await keyHintChecks(c)
 
         for tab in w.tabs { w.remove(tab) }
         _ = await wait(3) { !app.controllers.contains { $0 === w } }
