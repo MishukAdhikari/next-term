@@ -156,13 +156,14 @@ public enum ImportGhostty {
         var colours: [String: String] = [:]
         var keybinds: [String] = []
         /// The cursor, the scrollback and the folder new tabs start in: `cursor-style`, `cursor-style-blink`,
-        /// `scrollback-limit` and `working-directory`.
+        /// `scrollback-limit`, `working-directory` and whether new tabs follow the tab in front instead.
         var terminal: [String: String] = [:]
         /// Other keys, in the order first seen.
         var others: [String] = []
 
         static let colourKeys = ["foreground", "background", "cursor-color", "selection-background"]
-        static let terminalKeys = ["cursor-style", "cursor-style-blink", "scrollback-limit", "working-directory"]
+        static let terminalKeys = ["cursor-style", "cursor-style-blink", "scrollback-limit", "working-directory",
+                                   "tab-inherit-working-directory", "window-inherit-working-directory"]
 
         init(_ entries: [Entry]) {
             for entry in entries { add(entry) }
@@ -234,8 +235,8 @@ public enum ImportGhostty {
     // MARK: cursor, scrollback and start folder
 
     /// `cursor-style` (a hollow block comes over filled), `cursor-style-blink` (empty: Ghostty's default, so
-    /// nothing), `working-directory` (`inherit`, `home` or a folder). `scrollback-limit` counts bytes, not lines,
-    /// so it is reported, not converted.
+    /// nothing), and the start folder (`startFolder`). `scrollback-limit` counts bytes, not lines, so it is
+    /// reported, not converted.
     static func addTerminal(_ config: Config, home: String, to plan: inout ImportPlan) {
         if let style = config.terminal["cursor-style"] {
             let shapes = ["block": CursorShape.block, "block_hollow": .block, "bar": .bar, "underline": .underline]
@@ -256,15 +257,37 @@ public enum ImportGhostty {
         if config.terminal["scrollback-limit"] != nil {
             plan.skipped.append(SkippedItem("scrollback-limit", "Ghostty counts it in bytes and Next Term in lines, so it isn't converted"))
         }
-        if let directory = config.terminal["working-directory"], !directory.isEmpty {
-            switch directory {
-            case "inherit": plan.settings.append(ImportRows.startFolder(.current, source: "working-directory inherit"))
-            case "home": plan.settings.append(ImportRows.startFolder(.home, source: "working-directory home"))
-            default:
-                let row = ImportRows.startFolder(directory, key: "working-directory", home: home)
-                plan.settings += [row.setting].compactMap { $0 }
-                plan.skipped += row.skipped
+        addStartFolder(config, home: home, to: &plan)
+    }
+
+    /// Where Ghostty opens a new tab. By default it follows the tab in front (`tab-inherit-working-directory`,
+    /// or before Ghostty 1.3 `window-inherit-working-directory`), and `working-directory` is only where the first
+    /// window starts: set true, the folder of the tab in front is offered. Set false, new tabs start in
+    /// `working-directory`: `home` or a folder is offered, and unset is the home folder, where Ghostty starts
+    /// when opened from the Dock or Finder. Its `inherit`, the folder Ghostty itself was started from, has no
+    /// equivalent here.
+    static func addStartFolder(_ config: Config, home: String, to plan: inout ImportPlan) {
+        let key = config.terminal["tab-inherit-working-directory"] == nil ? "window-inherit-working-directory" : "tab-inherit-working-directory"
+        let inherit = config.terminal[key].flatMap { $0.isEmpty ? nil : $0 }
+        let directory = config.terminal["working-directory"].flatMap { $0.isEmpty ? nil : $0 }
+        if let inherit, inherit != "true", inherit != "false" { plan.skipped.append(SkippedItem(key, "value not recognised")) }
+        guard inherit == "false" else {
+            if inherit == "true" { plan.settings.append(ImportRows.startFolder(.current, source: "\(key) true")) }
+            if directory != nil {
+                plan.skipped.append(SkippedItem("working-directory", "Ghostty starts only its first window there; new tabs open in the folder of the tab in front"))
             }
+            return
+        }
+        switch directory {
+        case nil, "home"?:
+            let source = directory == nil ? "\(key) false (the home folder)" : "working-directory home"
+            plan.settings.append(ImportRows.startFolder(.home, source: source))
+        case "inherit"?:
+            plan.skipped.append(SkippedItem("working-directory inherit", "the folder Ghostty itself was started from, which Next Term has no setting for"))
+        case let path?:
+            let row = ImportRows.startFolder(path, key: "working-directory", home: home)
+            plan.settings += [row.setting].compactMap { $0 }
+            plan.skipped += row.skipped
         }
     }
 

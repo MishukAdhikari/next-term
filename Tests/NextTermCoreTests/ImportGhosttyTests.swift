@@ -257,18 +257,52 @@ import Testing
         #expect(plan.settings == [
             PlannedSetting(.terminalCursorShape("bar"), source: "cursor-style bar"),
             PlannedSetting(.terminalCursorBlink(false), source: "cursor-style-blink false"),
-            PlannedSetting(.terminalStartFolder("current"), source: "working-directory inherit"),
         ])
         #expect(reasons(plan)["scrollback-limit"] == "Ghostty counts it in bytes and Next Term in lines, so it isn't converted")
 
-        // A hollow block comes over filled; an empty blink is Ghostty's default, so nothing; home is offered unticked.
-        let other = try self.plan("cursor-style = block_hollow\ncursor-style-blink =\nworking-directory = home")
-        #expect(other.settings.map(\.setting) == [.terminalCursorShape("block"), .terminalStartFolder("home")])
-        #expect(other.settings.first?.note == "a hollow block isn't supported, so it is filled" && other.settings.last?.ticked == false)
-        let odd = try self.plan("cursor-style = beam\ncursor-style-blink = sometimes\nworking-directory = ../relative")
+        // A hollow block comes over filled; an empty blink is Ghostty's default, so nothing.
+        let other = try self.plan("cursor-style = block_hollow\ncursor-style-blink =")
+        #expect(other.settings.map(\.setting) == [.terminalCursorShape("block")])
+        #expect(other.settings.first?.note == "a hollow block isn't supported, so it is filled")
+        let odd = try self.plan("cursor-style = beam\ncursor-style-blink = sometimes\ntab-inherit-working-directory = false\nworking-directory = ../relative")
         #expect(odd.settings.isEmpty)
         #expect(reasons(odd)["cursor-style"] == "value not recognised" && reasons(odd)["cursor-style-blink"] == "value not recognised")
         #expect(reasons(odd)["working-directory"] == "only a full path to a folder is read")
+    }
+
+    @Test func whereNewTabsStart() throws {
+        let note = "in project windows too, where new tabs otherwise open in the project's folder"
+        // Ghostty's new tabs follow the tab in front unless told not to, and working-directory is only where its
+        // first window starts: nothing to offer for it, whatever it says.
+        for directory in ["inherit", "home", "/"] {
+            let plan = try self.plan("working-directory = \(directory)")
+            #expect(plan.settings.isEmpty, "\(directory)")
+            #expect(reasons(plan)["working-directory"] == "Ghostty starts only its first window there; new tabs open in the folder of the tab in front")
+        }
+        // Following the tab in front, set: offered unticked, since here it applies in project windows too.
+        let follow = try self.plan("tab-inherit-working-directory = true\nwindow-inherit-working-directory = false")
+        #expect(follow.settings == [PlannedSetting(.terminalStartFolder("current"), source: "tab-inherit-working-directory true", ticked: false, note: note)])
+        // Before Ghostty 1.3, the window's key was the tabs' too.
+        let older = try self.plan("window-inherit-working-directory = true")
+        #expect(older.settings.map(\.source) == ["window-inherit-working-directory true"])
+
+        // Not following: new tabs start in working-directory. Home, or unset (where Ghostty starts from the Dock).
+        let home = try self.plan("tab-inherit-working-directory = false\nworking-directory = home")
+        #expect(home.settings == [PlannedSetting(.terminalStartFolder("home"), source: "working-directory home", ticked: false, note: note)])
+        let unset = try self.plan("window-inherit-working-directory = false")
+        #expect(unset.settings.map(\.setting) == [.terminalStartFolder("home")])
+        #expect(unset.settings.first?.source == "window-inherit-working-directory false (the home folder)")
+        // A folder on this Mac; `inherit` (the folder Ghostty was started from) has no setting here.
+        let folder = try self.plan("tab-inherit-working-directory = false\nworking-directory = /usr")
+        #expect(folder.settings == [PlannedSetting(.terminalStartFolder("/usr"), source: "working-directory /usr", ticked: false, note: note)])
+        let started = try self.plan("tab-inherit-working-directory = false\nworking-directory = inherit")
+        #expect(started.settings.isEmpty)
+        #expect(reasons(started)["working-directory inherit"] == "the folder Ghostty itself was started from, which Next Term has no setting for")
+        // The tab's key decides over the window's; a value Ghostty wouldn't take is Ghostty's default.
+        let both = try self.plan("tab-inherit-working-directory = false\nwindow-inherit-working-directory = true")
+        #expect(both.settings.map(\.setting) == [.terminalStartFolder("home")])
+        let odd = try self.plan("tab-inherit-working-directory = sometimes")
+        #expect(odd.settings.isEmpty && reasons(odd)["tab-inherit-working-directory"] == "value not recognised")
     }
 
     @Test func safety() throws {
@@ -277,6 +311,7 @@ import Testing
             initial-command = ssh prod-db.internal.example
             env = OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwx
             working-directory = /Users/someone/private-folder
+            tab-inherit-working-directory = false
             window-padding-x = 4
             config-file = ?extra.conf
             config-file = /etc/hosts
