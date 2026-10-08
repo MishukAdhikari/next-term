@@ -120,10 +120,10 @@ public enum CopilotIDE {
     }
 
     /// ⌥⌘K with Copilot connected: `add_selection` for lines, `add_file_reference` for a whole file. The
-    /// CLI types `@path:10-20 ` into its prompt (lines 1-based here, 0-based on the wire). Nil for a file
-    /// that holds secrets.
+    /// CLI types `@path:10-20 ` into its prompt (lines 1-based here, 0-based on the wire). Only the path and
+    /// the line numbers go, never the text, as with Claude's @-mentions.
     public static func fileReference(path: String, lines: ClosedRange<Int>?) -> (method: String, params: [String: Any])? {
-        guard path.hasPrefix("/"), !IDELink.isSensitive(path) else { return nil }
+        guard path.hasPrefix("/") else { return nil }
         var params: [String: Any] = ["filePath": path, "fileUrl": URL(fileURLWithPath: path).absoluteString,
                                      "selection": NSNull(), "selectedText": NSNull()]
         guard let lines else { return ("add_file_reference", params) }

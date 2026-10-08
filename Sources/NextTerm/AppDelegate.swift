@@ -214,6 +214,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func projectsChanged() {
         ClaudeIDEServer.shared.updateWorkspaces(controllers.compactMap(\.project))
         GeminiIDEServer.shared.updateWorkspaces(agentWorkspaces)
+        updateCopilotFolders()
     }
 
     /// Brand icons on configuration folders (.github, .claude, .idea); off: they stay plain and quiet.
@@ -315,6 +316,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         DispatchQueue.main.async { RemoteConnection.restoreTabs() }
         // Claude Code's IDE link, before the first tab so every tab can use it.
         if shareWithClaude { startClaudeLink() }
+        if shareWithCopilot { startCopilotLink() } // Copilot CLI's, in CopilotIDE.swift
         // The MCP socket too: tabs are told where it is.
         if agentControl { startAgentControl() }
         NSApp.mainMenu = buildMenu()
@@ -550,6 +552,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         MCPControlServer.shared.stop()
         ClaudeIDEServer.shared.stop() // removes the lock file
         GeminiIDEServer.shared.stop()
+        CopilotIDEServer.shared.stop()
         MainActor.assumeIsolated { Updater.shared.installStagedUpdateOnQuit() }
         if !SelfTest.isRequested { sessionProjects = controllers.compactMap(\.project) }
         RemoteConnection.saveTabs(controllers)

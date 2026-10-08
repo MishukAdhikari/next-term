@@ -11,6 +11,9 @@ enum SelfTest {
     nonisolated static var isRequested: Bool { CommandLine.arguments.contains("--self-test") }
     /// The self-test's own MCP socket, so it never answers for (or takes over from) the Next Term you use.
     nonisolated static let mcpSocketPath = (NSTemporaryDirectory() as NSString).appendingPathComponent("nextterm-mcp-\(getpid()).sock")
+    /// Where the self-test's Copilot CLI lock goes, so it never writes in your own ~/.copilot.
+    nonisolated static let copilotLockFolder = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("nextterm-copilot-ide-\(getpid())", isDirectory: true)
 
     private static var lines: [String] = []
     private static var failures = 0

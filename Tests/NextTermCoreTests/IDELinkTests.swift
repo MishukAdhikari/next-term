@@ -174,7 +174,6 @@ import Testing
         let file = try #require(CopilotIDE.fileReference(path: "/p/a b.swift", lines: nil))
         #expect(file.method == "add_file_reference" && file.params["selection"] is NSNull)
         #expect(file.params["fileUrl"] as? String == "file:///p/a%20b.swift")
-        #expect(CopilotIDE.fileReference(path: "/p/.env", lines: 1...2) == nil)
         #expect(CopilotIDE.fileReference(path: "relative.swift", lines: nil) == nil)
     }
 }

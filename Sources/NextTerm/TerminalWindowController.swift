@@ -1303,7 +1303,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func editorAreaSelectionChanged(_ area: EditorArea) {
         followActiveFile()
-        guard ClaudeIDEServer.shared.isRunning || GeminiIDEServer.shared.isRunning else { return }
+        guard ClaudeIDEServer.shared.isRunning || GeminiIDEServer.shared.isRunning || CopilotIDEServer.shared.isRunning else { return }
         selectionShare?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.shareSelectionWithClaude() }
         selectionShare = work
@@ -1314,6 +1314,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// file the caret is in, or nothing (no file open).
     func shareSelectionWithClaude(only clients: Set<ClaudeIDEServer.ClientID>? = nil) {
         if clients == nil, GeminiIDEServer.shared.isRunning { GeminiIDEServer.shared.setContext(openFiles: openFilesForGemini()) }
+        if clients == nil { shareSelectionWithCopilot() }
         let recipients = clients ?? AppDelegate.shared.claudeClients(in: self)
         guard !recipients.isEmpty else { return }
         ClaudeIDEServer.shared.notify("selection_changed", currentSelectionForClaude(), to: recipients)
@@ -1481,6 +1482,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             }
             return
         }
+        if sendToCopilot(items, in: tab) { return }
         let dialect = AgentDialect.forProgram(tab.status.program)
         let segments = AgentPrompt.segments(instruction: "", items: relative, dialect: dialect)
         // Inside a bracketed paste a line break is text, never Return, so code keeps its lines and tabs.
@@ -1875,6 +1877,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     func tabDidChange(_ tab: TerminalTab) {
         // Events (command end, bell) can land between ticks; post their notices straight away.
         if let notice = tab.status.takeNotice() { AppDelegate.shared.post(notice, tab: tab, in: self) }
+        AppDelegate.shared.updateCopilotFolders() // a new folder for Copilot CLI to connect from
         refresh()
     }
 
