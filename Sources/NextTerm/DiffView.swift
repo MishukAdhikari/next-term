@@ -123,7 +123,7 @@ final class DiffPane: NSView {
         }
         return "Changes in \(path) — " + ["working tree against HEAD", "working tree against the index (unstaged)", "index against HEAD (staged)"][Self.bases.firstIndex(of: base) ?? 0]
     }
-    var focusView: NSView { right.textView }
+    var focusView: NSView { unified.isOn ? unified.column.textView : right.textView }
     /// For the self-test: lines shown as changed, removed or added.
     var changedLineCount: Int { rows.filter { $0.kind == .changed || $0.kind == .added || $0.kind == .removed }.count }
 
