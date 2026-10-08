@@ -69,8 +69,28 @@ extension SelfTest {
         check(c.newTabDirectory() == (current ?? c.project), "New tabs: in the current tab’s folder", c.newTabDirectory() ?? "nil")
         Preferences.terminalStartFolder = .folder("/nonexistent-next-term-folder")
         check(c.newTabDirectory() == (c.project ?? current), "a chosen folder that is gone falls back to the project’s rule")
+        await chosenFolderChecks(c, app: app)
         UserDefaults.standard.removeObject(forKey: "terminalStartFolder")
         check(c.newTabDirectory() == (c.project ?? current), "New tabs: in the project’s folder (or the current tab’s), as before")
+    }
+
+    /// A chosen folder that is there (neither the project's, the tab's nor home): ⌘T opens in it, in this window
+    /// and with no window open, where ⌘T opens a window.
+    private static func chosenFolderChecks(_ c: TerminalWindowController, app: AppDelegate) async {
+        let chosen = canonicalPath(NSTemporaryDirectory())
+        Preferences.terminalStartFolder = .folder(chosen)
+        check(c.newTabDirectory() == chosen, "New tabs: in a folder you chose", c.newTabDirectory() ?? "nil")
+        let before = app.controllers
+        app.newTab(nil)
+        guard let opened = app.controllers.first(where: { window in !before.contains { $0 === window } }) else {
+            return check(false, "⌘T with no window open opens one")
+        }
+        let started = opened.tabs.first.map { canonicalPath($0.directory) }
+        check(started == chosen, "⌘T with no window open starts in the chosen folder too", started ?? "no tab")
+        _ = await wait(20) { opened.tabs.first?.status.integrated == true }
+        opened.window?.performClose(nil)
+        _ = await wait(3) { !app.controllers.contains { $0 === opened } }
+        c.window?.makeKeyAndOrderFront(nil)
     }
 
     private static func defaults(has key: String) -> Bool { UserDefaults.standard.object(forKey: key) != nil }
@@ -179,6 +199,26 @@ extension SelfTest {
         let terminal = tabs.tabViewItems.first { $0.identifier as? String == "terminal" }?.view as? TerminalSettingsView
         let shapes = terminal?.behaviour.shape.numberOfItems ?? 0
         let folders = terminal?.behaviour.startFolder.numberOfItems ?? 0
-        check(shapes == 3 && folders >= 5, "Settings › Terminal offers three cursors and where new tabs open", "\(shapes) \(folders)")
+        check(shapes == 3 && folders == 5, "Settings › Terminal offers three cursors and where new tabs open", "\(shapes) \(folders)")
+        // A chosen folder is listed above Choose Folder…, and chosen.
+        let chosen = canonicalPath(NSTemporaryDirectory())
+        Preferences.terminalStartFolder = .folder(chosen)
+        terminal?.behaviour.refresh()
+        let popup = terminal?.behaviour.startFolder
+        let picked = popup?.selectedItem?.representedObject as? String
+        check(popup?.numberOfItems == 6 && picked == chosen, "Settings › Terminal › New tabs shows the folder you chose",
+              "\(popup?.numberOfItems ?? 0) \(picked ?? "nil")")
+        UserDefaults.standard.removeObject(forKey: "terminalStartFolder")
+        terminal?.behaviour.refresh()
+
+        // Patterns with braces read back as they were: an edit to the field never splits one at its comma.
+        let editor = tabs.tabViewItems.first { $0.identifier as? String == "editor" }?.view as? EditorSettingsView
+        let imported = ["*.{pyc,pyo}", "node_modules"]
+        Preferences.hiddenFilePatterns = imported
+        editor?.saving.refresh()
+        editor?.saving.controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification))
+        check(Preferences.hiddenFilePatterns == imported && editor?.saving.hidden.stringValue == "*.{pyc,pyo}, node_modules",
+              "Settings › Editor › Hide keeps a pattern with braces whole", "\(Preferences.hiddenFilePatterns)")
+        Preferences.hiddenFilePatterns = []
     }
 }
