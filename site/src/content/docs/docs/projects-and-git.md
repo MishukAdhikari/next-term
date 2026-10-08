@@ -23,7 +23,7 @@ The **Welcome** window lists your projects on the left, with a search field, eac
 - **Fork** continues a copy and leaves the original as it was: the safe choice while the session is open in another terminal.
 - In a project window, **Shell › Resume Agent Session…** (<kbd>⌥⌘O</kbd>) shows the same list as a panel: type to filter, <kbd>↩</kbd> resumes, <kbd>⌘↩</kbd> forks.
 
-Under the projects, **Servers** lists the hosts you saved for [remote tabs](/docs/remote/#from-the-welcome-window): click one for a window with a tab on it. **Connect to Server…** (<kbd>⌥⌘T</kbd>) is for another, beside **Open…** and **New Terminal**.
+Under the projects, **Servers** lists up to three of the hosts you saved for [remote tabs](/docs/remote/#from-the-welcome-window), the one you connected to last first: click one for a window with a tab on it. **Connect to Server…** (<kbd>⌥⌘T</kbd>) is for another, above **Open…** and **New Terminal**.
 
 Next Term reads only titles, dates, branches and models from each agent’s own files, never whole conversations, removes anything that looks like a secret from titles, and writes nothing. Claude Code deletes conversations after 30 days unless you change its `cleanupPeriodDays` setting.
 

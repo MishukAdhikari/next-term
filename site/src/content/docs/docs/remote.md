@@ -20,7 +20,7 @@ A remote tab is a terminal tab on one of your servers. Start Claude Code or Code
 
 ### From the Welcome window
 
-With no project open, the **Welcome** window lists the servers you saved under your projects, the one you connected to last first. Click one for a window with a tab on it, in its folder. **Connect to Server…** (or <kbd>⌥⌘T</kbd>) opens the sheet above over the Welcome window: **Connect** opens a window for the tab, **Cancel** leaves everything as it was.
+With no project open, the **Welcome** window lists up to three of the servers you saved under your projects, the one you connected to last first. Click one for a window with a tab on it, in its folder. **Connect to Server…** (or <kbd>⌥⌘T</kbd>) opens the sheet above over the Welcome window, with every server you saved under **Host**. **Connect** opens a window for the tab, and **Cancel** leaves everything as it was.
 
 The tab is named after the host and folder, such as “web-1: app”. While it connects, the title says so: **(connecting)**, **(log in)** when ssh is asking you for something in that tab, **(waiting)** when another tab is logging in to the same server, and **(disconnected)**.
 
