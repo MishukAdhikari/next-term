@@ -288,7 +288,9 @@ extension SelfTest {
         let sidebarWasVisible = c2.isSidebarVisible
         if sidebarWasVisible { c2.toggleProjectSidebar(nil) }
         _ = run("Show in Project Sidebar", in: menu)
-        check(c2.isSidebarVisible, "menus: Show in Project Sidebar brings the sidebar back to show it")
+        let revealed = await wait(5) { c2.sidebar.selection.map { canonicalPath($0.url.path) } == [aPath] }
+        check(c2.isSidebarVisible && revealed, "menus: Show in Project Sidebar brings the sidebar back, the tab's file selected in it",
+              c2.sidebar.selection.map(\.url.lastPathComponent).joined(separator: ", "))
         if !sidebarWasVisible { c2.toggleProjectSidebar(nil) } // as it was (the setting is the user's)
 
         // Close Others asks once about the unsaved file among them, and the agent's proposal it would reject.
@@ -406,8 +408,11 @@ extension SelfTest {
     /// with a tab on it, and ⇧⌘T reopens a closed tab in a window of its own.
     static func welcomeRemoteChecks() async {
         let app = AppDelegate.shared!
-        guard app.controllers.isEmpty, let welcome = app.welcomeController, let welcomeWindow = welcome.window, welcomeWindow.isVisible else {
-            return note("the Welcome window was not the only one open, so its remote entry points were not checked")
+        for controller in app.controllers { controller.window?.close() }
+        app.showWelcome(nil)
+        let alone = await wait(5) { app.controllers.isEmpty && app.welcomeController?.window?.isVisible == true }
+        guard alone, let welcome = app.welcomeController, let welcomeWindow = welcome.window else {
+            return check(false, "welcome: only the Welcome window is open for the remote checks", "\(app.controllers.count) windows")
         }
         let savedHosts = RemoteHosts.all
         let savedLast = UserDefaults.standard.string(forKey: "lastRemoteHost")
@@ -425,10 +430,15 @@ extension SelfTest {
         let tip = "Open a tab on one of your servers, over ssh" + key
         let wired = button.action == #selector(AppDelegate.newRemoteTab(_:))
         check(button.title == "Connect to Server…" && wired && button.toolTip == tip,
-              "welcome: Connect to Server… beside Open… and New Terminal, naming its key", button.toolTip ?? "no tooltip")
+              "welcome: Connect to Server…, its tooltip naming its key", button.toolTip ?? "no tooltip")
 
         let target = NSApp.target(forAction: #selector(TerminalWindowController.newRemoteTab(_:)), to: nil, from: nil) as AnyObject?
         check(target === app, "welcome: ⌥⌘T reaches Next Term with only the Welcome window open", target.map { "\(type(of: $0))" } ?? "nothing")
+        // The menu-bar item itself is on, as AppKit validates it before ⌥⌘T can choose it.
+        func items(_ menu: NSMenu) -> [NSMenuItem] { menu.items.flatMap { [$0] + ($0.submenu.map(items) ?? []) } }
+        let remoteItem = items(NSApp.mainMenu ?? NSMenu()).first { $0.action == #selector(TerminalWindowController.newRemoteTab(_:)) }
+        remoteItem?.menu?.update()
+        check(remoteItem?.isEnabled == true, "welcome: Shell › New Remote Tab… is on with only the Welcome window open", remoteItem?.title ?? "no such item")
         NSApp.sendAction(#selector(TerminalWindowController.newRemoteTab(_:)), to: nil, from: nil)
         check(await wait(3) { welcomeWindow.attachedSheet?.title == "New Remote Tab" }, "welcome: ⌥⌘T brings the remote sheet over the Welcome window")
         _ = await press("Cancel", inSheetOf: welcomeWindow)

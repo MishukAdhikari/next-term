@@ -273,6 +273,11 @@ extension SelfTest {
         check(await wait(20) { plain.remoteReady }, "remote: the host reports the tab's shell at its prompt",
               plain.screenTail(6).joined(separator: " | "))
         check(!plain.view.opensFiles, "remote: ⌘-click does not open this Mac's files from a remote tab")
+        // Its right-click menu: a web link's items, never a path's (a path there names a file on the host).
+        let onPath = c.terminalMenu(for: plain, link: "/etc/hosts").items.first?.title
+        let onWeb = c.terminalMenu(for: plain, link: "https://example.com/docs").items.first?.title
+        check(onPath == "Copy" && onWeb == "Open Link", "remote: its right-click menu offers a web link's items, not this Mac's files",
+              "\(onPath ?? "nothing") / \(onWeb ?? "nothing")")
         plain.view.send(txt: "sleep 4\r")
         check(await wait(8) { plain.status.running && plain.status.program == "sleep" }, "remote: what runs in front on the host is seen",
               "\(plain.status.running) \(plain.status.program)")
@@ -482,6 +487,17 @@ extension SelfTest {
               kept.screenTail(8).joined(separator: " | "))
         c.remove(kept)
         check(await wait(5) { sh("tmux -L nextterm list-sessions -F '#{session_name}'").contains(session) }, "remote tmux: closing the tab only detaches")
+        // ⇧⌘T: the closed tab comes back on its session, the shell in it as it was.
+        c.reopenClosedTab(nil)
+        if let back = c.tabs.first(where: { $0.remote?.session == session }) {
+            _ = await wait(20) { back.remoteReady }
+            back.view.send(txt: "echo reopened-$NT_MARK\r")
+            check(await wait(8) { back.screenTail(20).contains { $0.contains("reopened-kept-\(getpid())") } },
+                  "remote tmux: ⇧⌘T reattaches the closed tab to its session", back.screenTail(8).joined(separator: " | "))
+            c.remove(back)
+        } else {
+            check(false, "remote tmux: ⇧⌘T reattaches the closed tab to its session", "no tab on \(session)")
+        }
         await endSessionChecks(host: host, slow: { flag("slow", $0) }, sessions: { sh("tmux -L nextterm list-sessions -F '#{session_name}' 2>/dev/null") })
         _ = sh("tmux -L nextterm kill-server") // the test's own server (TMUX_TMPDIR)
     }
