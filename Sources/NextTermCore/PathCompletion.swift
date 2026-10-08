@@ -188,6 +188,10 @@ public enum PathCompletion {
         private let extra: Int
         private let complete: Bool
         private let allSeen: Bool
+        /// What a link followed or a folder entered gave, by entry, so narrowing the list again asks the disk
+        /// nothing new. One thread at a time uses a Prepared.
+        private var followed: [Int: Followed] = [:]
+        private var entered: [Int: Bool] = [:]
 
         public init(_ listing: Listing, foldersOnly: Bool, hidden: Bool) {
             folder = listing.folder
@@ -220,16 +224,22 @@ public enum PathCompletion {
                 let path = base + entry.name
                 var isFolder = entry.kind == .folder
                 if entry.kind == .link || entry.kind == .unknown {
-                    let followed = follow(path)
+                    let kind = followed[item.index] ?? follow(path)
+                    followed[item.index] = kind
                     // A link to nothing names no folder; as a path it is still a name.
-                    if foldersOnly, followed != .folder {
+                    if foldersOnly, kind != .folder {
                         dropped += 1
                         continue
                     }
-                    isFolder = followed == .folder
+                    isFolder = kind == .folder
                 }
-                shown.append(Candidate(name: entry.name, display: entry.display, isFolder: isFolder,
-                                       enterable: !isFolder || canEnter(path), prefix: item.prefix, highlights: item.highlights))
+                var enterable = true
+                if isFolder {
+                    enterable = entered[item.index] ?? canEnter(path)
+                    entered[item.index] = enterable
+                }
+                shown.append(Candidate(name: entry.name, display: entry.display, isFolder: isFolder, enterable: enterable,
+                                       prefix: item.prefix, highlights: item.highlights))
             }
             let unread = typed.isEmpty ? extra : 0
             let total = ranked.count - dropped + unread
