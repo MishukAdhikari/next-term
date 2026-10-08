@@ -85,8 +85,9 @@ extension SelfTest {
         check(c.groups.count == tabsBefore && c.tabBar.items[safe: c.activeIndex]?.title.hasSuffix("+2") == true,
               "the tab bar still shows one tab for the split", c.tabBar.items[safe: c.activeIndex]?.title ?? "")
 
-        // Marks: an agent at work in one pane shows on that pane's header, not on the others'.
-        try? "#!/bin/sh\nwhile true; do printf '\\r\\342\\234\\273 Working (esc to interrupt) %s' $(date +%S); sleep 0.3; done\n"
+        // Marks: an agent at work in one pane shows on that pane's header, not on the others'. It names its task in the
+        // terminal's title, as Claude Code does: that title is the pane's whatever the shell's theme set before it.
+        try? "#!/bin/sh\nprintf '\\033]2;Split the panes\\007'\nwhile true; do printf '\\r\\342\\234\\273 Working (esc to interrupt) %s' $(date +%S); sleep 0.3; done\n"
             .write(to: dir.appendingPathComponent("claude"), atomically: true, encoding: .utf8)
         chmod(dir.appendingPathComponent("claude").path, 0o755)
         other.view.send(txt: "PATH=\(dir.path):$PATH claude\r")
@@ -96,7 +97,9 @@ extension SelfTest {
         }
         check(working && header(other).shownState == .working && header(base).shownState == base.status.state && base.status.state != .working,
               "a pane's header shows its own mark", "\(header(other).shownState.rawValue), \(header(base).shownState.rawValue)")
-        check(header(other).shownTitle == other.title && other.title == "claude", "and its own title", header(other).shownTitle)
+        _ = await wait(2) { other.title == "Split the panes" }
+        c.refresh()
+        check(header(other).shownTitle == other.title && other.title == "Split the panes", "and its own title", header(other).shownTitle)
 
         // A click on a header gives that pane the keyboard.
         func mouse(_ type: NSEvent.EventType, on view: NSView, clicks: Int = 1) -> NSEvent? {

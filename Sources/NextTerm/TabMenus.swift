@@ -21,7 +21,7 @@ enum ClosedTabs {
     /// in and that has no name is not kept: there is nothing to bring back (and a new window's first shell
     /// makes way for a remote tab that way).
     static func remember(_ tab: TerminalTab, in window: TerminalWindowController) {
-        if tab.remote == nil, tab.userTitle == nil, tab.status.commandsStarted == 0, !tab.leftStartFolder { return }
+        if tab.remote == nil, tab.userTitle == nil, tab.status.commandsRun == 0, !tab.leftStartFolder { return }
         let directory = tab.exited ? tab.directory : tab.liveDirectory // an ended shell's process is gone
         entries.append(Entry(directory: directory, title: tab.userTitle, remote: tab.remote, window: window))
         if entries.count > limit { entries.removeFirst(entries.count - limit) }

@@ -61,6 +61,31 @@ enum SelfTest {
         try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
     }
 
+    /// Brings the app to the front with `window` key, as a hand's keys and clicks need (and as a window is
+    /// "used"), asking again while another app keeps taking the front. False when it could not have it within
+    /// `seconds`: the caller skips what needs it, with a note. With the app in front and the window still not
+    /// key (a sheet left over it), that is the app's own doing: a failed check, not only a skip.
+    static func bringToFront(_ window: NSWindow, within seconds: Double = 6) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        repeat {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            if await wait(1.5, { NSApp.isActive && window.isKeyWindow }) { return true }
+        } while Date() < deadline
+        if NSApp.isActive {
+            check(false, "the window takes the keyboard with the app in front",
+                  notFrontmost(window) + (window.attachedSheet != nil ? ", a sheet is up" : ""))
+        }
+        return false
+    }
+
+    /// Why `bringToFront` could not: for the note of a skipped check.
+    static func notFrontmost(_ window: NSWindow) -> String {
+        "the app is not frontmost (active \(NSApp.isActive), key window \(NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "none"), "
+            + "this one key \(window.isKeyWindow))"
+    }
+
     /// Whether Edit › Find › Replace… is on with `responder` holding the window's keyboard, as AppKit enables
     /// the menu item. Nil when the app is not in front: with no key window nothing is on.
     static func replaceIsOn(with responder: NSResponder, in window: NSWindow) -> Bool? {
@@ -196,6 +221,7 @@ enum SelfTest {
         chmod(agent.path, 0o755)
         c.select(1)
         second.status.setVisible(true)
+        _ = await wait(3) { !second.status.running } // the bell rang before its command ended: what runs next is the agent
         second.view.send(txt: "PATH=\(dir.path):$PATH claude\r")
         _ = await wait(3) { second.status.running }
         check(second.status.kind == .agent, "agent is recognised", "\(second.status.kind)")
@@ -673,7 +699,16 @@ enum SelfTest {
         c.select(c.tabs.count - 1)
         c.tabBar.layoutSubtreeIfNeeded()
         check(c.tabBar.visibleRange.contains(c.tabs.count - 1), "… at either end", "\(c.tabBar.visibleRange)")
+        // Closed once their shells have started: one still starting has children (a theme's `mkdir`) that closing
+        // would stop, and asks first, in a sheet that stays over the window for the checks after.
+        for tab in extra { _ = await wait(20) { tab.status.integrated } }
         for tab in extra { c.requestClose(tab) }
+        check(await wait(3) { extra.allSatisfy { tab in !c.tabs.contains { $0 === tab } } } && window.attachedSheet == nil,
+              "the extra tabs close at once, nothing running in them", window.attachedSheet.map { _ in "a sheet asks" } ?? "\(c.tabs.count) tabs")
+        while let sheet = window.attachedSheet { // not left for the checks after (each busy tab queues its own)
+            window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+            _ = await wait(2) { window.attachedSheet !== sheet }
+        }
         window.setFrame(savedFrame, display: true)
         c.tabBar.layoutSubtreeIfNeeded()
         check(!c.tabBar.isOverflowing, "and stops overflowing when they fit again")
@@ -1015,7 +1050,12 @@ enum SelfTest {
                   "in the folder the session was started in", forked.directory)
             holder.remove(forked)
         }
-        if let tab { app.controllers.first { $0.tabs.contains { $0 === tab } }?.remove(tab) }
+        if let tab, let owner = app.controllers.first(where: { $0.tabs.contains { $0 === tab } }) {
+            owner.remove(tab)
+            // Its last tab gone, its window closes, and leaves the app's windows a moment later: gone before the next
+            // checks open the project, which would find it still listed and add their tabs to a closed window.
+            _ = await wait(3) { !owner.tabs.isEmpty || !app.controllers.contains { $0 === owner } }
+        }
         _ = window
     }
 

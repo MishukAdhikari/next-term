@@ -112,9 +112,19 @@ public enum CommandClassifier {
     /// The program a command line is about: the agent if there is one, else the first command that is
     /// not set-up (`cd`, `export`, `nvm use`), else the first.
     public static func programName(_ commandLine: String) -> String {
+        programCommand(commandLine)?.name ?? ""
+    }
+
+    /// That program with its arguments, as the close alerts name what runs: `PATH=~/bin:$PATH claude --resume`
+    /// -> "claude --resume", `cd web && npm run dev` -> "npm run dev".
+    public static func programLine(_ commandLine: String) -> String {
+        programCommand(commandLine).map { ([$0.name] + $0.args).joined(separator: " ") } ?? ""
+    }
+
+    private static func programCommand(_ commandLine: String) -> (name: String, args: [String])? {
         let parsed = segments(commandLine).map(parse).filter { !$0.name.isEmpty }
-        if let agent = parsed.first(where: { kind(name: $0.name, args: $0.args) == .agent }) { return agent.name }
-        return (parsed.first { !setup.contains($0.name) } ?? parsed.first)?.name ?? ""
+        if let agent = parsed.first(where: { kind(name: $0.name, args: $0.args) == .agent }) { return agent }
+        return parsed.first { !setup.contains($0.name) } ?? parsed.first
     }
 
     /// The strongest kind among the line's simple commands: `cd ~/app && claude` is an agent.

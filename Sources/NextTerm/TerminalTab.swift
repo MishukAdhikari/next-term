@@ -627,7 +627,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             return items.isEmpty ? nil : items.joined(separator: ", ") + " on \(remote.host.name)"
         }
         var items: [String] = []
-        if status.running { items.append(status.program.isEmpty ? "a running process" : "“\(status.program)” (running)") }
+        if status.running { items.append(status.program.isEmpty ? "a running process" : "“\(runningName)” (running)") }
         if status.integrated {
             if status.jobs > 0 {
                 // "vim notes.md (suspended)" -> “vim notes.md” (suspended): the state is not part of the command.
@@ -643,6 +643,13 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             items += ProcessInspector.childProcessNames(of: view.process.shellPid).map { "“\($0)”" }
         }
         return items.isEmpty ? nil : items.joined(separator: ", ")
+    }
+
+    /// What runs in front, as the close alerts name it: the program with its arguments as they were typed ("npm run
+    /// dev", as a suspended job is named), shortened; its name alone when nothing was typed (one the polling found).
+    private var runningName: String {
+        let typed = status.integrated ? CommandClassifier.programLine(status.command) : ""
+        return typed.isEmpty ? status.program : Typography.shortened(typed, to: 60)
     }
 
     /// What closing a kept tmux tab leaves running on its host, said in the close alert (nil: nothing).

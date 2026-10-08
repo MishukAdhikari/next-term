@@ -106,9 +106,9 @@ extension SelfTest {
         func save(_ url: URL) async -> (disk: String, editor: CodeEditorView?) {
             c.openFile(url)
             guard let editor = c.editorArea.activeEditor, editor.document.path == canonicalPath(url.path) else { return ("", nil) }
-            // A change of its own makes it dirty, as typing would, in an undo step of its own.
+            // A change of its own makes it dirty, as typing would, in an undo step of its own: its key's event ends.
             editor.textView.insertText("x", replacementRange: NSRange(location: 0, length: 0))
-            await pause(0.2)
+            await endOfEvent(editor.document.undoManager)
             c.editorArea.save(editor.document)
             return ((try? String(contentsOf: url, encoding: .utf8)) ?? "", editor)
         }

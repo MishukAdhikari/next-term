@@ -100,7 +100,14 @@ extension SelfTest {
         let lines = work.drawnLines
         let between = lines.count == 1 && lines[0].minX == area.frame.maxX && lines[0].maxX == terminal.frame.minX
             && lines[0].height == work.bounds.height
-        let colour = lines.first.flatMap { screenColour(window, at: work.convert(NSPoint(x: $0.midX, y: $0.midY), to: nil)) }
+        // As the window shows it once it has drawn: opened through the app's own calls (not by a hand, whose
+        // double-click waits for the editor), the window may not have drawn yet.
+        var colour: [Int]?
+        _ = await wait(2) {
+            window.displayIfNeeded()
+            colour = lines.first.flatMap { screenColour(window, at: work.convert(NSPoint(x: $0.midX, y: $0.midY), to: nil)) }
+            return colour.map { WorkSplitView.line.matches($0) } == true
+        }
         check(opened && between && colour.map { WorkSplitView.line.matches($0) } == true && outer.drawnLines.count == 1,
               "lines: a file open, one line shows between the editor and the terminal, and one beside the sidebar",
               "editor \(area.frame), terminal \(terminal.frame), lines \(lines), on screen \(colour.map { "\($0)" } ?? "none"), sidebar's \(outer.drawnLines)")

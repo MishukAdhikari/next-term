@@ -76,7 +76,13 @@ public struct TabStatus {
     public private(set) var jobSummary = ""
     /// Commands started so far (with or without integration): something ran, however briefly.
     public private(set) var commandsStarted = 0
+    /// Of those, the ones polling caught before the shell integration first reported in: a theme's
+    /// `mkdir` or subshell while the shell starts, not something the user ran.
+    public private(set) var startupCommands = 0
+    /// Commands run after the shell started.
+    public var commandsRun: Int { commandsStarted - startupCommands }
 
+    private var everIntegrated = false
     private var startedAt: TimeInterval = 0
     private var lastInputAt: TimeInterval = -.infinity
     private var lastOutputAt: TimeInterval = -.infinity
@@ -114,7 +120,7 @@ public struct TabStatus {
             shellReplaced()
             return
         }
-        integrated = true
+        integrationReported()
         start(typed, kind: max(CommandClassifier.kind(of: typed), expanded.map(CommandClassifier.kind(of:)) ?? .command), at: now)
         expandedCommand = expanded ?? ""
         let typedProgram = CommandClassifier.programName(typed)
@@ -122,7 +128,7 @@ public struct TabStatus {
     }
 
     public mutating func commandFinished(exitCode code: Int32?, at now: TimeInterval) {
-        integrated = true
+        integrationReported()
         guard running else { return } // a bare Enter at the prompt
         finish(exitCode: code, at: now)
     }
@@ -308,6 +314,12 @@ public struct TabStatus {
     }
 
     // MARK: internals
+
+    private mutating func integrationReported() {
+        if !everIntegrated { startupCommands = commandsStarted }
+        everIntegrated = true
+        integrated = true
+    }
 
     private mutating func start(_ commandLine: String, kind newKind: CommandKind, at now: TimeInterval) {
         commandsStarted += 1

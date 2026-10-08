@@ -255,6 +255,8 @@ final class TabBarView: NSView {
             tabViews[i].barHasRemote = hasRemote
             tabViews[i].configure(item: item, selected: i == newSelected)
         }
+        let widestHint = tabViews.map(\.hintWidth).max() ?? 0
+        tabViews.forEach { $0.barHintWidth = widestHint }
         let selectionChanged = newSelected != selectedIndex
         items = newItems
         selectedIndex = newSelected
@@ -560,6 +562,11 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     /// Some tab in the bar runs on a server: every tab then leaves "⌘2" the room a remote one has (its title
     /// starts after the server mark), so all of them show it or none does.
     var barHasRemote = false { didSet { if barHasRemote != oldValue { needsLayout = true } } }
+    /// The widest "⌘N" in the bar: every tab leaves it the room, so the digits' own widths ("⌘2" is a point
+    /// narrower than "⌘3") never decide alone which tabs show their key.
+    var barHintWidth: CGFloat = 0 { didSet { if barHintWidth != oldValue { needsLayout = true } } }
+    /// This tab's "⌘N", measured as it changes.
+    private(set) var hintWidth: CGFloat = 0
 
     private static let font = NSFont.systemFont(ofSize: 12.5)
     /// A preview's title: italics say that the next file clicked takes the tab.
@@ -619,6 +626,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         if toolTip != tip { toolTip = tip }
         if hint.stringValue != newItem.shortcut ?? "" {
             hint.stringValue = newItem.shortcut ?? ""
+            hintWidth = hint.stringValue.isEmpty ? 0 : ceil(hint.intrinsicContentSize.width)
             needsLayout = true
         }
         setAccessibilityHelp(newItem.shortcut.map { "\($0) switches to this tab" })
@@ -677,11 +685,11 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         // The shortcut: in the close button's place while that is hidden (ending where the × would, 14 points
         // from the edge, so it doesn't crowd the next tab), else just before it, as long as the title keeps room
         // to be read.
-        let hintWidth = hint.stringValue.isEmpty ? 0 : ceil(hint.intrinsicContentSize.width)
         let titleStart = barHasRemote ? remoteLabelX : labelX
+        let hintRoom = max(hintWidth, barHintWidth)
         func hintEnd(closeShown: Bool) -> CGFloat? {
             let end = closeShown ? bounds.width - 27 : bounds.width - 14
-            return hintWidth == 0 || end - hintWidth - 6 - titleStart < (closeShown ? 56 : 40) ? nil : end
+            return hintWidth == 0 || end - hintRoom - 6 - titleStart < (closeShown ? 56 : 40) ? nil : end
         }
         func titleWidth(hintEnd: CGFloat?) -> CGFloat {
             max(0, min(bounds.width - 28, hintEnd.map { $0 - hintWidth - 6 } ?? .infinity) - labelX)

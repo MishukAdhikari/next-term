@@ -11,6 +11,14 @@ import Testing
         #expect(CommandClassifier.programName("A=1 B=2") == "")
     }
 
+    @Test func programLine() {
+        #expect(CommandClassifier.programLine("sleep 30") == "sleep 30")
+        #expect(CommandClassifier.programLine("PATH=/tmp/bin:$PATH claude --resume abc") == "claude --resume abc")
+        #expect(CommandClassifier.programLine("cd web && npm run dev") == "npm run dev")
+        #expect(CommandClassifier.programLine("FOO=1 sudo npx @anthropic-ai/claude-code --resume") == "claude-code --resume")
+        #expect(CommandClassifier.programLine("A=1 B=2") == "")
+    }
+
     @Test func kinds() {
         #expect(CommandClassifier.kind(of: "claude") == .agent)
         #expect(CommandClassifier.kind(of: "codex --full-auto") == .agent)
@@ -64,6 +72,21 @@ import Testing
 }
 
 @Suite struct TabStatusTests {
+    @Test func startupCommandsAreNotCommandsRun() {
+        var s = TabStatus()
+        s.observe(ForegroundProcess(isShell: false, name: "mkdir"), at: 0) // a theme's mkdir as the shell starts
+        s.observe(ForegroundProcess(isShell: true, name: "zsh"), at: 0.5)
+        #expect(s.commandsStarted == 1)
+        s.commandFinished(exitCode: 0, at: 1) // the first prompt
+        #expect(s.commandsRun == 0)
+        s.commandStarted("ls", at: 2)
+        s.commandFinished(exitCode: 0, at: 3)
+        #expect(s.commandsRun == 1)
+        var plain = TabStatus() // no integration: every command polling sees counts
+        plain.observe(ForegroundProcess(isShell: false, name: "vim"), at: 0)
+        #expect(plain.commandsRun == 1)
+    }
+
     @Test func commandInBackgroundTabFinishesDone() {
         var s = TabStatus()
         s.commandStarted("make", at: 0)

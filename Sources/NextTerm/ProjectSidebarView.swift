@@ -510,15 +510,36 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         }
     }
 
-    /// Re-reads one loaded folder in the background; updates the outline if it changed.
+    /// Folders being read in the background, and those that changed again meanwhile.
+    private var reading: Set<ObjectIdentifier> = []
+    private var readAgain: Set<ObjectIdentifier> = []
+    /// Names given in the tree so far: a listing read before one is out of date when it arrives after it.
+    private var renames = 0
+
+    /// Re-reads one loaded folder in the background; updates the outline if it changed. One read of a folder at a
+    /// time, then one more if it changed meanwhile: a busy folder (a home folder while agents run, /tmp) reports
+    /// changes faster than it can be read, and a read for each would take every background thread the app has.
     private func refresh(_ node: FileNode) {
         guard node.isLoaded else { return }
-        let url = node.url, hiding = fileHiding
+        let id = ObjectIdentifier(node)
+        guard !reading.contains(id) else {
+            readAgain.insert(id)
+            return
+        }
+        reading.insert(id)
+        let url = node.url, hiding = fileHiding, renamesAtRead = renames
         DispatchQueue.global(qos: .utility).async {
             let listing = FileNode.readChildren(of: url, hiding: hiding)
             DispatchQueue.main.async { [weak self] in
-                // The newest listing of each folder waits for a name being edited, keeping its row there.
-                self?.whenNotRenaming("refresh \(ObjectIdentifier(node))") { [weak self] in
+                guard let self else { return }
+                self.reading.remove(id)
+                if self.readAgain.remove(id) != nil { self.refresh(node) } // after this listing, the change since
+                // While a name is edited the folder waits, keeping its row there, and is read again once the name
+                // is done: a listing read meanwhile is out of date by then (it has the name before), and put in
+                // place it would show that name again and lose the row's selection.
+                if self.isRenaming { return self.whenNotRenaming("refresh \(ObjectIdentifier(node))") { [weak self] in self?.refresh(node) } }
+                if self.renames != renamesAtRead { return self.refresh(node) } // read before a name given since
+                self.whenNotRenaming("refresh \(ObjectIdentifier(node))") { [weak self] in
                     guard let self, node.install(listing) else { return }
                     self.syncHiddenRow(for: node)
                     self.rowCache[ObjectIdentifier(node)] = nil
@@ -1138,8 +1159,11 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             DispatchQueue.main.async { [weak self] in self?.runHeld() }
         }
         guard !renameCancelled, newName != node.name else { return }
-        let byKey = NSApp.currentEvent?.type == .keyDown // Return, not a click on another row
+        // Return, as the field says it ended (not a click on another row): however the key came, which the
+        // event being handled need not say.
+        let byKey = (notification.userInfo?["NSTextMovement"] as? Int) == NSTextMovement.return.rawValue
         rename(node.url, to: newName)
+        renames += 1
         // Named with Return, it stays selected, as in Finder: the folder's new listing makes it a new node,
         // which the outline would otherwise drop from the selection.
         if byKey, let parent = node.parent {
