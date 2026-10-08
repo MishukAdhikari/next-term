@@ -338,7 +338,7 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
     }
 
     private func perform(_ byFile: [String: [SearchMatch]], replacement: String) {
-        var originals: [(URL, Data)] = []
+        var done: [(path: String, url: URL, result: ProjectSearch.ReplaceResult)] = []
         var replaced = 0, skipped = 0
         var failures: [String] = []
         for (path, matches) in byFile.sorted(by: { $0.key < $1.key }) {
@@ -346,16 +346,13 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
                 let result = try ProjectSearch.replace(matches, in: root, with: replacement, query: query)
                 replaced += result.replaced
                 skipped += result.skipped
-                if let original = result.original { originals.append((URL(fileURLWithPath: root).appendingPathComponent(path), original)) }
+                if result.original != nil { done.append((path, URL(fileURLWithPath: root).appendingPathComponent(path), result)) }
             } catch {
                 failures.append("\(path): \(error.localizedDescription)")
             }
         }
-        if !originals.isEmpty, let undo = window?.undoManager ?? NSApp.keyWindow?.undoManager {
-            undo.registerUndo(withTarget: self) { target in
-                for (url, data) in originals { try? TextFile.write(data, to: url) }
-                target.scheduleSearch(after: 0)
-            }
+        if !done.isEmpty, let undo = window?.undoManager ?? NSApp.keyWindow?.undoManager {
+            undo.registerUndo(withTarget: self) { target in target.undoReplace(done) }
             undo.setActionName("Replace in Files")
         }
         lastReplace = (replaced, skipped)
@@ -372,6 +369,27 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
             alert.informativeText = lines.joined(separator: "\n")
             alert.beginSheetModal(for: window)
         }
+    }
+
+    /// ⌘Z: each file as it was before, unless it changed since the replacement (an agent's edit stays). Says which
+    /// were left as they are, and why.
+    private func undoReplace(_ done: [(path: String, url: URL, result: ProjectSearch.ReplaceResult)]) {
+        var failures: [String] = []
+        for file in done {
+            do {
+                try ProjectSearch.undo(file.result, at: file.url)
+            } catch SafeWrite.Failure.changed {
+                failures.append("\(file.path): changed since the replacement, so it was left as it is.")
+            } catch {
+                failures.append("\(file.path): \(error.localizedDescription)")
+            }
+        }
+        scheduleSearch(after: 0)
+        guard !failures.isEmpty, let window else { return }
+        let alert = NSAlert()
+        alert.messageText = failures.count == 1 ? "1 file was not put back." : "\(failures.count.formatted()) files were not put back."
+        alert.informativeText = failures.joined(separator: "\n")
+        alert.beginSheetModal(for: window)
     }
 
     /// Counts from the last replace, for the self-test.

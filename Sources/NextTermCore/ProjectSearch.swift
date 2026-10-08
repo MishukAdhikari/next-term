@@ -199,6 +199,8 @@ public enum ProjectSearch {
         public var skipped = 0
         /// The file before the change, for undo.
         public var original: Data?
+        /// What was written, which undo expects to find (`undo`).
+        public var written: Data?
     }
 
     /// Replaces the selected matches in one file. The file is read again and searched again first:
@@ -242,9 +244,18 @@ public enum ProjectSearch {
         result.skipped = wanted.subtracting(matchedKeys).count
         guard result.replaced > 0 else { return result }
         // Only over the bytes just read: a save since (an agent's) is kept, and this file is left alone.
-        try TextFile.write(Data(output.utf8), to: url, expecting: .contents(original))
+        let written = Data(output.utf8)
+        try TextFile.write(written, to: url, expecting: .contents(original))
         result.original = original
+        result.written = written
         return result
+    }
+
+    /// ⌘Z after `replace`: the file at `url` as it was, only while it still holds what `replace` wrote. A save since
+    /// (an agent's edit) is kept, and this throws `SafeWrite.Failure.changed`; so does a file deleted since.
+    public static func undo(_ result: ReplaceResult, at url: URL) throws {
+        guard let original = result.original, let written = result.written else { return }
+        try TextFile.write(original, to: url, expecting: .contents(written))
     }
 
     private struct Key: Hashable {

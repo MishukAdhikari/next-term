@@ -95,6 +95,32 @@ import Testing
         #expect(stale.replaced == 0 && stale.skipped == 1)
     }
 
+    @Test func undoPutsBackOnlyWhatItWrote() throws {
+        let root = try folder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(root, "a.txt", "foo\n")
+        try write(root, "b.txt", "foo\n")
+        let query = SearchQuery(text: "foo")
+        func replace(_ name: String) throws -> ProjectSearch.ReplaceResult {
+            let found = ProjectSearch.matches(in: "foo", relativePath: name, expression: try query.expression())
+            return try ProjectSearch.replace(found, in: root.path, with: "bar", query: query)
+        }
+        func text(_ name: String) -> String? { try? String(contentsOf: root.appendingPathComponent(name), encoding: .utf8) }
+        let a = try replace("a.txt"), b = try replace("b.txt")
+        #expect(a.written == Data("bar\n".utf8) && text("a.txt") == "bar\n" && text("b.txt") == "bar\n")
+        // Untouched since: back as it was.
+        try ProjectSearch.undo(a, at: root.appendingPathComponent("a.txt"))
+        #expect(text("a.txt") == "foo\n")
+        // An agent edited it since: its edit stays, and undo says so.
+        try write(root, "b.txt", "bar\nagent\n")
+        #expect(throws: SafeWrite.Failure.changed) { try ProjectSearch.undo(b, at: root.appendingPathComponent("b.txt")) }
+        #expect(text("b.txt") == "bar\nagent\n")
+        // Deleted since: not made again.
+        try FileManager.default.removeItem(at: root.appendingPathComponent("b.txt"))
+        #expect(throws: SafeWrite.Failure.changed) { try ProjectSearch.undo(b, at: root.appendingPathComponent("b.txt")) }
+        #expect(text("b.txt") == nil)
+    }
+
     @Test func regexReplacementAndPreview() throws {
         let root = try folder()
         defer { try? FileManager.default.removeItem(at: root) }

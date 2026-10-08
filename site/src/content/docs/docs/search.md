@@ -51,7 +51,7 @@ Press <kbd>⇧⌘R</kbd> (**Edit › Find › Replace in Files…**), or type in
 
 - **A preview of every replacement** appears in the results as you type, before anything is written. With regular expressions on, the replacement can use the captured groups as `$1`, `$2` and so on.
 - **Replace Selected** replaces only the matches you selected in the results; **Replace All** asks first and gives the count (“Replace 12 matches in 4 files?”).
-- **<kbd>⌘Z</kbd> undoes the whole replacement** as one step.
+- **<kbd>⌘Z</kbd> undoes the whole replacement** as one step. A file you or an agent changed since the replacement is left as it is, and named.
 - Files keep their line endings and permissions (see [How files are written](/docs/security-and-privacy/#how-files-are-written)).
 
 ## Agents keep working; nothing is overwritten
