@@ -27,8 +27,9 @@ final class Updater {
     private var observers: [NSObjectProtocol] = []
     private var checking = false
     private var progress: UpdateProgressWindow?
-    /// A new app staged next to this one, swapped in when Next Term quits.
-    private var staged: (newApp: URL, version: AppVersion)? { didSet { changed() } }
+    /// A new app staged next to this one, swapped in when Next Term quits, with what the install script
+    /// checks it and this app against before either is moved or opened.
+    private var staged: (newApp: URL, version: AppVersion, requirement: String, oldRequirement: String)? { didSet { changed() } }
     /// A newer version a check found, until it is installed: the Update button offers it.
     private(set) var available: ReleaseInfo? { didSet { changed() } }
     /// The releases whose notes the window shows for `available`, newest first.
@@ -328,7 +329,7 @@ final class Updater {
                 progress?.message = "Preparing…"
                 let version = release.version
                 let app = try await Task.detached { try Self.stage(dmg: dmg, version: version) }.value
-                staged = (app, release.version)
+                staged = (app.url, release.version, app.requirement, app.oldRequirement)
                 installing = false
                 hideProgress()
                 if !quietly { relaunchPrompt(release.version) }
@@ -435,8 +436,9 @@ final class Updater {
     }
 
     /// Copies the app out of the disk image into a folder on the same volume as this app, and checks
-    /// it is Next Term at the expected version with an intact signature.
-    private nonisolated static func stage(dmg: URL, version: AppVersion) throws -> URL {
+    /// it is Next Term at the expected version with an intact signature that meets the requirement the
+    /// install script checks it against again (see `CodeSignature.updateRequirement`).
+    private nonisolated static func stage(dmg: URL, version: AppVersion) throws -> (url: URL, requirement: String, oldRequirement: String) {
         let mount = FileManager.default.temporaryDirectory.appendingPathComponent("NextTerm-mount-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)
         defer {
@@ -448,6 +450,10 @@ final class Updater {
             throw UpdateError("The disk image could not be opened.")
         }
         let source = mount.appendingPathComponent("Next Term.app")
+        guard let running = CodeSignature.running(), let image = CodeSignature.of(source) else {
+            throw UpdateError("The signatures of this app and the new one could not be read.")
+        }
+        let requirement = CodeSignature.updateRequirement(running: running, staged: image)
         let here = Bundle.main.bundleURL
         let folder = try FileManager.default.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: here, create: true)
         let target = folder.appendingPathComponent("Next Term.app")
@@ -457,10 +463,10 @@ final class Updater {
               (info?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String).flatMap(AppVersion.init) == version else {
             throw UpdateError("The disk image does not hold Next Term \(version).")
         }
-        guard try Self.runTool("/usr/bin/codesign", ["--verify", "--deep", "--strict", target.path]) else {
+        guard try Self.runTool("/usr/bin/codesign", ["--verify", "--deep", "--strict", "-R", "=" + requirement, target.path]) else {
             throw UpdateError("The new app's signature is broken.")
         }
-        return target
+        return (target, requirement, running.requirement)
     }
 
     private nonisolated static func runTool(_ path: String, _ arguments: [String]) throws -> Bool {
@@ -486,13 +492,14 @@ final class Updater {
     }
 
     /// Called as Next Term quits: if an update is staged, a small script (see `InstallScript`) waits for
-    /// this process to end, swaps the apps (putting the old one back if anything fails) and starts the new one.
+    /// this process to end, checks the new app's signature again, swaps the apps (putting the old one back
+    /// if anything fails) and starts the new one.
     func installStagedUpdateOnQuit() {
         guard let staged else { return }
         let staging = staged.newApp.deletingLastPathComponent()
-        let backup = staging.appendingPathComponent("Next Term (previous).app").path
         let script = InstallScript(pid: ProcessInfo.processInfo.processIdentifier, app: Bundle.main.bundleURL.path,
-                                   newApp: staged.newApp.path, backup: backup, staging: staging.path, relaunch: true)
+                                   newApp: staged.newApp.path, staging: staging.path, requirement: staged.requirement,
+                                   oldRequirement: staged.oldRequirement, relaunch: true)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.arguments = ["-c", script.text]
