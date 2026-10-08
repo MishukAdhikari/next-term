@@ -27,10 +27,9 @@ struct CopilotSessions: AgentSessionProvider {
     static func session(_ path: String, id: String, cwd: String, workspace: [String: String]) -> AgentSession? {
         let events = AgentSessions.headAndTail(path + "/events.jsonl")
         var title = workspace["name"].flatMap { $0.isEmpty ? nil : $0 }
-        if title == nil {
-            title = events?.head.lazy.filter { $0["type"] as? String == "user.message" }
-                .compactMap { ($0["data"] as? [String: Any])?["content"] as? String }
-                .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        for event in events?.head ?? [] where title == nil && event["type"] as? String == "user.message" {
+            let content = (event["data"] as? [String: Any])?["content"] as? String ?? ""
+            if !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { title = content }
         }
         guard let title else { return nil } // nothing was asked
         var model: String?
