@@ -56,7 +56,7 @@ extension SelfTest {
         var opened: [TerminalTab] = []
         defer {
             for tab in opened { tab.view.send(txt: "\u{03}") }
-            SessionStore.home = NSHomeDirectory()
+            SessionStore.home = sessionsHome
         }
         if !holder.isSidebarVisible { holder.toggleProjectSidebar(nil) }
         func index(_ tab: TerminalTab) -> Int { holder.groups.firstIndex { $0.contains(tab) } ?? -1 }

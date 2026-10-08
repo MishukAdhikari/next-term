@@ -11,6 +11,10 @@ enum SelfTest {
     nonisolated static var isRequested: Bool { CommandLine.arguments.contains("--self-test") }
     /// The self-test's own MCP socket, so it never answers for (or takes over from) the Next Term you use.
     nonisolated static let mcpSocketPath = (NSTemporaryDirectory() as NSString).appendingPathComponent("nextterm-mcp-\(getpid()).sock")
+    /// The home agents' sessions are read from in a self-test run: a folder never made, so nothing of yours is read
+    /// (your Claude Code records and transcripts) for the sidebar's sessions or the agents in its tabs. The parts
+    /// that list sessions point SessionStore at sessions of their own, and back here after.
+    nonisolated static let sessionsHome = (NSTemporaryDirectory() as NSString).appendingPathComponent("nextterm-selftest-home-\(getpid())")
     /// Where the self-test's Copilot CLI lock goes, so it never writes in your own ~/.copilot.
     nonisolated static let copilotLockFolder = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("nextterm-copilot-ide-\(getpid())", isDirectory: true)
@@ -1018,7 +1022,7 @@ enum SelfTest {
         SessionStore.home = home.path
         SessionStore.commandPrefix = "echo "
         defer {
-            SessionStore.home = NSHomeDirectory()
+            SessionStore.home = sessionsHome
             SessionStore.commandPrefix = ""
             try? FileManager.default.removeItem(at: home)
         }

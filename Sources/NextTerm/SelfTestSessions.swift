@@ -31,7 +31,7 @@ extension SelfTest {
                 tab.view.send(txt: "\u{03}")
                 if let owner = app.controllers.first(where: { $0.tabs.contains { $0 === tab } }) { owner.remove(tab) }
             }
-            SessionStore.home = NSHomeDirectory()
+            SessionStore.home = sessionsHome
             SessionStore.commandPrefix = ""
             try? fm.removeItem(atPath: home)
             holder.sidebar.loadSessions()

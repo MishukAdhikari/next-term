@@ -2,9 +2,9 @@ import AppKit
 import NextTermCore
 
 /// Where the app reads agent sessions from, and how it resumes one. The self-test points these at its
-/// own sessions and makes the command harmless.
+/// own sessions and makes the command harmless: in a self-test run, never at yours.
 enum SessionStore {
-    nonisolated(unsafe) static var home = NSHomeDirectory()
+    nonisolated(unsafe) static var home = SelfTest.isRequested ? SelfTest.sessionsHome : NSHomeDirectory()
     /// Put before every resume command (the self-test's "echo ").
     nonisolated(unsafe) static var commandPrefix = ""
     private static let queue = DispatchQueue(label: "nextterm.sessions", qos: .userInitiated)
