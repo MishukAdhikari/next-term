@@ -29,8 +29,8 @@ Any tab can hold several terminals, side by side or one above the other, as many
 - **The tab bar still shows one tab,** named after the pane with the keyboard plus how many others there are, such as “claude +2”. Its mark is the most urgent of its panes, so a pane waiting on you is never hidden.
 - **Drag a divider** to resize. Panes keep their proportions when the window resizes or you split again.
 - **Maximize Pane** gives one pane the whole tab while the others keep running; press it again to bring them back.
-- **The tab’s ×** closes all its panes, asking once if that would stop anything. A pane closed by its own × or whose shell exits goes, and its neighbour takes its room (and the keyboard, if it had it).
-- **Agents can split too:** an orchestrator can open a worker in a pane beside another tab ([`new_tab` with `split_beside`](/docs/orchestration/#the-tools)).
+- **The tab’s ×** closes all its panes, asking once if that would stop anything. A pane goes when you close it with its × or its shell exits: its neighbour takes its room, and the keyboard if it had it. The pane you are typing in keeps the keyboard when you close another.
+- **Agents can split too:** an orchestrator can open a worker in a pane beside another tab ([`new_tab` with `split_beside`](/docs/orchestration/#the-tools)). The pane you are typing in keeps the keyboard.
 
 ## Where the terminal goes
 
