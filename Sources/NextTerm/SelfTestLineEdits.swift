@@ -124,6 +124,15 @@ extension SelfTest {
         place(line: 1)
         step("a selection's copy pastes at the caret", "one\nonetwo\nthree\n", selectionBack: false) { view.paste(nil) }
 
+        // An empty file has no line to take: Copy and Cut are off, as with nothing selected anywhere.
+        view.selectAll(nil)
+        view.delete(nil)
+        let cutItem = NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "")
+        check(doc.text.isEmpty && !view.validateMenuItem(copyItem) && !view.validateMenuItem(cutItem),
+              "whole-line copy: in an empty file Copy and Cut are off", doc.text.debugDescription)
+        doc.undoManager.undo()
+        check(doc.text == text, "and ⌘Z brings the text back", doc.text.debugDescription)
+
         // Copy Path with Line: the path from the project, with the caret's line or the selected lines; also in the
         // editor's right-click menu.
         place(line: 1)

@@ -342,8 +342,9 @@ final class CodeTextView: NSTextView {
     /// Marks a copy of a whole line, so pasting it with nothing selected puts it above the caret's line.
     static let wholeLineType = NSPasteboard.PasteboardType("me.mishuk.nextterm.whole-line")
 
-    /// Nothing selected (one caret): ⌘C and ⌘X take the caret's line.
-    private var copiesWholeLine: Bool { selectedRanges.count == 1 && selectedRange().length == 0 }
+    /// Nothing selected (one caret) in a file with text: ⌘C and ⌘X take the caret's line. In an empty file they
+    /// are off, as with nothing selected anywhere, and the clipboard keeps what it has.
+    private var copiesWholeLine: Bool { selectedRanges.count == 1 && selectedRange().length == 0 && (string as NSString).length > 0 }
 
     /// ⌘C with nothing selected copies the caret's line with its line break.
     override func copy(_ sender: Any?) {
