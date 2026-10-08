@@ -810,9 +810,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    /// ⌘T with no window open (every window closed, app still running).
+    /// ⌘T with no window open (every window closed, app still running), where Settings › Terminal › New tabs says.
     @objc func newTab(_ sender: Any?) {
-        newWindow(sender)
+        openWindow(directory: newTabWindowDirectory)
     }
 
     /// The terminal window used last, for a tab command given while another window is in front (Welcome,

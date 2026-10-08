@@ -75,7 +75,22 @@ extension TerminalWindowController {
     /// Where ⌘T opens a tab (Settings › Terminal › New tabs open in). A tab on a server has no folder here.
     func newTabDirectory() -> String? {
         let current = activeTab.flatMap { $0.remote == nil ? $0.currentDirectory() : nil }
-        return Preferences.terminalStartFolder.directory(project: project, current: current, home: NSHomeDirectory()) { path in
+        return Preferences.terminalStartFolder.localDirectory(project: project, current: current)
+    }
+}
+
+extension AppDelegate {
+    /// Where ⌘T with no window open starts the window it opens: the home folder or a folder chosen in Settings ›
+    /// Terminal › New tabs. The project's and the current tab's folders have neither here, so the shell's own.
+    var newTabWindowDirectory: String? {
+        Preferences.terminalStartFolder.localDirectory(project: nil, current: nil)
+    }
+}
+
+extension StartFolder {
+    /// `directory`, with a chosen folder used while it is a folder on this Mac.
+    func localDirectory(project: String?, current: String?) -> String? {
+        directory(project: project, current: current, home: NSHomeDirectory()) { path in
             var isDirectory: ObjCBool = false
             return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
         }
