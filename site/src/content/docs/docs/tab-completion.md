@@ -79,7 +79,7 @@ For the server’s own completions (git branches, your own completions, zsh’s 
 
 With the hook, a server tab works as a zsh tab on your Mac does: zsh’s own list, and zsh quotes the name you pick. The hook sends only Tab completion’s marks, never the commands you run, under a secret made for that server, which reaches it on the connection’s input and never on a command line. It runs nothing by itself. Inside a tmux of your own on the server it stays silent.
 
-**Remove**, on the same line, deletes the folder and takes the hook’s key off Next Term’s own tmux on the server; the next tab starts as before. If the folder is deleted on the server, Next Term says the hook was removed there, starts new tabs without it, and never puts it back by itself: **Turn On Again** asks again. **Settings › Terminal** names the servers where the hook is on.
+**Remove**, on the same line, deletes the folder and takes the hook’s key off Next Term’s own tmux on the server; the next tab starts as before. While Tab completion is on, Next Term checks now and then, over a tab’s connection, that the hook is still there and up to date. If the folder is deleted on the server, Next Term says the hook was removed there, starts new tabs without it, and never puts it back by itself: **Turn On Again** asks again. **Settings › Terminal** names the servers where the hook is on.
 
 ## Plugins that already own Tab
 
