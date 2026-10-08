@@ -188,7 +188,8 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
                     self.order = order
                     self.commits = page
                 }
-                self.apply(diffs: diffs)
+                // Listed, but git's diff of them could not be read: the page says so rather than staying blank.
+                self.apply(diffs: diffs, unreadable: wantsDiffs && set != nil && diffs == nil)
                 // The file selected went (another scope, or it is no longer changed): All files needs its diffs.
                 if !wantsDiffs, set != nil, self.selectedPath == nil { self.reload(quietly: true) }
             }
@@ -235,15 +236,16 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
     }
 
     /// Shows what was read: the list, the scopes, the header, and the right side.
-    private func apply(diffs: [String: FileDiff]? = nil) {
+    private func apply(diffs: [String: FileDiff]? = nil, unreadable: Bool = false) {
         let tree = ChangeTree.build(changes?.files ?? [])
         list.show(tree: tree, totals: changes?.totals ?? LineStats(), root: root, selected: selectedPath, message: listMessage)
         showScopes()
         updateTopBar()
         placeDetail()
-        if let page = allFiles, selectedPath == nil, let diffs {
+        if let page = allFiles, selectedPath == nil, diffs != nil || unreadable {
             page.reader = reader()
-            page.show(files: ChangeTree.files(in: tree), diffs: diffs, root: root, message: listMessage)
+            let text = listMessage ?? (unreadable ? "Git could not read these changes." : nil)
+            page.show(files: ChangeTree.files(in: tree), diffs: diffs ?? [:], root: root, message: text)
         }
         onTitleChange?()
     }

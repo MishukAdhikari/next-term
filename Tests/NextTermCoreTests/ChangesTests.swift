@@ -300,6 +300,16 @@ import Testing
         // The header stays as git wrote it, so a hunk's patch still applies.
         #expect(UnifiedDiff.patch(for: files[0].hunks[0], in: files[0]).hasPrefix("diff --git \"a/quote\\\"name.txt\""))
     }
+
+    @Test func linesNotInUTF8ReadAsLatin1() {
+        var data = Data("diff --git a/l.txt b/l.txt\n--- a/l.txt\n+++ b/l.txt\n@@ -1 +1 @@\n-caf".utf8)
+        data.append(0xE9)
+        data.append(contentsOf: Data("\n+café\n".utf8))
+        let files = UnifiedDiff.parse(GitRunner.diffText(data))
+        #expect(files.first?.hunks.first?.lines.map(\.text) == ["café", "café"])
+        let added = UnifiedRows.addedFile(path: "l.txt", data: Data([0x63, 0x61, 0x66, 0xE9, 0x0A]))
+        #expect(!added.isBinary && added.hunks.first?.lines.map(\.text) == ["café"])
+    }
 }
 
 /// The scopes on a real repository: a branch with commits since main, and uncommitted work on top.
@@ -391,5 +401,40 @@ import Testing
         #expect(chosen.base == "refs/heads/later" && chosen.mergeBase == featCommit)
         let fromLater = try #require(Changes.files(.all, context: chosen, in: root.path, git: git))
         #expect(!fromLater.files.contains { $0.path == "src/feat.txt" })
+    }
+
+    /// A file in Latin-1 and names git quotes are on the All files page like any other, committed or not.
+    @Test func latin1AndQuotedNames() throws {
+        guard let git = GitRunner.locateGit() else { return }
+        let root = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path)).appendingPathComponent("nt-changes-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func latin1(_ text: String) throws { try #require(text.data(using: .isoLatin1)).write(to: root.appendingPathComponent("latin1.txt")) }
+        let names = ["quote\"name.txt", #"back\slash.txt"#, "tab\there.txt", "naïve.txt"]
+        _ = run(git, root, "init", "-q")
+        try latin1("caf\u{E9}\nline 2\n")
+        for name in names { try write(root, name, "one\n") }
+        _ = run(git, root, "add", "-A")
+        _ = run(git, root, "commit", "-qm", "Base")
+        _ = run(git, root, "switch", "-qc", "feat")
+        try latin1("caf\u{E9} au lait\nline 2\n")
+        for name in names { try write(root, name, "two\n") }
+        _ = run(git, root, "commit", "-qam", "Change them all")
+        try latin1("caf\u{E9} au lait\nligne deux, d\u{E9}j\u{E0}\n") // and uncommitted on top
+
+        let context = try #require(Changes.context(in: root.path, git: git, chosen: nil))
+        for scope in [ChangeScope.all, .uncommitted] {
+            let set = try #require(Changes.files(scope, context: context, in: root.path, git: git))
+            let diffs = try #require(Changes.diffs(scope, context: context, set: set, in: root.path, git: git), "\(scope)")
+            #expect(Set(diffs.keys) == Set(set.files.map(\.path)), "\(scope)")
+            #expect(diffs["latin1.txt"]?.hunks.first?.lines.contains { $0.kind == .added && $0.text == "ligne deux, déjà" } == true, "\(scope)")
+            // The file's own diff too, with the whole file as context.
+            let file = try #require(set.file(at: "latin1.txt"))
+            let whole = Changes.diff(of: file, scope: scope, context: context, set: set, in: root.path, git: git, lines: UnifiedRows.wholeFile)
+            #expect(whole?.hunks.first?.lines.contains { $0.text == "café au lait" } == true, "\(scope)")
+        }
+        let all = try #require(Changes.files(.all, context: context, in: root.path, git: git))
+        #expect(Set(all.files.map(\.path)) == Set(names + ["latin1.txt"]))
+        #expect(Changes.diffs(.all, context: context, set: all, in: root.path, git: git)?["tab\there.txt"]?.hunks.first?.lines.last?.text == "two")
     }
 }

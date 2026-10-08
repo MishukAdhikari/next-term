@@ -311,7 +311,7 @@ public enum Changes {
                            "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/"]
             let against = set.parent.map { ["--end-of-options", $0, sha] } ?? ["--root", "--end-of-options", sha]
             guard let data = GitRunner.run(git, base(root) + options + against + ["--"] + paths, timeout: 30) else { return nil }
-            return UnifiedDiff.parse(String(decoding: data, as: UTF8.self))
+            return UnifiedDiff.parse(GitRunner.diffText(data))
         }
     }
 

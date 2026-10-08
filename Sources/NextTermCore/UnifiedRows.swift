@@ -159,15 +159,17 @@ public enum UnifiedRows {
     }
 
     /// A file git doesn't track yet, as a diff that adds every line; one with no lines for an empty file,
-    /// and a binary one when the first 8000 bytes hold a NUL or it isn't UTF-8.
+    /// and a binary one when the first 8000 bytes hold a NUL. A line that isn't UTF-8 reads as Latin-1, as
+    /// in git's diffs.
     public static func addedFile(path: String, data: Data) -> FileDiff {
         var file = FileDiff()
         file.oldPath = nil
         file.newPath = path
-        guard !data.prefix(8000).contains(0), let text = String(data: data, encoding: .utf8) else {
+        guard !data.prefix(8000).contains(0) else {
             file.isBinary = true
             return file
         }
+        let text = GitRunner.diffText(data)
         guard !text.isEmpty else { return file }
         // By the "\n" scalar: "\r\n" stays a line with its "\r", as git keeps it.
         var lines = text.unicodeScalars.split(separator: "\n", omittingEmptySubsequences: false).map { String(String.UnicodeScalarView($0)) }

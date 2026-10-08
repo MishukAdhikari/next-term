@@ -404,9 +404,8 @@ public enum GitRunner {
             }
         }
         // `diff --no-index` exits 1 when the files differ, which is the expected case here.
-        guard let data = run(git, args, timeout: 15, acceptedStatus: untracked ? [0, 1] : [0]),
-              let text = String(data: data, encoding: .utf8) else { return nil }
-        let files = UnifiedDiff.parse(text)
+        guard let data = run(git, args, timeout: 15, acceptedStatus: untracked ? [0, 1] : [0]) else { return nil }
+        let files = UnifiedDiff.parse(diffText(data))
         // Two paths give two patches when git doesn't pair them: the one for this path.
         guard case .ref = base, !untracked else { return files.first }
         return CommitLog.file(at: relativePath, in: files)
@@ -431,8 +430,18 @@ public enum GitRunner {
             guard let tree = hasHead ? "HEAD" : emptyTree(git: git, root: root) else { return nil }
             args = prefix + ["diff-index"] + (base == .staged ? ["--cached"] : []) + options + [tree] + pathspec
         }
-        guard let data = run(git, args, timeout: 20), let text = String(data: data, encoding: .utf8) else { return nil }
-        return UnifiedDiff.parse(text)
+        guard let data = run(git, args, timeout: 20) else { return nil }
+        return UnifiedDiff.parse(diffText(data))
+    }
+
+    /// A diff as text: UTF-8, and a line that isn't (a file in Latin-1 or another 8-bit encoding) byte for
+    /// byte as Latin-1, so one such file neither loses every file's diff nor its own lines. A hunk rebuilt
+    /// from such a line no longer matches the file's bytes, so git refuses to stage or revert it.
+    static func diffText(_ data: Data) -> String {
+        if let text = String(data: data, encoding: .utf8) { return text }
+        return data.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false).map { line in
+            String(data: line, encoding: .utf8) ?? String(data: line, encoding: .isoLatin1) ?? String(decoding: line, as: UTF8.self)
+        }.joined(separator: "\n")
     }
 
     /// Applies a patch: to the index (`cached`, i.e. stage it) or to the working tree, forwards or
