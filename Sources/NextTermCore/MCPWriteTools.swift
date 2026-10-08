@@ -7,15 +7,17 @@ import Glibc
 
 /// Who approves the change one of Next Term's write tools would make (the tools tagged `write` that the
 /// app's MCPWriteControl runs: write_file, create_file, stage, commit, focus_tab, split_pane, close_pane,
-/// zoom_pane, set_layout and settings_set).
+/// zoom_pane, set_layout and settings_set), and the skill requests install_skill and remove_skill.
 ///
-/// The entry point is `MCPControl.call(tool, arguments, caller: pid, approval:, requester:, reply:)` in the
-/// app, on the main thread; its reply can come from any thread.
+/// The entry point is `MCPControl.call(tool, arguments, caller: pid, approval:, requester:, connection:,
+/// reply:)` in the app, on the main thread; its reply can come from any thread.
 /// - The local socket (`nxtrm mcp`) never passes an approval, so a local agent's change always waits for
 ///   the user on the Mac. Nothing in a request's arguments can change that.
 /// - The remote door calls it with `caller: nil`, `requester:` the connection's name as the approval
-///   window should show it (for example “the connection “Claude, phone””), and `.askOnMac` while the
-///   connection's “Ask on this Mac before changes” is on, `.preApprovedByGrant(grantID)` while it is off.
+///   window should show it (for example “the connection “Claude, phone””), `connection:` its grant id,
+///   and `.askOnMac` while the connection's “Ask on this Mac before changes” is on,
+///   `.preApprovedByGrant(grantID)` while it is off. Decline and Stop Asking stops the asker by
+///   `connection`: that connection only, not another of the same name, and not lifted by a rename.
 ///
 /// propose_edit takes the policy too, but its ask is its proposal: under either policy the change opens
 /// in the editor's side-by-side diff for the user to Accept or Reject, and the tool never writes.

@@ -12,8 +12,8 @@ import NextTermCore
 /// the index and branch unchanged, the tab still there) and refuses if not.
 ///
 /// The remote door calls `MCPControl.call(tool, arguments, caller: nil, approval: policy, requester:
-/// "the connection “name”", reply:)` on the main thread. `pending?.window` is the window asking now, for
-/// its own checks that a tool asks before it changes anything.
+/// "the connection “name”", connection: grantID, reply:)` on the main thread. `pending?.window` is the
+/// window asking now, for its own checks that a tool asks before it changes anything.
 @MainActor
 enum MCPWriteControl {
     typealias Reply = MCPControl.Reply
@@ -40,10 +40,10 @@ enum MCPWriteControl {
     }
 
     static func call(_ tool: String, _ arguments: [String: Any], caller: TerminalTab?, approval: MCPApproval, requester: String?,
-                     reply: @escaping Reply) {
+                     connection: String? = nil, reply: @escaping Reply) {
         let preferred = caller.flatMap(MCPControl.controller(of:))?.project
         let projects = MCPProjects(open: AppDelegate.shared.controllers.compactMap { $0.project }, preferred: preferred)
-        let asker = requester.map { "remote:" + $0 } ?? caller.map { $0.id.uuidString } ?? "outside"
+        let asker = Self.asker(connection: connection, requester: requester, caller: caller)
         let context = Context(caller: caller, approval: approval, reason: arguments["reason"] as? String, asker: asker,
                               who: requester ?? SkillsMCP.describe(caller), projects: projects, isRemote: requester != nil)
         switch tool {
@@ -60,6 +60,14 @@ enum MCPWriteControl {
         case "settings_set": setSettings(arguments, context, reply: reply)
         default: reply(MCPControl.fail("Unknown tool \(tool)"))
         }
+    }
+
+    /// Who Decline and Stop Asking stops (here and in SkillsMCP): a remote connection by its grant id
+    /// (by its name when the door gives no id), a tab, or every other caller outside the tabs.
+    static func asker(connection: String?, requester: String?, caller: TerminalTab?) -> String {
+        if let connection { return "remote:" + connection }
+        if let requester { return "remote-name:" + requester }
+        return caller.map { $0.id.uuidString } ?? "outside"
     }
 
     // MARK: approval

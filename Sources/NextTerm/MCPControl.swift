@@ -212,12 +212,13 @@ enum MCPControl {
     static func fail(_ text: String) -> MCPServer.CallResult { MCPServer.CallResult(text: text, isError: true) }
     static func ok(_ value: Any) -> MCPServer.CallResult { MCPServer.CallResult(text: MCPServer.json(value)) }
 
-    /// Runs a tool. `approval` and `requester` are for the write tools that MCPWriteControl runs: who
-    /// approves their change, and who asks as the approval window names it. The local socket passes
-    /// neither, so a local agent's change always waits for Approve on the Mac; the remote door passes its
-    /// connection's policy and name (see MCPApproval).
+    /// Runs a tool. `approval`, `requester` and `connection` are for the write tools that MCPWriteControl
+    /// runs, and for install_skill and remove_skill: who approves their change, who asks as the approval
+    /// window names it, and which remote connection (its grant id) a Decline and Stop Asking stops. The
+    /// local socket passes none, so a local agent's change always waits for Approve on the Mac; the remote
+    /// door passes its connection's policy, name and grant id (see MCPApproval).
     static func call(_ tool: String, _ arguments: [String: Any], caller pid: pid_t?, approval: MCPApproval = .askOnMac,
-                     requester: String? = nil, reply: @escaping Reply) {
+                     requester: String? = nil, connection: String? = nil, reply: @escaping Reply) {
         let caller = pid.flatMap { ClaudeIDEServer.tab(for: $0, among: allTabs) }
         switch tool {
         case "list_tabs": reply(listTabs(project: arguments["project"] as? String, caller: caller))
@@ -241,10 +242,12 @@ enum MCPControl {
         case "list_hosts", "add_host", "remove_host", "check_host", "new_remote_tab", "host_sessions", "host_changes":
             RemoteMCP.call(tool, arguments, caller: caller, reply: reply)
         case "list_skills", "install_skill", "remove_skill":
-            MainActor.assumeIsolated { SkillsMCP.call(tool, arguments, caller: caller, reply: reply) }
+            MainActor.assumeIsolated {
+                SkillsMCP.call(tool, arguments, caller: caller, approval: approval, connection: connection, requester: requester, reply: reply)
+            }
         case _ where MCPServer.isControlTool(tool):
             MainActor.assumeIsolated {
-                MCPWriteControl.call(tool, arguments, caller: caller, approval: approval, requester: requester, reply: reply)
+                MCPWriteControl.call(tool, arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
             }
         default: reply(fail("Unknown tool \(tool)"))
         }
