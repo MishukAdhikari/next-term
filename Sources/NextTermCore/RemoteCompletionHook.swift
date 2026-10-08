@@ -12,7 +12,15 @@ import Foundation
 /// The hook sends completion marks only (arm, tab, comp, done, line), never cmd, end, cwd or jobs: the tab's status
 /// keeps coming from the status checks.
 public enum RemoteCompletionHook {
-    public static let version = 1
+    /// The hook's version: a checksum (FNV-1a) of what its files hold, so any Next Term whose hook changed brings a
+    /// server's hook up to date (RemoteCompletionConsent.verify), with no number to remember to raise.
+    public static let version: Int = {
+        var hash: UInt32 = 2_166_136_261
+        for byte in (ZshCompletionScript.script + zshenv + start).utf8 {
+            hash = (hash ^ UInt32(byte)) &* 16_777_619
+        }
+        return Int(hash)
+    }()
     /// The folder on the server, as one sh word.
     static let folder = "\"$HOME/.cache/next-term/completion\""
     /// How long a Tab waits for Next Term's answer when its key doesn't say (Next Term's Tab keys to a server do).

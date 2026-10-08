@@ -51,6 +51,11 @@ import Testing
         let added = Set(files(home)).subtracting(before)
         #expect(!added.isEmpty && added.allSatisfy { $0.hasPrefix(".cache/next-term/completion") })
         #expect(RemoteCompletionHook.parse(try run(RemoteCompletionHook.checkScript, home: home.path)) == .present(version: RemoteCompletionHook.version))
+        // The version is what the files hold: a hook written by a Next Term with another hook reads as another one.
+        let current = try String(contentsOf: folder.appendingPathComponent("version"), encoding: .utf8)
+        #expect(current == "\(RemoteCompletionHook.version)\n" && RemoteCompletionHook.version > 1)
+        try "1\n".write(to: folder.appendingPathComponent("version"), atomically: true, encoding: .utf8)
+        #expect(RemoteCompletionHook.parse(try run(RemoteCompletionHook.checkScript, home: home.path)) == .present(version: 1))
         // Remove leaves the files as they were before Allow.
         #expect(RemoteCompletionHook.parse(try run(RemoteCompletionHook.removeScript, home: home.path)) == .removed)
         #expect(files(home) == before)
