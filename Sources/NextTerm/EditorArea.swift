@@ -64,6 +64,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
         if let data = pane as? DataPane { return data.path }
         return (pane as? DiffPane)?.absolutePath
     }
+
     /// Where its text is, for a selection to search for.
     var activeTextView: NSTextView? { activeEditor?.textView ?? activeNotebook?.textView }
     var documents: [EditorDocument] { editors.map(\.document) }
