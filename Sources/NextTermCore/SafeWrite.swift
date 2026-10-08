@@ -23,7 +23,8 @@ import Darwin
 /// - **Through links.** `path` may be a link: the file it points to is replaced, and the link stays a link. A
 ///   link to a file that is not there (on a volume not mounted) is refused, since a file would take its place.
 /// - **Read-only stays read-only.** A file this account can't write is refused (`readOnly`): renaming over it
-///   would work, but would undo what the read-only mark is for. So is anything but a plain file (`notAFile`).
+///   would work, but would undo what the read-only mark is for. So is a file locked in the Finder (`locked`), and
+///   anything but a plain file (`notAFile`).
 /// - **No lost saves, where the caller asks** (`expecting`). Just before the rename the file is read again,
 ///   and when it no longer holds what the caller read (`contents`), or one turned up where there was none
 ///   (`noFile`), nothing is written (`changed`): the new bytes were made from the old ones, and would undo
@@ -58,6 +59,8 @@ public enum SafeWrite {
         case changed
         /// This account can't write the file.
         case readOnly
+        /// Locked in the Finder (Get Info's Locked, `chflags uchg`): no one may change it until it is unlocked.
+        case locked
         /// Not a plain file (a folder, a named pipe), or a link to a file that is not there.
         case notAFile
         /// A system call failed with this `errno`: no space left, a folder this account can't write in, a
@@ -68,6 +71,7 @@ public enum SafeWrite {
             switch self {
             case .changed: return "It changed on disk while it was being written, so nothing was written."
             case .readOnly: return "It is read-only."
+            case .locked: return "It is locked (the Locked checkbox in the Finder’s Get Info)."
             case .notAFile: return "It is not a plain file, or it is a link to a file that is not there."
             case .system(EACCES), .system(EPERM): return "You don’t have permission to write in its folder."
             case .system(ENOSPC): return "The disk is full."
@@ -111,7 +115,12 @@ public enum SafeWrite {
         let exists = stat(target, &info) == 0
         if exists {
             guard info.st_mode & S_IFMT == S_IFREG else { throw Failure.notAFile }
-            if access(target, W_OK) != 0 { throw errno == EACCES ? Failure.readOnly : Failure.system(errno) }
+            // `access` says EPERM for a locked file, which is no folder's doing.
+            if info.st_flags & UInt32(UF_IMMUTABLE | SF_IMMUTABLE) != 0 { throw Failure.locked }
+            if access(target, W_OK) != 0 {
+                let code = errno
+                throw code == EACCES || code == EPERM ? Failure.readOnly : Failure.system(code)
+            }
         } else {
             guard errno == ENOENT else { throw Failure.system(errno) }
             var link = stat()

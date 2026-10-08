@@ -126,6 +126,14 @@ import Testing
         // Not a plain file.
         try FileManager.default.createDirectory(atPath: dir + "/folder", withIntermediateDirectories: true)
         #expect(failure { try SafeWrite.replace(dir + "/folder", with: Data("x".utf8)) } == .notAFile)
+        // Locked in the Finder (uchg), in a folder it could be written in: locked, not the folder's permissions.
+        let locked = dir + "/finder-locked.txt"
+        try put("keep\n", locked)
+        #expect(chflags(locked, UInt32(UF_IMMUTABLE)) == 0)
+        let lockedFailure = failure { try SafeWrite.replace(locked, with: Data("lost\n".utf8)) }
+        chflags(locked, 0)
+        #expect(lockedFailure == .locked && lockedFailure?.errorDescription == "It is locked (the Locked checkbox in the Finder’s Get Info).")
+        #expect(read(locked) == "keep\n" && names(dir) == ["finder-locked.txt", "folder", "locked.txt", "open.txt"])
     }
 
     @Test func aFileChangedSinceItWasReadIsLeftAlone() throws {

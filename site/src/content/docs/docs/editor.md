@@ -116,7 +116,7 @@ Saving writes the file back the way it was stored:
 - **Permissions:** a script stays executable, and a file only you can read stays that way. Its group and extended attributes, such as Finder tags, stay too.
 - **Links:** saving through a symlink writes the file it points at, and the link stays a link.
 - **Atomic and private writes:** a save never leaves a half-written file behind, and never shows the new text to another account along the way (see [How files are written](/docs/security-and-privacy/#how-files-are-written)).
-- **Read-only files** are not saved over: the save says the file is read-only.
+- **Read-only files** are not saved over: the save says the file is read-only. Nor are files locked in the Finder: the save says the file is locked.
 
 ## Files your agents change
 
