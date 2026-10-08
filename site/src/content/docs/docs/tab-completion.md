@@ -1,6 +1,6 @@
 ---
 title: Tab completion
-description: "Tab at a zsh prompt opens a list at the cursor: zsh’s own completions, or folders and files, on your Mac and on your servers. Type to narrow it; ↑ ↓ and Return pick. Nothing runs."
+description: "Tab opens a list at the cursor: zsh’s own completions, or folders and files, on your Mac and your servers. Type to narrow it; Return picks. Nothing runs."
 ---
 
 Press Tab (<kbd>⇥</kbd>) at a zsh prompt and Next Term lists what can complete the word under the cursor, in a list at the cursor. Type to narrow it, pick with the arrow keys and <kbd>↩︎</kbd>, and the name goes on the line, quoted so the shell reads it back exactly. Nothing runs until you press <kbd>↩︎</kbd> again at the prompt.
@@ -50,7 +50,7 @@ A tab’s tooltip says who answers its <kbd>⇥</kbd>: Next Term’s list with z
 
 ## On your servers
 
-In a [remote tab](/docs/remote/), <kbd>⇥</kbd> lists the server’s folders and files, read over the tab’s own ssh connection by a short script that writes nothing on the server. It lists what it lists on your Mac:
+In a [remote tab](/docs/remote/), <kbd>⇥</kbd> lists the server’s folders and files, read over the tab’s own ssh connection by a short script that writes nothing on the server. For zsh’s own completions there, [allow the hook](#the-hook-for-zsh-on-a-server). Without it, Next Term lists what it lists on your Mac:
 
 - after `cd`, `pushd`, `mkdir`, `rmdir` and `chdir`, folders;
 - after `ls`, `cat`, `less`, `vim` and the other commands that take files, files and folders;
@@ -66,6 +66,18 @@ It answers only when it can be sure what is on the line, and otherwise <kbd>⇥<
 - on a connection that carries fewer than 7 tabs. sshd allows about 10 sessions on one connection, and every tab and every check is one, so a crowded connection, or one that refused a session in the last 30 seconds, is left alone.
 
 A listing is kept for ten seconds. When the server reports the folder of the tab in front (tmux, or a Linux server), Next Term lists it as soon as it changes, so the first <kbd>⇥</kbd> there answers at once. herdr tabs, and tabs where a program runs, keep the shell’s own <kbd>⇥</kbd>.
+
+### The hook for zsh on a server
+
+For the server’s own completions (git branches, your own completions, zsh’s descriptions), allow a small hook there. In **File › New Remote Tab…**, choose the server: its **Tab completion** line offers **Allow…**. Next Term asks first, with no default button, then, over a tab’s open connection:
+
+- writes a few small files to `~/.cache/next-term/completion/` on the server: the same hook as on your Mac, and a launch command that starts your login shell through it. Your own files stay as they are;
+- only where the login shell is zsh. A hook for bash isn’t here yet, so a bash server keeps the folders and files above;
+- for new tabs. A session kept in tmux gets it when its shell restarts.
+
+With the hook, a server tab works as a zsh tab on your Mac does: zsh’s own list, and zsh quotes the name you pick. The hook sends only Tab completion’s marks, never the commands you run, under a secret made for that server, which reaches it on the connection’s input and never on a command line. It runs nothing by itself. Inside a tmux of your own on the server it stays silent.
+
+**Remove**, on the same line, deletes the folder and takes the hook’s key off Next Term’s own tmux on the server; the next tab starts as before. If the folder is deleted on the server, Next Term says the hook was removed there, starts new tabs without it, and never puts it back by itself: **Turn On Again** asks again. **Settings › Terminal** names the servers where the hook is on.
 
 ## Plugins that already own Tab
 
@@ -94,6 +106,6 @@ zsh’s own <kbd>⇥</kbd>, and the widgets oh-my-zsh and fzf put on it (fzf’s
 ## What it never does
 
 - **It never runs anything.** A name goes on the line; you press <kbd>↩︎</kbd>.
-- **It never edits your files.** Your `.zshrc` loads exactly as before; Next Term’s hook loads after it, for that shell only, and leaves your <kbd>⇥</kbd> binding as it is. Turning zsh-autocomplete’s list off changes that shell, not a file.
+- **It never edits your files.** Your `.zshrc` loads exactly as before; Next Term’s hook loads after it, for that shell only, and leaves your <kbd>⇥</kbd> binding as it is. Turning zsh-autocomplete’s list off changes that shell, not a file. On a server, nothing is written but the hook you allow, in its own folder.
 - **A file name can’t turn into a command.** Names are quoted from an allowlist, and names with control or invisible characters go in as `$'…'`, so a folder called `x;touch PWNED;` goes in as one word.
 - **Nothing is kept.** The line you type and the names listed are never logged or saved.

@@ -62,7 +62,7 @@ Yes. Next Term is an MCP server, set up for you in Claude Code and the Claude de
 
 ## Can my agents run on a server?
 
-Yes. **File › New Remote Tab…** (<kbd>⌥⌘T</kbd>) opens a tab on any server you reach with ssh, using your `~/.ssh/config`, keys and agent. Choose **tmux** or **herdr**, and the session keeps running while your Mac sleeps or the network drops; the tab reconnects by itself and comes back at the next launch. Agents there get the same marks as local ones. Nothing is installed on the server and no password is stored. See [Remote tabs on your servers](/docs/remote/).
+Yes. **File › New Remote Tab…** (<kbd>⌥⌘T</kbd>) opens a tab on any server you reach with ssh, using your `~/.ssh/config`, keys and agent. Choose **tmux** or **herdr**, and the session keeps running while your Mac sleeps or the network drops; the tab reconnects by itself and comes back at the next launch. Agents there get the same marks as local ones, and Tab lists the server’s folders and files. Nothing is installed on the server, except the Tab completion hook you allow there, and no password is stored. See [Remote tabs on your servers](/docs/remote/).
 
 ## Can I split a tab into panes?
 

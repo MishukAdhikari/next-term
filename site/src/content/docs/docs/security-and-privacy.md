@@ -107,7 +107,7 @@ A [remote tab](/docs/remote/) runs the system’s `ssh` with your own configurat
 - **Host keys are never accepted silently.** A new key is asked about in the tab, and a changed one is refused, whatever your ssh config says, for jump hosts too.
 - **No password is stored,** and your `~/.ssh/config` is never written. ssh does every login.
 - **Nothing on a server can reach back to Next Term.** Every port forward is cleared, and the MCP socket and editor links are never forwarded. Agent forwarding is as your ssh config sets it.
-- **Nothing is installed.** tmux and herdr are used only if you installed them; a few small files go in `~/.cache/next-term` on the server.
+- **Nothing is installed, except the Tab hook you allow.** tmux and herdr are used only if you installed them; a few small files go in `~/.cache/next-term` on the server. Tab completion lists a server’s folders and files with a script that writes nothing. Its hook for zsh goes in `~/.cache/next-term/completion` only after you allow it for that server; it sends only Tab completion’s marks, under a secret that never appears on a command line, and **Remove** deletes it. See [Tab completion on your servers](/docs/tab-completion/#on-your-servers).
 - **Commands are never pieced together from text:** what runs on a server is a fixed script, with every name and folder quoted.
 
 ## Background fetch
