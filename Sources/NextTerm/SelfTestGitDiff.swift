@@ -3,9 +3,10 @@ import NextTermCore
 
 extension SelfTest {
     /// The Git Diff tab, in a repository of its own (a branch with two commits since main, and uncommitted
-    /// work on top), then from the menu and the sidebar header's counts in the project's: the file column,
-    /// the scopes, the side-by-side and unified views of a file, the All files page with its folds, the
-    /// tab reused, the list following the repository.
+    /// work on top), then from the menu, ⌥⌘G and the sidebar header's counts in the project's: the file
+    /// column, the scopes, the side-by-side and unified views of a file and the change each hunk action acts
+    /// on, the All files page with its folds, the tab reused, the list following the repository; and a
+    /// Latin-1 file and a name git quotes on the page, in a repository of their own.
     static func gitDiffChecks(_ c: TerminalWindowController, proj: URL) async {
         guard let git = GitRunner.locateGit() else { return }
         c.editorArea.closeAll() // the tabs counted below are the Git Diff tab's alone
@@ -16,10 +17,11 @@ extension SelfTest {
         let repo = URL(fileURLWithPath: canonicalPath(NSTemporaryDirectory())).appendingPathComponent("nt-selftest-gitdiff-\(getpid())")
         try? FileManager.default.removeItem(at: repo)
         try? FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
-        @discardableResult func run(_ args: String...) -> String {
+        @discardableResult func run(_ args: String...) -> String { run(in: repo, args) }
+        @discardableResult func run(in folder: URL, _ args: [String]) -> String {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: git)
-            p.arguments = ["-C", repo.path, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main"] + args
+            p.arguments = ["-C", folder.path, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main"] + args
             let out = Pipe()
             p.standardOutput = out
             p.standardError = FileHandle.nullDevice
@@ -118,8 +120,10 @@ extension SelfTest {
             _ = await wait(5) { diff.hunkCount == 2 && rows().contains { $0.line?.text == "line two" } && rows().contains { $0.line?.text == "line thirty-five" } }
             act()
             diff.base = .staged
-            _ = await wait(5) { diff.hunkCount == 1 }
-            let staged = rows().filter { $0.kind == .added }.compactMap { $0.line?.text }
+            // The staged diff's own rows, not the rows kept on show while its whole file is read.
+            let added = { rows().filter { $0.kind == .added }.compactMap { $0.line?.text } }
+            _ = await wait(5) { diff.hunkCount == 1 && added().count == 1 }
+            let staged = added()
             diff.perform(.unstage)
             _ = await wait(5) { diff.hunkCount == 0 }
             return staged
@@ -146,6 +150,25 @@ extension SelfTest {
               "\(said), staged: " + stepped.joined(separator: ", "))
         column.textView.setSelectedRange(NSRange(location: 0, length: 0))
         diff.base = .head
+        // Revert Hunk… from a row, its folds open: the line put back shows between the changes left, every line
+        // of the file there once, none folded away for good.
+        _ = await wait(5) { diff.hunkCount == 2 && rows().contains { $0.line?.text == "line thirty-five" } && !rows().contains { $0.kind == .fold } }
+        if let row = rows().firstIndex(where: { $0.kind == .added && $0.line?.text == "line thirty-five" }), let window = c.window,
+           let menu = rightClick(column, row), let item = menu.items.firstIndex(where: { $0.title == "Revert Hunk…" }) {
+            menu.performActionForItem(at: item)
+            let reverted = await pressButton("Revert", inSheetOf: window)
+            let numbers = { rows().compactMap { $0.kind == .removed ? nil : $0.number } }
+            let whole = await wait(6) {
+                diff.hunkCount == 1 && !rows().contains { $0.line?.text == "line thirty-five" } && numbers() == Array(1...40) && !rows().contains { $0.kind == .fold }
+            }
+            check(reverted && whole, "Revert Hunk… in Unified with its folds open: the line put back shows, numbered 1 to 40, nothing folded",
+                  "\(diff.hunkCount) hunks, \(numbers().count) lines, folds: " + rows().compactMap { $0.fold?.title }.joined(separator: " | "))
+            write("src/app.txt", edited.joined(separator: "\n") + "\n")
+            diff.reload()
+            _ = await wait(5) { diff.hunkCount == 2 }
+        } else {
+            check(false, "Unified offers Revert Hunk… on a row of a change", rows().compactMap { $0.fold?.title }.joined(separator: " | "))
+        }
         // Remembered, for every diff, and in the View menu.
         let menuItem = KeyboardShortcuts.shared.commands.first { $0.id == "toggleUnifiedDiffs:" }?.item
         if let menuItem { _ = DiffLayoutMenu.shared.validateMenuItem(menuItem) }
@@ -252,42 +275,96 @@ extension SelfTest {
         c.branchPopup.close()
         c.editorArea.close(tab)
 
-        // From the menu, and from the sidebar header's counts, in the project's repository.
+        // From the menu, ⌥⌘G on the editor's file and on the sidebar's, and the sidebar header's counts, in the
+        // project's repository.
         let noteFile = proj.appendingPathComponent("git-diff-note.txt")
-        // Long enough that the header has room to show its count (it hides one too short to read).
-        try? ((1...120).map { "note \($0)" }.joined(separator: "\n") + "\n").write(to: noteFile, atomically: true, encoding: .utf8)
+        // Two lines: the header shows a count that short too.
+        try? "note 1\nnote 2\n".write(to: noteFile, atomically: true, encoding: .utf8)
         _ = await wait(8) {
             c.sidebar.git.snapshot?.files["git-diff-note.txt"] == .untracked && c.sidebar.root?.children?.contains { $0.name == "git-diff-note.txt" } == true
         }
         let command = KeyboardShortcuts.shared.commands.first { $0.id == "showGitDiff:" }
         check(command?.path == "Git" && command?.defaultChord == KeyChord(key: "g", command: true, control: true),
               "Git › Git Diff is in the menu bar, ⌃⌘G by default", "\(command?.path ?? "missing") \(command?.defaultChord?.display ?? "no key")")
-        func sidebarRows() -> [String] { (0..<c.sidebar.outline.numberOfRows).map { (c.sidebar.outline.item(atRow: $0) as? FileNode)?.path ?? "other row" } }
-        let before = sidebarRows()
-        c.showGitDiff(nil)
+        // The menu item's action through the responder chain, as a click on it or ⌃⌘G sends it: that needs the
+        // window to have the keyboard.
+        if let window = c.window {
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+        }
+        let isKey = await wait(3) { NSApp.isActive && NSApp.keyWindow === c.window }
+        check(isKey, "Git Diff from the menu: the window has the keyboard", "active \(NSApp.isActive)")
+        if let item = command?.item, let action = item.action, isKey {
+            check(c.validateMenuItem(item), "Git › Git Diff is on in a project window")
+            NSApp.sendAction(action, to: item.target, from: item)
+        } else {
+            c.showGitDiff(nil)
+        }
         let fromMenu = c.editorArea.activeGitDiff
         check(fromMenu.map { canonicalPath($0.root) == canonicalPath(proj.path) && $0.isShowingAllFiles } == true,
               "Git › Git Diff opens the project's changes, all files on one page", fromMenu?.root ?? "no tab")
         check(await wait(8) { fromMenu?.list.rowTitles.contains { $0.contains("git-diff-note.txt") } == true }, "listing the project's changed files",
               fromMenu?.list.rowTitles.joined(separator: " | ") ?? "")
-        let after = sidebarRows()
-        check(after == before && !c.sidebar.isHidden, "the project sidebar is unchanged", "\(before.count) rows, then \(after.count)")
-        if let fromMenu { c.editorArea.close(fromMenu) }
+        c.editorArea.closeAll()
+        // ⌥⌘G with the file in the editor: its changes, the file selected in the list.
+        c.openFile(noteFile)
+        _ = await wait(5) { c.editorArea.activePath == canonicalPath(noteFile.path) }
+        if let text = c.editorArea.activeTextView { c.window?.makeFirstResponder(text) }
+        c.showChanges(nil)
+        let fromEditor = c.editorArea.activeGitDiff
+        check(await wait(5) { fromEditor?.selectedPath == "git-diff-note.txt" && c.editorArea.activeDiff?.path == "git-diff-note.txt" },
+              "⌥⌘G in the editor opens the Git Diff tab on the file being edited", fromEditor?.selectedPath ?? "no tab")
+        c.editorArea.closeAll()
+        // ⌥⌘G with the file selected in the project sidebar.
+        if let node = c.sidebar.root?.children?.first(where: { $0.name == "git-diff-note.txt" }) {
+            let row = c.sidebar.outline.row(forItem: node)
+            c.sidebar.outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            c.window?.makeFirstResponder(c.sidebar.outline)
+            c.showChanges(nil)
+            let fromSidebar = c.editorArea.activeGitDiff
+            check(await wait(5) { fromSidebar?.selectedPath == "git-diff-note.txt" && c.editorArea.activeDiff?.path == "git-diff-note.txt" },
+                  "⌥⌘G in the sidebar opens the Git Diff tab on the file selected there", fromSidebar?.selectedPath ?? "no tab")
+            c.editorArea.closeAll()
+        } else {
+            check(false, "the sidebar lists the new file to select")
+        }
+        // The header's counts: shown however short, a button, opening what they count (Uncommitted).
         let header = c.sidebar.header
         header.layoutSubtreeIfNeeded()
-        if header.summaryIsShown {
-            let frame = header.summaryFrame
-            let hit = header.hitTest(header.convert(NSPoint(x: frame.midX, y: frame.midY), to: header.superview))
-            check(hit is HeaderCountsLabel && hit?.toolTip == "Show Git Diff" && (hit?.accessibilityLabel() ?? "").hasPrefix("Show Git Diff"),
-                  "the header's +N −M is a button: “Show Git Diff”, for the pointer and VoiceOver", hit.map { String(describing: type(of: $0)) } ?? "nothing")
-            if let label = hit as? HeaderCountsLabel, let event = mouseEvent(label) {
-                label.mouseDown(with: event)
-                check(c.editorArea.activeGitDiff.map { canonicalPath($0.root) == canonicalPath(proj.path) } == true, "a click on it opens the Git Diff tab")
-            }
-        } else {
-            note("the sidebar header hides its counts at this width: the click on them is not checked")
+        check(header.summaryIsShown, "the sidebar header shows its counts, however short", "\(header.frame.width) wide")
+        let frame = header.summaryFrame
+        let hit = header.hitTest(header.convert(NSPoint(x: frame.midX, y: frame.midY), to: header.superview))
+        check(hit is HeaderCountsLabel && hit?.toolTip == "Show Git Diff" && (hit?.accessibilityLabel() ?? "").hasPrefix("Show Git Diff"),
+              "the header's +N −M is a button: “Show Git Diff”, for the pointer and VoiceOver", hit.map { String(describing: type(of: $0)) } ?? "nothing")
+        if let label = hit as? HeaderCountsLabel, let event = mouseEvent(label) {
+            label.mouseDown(with: event)
+            let clicked = c.editorArea.activeGitDiff
+            check(clicked.map { canonicalPath($0.root) == canonicalPath(proj.path) && $0.scope == .uncommitted && $0.isShowingAllFiles } == true,
+                  "a click on it opens the Git Diff tab on the changes not committed yet, which they count", clicked.map { "\($0.scope)" } ?? "no tab")
         }
         c.editorArea.closeAll()
+
+        // A file that isn't UTF-8 (Latin-1) and a name git quotes: on the All files page like any other file.
+        let edge = URL(fileURLWithPath: canonicalPath(NSTemporaryDirectory())).appendingPathComponent("nt-selftest-gitdiff-edge-\(getpid())")
+        try? FileManager.default.removeItem(at: edge)
+        try? FileManager.default.createDirectory(at: edge, withIntermediateDirectories: true)
+        try? "caf\u{E9}\nline 2\n".data(using: .isoLatin1)?.write(to: edge.appendingPathComponent("latin1.txt"))
+        try? "one\n".write(to: edge.appendingPathComponent("quote\"name.txt"), atomically: true, encoding: .utf8)
+        run(in: edge, ["init", "-q"])
+        run(in: edge, ["add", "-A"])
+        run(in: edge, ["commit", "-qm", "Base"])
+        try? "caf\u{E9} au lait\nline 2\n".data(using: .isoLatin1)?.write(to: edge.appendingPathComponent("latin1.txt"))
+        try? "two\n".write(to: edge.appendingPathComponent("quote\"name.txt"), atomically: true, encoding: .utf8)
+        let edgeTab = c.editorArea.openGitDiff(root: edge.path)
+        let shown = await wait(8) {
+            let titles = edgeTab.allFiles?.blockTitles ?? []
+            return titles.count == 2 && titles.allSatisfy { $0.hasSuffix(" rows") }
+        }
+        let latin = edgeTab.allFiles?.entry(at: "latin1.txt")?.rows.contains { $0.kind == .added && $0.line?.text == "café au lait" } == true
+        check(shown && latin, "All files shows the lines of a Latin-1 file and of a file whose name git quotes",
+              edgeTab.allFiles?.blockTitles.joined(separator: " | ") ?? "no page")
+        c.editorArea.closeAll()
+        try? FileManager.default.removeItem(at: edge)
         try? FileManager.default.removeItem(at: noteFile)
         try? FileManager.default.removeItem(at: repo)
         GitDiffPane.columnHidden = columnHidden
@@ -316,6 +393,15 @@ extension SelfTest {
                                              timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
                                              eventNumber: 0, clickCount: 1, pressure: 1) else { return }
         text.mouseDown(with: event)
+    }
+
+    /// Clicks the button titled `title` in the sheet over `window`, once it is up.
+    private static func pressButton(_ title: String, inSheetOf window: NSWindow) async -> Bool {
+        func buttons(_ view: NSView) -> [NSButton] { view.subviews.flatMap { ($0 as? NSButton).map { [$0] } ?? buttons($0) } }
+        guard await wait(5, { window.attachedSheet?.contentView.map(buttons)?.contains { $0.title == title } == true }),
+              let button = window.attachedSheet?.contentView.map(buttons)?.first(where: { $0.title == title }) else { return false }
+        button.performClick(nil)
+        return true
     }
 
     /// The menu a right-click on `row` of a unified column opens.
