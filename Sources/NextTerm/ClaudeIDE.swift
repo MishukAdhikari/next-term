@@ -16,6 +16,10 @@ import Security
 /// carrying `Origin` (a browser) is refused; the lock is 0600 in a 0700 folder and removed on quit.
 /// Nothing a client sends can write files: this end reports the selection, and shows proposed edits
 /// for the user to accept or reject (the CLI writes the file itself, after an accept).
+///
+/// opencode speaks this protocol too, but from a Next Term tab it connects without the token. Such a
+/// connection is kept only when the process holding it is opencode running in one of this app's tabs
+/// (IDEPeer), and then it only receives: the selection and @-mentions, no tools.
 final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `queue`
     typealias ClientID = ObjectIdentifier
 
@@ -26,12 +30,16 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
         var claudePid: pid_t?
         var ready = false
         var client = ""
+        /// Came in without the token, and passed the peer check (opencode in a tab).
+        var tokenless = false
     }
 
     let token: String
     private let queue = DispatchQueue(label: "nextterm.claude-ide")
     private var listener: NWListener?
     private var acceptedNonces = Set<String>()
+    /// Handshakes without the token, waiting for the peer check.
+    private var peerNonces = Set<String>()
     private var sessions: [ClientID: Session] = [:]
     /// The port once listening (read from any thread).
     private(set) var port: UInt16?
@@ -43,6 +51,8 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
     var onOpenDiff: ((ClientID, _ path: String, _ proposed: String, _ tabName: String) -> Void)?
     /// close_tab / closeAllDiffTabs: close these proposal tabs (undecided ones count as rejected).
     var onCloseDiffs: ((ClientID, _ tabNames: [String]) -> Void)?
+    /// The shells of this app's local tabs (asked on the main queue), for the peer check.
+    var tabShells: (() -> [pid_t])?
     /// tab_name -> the waiting openDiff call.
     private var pendingDiffs: [String: (client: ClientID, id: Any)] = [:]
     /// Proposal tabs each client has open.
@@ -70,9 +80,17 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
                 headers.filter { $0.name.caseInsensitiveCompare(name) == .orderedSame }.map(\.value)
             }
             let auth = header("X-Claude-Code-Ide-Authorization")
-            guard header("Origin").isEmpty, // browsers always send Origin (CVE-2025-52882)
-                  auth.count == 1, Self.constantTimeEqual(auth[0], token),
-                  protocols.map({ $0.trimmingCharacters(in: .whitespaces) }).contains("mcp") else {
+            let offered = protocols.map { $0.trimmingCharacters(in: .whitespaces) }
+            // Browsers always send Origin (CVE-2025-52882).
+            guard header("Origin").isEmpty else { return .init(status: .reject, subprotocol: nil) }
+            // No token at all, as opencode in a tab connects: kept only if the peer check passes (.ready).
+            if auth.isEmpty {
+                let nonce = UUID().uuidString
+                peerNonces.insert(nonce)
+                return .init(status: .accept, subprotocol: offered.contains("mcp") ? "mcp" : nil,
+                             additionalHeaders: [("X-Next-Term-Nonce", nonce)])
+            }
+            guard auth.count == 1, Self.constantTimeEqual(auth[0], token), offered.contains("mcp") else {
                 return .init(status: .reject, subprotocol: nil)
             }
             // A rejected handshake still reaches .ready: only connections bearing a nonce issued here count.
@@ -183,8 +201,9 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
             switch state {
             case .ready:
                 let metadata = connection.metadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata
-                let nonce = metadata?.additionalServerHeaders?.first { $0.0 == "X-Next-Term-Nonce" }?.1
-                guard metadata?.selectedSubprotocol == "mcp", let nonce, acceptedNonces.remove(nonce) != nil else {
+                let nonce = metadata?.additionalServerHeaders?.first { $0.0 == "X-Next-Term-Nonce" }?.1 ?? ""
+                if peerNonces.remove(nonce) != nil { return checkPeer(connection) }
+                guard metadata?.selectedSubprotocol == "mcp", acceptedNonces.remove(nonce) != nil else {
                     connection.cancel()
                     return
                 }
@@ -206,6 +225,24 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
         connection.start(queue: queue)
     }
 
+    /// A client without the token: kept only if the process holding its socket is opencode, running in one
+    /// of this app's tabs (found by the socket's ports among the tabs' processes). Anything else is closed
+    /// before a single message is read.
+    private func checkPeer(_ connection: NWConnection) {
+        guard let port, case let .hostPort(_, remote) = connection.endpoint else { return connection.cancel() }
+        DispatchQueue.main.async {
+            let shells = self.tabShells?() ?? []
+            DispatchQueue.global(qos: .userInitiated).async {
+                let pid = IDEPeer.opencode(clientPort: remote.rawValue, serverPort: port, under: shells)
+                self.queue.async {
+                    guard let pid, case .ready = connection.state else { return connection.cancel() }
+                    self.sessions[ObjectIdentifier(connection)] = Session(connection: connection, claudePid: pid, tokenless: true)
+                    self.receive(connection)
+                }
+            }
+        }
+    }
+
     private func receive(_ connection: NWConnection) {
         connection.receiveMessage { [weak self] data, context, _, error in
             guard let self, error == nil else { return connection.cancel() }
@@ -221,8 +258,18 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
         guard let message = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let method = message["method"] as? String else { return }
         let params = message["params"] as? [String: Any] ?? [:]
+        let tokenless = sessions[client]?.tokenless ?? false
         guard let id = message["id"] else {
             // Notifications get no reply.
+            if tokenless {
+                // opencode listens once it has said so; its pid is the one the peer check found.
+                if method == "notifications/initialized", sessions[client]?.ready == false {
+                    sessions[client]?.ready = true
+                    let pid = sessions[client]?.claudePid
+                    DispatchQueue.main.async { self.onClientReady?(client, pid) }
+                }
+                return
+            }
             if method == "ide_connected" {
                 let pid = (params["pid"] as? NSNumber).map { pid_t($0.int32Value) }
                 sessions[client]?.claudePid = pid
@@ -248,8 +295,12 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
         case "ping":
             reply(connection, id, result: [:])
         case "tools/list":
-            reply(connection, id, result: ["tools": Self.tools])
+            reply(connection, id, result: ["tools": tokenless ? [[String: Any]]() : Self.tools])
         case "tools/call":
+            // Without the token a client only receives.
+            if tokenless {
+                return reply(connection, id, result: ["content": [["type": "text", "text": "Not available without the token"]], "isError": true])
+            }
             let name = params["name"] as? String ?? ""
             let arguments = params["arguments"] as? [String: Any] ?? [:]
             callTool(name, arguments, id: id, client: client, connection: connection)

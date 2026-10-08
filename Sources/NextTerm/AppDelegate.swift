@@ -119,6 +119,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             (window ?? self.controllers.last)?.shareSelectionWithClaude(only: [client])
         }
         server.onClientGone = { [weak self] client in self?.claudeTabs.removeValue(forKey: client) }
+        // opencode connects without the token: only from a process in one of these shells (IDEPeer).
+        server.tabShells = { [weak self] in
+            (self?.controllers.flatMap(\.tabs) ?? []).filter { $0.remote == nil }.map { $0.view.process.shellPid }
+        }
         // Claude's proposed edits: shown as a diff in the window of the tab it runs in.
         server.onOpenDiff = { [weak self] client, path, proposed, tabName in
             guard let self else { return }
