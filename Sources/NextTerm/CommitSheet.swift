@@ -167,7 +167,8 @@ final class CommitSheet: NSObject, NSTextViewDelegate {
         let text = message.string.trimmingCharacters(in: .whitespacesAndNewlines)
         let summary = text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
         hint.textColor = writeProblem == nil ? .secondaryLabelColor : Theme.failed
-        writeButton.isEnabled = hasChanges || writing != nil
+        // Amending with nothing new, it describes the last commit again.
+        writeButton.isEnabled = hasChanges || amend.state == .on || writing != nil
         if writing != nil, let writer {
             hint.stringValue = "\(writer.agent.name) is writing the message…"
         } else if let writeProblem {
@@ -204,11 +205,11 @@ final class CommitSheet: NSObject, NSTextViewDelegate {
     /// Asks the agent for a message (or, while it writes, stops it).
     @objc private func writeWithAgent() {
         if let writing { return writing.stop() }
-        guard let writer, hasChanges else { return }
+        guard let writer, hasChanges || amend.state == .on else { return }
         writeProblem = nil
         writeButton.title = "Stop"
         spinner.startAnimation(nil)
-        writing = writer.start { [weak self] outcome in self?.written(outcome) }
+        writing = writer.start(amend: amend.state == .on) { [weak self] outcome in self?.written(outcome) }
         updateState()
     }
 
@@ -266,13 +267,15 @@ struct CommitWriter {
     let newFiles: [String]?
 
     /// Reads what will be committed and asks the agent, off the main thread; `done` on the main thread.
-    func start(_ done: @escaping (CommitMessageRun.Outcome) -> Void) -> CommitMessageRun {
+    /// `amend`: the new commit replaces the last one, so the agent reads that one's changes and message too.
+    func start(amend: Bool, _ done: @escaping (CommitMessageRun.Outcome) -> Void) -> CommitMessageRun {
         let run = CommitMessageRun()
         let agent = agent, path = path, root = root, newFiles = newFiles
         DispatchQueue.global(qos: .userInitiated).async {
             guard let git = GitWriter.git else { return DispatchQueue.main.async { done(.failed("git is not installed.")) } }
-            let prompt = CommitMessageAgent.prompt(recentSubjects: CommitMessageAgent.recentSubjects(at: root, git: git))
-            let changes = CommitMessageAgent.changes(at: root, git: git, staged: newFiles == nil, newFiles: newFiles ?? [])
+            let last = amend ? CommitMessageAgent.lastMessage(at: root, git: git) : nil
+            let prompt = CommitMessageAgent.prompt(recentSubjects: CommitMessageAgent.recentSubjects(at: root, git: git), replacing: last)
+            let changes = CommitMessageAgent.changes(at: root, git: git, staged: newFiles == nil, newFiles: newFiles ?? [], amending: amend)
             let outcome = run.run(agent, path: path, prompt: prompt, changes: changes, environment: Self.environment)
             DispatchQueue.main.async { done(outcome) }
         }

@@ -52,6 +52,38 @@ import Testing
         #expect(CommitMessageAgent.recentSubjects(at: repo.work, git: repo.git) == ["One"])
     }
 
+    /// Amend replaces the last commit: the agent reads its changes with the new ones, and its message.
+    @Test func amendingTheLastCommit() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        try repo.write("a.txt", "first\n")
+        repo.sh(["add", "a.txt"])
+        #expect(CommitMessageAgent.changes(at: repo.work, git: repo.git, staged: true).contains("+first")) // staged before a first commit
+        repo.commit("One")
+        // The first commit has no parent: amending it, all of it is new.
+        let root = CommitMessageAgent.changes(at: repo.work, git: repo.git, staged: true, amending: true)
+        #expect(root.contains("+++ b/a.txt") && root.contains("+first"), "\(root)")
+        try repo.write("b.txt", "second\n")
+        repo.commit("Two\n\nAdds b.")
+        try repo.write("c.txt", "third\n")
+        repo.sh(["add", "c.txt"])
+        let staged = CommitMessageAgent.changes(at: repo.work, git: repo.git, staged: true)
+        #expect(staged.contains("+third") && !staged.contains("+second"))
+        let amended = CommitMessageAgent.changes(at: repo.work, git: repo.git, staged: true, amending: true)
+        #expect(amended.contains("+third") && amended.contains("+second") && !amended.contains("+first"), "\(amended)")
+        // Nothing staged: every change goes in, with the last commit's.
+        repo.sh(["reset", "-q"])
+        try repo.write("a.txt", "first, edited\n")
+        let all = CommitMessageAgent.changes(at: repo.work, git: repo.git, staged: false, newFiles: ["c.txt"], amending: true)
+        #expect(all.contains("+second") && all.contains("+first, edited") && all.contains("New file: c.txt\nthird"), "\(all)")
+
+        let last = CommitMessageAgent.lastMessage(at: repo.work, git: repo.git)
+        #expect(last == "Two\n\nAdds b.")
+        let prompt = CommitMessageAgent.prompt(recentSubjects: ["Two", "One"], replacing: last)
+        #expect(prompt.contains("replace the last commit") && prompt.contains("Two\n\nAdds b.") && prompt.hasSuffix("The changes:"), "\(prompt)")
+        #expect(!CommitMessageAgent.prompt(recentSubjects: []).contains("replace the last commit"))
+    }
+
     /// What goes to the agent goes on to its vendor: files that usually hold secrets are named, not sent,
     /// and secret-looking values are masked, as get_diff gives changes to agents.
     @Test func secretsStayOut() throws {

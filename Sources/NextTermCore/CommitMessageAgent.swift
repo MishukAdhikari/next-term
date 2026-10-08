@@ -59,15 +59,38 @@ public struct CommitMessageAgent: Equatable, Sendable {
         return nil
     }
 
-    /// What the agent is asked, with the recent commits' subjects for the house style.
-    public static func prompt(recentSubjects: [String]) -> String {
+    /// What the agent is asked, with the recent commits' subjects for the house style. Amending, `replacing`
+    /// is the last commit's message: the new commit takes its place.
+    public static func prompt(recentSubjects: [String], replacing lastMessage: String? = nil) -> String {
         var text = "Write the commit message for the changes below. Reply with the message alone, as it should be committed: no code fences, "
             + "no quotes, nothing before or after it. The first line is a summary of at most 72 characters; if the change needs explaining, "
             + "a blank line and a short body follow."
         if !recentSubjects.isEmpty {
             text += " Write it the way this repository's recent commits are written:\n" + recentSubjects.map { "- " + $0 }.joined(separator: "\n")
         }
+        if let lastMessage {
+            text += "\n\nThis commit will replace the last commit (it is amended), so the changes below include what that commit did. "
+                + "Its message was:\n\n" + lastMessage
+        }
         return text + "\n\nThe changes:"
+    }
+
+    /// The last commit's whole message, for amending it; nil without one.
+    public static func lastMessage(at root: String, git: String) -> String? {
+        guard let data = GitRunner.run(git, ["-C", root, "--no-optional-locks", "log", "-1", "--format=%B"], timeout: 10) else { return nil }
+        let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
+    /// What an amended commit is compared with: the last commit's parent, or for a first commit the
+    /// empty tree (whose id depends on the repository's hash).
+    static func amendBase(at root: String, git: String) -> String? {
+        let parent = GitRunner.run(git, ["-C", root, "--no-optional-locks", "rev-parse", "--verify", "--quiet", "HEAD~1"], timeout: 10, acceptedStatus: [0, 1])
+        let id = parent.map { String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
+        if !id.isEmpty { return id }
+        let empty = GitRunner.run(git, ["-C", root, "hash-object", "-t", "tree", "--stdin"], timeout: 10, input: Data())
+        let tree = empty.map { String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
+        return tree.isEmpty ? nil : tree
     }
 
     /// The subjects of the last commits here, newest first (none in a repository without one).
@@ -78,11 +101,12 @@ public struct CommitMessageAgent: Equatable, Sendable {
     }
 
     /// What will be committed, as the agent reads it: the staged diff; with nothing staged, every change
-    /// (the tracked files against HEAD, then each new file with the start of its text). What the agent
-    /// reads goes on to its vendor, so the get_diff rules apply: files that usually hold secrets are named
-    /// and left out, and secret-looking values are masked. At most `limit` bytes, with a line saying when
-    /// the rest was cut.
-    public static func changes(at root: String, git: String, staged: Bool, newFiles: [String] = [], limit: Int = 60_000) -> String {
+    /// (the tracked files against HEAD, then each new file with the start of its text). `amending`, the
+    /// last commit's changes too, as the amended commit holds them. What the agent reads goes on to its
+    /// vendor, so the get_diff rules apply: files that usually hold secrets are named and left out, and
+    /// secret-looking values are masked. At most `limit` bytes, with a line saying when the rest was cut.
+    public static func changes(at root: String, git: String, staged: Bool, newFiles: [String] = [], amending: Bool = false,
+                               limit: Int = 60_000) -> String {
         let options = ["--no-color", "--no-ext-diff", "--no-textconv", "-M"]
         let base = ["-C", root, "--no-optional-locks", "-c", "core.quotepath=off", "diff"]
         var text = "", rest = 0
@@ -90,13 +114,15 @@ public struct CommitMessageAgent: Equatable, Sendable {
         func add(_ piece: String) {
             if text.utf8.count > limit { rest += piece.utf8.count } else { text += MCPRedaction.redact(piece).text }
         }
-        let diff: Data?
-        if staged {
-            diff = GitRunner.run(git, base + ["--cached"] + options, timeout: 20)
-        } else {
-            // Without a first commit there is no HEAD to compare with: the new files are all there is.
-            diff = GitRunner.run(git, base + options + ["HEAD", "--"], timeout: 20, acceptedStatus: [0, 128])
+        // What is staged is compared with HEAD (before a first commit, with nothing); the work tree with HEAD
+        // too, and before a first commit the new files are all there is.
+        var args = staged ? base + ["--cached"] + options : base + options
+        if amending, let parent = amendBase(at: root, git: git) {
+            args += [parent, "--"]
+        } else if !staged {
+            args += ["HEAD", "--"]
         }
+        let diff = GitRunner.run(git, args, timeout: 20, acceptedStatus: [0, 128])
         for file in UnifiedDiff.parse(diff.map { String(decoding: $0, as: UTF8.self) } ?? "") {
             add(shown(file))
         }
