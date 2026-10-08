@@ -526,10 +526,11 @@ final class SkillsUnifySheet: NSObject {
     /// The first copy that can win, so the sheet opens on a choice that works.
     private var firstGood: Int { copies.firstIndex { row.cannotWin($0) == nil } ?? 0 }
 
-    /// What Unify asks about Claude Code's link when `copy` is kept: nil when it is no Claude Code plugin, or
-    /// Claude Code did not have the skill.
+    /// What Unify asks about Claude Code's link when `copy` is kept: nil when it is no Claude Code plugin Link
+    /// would ask about (one that runs nothing and meets no other plugin is linked as before), or Claude Code
+    /// did not have the skill.
     private func pluginLink(_ copy: SkillCopy) -> SkillInstall.PluginLink? {
-        SkillUnify.pluginLink(row, winner: copy, in: inventory, read: plugins)
+        SkillsUnifyChoice.asking(row, winner: copy, in: inventory, read: plugins)
     }
 
     /// Claude Code's copy is a link to `copy`: leaving it out removes that link.

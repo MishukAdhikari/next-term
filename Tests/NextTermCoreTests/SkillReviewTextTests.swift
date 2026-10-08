@@ -18,7 +18,7 @@ import Testing
     @Test func aPluginThatStartsProgramsLeadsWithIt() throws {
         let plugin = try #require(try Self.writingHelper().package?.claude)
         #expect(SkillReviewText.pluginBlock(plugin, start: .on, clashes: []) == [
-            "Also a Claude Code plugin, “writing-helper” (.claude-plugin/plugin.json). " + Self.adds + " It starts on.",
+            "Also a Claude Code plugin, “writing-helper” (.claude-plugin/plugin.json). " + Self.adds + " Claude Code turns it on when it's added.",
             "It would start:",
             "• An MCP server, a program or web service that gives the agent tools, from .mcp.json: “helper” runs the program `node server.js`.",
             "• A hook, a command that runs on Claude Code events, from hooks/hooks.json: PostToolUse (Edit) runs `./fmt.sh`.",
@@ -29,7 +29,7 @@ import Testing
     @Test func theStartStateIsSaid() throws {
         let plugin = try #require(try Self.writingHelper().package?.claude)
         let byManifest = try #require(SkillReviewText.pluginBlock(plugin, start: .offByManifest, clashes: []).first)
-        #expect(byManifest.hasSuffix(Self.adds + " It starts off only because its manifest says so. A later version can change that."))
+        #expect(byManifest.hasSuffix(Self.adds + " Its plugin.json adds it turned off. A later version can change that."))
         let byKey = try #require(SkillReviewText.pluginBlock(plugin, start: .offByKey, clashes: []).first)
         #expect(byKey.hasSuffix(" Your Claude Code settings keep it off (“writing-helper@skills-dir”: false), so Claude Code loads nothing "
             + "from it, not even its skill, until you turn it on in /plugin."))
@@ -105,6 +105,44 @@ import Testing
             + "because its plugin.json has no usable name (as of October 2026). A later version may start the programs below.")
     }
 
+    /// H7: a plugin of the same name installed for the user is the one Claude Code keeps, so the lead
+    /// says the folder's programs don't start there, and says nothing of how it would start.
+    @Test func anInstalledPluginOfTheSameNameIsSaidInTheLead() throws {
+        let plugin = try #require(try Self.writingHelper().package?.claude)
+        let installed = SkillInstall.Clash(kind: .installed, name: "writing-helper", text: "You have a plugin named “writing-helper” installed.")
+        let block = SkillReviewText.pluginBlock(plugin, start: .on, clashes: [installed])
+        #expect(block.prefix(2) == [
+            "Also a Claude Code plugin, “writing-helper” (.claude-plugin/plugin.json). Claude Code keeps your installed “writing-helper” and "
+                + "doesn't load this folder as a plugin, so the programs below don't start there (as of October 2026).",
+            "• You have a plugin named “writing-helper” installed.",
+        ])
+        let project = SkillInstall.Clash(kind: .installedForProject, name: "writing-helper", text: "For a project.")
+        #expect(SkillReviewText.pluginBlock(plugin, start: .on, clashes: [project]).first?.hasSuffix(Self.adds + " Claude Code turns it on when it's added.") == true)
+    }
+
+    /// ~/.claude/skills linked to the shared folder: Claude Code reads the folder there, and the block says
+    /// so right under the lead, as a warning when it would start programs.
+    @Test func aLinkedClaudeFolderIsSaidUnderTheLead() throws {
+        let plugin = try #require(try Self.writingHelper().package?.claude)
+        let block = SkillReviewText.pluginBlock(plugin, start: .on, clashes: [], readsShared: true)
+        #expect(block.dropFirst().first == "⚠︎ Claude Code reads ~/.agents/skills through your linked ~/.claude/skills, so it loads this plugin "
+            + "and starts the programs below; Next Term can't leave it out.")
+        let quiet = try #require(try SkillFixture("writing-helper").claudeManifest("writing-helper").package?.claude)
+        #expect(SkillReviewText.pluginBlock(quiet, start: .on, clashes: [], readsShared: true).last
+            == "• Claude Code reads ~/.agents/skills through your linked ~/.claude/skills, so Next Term can't leave this folder out of Claude Code.")
+        #expect(SkillReviewText.pluginBlock(plugin, start: .on, clashes: []).allSatisfy { !$0.contains("~/.agents/skills") })
+    }
+
+    /// H6: bin/ goes on Claude Code's shell's PATH; nothing in it is started.
+    @Test func onlyBinProgramsAreNotStarted() throws {
+        let plugin = try #require(try SkillFixture().claudeManifest().write("bin/tidy", "#!/bin/sh\n", executable: true).package?.claude)
+        #expect(plugin.programsOnly && plugin.startsPrograms)
+        #expect(SkillReviewText.pluginBlock(plugin, start: .on, clashes: []).first == "Also a Claude Code plugin, “demo” (.claude-plugin/plugin.json). "
+            + "If you add it to Claude Code, Claude Code's shell can then run its bin/ programs by name. Claude Code turns it on when it's added.")
+        #expect(SkillReviewText.choiceLine(skill: "demo", plugin: plugin, choice: .link, start: .on, keptLink: false, clashes: [])
+            == "demo: linked. Claude Code's shell can then run its bin/ programs by name.")
+    }
+
     @Test func clashesAndLinksFollowTheLead() throws {
         let fixture = try SkillFixture().write("meta/plugin.json", #"{"name": "demo"}"#).link(".claude-plugin", to: "meta")
             .write("tools/tidy", "#!/bin/sh\n", executable: true).link("bin", to: "tools")
@@ -151,11 +189,14 @@ import Testing
         #expect(SkillReviewText.otherPackages(package) == [
             "Also a Codex plugin (.codex-plugin/plugin.json).",
             "Also a Gemini CLI extension (gemini-extension.json), with MCP servers “a” and “b”.",
-            "Not checked for other agents.",
+            "Next Term didn't check what those agents do with this folder.",
         ])
         let hooks = try #require(try SkillFixture().write("qwen-extension.json", #"{"name": "demo", "mcpServers": {"a": {"command": "node"}}}"#)
             .write("hooks/hooks.json", "{}").package)
-        #expect(SkillReviewText.otherPackages(hooks).first == "Also a Qwen Code extension (qwen-extension.json), with the MCP server “a” and hooks.")
+        #expect(SkillReviewText.otherPackages(hooks) == ["Also a Qwen Code extension (qwen-extension.json), with the MCP server “a” and hooks.",
+                                                        "Next Term didn't check what Qwen Code does with this folder."])
+        let copilot = try #require(try SkillFixture().write(".plugin/plugin.json", #"{"name": "demo"}"#).package)
+        #expect(SkillReviewText.otherPackages(copilot).last == "Next Term didn't check what Copilot CLI and VS Code do with this folder.")
         let claudeOnly = try #require(try SkillFixture().claudeManifest().package)
         #expect(SkillReviewText.otherPackages(claudeOnly).isEmpty)
     }
@@ -178,51 +219,83 @@ import Testing
         let out = SkillReviewText.serverRows(servers, choice: .skip, start: .on, codex: .init(), trigger: "$writing-helper")
         #expect(out.contains { $0.hasPrefix("• Claude Code, from .mcp.json:") && $0.hasSuffix("Left out of Claude Code, so these don't start there.") })
         let added = SkillReviewText.serverRows(servers, choice: .link, start: .on, codex: .init(), trigger: "$writing-helper")
-        #expect(added.contains { $0.hasSuffix("it starts these every time Claude Code opens, without asking you, while “writing-helper@skills-dir” is on.") })
+        #expect(added.contains { $0.hasSuffix("it starts these every time Claude Code opens, without asking you, until you turn it off in Claude Code's /plugin.") })
+        // ~/.claude/skills linked to the shared folder: the row follows what Claude Code does, not the choice.
+        let shared = SkillReviewText.serverRows(servers, choice: .skip, start: .on, readsShared: true, codex: .init(), trigger: "$writing-helper")
+        #expect(shared.contains { $0.hasPrefix("• Claude Code, from .mcp.json:") && $0.contains("through your linked ~/.claude/skills, so it starts these") })
+        #expect(!shared.contains { $0.contains("Left out of Claude Code") })
+        // H7: Claude Code keeps the installed plugin of the same name.
+        let installed = SkillInstall.Clash(kind: .installed, name: "writing-helper", text: "")
+        let kept = SkillReviewText.serverRows(servers, choice: .link, start: .on, clashes: [installed], codex: .init(), trigger: "$writing-helper")
+        #expect(kept.contains { $0.hasSuffix("Claude Code keeps your installed “writing-helper”, so these don't start there (as of October 2026).") })
     }
 
-    /// The line beside the popup, one clause per plugin folder, for each choice and start.
+    /// The line beside the popup, one clause per plugin folder, for each choice and start. Nothing is below
+    /// the popup, so a clause names what the plugin starts.
     @Test func theChoiceLineNamesWhatInstallDoes() throws {
         let plugin = try #require(try SkillReviewTextPluginTests.writingHelper().package?.claude)
         func line(_ choice: SkillInstall.ClaudeLink, _ start: SkillPackage.Start = .on, kept: Bool = false,
                   clashes: [SkillInstall.Clash] = []) -> String {
             SkillReviewText.choiceLine(skill: "writing-helper", plugin: plugin, choice: choice, start: start, keptLink: kept, clashes: clashes)
         }
-        #expect(line(.link) == "writing-helper: linked. It starts the programs below every time Claude Code opens, without asking you.")
-        #expect(line(.link, kept: true) == "writing-helper: stays linked. It starts the programs below every time Claude Code opens, without asking you.")
+        let starts = "starts what its review lists every time Claude Code opens, without asking you: 1 MCP server and 1 hook."
+        #expect(line(.link) == "writing-helper: linked. It " + starts)
+        #expect(line(.link, kept: true) == "writing-helper: stays linked. It " + starts)
         #expect(line(.link, .offByKey) == "writing-helper: linked. Your Claude Code settings keep it off (“writing-helper@skills-dir”: false) "
-            + "until you turn it on in /plugin.")
-        #expect(line(.link, .offByManifest) == "writing-helper: linked. Its manifest starts it off; once it is on, it starts the programs below "
-            + "every time Claude Code opens, without asking you.")
-        #expect(line(.skip) == "writing-helper: not linked. npx skills update may link it again.")
-        #expect(line(.skip, kept: true) == "writing-helper: its link is removed, so Claude Code doesn't load it. npx skills update may link it again.")
+            + "until you turn it on in /plugin. Once you turn it on there, it starts its programs every time Claude Code opens, without asking you.")
+        #expect(line(.link, .offByManifest) == "writing-helper: linked. Its plugin.json adds it turned off; once you turn it on, it " + starts)
+        #expect(line(.skip) == "writing-helper: left out of Claude Code, so nothing in it starts there.")
+        #expect(line(.skip, kept: true) == "writing-helper: its link is removed, so nothing in it starts in Claude Code.")
+        #expect(!line(.link).contains("below"))
         let installed = SkillInstall.Clash(kind: .installed, name: "writing-helper", text: "")
         #expect(line(.link, clashes: [installed]) == "writing-helper: linked as a plain skill. Claude Code keeps your installed plugin "
             + "“writing-helper” and doesn't load this one as a plugin.")
         let quiet = try #require(try SkillFixture("writing-helper").claudeManifest("writing-helper").package?.claude)
         #expect(SkillReviewText.choiceLine(skill: "writing-helper", plugin: quiet, choice: .link, start: .on, keptLink: false, clashes: [])
             == "writing-helper: linked. It declares nothing that starts by itself.")
+        #expect(SkillReviewText.choiceLine(skill: "writing-helper", plugin: quiet, choice: .link, start: .offByKey, keptLink: false, clashes: [])
+            == "writing-helper: linked. Your Claude Code settings keep it off (“writing-helper@skills-dir”: false) until you turn it on in /plugin.")
         let unnamed = try #require(try SkillFixture().write(".claude-plugin/plugin.json", "{}").package?.claude)
         #expect(SkillReviewText.choiceLine(skill: "demo", plugin: unnamed, choice: .link, start: .on, keptLink: false, clashes: [])
             == "demo: linked as a plain skill. Claude Code doesn't load its plugin, because its plugin.json has no usable name (as of October 2026).")
     }
 
-    /// R10: Settings › Skills' Link asks with the lead line, then what the plugin would start.
+    /// The whole line: at most three clauses, then how many more; and what leaving them out means, once.
+    @Test func theChoiceSummaryIsCappedAndSaysWhatLeavingOutMeans() {
+        #expect(SkillReviewText.choiceSummary(["a: left out of Claude Code, so nothing in it starts there."], choice: .skip)
+            == "a: left out of Claude Code, so nothing in it starts there. Codex and the other agents still load its skill. "
+            + "If you use npx skills update, it may add it back.")
+        #expect(SkillReviewText.choiceSummary(["a: linked.", "b: linked."], choice: .link) == "a: linked. b: linked.")
+        #expect(SkillReviewText.choiceSummary(["a.", "b.", "c.", "d.", "e."], choice: .link) == "a. b. c. And 2 more plugin folders: linked.")
+        #expect(SkillReviewText.choiceSummary(["a.", "b.", "c.", "d."], choice: .skip) == "a. b. c. And 1 more plugin folder: left out of Claude Code. "
+            + "Codex and the other agents still load their skills. If you use npx skills update, it may add them back.")
+        #expect(SkillReviewText.choiceSummary([], choice: .skip).isEmpty)
+    }
+
+    /// R10: Settings › Skills' Link asks with the lead line, which names the skill, and lists what the
+    /// plugin would start under it.
     @Test func theLinkQuestionSaysWhatItStarts() throws {
         let plugin = try #require(try SkillReviewTextPluginTests.writingHelper().package?.claude)
         let link = SkillInstall.PluginLink(skill: "writing-helper", plugin: plugin, start: .on, clashes: [], preset: .skip)
         let question = SkillReviewText.linkQuestion(link)
         #expect(question.title == "Add “writing-helper” to Claude Code?" && question.button == "Add with Its Programs")
         #expect(question.text.components(separatedBy: "\n") == [
-            "Also a Claude Code plugin, “writing-helper” (.claude-plugin/plugin.json). " + SkillReviewTextPluginTests.adds + " It starts on.",
+            "“writing-helper” is also a Claude Code plugin (.claude-plugin/plugin.json). " + SkillReviewTextPluginTests.adds
+                + " Claude Code turns it on when it's added.",
+            SkillReviewText.linkClosing,
+        ])
+        #expect(question.detail.components(separatedBy: "\n") == [
             "It would start:",
             "• An MCP server, a program or web service that gives the agent tools, from .mcp.json: “helper” runs the program `node server.js`.",
             "• A hook, a command that runs on Claude Code events, from hooks/hooks.json: PostToolUse (Edit) runs `./fmt.sh`.",
-            SkillReviewText.linkClosing,
         ])
-        // Turned off in /plugin: the lead says so, and the closing line is not repeated.
+        // Turned off in /plugin: the lead says so, the closing line is not repeated, and nothing starts on Add.
         let off = SkillReviewText.linkQuestion(SkillInstall.PluginLink(skill: "writing-helper", plugin: plugin, start: .offByKey, clashes: [], preset: .link))
         #expect(off.text.contains("so Claude Code loads nothing from it, not even its skill") && !off.text.contains(SkillReviewText.linkClosing))
+        #expect(off.button == "Add as Plugin")
+        // A plugin name other than the skill's is named too.
+        let other = SkillReviewText.linkQuestion(SkillInstall.PluginLink(skill: "helper", plugin: plugin, start: .on, clashes: [], preset: .skip))
+        #expect(other.text.hasPrefix("“helper” is also a Claude Code plugin, “writing-helper” (.claude-plugin/plugin.json)."))
     }
 
     /// A plugin that runs nothing is asked about only for a clash: the clash is named, and it is added as a plugin.
@@ -233,10 +306,24 @@ import Testing
                                                                            preset: .skip))
         #expect(question.button == "Add as Plugin")
         #expect(question.text.components(separatedBy: "\n") == [
-            "Also a Claude Code plugin, “writing-helper” (.claude-plugin/plugin.json). It declares nothing that starts by itself.",
-            "⚠︎ You have a plugin named “writing-helper” from claude.ai.",
+            "“writing-helper” is also a Claude Code plugin (.claude-plugin/plugin.json). It declares nothing that starts by itself.",
             SkillReviewText.linkClosing,
         ])
+        #expect(question.detail == "⚠︎ You have a plugin named “writing-helper” from claude.ai.")
+    }
+
+    /// A plugin that only brings commands, agents, output styles or skills asks too (it is past the
+    /// allowlist): the question lists what it brings, the reason it asks.
+    @Test func aPluginThatOnlyBringsSaysWhatItBrings() throws {
+        let plugin = try #require(try SkillFixture("writing-helper").claudeManifest("writing-helper")
+            .write("commands/go.md", "---\ndescription: Go.\n---\nGo.\n").package?.claude)
+        let link = SkillInstall.PluginLink(skill: "writing-helper", plugin: plugin, start: .on, clashes: [], preset: .skip)
+        #expect(link.asks && !plugin.startsPrograms)
+        let question = SkillReviewText.linkQuestion(link)
+        #expect(question.button == "Add as Plugin")
+        #expect(question.text.hasPrefix("“writing-helper” is also a Claude Code plugin (.claude-plugin/plugin.json). It declares nothing that starts by itself."))
+        #expect(question.detail.components(separatedBy: "\n") == ["It also brings:",
+            "• commands/go.md, a command: The agent may use it on its own when the task fits its description."])
     }
 
     /// Names from the folder stay on one line in the title.

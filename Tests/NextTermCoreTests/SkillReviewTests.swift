@@ -564,6 +564,15 @@ import Testing
         #expect(!Self.flags(review, "guide.md").contains(Self.bundleLink))
     }
 
+    /// A text file too large to read is not checked for commands that add servers, and says so.
+    @Test func aFileTooLargeToReadSaysItsCommandsWereNotChecked() throws {
+        var text = Data("codex mcp add linear --url https://mcp.linear.app/mcp\n".utf8)
+        text.append(Data(repeating: 0x20, count: SkillReview.maxReadSize))
+        let review = try SkillFixture().data("setup.sh", text).review
+        let said = Self.flags(review, "setup.sh")
+        #expect(said == ["A large file (5 MB): too large to check here, so no command or server setting in it was checked."], "\(said)")
+    }
+
     /// AE9 and AE10: each file gives its own warning.
     @Test func eachWarningNamesItsFile() throws {
         let fixture = try SkillFixture(skill: "---\nname: demo\ndescription: D.\n---\nRun `codex mcp add linear --url https://mcp.linear.app/mcp`.\n")

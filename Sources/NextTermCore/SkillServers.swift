@@ -4,12 +4,13 @@ import Foundation
 // starts them (as of October 2026). Read offline from the folder's own files: no agent runs, and Next
 // Term adds, starts, registers and removes none of these servers.
 // - Claude Code: the servers of the plugin the folder also is (SkillPackage). Claude Code starts them in
-//   every session while the plugin "<name>@skills-dir" is on.
+//   every session while the plugin "<name>@skills-dir" is on, unless an installed plugin of that name
+//   takes its place (hand check H7).
 // - Codex: entries of type mcp in agents/openai.yaml's `dependencies.tools`. When the user names the skill
-//   with $name in Codex's own apps, Codex offers to add the missing ones to ~/.codex/config.toml, and adds
-//   them with no question under approval "never" with full access. It matches what is there by transport
-//   and address, keeps a stdio entry's command with no arguments, and skips a name that already has a
-//   table (openai/codex @9b73858, core/src/mcp_skill_dependencies.rs, :137).
+//   with $name in Codex itself (its CLI, IDE extension or app), Codex offers to add the missing ones to
+//   ~/.codex/config.toml, and adds them with no question under approval "never" with full access. It
+//   matches what is there by transport and address, keeps a stdio entry's command with no arguments, and
+//   skips a name that already has a table (openai/codex @9b73858, core/src/mcp_skill_dependencies.rs, :137).
 // - Amp: `mcpServers` in SKILL.md's front matter, else an mcp.json beside it. Amp connects to them, and
 //   starts any program among them, when it finds the skill, and shows their tools once the skill loads
 //   (ampcode.com/docs/customize/skills). Whether it asks first is not documented.
@@ -110,6 +111,7 @@ public struct SkillServers: Equatable, Sendable {
 // MARK: - Codex
 
 extension SkillServers {
+    /// Codex reads only this name (openai/codex at 9b73858): an `agents/openai.yml` is not a Codex file.
     static let codexPath = "agents/openai.yaml"
 
     static func readCodex(_ reader: PackageReader) -> (file: String?, servers: [Server], unread: [SkillPackage.Unread]) {
@@ -603,32 +605,46 @@ extension SkillServers {
     public static let closing = "Next Term adds none of these. Each agent decides as above."
 
     /// One line per agent that would use the skill's servers. `choice` is Claude Code's link, `start`
-    /// how its plugin would start, `codex` what ~/.codex/config.toml holds, `trigger` the skill's Codex
-    /// command (`$name`).
-    public func lines(choice: SkillInstall.ClaudeLink, start: SkillPackage.Start, codex config: CodexConfig, trigger: String) -> [Line] {
+    /// how its plugin would start, `clashes` the plugins its name meets (the install plan's), `readsShared`
+    /// that Claude Code reads ~/.agents/skills through a linked ~/.claude/skills (so it loads the folder
+    /// whatever the choice), `codex` what ~/.codex/config.toml holds, `trigger` the skill's Codex command
+    /// (`$name`).
+    public func lines(choice: SkillInstall.ClaudeLink, start: SkillPackage.Start, clashes: [SkillInstall.Clash] = [],
+                      readsShared: Bool = false, codex config: CodexConfig, trigger: String) -> [Line] {
         var lines: [Line] = []
-        if let line = claudeLine(choice: choice, start: start) { lines.append(line) }
+        if let line = claudeLine(choice: readsShared ? .link : choice, start: start, clashes: clashes, readsShared: readsShared) {
+            lines.append(line)
+        }
         if let line = codexLine(config, trigger: trigger) { lines.append(line) }
         if let line = ampLine() { lines.append(line) }
         return lines
     }
 
-    func claudeLine(choice: SkillInstall.ClaudeLink, start: SkillPackage.Start) -> Line? {
+    func claudeLine(choice: SkillInstall.ClaudeLink, start: SkillPackage.Start, clashes: [SkillInstall.Clash], readsShared: Bool) -> Line? {
         guard let plugin = claudePlugin, plugin.serverCount > 0 else { return nil }
         let key = "“" + SkillReview.oneLine(plugin.name, limit: 60) + "@skills-dir”"
+        let installed = clashes.first { $0.kind == .installed }
         let condition: String
         if choice == .skip {
             condition = "Left out of Claude Code, so these don't start there."
         } else if start == .offByKey {
             condition = "Your Claude Code settings keep the plugin off (\(key): false), so these don't start until you turn it on in /plugin."
-        } else if !plugin.loadsAsPlugin {
+        } else if !plugin.mayLoadAsPlugin {
             // Hand check H2: Claude Code 2.1.280 loads only the plain skill then.
             condition = "Claude Code loads only its skill, not its plugin, because its plugin.json has no usable name, so these don't start there "
                 + "(as of October 2026). A later version may start them."
+        } else if let installed {
+            // Hand check H7: an installed plugin of the same name wins, even turned off.
+            let name = "“" + SkillReview.oneLine(installed.name, limit: 60) + "”"
+            condition = "Claude Code keeps your installed \(name), so these don't start there (as of October 2026)."
         } else if start == .offByManifest {
             condition = "Claude Code adds the plugin turned off, only because its manifest says so. These start once it is on."
+        } else if readsShared {
+            condition = "Claude Code reads ~/.agents/skills through your linked ~/.claude/skills, so it starts these every time Claude Code opens, "
+                + "without asking you, until you turn it off in Claude Code's /plugin."
         } else {
-            condition = "If you add it to Claude Code, it starts these every time Claude Code opens, without asking you, while \(key) is on."
+            condition = "If you add it to Claude Code, it starts these every time Claude Code opens, without asking you, until you turn it off "
+                + "in Claude Code's /plugin."
         }
         let described = Self.described(plugin.servers, count: plugin.serverCount)
         return Line(agent: "Claude Code", text: Self.lead("Claude Code", files: files(of: plugin.servers), servers: described) + " " + condition, preview: [])
@@ -637,8 +653,9 @@ extension SkillServers {
     func codexLine(_ config: CodexConfig, trigger: String) -> Line? {
         guard hasCodex, let codexFile else { return nil }
         let shown = Array(codex.prefix(SkillPackage.cap))
-        var said = ["If you name this skill with `\(SkillReview.oneLine(trigger, limit: 80))` in Codex's own apps, Codex offers to add these to "
-            + "~/.codex/config.toml. If you let Codex work without asking and with full access, it adds them without asking you."]
+        var said = ["If you name this skill with `\(SkillReview.oneLine(trigger, limit: 80))` in Codex itself (its CLI, IDE extension or app), "
+            + "Codex offers to add these to ~/.codex/config.toml. If you let Codex work without asking and with full access, it adds them "
+            + "without asking you."]
         var present: [String] = []
         var keeps: [Server] = []
         var unknown: [String] = []

@@ -15,7 +15,7 @@ public enum SkillReaders {
     /// Other agents that also read ~/.claude/skills.
     public static let claude = ["Amp", "Cursor", "opencode", "goose"]
 
-    /// The review's "Agents that load it" sentence. `agents`: the managed agents that load the skill (an
+    /// The review's "Agents that load it, if you use them" sentence. `agents`: the managed agents that load the skill (an
     /// install plan's). `linked`: Claude Code reads it through a link of its own in ~/.claude/skills (made
     /// or kept); without one, Claude Code in `agents` reads the shared folder itself, as when
     /// ~/.claude/skills is a link to it. `pluginOff`: Claude Code's settings turn the folder's plugin off,
@@ -25,7 +25,7 @@ public enum SkillReaders {
         let claudeReads = agents.contains(.claudeCode)
         if claudeReads, !pluginOff { names.append(linked ? "Claude Code (through its link)" : "Claude Code") }
         names += shared
-        var sentences = ["Agents that load it: " + SkillPackage.list(names) + "."]
+        var sentences = ["Agents that load it, if you use them: " + SkillPackage.list(names) + "."]
         if claudeReads, pluginOff { sentences.append("Claude Code loads nothing from it while its plugin is off.") }
         if claudeReads, linked { sentences.append(SkillPackage.list(claude) + " also find it through the Claude Code link.") }
         return sentences.joined(separator: " ")

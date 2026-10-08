@@ -6,18 +6,23 @@ import Foundation
 // SkillReview.oneLine, so hidden characters and line breaks are written out.
 
 public enum SkillReviewText {
-    /// What a plugin that starts something does once added, in the words of the review and the popup's line.
+    /// What a plugin that starts something does once added, in the words of the review.
     static let startsBelow = "it starts the programs below every time Claude Code opens, without asking you."
     static let declaresNothing = "It declares nothing that starts by itself."
+    /// What a plugin whose only running part is bin/ does once added: Claude Code puts bin/ on its shell's
+    /// PATH and starts nothing (hand check H6).
+    static let shellRuns = "Claude Code's shell can then run its bin/ programs by name."
 
     // MARK: the Claude Code plugin
 
     /// The plugin block: what it is, whether it starts anything by itself and how it starts, the plugins of
     /// the user's it clashes with (the install plan's), the parts reached through links, then what it would
-    /// start and what else it brings. `start`: from the user's key, else the manifest.
+    /// start and what else it brings. `start`: from the user's key, else the manifest. `readsShared`: Claude
+    /// Code reads ~/.agents/skills through a linked ~/.claude/skills, so no choice leaves the folder out.
     public static func pluginBlock(_ plugin: SkillPackage.ClaudePlugin, start: SkillPackage.Start,
-                                   clashes: [SkillInstall.Clash]) -> [String] {
-        var lines = [lead(plugin, start: start)]
+                                   clashes: [SkillInstall.Clash], readsShared: Bool = false) -> [String] {
+        var lines = [lead(plugin, start: start, clashes: clashes)]
+        if readsShared { lines.append(sharedLine(plugin, start: start, clashes: clashes)) }
         for clash in clashes { lines.append((clash.warning ? "⚠︎ " : "• ") + clash.text) }
         if let links = linksLine(plugin.links) { lines.append(links) }
         let starts = startsItems(plugin)
@@ -33,37 +38,59 @@ public enum SkillReviewText {
         return lines
     }
 
-    /// "Also a Claude Code plugin, “x” (.claude-plugin/plugin.json). If you add it … It starts on."
-    static func lead(_ plugin: SkillPackage.ClaudePlugin, start: SkillPackage.Start) -> String {
-        var first = "Also a Claude Code plugin, \(quoted(plugin.name)) (\(SkillReview.oneLine(plugin.manifest, limit: 120)))"
+    /// "Also a Claude Code plugin, “x” (.claude-plugin/plugin.json). If you add it … Claude Code turns it on
+    /// when it's added." `skill`: Link's question opens with the skill's name instead ("“x” is also a
+    /// Claude Code plugin (…)"), since nothing comes before it there.
+    static func lead(_ plugin: SkillPackage.ClaudePlugin, start: SkillPackage.Start, clashes: [SkillInstall.Clash] = [],
+                     skill: String? = nil) -> String {
+        let file = SkillReview.oneLine(plugin.manifest, limit: 120)
+        var first = "Also a Claude Code plugin, \(quoted(plugin.name)) (\(file))"
+        if let skill {
+            let named = plugin.name == skill ? "" : ", " + quoted(plugin.name)
+            first = quoted(skill) + " is also a Claude Code plugin" + named + " (" + file + ")"
+        }
         if let display = plugin.displayName, !display.isEmpty, display != plugin.name { first += ", shown as " + quoted(display) }
         var sentences = [first + "."]
         // A manifest that can't be read says nothing about its name: it counts as one that starts programs.
-        let manifestUnread = plugin.unread.contains { $0.file == plugin.manifest }
-        let loads = plugin.loadsAsPlugin || manifestUnread
+        let loads = plugin.mayLoadAsPlugin
+        let installed = clashes.first { $0.kind == .installed }
         if !loads {
             // Hand check H2: Claude Code 2.1.280 loads only the plain skill then.
             var text = "Claude Code loads only its skill, not its plugin, because its plugin.json has no usable name (as of October 2026)."
             if plugin.startsPrograms { text += " A later version may start the programs below." }
             sentences.append(text)
+        } else if let installed {
+            // Hand check H7: an installed plugin of the same name wins, even turned off.
+            let kept = "Claude Code keeps your installed \(quoted(installed.name)) and doesn't load this folder as a plugin"
+            sentences.append(kept + (plugin.startsPrograms ? ", so the programs below don't start there" : "") + " (as of October 2026).")
         } else if plugin.startsPrograms {
-            sentences.append("If you add it to Claude Code, " + startsBelow)
+            sentences.append("If you add it to Claude Code, " + (plugin.programsOnly ? shellRuns : startsBelow))
         } else {
             sentences.append(declaresNothing)
         }
         let key = quoted(SkillClaudeSettings.key(plugin.name))
+        let said = loads && installed == nil && plugin.startsPrograms
         switch start {
         case .offByKey:
             sentences.append("Your Claude Code settings keep it off (\(key): false), so Claude Code loads nothing from it, not even its skill, "
                 + "until you turn it on in /plugin.")
-        case .offByManifest where loads && plugin.startsPrograms:
-            sentences.append("It starts off only because its manifest says so. A later version can change that.")
-        case .on where loads && plugin.startsPrograms:
-            sentences.append("It starts on.")
+        case .offByManifest where said:
+            sentences.append("Its plugin.json adds it turned off. A later version can change that.")
+        case .on where said:
+            sentences.append("Claude Code turns it on when it's added.")
         default:
             break
         }
         return sentences.joined(separator: " ")
+    }
+
+    /// ~/.claude/skills linked to the shared folder: Claude Code loads the folder whatever Install does.
+    static func sharedLine(_ plugin: SkillPackage.ClaudePlugin, start: SkillPackage.Start, clashes: [SkillInstall.Clash]) -> String {
+        let reads = "Claude Code reads ~/.agents/skills through your linked ~/.claude/skills"
+        let shadowed = clashes.contains { $0.kind == .installed }
+        let starts = plugin.mayLoadAsPlugin && plugin.startsPrograms && !plugin.programsOnly && start == .on && !shadowed
+        guard starts else { return "• " + reads + ", so Next Term can't leave this folder out of Claude Code." }
+        return "⚠︎ " + reads + ", so it loads this plugin and starts the programs below; Next Term can't leave it out."
     }
 
     /// "Links inside the folder: bin is a link to tools; …"
@@ -173,11 +200,14 @@ public enum SkillReviewText {
     // MARK: other packages
 
     /// "Also a Gemini CLI extension (gemini-extension.json), with MCP servers “a” and “b”.", one line per
-    /// manifest other than Claude Code's, then once: "Not checked for other agents."
+    /// manifest other than Claude Code's, then once: "Next Term didn't check what Gemini CLI does with this
+    /// folder."
     public static func otherPackages(_ package: SkillPackage) -> [String] {
         let others = package.manifests.filter { $0.kind != .claudePlugin }
-        guard !others.isEmpty else { return [] }
-        return others.map(otherLine) + ["Not checked for other agents."]
+        guard let first = others.first else { return [] }
+        let closing = others.count == 1 ? SkillPackage.uncheckedBy(first.agent, what: "this folder")
+            : "Next Term didn't check what those agents do with this folder."
+        return others.map(otherLine) + [closing]
     }
 
     static func otherLine(_ manifest: SkillPackage.Manifest) -> String {
@@ -198,9 +228,11 @@ public enum SkillReviewText {
 
     /// "Needs MCP servers:", one line per agent that would use the skill's servers (the tables Codex would
     /// add indented under its line), then what Next Term does with them. Empty when no agent would use one.
+    /// `clashes` and `readsShared` as for SkillServers.lines.
     public static func serverRows(_ servers: SkillServers, choice: SkillInstall.ClaudeLink, start: SkillPackage.Start,
+                                  clashes: [SkillInstall.Clash] = [], readsShared: Bool = false,
                                   codex: SkillServers.CodexConfig, trigger: String) -> [String] {
-        let lines = servers.lines(choice: choice, start: start, codex: codex, trigger: trigger)
+        let lines = servers.lines(choice: choice, start: start, clashes: clashes, readsShared: readsShared, codex: codex, trigger: trigger)
         guard !lines.isEmpty else { return [] }
         var rows = ["Needs MCP servers:"]
         for line in lines {
@@ -222,22 +254,24 @@ public enum SkillReviewText {
     }
 
     /// What Install does about one plugin folder, for the line beside the popup: "writing-helper: linked. It
-    /// starts the programs below …". `keptLink`: a link to the shared copy is there now. `clashes`: the
-    /// install plan's.
+    /// starts what its review lists …". Nothing is below the popup, so it names what it starts rather than
+    /// pointing at a list. `keptLink`: a link to the shared copy is there now. `clashes`: the install plan's.
     public static func choiceLine(skill: String, plugin: SkillPackage.ClaudePlugin, choice: SkillInstall.ClaudeLink,
                                   start: SkillPackage.Start, keptLink: Bool, clashes: [SkillInstall.Clash]) -> String {
         let name = SkillReview.oneLine(skill, limit: 60)
         guard choice == .link else {
-            let left = keptLink ? "its link is removed, so Claude Code doesn't load it" : "not linked"
-            return "\(name): \(left). npx skills update may link it again."
+            return keptLink ? "\(name): its link is removed, so nothing in it starts in Claude Code."
+                : "\(name): left out of Claude Code, so nothing in it starts there."
         }
         let linked = name + (keptLink ? ": stays linked" : ": linked")
+        let runs = plugin.mayLoadAsPlugin && plugin.startsPrograms
         if start == .offByKey {
             let key = quoted(SkillClaudeSettings.key(plugin.name))
-            return "\(linked). Your Claude Code settings keep it off (\(key): false) until you turn it on in /plugin."
+            let off = "\(linked). Your Claude Code settings keep it off (\(key): false) until you turn it on in /plugin."
+            guard runs, !plugin.programsOnly else { return off }
+            return off + " Once you turn it on there, it starts its programs every time Claude Code opens, without asking you."
         }
-        let manifestUnread = plugin.unread.contains { $0.file == plugin.manifest }
-        if !plugin.loadsAsPlugin, !manifestUnread {
+        if !plugin.mayLoadAsPlugin {
             return "\(linked) as a plain skill. Claude Code doesn't load its plugin, because its plugin.json has no usable name (as of October 2026)."
         }
         // Hand check H7: an installed plugin of the same name wins, even turned off.
@@ -245,37 +279,64 @@ public enum SkillReviewText {
             return "\(linked) as a plain skill. Claude Code keeps your installed plugin \(quoted(installed.name)) and doesn't load this one as a plugin."
         }
         guard plugin.startsPrograms else { return "\(linked). " + declaresNothing }
-        if start == .offByManifest { return "\(linked). Its manifest starts it off; once it is on, " + startsBelow }
-        return "\(linked). It starts the programs below every time Claude Code opens, without asking you."
+        if plugin.programsOnly { return "\(linked). " + shellRuns }
+        let starts = "starts what its review lists every time Claude Code opens, without asking you: " + SkillPackage.startsSummary(plugin) + "."
+        if start == .offByManifest { return "\(linked). Its plugin.json adds it turned off; once you turn it on, it " + starts }
+        return "\(linked). It " + starts
+    }
+
+    /// The whole line beside the popup: the first three folders' clauses (choiceLine), then how many more and
+    /// what Install does with them, and, when they are left out, once what that means for the other agents.
+    public static func choiceSummary(_ clauses: [String], choice: SkillInstall.ClaudeLink) -> String {
+        var said = Array(clauses.prefix(3))
+        let more = clauses.count - said.count
+        if more > 0 {
+            let folders = more == 1 ? "1 more plugin folder" : "\(more) more plugin folders"
+            said.append("And \(folders): " + (choice == .link ? "linked." : "left out of Claude Code."))
+        }
+        if choice == .skip, !clauses.isEmpty {
+            said.append(clauses.count == 1 ? "Codex and the other agents still load its skill. If you use npx skills update, it may add it back."
+                : "Codex and the other agents still load their skills. If you use npx skills update, it may add them back.")
+        }
+        return said.joined(separator: " ")
     }
 
     // MARK: Settings › Skills
 
-    /// A question Settings › Skills asks before it acts: its title, its text, and the button that goes ahead.
+    /// A question Settings › Skills asks before it acts: its title, its text, what it lists under the text
+    /// (a scroll view, since a plugin can list many parts), and the button that goes ahead.
     public struct Question: Equatable, Sendable {
         public let title: String
         public let text: String
+        public let detail: String
         public let button: String
     }
 
     /// Link's last line, unless the user's key already keeps the plugin off.
     public static let linkClosing = "Next Term changes none of Claude Code's settings: to keep an added plugin off, turn it off in Claude Code's /plugin."
 
-    /// What Link asks before it links a plugin folder for Claude Code (R10): the lead line, the plugins its
-    /// name meets, then what it would start. "Add with Its Programs" when it starts something (or may),
-    /// "Add as Plugin" when only a clash asks.
+    /// What Link asks before it links a plugin folder for Claude Code (R10). The text: the lead line, which
+    /// names the skill, then the closing line. The detail: the plugins its name meets, what it would start,
+    /// and, for one that starts nothing, what else it brings (the reason it asks). "Add with Its Programs"
+    /// when it starts something (or may) and its key doesn't keep it off, else "Add as Plugin".
     public static func linkQuestion(_ link: SkillInstall.PluginLink) -> Question {
-        var lines = [lead(link.plugin, start: link.start)]
-        for clash in link.clashes { lines.append((clash.warning ? "⚠︎ " : "• ") + clash.text) }
-        let starts = startsItems(link.plugin)
+        let plugin = link.plugin
+        var text = lead(plugin, start: link.start, clashes: link.clashes, skill: link.skill)
+        if link.start != .offByKey { text += "\n" + linkClosing }
+        var detail = link.clashes.map { ($0.warning ? "⚠︎ " : "• ") + $0.text }
+        let starts = startsItems(plugin)
         if !starts.isEmpty {
-            lines.append("It would start:")
-            lines += starts.map { "• " + $0 }
+            detail.append("It would start:")
+            detail += starts.map { "• " + $0 }
         }
-        if link.start != .offByKey { lines.append(linkClosing) }
+        let brings = plugin.startsPrograms ? [] : bringsItems(plugin)
+        if !brings.isEmpty {
+            detail.append("It also brings:")
+            detail += brings.map { "• " + $0 }
+        }
         let title = "Add " + quoted(link.skill) + " to Claude Code?"
-        let button = link.plugin.startsPrograms ? "Add with Its Programs" : "Add as Plugin"
-        return Question(title: title, text: lines.joined(separator: "\n"), button: button)
+        let button = plugin.startsPrograms && link.start != .offByKey ? "Add with Its Programs" : "Add as Plugin"
+        return Question(title: title, text: text, detail: detail.joined(separator: "\n"), button: button)
     }
 
     /// Unify's step when the copy it keeps is a Claude Code plugin left out of Claude Code.

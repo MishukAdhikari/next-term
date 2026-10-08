@@ -364,6 +364,18 @@ public struct SkillInventory: Sendable {
 
     public func root(_ kind: SkillRoot.Kind) -> SkillRoot? { roots.first { $0.kind == kind } }
 
+    /// Claude Code is on this Mac (~/.claude is there) with a skills folder of its own, so a link for it can
+    /// be made there. Without ~/.claude no link is made, since making one would make Claude Code's folder.
+    public var claudeAvailable: Bool {
+        root(.claude) != nil && FileManager.default.fileExists(atPath: (home as NSString).appendingPathComponent(".claude"))
+    }
+
+    /// ~/.claude/skills is a link to the shared folder (or the other way round): Claude Code reads every
+    /// shared skill there itself, so no link of its own can leave one out.
+    public var claudeReadsShared: Bool {
+        root(.claude) == nil && root(.shared)?.readers.contains(.claudeCode) == true
+    }
+
     /// Whether a path is inside one of the personal skill folders (rather than, say, the developer's own
     /// repository that a skill links to).
     public func isInsideRoots(_ path: String) -> Bool {

@@ -139,7 +139,8 @@ import Testing
     @Test func theLineNamesTheServerTheConditionsAndTheTable() throws {
         let line = try Self.line(trigger: "$writing-helper")
         #expect(line.text.hasPrefix("Codex, from agents/openai.yaml: “linear” connects to https://mcp.linear.app/mcp."))
-        #expect(line.text.contains("If you name this skill with `$writing-helper` in Codex's own apps, Codex offers to add these to ~/.codex/config.toml."))
+        #expect(line.text.contains("If you name this skill with `$writing-helper` in Codex itself (its CLI, IDE extension or app), Codex offers to add "
+            + "these to ~/.codex/config.toml."))
         #expect(line.text.contains("If you let Codex work without asking and with full access, it adds them without asking you."))
         #expect(line.text.hasSuffix("It would add:"))
         #expect(line.preview == ["[mcp_servers.linear]", "url = \"https://mcp.linear.app/mcp\""])
@@ -365,8 +366,9 @@ import Testing
             .servers
     }
 
-    static func line(_ servers: SkillServers, _ choice: SkillInstall.ClaudeLink, _ start: SkillPackage.Start) throws -> String {
-        let lines = servers.lines(choice: choice, start: start, codex: .init(), trigger: "$demo")
+    static func line(_ servers: SkillServers, _ choice: SkillInstall.ClaudeLink, _ start: SkillPackage.Start,
+                     clashes: [SkillInstall.Clash] = [], readsShared: Bool = false) throws -> String {
+        let lines = servers.lines(choice: choice, start: start, clashes: clashes, readsShared: readsShared, codex: .init(), trigger: "$demo")
         return try #require(lines.first { $0.agent == "Claude Code" }).text
     }
 
@@ -376,12 +378,36 @@ import Testing
         let lead = "Claude Code, from .mcp.json: “docs” runs the program `node server.js`; “linear” connects to https://mcp.linear.app/mcp, and runs `./token.sh` for its headers. "
         #expect(try Self.line(servers, .skip, .on) == lead + "Left out of Claude Code, so these don't start there.")
         #expect(try Self.line(servers, .link, .on)
-                == lead + "If you add it to Claude Code, it starts these every time Claude Code opens, without asking you, while “writing-helper@skills-dir” is on.")
+                == lead + "If you add it to Claude Code, it starts these every time Claude Code opens, without asking you, until you turn it off in Claude Code's /plugin.")
         #expect(try Self.line(servers, .link, .offByManifest)
                 == lead + "Claude Code adds the plugin turned off, only because its manifest says so. These start once it is on.")
         #expect(try Self.line(servers, .link, .offByKey)
                 == lead + "Your Claude Code settings keep the plugin off (“writing-helper@skills-dir”: false), so these don't start until you turn it on in /plugin.")
         #expect(try Self.line(servers, .skip, .offByKey).hasSuffix("Left out of Claude Code, so these don't start there."))
+    }
+
+    /// Hand check H7: a plugin of the same name installed for the user is the one Claude Code keeps, even
+    /// turned off, so these don't start; one installed for a project leaves them starting elsewhere.
+    @Test func anInstalledPluginOfTheSameNameKeepsTheseFromStarting() throws {
+        let servers = try Self.servers()
+        let installed = SkillInstall.Clash(kind: .installed, name: "writing-helper", text: "")
+        #expect(try Self.line(servers, .link, .on, clashes: [installed])
+                .hasSuffix(" Claude Code keeps your installed “writing-helper”, so these don't start there (as of October 2026)."))
+        #expect(try Self.line(servers, .skip, .on, clashes: [installed]).hasSuffix("Left out of Claude Code, so these don't start there."))
+        let project = SkillInstall.Clash(kind: .installedForProject, name: "writing-helper", text: "")
+        #expect(try Self.line(servers, .link, .on, clashes: [project]).hasSuffix("until you turn it off in Claude Code's /plugin."))
+    }
+
+    /// ~/.claude/skills linked to the shared folder: Claude Code reads the folder there whatever the choice.
+    @Test func aLinkedClaudeFolderStartsTheseWhateverTheChoice() throws {
+        let servers = try Self.servers()
+        let shared = "Claude Code reads ~/.agents/skills through your linked ~/.claude/skills, so it starts these every time Claude Code "
+            + "opens, without asking you, until you turn it off in Claude Code's /plugin."
+        for choice in [SkillInstall.ClaudeLink.skip, .link] {
+            let text = try Self.line(servers, choice, .on, readsShared: true)
+            #expect(text.hasSuffix(shared) && !text.contains("Left out"), "\(choice)")
+        }
+        #expect(try Self.line(servers, .skip, .offByKey, readsShared: true).hasSuffix("so these don't start until you turn it on in /plugin."))
     }
 
     @Test func theStartStateComesFromTheKeyThenTheManifest() throws {

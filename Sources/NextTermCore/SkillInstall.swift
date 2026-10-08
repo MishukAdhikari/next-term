@@ -72,7 +72,7 @@ public enum SkillInstall {
             /// a plugin everywhere else (H7).
             case installedForProject
             /// Another folder Claude Code reads, or another skill ticked in the same review, with the same
-            /// plugin name: Claude Code loads only one, and one key turns off both.
+            /// plugin name: Claude Code loads only one, and turning one off in /plugin turns off both.
             case skillsDir
             /// A name or display name that looks like one of the user's plugins.
             case lookalike
@@ -305,8 +305,7 @@ public enum SkillInstall {
     public static func clashes(plugin: SkillPackage.ClaudePlugin, skill: String, facts: SkillClaudeSettings.Snapshot,
                                inventory: SkillInventory, ticked: [String: String] = [:]) -> [Clash] {
         let name = SkillPackage.normalized(plugin.name)
-        let mine = SkillReview.oneLine(plugin.name, limit: 60)
-        let key = "“" + SkillClaudeSettings.key(mine) + "”"
+        let both = "Claude Code loads only one of them, and turning one off in Claude Code's /plugin turns off both."
         var clashes: [Clash] = []
         var looks: [Clash] = []
         let own = lookalikes(plugin.name, plugin.displayName)
@@ -316,7 +315,8 @@ public enum SkillInstall {
                 let text = "You have a plugin named \(theirs) from claude.ai. Added, this folder replaces it in Claude Code sessions, and Claude Code reports yours as not loaded."
                 clashes.append(Clash(kind: .synced, name: synced.name, text: text))
             } else if !own.isDisjoint(with: lookalikes(synced.name, synced.displayName)) {
-                looks.append(Clash(kind: .lookalike, name: synced.name, text: "Its plugin name looks like your plugin \(theirs) from claude.ai."))
+                let text = "Its plugin name looks like your plugin \(theirs) from claude.ai, so it could be mistaken for it."
+                looks.append(Clash(kind: .lookalike, name: synced.name, text: text))
             }
         }
         for installed in facts.installed {
@@ -325,7 +325,8 @@ public enum SkillInstall {
             if SkillPackage.normalized(installed.name) == name {
                 clashes.append(installedClash(installed, theirs: theirs, market: market))
             } else if !own.isDisjoint(with: lookalikes(installed.name, nil)) {
-                looks.append(Clash(kind: .lookalike, name: installed.name, text: "Its plugin name looks like your plugin \(theirs) from \(market)."))
+                let text = "Its plugin name looks like your plugin \(theirs) from \(market), so it could be mistaken for it."
+                looks.append(Clash(kind: .lookalike, name: installed.name, text: text))
             }
         }
         for row in inventory.rows where row.name != skill {
@@ -333,12 +334,11 @@ public enum SkillInstall {
             guard let copy = row.rawLoad(for: .claudeCode).used, let other = copy.claudePluginName,
                   SkillPackage.normalized(other) == name else { continue }
             let place = copy.root.title + "/" + SkillReview.oneLine(copy.name, limit: 60)
-            let text = "\(place) is also a Claude Code plugin named \(quoted(other)). Claude Code loads only one of them, and \(key): false turns off both."
+            let text = "\(place) is also a Claude Code plugin named \(quoted(other)). " + both
             clashes.append(Clash(kind: .skillsDir, name: other, text: text))
         }
         for (other, otherPlugin) in ticked.sorted(by: { $0.key < $1.key }) where other != skill && SkillPackage.normalized(otherPlugin) == name {
-            let text = "“\(SkillReview.oneLine(other, limit: 60))”, also ticked here, is also a Claude Code plugin named \(quoted(otherPlugin)). "
-                + "Claude Code loads only one of them, and \(key): false turns off both."
+            let text = "“\(SkillReview.oneLine(other, limit: 60))”, also ticked here, is also a Claude Code plugin named \(quoted(otherPlugin)). " + both
             clashes.append(Clash(kind: .skillsDir, name: otherPlugin, text: text))
         }
         return clashes + looks
@@ -388,22 +388,32 @@ public enum SkillInstall {
     /// and pre-approved tools. Removal lists them, so the developer can check those places too; it removes
     /// and edits none of them (KTD12). `folder`: the installed copy, read for its plugin and servers (nil:
     /// none). `home`: for Claude Code's skills folder, settings and installed plugins in ~/.claude, and for
-    /// ~/.codex/config.toml, all read only.
+    /// ~/.codex/config.toml, all read only. The alert that lists them already says agent sessions open now
+    /// keep the skill until they restart, so what they keep running for it is one line, first: "This
+    /// includes …".
     public static func leftovers(frontMatter: SkillFrontMatter?, folder: String?, home: String) -> [String] {
         let read = folder.map { installed(folder: $0, home: home) }
+        var running: [String] = []
+        if frontMatter?.keys.contains("hooks") == true { running.append("the hooks it added to Claude Code") }
+        let claude = read.map { claudeLeftovers($0, home: home) }
+        if let parts = claude?.parts { running.append(parts) }
         var items: [String] = []
-        if frontMatter?.keys.contains("hooks") == true {
-            items.append("Hooks it added stay active in Claude Code sessions that are open now, until they restart.")
-        }
-        if let read { items += claudeLeftovers(read, home: home) }
         if let servers = read?.servers, servers.hasAmp {
-            items.append("Amp sessions open now keep its MCP servers until they restart.")
+            running.append("the MCP servers Amp started for it")
         } else if frontMatter?.keys.contains("mcpServers") == true {
             items.append("It asked for MCP servers: check your agents' MCP settings.")
         }
+        if let key = claude?.key { items.insert(key, at: 0) }
+        if !running.isEmpty { items.insert("This includes " + Self.listed(running) + ".", at: 0) }
         if let servers = read?.servers { items += codexLeftovers(servers, config: SkillServers.codexConfig(home: home)) }
         if let tools = frontMatter?.allowedTools, !tools.isEmpty { items.append("It pre-approved these tools while it ran: \(tools).") }
         return items
+    }
+
+    /// "a", "a, and b", "a, b, and c": the items may hold "and" themselves.
+    static func listed(_ items: [String]) -> String {
+        guard let last = items.last, items.count > 1 else { return items.first ?? "" }
+        return items.dropLast().joined(separator: ", ") + ", and " + last
     }
 
     /// An installed copy as removal reads it: its package, its servers, and whether Claude Code reads it (a
@@ -427,9 +437,10 @@ public enum SkillInstall {
     }
 
     /// The Claude Code plugin's leftovers: what it started, while Claude Code loaded it as a plugin that
-    /// was on, and the key the user set to keep it off, which stays.
-    static func claudeLeftovers(_ installed: InstalledCopy, home: String) -> [String] {
-        guard let plugin = installed.package?.claude else { return [] }
+    /// was on ("its Claude Code plugin's MCP servers and hooks"), and the line for the key the user set to
+    /// keep it off, which stays.
+    static func claudeLeftovers(_ installed: InstalledCopy, home: String) -> (parts: String?, key: String?) {
+        guard let plugin = installed.package?.claude else { return (nil, nil) }
         let key = SkillClaudeSettings.key(plugin.name)
         let facts = SkillClaudeSettings.snapshot(home: home, keys: [key])
         let value = facts.values[key]
@@ -437,28 +448,27 @@ public enum SkillInstall {
         // this folder as a plugin (hand check H7).
         let name = SkillPackage.normalized(plugin.name)
         let shadowed = facts.installed.contains { $0.everywhere && SkillPackage.normalized($0.name) == name }
-        var items: [String] = []
+        var parts: String?
         if installed.claudeReads, plugin.loadsAsPlugin, plugin.startsPrograms, !shadowed, plugin.start(key: value) == .on {
-            items.append(partsLeftover(plugin))
+            parts = partsLeftover(plugin)
         }
+        var line: String?
         if value == false {
             let quoted = "“" + SkillReview.oneLine(key, limit: 80) + "”"
-            items.append("~/.claude/settings.json keeps \(quoted): false. It stays, and keeps any later folder with that plugin name turned off in Claude Code.")
+            line = "~/.claude/settings.json keeps \(quoted): false. It stays, and keeps any later folder with that plugin name turned off in Claude Code."
         }
-        return items
+        return (parts, line)
     }
 
-    /// "Its Claude Code plugin's MCP servers and hooks stop with it. …", naming the kinds it has.
+    /// "its Claude Code plugin's MCP servers and hooks", naming the kinds it has.
     static func partsLeftover(_ plugin: SkillPackage.ClaudePlugin) -> String {
         var kinds: [String] = []
         if plugin.serverCount > 0 { kinds.append("MCP servers") }
         if (plugin.partCounts[.hook] ?? 0) > 0 { kinds.append("hooks") }
         if (plugin.partCounts[.monitor] ?? 0) > 0 { kinds.append("monitors") }
         if (plugin.partCounts[.lspServer] ?? 0) > 0 { kinds.append("language servers") }
-        guard !kinds.isEmpty else {
-            return "Its Claude Code plugin goes with it. Claude Code sessions open now keep what it started until they restart."
-        }
-        return "Its Claude Code plugin's \(SkillPackage.list(kinds)) stop with it. Claude Code sessions open now keep them until they restart."
+        guard !kinds.isEmpty else { return "what its Claude Code plugin started" }
+        return "its Claude Code plugin's " + SkillPackage.list(kinds)
     }
 
     /// The servers in ~/.codex/config.toml that match the skill's agents/openai.yaml by address, as Codex

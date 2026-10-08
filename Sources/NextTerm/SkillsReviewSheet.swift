@@ -6,13 +6,15 @@ import NextTermCore
 /// what else its folder is (a plugin or extension, with what a Claude Code plugin starts by itself), the
 /// MCP servers it brings to each agent, what it may do, what looks risky, and every file's text as written
 /// (hidden characters spelled out, never rendered). Claude Code's link is a checkbox for plain skills and
-/// a popup for plugin folders (SkillsClaudeChoice). Nothing is ticked when a source holds several skills.
+/// a popup for plugin folders (SkillsClaudeChoice, wired in SkillsReviewSheetClaude.swift). Nothing is
+/// ticked when a source holds several skills.
 /// Install has no Return key, so typing meant for somewhere else never installs anything.
 @MainActor
 final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
-    private var fetched: SkillsInstaller.Fetched
-    private var ticked: Set<Int>
-    private var selected = 0
+    /// What was fetched, with the home facts the review plans with: read again after a refused Install.
+    var fetched: SkillsInstaller.Fetched
+    private(set) var ticked: Set<Int>
+    private(set) var selected = 0
     /// Called once: the names installed, or nil when the user cancelled.
     private let done: ([String]?) -> Void
     /// Set for an agent's request: a download that is gone is reported to it as a failure, not as the
@@ -28,13 +30,14 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
     private let fileChoice = NSPopUpButton()
     private(set) var textView: NSTextView!
     /// Claude Code's link for plain skills (readable by the self-test).
-    let claudeLink = NSButton(checkboxWithTitle: "Link it for Claude Code (in ~/.claude/skills)", target: nil, action: nil)
+    let claudeLink = NSButton(checkboxWithTitle: SkillsReviewSheet.linkTitle, target: nil, action: nil)
     /// Claude Code's link for skill folders that are also Claude Code plugins (readable by the self-test).
     let choice = SkillsClaudeChoice()
-    /// Each plugin folder's own default for Claude Code's link, by skill name, with the skills ticked now.
-    private var presets: [String: SkillInstall.ClaudeLink] = [:]
+    /// Each plugin folder's own default for Claude Code's link, by skill name, with the skills ticked now
+    /// (SkillsReviewSheetClaude.swift).
+    var presets: [String: SkillInstall.ClaudeLink] = [:]
     /// Claude Code is on this Mac, with a skills folder of its own: links can be made.
-    private var claudeAvailable = false
+    private(set) var claudeAvailable = false
     private(set) var installButton = NSButton(title: "Install", target: nil, action: nil)
     private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
 
@@ -145,10 +148,9 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
         claudeLink.state = .on
         claudeLink.target = self
         claudeLink.action = #selector(linkChanged)
-        let claudeHere = FileManager.default.fileExists(atPath: (SkillsStore.home as NSString).appendingPathComponent(".claude"))
-        claudeAvailable = fetched.inventory.root(.claude) != nil && claudeHere
+        claudeAvailable = fetched.inventory.claudeAvailable
         claudeLink.isHidden = !claudeAvailable
-        if !claudeHere { claudeLink.state = .off }
+        if !claudeAvailable { claudeLink.state = .off }
         choice.onChange = { [weak self] in
             self?.updateDetails()
             self?.updateInstallButton()
@@ -223,58 +225,7 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
         updateInstallButton()
     }
 
-    private var chosen: [SkillsInstaller.Candidate] { ticked.sorted().map { fetched.candidates[$0] } }
-
-    /// The skills Claude Code's checkbox and popup cover: the ticked ones, or the selected one with none ticked.
-    private var covered: [SkillsInstaller.Candidate] {
-        let chosen = chosen
-        guard chosen.isEmpty else { return chosen }
-        return fetched.candidates.indices.contains(selected) ? [fetched.candidates[selected]] : []
-    }
-
-    private var coveredNames: Set<String> { Set(covered.map(\.name)) }
-
-    /// Each plugin folder's own default, worked out once per change of ticks (it reads the installed copy).
-    private func refreshPresets() {
-        presets = [:]
-        guard claudeAvailable else { return }
-        let chosen = chosen
-        for candidate in fetched.candidates where candidate.review.package?.claude != nil {
-            presets[candidate.name] = SkillsInstaller.defaultClaudeLink(candidate, fetched: fetched, together: chosen)
-        }
-    }
-
-    /// A plugin folder the popup newly covers whose own default leaves it out sets the popup back to that.
-    private func coverChanged(from before: Set<String>) {
-        let added = covered.filter { !before.contains($0.name) && $0.review.package?.claude != nil }
-        if added.contains(where: { presets[$0.name] == .skip }) { choice.reset() }
-    }
-
-    /// Claude Code's link for one skill: the checkbox for a plain skill, the popup for a plugin folder it
-    /// covers, and the folder's own default for one it doesn't (selected while others are ticked).
-    private func claudeChoice(_ candidate: SkillsInstaller.Candidate) -> SkillInstall.ClaudeLink {
-        guard claudeAvailable else { return .skip }
-        guard candidate.review.package?.claude != nil else { return claudeLink.state == .on ? .link : .skip }
-        if covered.contains(where: { $0.name == candidate.name }) { return choice.value }
-        return presets[candidate.name] ?? .skip
-    }
-
-    /// The checkbox shows when a plain skill is covered, the popup when a plugin folder is; both for both.
-    private func updateControls() {
-        let covered = covered
-        claudeLink.isHidden = !claudeAvailable || !covered.contains { $0.review.package?.claude == nil }
-        let folders = claudeAvailable ? covered.compactMap(folder) : []
-        choice.show(folders)
-    }
-
-    private func folder(_ candidate: SkillsInstaller.Candidate) -> SkillsClaudeChoice.Folder? {
-        guard let plugin = candidate.review.package?.claude else { return nil }
-        // The kept link and the clashes don't depend on the choice.
-        let plan = SkillsInstaller.plan(candidate, fetched: fetched, claude: .skip, together: chosen)
-        let start = plugin.start(key: fetched.claude.value(for: plugin.name))
-        return SkillsClaudeChoice.Folder(skill: candidate.name, plugin: plugin, start: start, keptLink: plan.keptLink != nil,
-                                         clashes: plan.clashes, preset: presets[candidate.name] ?? .skip)
-    }
+    var chosen: [SkillsInstaller.Candidate] { ticked.sorted().map { fetched.candidates[$0] } }
 
     /// Everything that follows the ticks, the selection and Claude Code's choice: the controls, the selected
     /// skill's review and the Install button.
@@ -284,7 +235,7 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
         updateInstallButton()
     }
 
-    private func updateInstallButton() {
+    func updateInstallButton() {
         let chosen = chosen
         installButton.isEnabled = !chosen.isEmpty && chosen.allSatisfy(\.installable)
         let plans = chosen.map { SkillsInstaller.plan($0, fetched: fetched, claude: claudeChoice($0), together: chosen) }
@@ -317,7 +268,7 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
     }
 
     /// The selected skill's review, with Claude Code's choice as it is now. The file shown stays as it is.
-    private func updateDetails() {
+    func updateDetails() {
         guard fetched.candidates.indices.contains(selected) else { return }
         let candidate = fetched.candidates[selected]
         let review = candidate.review
@@ -450,12 +401,7 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
                 // The skill folders or Claude Code's plugins changed since the review: redraw it from the
                 // disk as it is now.
                 if failure.message.hasPrefix("Your skill folders changed") || failure.message.hasPrefix("Your Claude Code plugins changed") {
-                    let inventory = await SkillsStore.scan()
-                    let claude = await SkillsInstaller.claudeFacts(fetched.candidates)
-                    fetched = fetched.with(inventory: inventory, claude: claude, codex: await SkillsInstaller.codexFacts())
-                    refreshPresets()
-                    updateControls()
-                    updateDetails()
+                    await reread()
                 }
                 // The download is kept after a failure, so Install can be tried again once the cause is fixed.
                 updateInstallButton()

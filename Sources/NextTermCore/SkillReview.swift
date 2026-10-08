@@ -140,7 +140,8 @@ public struct SkillReview: Sendable {
                 flags.append(Flag(level: .warning, file: relative, text: packed))
             }
             if !readable {
-                flags.append(Flag(level: .warning, file: relative, text: "A large file (\(size / 1_000_000) MB): too large to check here."))
+                let text = "A large file (\(size / 1_000_000) MB): too large to check here, so no command or server setting in it was checked."
+                flags.append(Flag(level: .warning, file: relative, text: text))
                 continue
             }
             if size > 1_000_000 { flags.append(Flag(level: .warning, file: relative, text: "A large file (\(size / 1000) KB).")) }
@@ -562,9 +563,9 @@ public struct SkillReview: Sendable {
             if plugin.programCount > 0 {
                 return "Claude Code puts the programs in its bin/ folder on its shell's PATH once it is added, so they run by name."
             }
-            return "Claude Code loads its plugin parts by itself once it is added, outside the agent's tools."
+            return "Claude Code loads its plugin parts by itself once it is added, without the agent asking you first."
         }
-        return "Claude Code starts its \(SkillPackage.list(started)) by itself once it is added, outside the agent's tools."
+        return "Claude Code starts its \(SkillPackage.list(started)) by itself once it is added, without the agent asking you first."
     }
 }
 

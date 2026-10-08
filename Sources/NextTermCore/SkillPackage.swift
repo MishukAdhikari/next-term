@@ -182,6 +182,19 @@ public struct SkillPackage: Equatable, Sendable {
         /// `runsNothing` and `startsPrograms`, which don't count on it: a later version may load more.
         public var loadsAsPlugin: Bool { declaredName.map(SkillPackage.isUsableName) ?? false }
 
+        /// Its plugin.json could not be read: nothing is known about its name, so it counts as a plugin that
+        /// loads and starts programs (KTD13), not as one without a usable name.
+        public var manifestUnread: Bool { unread.contains { $0.file == manifest } }
+
+        /// Claude Code loads it as a plugin, or may: its name is usable, or its manifest could not be read.
+        public var mayLoadAsPlugin: Bool { loadsAsPlugin || manifestUnread }
+
+        /// What it runs is only programs in bin/, which Claude Code puts on its shell's PATH and doesn't start
+        /// (hand check H6).
+        public var programsOnly: Bool {
+            programCount > 0 && serverCount == 0 && partCounts.isEmpty && unknownKeys.isEmpty && unread.isEmpty && outside.isEmpty
+        }
+
         /// Whether Claude Code starts it on, given `"<name>@skills-dir"` in `enabledPlugins` (nil: not
         /// there). The key wins; without it, the manifest's `defaultEnabled` decides.
         public func start(key value: Bool?) -> Start {
@@ -370,14 +383,20 @@ extension SkillPackage {
         if !declares.isEmpty {
             // "MCP servers “a” and “b”, and hooks", but "the MCP server “a” and hooks".
             let joiner = manifest.servers.count > 1 ? ", and " : " and "
-            let text = "Also \(manifest.kind.title), with \(declares.joined(separator: joiner)). Not checked for other agents."
+            let text = "Also \(manifest.kind.title), with \(declares.joined(separator: joiner)). " + uncheckedBy(manifest.agent, what: "them")
             flags.append(warning(manifest.file, text))
         }
         for unread in manifest.unread {
-            flags.append(warning(unread.file, "Next Term could not read it (\(unread.reason)). Not checked for other agents."))
+            flags.append(warning(unread.file, "Next Term could not read it (\(unread.reason)). " + uncheckedBy(manifest.agent, what: "it")))
         }
         for server in manifest.servers where !isASCII(server.name) { flags.append(nonASCIIServer(server)) }
         return flags
+    }
+
+    /// "Next Term didn't check what Gemini CLI does with them." (`agent` may name two: "Copilot CLI and VS Code".)
+    public static func uncheckedBy(_ agent: String, what: String) -> String {
+        let verb = agent.contains(" and ") ? "do" : "does"
+        return "Next Term didn't check what \(agent) \(verb) with \(what)."
     }
 
     static func nonASCIIServer(_ server: Server) -> SkillReview.Flag {
@@ -420,7 +439,8 @@ extension SkillPackage {
         var flags: [SkillReview.Flag] = []
         let name = SkillReview.oneLine(plugin.name, limit: 60)
         if plugin.startsPrograms {
-            let text = "Also a Claude Code plugin, “\(name)”. Added to Claude Code, it runs parts by itself, outside the agent's tools: \(startsSummary(plugin))."
+            let text = "Also a Claude Code plugin, “\(name)”. Added to Claude Code, it runs parts by itself, without the agent asking you first: "
+                + startsSummary(plugin) + "."
             flags.append(warning(plugin.manifest, text))
         } else if !plugin.runsNothing {
             let brought = bringsSummary(allBrings)
@@ -1178,8 +1198,9 @@ extension PackageReader {
 
     /// What a plugin declares that starts by itself, as one digest: the manifest's keys outside the
     /// allowlist, the bytes of every file that declares a server, hook, monitor, LSP server or plugin
-    /// settings, and the names in bin/. Nil when something could not be read or leads outside: then no two
-    /// copies count as the same. A file that declares none of these (a hooks.json with no hooks) does not count.
+    /// settings, the bytes of each MCP bundle in the folder (the server itself), and each program in bin/,
+    /// by name and bytes. Nil when something could not be read or leads outside: then no two copies count
+    /// as the same. A file that declares none of these (a hooks.json with no hooks) does not count.
     func partsFingerprint(_ manifest: [String: Any], file: String, found: Found) -> String? {
         guard found.unread.isEmpty, found.outside.isEmpty else { return nil }
         let declared = manifest.filter { !Self.allowlist.contains($0.key) }
@@ -1192,7 +1213,24 @@ extension PackageReader {
             hasher.update(data: Data("\u{0}file\u{0}\(path)\u{0}".utf8))
             hasher.update(data: Data(SHA256.hash(data: data)))
         }
-        hasher.update(data: Data(("\u{0}bin\u{0}" + found.programs.joined(separator: "\u{0}")).utf8))
+        let bundles = found.servers.compactMap { $0.url == nil ? $0.bundle : nil }
+        for path in Set(bundles).sorted() {
+            guard let relative = inside(path), let digest = digest(relative) else { return nil }
+            hasher.update(data: Data("\u{0}bundle\u{0}\(path)\u{0}\(digest)".utf8))
+        }
+        for name in found.programs {
+            guard let digest = digest("bin/" + name) else { return nil }
+            hasher.update(data: Data("\u{0}bin\u{0}\(name)\u{0}\(digest)".utf8))
+        }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// A file's bytes as a digest, read in pieces, so a large bundle or program counts too. Nil for
+    /// anything but a file inside the folder (a link out, a folder, a pipe).
+    func digest(_ relative: String) -> String? {
+        let path = full(relative)
+        var info = stat()
+        guard staysInside(relative), stat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { return nil }
+        return SkillHash.fileDigest(path)
     }
 }

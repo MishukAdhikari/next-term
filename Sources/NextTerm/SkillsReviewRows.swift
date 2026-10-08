@@ -6,16 +6,18 @@ import NextTermCore
 /// Core's (SkillReviewText); the facts are the fetch's: Claude Code's plugins and Codex's config, read when
 /// the skill was fetched.
 enum SkillsReviewRows {
-    /// `plan`: the install plan with `choice`, Claude Code's link for this skill now.
+    /// `plan`: the install plan with `choice`, Claude Code's link for this skill now. With ~/.claude/skills a
+    /// link to the shared folder, Claude Code reads the skill there whatever the choice, and the rows say so.
     static func lines(_ candidate: SkillsInstaller.Candidate, fetched: SkillsInstaller.Fetched, plan: SkillInstallPlan,
                       choice: SkillInstall.ClaudeLink) -> [String] {
         let review = candidate.review
         let plugin = review.package?.claude
         let start = plugin.map { $0.start(key: fetched.claude.value(for: $0.name)) } ?? .on
+        let shared = fetched.inventory.claudeReadsShared && plan.agents.contains(.claudeCode)
         var lines: [String] = []
         if let plugin {
             lines.append("")
-            lines += SkillReviewText.pluginBlock(plugin, start: start, clashes: plan.clashes)
+            lines += SkillReviewText.pluginBlock(plugin, start: start, clashes: plan.clashes, readsShared: shared)
         }
         let others = review.package.map(SkillReviewText.otherPackages) ?? []
         if !others.isEmpty {
@@ -23,7 +25,8 @@ enum SkillsReviewRows {
             lines += others
         }
         let trigger = SkillServers.codexTrigger(name: candidate.name, package: review.package)
-        let servers = SkillReviewText.serverRows(review.servers, choice: choice, start: start, codex: fetched.codex, trigger: trigger)
+        let servers = SkillReviewText.serverRows(review.servers, choice: choice, start: start, clashes: plan.clashes, readsShared: shared,
+                                                 codex: fetched.codex, trigger: trigger)
         if !servers.isEmpty {
             lines.append("")
             lines += servers

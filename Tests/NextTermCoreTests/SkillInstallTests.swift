@@ -288,6 +288,31 @@ import Testing
         }
     }
 
+    /// A link for Claude Code is made only where Claude Code is: ~/.claude there, and ~/.claude/skills a folder
+    /// of its own. A missing ~/.claude/skills is still made, as a link in it always has been.
+    @Test func claudeCodeIsAvailableOnlyWhereItIs() throws {
+        #expect(SkillInventory.scan(home: home).claudeAvailable)
+        let bare = FileManager.default.temporaryDirectory.appendingPathComponent("nt-no-claude-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: bare + "/.agents/skills", withIntermediateDirectories: true)
+        let none = SkillInventory.scan(home: bare)
+        #expect(!none.claudeAvailable && !none.claudeReadsShared)
+        try FileManager.default.createDirectory(atPath: bare + "/.claude", withIntermediateDirectories: true)
+        #expect(SkillInventory.scan(home: bare).claudeAvailable)
+    }
+
+    /// ~/.claude/skills linked to the shared folder as a whole: Claude Code reads the folder there, so no
+    /// choice leaves it out, and the plan names Claude Code with no link of its own to make or remove.
+    @Test func aLinkedClaudeFolderReadsTheSharedFolder() throws {
+        try FileManager.default.removeItem(atPath: home + "/.claude/skills")
+        try FileManager.default.createDirectory(atPath: home + "/.agents/skills", withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: home + "/.claude/skills", withDestinationPath: "../.agents/skills")
+        let inventory = SkillInventory.scan(home: home)
+        #expect(inventory.claudeReadsShared && !inventory.claudeAvailable)
+        let package = try stage([".mcp.json": Self.server])
+        let left = plan(.skip, package)
+        #expect(left.agents.contains(.claudeCode) && !makesLink(left) && !left.linksClaude)
+    }
+
     // MARK: clashes
 
     /// AE4: a plugin synced from claude.ai of the same name, compared as Claude Code compares names.
@@ -310,12 +335,13 @@ import Testing
         let underscore = SkillClaudeSettings.Snapshot(synced: [.init(name: "writing_helper", displayName: nil)])
         let plan = plan(.skip, package, facts: underscore)
         #expect(plan.clashes.map(\.kind) == [.lookalike] && plan.clashes.first?.warning == true)
-        #expect(plan.untouched.contains("Its plugin name looks like your plugin “writing_helper” from claude.ai."))
+        #expect(plan.untouched.contains("Its plugin name looks like your plugin “writing_helper” from claude.ai, so it could be mistaken for it."))
         #expect(defaultLink(package, facts: underscore) == .skip)
         let display = SkillClaudeSettings.Snapshot(synced: [.init(name: "wh", displayName: "Writing Helper")])
         #expect(self.plan(.skip, package, facts: display).clashes.map(\.kind) == [.lookalike])
         let installed = SkillClaudeSettings.Snapshot(installed: [.init(name: "writing.helper", marketplace: "m", scopes: ["user"], enabled: true)])
-        #expect(self.plan(.skip, package, facts: installed).untouched.contains("Its plugin name looks like your plugin “writing.helper” from “m”."))
+        #expect(self.plan(.skip, package, facts: installed).untouched.contains("Its plugin name looks like your plugin “writing.helper” from “m”, "
+            + "so it could be mistaken for it."))
         let unrelated = SkillClaudeSettings.Snapshot(synced: [.init(name: "reading-helper", displayName: "Reader")])
         #expect(self.plan(.skip, package, facts: unrelated).clashes.isEmpty && defaultLink(package, facts: unrelated) == .link)
     }
@@ -347,7 +373,7 @@ import Testing
         try skill(".claude/skills/other-helper", plugin: "Writing-Helper")
         let plan = plan(.skip, package)
         let text = "~/.claude/skills/other-helper is also a Claude Code plugin named “Writing-Helper”. Claude Code loads only one of them, "
-            + "and “writing-helper@skills-dir”: false turns off both."
+            + "and turning one off in Claude Code's /plugin turns off both."
         #expect(plan.clashes.map(\.kind) == [.skillsDir] && plan.untouched.contains(text))
         #expect(defaultLink(package) == .skip)
         let ticked = self.plan(.skip, package, ticked: ["writing-helper": "writing-helper", "notes": "writing-helper"])
@@ -379,7 +405,7 @@ import Testing
     static let hooks = #"{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "./start.sh"}]}]}}"#
     static let codexLine = "Codex may have added the MCP server “linear” (https://mcp.linear.app/mcp) for this skill, in ~/.codex/config.toml. "
         + "It stays there, because you may use it for other things. Remove it there if you don't."
-    static let pluginLine = "Its Claude Code plugin's MCP servers and hooks stop with it. Claude Code sessions open now keep them until they restart."
+    static let pluginLine = "This includes its Claude Code plugin's MCP servers and hooks."
 
     func write(_ path: String, _ text: String) throws {
         let full = (home as NSString).appendingPathComponent(path)
@@ -467,7 +493,7 @@ import Testing
     @Test func aPluginWithOtherPartsGoesWithIt() throws {
         try skill([".claude-plugin/plugin.json": #"{"name": "writing-helper"}"#, "bin/tidy": "#!/bin/sh\n"])
         try link()
-        #expect(leftovers() == ["Its Claude Code plugin goes with it. Claude Code sessions open now keep what it started until they restart."])
+        #expect(leftovers() == ["This includes what its Claude Code plugin started."])
     }
 
     /// Off by the user's key, by its manifest, or not loaded as a plugin (no usable name, H2): nothing ran.
@@ -480,7 +506,7 @@ import Testing
             + "turned off in Claude Code."
         #expect(leftovers() == [key])
         try write(".claude/settings.json", "{\"enabledPlugins\": {\"writing-helper@skills-dir\": true}}")
-        #expect(leftovers() == ["Its Claude Code plugin's MCP servers stop with it. Claude Code sessions open now keep them until they restart."])
+        #expect(leftovers() == ["This includes its Claude Code plugin's MCP servers."])
         try FileManager.default.removeItem(atPath: home + "/.claude/settings.json")
         try write(".agents/skills/writing-helper/.claude-plugin/plugin.json", #"{"name": "writing-helper", "defaultEnabled": false}"#)
         #expect(leftovers().isEmpty)
@@ -498,16 +524,27 @@ import Testing
         #expect(leftovers().isEmpty)
         let project = #"{"version": 2, "plugins": {"writing-helper@some-market": [{"scope": "project", "projectPath": "/p", "installPath": "/x"}]}}"#
         try write(".claude/plugins/installed_plugins.json", project)
-        #expect(leftovers() == ["Its Claude Code plugin's MCP servers stop with it. Claude Code sessions open now keep them until they restart."])
+        #expect(leftovers() == ["This includes its Claude Code plugin's MCP servers."])
     }
 
     /// Amp's servers: open sessions keep them, in place of the old "check your agents" line.
     @Test func ampServersStayInOpenSessions() throws {
         try skill(front: "mcpServers:\n  docs:\n    url: https://mcp.example.com/mcp\n")
-        #expect(leftovers() == ["Amp sessions open now keep its MCP servers until they restart."])
+        #expect(leftovers() == ["This includes the MCP servers Amp started for it."])
         try FileManager.default.removeItem(atPath: folder + "/SKILL.md")
         try skill(front: "", ["mcp.json": #"{"mcpServers": {"docs": {"command": "node", "args": ["x.js"]}}}"#])
-        #expect(leftovers() == ["Amp sessions open now keep its MCP servers until they restart."])
+        #expect(leftovers() == ["This includes the MCP servers Amp started for it."])
+    }
+
+    /// The alert already says open sessions keep the skill: what they keep running for it is one line,
+    /// first, and the key line after it.
+    @Test func whatOpenSessionsKeepIsOneLine() throws {
+        try skill(front: "hooks:\n  PreToolUse: []\nmcpServers:\n  docs:\n    url: https://mcp.example.com/mcp\n",
+                  [".claude-plugin/plugin.json": #"{"name": "writing-helper"}"#, ".mcp.json": Self.server, "hooks/hooks.json": Self.hooks])
+        try link()
+        #expect(leftovers() == ["This includes the hooks it added to Claude Code, its Claude Code plugin's MCP servers and hooks, "
+            + "and the MCP servers Amp started for it."])
+        #expect(leftovers().allSatisfy { !$0.contains("until they restart") })
     }
 
     // MARK: as before
@@ -515,8 +552,7 @@ import Testing
     /// A plain skill gives today's lines, and nothing else.
     @Test func aPlainSkillGivesTodaysLines() throws {
         try skill(front: "hooks:\n  PreToolUse: []\nallowed-tools: Bash(git:*)\n", ["scripts/run.sh": "echo hi\n"])
-        #expect(leftovers() == ["Hooks it added stay active in Claude Code sessions that are open now, until they restart.",
-                                "It pre-approved these tools while it ran: Bash(git:*)."])
+        #expect(leftovers() == ["This includes the hooks it added to Claude Code.", "It pre-approved these tools while it ran: Bash(git:*)."])
         try skill(front: "")
         #expect(leftovers().isEmpty)
         #expect(SkillInstall.leftovers(frontMatter: nil, folder: nil, home: home).isEmpty)
@@ -536,19 +572,19 @@ import Testing
 
     @Test func withTheLink() {
         let text = SkillReaders.loadedBy([.claudeCode, .codex, .commandCode], linked: true, pluginOff: false)
-        #expect(text == "Agents that load it: Codex, Command Code, Claude Code (through its link), \(Self.others). "
+        #expect(text == "Agents that load it, if you use them: Codex, Command Code, Claude Code (through its link), \(Self.others). "
             + "Amp, Cursor, opencode and goose also find it through the Claude Code link.")
     }
 
     @Test func withoutTheLink() {
-        #expect(SkillReaders.loadedBy([.codex, .commandCode], linked: false, pluginOff: false) == "Agents that load it: Codex, Command Code, \(Self.others).")
-        #expect(SkillReaders.loadedBy([.codex, .commandCode], linked: false, pluginOff: true) == "Agents that load it: Codex, Command Code, \(Self.others).")
+        #expect(SkillReaders.loadedBy([.codex, .commandCode], linked: false, pluginOff: false) == "Agents that load it, if you use them: Codex, Command Code, \(Self.others).")
+        #expect(SkillReaders.loadedBy([.codex, .commandCode], linked: false, pluginOff: true) == "Agents that load it, if you use them: Codex, Command Code, \(Self.others).")
     }
 
     /// Its plugin's key false: Claude Code loads nothing from it, though the others still find the link.
     @Test func withThePluginOff() {
         let text = SkillReaders.loadedBy([.claudeCode, .codex, .commandCode], linked: true, pluginOff: true)
-        #expect(text == "Agents that load it: Codex, Command Code, \(Self.others). Claude Code loads nothing from it while its plugin is off. "
+        #expect(text == "Agents that load it, if you use them: Codex, Command Code, \(Self.others). Claude Code loads nothing from it while its plugin is off. "
             + "Amp, Cursor, opencode and goose also find it through the Claude Code link.")
     }
 
@@ -556,7 +592,7 @@ import Testing
     /// its own.
     @Test func throughALinkedFolder() {
         #expect(SkillReaders.loadedBy([.claudeCode, .codex, .commandCode], linked: false, pluginOff: false)
-            == "Agents that load it: Codex, Command Code, Claude Code, \(Self.others).")
+            == "Agents that load it, if you use them: Codex, Command Code, Claude Code, \(Self.others).")
     }
 
     /// The plan says whether Claude Code reads it through a link: made, kept, or dropped.

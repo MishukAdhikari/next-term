@@ -40,14 +40,18 @@ enum SkillsInstaller {
         /// The MCP server tables in ~/.codex/config.toml when this was fetched, for the review's Codex line.
         /// Read only.
         var codex = SkillServers.CodexConfig()
+        /// The installed copies of the plugin folders, by skill name, read off the main thread with the
+        /// inventory: an update compares what it declares with them (defaultClaudeLink).
+        var installed: [String: SkillPackage] = [:]
 
         func discard() { try? FileManager.default.removeItem(at: scratch) }
 
-        /// The same review, planned against the skill folders, Claude Code's plugins and Codex's config as
-        /// they are now.
-        func with(inventory: SkillInventory, claude: SkillClaudeSettings.Snapshot, codex: SkillServers.CodexConfig) -> Fetched {
+        /// The same review, planned against the skill folders, their installed plugins, Claude Code's plugins
+        /// and Codex's config as they are now.
+        func with(inventory: SkillInventory, claude: SkillClaudeSettings.Snapshot, codex: SkillServers.CodexConfig,
+                  installed: [String: SkillPackage]) -> Fetched {
             Fetched(resolved: resolved, info: info, scratch: scratch, candidates: candidates, lockPath: lockPath, inventory: inventory,
-                    editedSinceInstall: editedSinceInstall, projects: projects, claude: claude, codex: codex)
+                    editedSinceInstall: editedSinceInstall, projects: projects, claude: claude, codex: codex, installed: installed)
         }
     }
 
@@ -98,8 +102,10 @@ enum SkillsInstaller {
             let edited = await editedSinceInstall(names, inventory: inventory, lockPath: lockPath, records: records)
             let claude = await claudeFacts(candidates)
             let codex = await codexFacts()
+            let installed = await Task.detached { installedPackages(candidates, inventory: inventory) }.value
             return Fetched(resolved: resolved, info: await info, scratch: scratch, candidates: candidates, lockPath: lockPath,
-                           inventory: inventory, editedSinceInstall: edited, projects: openProjects, claude: claude, codex: codex)
+                           inventory: inventory, editedSinceInstall: edited, projects: openProjects, claude: claude, codex: codex,
+                           installed: installed)
         } catch {
             try? FileManager.default.removeItem(at: scratch)
             throw error
@@ -193,6 +199,18 @@ enum SkillsInstaller {
         return await Task.detached { SkillClaudeSettings.snapshot(home: home, keys: keys) }.value
     }
 
+    /// The installed copy's package of each candidate that is a plugin folder, by skill name. It reads
+    /// each folder in full (nested manifests too): call it off the main thread.
+    nonisolated static func installedPackages(_ candidates: [Candidate], inventory: SkillInventory) -> [String: SkillPackage] {
+        var packages: [String: SkillPackage] = [:]
+        for candidate in candidates where candidate.review.package?.claude != nil {
+            let row = inventory.rows.first { $0.name == candidate.name }
+            guard let copy = row?.copies.first(where: { $0.root.kind == .shared && !$0.broken }) else { continue }
+            packages[candidate.name] = SkillPackage.read(folder: copy.realPath, folderName: candidate.name)
+        }
+        return packages
+    }
+
     /// The MCP server tables in ~/.codex/config.toml, read off the main thread. Never written.
     nonisolated static func codexFacts() async -> SkillServers.CodexConfig {
         let home = SkillsStore.home
@@ -221,12 +239,15 @@ enum SkillsInstaller {
 
     /// What the review offers first for Claude Code's link to this skill (SkillInstall.defaultClaudeLink):
     /// a plain skill is linked; a plugin folder that runs something, or whose name clashes, is left out.
+    /// Without Claude Code on this Mac (no ~/.claude), or with a ~/.claude/skills that is a link to the shared
+    /// folder, nothing is linked (SkillInventory.claudeAvailable), as the review's checkbox shows. Reads
+    /// nothing from disk: the installed copy's package was read with the fetch.
     static func defaultClaudeLink(_ candidate: Candidate, fetched: Fetched, together: [Candidate] = []) -> SkillInstall.ClaudeLink {
+        guard fetched.inventory.claudeAvailable else { return .skip }
         guard let package = candidate.review.package, package.claude != nil else { return .link }
         let shown = plan(candidate, fetched: fetched, claude: .skip, together: together)
         // An update compares what it declares with the installed copy's.
-        let copy = fetched.inventory.rows.first { $0.name == candidate.name }?.copies.first { $0.root.kind == .shared && !$0.broken }
-        let installed = copy.flatMap { SkillPackage.read(folder: $0.realPath, folderName: candidate.name) }
+        let installed = fetched.installed[candidate.name]
         return SkillInstall.defaultClaudeLink(shown, package: package, installed: installed, facts: fetched.claude)
     }
 
@@ -306,6 +327,24 @@ enum SkillsInstaller {
         if case .failure(let failure) = applied { return .failure(failure) }
         fetched.discard()
         return .success(notes.joined(separator: " "))
+    }
+
+    // MARK: SkillsMCP's grant install
+
+    // SkillsMCP.swift (not edited here) still calls these Bool forms for a pre-approved install. They give
+    // each skill the review's default (true) or leave Claude Code out (false), so a plugin folder that runs
+    // something is never linked through them. They go once that call passes `claude:` instead:
+    // `plan(candidate, fetched: fetched, claude: defaultClaudeLink(candidate, fetched: fetched))` and
+    // `install([candidate], fetched: fetched)`.
+
+    static func plan(_ candidate: Candidate, fetched: Fetched, linkForClaude: Bool) -> SkillInstallPlan {
+        plan(candidate, fetched: fetched, claude: linkForClaude ? defaultClaudeLink(candidate, fetched: fetched) : .skip)
+    }
+
+    static func install(_ chosen: [Candidate], fetched: Fetched, linkForClaude: Bool) async -> Result<String, SkillsStore.Failure> {
+        var leftOut: [String: SkillInstall.ClaudeLink] = [:]
+        for candidate in chosen { leftOut[candidate.name] = .skip }
+        return await install(chosen, fetched: fetched, claude: linkForClaude ? nil : leftOut)
     }
 
     // MARK: removing

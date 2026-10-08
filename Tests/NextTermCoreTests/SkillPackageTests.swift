@@ -267,7 +267,7 @@ import Testing
         let codex = try #require(package.manifests.first { $0.kind == .codexPlugin })
         #expect(codex.servers.map(\.name) == ["c"] && codex.servers.first?.file == ".mcp.json")
         let flags = fixture.review.flags
-        #expect(flags.contains { $0.level == .warning && $0.file == "gemini-extension.json" && $0.text.contains("Not checked for other agents") })
+        #expect(flags.contains { $0.level == .warning && $0.file == "gemini-extension.json" && $0.text.hasSuffix("Next Term didn't check what Gemini CLI does with them.") })
         #expect(flags.contains { $0.text.contains("Gemini CLI extension, with MCP servers “a” and “b”, and hooks.") })
         #expect(flags.contains { $0.text.contains("Codex plugin, with the MCP server “c” and hooks.") })
         #expect(flags.contains { $0.level == .warning && $0.file == ".codex-plugin/plugin.json" })
@@ -385,17 +385,17 @@ import Testing
     func plugin(_ fixture: SkillFixture) throws -> SkillPackage.ClaudePlugin { try #require(fixture.package?.claude) }
 
     func installed() throws -> SkillFixture {
-        try SkillFixture().claudeManifest("demo", #""version": "1.0.0""#).write(".mcp.json", Self.server)
-            .write("hooks/hooks.json", Self.hooks).write("bin/tidy", "#!/bin/sh\n", executable: true)
+        try SkillFixture().claudeManifest("demo", #""version": "1.0.0", "mcpServers": ["./.mcp.json", "./server.mcpb"]"#).write(".mcp.json", Self.server)
+            .write("hooks/hooks.json", Self.hooks).write("bin/tidy", "#!/bin/sh\n", executable: true).write("server.mcpb", "PK v1")
     }
 
     @Test func theTextAndTheAllowlistedKeysDontCount() throws {
         let old = try installed()
         let new = try SkillFixture(skill: "---\nname: demo\ndescription: Newer.\n---\nNew text.\n")
-            .claudeManifest("demo", #""version": "2.0.0", "description": "Newer.", "keywords": ["x"]"#)
-            .write(".mcp.json", Self.server).write("hooks/hooks.json", Self.hooks).write("bin/tidy", "#!/bin/sh\necho newer\n", executable: true)
+            .claudeManifest("demo", #""version": "2.0.0", "description": "Newer.", "keywords": ["x"], "mcpServers": ["./.mcp.json", "./server.mcpb"]"#)
+            .write(".mcp.json", Self.server).write("hooks/hooks.json", Self.hooks).write("bin/tidy", "#!/bin/sh\n", executable: true)
+            .write("server.mcpb", "PK v1").write("notes.md", "Other text.")
         #expect(try plugin(new).sameParts(as: plugin(old)))
-        // bin/ is compared by its names, as the review lists them.
         try new.write("bin/lint", "#!/bin/sh\n", executable: true)
         #expect(try !plugin(new).sameParts(as: plugin(old)))
     }
@@ -406,6 +406,9 @@ import Testing
         ("hooks/hooks.json", #"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "./stop.sh", "timeout": 5}]}]}}"#),
         (".claude-plugin/plugin.json", #"{"name": "demo", "channels": []}"#),
         ("settings.json", #"{"agent": "reviewer"}"#),
+        // A program in bin/ and a bundle in the folder are compared by their bytes: an update can swap the code.
+        ("bin/tidy", "#!/bin/sh\necho newer\n"),
+        ("server.mcpb", "PK v2"),
     ])
     func anyChangeToWhatStartsIsNotTheSame(_ path: String, _ text: String) throws {
         let old = try installed()
@@ -419,6 +422,11 @@ import Testing
         #expect(try !plugin(old).sameParts(as: nil))
         let unread = try installed().write("hooks/hooks.json", "{")
         #expect(try plugin(unread).partsFingerprint == nil && !plugin(unread).sameParts(as: plugin(unread)))
+        // A program in bin/ that is a link out of the folder can't be compared.
+        let linkedOut = try installed()
+        try FileManager.default.removeItem(atPath: linkedOut.at("bin/tidy"))
+        try linkedOut.link("bin/tidy", to: "/bin/sh")
+        #expect(try plugin(linkedOut).partsFingerprint == nil)
         let outside = try installed().claudeManifest("demo", #""mcpServers": "../shared/mcp.json""#)
         #expect(try plugin(outside).partsFingerprint == nil)
         #expect(try plugin(installed()).sameParts(as: plugin(old)))

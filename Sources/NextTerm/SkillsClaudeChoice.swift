@@ -42,6 +42,7 @@ final class SkillsClaudeChoice: NSObject {
         popup.toolTip = "A skill folder that is also a Claude Code plugin loads through its link in ~/.claude/skills as a plugin, "
             + "and its MCP servers, hooks and programs start with it. Next Term changes none of Claude Code's settings: "
             + "to keep an added plugin off, turn it off in Claude Code's /plugin."
+        popup.setAccessibilityLabel("Claude Code")
         view = NSStackView(views: [popup, line])
         view.alignment = .firstBaseline
         view.spacing = 10
@@ -79,13 +80,26 @@ final class SkillsClaudeChoice: NSObject {
         line.preferredMaxLayoutWidth = width
     }
 
+    /// The line names what Install does with each folder (the first three), and stands out when a folder
+    /// added this way starts programs by itself. VoiceOver hears it with the popup, and again when it changes.
     private func updateLine() {
         let choice = value
         let clauses = folders.map { folder in
             SkillReviewText.choiceLine(skill: folder.skill, plugin: folder.plugin, choice: choice, start: folder.start,
                                        keptLink: folder.keptLink, clashes: folder.clashes)
         }
-        line.stringValue = clauses.joined(separator: " ")
+        let warns = choice == .link && folders.contains(where: Self.starts)
+        line.stringValue = (warns ? "⚠︎ " : "") + SkillReviewText.choiceSummary(clauses, choice: choice)
+        line.textColor = warns ? .labelColor : .secondaryLabelColor
+        popup.setAccessibilityHelp(line.stringValue)
+        NSAccessibility.post(element: line, notification: .valueChanged)
+    }
+
+    /// Added, the folder starts programs by itself in every Claude Code session.
+    private static func starts(_ folder: Folder) -> Bool {
+        let plugin = folder.plugin
+        let shadowed = folder.clashes.contains { $0.kind == .installed }
+        return plugin.mayLoadAsPlugin && plugin.startsPrograms && !plugin.programsOnly && folder.start != .offByKey && !shadowed
     }
 
     @objc private func changed() {
@@ -118,17 +132,35 @@ extension SkillsClaudeChoice {
     }
 
     /// Link's question about a plugin folder: "Add with Its Programs" (or "Add as Plugin"), and Cancel, which
-    /// Return presses.
+    /// Return presses. What it would start goes in a scroll view of a fixed height, so a plugin with many
+    /// parts never pushes the buttons off the screen.
     static func linkAlert(_ link: SkillInstall.PluginLink) -> NSAlert {
         let question = SkillReviewText.linkQuestion(link)
         let alert = NSAlert()
         alert.messageText = question.title
         alert.informativeText = question.text
+        if !question.detail.isEmpty { alert.accessoryView = detailView(question.detail) }
         alert.addButton(withTitle: question.button)
         alert.addButton(withTitle: "Cancel")
         alert.buttons[0].keyEquivalent = ""
         alert.buttons[1].keyEquivalent = "\r"
         return alert
+    }
+
+    /// The question's list: read only, scrolling past its height.
+    private static func detailView(_ text: String) -> NSView {
+        let scroll = NSTextView.scrollableTextView()
+        scroll.frame = NSRect(x: 0, y: 0, width: 400, height: 150)
+        scroll.borderType = .bezelBorder
+        if let view = scroll.documentView as? NSTextView {
+            view.isEditable = false
+            view.isRichText = false
+            view.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            view.textContainerInset = NSSize(width: 4, height: 4)
+            view.string = text
+            view.setAccessibilityLabel("What the plugin starts")
+        }
+        return scroll
     }
 
     /// Shows `alert` as a sheet over `window`: whether its first button was pressed.
@@ -148,14 +180,15 @@ extension SkillsClaudeChoice {
             guard let row = inventory.rows.first(where: { $0.name == name }),
                   let copy = row.copies.first(where: { $0.path == winner }) else { return changed }
             let read = SkillInstall.pluginFacts(row.distinctCopies, home: home)
-            return SkillUnify.pluginLink(row, winner: copy, in: inventory, read: read) == shown ? nil : changed
+            return SkillsUnifyChoice.asking(row, winner: copy, in: inventory, read: read) == shown ? nil : changed
         }
     }
 }
 
-/// Unify's Claude Code part, for a kept copy that is also a Claude Code plugin while Claude Code had the
-/// skill in a folder of its own: the popup with the line under it, then the plugin block (what it is, how
-/// it starts, its clashes and what it would start). Hidden for any other copy, which is linked as before.
+/// Unify's Claude Code part, for a kept copy that is also a Claude Code plugin Link would ask about, while
+/// Claude Code had the skill in a folder of its own: the popup with the line under it, then the plugin block
+/// (what it is, how it starts, its clashes and what it would start). Hidden for any other copy, which is
+/// linked as before.
 @MainActor
 final class SkillsUnifyChoice {
     /// The popup and its line (readable by the self-test).
@@ -175,6 +208,7 @@ final class SkillsUnifyChoice {
         blockView.isRichText = false
         blockView.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         blockView.textContainerInset = NSSize(width: 4, height: 4)
+        blockView.setAccessibilityLabel("What the plugin starts")
         scroll.borderType = .bezelBorder
         scroll.widthAnchor.constraint(equalToConstant: width).isActive = true
         scroll.heightAnchor.constraint(equalToConstant: 110).isActive = true
@@ -187,6 +221,15 @@ final class SkillsUnifyChoice {
 
     /// The plugin block as shown (readable by the self-test).
     var block: String { blockView.string }
+
+    /// What Unify asks about Claude Code's link when `winner` is kept: a plugin folder that Link would ask
+    /// about too (it runs something, or its name meets another plugin). Nil for any other copy, which is
+    /// linked as before.
+    nonisolated static func asking(_ row: SkillRow, winner: SkillCopy, in inventory: SkillInventory,
+                                   read: SkillInstall.PluginFacts) -> SkillInstall.PluginLink? {
+        guard let link = SkillUnify.pluginLink(row, winner: winner, in: inventory, read: read), link.asks else { return nil }
+        return link
+    }
 
     /// Claude Code's link after Unify: the popup's choice for a plugin shown, else a link as before.
     var value: SkillInstall.ClaudeLink { shown == nil ? .link : choice.value }

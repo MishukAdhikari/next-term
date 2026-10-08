@@ -46,9 +46,11 @@ extension SelfTest {
         let resolved = SkillsGitHub.Resolved(source: source, commit: String(repeating: "0123456789", count: 4), date: nil, skills: skills, truncated: false)
         let candidates = SkillsInstaller.check(skills, top: top, repo: "plugin")
         let claude = SkillClaudeSettings.snapshot(home: home, keys: [SkillClaudeSettings.key("demo-plugin")])
+        let inventory = SkillsStore.inventory()
         return SkillsInstaller.Fetched(resolved: resolved, info: nil, scratch: scratch, candidates: candidates,
-                                       lockPath: SkillLock.path(home: home, environment: [:]), inventory: SkillsStore.inventory(),
-                                       editedSinceInstall: [], projects: [], claude: claude, codex: SkillServers.codexConfig(home: home))
+                                       lockPath: SkillLock.path(home: home, environment: [:]), inventory: inventory,
+                                       editedSinceInstall: [], projects: [], claude: claude, codex: SkillServers.codexConfig(home: home),
+                                       installed: SkillsInstaller.installedPackages(candidates, inventory: inventory))
     }
 
     static func pluginReviewChecks(home: String) async {
@@ -89,6 +91,7 @@ extension SelfTest {
         bothKindsChecks(home: home)
         await pluginChoiceChecks(home: home)
         await pluginUpdateChecks(home: home)
+        await installRefusalChecks(home: home)
         await settingsPluginChecks(home: home)
     }
 
@@ -97,14 +100,14 @@ extension SelfTest {
     static func pluginRowChecks(_ details: String) {
         let lines = details.components(separatedBy: "\n")
         let lead = "Also a Claude Code plugin, “demo-plugin” (.claude-plugin/plugin.json). If you add it to Claude Code, it starts the programs "
-            + "below every time Claude Code opens, without asking you. It starts on."
+            + "below every time Claude Code opens, without asking you. Claude Code turns it on when it's added."
         let server = "• An MCP server, a program or web service that gives the agent tools, from .mcp.json: “demo” runs the program `/usr/bin/true`."
         let hook = "• A hook, a command that runs on Claude Code events, from hooks/hooks.json: SessionStart runs `/usr/bin/true`."
         let block = lines.contains(lead) && lines.contains("It would start:") && lines.contains(server) && lines.contains(hook)
         check(block, "skills plugins: the review leads with what the plugin starts, and lists each part with what it is", details)
         let claudeLine = "• Claude Code, from .mcp.json: “demo” runs the program `/usr/bin/true`. Left out of Claude Code, so these don't start there."
         let codexLine = "• Codex, from agents/openai.yaml: “docs” connects to https://mcp.example.com/mcp. If you name this skill with "
-            + "`$demo-plugin:demo-plugin` in Codex's own apps, Codex offers to add these to ~/.codex/config.toml."
+            + "`$demo-plugin:demo-plugin` in Codex itself (its CLI, IDE extension or app), Codex offers to add these to ~/.codex/config.toml."
         let table = lines.contains("    [mcp_servers.docs]") && lines.contains("    url = \"https://mcp.example.com/mcp\"")
         let amp = lines.contains { $0.hasPrefix("• Amp, from SKILL.md: “docs” connects to https://mcp.example.com/mcp; “helper” runs the program `/usr/bin/true`.") }
         let row = lines.contains("Needs MCP servers:") && lines.contains(claudeLine) && lines.contains { $0.hasPrefix(codexLine) }
@@ -135,13 +138,13 @@ extension SelfTest {
         click(0)
         pickAdd()
         click(1)
-        let both = !sheet.choice.view.isHidden && !sheet.claudeLink.isHidden
+        let both = !sheet.choice.view.isHidden && !sheet.claudeLink.isHidden && sheet.claudeLink.title == "Link the plain skill for Claude Code"
         let kept = sheet.choice.popup.titleOfSelectedItem == "Add it to Claude Code as a plugin"
         check(both && kept && sheet.installButton.title == "Install 2 Skills",
-              "skills plugins: a plain skill and a plugin folder ticked together show the checkbox and the popup",
-              "\(sheet.installButton.title) \(String(describing: sheet.choice.popup.titleOfSelectedItem))")
+              "skills plugins: a plain skill and a plugin folder ticked together show the popup and the checkbox, which says it is for the plain skill",
+              "\(sheet.installButton.title) \(sheet.claudeLink.title) \(String(describing: sheet.choice.popup.titleOfSelectedItem))")
         click(0)
-        let plainOnly = sheet.choice.view.isHidden && !sheet.claudeLink.isHidden
+        let plainOnly = sheet.choice.view.isHidden && !sheet.claudeLink.isHidden && sheet.claudeLink.title == SkillsReviewSheet.linkTitle
         click(0)
         check(plainOnly && sheet.choice.popup.titleOfSelectedItem == leave,
               "skills plugins: ticking a plugin folder that runs something sets the popup back to leaving it out",
@@ -187,23 +190,14 @@ extension SelfTest {
             try? manager.removeItem(atPath: plugins)
             try? manager.removeItem(atPath: codexConfig)
         }
-        func state(_ path: String) -> String? {
-            var info = stat()
-            guard stat(path, &info) == 0 else { return nil }
-            return (SkillHash.fileDigest(path) ?? "unreadable") + " " + String(UInt32(info.st_mode & 0o777), radix: 8)
-        }
-        func exists(_ path: String) -> Bool {
-            var info = stat()
-            return lstat(path, &info) == 0
-        }
         func writeSettings(_ text: String) {
             manager.createFile(atPath: settings, contents: Data(text.utf8))
             chmod(settings, 0o600)
         }
         let realSettings = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/settings.json")
-        let realBefore = state(realSettings)
+        let realBefore = fileState(realSettings)
         writeSettings("{\n  \"model\": \"self-test\"\n}\n")
-        let before = state(settings)
+        let before = fileState(settings)
 
         // The default: a plugin folder that runs something is left out, and the checkbox (for plain
         // skills) is not offered for it.
@@ -213,14 +207,15 @@ extension SelfTest {
         let sheet = SkillsReviewSheet(fetched: first) { _ in }
         let details = sheet.details.stringValue
         check(SkillsInstaller.defaultClaudeLink(candidate, fetched: first) == .skip && sheet.claudeLink.isHidden
-              && details.contains("Goes to ~/.agents/skills/demo-plugin. Agents that load it: Codex, Command Code, \(otherReaders).")
+              && details.contains("Goes to ~/.agents/skills/demo-plugin. Agents that load it, if you use them: Codex, Command Code, \(otherReaders).")
               && !details.contains("through the Claude Code link"),
               "skills plugins: a plugin folder that runs something is left out of Claude Code by default, and every agent that loads it is named",
               details)
         let popup = sheet.choice.popup
         let leftOut = !sheet.choice.view.isHidden && popup.titleOfSelectedItem == "Leave it out of Claude Code"
             && popup.itemTitles == ["Leave it out of Claude Code", "Add it to Claude Code as a plugin"]
-        let notLinked = sheet.choice.line.stringValue == "demo-plugin: not linked. npx skills update may link it again."
+        let notLinked = sheet.choice.line.stringValue == "demo-plugin: left out of Claude Code, so nothing in it starts there. "
+            + "Codex and the other agents still load its skill. If you use npx skills update, it may add it back."
         check(leftOut && sheet.installButton.title == "Install" && notLinked,
               "skills plugins: the popup offers leaving it out or adding it as a plugin, on “Leave it out”, and Install reads Install",
               "\(popup.itemTitles) \(sheet.installButton.title) \(sheet.choice.line.stringValue)")
@@ -228,8 +223,9 @@ extension SelfTest {
         popup.selectItem(at: 1)
         _ = popup.sendAction(popup.action, to: popup.target)
         let added = sheet.details.stringValue
-        let said = "demo-plugin: linked. It starts the programs below every time Claude Code opens, without asking you."
-        let follows = added.contains("it starts these every time Claude Code opens, without asking you, while “demo-plugin@skills-dir” is on.")
+        let said = "⚠︎ demo-plugin: linked. It starts what its review lists every time Claude Code opens, without asking you: "
+            + "1 MCP server and 1 hook."
+        let follows = added.contains("it starts these every time Claude Code opens, without asking you, until you turn it off in Claude Code's /plugin.")
             && added.contains("Claude Code (through its link)")
         check(sheet.choice.line.stringValue == said && sheet.installButton.title == "Install" && follows,
               "skills plugins: “Add it to Claude Code as a plugin” says beside the popup what it starts, and Install still reads Install",
@@ -238,7 +234,7 @@ extension SelfTest {
             check(false, "skills plugins: Install with the default applies", failure.message)
         }
         let manifest = (shared as NSString).appendingPathComponent(".claude-plugin/plugin.json")
-        check(manager.fileExists(atPath: manifest) && !exists(link) && state(settings) == before,
+        check(manager.fileExists(atPath: manifest) && !entryExists(link) && fileState(settings) == before,
               "skills plugins: Install leaves it out: no link, its .claude-plugin kept, and Claude Code's settings untouched")
         if case .failure(let failure) = await SkillsStore.undo() { check(false, "skills plugins: Undo of the install applies", failure.message) }
 
@@ -253,13 +249,13 @@ extension SelfTest {
         _ = await wait(10) { answered != nil }
         check(answered == .some(["demo-plugin"]), "skills plugins: Install from the review, with “Add it to Claude Code as a plugin” picked, applies",
               "\(String(describing: answered))")
-        check(exists(link) && manager.fileExists(atPath: manifest) && state(settings) == before && before?.hasSuffix(" 600") == true,
-              "skills plugins: Add it as a plugin links it, and leaves Claude Code's settings byte for byte, mode 0600", state(settings) ?? "none")
+        check(entryExists(link) && manager.fileExists(atPath: manifest) && fileState(settings) == before && before?.hasSuffix(" 600") == true,
+              "skills plugins: Add it as a plugin links it, and leaves Claude Code's settings byte for byte, mode 0600", fileState(settings) ?? "none")
         let linkedReview = pluginDownload(home: home)
         defer { linkedReview.discard() }
         let linkedSheet = SkillsReviewSheet(fetched: linkedReview) { _ in }
         let linkedDetails = linkedSheet.details.stringValue
-        check(linkedDetails.contains("Agents that load it: Codex, Command Code, Claude Code (through its link), \(otherReaders). "
+        check(linkedDetails.contains("Agents that load it, if you use them: Codex, Command Code, Claude Code (through its link), \(otherReaders). "
                                      + "Amp, Cursor, opencode and goose also find it through the Claude Code link."),
               "skills plugins: an update that keeps the link names Claude Code and the agents that find it through the link", linkedDetails)
         // AE6: the same parts as the installed copy keep the link by default; leaving it out would remove it.
@@ -273,15 +269,15 @@ extension SelfTest {
         // address (as Codex would have added it), the plugin's parts and Amp's servers in open sessions.
         try? manager.createDirectory(atPath: (codexConfig as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
         manager.createFile(atPath: codexConfig, contents: Data("[mcp_servers.docs]\nurl = \"https://mcp.example.com/mcp\"\n".utf8))
-        let configBefore = state(codexConfig)
+        let configBefore = fileState(codexConfig)
         await pluginLeftoverChecks(keyOff: false)
-        check(state(codexConfig) == configBefore && state(settings) == before,
+        check(fileState(codexConfig) == configBefore && fileState(settings) == before,
               "skills plugins: working out what removal leaves changes neither Codex's config nor Claude Code's settings")
 
         // The user turns it off in /plugin, which sets its key to false: Settings › Skills and list_skills
         // say "off", and the review offers the link, since Claude Code then loads nothing from it.
         writeSettings("{\n  \"enabledPlugins\": {\n    \"demo-plugin@skills-dir\": false\n  },\n  \"model\": \"self-test\"\n}\n")
-        let keyed = state(settings)
+        let keyed = fileState(settings)
         let row = SkillsStore.inventory().rows.first { $0.name == "demo-plugin" }
         let (cell, tip) = row.map { SkillsSettingsView.cellText($0, agent: .claudeCode) } ?? ("none", nil)
         let listed = await SkillsMCP.listSkills()
@@ -298,14 +294,14 @@ extension SelfTest {
                   "skills plugins: with its key false, the review offers the link (Claude Code loads nothing from it)")
         }
         let offDetails = SkillsReviewSheet(fetched: third) { _ in }.details.stringValue
-        check(offDetails.contains("Agents that load it: Codex, Command Code, \(otherReaders). Claude Code loads nothing from it while its plugin is off."),
+        check(offDetails.contains("Agents that load it, if you use them: Codex, Command Code, \(otherReaders). Claude Code loads nothing from it while its plugin is off."),
               "skills plugins: with its key false, the review leaves Claude Code out of the agents that load it", offDetails)
         await pluginLeftoverChecks(keyOff: true)
-        check(state(settings) == keyed, "skills plugins: working out what removal leaves keeps the user's key as it is")
+        check(fileState(settings) == keyed, "skills plugins: working out what removal leaves keeps the user's key as it is")
 
         // Undo takes the link and the skill away, and leaves the settings as the user left them.
         if case .failure(let failure) = await SkillsStore.undo() { check(false, "skills plugins: Undo of the plugin install applies", failure.message) }
-        check(!exists(link) && !exists(shared) && state(settings) == keyed,
+        check(!entryExists(link) && !entryExists(shared) && fileState(settings) == keyed,
               "skills plugins: Undo removes the link and the skill, and Claude Code's settings stay byte for byte")
 
         // A plugin synced from claude.ai with the same name: the review warns, and leaves it out.
@@ -322,7 +318,7 @@ extension SelfTest {
         check(shown.contains(clashText) && fallsBack,
               "skills plugins: a plugin synced from claude.ai with the same name is named, and the folder is left out", shown)
 
-        check(state(realSettings) == realBefore, "skills plugins: the real ~/.claude/settings.json keeps its bytes and mode")
+        check(fileState(realSettings) == realBefore, "skills plugins: the real ~/.claude/settings.json keeps its bytes and mode")
     }
 
     /// The agents besides Codex, Command Code and Claude Code that read ~/.agents/skills, as the review
@@ -334,20 +330,20 @@ extension SelfTest {
     static func pluginLeftoverChecks(keyOff: Bool) async {
         let (steps, leftovers, installed) = await SkillsInstaller.removal("demo-plugin")
         let said = leftovers.joined(separator: "\n")
-        let parts = "Its Claude Code plugin's MCP servers and hooks stop with it. Claude Code sessions open now keep them until they restart."
-        let amp = "Amp sessions open now keep its MCP servers until they restart."
+        let parts = "This includes its Claude Code plugin's MCP servers and hooks, and the MCP servers Amp started for it."
+        let amp = "This includes the MCP servers Amp started for it."
         let codex = "Codex may have added the MCP server “docs” (https://mcp.example.com/mcp) for this skill, in ~/.codex/config.toml. "
             + "It stays there, because you may use it for other things. Remove it there if you don't."
         let key = "~/.claude/settings.json keeps “demo-plugin@skills-dir”: false. It stays, and keeps any later folder with that plugin name "
             + "turned off in Claude Code."
-        let named = installed && !steps.isEmpty && leftovers.contains(amp) && leftovers.contains(codex)
+        let named = installed && !steps.isEmpty && leftovers.contains(codex) && !leftovers.contains { $0.contains("until they restart") }
             && !leftovers.contains("It asked for MCP servers: check your agents' MCP settings.")
         if keyOff {
-            check(named && leftovers.contains(key) && !leftovers.contains(parts),
+            check(named && leftovers.first == amp && leftovers.contains(key) && !leftovers.contains(parts),
                   "skills plugins: removing a plugin the user turned off names the key that stays, and no parts that ran", said)
         } else {
-            check(named && leftovers.contains(parts) && !leftovers.contains(key),
-                  "skills plugins: removing a linked plugin names its parts, Amp's servers and the Codex server that may stay", said)
+            check(named && leftovers.first == parts && !leftovers.contains(key),
+                  "skills plugins: removing a linked plugin names its parts, Amp's servers and the Codex server that may stay, once each", said)
         }
     }
 
@@ -380,7 +376,8 @@ extension SelfTest {
         let sheet = SkillsReviewSheet(fetched: update) { names in answered = .some(names) }
         let popup = sheet.choice.popup
         let offered = popup.itemTitles == ["Remove it from Claude Code", "Add it to Claude Code as a plugin"] && popup.indexOfSelectedItem == 0
-        let said = "demo-plugin: its link is removed, so Claude Code doesn't load it. npx skills update may link it again."
+        let said = "demo-plugin: its link is removed, so nothing in it starts in Claude Code. Codex and the other agents still load its skill. "
+            + "If you use npx skills update, it may add it back."
         check(offered && sheet.choice.line.stringValue == said && sheet.installButton.title == "Update",
               "skills plugins: an update that declares another server takes Claude Code's link away by default, and says so beside the popup",
               "\(popup.itemTitles) \(popup.indexOfSelectedItem) \(sheet.choice.line.stringValue) \(sheet.installButton.title)")
@@ -402,6 +399,45 @@ extension SelfTest {
 }
 
 extension SelfTest {
+    /// Install reads Claude Code's plugins again before it writes anything (KTD1). A plugin of the same name
+    /// synced from claude.ai after the review, with "Add it to Claude Code as a plugin" picked: Install
+    /// refuses and says why, the review is drawn again from the disk as it is now (the synced plugin named,
+    /// the popup back on leaving it out), and nothing is installed or linked.
+    static func installRefusalChecks(home: String) async {
+        let manager = FileManager.default
+        let plugins = (home as NSString).appendingPathComponent(".claude/plugins")
+        let synced = (plugins as NSString).appendingPathComponent("synced/user/demo-plugin/.claude-plugin")
+        let link = (home as NSString).appendingPathComponent(".claude/skills/demo-plugin")
+        let shared = (home as NSString).appendingPathComponent(".agents/skills/demo-plugin")
+        defer { try? manager.removeItem(atPath: plugins) }
+        let fetched = pluginDownload(home: home)
+        defer { fetched.discard() }
+        var answered: [String]?? = .none
+        let sheet = SkillsReviewSheet(fetched: fetched) { names in answered = .some(names) }
+        guard let window = sheet.window else { return check(false, "skills plugins: the review has a window, for the refused install") }
+        window.orderFront(nil)
+        defer {
+            if let alert = window.attachedSheet { window.endSheet(alert) }
+            window.orderOut(nil)
+        }
+        let popup = sheet.choice.popup
+        popup.selectItem(at: 1)
+        _ = popup.sendAction(popup.action, to: popup.target)
+        // Synced after the review was read, as claude.ai would sync it.
+        try? manager.createDirectory(atPath: synced, withIntermediateDirectories: true)
+        manager.createFile(atPath: synced + "/plugin.json", contents: Data(#"{"name": "demo-plugin"}"#.utf8))
+        sheet.installButton.performClick(nil)
+        let told = await wait(10) { window.attachedSheet != nil }
+        let words = pluginSheetText(window)
+        check(told && answered == nil && words.contains("Your Claude Code plugins changed since the review (demo-plugin). Nothing was installed"),
+              "skills plugins: Install refuses when a plugin of the same name was synced from claude.ai after the review", words)
+        let details = sheet.details.stringValue
+        check(details.contains("You have a plugin named “demo-plugin” from claude.ai.") && popup.titleOfSelectedItem == "Leave it out of Claude Code",
+              "skills plugins: after the refusal the review names the synced plugin, and the popup is back on leaving it out",
+              "\(String(describing: popup.titleOfSelectedItem))\n" + details)
+        check(!entryExists(link) && !entryExists(shared), "skills plugins: the refused install puts nothing in place and links nothing")
+    }
+
     /// Settings › Skills for a skill folder that is also a Claude Code plugin, installed with the review's
     /// default (left out of Claude Code): Link asks first and links only on "Add with Its Programs"; Unify,
     /// keeping it over a hand-made copy in ~/.claude/skills, asks with the same popup (AE14). Neither writes
@@ -475,6 +511,20 @@ extension SelfTest {
         _ = await wait(5) { window.attachedSheet == nil && view.linkButton.isEnabled }
         check(!entryExists(link), "skills plugins: Cancel on Link's question links nothing")
 
+        // The folder gains a part between the question and the answer: Link reads it again and links nothing.
+        let lsp = (SkillsStore.home as NSString).appendingPathComponent(".agents/skills/demo-plugin/.lsp.json")
+        view.linkButton.performClick(nil)
+        _ = await wait(5) { window.attachedSheet != nil }
+        FileManager.default.createFile(atPath: lsp, contents: Data(#"{"go": {"command": "gopls"}}"#.utf8))
+        pluginSheetButtons(window).first { $0.title == "Add with Its Programs" }?.performClick(nil)
+        let changed = "“demo-plugin” changed since you looked. Look again before linking it."
+        let refused = await wait(10) { pluginSheetText(window).contains(changed) }
+        check(refused && !entryExists(link), "skills plugins: a plugin folder that changed after Link's question is not linked, and Link says why",
+              pluginSheetText(window))
+        if let alert = window.attachedSheet { window.endSheet(alert) }
+        try? FileManager.default.removeItem(atPath: lsp)
+        _ = await wait(5) { window.attachedSheet == nil && view.linkButton.isEnabled }
+
         view.linkButton.performClick(nil)
         _ = await wait(5) { window.attachedSheet != nil }
         pluginSheetButtons(window).first { $0.title == "Add with Its Programs" }?.performClick(nil)
@@ -535,6 +585,13 @@ extension SelfTest {
         let makesLink = confirmed.steps.contains { if case .link = $0 { return true }; return false }
         check(confirmed.steps.contains(.trash(link)) && !makesLink && confirmed.precheck() == nil,
               "skills plugins: Unify follows the popup: Claude Code's copy goes, and no link is made", "\(confirmed.steps)")
+        // The kept copy gains a part after the question: Unify's check, in the change's own turn, refuses.
+        let lsp = shared.path + "/.lsp.json"
+        manager.createFile(atPath: lsp, contents: Data(#"{"go": {"command": "gopls"}}"#.utf8))
+        let refused = confirmed.precheck()
+        try? manager.removeItem(atPath: lsp)
+        check(refused == "“demo-plugin” changed since you looked. Look again before unifying it." && confirmed.precheck() == nil,
+              "skills plugins: Unify's check refuses a kept plugin folder that changed after the question", refused ?? "no refusal")
         let applied = await SkillsStore.apply(confirmed.steps, title: "Unify demo-plugin", precheck: confirmed.precheck)
         if case .failure(let failure) = applied { check(false, "skills plugins: Unify with the plugin left out applies", failure.message) }
         check(!entryExists(link) && manager.fileExists(atPath: shared.path + "/.claude-plugin/plugin.json"),
@@ -557,10 +614,16 @@ extension SelfTest {
         return lstat(path, &info) == 0
     }
 
-    /// The words in the sheet over `window`: an alert's title and text.
+    /// The words in the sheet over `window`: an alert's title and text, and the list under them.
     private static func pluginSheetText(_ window: NSWindow) -> String {
-        func fields(_ view: NSView) -> [String] { view.subviews.flatMap { ($0 as? NSTextField).map { [$0.stringValue] } ?? fields($0) } }
-        return window.attachedSheet?.contentView.map(fields)?.joined(separator: "\n") ?? ""
+        func texts(_ view: NSView) -> [String] {
+            view.subviews.flatMap { sub -> [String] in
+                if let field = sub as? NSTextField { return [field.stringValue] }
+                if let text = sub as? NSTextView { return [text.string] }
+                return texts(sub)
+            }
+        }
+        return window.attachedSheet?.contentView.map(texts)?.joined(separator: "\n") ?? ""
     }
 
     /// The buttons in the sheet over `window`.
