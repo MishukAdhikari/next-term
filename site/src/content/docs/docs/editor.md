@@ -117,6 +117,15 @@ Saving writes the file back the way it was stored:
 - **Links:** saving through a symlink writes the file it points at, and the link stays a link.
 - **Atomic writes:** a save never leaves a half-written file behind.
 
+## Clean-up on save
+
+Two choices under **Settings › Editor › On save**, both off by default, change the text as you save it:
+
+- **Trim trailing spaces** removes the spaces and tabs at the end of every line. Markdown files (`.md`, `.markdown`, `.mdx`) keep theirs, since two spaces end a line there, and so do patches (`.diff`, `.patch`), whose lines must match the files they apply to.
+- **End files with a newline** adds a line break after the last line when that line has something on it, so an empty file stays empty.
+
+Both are done in the editor just before the file is written, as one step: <kbd>⌘Z</kbd> puts the text back as you had it, and the caret stays on the text it was on. A file keeps its line endings and encoding as above.
+
 ## Files your agents change
 
 Agents edit the files you have open. Next Term checks them about once a second:
