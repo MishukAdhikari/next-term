@@ -168,6 +168,7 @@ final class DiffPane: NSView {
     var isDecided: Bool { decided }
 
     @objc private func acceptClicked() { decide(true); closeSelf() }
+    @objc private func rejectClicked() { decide(false); closeSelf() }
 
     /// Accept's key (⌘↩, or what Settings gives it), wherever the keyboard is in the window while the proposal shows:
     /// read as the other parts read theirs, so a key with ⇧ works too. A pane in a tab behind is hidden, and never asked.
@@ -180,7 +181,6 @@ final class DiffPane: NSView {
 
     /// For the self-test: Accept's tooltip.
     var acceptToolTip: String? { accept.toolTip }
-    @objc private func rejectClicked() { decide(false); closeSelf() }
 
     private func closeSelf() {
         var view: NSView? = superview
@@ -290,7 +290,7 @@ final class DiffPane: NSView {
                 button.action = action
             }
             acceptKey = PartToolTip(accept, "Accept", command: "diff.accept", then: ": \(proposal.author) then writes the file")
-            accept.bezelColor = .controlAccentColor // what ⌘↩ as its own key equivalent made it, as the window's default button
+            accept.bezelColor = .controlAccentColor // the default button's colour, which ⌘↩ as its own key equivalent gave it
             reject.toolTip = "Reject: the file stays as it is"
             header.setViews([pathLabel, counts, NSView(), previous, position, next, reject, accept], in: .leading)
         } else if let commit {
