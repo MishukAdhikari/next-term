@@ -218,6 +218,29 @@ public struct RunningAgent: Sendable, Equatable {
     }
 }
 
+/// When the agents in tabs started, by the wall clock. A tab notes a start on the uptime clock, which stops
+/// while the Mac sleeps: converted again after a sleep, the start would move on by the time asleep. So each
+/// start is converted once, the first time it is seen (right after it), and kept.
+public struct AgentStarts: Sendable {
+    private var starts: [String: (since: TimeInterval, date: Date)] = [:]
+
+    public init() {}
+
+    /// The wall-clock time of the start tab `key` noted at `since` on the uptime clock, which reads `uptime`
+    /// at `now`.
+    public mutating func date(of key: String, since: TimeInterval, uptime: TimeInterval, now: Date = Date()) -> Date {
+        if let start = starts[key], start.since == since { return start.date }
+        let date = now.addingTimeInterval(since - uptime)
+        starts[key] = (since, date)
+        return date
+    }
+
+    /// Forgets the tabs not in `keys` (they run no agent now).
+    public mutating func forget(allBut keys: Set<String>) {
+        starts = starts.filter { keys.contains($0.key) }
+    }
+}
+
 extension AgentSessions {
     /// The newest session `agent` has started in `folder` (exactly that folder) at or after `time`, ids in
     /// `excluding` left out, or nil when there is none: what a tab that started that agent at `time`

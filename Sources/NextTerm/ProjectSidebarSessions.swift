@@ -116,14 +116,19 @@ extension TerminalWindowController {
         }
     }
 
-    /// Called with every refresh: when an agent starts, stops or finishes a turn in any tab, the sidebar
-    /// reads its sessions again (a new session, a new title, a "running" badge that comes or goes).
+    /// Called with every refresh: notes when each agent in a tab started (by the wall clock, while it is
+    /// fresh), and when an agent starts, stops or finishes a turn in any tab the sidebar reads its sessions
+    /// again (a new session, a new title, a "running" badge that comes or goes).
     func noteAgentTabs() {
         guard let app = AppDelegate.shared else { return }
         var marks: [String] = []
+        var agents = Set<String>()
         for tab in app.controllers.flatMap(\.tabs) where tab.status.running && tab.status.kind == .agent {
+            if let since = tab.status.runningSince { _ = SessionStore.startDate(of: tab, since: since) }
+            agents.insert(tab.id.uuidString)
             marks.append(tab.id.uuidString + "\(tab.status.runningSince ?? 0)" + "\(tab.status.state)")
         }
+        SessionStore.agentStarts.forget(allBut: agents)
         let signature = marks.joined(separator: ",")
         guard signature != sidebar.sessionsGroup.agentTabs else { return }
         sidebar.sessionsGroup.agentTabs = signature

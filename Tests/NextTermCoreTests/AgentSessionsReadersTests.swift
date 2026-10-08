@@ -495,6 +495,23 @@ import Testing
         #expect(AgentSessions.sessionID(of: .copilot, pid: 90005, home: home) == nil)
     }
 
+    @Test func anAgentsStartStaysPutThroughSleep() {
+        var starts = AgentStarts()
+        let seen = Date()
+        // First seen 60 s after it started, with the uptime clock at 1000.
+        let first = starts.date(of: "A", since: 940, uptime: 1000, now: seen)
+        #expect(first == seen.addingTimeInterval(-60))
+        // After eight hours asleep the wall clock has moved on 8 h 10 s, the uptime clock only 10 s.
+        let later = seen.addingTimeInterval(8 * 3600 + 10)
+        #expect(starts.date(of: "A", since: 940, uptime: 1010, now: later) == first)
+        // Converted afresh then, it would have started eight hours later than it did.
+        #expect(later.addingTimeInterval(940 - 1010) == first.addingTimeInterval(8 * 3600))
+        // The tab's next agent is a start of its own; a tab that runs none is forgotten.
+        #expect(starts.date(of: "A", since: 1005, uptime: 1010, now: later) == later.addingTimeInterval(-5))
+        starts.forget(allBut: ["B"])
+        #expect(starts.date(of: "A", since: 1005, uptime: 1020, now: later) == later.addingTimeInterval(-15))
+    }
+
     @Test func everyAgentHasItsCommands() {
         func session(_ agent: AgentKind, _ id: String) -> AgentSession {
             AgentSession(agent: agent, id: id, cwd: "/p", title: "t", named: false, createdAt: nil, updatedAt: Date(),

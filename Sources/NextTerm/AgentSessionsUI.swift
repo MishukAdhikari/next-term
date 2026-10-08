@@ -31,8 +31,18 @@ enum SessionStore {
             else { return nil }
             let line = status.expandedCommand.isEmpty ? status.command : status.command + " ; " + status.expandedCommand
             return RunningAgent(key: tab.id.uuidString, agent: agent, directory: tab.liveDirectory, commandLine: line,
-                                startedAt: Date().addingTimeInterval(since - TerminalTab.now))
+                                startedAt: startDate(of: tab, since: since))
         }
+    }
+
+    /// When the agents in tabs started, by the wall clock.
+    nonisolated(unsafe) static var agentStarts = AgentStarts()
+
+    /// When `tab`'s agent, which the tab saw start at `since` on its uptime clock, started by the wall clock:
+    /// worked out the first time it is asked (on the refresh right after the start) and kept, so a sleep
+    /// after that does not move it on.
+    static func startDate(of tab: TerminalTab, since: TimeInterval) -> Date {
+        agentStarts.date(of: tab.id.uuidString, since: since, uptime: TerminalTab.now)
     }
 
     /// "main", from .git/HEAD (a worktree's .git file points to its own HEAD). No git process.
