@@ -183,6 +183,8 @@ func json(_ result: MCPServer.CallResult) -> [String: Any] {
             "export OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuv",
             "DB_PASSWORD=s3cr3t-passw0rd",
             "  password: hunter2x",
+            "+  password: hunter2x", // a line a diff adds
+            "-DB_PASSWORD=s3cr3t-passw0rd",
             #"{"client_secret": "Zq8pL2vX9mN4"}"#,
             "git clone https://me:pa55word@github.com/me/repo.git",
             "auth: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmn",
@@ -193,7 +195,7 @@ func json(_ result: MCPServer.CallResult) -> [String: Any] {
             let (text, count) = MCPRedaction.redact(line)
             #expect(count >= 1 && text.contains(MCPRedaction.mask), "\(line) -> \(text)")
         }
-        #expect(!MCPRedaction.redact(cases[5]).text.contains("pa55word"))
+        #expect(!MCPRedaction.redact(cases[7]).text.contains("pa55word") && cases[7].contains("pa55word"))
     }
 
     @Test func codeStaysReadable() {
@@ -201,6 +203,7 @@ func json(_ result: MCPServer.CallResult) -> [String: Any] {
             "let token = try await session.getToken()",
             "tokenizer = \"bert-base\"",
             "password: String",
+            "+  password: String",
             "let secret = config.secret",
             "commit 3f786850e387550fdab836ed7e6dc881de23001b",
             "id: 123e4567-e89b-12d3-a456-426614174000",

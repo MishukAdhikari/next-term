@@ -159,10 +159,12 @@ public struct CommitQuery: Equatable, Sendable {
     }
 
     public var scope: Scope = .all
-    /// In the message, ignoring case: a fixed string, or an extended regular expression with `regex`.
-    /// A hash prefix that names a commit lists that commit alone.
+    /// In the message, ignoring case unless `matchCase`: a fixed string, or an extended regular expression
+    /// with `regex`. A hash prefix that names a commit lists that commit alone.
     public var text = ""
     public var regex = false
+    /// The text matches only in the case typed. The author still ignores case.
+    public var matchCase = false
     /// In "Name <email>", ignoring case, always a fixed string.
     public var author = ""
     /// The author is a whole name (picked from a list), not part of a name or an address: "Ann" is
@@ -174,11 +176,12 @@ public struct CommitQuery: Equatable, Sendable {
     /// From the work tree's root.
     public var paths: [String] = []
 
-    public init(scope: Scope = .all, text: String = "", regex: Bool = false, author: String = "", exactAuthor: Bool = false, since: String? = nil,
-                until: String? = nil, paths: [String] = []) {
+    public init(scope: Scope = .all, text: String = "", regex: Bool = false, matchCase: Bool = false, author: String = "", exactAuthor: Bool = false,
+                since: String? = nil, until: String? = nil, paths: [String] = []) {
         self.scope = scope
         self.text = text
         self.regex = regex
+        self.matchCase = matchCase
         self.author = author
         self.exactAuthor = exactAuthor
         self.since = since
@@ -214,22 +217,40 @@ public struct CommitQuery: Equatable, Sendable {
         return trimmed
     }
 
+    /// A pattern for `text` in either case, letter by letter ("Ann" → "[aA][nN][nN]"), everything else
+    /// escaped: an author that ignores case while the message matches it.
+    static func eitherCase(_ text: String) -> String {
+        text.map { character in
+            let lower = character.lowercased(), upper = character.uppercased()
+            guard lower != upper, lower.count == 1, upper.count == 1 else { return NSRegularExpression.escapedPattern(for: String(character)) }
+            return "[" + lower + upper + "]"
+        }.joined()
+    }
+
     /// The `git rev-list` options and revisions after `rev-list`: the ids the query lists, in order.
-    func arguments(includeHead: Bool) -> [String] {
+    /// Without `paths`, they end at "--" (the paths go on standard input, see CommitLog.order).
+    func arguments(includeHead: Bool, paths withPaths: Bool = true) -> [String] {
         var args = ["--topo-order"]
         let text = self.text.trimmingCharacters(in: .whitespaces), author = self.author.trimmingCharacters(in: .whitespaces)
-        // --fixed-strings covers --author as well, so with any regular expression (the text's, or the
-        // anchored one for a whole name) the other part is escaped instead.
+        // --regexp-ignore-case covers the author as well: matching the text's case, the author is a
+        // pattern that spells each letter both ways instead.
+        let ignoreCase = !matchCase || text.isEmpty
+        let caselessAuthor = !ignoreCase && !author.isEmpty
+        // --fixed-strings covers --author as well, so with any regular expression (the text's, the
+        // anchored one for a whole name, or the author's both ways) the other part is escaped instead.
         let exact = exactAuthor && !author.isEmpty
-        let patterns = (regex && !text.isEmpty) || exact
+        let patterns = (regex && !text.isEmpty) || exact || caselessAuthor
         let escape = { (part: String) in patterns ? NSRegularExpression.escapedPattern(for: part) : part }
         if !text.isEmpty || !author.isEmpty {
-            args.append("--regexp-ignore-case")
+            if ignoreCase { args.append("--regexp-ignore-case") }
             args.append(patterns ? "--extended-regexp" : "--fixed-strings")
         }
         if !text.isEmpty { args.append("--grep=" + (regex ? text : escape(text))) }
         // git matches the author against "Name <email> time zone".
-        if !author.isEmpty { args.append("--author=" + (exact ? "^" + escape(author) + " <" : escape(author))) }
+        if !author.isEmpty {
+            let name = caselessAuthor ? Self.eitherCase(author) : escape(author)
+            args.append("--author=" + (exact ? "^" + name + " <" : name))
+        }
         // git knows no "today", and versions differ on what they make of it (now, or the start of the
         // day), so it is never passed on: since today is since midnight, and until today is until now.
         if let since, !since.isEmpty {
@@ -247,7 +268,7 @@ public struct CommitQuery: Equatable, Sendable {
         case let .ref(name):
             args += ["--end-of-options", name]
         }
-        return args + ["--"] + paths
+        return args + ["--"] + (withPaths ? paths : [])
     }
 }
 
@@ -373,16 +394,34 @@ public enum CommitLog {
          "-c", "core.precomposeUnicode=true"]
     }
 
-    /// Runs git on `paths` composed, then, when a path beyond ASCII matched nothing, as stored: a name
-    /// a git that did not compose names added (an old one on HFS+) is stored decomposed, and composed it
-    /// matches nothing. The later `-c` wins.
+    /// Runs git on `paths` composed, then, when a path is beyond ASCII, as stored too, and keeps the run
+    /// that found more (`score`): a name a git that did not compose names added (an old one on HFS+) is
+    /// stored decomposed, and composed it matches nothing. A lone path that matched is as asked; beside
+    /// other paths that match, or across a rename to an ASCII name, the decomposed one may still be
+    /// missing, so then both runs are made. The later `-c` wins. For one file's diff, whose paths are
+    /// one name (two across a rename); the log's filter gives its paths both ways at once (`pathspecs`).
     private static func run(_ git: String, _ args: [String], paths: [String], in root: String, timeout: TimeInterval,
-                            environment: [String: String] = [:]) -> Data? {
+                            environment: [String: String] = [:], score: (Data) -> Int) -> Data? {
         guard let data = GitRunner.run(git, base(root) + args, timeout: timeout, environment: environment) else { return nil }
         let beyondASCII = paths.contains { path in path.unicodeScalars.contains { !$0.isASCII } }
-        guard data.isEmpty, beyondASCII else { return data }
+        guard beyondASCII, data.isEmpty || paths.count > 1 else { return data }
         let stored = base(root) + ["-c", "core.precomposeUnicode=false"] + args
-        return GitRunner.run(git, stored, timeout: timeout, environment: environment) ?? data
+        guard let other = GitRunner.run(git, stored, timeout: timeout, environment: environment), score(other) > score(data) else { return data }
+        return other
+    }
+
+    /// The paths for `git rev-list --stdin`: each as given and, beyond ASCII, decomposed too, so a name
+    /// stored either way is matched in one walk, beside names stored the other way. Standard input is
+    /// read as it is, never composed (Process decomposes arguments, and git composes them again).
+    static func pathspecs(_ paths: [String]) -> Data {
+        var lines = ["--"]
+        for path in paths {
+            lines.append(path.precomposedStringWithCanonicalMapping)
+            let decomposed = path.decomposedStringWithCanonicalMapping
+            // Swift's == takes both spellings as one: compare the bytes.
+            if Array(decomposed.utf8) != Array(path.precomposedStringWithCanonicalMapping.utf8) { lines.append(decomposed) }
+        }
+        return Data((lines.joined(separator: "\n") + "\n").utf8)
     }
 
     /// Every commit the query lists, in order, as ids; nil when git fails (not a repository, a bad
@@ -392,8 +431,11 @@ public enum CommitLog {
         if let prefix = query.hashPrefix, let sha = resolve(prefix, in: root, git: git) { return CommitOrder(ids: [sha]) }
         // HEAD only when there is a commit: on an unborn branch, naming it is an error.
         let hasHead = query.scope != .all || resolve("HEAD", in: root, git: git) != nil
-        guard let data = run(git, ["rev-list"] + query.arguments(includeHead: hasHead), paths: query.paths, in: root, timeout: timeout,
-                             environment: query.environment) else {
+        // Limited to paths, they go on standard input, both ways (`pathspecs`).
+        let args = query.paths.isEmpty ? ["rev-list"] + query.arguments(includeHead: hasHead)
+                                       : ["rev-list", "--stdin"] + query.arguments(includeHead: hasHead, paths: false)
+        let input = query.paths.isEmpty ? nil : pathspecs(query.paths)
+        guard let data = GitRunner.run(git, base(root) + args, timeout: timeout, environment: query.environment, input: input) else {
             // A repository without a single commit has nothing to list.
             return hasHead || query.scope != .all ? nil : CommitOrder(ids: [])
         }
@@ -540,7 +582,13 @@ public enum CommitLog {
                        "--src-prefix=a/", "--dst-prefix=b/"]
         let against = parent.map { ["--end-of-options", $0, commit] } ?? ["--root", "--end-of-options", commit]
         let paths = [oldPath, path].compactMap { $0 }
-        guard let data = run(git, ["diff-tree", "-r", "--no-commit-id"] + options + against + ["--"] + paths, paths: paths, in: root, timeout: 15) else { return nil }
+        // The run whose patches name more of the paths asked for (Swift's == takes both spellings as one).
+        let score = { (data: Data) -> Int in
+            let files = UnifiedDiff.parse(String(decoding: data, as: UTF8.self))
+            return paths.filter { wanted in files.contains { $0.oldPath == wanted || $0.newPath == wanted } }.count
+        }
+        guard let data = run(git, ["diff-tree", "-r", "--no-commit-id"] + options + against + ["--"] + paths, paths: paths, in: root, timeout: 15,
+                             score: score) else { return nil }
         return file(at: path, in: UnifiedDiff.parse(String(decoding: data, as: UTF8.self)))
     }
 

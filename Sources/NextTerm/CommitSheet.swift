@@ -3,7 +3,8 @@ import NextTermCore
 
 /// Commit…: the message, and exactly what goes in. What is staged if anything is (the rest stays out),
 /// else every change, with new files marked and files that look like secrets or are large called out
-/// before they are added. ⌘↩ commits; Commit and Push pushes after; Let Agent Commit asks the agent.
+/// before they are added. ⌘↩ commits; Commit and Push pushes after; Let Agent Commit asks the agent;
+/// Write with Agent fills the message from an agent CLI, for you to read and edit.
 final class CommitSheet: NSObject, NSTextViewDelegate {
     typealias Done = (_ message: String, _ files: [String]?, _ amend: Bool, _ andPush: Bool) -> Void
 
@@ -11,6 +12,15 @@ final class CommitSheet: NSObject, NSTextViewDelegate {
     private let window: NSWindow
     private let message: NSTextView
     private let hint = NSTextField(labelWithString: "")
+    private let writeButton = NSButton(title: "Write with Agent", target: nil, action: nil)
+    private let spinner = NSProgressIndicator()
+    private let writer: CommitWriter?
+    /// The agent writing the message now; Stop stops it.
+    private var writing: CommitMessageRun?
+    /// The agent that wrote the message in the field.
+    private var writtenBy: String?
+    /// Why the agent wrote nothing, until the message is edited.
+    private var writeProblem: String?
     private let amend = NSButton(checkboxWithTitle: "Amend last commit", target: nil, action: nil)
     private var commitButton: NSButton!
     private var pushButton: NSButton!
@@ -21,19 +31,21 @@ final class CommitSheet: NSObject, NSTextViewDelegate {
     private weak var parent: NSWindow?
 
     static func present(over controller: TerminalWindowController, branch: String?, staged: [String], changed: [String], untracked: Set<String>,
-                        onAgent: @escaping () -> Void, done: @escaping Done) {
+                        writer: CommitWriter?, onAgent: @escaping () -> Void, done: @escaping Done) {
         guard let parent = controller.window, shown == nil else { return }
         let sheet = CommitSheet(branch: branch, staged: staged, changed: changed, untracked: untracked, root: controller.sidebar.git.snapshot?.root,
-                                onAgent: onAgent, done: done)
+                                writer: writer, onAgent: onAgent, done: done)
         shown = sheet
         sheet.parent = parent
         parent.beginSheet(sheet.window) { _ in shown = nil }
         sheet.window.makeFirstResponder(sheet.message)
     }
 
-    private init(branch: String?, staged: [String], changed: [String], untracked: Set<String>, root: String?, onAgent: @escaping () -> Void, done: @escaping Done) {
+    private init(branch: String?, staged: [String], changed: [String], untracked: Set<String>, root: String?, writer: CommitWriter?,
+                 onAgent: @escaping () -> Void, done: @escaping Done) {
         files = staged.isEmpty ? changed : nil
         hasChanges = !staged.isEmpty || !changed.isEmpty
+        self.writer = writer
         self.done = done
         self.onAgent = onAgent
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 420), styleMask: [.titled], backing: .buffered, defer: false)
@@ -59,6 +71,24 @@ final class CommitSheet: NSObject, NSTextViewDelegate {
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
         Typography.singleLine(hint, truncation: .byTruncatingTail)
+        hint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // Write with Agent, beside the hint under the message: only when an agent CLI is installed.
+        writeButton.target = self
+        writeButton.action = #selector(writeWithAgent)
+        writeButton.controlSize = .small
+        writeButton.font = .systemFont(ofSize: 11)
+        writeButton.isHidden = writer == nil
+        if let writer {
+            writeButton.toolTip = "Asks \(writer.agent.name) to write the message from the changes below, for you to read and edit. "
+                + "Nothing is committed, and the changes go to \(writer.agent.name) and nowhere else, without files that usually hold secrets."
+        }
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isDisplayedWhenStopped = false
+        let hintSpacer = NSView()
+        hintSpacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        let hintRow = NSStackView(views: [hint, hintSpacer, spinner, writeButton])
+        hintRow.spacing = 6
 
         // What goes in.
         let shownFiles = staged.isEmpty ? changed : staged
@@ -113,13 +143,13 @@ final class CommitSheet: NSObject, NSTextViewDelegate {
         let buttons = NSStackView(views: [agent, spacer, cancel, pushButton, commitButton])
         buttons.spacing = 8
 
-        let stack = NSStackView(views: [title, scroll, hint, fileList, amend, buttons])
+        let stack = NSStackView(views: [title, scroll, hintRow, fileList, amend, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
         stack.setCustomSpacing(4, after: scroll)
         stack.edgeInsets = NSEdgeInsets(top: 18, left: 20, bottom: 16, right: 20)
-        for view in [scroll, buttons] {
+        for view in [scroll, hintRow, buttons] {
             view.translatesAutoresizingMaskIntoConstraints = false
             view.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
         }
@@ -128,13 +158,25 @@ final class CommitSheet: NSObject, NSTextViewDelegate {
         updateState()
     }
 
-    func textDidChange(_ notification: Notification) { updateState() }
+    func textDidChange(_ notification: Notification) {
+        writeProblem = nil
+        updateState()
+    }
 
     @objc private func updateState() {
         let text = message.string.trimmingCharacters(in: .whitespacesAndNewlines)
         let summary = text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
-        if summary.count > 72 {
+        hint.textColor = writeProblem == nil ? .secondaryLabelColor : Theme.failed
+        // Amending with nothing new, it describes the last commit again.
+        writeButton.isEnabled = hasChanges || amend.state == .on || writing != nil
+        if writing != nil, let writer {
+            hint.stringValue = "\(writer.agent.name) is writing the message…"
+        } else if let writeProblem {
+            hint.stringValue = writeProblem
+        } else if summary.count > 72 {
             hint.stringValue = "The first line is \(summary.count) characters; 72 or fewer reads best in logs."
+        } else if let writtenBy, !text.isEmpty {
+            hint.stringValue = "Written by \(writtenBy): read it, edit it, then commit."
         } else if text.isEmpty {
             hint.stringValue = amend.state == .on ? "Empty: the last commit keeps its message." : "A short summary line, then a blank line and the details."
         } else {
@@ -160,7 +202,44 @@ final class CommitSheet: NSObject, NSTextViewDelegate {
         onAgent()
     }
 
+    /// Asks the agent for a message (or, while it writes, stops it).
+    @objc private func writeWithAgent() {
+        if let writing { return writing.stop() }
+        guard let writer, hasChanges || amend.state == .on else { return }
+        writeProblem = nil
+        writeButton.title = "Stop"
+        spinner.startAnimation(nil)
+        writing = writer.start(amend: amend.state == .on) { [weak self] outcome in self?.written(outcome) }
+        updateState()
+    }
+
+    private func written(_ outcome: CommitMessageRun.Outcome) {
+        writing = nil
+        spinner.stopAnimation(nil)
+        writeButton.title = "Write with Agent"
+        let name = writer?.agent.name ?? "The agent"
+        switch outcome {
+        case let .message(text):
+            writtenBy = name
+            // One edit, so ⌘Z brings back what was there.
+            let all = NSRange(location: 0, length: (message.string as NSString).length)
+            if message.shouldChangeText(in: all, replacementString: text) {
+                message.replaceCharacters(in: all, with: text)
+                message.didChangeText()
+            }
+            window.makeFirstResponder(message)
+        case let .failed(why):
+            writeProblem = "\(name) didn’t write one: \(why)"
+        case .timedOut:
+            writeProblem = "\(name) didn’t answer within a minute."
+        case .stopped:
+            break
+        }
+        updateState()
+    }
+
     private func close() {
+        writing?.stop()
         parent?.endSheet(window)
         Self.shown = nil
     }
@@ -171,4 +250,46 @@ final class CommitSheet: NSObject, NSTextViewDelegate {
     func pressCommit() { if commitButton.isEnabled { commit() } }
     func setAmend(_ on: Bool) { amend.state = on ? .on : .off; updateState() }
     var fileListText: String { (window.contentView as? NSStackView)?.views.compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: "\n") ?? "" }
+    var messageText: String { message.string }
+    var hintText: String { hint.stringValue }
+    var canWriteWithAgent: Bool { !writeButton.isHidden && writeButton.isEnabled }
+    var isWriting: Bool { writing != nil }
+    func pressWriteWithAgent() { writeWithAgent() }
+    func pressCancel() { cancel() }
+}
+
+/// Write with Agent: the agent that writes the message, and what it is given to read.
+struct CommitWriter {
+    let agent: CommitMessageAgent
+    /// The agent's program.
+    let path: String
+    let root: String
+    /// Nothing staged: every change goes in, and these new files with it. Nil: what is staged.
+    let newFiles: [String]?
+
+    /// Reads what will be committed and asks the agent, off the main thread; `done` on the main thread.
+    /// `amend`: the new commit replaces the last one, so the agent reads that one's changes and message too.
+    func start(amend: Bool, _ done: @escaping (CommitMessageRun.Outcome) -> Void) -> CommitMessageRun {
+        let run = CommitMessageRun()
+        let agent = agent, path = path, root = root, newFiles = newFiles
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let git = GitWriter.git else { return DispatchQueue.main.async { done(.failed("git is not installed.")) } }
+            let last = amend ? CommitMessageAgent.lastMessage(at: root, git: git) : nil
+            let prompt = CommitMessageAgent.prompt(recentSubjects: CommitMessageAgent.recentSubjects(at: root, git: git), replacing: last)
+            let changes = CommitMessageAgent.changes(at: root, git: git, staged: newFiles == nil, newFiles: newFiles ?? [], amending: amend)
+            let outcome = run.run(agent, path: path, prompt: prompt, changes: changes, environment: Self.environment)
+            DispatchQueue.main.async { done(outcome) }
+        }
+        return run
+    }
+
+    /// The login shell's PATH, where agents are installed, without what another program's session or git
+    /// left behind.
+    static var environment: [String: String] {
+        var env = TerminalEnvironment.clean(ProcessInfo.processInfo.environment).filter { !$0.key.hasPrefix("GIT_") }
+        env["PATH"] = LoginShell.path.joined(separator: ":")
+        env["NO_COLOR"] = "1"
+        env["DISABLE_AUTOUPDATER"] = "1"
+        return env
+    }
 }

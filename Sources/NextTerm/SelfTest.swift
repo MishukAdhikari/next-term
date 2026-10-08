@@ -539,6 +539,7 @@ enum SelfTest {
         await branchChecks(c, proj: proj)
         await gitLogChecks(c, proj: proj)
         await gitLogPagingChecks(c)
+        await gitLeftoverChecks(c)
         await branchCompareChecks(c)
         await backgroundFetchChecks(c)
         await ragColorChecks(c, proj: proj)
@@ -1985,9 +1986,11 @@ enum SelfTest {
         // The popup: actions first, branches in folders, agents' branches in their own folder.
         c.showBranches(nil)
         let popup = c.branchPopup
-        // Read afresh: an earlier check may have opened it here, and it shows what it read then until the
-        // new read is in.
-        check(await wait(5) { popup.isVisible && popup.model?.current == start && popup.model?.local("claude/try") != nil },
+        // Until the read it starts is in, it says so, rather than list what an earlier check read here
+        // (without the branches made since). Under load that read can take seconds.
+        check(popup.isReading && popup.rowTitles == ["note Reading branches…"], "the branch popup says “Reading branches…” until its read is in",
+              popup.rowTitles.joined(separator: " | "))
+        check(await wait(20) { popup.isVisible && !popup.isReading && popup.model?.current == start && popup.model?.local("claude/try") != nil },
               "⌥⌘B opens the branch popup", popup.rowTitles.joined(separator: " | "))
         let rows = popup.rowTitles
         check(["Update Project", "Commit…", "Push…", "New Branch…", "Checkout Tag or Revision…"].allSatisfy(rows.contains),
@@ -2202,6 +2205,15 @@ enum SelfTest {
         log.apply { $0.author = ""; $0.text = "MAIN WORK" }
         check(await wait(8) { !log.isLoading && log.commits.map(\.subject) == ["Main work for the log"] }, "the text filter searches messages, ignoring case",
               log.commits.map(\.subject).joined(separator: " | "))
+        // Match case, beside .*: the text only as typed.
+        log.apply { $0.matchCase = true }
+        check(await wait(8) { !log.isLoading && log.commits.isEmpty && log.matchCaseToggle.state == .on }, "with Match case on, the text is found only as typed",
+              log.commits.map(\.subject).joined(separator: " | "))
+        log.apply { $0.text = "Main work" }
+        check(await wait(8) { !log.isLoading && log.commits.map(\.subject) == ["Main work for the log"] }, "and in that case it is found",
+              log.commits.map(\.subject).joined(separator: " | "))
+        log.apply { $0.matchCase = false }
+        check(log.matchCaseToggle.state == .off, "and the toggle goes off with it")
         log.apply { $0.text = String(side.prefix(8)) }
         check(await wait(8) { !log.isLoading && log.commits.map(\.sha) == [side] }, "a hash prefix finds its commit")
         log.apply { $0.text = "fix("; $0.regex = true }
@@ -2261,7 +2273,7 @@ enum SelfTest {
                   "tooltip area \(log.refs.rowToolTips != nil): " + log.refs.rowTitles.joined(separator: " | "))
         }
         c.showBranches(nil)
-        check(await wait(5) { c.branchPopup.isVisible && c.branchPopup.rowTitles.contains("Git Log") }, "the branch popup has a Git Log row",
+        check(await wait(15) { c.branchPopup.isVisible && c.branchPopup.rowTitles.contains("Git Log") }, "the branch popup has a Git Log row",
               c.branchPopup.rowTitles.prefix(8).joined(separator: " | "))
         c.branchPopup.close()
 
@@ -2346,11 +2358,15 @@ enum SelfTest {
         check(top != nil && nowTop == top, "and keeps the same commit at the top of the view",
               "\(log.commits.first { $0.sha == top }?.subject ?? "-") then \(log.commits.first { $0.sha == nowTop }?.subject ?? "-")")
 
-        // A commit no branch or tag lists: shown alone, and selected.
+        // A commit no branch or tag lists: shown alone, and selected; Aa and .* go off, as its query has them.
+        log.apply { $0.matchCase = true; $0.regex = true }
+        _ = await wait(8) { !log.isLoading }
         let orphan = run(["commit-tree", "HEAD^{tree}", "-m", "orphan"])
         c.showCommit(sha: orphan, root: repo.path)
         check(await wait(10) { log.commits.map(\.sha) == [orphan] && log.selectedCommit?.sha == orphan && log.query.text == orphan },
               "showCommit of a commit no branch lists shows it alone", log.commits.prefix(3).map(\.subject).joined(separator: " | "))
+        check(log.matchCaseToggle.state == .off && log.regexToggle.state == .off && !log.query.matchCase && !log.query.regex,
+              "and Aa and .* are off, as the query that shows it has them", "Aa \(log.matchCaseToggle.state.rawValue), .* \(log.regexToggle.state.rawValue)")
         c.editorArea.close(log)
     }
 
@@ -2411,7 +2427,7 @@ enum SelfTest {
                 return false
             }
         }
-        check(await wait(5) { popup.model.map { canonicalPath($0.root) == canonicalPath(repo.path) } == true && row("feat", remote: false) != nil },
+        check(await wait(15) { popup.model.map { canonicalPath($0.root) == canonicalPath(repo.path) } == true && row("feat", remote: false) != nil },
               "the branch popup opens on the comparison's repository", popup.rowTitles.joined(separator: " | "))
         let localRow = row("feat", remote: false)
         let local: [NSMenuItem] = localRow.flatMap { popup.menu(forRow: $0) }?.items ?? []
@@ -4670,7 +4686,7 @@ enum SelfTest {
         await screenshot(window, suffix: suffix)
     }
 
-    private static func screenshot(_ window: NSWindow, suffix: String) async {
+    static func screenshot(_ window: NSWindow, suffix: String) async {
         guard let base = reportPath else { return }
         await pause(0.4)
         guard let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber),

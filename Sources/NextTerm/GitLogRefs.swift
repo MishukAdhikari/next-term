@@ -268,6 +268,10 @@ final class GitRefCell: NSTableCellView {
     private var iconWidth: NSLayoutConstraint!
     /// The row's tooltip, shown by the tree for rows in view (see RowToolTips).
     private(set) var tipText = ""
+    /// For the self-test: the name as drawn, with its paragraph style, and where the name and detail are.
+    var titleText: NSAttributedString { title.attributedStringValue }
+    var titleFrame: NSRect { title.frame }
+    var detailFrame: NSRect { detail.frame }
 
     init() {
         super.init(frame: .zero)
@@ -315,14 +319,16 @@ final class GitRefCell: NSTableCellView {
         icon.contentTintColor = tint
         icon.isHidden = symbol == nil
         iconWidth.constant = symbol == nil ? 0 : 14
+        // Attributed text keeps the label's truncation only with a paragraph style of its own (Theme.swift):
+        // names are cut in the middle, so both ends show.
         if node.kind == .group {
-            title.attributedStringValue = NSAttributedString(string: node.title.uppercased(), attributes: [
+            title.attributedStringValue = Typography.truncating(NSAttributedString(string: node.title.uppercased(), attributes: [
                 .font: NSFont.systemFont(ofSize: 10.5, weight: .semibold), .foregroundColor: Theme.textDim, .kern: 0.6,
-            ])
+            ]), .byTruncatingTail)
         } else {
-            title.attributedStringValue = NSAttributedString(string: node.title, attributes: [
+            title.attributedStringValue = Typography.truncating(NSAttributedString(string: node.title, attributes: [
                 .font: NSFont.systemFont(ofSize: 12.5, weight: node.isCurrent || node.kind == .folder ? .medium : .regular), .foregroundColor: Theme.text,
-            ])
+            ]), .byTruncatingMiddle)
         }
         detail.stringValue = node.detail
         tipText = node.ref.map { $0 == "HEAD" ? "HEAD: " + node.detail : $0 } ?? ""

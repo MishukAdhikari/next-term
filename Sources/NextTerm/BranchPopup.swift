@@ -61,12 +61,32 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         }
     }
 
+    /// A worktree as its row shows it: the agents working in it (Next Term tabs, with their state), and
+    /// whether the process its lock names still runs.
+    struct WorktreeRow {
+        struct Agent {
+            let name: String
+            let state: TabState
+            let tab: String
+        }
+        let worktree: Worktree
+        let agents: [Agent]
+        /// The process in the lock's reason; nil when the reason names none (or it isn't locked).
+        let holder: LockHolder?
+        let holderAlive: Bool
+
+        /// Locked by a process that has ended.
+        var isStale: Bool { holder != nil && !holderAlive }
+        var folder: String { (worktree.path as NSString).lastPathComponent }
+    }
+
     enum Item {
         case header(String)
         case action(Action, hint: String, enabled: Bool)
         case folder(id: String, title: String, count: Int, depth: Int)
         case branch(BranchRef, label: String, depth: Int, positions: [Int])
-        case worktree(Worktree)
+        case worktree(WorktreeRow)
+        case tag(String, positions: [Int])
         case create(String)
         case revision(String)
         case note(String)
@@ -76,6 +96,14 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             case .header, .note: return false
             case let .action(_, _, enabled): return enabled
             default: return true
+            }
+        }
+
+        /// The row ends in › for its menu.
+        var hasMenuMark: Bool {
+            switch self {
+            case .branch, .tag: return true
+            default: return false
             }
         }
     }
@@ -92,6 +120,17 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
     private var openFolders: Set<String> = []
     private var directory = ""
     private var snapshot: GitSnapshot?
+    /// The read started as the popup opened is not in yet: until it is, the popup says "Reading
+    /// branches…" rather than list what an earlier read found (missing branches made since, by you or an
+    /// agent).
+    private(set) var isReading = false
+    /// Counts the popup's openings: only the read the latest one started ends `isReading`.
+    private var openings = 0
+    /// The last read came back with nothing: not a repository any more, or git failed.
+    private var readFailed = false
+    /// Tag names, newest first, read on the first search of an opening (nil until then).
+    private(set) var tags: [String]?
+    private var readingTags = false
     private static let readQueue = DispatchQueue(label: "nextterm.branches", qos: .userInitiated)
     static let rowHeight: CGFloat = 26
     static let width: CGFloat = 440
@@ -125,8 +164,16 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         if panel.parent == nil { parent.addChildWindow(panel, ordered: .above) }
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(field)
+        isReading = GitWriter.git != nil
+        tags = nil
+        openings += 1
+        let opening = openings
         rebuild()
-        reload()
+        reload { [weak self] in
+            guard let self, self.isReading, opening == self.openings else { return }
+            self.isReading = false
+            if self.panel.isVisible { self.rebuild() }
+        }
         // It draws first; if the last fetch is over five minutes old, a background fetch brings the counts up to date.
         BackgroundFetcher.shared.popupOpened(directory: directory)
     }
@@ -139,7 +186,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
     /// For the Git menu: the model for `directory`, read fresh, without opening the popup.
     func prepare(for controller: TerminalWindowController, directory: String, snapshot: GitSnapshot?, then body: @escaping () -> Void) {
         window = controller
-        if canonicalPath(self.directory) != canonicalPath(directory) { model = nil; openFolders = [] }
+        if canonicalPath(self.directory) != canonicalPath(directory) { model = nil; openFolders = []; tags = nil }
         self.directory = directory
         self.snapshot = snapshot
         reload(then: body)
@@ -162,7 +209,10 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             case let .action(action, _, _): return action.title
             case let .folder(_, title, count, _): return "▸ \(title) \(count)"
             case let .branch(ref, label, _, _): return (ref.isHead ? "✓ " : "") + (ref.isRemote ? "remote " : "") + label
-            case let .worktree(w): return "worktree " + (w.path as NSString).lastPathComponent
+            case let .worktree(row):
+                let agents = row.agents.map { " · \($0.name): \(Self.words(for: $0.state))" }.joined()
+                return "worktree " + row.folder + (row.isStale ? " (stale lock)" : "") + agents
+            case let .tag(name, _): return "tag " + name
             case let .create(name): return "new " + name
             case let .revision(rev): return "revision " + rev
             case let .note(text): return "note " + text
@@ -186,6 +236,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
                     self.openFolders.insert(BranchModel.isAgentBranch(current, worktree: nil) ? "local:agents" : "local:" + folder)
                 }
                 self.model = fresh
+                self.readFailed = fresh == nil
                 if self.panel.isVisible { self.rebuild() }
                 done?()
             }
@@ -214,13 +265,21 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         case let .action(action, _, _): return "action:\(action)"
         case let .folder(id, _, _, _): return "folder:" + id
         case let .branch(ref, _, _, _): return (ref.isRemote ? "remote:" : "local:") + ref.name
-        case let .worktree(w): return "worktree:" + w.path
+        case let .worktree(row): return "worktree:" + row.worktree.path
+        case let .tag(name, _): return "tag:" + name
         default: return nil
         }
     }
 
+    /// While the first read is out, or when it found nothing, the one row that says so.
+    private var waitingNote: Item? {
+        if isReading || (model == nil && !readFailed) { return .note("Reading branches…") }
+        return model == nil ? .note("Git could not read the branches here.") : nil
+    }
+
     private func actionItems() -> [Item] {
-        guard let model else { return [.note("Reading branches…")] }
+        if let waitingNote { return [waitingNote] }
+        guard let model else { return [] }
         var rows: [Item] = []
         if let progress = model.inProgress {
             rows.append(.header(progress.title))
@@ -245,7 +304,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
 
     private func browseItems() -> [Item] {
         var rows = actionItems()
-        guard let model else { return rows }
+        guard waitingNote == nil, let model else { return rows }
         if model.current == nil, let sha = model.headSHA {
             rows.insert(.note("Detached at \(sha.prefix(7)): New Branch… keeps work made here"), at: 0)
         }
@@ -281,7 +340,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         let worktrees = model.worktrees.filter { !$0.isBare && canonicalPath($0.path) != canonicalPath(model.root) }
         if !worktrees.isEmpty {
             rows.append(.header("Worktrees"))
-            rows += worktrees.map { .worktree($0) }
+            rows += worktreeRows(worktrees, in: model)
         }
         if !model.remotes.isEmpty {
             rows.append(.header("Remote"))
@@ -296,7 +355,8 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
     }
 
     private func searchItems(_ query: String) -> [Item] {
-        guard let model else { return [.note("Reading branches…")] }
+        if let waitingNote { return [waitingNote] }
+        guard let model else { return [] }
         var rows: [Item] = []
         // Actions: by title and the other words people use for them.
         let actions = actionItems().filter {
@@ -314,21 +374,81 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         let worktrees = model.worktrees.filter { w in
             !w.isBare && FuzzyIndex(paths: [w.path + " " + (w.branch ?? "")]).search(query)?.isEmpty == false && canonicalPath(w.path) != canonicalPath(model.root)
         }
-        if !worktrees.isEmpty { rows.append(.header("Worktrees")); rows += worktrees.map { .worktree($0) } }
+        if !worktrees.isEmpty { rows.append(.header("Worktrees")); rows += worktreeRows(worktrees, in: model) }
         let remotes = matches(model.remotes)
         if !remotes.isEmpty { rows.append(.header("Remote")); rows += remotes }
+        let tagRows = matchingTags(query)
+        if !tagRows.isEmpty { rows.append(.header("Tags")); rows += tagRows }
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         let name = BranchName.suggest(from: trimmed)
         if model.local(name) == nil, BranchName.problem(name, existing: Set(model.locals.map(\.name))) == nil {
             rows.append(.header("New"))
             rows.append(.create(name))
         }
-        if !trimmed.contains(" ") { rows.append(.revision(trimmed)) }
+        // A tag of exactly that name has its own row.
+        if !trimmed.contains(" "), tags?.contains(trimmed) != true { rows.append(.revision(trimmed)) }
         return rows
     }
 
+    /// The tags the query finds, best first; the first search of an opening reads them, and the rows
+    /// come when they are in.
+    private func matchingTags(_ query: String) -> [Item] {
+        guard let tags else {
+            readTags()
+            return []
+        }
+        let index = FuzzyIndex(paths: tags)
+        guard let found = index.search(query) else { return [] }
+        return index.sorted(found, limit: 30).map { .tag(tags[$0.index], positions: index.positions(of: query, in: $0.index)) }
+    }
+
+    private func readTags() {
+        guard !readingTags, let git = GitWriter.git else { return }
+        readingTags = true
+        let directory = self.directory
+        Self.readQueue.async { [weak self] in
+            let names = CommitLog.tags(in: directory, git: git)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.readingTags = false
+                guard canonicalPath(self.directory) == canonicalPath(directory) else { return }
+                self.tags = names
+                if self.panel.isVisible, !self.field.stringValue.trimmingCharacters(in: .whitespaces).isEmpty { self.rebuild() }
+            }
+        }
+    }
+
+    /// Worktrees' rows: the agent tabs whose folder is in each (and not in a worktree nested inside it),
+    /// and whether the process its lock names still runs.
+    private func worktreeRows(_ worktrees: [Worktree], in model: BranchModel) -> [Item] {
+        // Each agent tab's worktree, found once.
+        let tabs = AppDelegate.shared.controllers.flatMap(\.tabs).filter { $0.remote == nil && $0.status.running && $0.status.kind == .agent }
+        var agentsByPath: [String: [WorktreeRow.Agent]] = [:]
+        for tab in tabs {
+            guard let worktree = model.worktree(containing: tab.liveDirectory) else { continue }
+            let agent = WorktreeRow.Agent(name: AgentName.of(program: tab.status.program), state: tab.status.state, tab: tab.title)
+            agentsByPath[canonicalPath(worktree.path), default: []].append(agent)
+        }
+        return worktrees.map { worktree in
+            let agents = agentsByPath[canonicalPath(worktree.path)] ?? []
+            let holder = worktree.lockReason.flatMap(LockHolder.parse)
+            return .worktree(WorktreeRow(worktree: worktree, agents: agents, holder: holder, holderAlive: holder?.isAlive() ?? false))
+        }
+    }
+
+    /// A tab's state in words, for tooltips and the self-test.
+    static func words(for state: TabState) -> String {
+        switch state {
+        case .working: return "working"
+        case .done: return "done"
+        case .failed: return "failed"
+        case .attention: return "needs your decision"
+        case .idle: return "idle"
+        }
+    }
+
     private func updateFooter() {
-        guard let model else { footer.stringValue = ""; return }
+        guard !isReading, let model else { footer.stringValue = ""; return }
         let ahead = model.currentRef.map { r in r.upstream.map { "tracking \($0)" } ?? "not published" } ?? "detached"
         footer.stringValue = "\(model.current ?? "HEAD") · \(ahead) · \(model.locals.count) local, \(model.remotes.count) remote"
     }
@@ -344,6 +464,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         case #selector(NSResponder.pageDown(_:)), #selector(NSResponder.scrollPageDown(_:)): move(by: 12)
         case #selector(NSResponder.pageUp(_:)), #selector(NSResponder.scrollPageUp(_:)): move(by: -12)
         case #selector(NSResponder.insertNewline(_:)): activate(row: table.selectedRow)
+        case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)): checkoutAndUpdate(row: table.selectedRow)
         case #selector(NSResponder.insertTab(_:)): showMenu(row: table.selectedRow)
         case #selector(NSResponder.moveRight(_:)):
             // In the search field → moves the caret; at its end it opens the row's menu.
@@ -383,19 +504,42 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         switch event.charactersIgnoringModifiers {
         case "r": perform(.fetch)
         case "c":
-            guard case let .branch(ref, _, _, _)? = item else { return false }
-            copy(ref.name)
+            switch item {
+            case let .branch(ref, _, _, _)?: copy(ref.name)
+            case let .tag(name, _)?: copy(name)
+            case let .worktree(row)?: copy(row.worktree.path)
+            default: return false
+            }
         case "\r":
-            guard case let .branch(ref, _, _, _)? = item else { return false }
-            close()
-            GitActions(self).newBranch(from: ref)
+            switch item {
+            case let .branch(ref, _, _, _)?:
+                close()
+                GitActions(self).newBranch(from: ref)
+            case let .tag(name, _)?:
+                close()
+                GitActions(self).newBranch(fromTag: name)
+            default: return false
+            }
         case "\u{7F}":
-            guard case let .branch(ref, _, _, _)? = item, !ref.isRemote else { return false }
+            // A local branch goes at once (with Undo); one on a remote only after asking.
+            guard case let .branch(ref, _, _, _)? = item, !ref.isHead else { return false }
             close()
-            GitActions(self).delete(ref)
+            if ref.isRemote { GitActions(self).deleteOnRemote(ref) } else { GitActions(self).delete(ref) }
         default: return false
         }
         return true
+    }
+
+    /// ⌥↩: Checkout and Update, on a local branch that is behind its upstream; elsewhere as ↩.
+    private func checkoutAndUpdate(row: Int) {
+        guard case let .branch(ref, _, _, _)? = items[safe: row], let model, canCheckoutAndUpdate(ref, in: model) else { return activate(row: row) }
+        close()
+        GitActions(self).checkoutAndUpdate(ref)
+    }
+
+    /// A local branch, not the current one, checked out nowhere else, and behind the upstream it tracks.
+    private func canCheckoutAndUpdate(_ ref: BranchRef, in model: BranchModel) -> Bool {
+        !ref.isRemote && !ref.isHead && ref.behind > 0 && model.otherWorktree(of: ref) == nil && model.upstream(of: ref) != nil
     }
 
     // MARK: doing
@@ -403,8 +547,8 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
     @objc private func clicked() {
         let row = table.clickedRow
         guard items.indices.contains(row) else { return }
-        // The › at a branch row's end opens its menu; anywhere else, the default action.
-        if let event = NSApp.currentEvent, case .branch = items[row] {
+        // The › at a branch or tag row's end opens its menu; anywhere else, the default action.
+        if let event = NSApp.currentEvent, items[row].hasMenuMark {
             let point = table.convert(event.locationInWindow, from: nil)
             if point.x > table.bounds.width - 28 { return showMenu(row: row) }
         }
@@ -423,9 +567,12 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             close()
             if !ref.isRemote, let elsewhere = model.otherWorktree(of: ref) { return GitActions(self).openWorktree(elsewhere) }
             GitActions(self).checkout(ref)
-        case let .worktree(w):
+        case let .worktree(row):
             close()
-            GitActions(self).openWorktree(w.path)
+            GitActions(self).openWorktree(row.worktree.path)
+        case let .tag(name, _):
+            close()
+            GitActions(self).checkoutTag(name)
         case let .create(name):
             close()
             GitActions(self).createBranch(name, base: nil, switching: true)
@@ -496,10 +643,16 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             add("Copy Name") { self.copy(ref.name) }
         case let .branch(ref, _, _, _) where !ref.isRemote:
             let elsewhere = model.otherWorktree(of: ref)
+            let tracking = model.upstream(of: ref)
             if let elsewhere {
                 add("Open Worktree") { actions.openWorktree(elsewhere) }
             } else {
                 add("Checkout") { actions.checkout(ref) }
+            }
+            if canCheckoutAndUpdate(ref, in: model), let tracking {
+                add("Checkout and Update", tip: "Switches to it, then brings it up to \(tracking.remote)/\(tracking.branch) (↓\(ref.behind)). ⌥↩") {
+                    actions.checkoutAndUpdate(ref)
+                }
             }
             add("New Branch from “\(ref.name)”…") { actions.newBranch(from: ref) }
             add("Show History") { self.showHistory(of: ref) }
@@ -511,9 +664,13 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
                 add("Merge “\(ref.name)” into “\(current)”") { actions.merge(ref.name) }
                 menu.addItem(.separator())
             }
+            let held = elsewhere.map { "It is checked out in \(RecentProjects.abbreviate($0))." }
+            if let tracking {
+                // Fetched into, forward only: it can't be checked out anywhere.
+                add("Update “\(ref.name)” from \(tracking.remote)/\(tracking.branch)", enabled: elsewhere == nil, tip: held) { actions.update(ref) }
+            }
             add(ref.upstream == nil ? "Publish “\(ref.name)”…" : "Push “\(ref.name)”…") { actions.push(branch: ref) }
             menu.addItem(.separator())
-            let held = elsewhere.map { "It is checked out in \(RecentProjects.abbreviate($0))." }
             add("Rename…", enabled: elsewhere == nil, tip: held) { actions.rename(ref) }
             add("Delete…", enabled: elsewhere == nil, tip: held) { actions.delete(ref) }
             add("Copy Name") { self.copy(ref.name) }
@@ -529,12 +686,33 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
                 add("Merge “\(ref.name)” into “\(current)”") { actions.merge(ref.name) }
             }
             menu.addItem(.separator())
+            // Off for a shared branch, as force push is: the reason as the tooltip.
+            let parts = model.remoteAndBranch(of: ref.name)
+            let shared = parts.map { model.isShared($0.branch, on: $0.remote) } ?? true
+            let why = parts.map { "\($0.branch) is shared: \($0.remote)’s default branch, main, master and release/* are never deleted from here." }
+            add("Delete on Remote…", enabled: !shared, tip: shared ? why : nil) { actions.deleteOnRemote(ref) }
             add("Copy Name") { self.copy(ref.name) }
-        case let .worktree(w):
+        case let .tag(name, _):
+            add("Checkout “\(name)” (detached)") { actions.checkoutTag(name) }
+            add("New Branch from “\(name)”…") { actions.newBranch(fromTag: name) }
+            add("Show History") { self.showHistory(of: "refs/tags/" + name) }
+            menu.addItem(.separator())
+            add("Copy Name") { self.copy(name) }
+        case let .worktree(row):
+            let w = row.worktree
             add("Open in New Tab") { actions.openWorktree(w.path) }
             add("Open as Project") { _ = AppDelegate.shared.openFolder(w.path, newWindow: true) }
             add("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: w.path)]) }
             add("Copy Path") { self.copy(w.path) }
+            if w.lockReason != nil {
+                menu.addItem(.separator())
+                let live = row.holder.map { "\(AgentName.of(program: $0.program)) (pid \($0.pid)) still holds it." }
+                if row.holder != nil, row.holderAlive {
+                    add("Unlock", enabled: false, tip: live) {}
+                } else {
+                    add(row.isStale ? "Unlock" : "Unlock…") { actions.unlock(w, stale: row.isStale) }
+                }
+            }
         default:
             return nil
         }
@@ -542,9 +720,12 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
     }
 
     /// The Git Log, showing one branch.
-    private func showHistory(of ref: BranchRef) {
+    private func showHistory(of ref: BranchRef) { showHistory(of: ref.fullName) }
+
+    /// The Git Log, showing one branch or tag by its full name.
+    private func showHistory(of fullName: String) {
         guard let root = model?.root else { return }
-        window?.openGitLog(root: root)?.show(ref: (ref.isRemote ? "refs/remotes/" : "refs/heads/") + ref.name)
+        window?.openGitLog(root: root)?.show(ref: fullName)
     }
 
     private func copy(_ text: String) {
@@ -743,6 +924,10 @@ final class BranchCell: NSTableCellView {
             addSubview(view)
         }
         leading = icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14)
+        // A worktree's detail is long (branch, stale lock, agents): against a long folder name it keeps 40%
+        // of the row (less if it needs less), and beyond that it is cut first (see show(_:chosen:)).
+        detailRoom = detail.widthAnchor.constraint(greaterThanOrEqualTo: widthAnchor, multiplier: 0.4)
+        detailRoom.priority = .init(251)
         NSLayoutConstraint.activate([
             leading,
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -759,12 +944,24 @@ final class BranchCell: NSTableCellView {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     private var leading: NSLayoutConstraint!
+    private var detailRoom: NSLayoutConstraint!
     private var shown: (BranchPopupController.Item, BranchModel?)?
     /// The row's tooltip, shown by the popup for rows in view (see RowToolTips).
     private(set) var tipText = ""
 
     override var backgroundStyle: NSView.BackgroundStyle {
         didSet { if let shown, backgroundStyle != oldValue { show(shown.0, model: shown.1) } }
+    }
+
+    /// For the self-test: the name as drawn, with its paragraph style, and where the name and detail are.
+    var titleText: NSAttributedString { title.attributedStringValue }
+    var titleFrame: NSRect { title.frame }
+    var detailFrame: NSRect { detail.frame }
+
+    /// Attributed text keeps the label's truncation only with a paragraph style of its own (Theme.swift):
+    /// names are cut in the middle, so both ends show; notes and headings at the end.
+    private func setTitle(_ text: NSAttributedString, _ mode: NSLineBreakMode = .byTruncatingMiddle) {
+        title.attributedStringValue = Typography.truncating(text, mode)
     }
 
     private func symbol(_ name: String, _ color: NSColor = Theme.textDim) {
@@ -781,19 +978,22 @@ final class BranchCell: NSTableCellView {
         detail.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         detail.textColor = chosen ? Theme.text : Theme.textDim
         detail.stringValue = ""
+        detail.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+        detailRoom.isActive = false
         icon.isHidden = false
         leading.constant = 14
         tipText = ""
+        spoken = nil
         switch item {
         case let .header(text):
             icon.isHidden = true
             leading.constant = 0
-            title.attributedStringValue = NSAttributedString(string: text.uppercased(), attributes: [
+            setTitle(NSAttributedString(string: text.uppercased(), attributes: [
                 .font: NSFont.systemFont(ofSize: 10.5, weight: .semibold), .foregroundColor: Theme.textDim, .kern: 0.6,
-            ])
+            ]), .byTruncatingTail)
         case let .note(text):
             symbol("info.circle")
-            title.attributedStringValue = NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: Theme.textDim])
+            setTitle(NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: Theme.textDim]), .byTruncatingTail)
         case let .action(action, hint, enabled):
             symbol(action.symbol, enabled ? Theme.accent : Theme.textDim)
             title.stringValue = action.title
@@ -803,23 +1003,12 @@ final class BranchCell: NSTableCellView {
             let open = (superview?.superview as? NSTableView).flatMap { ($0.delegate as? BranchPopupController)?.isOpen(id) } ?? false
             symbol(open ? "chevron.down" : "chevron.right")
             leading.constant = 14 + CGFloat(depth) * 16
-            title.attributedStringValue = NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium), .foregroundColor: Theme.text])
+            setTitle(NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium), .foregroundColor: Theme.text]))
             detail.stringValue = "\(count)"
         case let .branch(ref, label, depth, positions):
             leading.constant = 14 + CGFloat(depth) * 16
             symbol(ref.isHead ? "checkmark" : (ref.isRemote ? "cloud" : "arrow.triangle.branch"), ref.isHead ? Theme.done : Theme.textDim)
-            let text = NSMutableAttributedString(string: label, attributes: [.font: font, .foregroundColor: Theme.text])
-            let offset = label.utf8.count - ref.name.utf8.count // positions are in the full name
-            let bytes = Array(label.utf8)
-            for p in positions {
-                let i = p + offset
-                guard i >= 0, i < bytes.count else { continue }
-                let start = String(decoding: bytes[..<i], as: UTF8.self).utf16.count
-                let length = String(decoding: bytes[i...i], as: UTF8.self).utf16.count
-                text.addAttributes([.font: NSFont.systemFont(ofSize: 13, weight: .bold), .foregroundColor: chosen ? NSColor.white : NSColor(hex: 0x6EA4F7)],
-                                   range: NSRange(location: start, length: length))
-            }
-            title.attributedStringValue = text
+            setTitle(matched(label, of: ref.name, positions: positions, font: font, chosen: chosen))
             var parts: [String] = []
             if ref.upstreamGone { parts.append("gone") }
             if ref.behind > 0 { parts.append("↓\(ref.behind)") }
@@ -836,19 +1025,83 @@ final class BranchCell: NSTableCellView {
             }
             if let worktree = ref.worktree { tip += ". Checked out in \(RecentProjects.abbreviate(worktree))" }
             tipText = tip + "."
-        case let .worktree(w):
-            symbol(w.lockReason != nil ? "lock" : "folder")
-            title.stringValue = (w.path as NSString).lastPathComponent
-            detail.stringValue = (w.branch ?? "detached @" + String((w.head ?? "").prefix(7))) + (w.isPrunable ? "  missing" : "")
-            tipText = RecentProjects.abbreviate(w.path) + (w.lockReason.map { "\nLocked" + ($0.isEmpty ? "" : ": \($0)") } ?? "")
+        case let .worktree(row):
+            show(row, chosen: chosen)
+        case let .tag(name, positions):
+            symbol("tag")
+            setTitle(matched(name, of: name, positions: positions, font: font, chosen: chosen))
+            detail.stringValue = "›"
+            tipText = "Tag \(name). ↩ checks it out, detached."
         case let .create(name):
             symbol("plus", Theme.accent)
-            title.attributedStringValue = NSAttributedString(string: "New Branch “\(name)”", attributes: [.font: font, .foregroundColor: Theme.text])
+            setTitle(NSAttributedString(string: "New Branch “\(name)”", attributes: [.font: font, .foregroundColor: Theme.text]))
         case let .revision(rev):
             symbol("tag")
-            title.attributedStringValue = NSAttributedString(string: "Checkout “\(rev)” (tag or revision)", attributes: [.font: font, .foregroundColor: Theme.text])
+            setTitle(NSAttributedString(string: "Checkout “\(rev)” (tag or revision)", attributes: [.font: font, .foregroundColor: Theme.text]))
         }
-        setAccessibilityLabel([title.stringValue, detail.stringValue].filter { !$0.isEmpty }.joined(separator: ", "))
+        setAccessibilityLabel(spoken ?? [title.stringValue, detail.stringValue].filter { !$0.isEmpty }.joined(separator: ", "))
+    }
+
+    /// What VoiceOver says for a row whose detail has status marks (pictures): the words instead.
+    private var spoken: String?
+
+    /// The name with the letters the search matched in bold. `positions` are UTF-8 offsets in `name`, of
+    /// which `label` is the end (a branch in a folder shows without its folder).
+    private func matched(_ label: String, of name: String, positions: [Int], font: NSFont, chosen: Bool) -> NSAttributedString {
+        let text = NSMutableAttributedString(string: label, attributes: [.font: font, .foregroundColor: Theme.text])
+        let offset = label.utf8.count - name.utf8.count
+        let bytes = Array(label.utf8)
+        for p in positions {
+            let i = p + offset
+            guard i >= 0, i < bytes.count else { continue }
+            let start = String(decoding: bytes[..<i], as: UTF8.self).utf16.count
+            let length = String(decoding: bytes[i...i], as: UTF8.self).utf16.count
+            text.addAttributes([.font: NSFont.systemFont(ofSize: 13, weight: .bold), .foregroundColor: chosen ? NSColor.white : NSColor(hex: 0x6EA4F7)],
+                               range: NSRange(location: start, length: length))
+        }
+        return text
+    }
+
+    /// A worktree: its folder; on the right its branch, "stale lock" when the process that locked it has
+    /// ended, and the agents working in it, each with its status mark.
+    private func show(_ row: BranchPopupController.WorktreeRow, chosen: Bool) {
+        let w = row.worktree
+        symbol(w.lockReason != nil ? "lock" : "folder", row.isStale ? Theme.attention : Theme.textDim)
+        title.stringValue = row.folder
+        // The folder is the row's name: the detail gives way first, cut at its head so the marks stay.
+        detail.setContentCompressionResistancePriority(.init(249), for: .horizontal)
+        detailRoom.isActive = true
+        let dim = chosen ? Theme.text : Theme.textDim
+        let small = NSFont.systemFont(ofSize: 11)
+        let text = NSMutableAttributedString(string: w.branch ?? "detached @" + String((w.head ?? "").prefix(7)),
+                                             attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: dim])
+        if w.isPrunable { text.append(NSAttributedString(string: "  missing", attributes: [.font: small, .foregroundColor: dim])) }
+        if row.isStale { text.append(NSAttributedString(string: "  stale lock", attributes: [.font: small, .foregroundColor: chosen ? Theme.text : Theme.attention])) }
+        for agent in row.agents.prefix(3) {
+            text.append(NSAttributedString(string: "  " + agent.name, attributes: [.font: small, .foregroundColor: dim]))
+            if let image = StatusGlyph.image(for: agent.state, size: 10) {
+                let mark = NSTextAttachment()
+                mark.image = image
+                mark.bounds = NSRect(x: 0, y: -1.5, width: image.size.width, height: image.size.height)
+                text.append(NSAttributedString(string: " "))
+                text.append(NSAttributedString(attachment: mark))
+            }
+        }
+        if row.agents.count > 3 { text.append(NSAttributedString(string: "  +\(row.agents.count - 3)", attributes: [.font: small, .foregroundColor: dim])) }
+        detail.attributedStringValue = Typography.truncating(text, .byTruncatingHead, alignment: .right)
+        var tip = [RecentProjects.abbreviate(w.path)]
+        if let reason = w.lockReason {
+            if let holder = row.holder {
+                let who = "\(AgentName.of(program: holder.program)) (pid \(holder.pid))"
+                tip.append(row.holderAlive ? "Locked by \(who), which is still running."
+                                           : "Locked by \(who), which has ended: a stale lock. Unlock it from this row’s menu (→).")
+            } else {
+                tip.append("Locked" + (reason.isEmpty ? "." : ": \(reason)"))
+            }
+        }
+        tip += row.agents.map { "\($0.name) in the tab “\($0.tab)”: \(BranchPopupController.words(for: $0.state))." }
+        tipText = tip.joined(separator: "\n")
+        spoken = ([row.folder, w.branch ?? "detached"] + Array(tip.dropFirst())).joined(separator: ", ")
     }
 }
 
