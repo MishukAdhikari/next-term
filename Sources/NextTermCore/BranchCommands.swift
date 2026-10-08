@@ -22,10 +22,12 @@ public enum BranchCommand {
         ["fetch", remote, "refs/heads/" + upstream + ":refs/heads/" + local]
     }
 
-    /// Checkout and Update: switch, then forward to the upstream (the changes you carry along are put
-    /// aside and back).
+    /// The branch checked out, forward to its upstream (the changes you carry along are put aside and back).
+    public static let fastForward = ["merge", "--ff-only", "--autostash", "@{upstream}"]
+
+    /// Checkout and Update: switch, then forward to the upstream.
     public static func checkoutAndUpdate(_ branch: String) -> [[String]] {
-        [["switch", branch], ["merge", "--ff-only", "--autostash", "@{upstream}"]]
+        [["switch", branch], fastForward]
     }
 
     /// Unlock a worktree whose lock is stale (or one you choose to free).

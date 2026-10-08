@@ -68,19 +68,34 @@ struct GitActions {
         }
     }
 
-    func checkoutRevision(_ revision: String) {
-        run("Check “\(revision)”", [["rev-parse", "--verify", "--quiet", "--end-of-options", revision + "^{commit}"]]) { found in
+    /// `shown` names it in messages: a tag by its name, checked out as refs/tags/<name> (never a branch
+    /// of the same name).
+    func checkoutRevision(_ revision: String, shown: String? = nil) {
+        let name = shown ?? revision
+        run("Check “\(name)”", [["rev-parse", "--verify", "--quiet", "--end-of-options", revision + "^{commit}"]]) { found in
             guard found.ok else {
-                return GitPrompt.ask("“\(revision)” isn’t a tag or revision here", info: "Try a tag (v1.2.0), a commit (abc1234) or something like main~3.",
+                return GitPrompt.ask("“\(name)” isn’t a tag or revision here", info: "Try a tag (v1.2.0), a commit (abc1234) or something like main~3.",
                                      buttons: ["OK"], over: window) { _ in }
             }
             let steps = [["switch", "--detach", revision]]
             confirmAgents("Switching") {
-                run("Checkout \(revision)", steps) { result in
-                    if result.ok { return toast("At \(revision), detached: New Branch… keeps work made here") }
-                    switchFailed(result, to: revision, steps: steps)
+                run("Checkout \(name)", steps) { result in
+                    if result.ok { return toast("At \(name), detached: New Branch… keeps work made here") }
+                    switchFailed(result, to: name, steps: steps)
                 }
             }
+        }
+    }
+
+    /// A tag from the popup's search: checked out detached.
+    func checkoutTag(_ tag: String) { checkoutRevision("refs/tags/" + tag, shown: tag) }
+
+    /// New Branch from a tag, switched to.
+    func newBranch(fromTag tag: String) {
+        let existing = Set(model?.locals.map(\.name) ?? [])
+        GitPrompt.text("New Branch", info: "From the tag “\(tag)”. Next Term switches to it.", placeholder: "fix/after-\(tag)", button: "Create", over: window,
+                       check: { BranchName.problem($0, existing: existing) }) { name in
+            if let name { createBranch(name, base: BranchRef(name: "refs/tags/" + tag, isRemote: false, sha: ""), switching: true) }
         }
     }
 
@@ -91,7 +106,8 @@ struct GitActions {
         }
     }
 
-    private func switchFailed(_ result: GitWriter.Result, to target: String, steps: [[String]]) {
+    /// `then` runs once the switch is made after a stash (Checkout and Update brings the branch forward).
+    private func switchFailed(_ result: GitWriter.Result, to target: String, steps: [[String]], then: (() -> Void)? = nil) {
         switch result.failure {
         case let .localChanges(files)?:
             let list = files.prefix(8).joined(separator: "\n") + (files.count > 8 ? "\n…and \(files.count - 8) more" : "")
@@ -101,7 +117,7 @@ struct GitActions {
             }
             GitPrompt.ask("Switching to “\(target)” would overwrite your changes", info: "\(list)\n\nNext Term can put them in a stash, switch, and put them back. If they don’t fit there, they stay safe in the stash.",
                           buttons: ["Stash, Switch and Reapply", "Cancel"], over: window) { choice in
-                if choice == 0 { stashSwitch(to: target, steps: steps) }
+                if choice == 0 { stashSwitch(to: target, steps: steps, then: then) }
             }
         case let .heldByWorktree(path)?:
             GitPrompt.ask("“\(target)” is checked out in another worktree", info: path.map { RecentProjects.abbreviate($0) } ?? "",
@@ -115,7 +131,7 @@ struct GitActions {
 
     /// Stash (kept by its id, never "the newest"), switch, put the changes back. On any trouble the stash
     /// stays and says where the changes are.
-    private func stashSwitch(to target: String, steps: [[String]]) {
+    private func stashSwitch(to target: String, steps: [[String]], then: (() -> Void)? = nil) {
         let from = model?.current ?? String((model?.headSHA ?? "HEAD").prefix(7))
         let message = "Next Term: switching from \(from) to \(target)"
         run("Stash changes", [["stash", "push", "--include-untracked", "--message", message], ["rev-parse", "--verify", "--quiet", "refs/stash"]]) { stashed in
@@ -128,6 +144,7 @@ struct GitActions {
                 }
                 reapply(sha) { clean in
                     if clean {
+                        if let then { return then() }
                         toast("Switched to \(target), with your changes")
                     } else {
                         GitPrompt.ask("Switched to “\(target)”; some changes conflict", info: "Your changes are safe in the stash “\(message)”. The files with conflicts are marked in the sidebar.",
@@ -167,6 +184,29 @@ struct GitActions {
     func openWorktree(_ path: String) {
         guard let controller else { return }
         controller.addTab(directory: path)
+    }
+
+    /// Unlock a worktree. A stale lock (the process that took it has ended) goes at once; any other only
+    /// after asking, since whatever locked it may still need it. Undo locks it again, with its reason.
+    func unlock(_ worktree: Worktree, stale: Bool) {
+        guard let reason = worktree.lockReason else { return NSSound.beep() }
+        let folder = (worktree.path as NSString).lastPathComponent
+        let go = {
+            run("Unlock \(folder)", [BranchCommand.unlock(worktree: worktree.path)]) { result in
+                guard result.ok else { return failed("Could not unlock “\(folder)”", result, retry: nil) }
+                GitToast.show("Unlocked \(folder)", in: window, button: "Undo") {
+                    run("Lock \(folder)", [BranchCommand.lock(worktree: worktree.path, reason: reason)]) { locked in
+                        locked.ok ? toast("Locked \(folder) again") : failed("Could not lock “\(folder)”", locked, retry: nil)
+                    }
+                }
+            }
+        }
+        if stale { return go() }
+        GitPrompt.ask("Unlock “\(folder)”?", info: (reason.isEmpty ? "It is locked, with no reason given." : "It is locked: \(reason)")
+                      + "\n\nA lock keeps git from pruning or removing the worktree. Unlock it only when whatever locked it is done with it.",
+                      buttons: ["Unlock", "Cancel"], over: window) { choice in
+            if choice == 0 { go() }
+        }
     }
 
     // MARK: comparing
@@ -289,6 +329,36 @@ struct GitActions {
         }
     }
 
+    /// Delete on Remote: asks first, naming the remote and the branch, and never for a shared branch (the
+    /// remote's default branch, main, master, release/*), as Force Push. Undo puts it back at its commit,
+    /// which is still here.
+    func deleteOnRemote(_ ref: BranchRef) {
+        guard ref.isRemote, let parts = model?.remoteAndBranch(of: ref.name) else { return NSSound.beep() }
+        let remote = parts.remote, branch = parts.branch
+        if model?.isShared(branch, on: remote) ?? true {
+            return GitPrompt.ask("Deleting \(branch) on \(remote) is off", info: "\(branch) is shared: delete branches of your own, not \(remote)’s default branch, main, master or release/*.",
+                                 buttons: ["OK"], over: window) { _ in }
+        }
+        var info = "This deletes the branch \(branch) on \(remote) for everyone who uses \(remote). It is at \(ref.shortSHA); Undo puts it back there for a while after."
+        let trackers = (model?.locals ?? []).filter { $0.upstream == ref.name }.map(\.name)
+        if !trackers.isEmpty { info += "\n\nHere, \(trackers.map { "“\($0)”" }.joined(separator: ", ")) tracks it and stays as it is." }
+        if model?.remoteHeads[remote] == nil {
+            info += "\n\n\(remote)/HEAD isn’t set here, so Next Term can’t tell whether \(branch) is \(remote)’s default branch."
+        }
+        GitPrompt.ask("Delete \(branch) on \(remote)?", info: info, buttons: ["Delete on \(remote)", "Cancel"], destructive: 0, style: .warning, over: window) { choice in
+            guard choice == 0 else { return }
+            let args = BranchCommand.deleteOnRemote(remote: remote, branch: branch)
+            run("Delete \(ref.name)", [args], activity: .pushing) { result in
+                guard result.ok else { return failed("Could not delete \(branch) on \(remote)", result, retry: args) }
+                GitToast.show("Deleted \(ref.name) (was \(ref.shortSHA))", in: window, button: "Undo") {
+                    run("Restore \(ref.name)", [BranchCommand.restoreOnRemote(remote: remote, branch: branch, sha: ref.sha)], activity: .pushing) { restored in
+                        restored.ok ? toast("Restored \(ref.name)") : failed("Could not restore \(branch) on \(remote)", restored, retry: nil)
+                    }
+                }
+            }
+        }
+    }
+
     func updateProject() {
         guard let current = model?.currentRef else {
             return GitPrompt.ask("Not on a branch", info: "HEAD is detached. New Branch… keeps work made here.", buttons: ["OK"], over: window) { _ in }
@@ -303,17 +373,69 @@ struct GitActions {
             popup.reload {
                 guard let fresh = popup.model?.currentRef else { return }
                 guard fresh.behind > 0 else { return toast("Already up to date") }
-                confirmAgents("Updating") {
-                    if fresh.ahead == 0 {
-                        integrate("Update \(fresh.name)", ["merge", "--ff-only", "--autostash", "@{upstream}"], activity: .pulling)
-                        return
-                    }
-                    GitPrompt.ask("“\(fresh.name)” and “\(upstream)” have both changed",
-                                  info: "\(fresh.ahead) commit\(fresh.ahead == 1 ? "" : "s") here, \(fresh.behind) there. Rebase puts yours on top of theirs; Merge joins them with a merge commit.",
-                                  buttons: ["Rebase", "Merge", "Cancel"], over: window) { choice in
-                        if choice == 0 { integrate("Rebase \(fresh.name)", ["rebase", "--autostash", "@{upstream}"], activity: .pulling) }
-                        if choice == 1 { integrate("Merge \(upstream)", ["merge", "--no-edit", "--autostash", "@{upstream}"], activity: .pulling) }
-                    }
+                confirmAgents("Updating") { bringUp(fresh) }
+            }
+        }
+    }
+
+    /// The branch checked out, brought up to its upstream as last fetched: forward when it is only behind,
+    /// else the question of how (Rebase or Merge).
+    private func bringUp(_ fresh: BranchRef) {
+        guard let upstream = fresh.upstream else { return }
+        if fresh.ahead == 0 { return integrate("Update \(fresh.name)", BranchCommand.fastForward, activity: .pulling) }
+        GitPrompt.ask("“\(fresh.name)” and “\(upstream)” have both changed",
+                      info: "\(fresh.ahead) commit\(fresh.ahead == 1 ? "" : "s") here, \(fresh.behind) there. Rebase puts yours on top of theirs; Merge joins them with a merge commit.",
+                      buttons: ["Rebase", "Merge", "Cancel"], over: window) { choice in
+            if choice == 0 { integrate("Rebase \(fresh.name)", ["rebase", "--autostash", "@{upstream}"], activity: .pulling) }
+            if choice == 1 { integrate("Merge \(upstream)", ["merge", "--no-edit", "--autostash", "@{upstream}"], activity: .pulling) }
+        }
+    }
+
+    /// Checkout and Update: switch to a branch, then bring it up to its upstream as last fetched (forward;
+    /// diverged, the question of how, as Update Project asks).
+    func checkoutAndUpdate(_ ref: BranchRef) {
+        guard !ref.isRemote, !ref.isHead, model?.upstream(of: ref) != nil else { return checkout(ref) }
+        let steps = [BranchCommand.checkoutAndUpdate(ref.name)[0]]
+        let update = {
+            popup.reload {
+                guard let fresh = popup.model?.currentRef, fresh.name == ref.name else { return }
+                guard fresh.behind > 0 else { return toast("Switched to \(ref.name), already up to date") }
+                bringUp(fresh)
+            }
+        }
+        confirmAgents("Switching branches") {
+            run("Checkout \(ref.name)", steps) { result in
+                guard result.ok else { return switchFailed(result, to: ref.name, steps: steps, then: update) }
+                update()
+            }
+        }
+    }
+
+    /// Update a branch that isn't checked out: its upstream fetched into it, which only ever moves it
+    /// forward. When the two have diverged, says so plainly: rebasing or merging needs it checked out.
+    func update(_ ref: BranchRef) {
+        guard !ref.isRemote, !ref.isHead, let tracking = model?.upstream(of: ref) else { return NSSound.beep() }
+        if let elsewhere = ref.worktree {
+            return GitPrompt.ask("“\(ref.name)” is checked out in another worktree", info: "Update it there: \(RecentProjects.abbreviate(elsewhere)).",
+                                 buttons: ["Open Worktree", "OK"], over: window) { choice in if choice == 0 { openWorktree(elsewhere) } }
+        }
+        let remote = tracking.remote, tracked = "\(remote)/\(tracking.branch)"
+        let args = BranchCommand.fetchInto(local: ref.name, remote: remote, upstream: tracking.branch)
+        run("Update \(ref.name)", [args], activity: .pulling) { result in
+            if result.ok { fetchedByHand(remote: remote) }
+            popup.reload {
+                let fresh = popup.model?.local(ref.name) ?? ref
+                if result.ok { return toast(fresh.sha == ref.sha ? "\(ref.name) is up to date with \(tracked)" : "Updated \(ref.name) from \(tracked)") }
+                guard result.failure == .pushRejected else { return failed("Could not update “\(ref.name)”", result, retry: args) }
+                // Refused as not forward: nothing new there (only yours to push), or both changed.
+                if fresh.behind == 0 {
+                    return toast("\(ref.name) has nothing new from \(tracked)" + (fresh.ahead > 0 ? "; \(fresh.ahead) of its commits aren’t pushed" : ""))
+                }
+                let here = "\(fresh.ahead) commit\(fresh.ahead == 1 ? "" : "s") here", there = "\(fresh.behind) on \(tracked)"
+                GitPrompt.ask("“\(ref.name)” and “\(tracked)” have both changed",
+                              info: "\(here) and \(there), so Next Term can’t just move it forward, and nothing was changed. Check it out, then Update Project rebases or merges them.",
+                              buttons: ["Checkout", "OK"], over: window) { choice in
+                    if choice == 0 { checkout(fresh) }
                 }
             }
         }
