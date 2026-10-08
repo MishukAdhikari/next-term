@@ -760,6 +760,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                                       #selector(gitPush(_:)), #selector(gitNewBranch(_:))]
         if let action = item.action, gitActions.contains(action) { return gitFolder != nil }
         if item.action == #selector(showGitLog(_:)) { return gitLogRoot != nil }
+        if item.action == #selector(showGitDiff(_:)) { return gitDiffRoot != nil }
         if item.action == #selector(closeProject(_:)) { return project != nil }
         if item.action == #selector(openServedURL(_:)) { return activeTab?.servedURL != nil }
         if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil }
@@ -1498,7 +1499,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     // MARK: diffs
 
-    /// ⌥⌘G: the changes of the file being edited, or the file selected in the sidebar, side by side.
+    /// ⌥⌘G: the changes of the file being edited, or the file selected in the sidebar, side by side in the
+    /// Git Diff tab, the changed files listed beside them.
     @objc func showChanges(_ sender: Any?) {
         let fromEditor = isEditorFocused || window?.firstResponder !== sidebar.outline
         // A database file has no lines to compare, and one too large for the editor is too large to compare.
@@ -1540,7 +1542,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             if let window { alert.beginSheetModal(for: window) }
             return
         }
-        editorArea.openDiff(root: root, path: String(path.dropFirst(root.count + 1)), base: base)
+        editorArea.openGitDiff(root: root, path: String(path.dropFirst(root.count + 1)), base: base)
     }
 
     @objc func saveDocument(_ sender: Any?) { editorArea.saveActive() }

@@ -1111,6 +1111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(git, "New Branch…", #selector(TerminalWindowController.gitNewBranch(_:)), "")
         git.addItem(.separator())
         item(git, "Git Log", #selector(TerminalWindowController.showGitLog(_:)), "l", [.command, .option])
+        item(git, "Git Diff", #selector(TerminalWindowController.showGitDiff(_:)), "g", [.command, .control])
         item(git, "Git Commands", #selector(TerminalWindowController.showGitCommands(_:)), "")
 
         let window = submenu(main, "Window")
