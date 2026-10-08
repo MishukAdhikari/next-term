@@ -121,10 +121,13 @@ extension SelfTest {
         c.renamePane(third, to: nil)
 
         // The × shows under the pointer, and closes that pane alone: an idle one at once.
-        if let enter = NSEvent.enterExitEvent(with: .mouseEntered, location: .zero, modifierFlags: [], timestamp: 0,
-                                              windowNumber: window.windowNumber, context: nil, eventNumber: 0, trackingNumber: 0, userData: nil) {
-            header(other).mouseEntered(with: enter)
+        func pointerEnters(_ tab: TerminalTab) {
+            guard let enter = NSEvent.enterExitEvent(with: .mouseEntered, location: .zero, modifierFlags: [], timestamp: 0,
+                                                     windowNumber: window.windowNumber, context: nil, eventNumber: 0, trackingNumber: 0,
+                                                     userData: nil) else { return }
+            header(tab).mouseEntered(with: enter)
         }
+        pointerEnters(other)
         check(!header(third).closeButton.isHidden && !header(other).closeButton.isHidden && header(base).closeButton.isHidden,
               "the × shows on the pane with the keyboard and under the pointer, not on the others")
         check(header(other).closeButton.accessibilityLabel() == "Close pane \(other.title)", "VoiceOver calls it Close pane and the title",
@@ -137,13 +140,16 @@ extension SelfTest {
         check(!header(base).isHidden && !header(other).isHidden, "the other panes keep their headers")
         check(window.firstResponder === base.view && group.focused === base, "its neighbour takes the keyboard")
 
-        // Maximized: no header, the terminal from the top as in a tab of one pane.
+        // Maximized: no header, the terminal from the top as in a tab of one pane. A header under the pointer
+        // as another pane fills the tab gets no exit: it drops its hover.
         c.show(base)
         window.makeFirstResponder(base.view)
+        pointerEnters(other)
         c.toggleZoomPane(nil)
         check(group.zoomed === base && header(base).isHidden && abs(terminalTop(base) - 4) < 1, "a maximized pane has no header", "\(terminalTop(base))")
         c.toggleZoomPane(nil)
         check(group.zoomed == nil && !header(base).isHidden && !header(other).isHidden, "and the headers come back with the panes")
+        check(header(other).closeButton.isHidden, "without the hover of a pointer they lost track of")
 
         // The panes built again around the pane you type in: it keeps the keyboard.
         c.equalizePanes(nil)

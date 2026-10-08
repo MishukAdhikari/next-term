@@ -259,6 +259,13 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate {
         hovering = false
     }
 
+    /// Taken out of the window under the pointer (another pane maximized, or the panes built again for a
+    /// split or a close): no exit comes either.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { hovering = false }
+    }
+
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2 { return beginRename() }
         controller?.focusPane(tab)
