@@ -296,7 +296,8 @@ public enum AgentSessions {
 
     // MARK: Command Code
 
-    static func commandCode(_ folder: String, home: String, subfolders: Bool) throws -> [AgentSession] {
+    /// `since`: transcripts last written before then are skipped unread.
+    static func commandCode(_ folder: String, home: String, subfolders: Bool, since: Date? = nil) throws -> [AgentSession] {
         let base = (home as NSString).appendingPathComponent(".commandcode/projects")
         guard let projects = try? FileManager.default.contentsOfDirectory(atPath: base) else { return [] }
         var sessions: [AgentSession] = []
@@ -306,6 +307,7 @@ public enum AgentSessions {
             // <id>.jsonl is the transcript; <id>.checkpoints.jsonl, .prompts.jsonl and backups sit beside it.
             for file in files where file.hasSuffix(".jsonl") && file.dropLast(6).contains(".") == false {
                 let path = (directory as NSString).appendingPathComponent(file)
+                if let since, (AgentStoreFiles.modified(path) ?? .distantPast) < since { continue }
                 guard let head = readHead(path, bytes: 8192),
                       let firstLine = head.split(separator: 0x0A, maxSplits: 1).first,
                       let header = (try? JSONSerialization.jsonObject(with: Data(firstLine))) as? [String: Any],

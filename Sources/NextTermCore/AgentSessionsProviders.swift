@@ -276,7 +276,7 @@ struct CommandCodeSessions: AgentSessionProvider {
     var agent: AgentKind { .commandCode }
 
     func sessions(in folder: String, subfolders: Bool, since: Date?) throws -> [AgentSession] {
-        try AgentSessions.commandCode(folder, home: home, subfolders: subfolders)
+        try AgentSessions.commandCode(folder, home: home, subfolders: subfolders, since: since)
     }
 }
 

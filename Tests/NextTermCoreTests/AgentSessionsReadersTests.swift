@@ -344,6 +344,21 @@ import Testing
         #expect(AgentSessions.newest(agent: .copilot, in: project, after: Date(), home: home) == nil)
     }
 
+    @Test func newestSkipsCommandCodeFilesWrittenBefore() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let project = "/Users/me/Code/app"
+        let dir = home + "/.commandcode/projects/users-me-code-app"
+        let after = Date().addingTimeInterval(-86400)
+        let later = ISO8601DateFormatter().string(from: after.addingTimeInterval(60))
+        try write([["type": "session", "version": 3, "id": "cc1", "timestamp": later, "cwd": project]], to: dir + "/cc1.jsonl")
+        try write([["id": "k", "prompt": "Refactor the billing"]], to: dir + "/cc1.checkpoints.jsonl")
+        #expect(AgentSessions.newest(agent: .commandCode, in: project, after: after, home: home)?.id == "cc1")
+        // Last written two days ago, whatever its header says: not read at all.
+        try age(dir + "/cc1.jsonl", days: 2)
+        #expect(AgentSessions.newest(agent: .commandCode, in: project, after: after, home: home) == nil)
+    }
+
     @Test func resumedIDsFromCommandLines() {
         #expect(AgentKind.claude.resumedID(in: "claude --resume 0a1b") == "0a1b")
         #expect(AgentKind.claude.resumedID(in: "cd ~/app && claude -r 'abc-def'") == "abc-def")
