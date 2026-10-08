@@ -15,7 +15,17 @@ import Testing
         // Leading indentation and spaces inside a line stay.
         #expect(cleaned("    a  b   \n") == "    a  b\n")
         // Lines of spaces only become empty; a CR kept at a line's end (mixed endings) stays, after the trim.
-        #expect(cleaned("a\n   \nb \r\nc") == "a\n\nb\r\nc\n")
+        #expect(cleaned("a\n   \nb \r\nc  \nd") == "a\n\nb\r\nc\nd\n")
+    }
+
+    @Test func oldMacAndMixedLineEndingsStay() {
+        // A file with "\r" line endings (the editor holds it as it is): every line trimmed, and nothing to add when
+        // it already ends with a line break.
+        #expect(cleaned("a  \rb  \r") == "a\rb\r")
+        // The newline added is the line break the line before ends with.
+        #expect(cleaned("a  \rb  ") == "a\rb\r")
+        #expect(cleaned("a\nb \r\nc") == "a\nb\r\nc\r\n")
+        #expect(cleaned("one line ") == "one line\n")
     }
 
     @Test func aFinalNewlineOnlyAfterText() {
