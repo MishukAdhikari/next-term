@@ -233,13 +233,14 @@ public enum AgentLocation {
     }
 
     /// A Claude Code session's transcript: in the project folder named after the folder it started in, or,
-    /// moved, in any project folder (a look through all of them: callers keep what it finds).
-    public static func claudeTranscript(id: String, started: String?, home: String) -> String? {
+    /// moved, in any project folder when `scanning` (a look through all of them: callers keep what it finds).
+    public static func claudeTranscript(id: String, started: String?, home: String, scanning: Bool = true) -> String? {
         let projects = (home as NSString).appendingPathComponent(".claude/projects")
         if let started {
             let path = "\(projects)/\(AgentSessions.claudeFolderName(started))/\(id).jsonl"
             if isRegularFile(path) { return path }
         }
+        guard scanning else { return nil }
         let folders = (try? FileManager.default.contentsOfDirectory(atPath: projects)) ?? []
         return folders.lazy.map { "\(projects)/\($0)/\(id).jsonl" }.first(where: isRegularFile)
     }

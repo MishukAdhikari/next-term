@@ -268,10 +268,12 @@ final class AgentPlaces {
         case .claude?:
             guard let session = AgentLocation.claudeSession(pid: probe.pid, home: home) else { return nil }
             if let known = transcripts[session.id], isRegularFile(known) { return AgentLocation.claudeFolder(transcript: known) }
-            if let missed = missingTranscripts[session.id], Date().timeIntervalSince(missed) < 10 { return nil }
-            guard let found = AgentLocation.claudeTranscript(id: session.id, started: session.started, home: home) else {
+            // Where it should be, each time; a look through every project folder at most every 10 s (a new
+            // session has no transcript until its first message).
+            let scanning = missingTranscripts[session.id].map { Date().timeIntervalSince($0) >= 10 } ?? true
+            guard let found = AgentLocation.claudeTranscript(id: session.id, started: session.started, home: home, scanning: scanning) else {
                 if missingTranscripts.count > 200 { missingTranscripts.removeAll() }
-                missingTranscripts[session.id] = Date()
+                if scanning { missingTranscripts[session.id] = Date() }
                 return nil
             }
             if transcripts.count > 200 { transcripts.removeAll() }

@@ -190,6 +190,7 @@ import Testing
         #expect(session?.id == id && session?.started == "/Code/xCloud")
         #expect(AgentLocation.claudeTranscript(id: id, started: nil, home: home) == project + "/\(id).jsonl") // looked for in every folder
         #expect(AgentLocation.claudeTranscript(id: "other", started: "/Code/xCloud", home: home) == nil)
+        #expect(AgentLocation.claudeTranscript(id: id, started: "/elsewhere", home: home, scanning: false) == nil) // only where it should be
 
         // Moved to another project folder: still found.
         let other = home + "/.claude/projects/-elsewhere"
