@@ -820,9 +820,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     @discardableResult
     func openWindow(remote: RemoteTab) -> TerminalWindowController {
         let controller = openWindow(directory: nil)
-        let tab = controller.addRemoteTab(remote)
-        for other in controller.tabs where other !== tab { controller.remove(other) }
+        closeFirstShell(of: controller, keeping: controller.addRemoteTab(remote))
         return controller
+    }
+
+    /// The shell a new window starts with, closed for the tab the window was opened for. Only while the
+    /// window holds just the two and nothing has run in that shell: no other tab, and nothing that runs,
+    /// is ever closed this way.
+    func closeFirstShell(of controller: TerminalWindowController, keeping tab: TerminalTab) {
+        guard controller.tabs.count == 2, let first = controller.tabs.first, first !== tab else { return }
+        guard first.remote == nil, first.userTitle == nil, first.status.commandsStarted == 0, !first.status.running else { return }
+        controller.remove(first)
     }
 
     /// A saved host on the Welcome window: a window with a tab on it, in its folder.
@@ -840,8 +848,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         guard let entry = ClosedTabs.takeLast() else { return NSSound.beep() }
         let controller = openWindow(directory: nil)
-        let first = controller.tabs.first
-        if let tab = controller.reopen(entry), let first, first !== tab { controller.remove(first) }
+        if let tab = controller.reopen(entry) { closeFirstShell(of: controller, keeping: tab) }
     }
 
     // MARK: Option as Meta

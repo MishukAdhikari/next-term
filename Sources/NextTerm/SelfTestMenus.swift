@@ -28,6 +28,7 @@ extension SelfTest {
         await terminalMenuChecks(w, tab: first, folder: folder)
         await tabMenuChecks(w, folder: folder)
         await editorTabMenuChecks(w, folder: folder)
+        await firstShellChecks(folder: folder)
         await tooltipRemapChecks(c)
 
         for tab in w.tabs { w.remove(tab) }
@@ -304,6 +305,33 @@ extension SelfTest {
         check(alone.items.first { $0.title == "Close Others" }?.isEnabled == false, "menus: one file has no others to close")
         _ = run("Close", in: alone)
         check(await wait(3) { area.panes.isEmpty }, "menus: Close closes the file")
+    }
+
+    // MARK: a window opened for one tab
+
+    /// A window opened for a tab (a saved server, ⇧⌘T with no window) closes the shell it starts with: only
+    /// that one, only while the window holds just the two, and only while nothing ran in it.
+    private static func firstShellChecks(folder: URL) async {
+        let app = AppDelegate.shared!
+        let x = app.openWindow(directory: folder.path)
+        guard x.tabs.count == 1 else { return check(false, "menus: a new window starts with one shell", "\(x.tabs.count) tabs") }
+        let first = x.addTab(directory: folder.path)
+        app.closeFirstShell(of: x, keeping: first)
+        check(x.tabs.count == 1 && x.tabs.first === first, "menus: a new window's first shell makes way for the tab it was opened for")
+        _ = await wait(20) { first.status.integrated }
+        let middle = x.addTab(directory: folder.path)
+        let last = x.addTab(directory: folder.path)
+        app.closeFirstShell(of: x, keeping: last)
+        check(x.tabs.count == 3, "menus: a window with more tabs than that keeps them all", "\(x.tabs.count) tabs")
+        x.remove(middle)
+        first.view.send(txt: "\u{15}true\r")
+        _ = await wait(5) { first.status.commandsStarted > 0 }
+        app.closeFirstShell(of: x, keeping: last)
+        check(x.tabs.count == 2 && x.tabs.first === first, "menus: and a first shell something ran in stays",
+              "\(x.tabs.count) tabs, \(first.status.commandsStarted) commands run")
+        for tab in x.tabs { x.remove(tab) }
+        _ = await wait(3) { !app.controllers.contains { $0 === x } }
+        if app.controllers.contains(where: { $0 === x }) { x.window?.close() }
     }
 
     // MARK: tooltips
