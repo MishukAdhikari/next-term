@@ -61,7 +61,7 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Reveal in Finder, Copy Path, Copy Relative Path (the file in front in the editor) | — |
 | Split Right (while the editor has the keyboard, <kbd>⌘D</kbd> is Duplicate Line) | <kbd>⌘D</kbd> |
 | Split Down | <kbd>⇧⌘D</kbd> |
-| Rename Tab… | <kbd>⌥⌘R</kbd> |
+| Rename Tab… (while the project sidebar has the keyboard, <kbd>⌥⌘R</kbd> is Reveal in Finder) | <kbd>⌥⌘R</kbd> |
 | Use Option as Meta Key (off by default; for Emacs-style keys) | — |
 | Close Tab (Close Pane in a split tab; the file being edited when the editor has the keyboard) | <kbd>⌘W</kbd> |
 | Close Other Tabs, Close Tabs to the Right (the editor’s tabs when it has the keyboard) | — |
@@ -150,11 +150,24 @@ In the Git Log: <kbd>↑</kbd> and <kbd>↓</kbd> move through the commits, <kbd
 
 Each of these belongs to one part of the window and works only there. **Settings › Keyboard Shortcuts** lists them after the menu commands, with the part each belongs to, and changes them as it changes a menu command’s; a tooltip that names one, such as **Accept**’s on a proposed edit, follows it. In the project sidebar and the Git lists, where nothing is typed, a key needs no <kbd>⌘</kbd> or <kbd>⌃</kbd>: <kbd>↩︎</kbd> will do on its own, and <kbd>↩︎</kbd>, <kbd>⌫</kbd> or <kbd>⌦</kbd> with <kbd>⇧</kbd> or <kbd>⌥</kbd>.
 
+The project sidebar’s are the items of its right-click menu, and the menu shows each one’s key the way the menu bar does, as you have set it. The key does what the item does, to the selected rows, while the sidebar has the keyboard; anywhere else it does what it did before. The menu’s **Send to Agent**, **Show Changes** (and **Show What Was Deleted**) and **Show All Sessions…** are the menu bar’s commands, <kbd>⌥⌘K</kbd>, <kbd>⌥⌘G</kbd> and <kbd>⌥⌘O</kbd>, which act on the sidebar’s selection while it has the keyboard.
+
 | Part of the window | Command | Default |
 |---|---|---|
-| Project Sidebar | Open | <kbd>⌘↓</kbd> |
+| Project Sidebar | Open: a file, a SQLite database, a session (**Resume** or **Go to Tab**) | <kbd>⌘↓</kbd> |
+| Project Sidebar | Open in New Tab: a folder, a file’s folder, a database’s `mysql` or `psql` | — |
+| Project Sidebar | Open as Project | — |
+| Project Sidebar | Reveal in Finder | <kbd>⌥⌘R</kbd> |
+| Project Sidebar | New File (<kbd>⌘N</kbd> is New Window everywhere) | <kbd>⌥⌘N</kbd> |
+| Project Sidebar | New Folder (no key with VS Code’s keys, where <kbd>⇧⌘N</kbd> is New Window) | <kbd>⇧⌘N</kbd> |
 | Project Sidebar | Rename | <kbd>↩︎</kbd> (Enter too) |
 | Project Sidebar | Move to Trash | <kbd>⌘⌫</kbd> |
+| Project Sidebar | Insert Path in Terminal | — |
+| Project Sidebar | Copy Path, Copy Relative Path (a deleted file’s too) | <kbd>⌥⌘C</kbd>, <kbd>⌥⇧⌘C</kbd> |
+| Project Sidebar | Refresh: the files, or the Databases or Agent Sessions group on its row | — |
+| Project Sidebar | Open in TablePlus, Open in Vercel, Copy Connection Name, Reveal Source File (a Databases row) | — |
+| Project Sidebar | Fork Session, Copy Resume Command (an Agent Sessions row) | — |
+| Project Sidebar | Continue Latest Session: the first agent’s in the Agent Sessions group’s menu | — |
 | Git Log, Git Diff and Compare lists | Open Commit or File: from a commit to its changed files, a file’s diff, or from the Git Diff tab’s file list to the diff | <kbd>↩︎</kbd> |
 | Proposed Edit | Accept an agent’s proposed edit | <kbd>⌘↩︎</kbd> |
 | Branch Popup | Fetch | <kbd>⌘R</kbd> |
@@ -188,7 +201,7 @@ Open **Next Term › Settings…** (<kbd>⌘,</kbd>) and choose **Keyboard Short
 2. Click a command’s shortcut and press the new keys. <kbd>⌫</kbd> removes the shortcut; <kbd>⎋</kbd> cancels.
 3. If the keys already belong to another command, Next Term says which and offers **Use It Here**; the other command is then left without a shortcut.
 
-A key can belong to one command in each part of the window. **Edit › Line**’s commands work only while the editor has the keyboard, so one of them can share a key with a command for the terminal (Split Right, Split Down, Clear Buffer, Rename Tab, New Remote Tab and the pane commands): the editor’s command has it while the editor has the keyboard, the terminal’s everywhere else. That is how <kbd>⌘D</kbd> duplicates a line in the editor and splits the terminal elsewhere. In the same way the sidebar’s Move to Trash and the editor’s Delete Line can both be <kbd>⌘⌫</kbd>, and Rename in the sidebar and Open in the Git Log are both <kbd>↩︎</kbd>. The branch popup has the keyboard while it is open, so its keys can be any other command’s too: its <kbd>⌘C</kbd> copies a branch’s name, and Edit › Copy is <kbd>⌘C</kbd> everywhere else. Settings lists all of them on the key and does not call that a clash; point at a shortcut to see which part has it. **Accept** on a proposed edit is the exception: it works wherever the keyboard is in the window while the proposed edit is shown, and the project sidebar can be beside it, so it can’t share a key with the sidebar’s commands. While the menus are open over the editor, the shared key shows on the editor’s command.
+A key can belong to one command in each part of the window. **Edit › Line**’s commands work only while the editor has the keyboard, so one of them can share a key with a command for the terminal (Split Right, Split Down, Clear Buffer, Rename Tab, New Remote Tab and the pane commands): the editor’s command has it while the editor has the keyboard, the terminal’s everywhere else. That is how <kbd>⌘D</kbd> duplicates a line in the editor and splits the terminal elsewhere. In the same way the sidebar’s Move to Trash and the editor’s Delete Line can both be <kbd>⌘⌫</kbd>, Rename in the sidebar and Open in the Git Log are both <kbd>↩︎</kbd>, and the sidebar’s Reveal in Finder and Rename Tab are both <kbd>⌥⌘R</kbd>: Reveal in Finder while the sidebar has the keyboard, Rename Tab everywhere else. The branch popup has the keyboard while it is open, so its keys can be any other command’s too: its <kbd>⌘C</kbd> copies a branch’s name, and Edit › Copy is <kbd>⌘C</kbd> everywhere else. Settings lists all of them on the key and does not call that a clash; point at a shortcut to see which part has it. **Accept** on a proposed edit is the exception: it works wherever the keyboard is in the window while the proposed edit is shown, and the project sidebar can be beside it, so it can’t share a key with the sidebar’s commands. While the menus are open over the editor, the shared key shows on the editor’s command.
 
 A shortcut needs <kbd>⌘</kbd> or <kbd>⌃</kbd> (or a function key), so it can never swallow ordinary typing. A changed command shows a **Default** button that puts its shortcut back, and **Restore All Defaults** resets everything. Changes apply at once, in every menu, including the ⋯ menus and the right-click menus, and in the tooltips that name a key, such as the **+** button’s “New tab (⌘T)”. A command left without a shortcut shows none.
 

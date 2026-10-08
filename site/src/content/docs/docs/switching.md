@@ -64,6 +64,7 @@ Only what you set comes over, never an app’s own defaults. Zed trims trailing 
 | Command | Next Term | VS Code | JetBrains (macOS) |
 |---|---|---|---|
 | New Window | <kbd>⌘N</kbd> | <kbd>⇧⌘N</kbd> | <kbd>⌘N</kbd> |
+| New Folder (in the project sidebar) | <kbd>⇧⌘N</kbd> | no key | <kbd>⇧⌘N</kbd> |
 | Go to File | <kbd>⌘P</kbd> | <kbd>⌘P</kbd> | <kbd>⇧⌘O</kbd>, and <kbd>⌘P</kbd> still works |
 | Save | <kbd>⌘S</kbd> | <kbd>⌘S</kbd> | <kbd>⌥⌘S</kbd> |
 | Save All | <kbd>⌥⌘S</kbd> | <kbd>⌥⌘S</kbd> | <kbd>⌘S</kbd> |

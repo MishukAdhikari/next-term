@@ -176,7 +176,7 @@ Everything here can be undone with <kbd>⌘Z</kbd>.
 | Rename | <kbd>↩︎</kbd>, or right-click › **Rename…** |
 | Move | Drag onto a folder |
 | Copy | Drag with <kbd>⌥</kbd> held |
-| New file, new folder | Right-click › **New File** or **New Folder** |
+| New file, new folder | <kbd>⌥⌘N</kbd>, <kbd>⇧⌘N</kbd>, or right-click › **New File** or **New Folder** |
 | Move to the Trash | <kbd>⌘⌫</kbd> (asks first), or right-click › **Move to Trash** |
 | Open a file | Double-click, or <kbd>⌘↓</kbd> (one click, with **Open files with a single click** on in **Settings › Editor**); from anywhere, <kbd>⌘P</kbd> ([Go to File](/docs/editor/#go-to-file)) |
 
@@ -187,6 +187,8 @@ Rename selects the name without its extension, as Finder does. Open files follow
 ### The right-click menu
 
 **Open**, **Show Changes** (for a changed file), **Open in New Tab** (**Open Folder in New Tab** for a file), **Open as Project**, **Reveal in Finder**, **New File**, **New Folder**, **Rename…**, **Move to Trash**, **Send to Agent**, **Insert Path in Terminal**, **Copy Path**, **Copy Relative Path** and **Refresh**. With several rows selected, the menu acts on all of them.
+
+Each item shows its key, as the menu bar does, and while the sidebar has the keyboard the key does the same to the selected rows: <kbd>⌘↓</kbd> Open, <kbd>⌥⌘G</kbd> Show Changes, <kbd>⌥⌘R</kbd> Reveal in Finder, <kbd>⌥⌘N</kbd> New File, <kbd>⇧⌘N</kbd> New Folder, <kbd>↩︎</kbd> Rename, <kbd>⌘⌫</kbd> Move to Trash, <kbd>⌥⌘K</kbd> Send to Agent, <kbd>⌥⌘C</kbd> Copy Path and <kbd>⌥⇧⌘C</kbd> Copy Relative Path. The Databases and Agent Sessions rows’ menus show theirs the same way: <kbd>⌘↓</kbd> opens a SQLite file or resumes a session, <kbd>⌥⌘O</kbd> shows every session. The rest have no key until you give them one in **Settings › Keyboard Shortcuts**, under Project Sidebar (see [Keys outside the menus](/docs/keyboard-shortcuts/#keys-outside-the-menus)); a key you change there shows the next time a menu opens. With the terminal or the editor in front, the keys do what they do there: <kbd>⌥⌘R</kbd> renames the tab.
 
 ## Databases
 
