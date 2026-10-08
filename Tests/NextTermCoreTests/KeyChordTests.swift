@@ -104,6 +104,11 @@ import Testing
         #expect(KeyBindings.canShareKey("sidebar.trash", "clearBuffer:") && KeyBindings.canShareKey("toggleZoomPane:", "diff.accept"))
         #expect(KeyBindings.canShareKey("branchPopup.copyName", "copy:") && !KeyBindings.canShareKey("sidebar.trash", "copy:"))
         #expect(!KeyBindings.canShareKey("branchPopup.fetch", "branchPopup.delete") && KeyBindings.canShareKey("deleteLine:", "sidebar.trash"))
+        // Accept answers wherever the keyboard is in the window while a proposed edit shows, the sidebar beside it.
+        #expect(!KeyBindings.canShareKey("diff.accept", "sidebar.open") && !KeyBindings.canShareKey("sidebar.rename", "diff.accept"))
+        #expect(KeyBindings.canShareKey("diff.accept", "gitLists.open") && KeyBindings.canShareKey("diff.accept", "duplicateLine:"))
+        #expect(bindings.owners(of: commandReturn, defaults: defaults.merging(["sidebar.open": commandReturn]) { _, new in new }, except: "diff.accept")
+            == ["sidebar.open"])
         // What Settings says about a shared key.
         let titles = ["duplicateLine:": "Duplicate Line", "splitRight:": "Split Right", "sidebar.trash": "Move to Trash", "deleteLine:": "Delete Line",
                       "branchPopup.copyName": "Copy Name", "copy:": "Copy"]

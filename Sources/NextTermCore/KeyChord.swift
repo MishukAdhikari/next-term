@@ -153,10 +153,15 @@ public struct KeyBindings: Equatable, Sendable {
     /// Whether two commands can have the same key: a key can belong to one command per part of the window. Two
     /// parts' commands can share one, and so can a part's and a terminal command (⌘D: Duplicate Line in the editor,
     /// Split Right elsewhere). The branch popup's can share any key, since it has the keyboard while it is open (its
-    /// ⌘C copies a branch's name, Edit › Copy is ⌘C everywhere else). A key of a command for everywhere is its own.
+    /// ⌘C copies a branch's name, Edit › Copy is ⌘C everywhere else). A key of a command for everywhere is its own,
+    /// and so is Accept's from the sidebar's.
     public static func canShareKey(_ first: String, _ second: String) -> Bool {
         let one = scope(of: first), other = scope(of: second)
-        if case .part(let a) = one, case .part(let b) = other { return a != b }
+        if case .part(let a) = one, case .part(let b) = other {
+            // Accept answers wherever the keyboard is in the window, and the sidebar can be beside the proposed edit.
+            if Set([a, b]) == [.diff, .sidebar] { return false }
+            return a != b
+        }
         if case .part(let a) = one { return other == .terminal || a == .branchPopup }
         if case .part(let b) = other { return one == .terminal || b == .branchPopup }
         return false
