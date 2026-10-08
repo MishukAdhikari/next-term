@@ -278,16 +278,34 @@ final class CodeTextView: NSTextView {
         return LineIndex(string)
     }
 
-    /// One edit, undone in one step (named in Edit › Undo), then the selection it gives.
+    /// One edit, undone in one step (named in Edit › Undo), then the selection it gives. ⌘Z puts back the
+    /// caret or the selection from before it, and ⇧⌘Z the one after.
     private func apply(_ edit: LineEdits.Edit, named name: String) {
-        guard shouldChangeText(in: edit.range, replacementString: edit.text) else { return }
+        guard isEditable else { return } // as shouldChangeText would say, before anything goes into the undo step
         breakUndoCoalescing() // typing just before is undone on its own
+        let before = selectedRanges
+        restoresSelection(before, edit.selection, afterEdit: false)
+        guard shouldChangeText(in: edit.range, replacementString: edit.text) else { return }
         replaceCharacters(in: edit.range, with: edit.text)
         didChangeText()
         breakUndoCoalescing()
+        restoresSelection(before, edit.selection, afterEdit: true)
         undoManager?.setActionName(name)
         setSelectedRange(edit.selection)
         scrollRangeToVisible(edit.selection)
+    }
+
+    /// The text's own undo and redo select the text that changed. Registered just before the change, this runs
+    /// after that undo (an undo step runs backwards) and puts `before` back; registered just after, it runs after
+    /// the redo and puts `after` back. Each registers itself again for the next ⌘Z or ⇧⌘Z.
+    private func restoresSelection(_ before: [NSValue], _ after: NSRange, afterEdit: Bool) {
+        undoManager?.registerUndo(withTarget: self) { view in
+            if !afterEdit { view.selectedRanges = before }
+            view.undoManager?.registerUndo(withTarget: view) { view in
+                if afterEdit { view.setSelectedRange(after) }
+                view.restoresSelection(before, after, afterEdit: afterEdit)
+            }
+        }
     }
 
     /// Duplicate Line (⌘D while the editor has the keyboard): the line below itself, or a selection after itself.

@@ -25,15 +25,19 @@ extension SelfTest {
             view.setSelectedRange(NSRange(location: doc.lines.starts[line] + column, length: length))
         }
 
-        /// An edit on the scratch file, the text it leaves, and ⌘Z back to the text before in one step.
-        func step(_ name: String, _ expected: String, selected: NSRange? = nil, _ edit: () -> Void) {
+        /// An edit on the scratch file, the text it leaves, and ⌘Z back to the text before in one step, with the
+        /// caret or selection from before (`selectionBack`: one of the editor's own edits, not AppKit's paste).
+        func step(_ name: String, _ expected: String, selected: NSRange? = nil, selectionBack: Bool = true, _ edit: () -> Void) {
             let before = doc.text
+            let selectionBefore = view.selectedRange()
             edit()
             let selection = view.selectedRange()
             check(doc.text == expected && (selected.map { $0 == selection } ?? true), "line edits: \(name)",
                   "\(doc.text.debugDescription), selected \(selection)")
             doc.undoManager.undo()
-            check(doc.text == before, "line edits: \(name), undone in one step", doc.text.debugDescription)
+            let restored = !selectionBack || view.selectedRange() == selectionBefore
+            check(doc.text == before && restored, "line edits: \(name), undone in one step" + (selectionBack ? ", the selection as it was" : ""),
+                  "\(doc.text.debugDescription), selected \(view.selectedRange())")
         }
         check(doc.text == text, "line edits: the scratch file is edited with plain newlines", doc.text.debugDescription)
         place(line: 1, column: 1)
@@ -55,6 +59,16 @@ extension SelfTest {
         place(line: 0, length: 8)
         step("Move Line Down moves the selected lines and keeps them selected", "three\none\ntwo\n",
              selected: NSRange(location: 6, length: 8)) { view.moveLineDown(nil) }
+        // ⇧⌘Z puts the edit back with the caret it gave, and ⌘Z again the caret from before.
+        place(line: 1, column: 1)
+        view.moveLineDown(nil)
+        doc.undoManager.undo()
+        doc.undoManager.redo()
+        check(doc.text == "one\nthree\ntwo\n" && view.selectedRange() == NSRange(location: 11, length: 0),
+              "line edits: ⇧⌘Z redoes Move Line Down, the caret on the moved line", "\(doc.text.debugDescription), selected \(view.selectedRange())")
+        doc.undoManager.undo()
+        check(doc.text == text && view.selectedRange() == NSRange(location: 5, length: 0), "and ⌘Z undoes it again, the caret back",
+              "\(doc.text.debugDescription), selected \(view.selectedRange())")
         place(line: 0)
         view.moveLineUp(nil)
         check(doc.text == text && !doc.isDirty, "line edits: at the top, Move Line Up leaves the file as it is")
@@ -65,7 +79,9 @@ extension SelfTest {
         await pause(0.1)
         view.duplicateLine(nil)
         doc.undoManager.undo()
-        check(doc.text == "one\ntwo\nxthree\n", "line edits: ⌘Z after typing and Duplicate Line undoes only the duplicate", doc.text.debugDescription)
+        check(doc.text == "one\ntwo\nxthree\n" && view.selectedRange() == NSRange(location: 9, length: 0),
+              "line edits: ⌘Z after typing and Duplicate Line undoes only the duplicate, the caret after the typing",
+              "\(doc.text.debugDescription), selected \(view.selectedRange())")
         doc.undoManager.undo()
         check(doc.text == text, "line edits: and the typing after it", doc.text.debugDescription)
 
@@ -96,7 +112,8 @@ extension SelfTest {
         step("whole-line paste: pasted with nothing selected, the line goes in above the caret's line, the caret staying in its text",
              "two\none\ntwo\nthree\n", selected: NSRange(location: 5, length: 0)) { view.paste(nil) }
         place(line: 0, column: 1, length: 1)
-        step("whole-line paste: over a selection, it replaces the selection as any paste does", "otwo\ne\ntwo\nthree\n") { view.paste(nil) }
+        step("whole-line paste: over a selection, it replaces the selection as any paste does", "otwo\ne\ntwo\nthree\n",
+             selectionBack: false) { view.paste(nil) }
         place(line: 2, column: 2)
         step("whole-line cut: ⌘X with nothing selected cuts the caret's line", "one\ntwo\n") { view.cut(nil) }
         check(board.string(forType: .string) == "three\n", "whole-line cut: the line is on the clipboard", board.string(forType: .string).debugDescription)
@@ -105,7 +122,7 @@ extension SelfTest {
         check(board.string(forType: .string) == "one" && board.string(forType: CodeTextView.wholeLineType) == nil,
               "a selection copies as before, and pastes where the caret is")
         place(line: 1)
-        step("a selection's copy pastes at the caret", "one\nonetwo\nthree\n") { view.paste(nil) }
+        step("a selection's copy pastes at the caret", "one\nonetwo\nthree\n", selectionBack: false) { view.paste(nil) }
 
         // Copy Path with Line: the path from the project, with the caret's line or the selected lines; also in the
         // editor's right-click menu.
