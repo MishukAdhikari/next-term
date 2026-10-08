@@ -56,13 +56,12 @@ final class PaneView: NSView {
 }
 
 /// Between panes: a hairline that shows against the terminal background, easy to grab.
-final class PaneSplitView: NSSplitView, NSSplitViewDelegate {
+final class PaneSplitView: HairlineSplitView, NSSplitViewDelegate {
     weak var split: PaneGroup.Split?
     /// Set while the group lays itself out, so its own moves are not taken for the user's.
     var applying = false
 
-    override var dividerColor: NSColor { WorkSplitView.line }
-    override var dividerThickness: CGFloat { 1 }
+    override var lineColor: NSColor { WorkSplitView.line }
 
     func splitView(_ splitView: NSSplitView, effectiveRect proposedEffectiveRect: NSRect, forDrawnRect drawnRect: NSRect,
                    ofDividerAt dividerIndex: Int) -> NSRect {

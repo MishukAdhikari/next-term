@@ -3167,6 +3167,15 @@ enum SelfTest {
         }
         let found = problems()
         check(found.isEmpty, "nothing open: the terminal fills the work area, edge to edge", found)
+        // With nothing beside it, no line either. AppKit kept the editor's divider showing in a layer above the
+        // terminal: down through it where the editor had ended, then (once the work area was laid out again) at
+        // its edge, beside the sidebar's.
+        let over = await linesOverTerminal(c)
+        check(over.isEmpty, "nothing open: no line is left over the terminal where the editor ended", over)
+        work.needsLayout = true
+        window.layoutIfNeeded()
+        let edgeLine = await linesOverTerminal(c)
+        check(edgeLine.isEmpty, "… nor at the terminal's edge, once the work area is laid out again", edgeLine)
 
         let edge = work.convert(NSPoint.zero, to: nil).x // the sidebar's right edge, in the window
         let middle = work.convert(NSPoint(x: 0, y: work.bounds.midY), to: nil).y
@@ -3239,6 +3248,44 @@ enum SelfTest {
         c.applyLayout()
         restoreFraction()
         restore("sidebarWidth", saved.width) // laying out saves the width it placed (the default, if none was saved)
+    }
+
+    /// Lines drawn over the terminal in front, as the window shows it: in its margins, which are plain
+    /// background (along the row between its tab bar and its text, and down its first column), any pixel not
+    /// the background's is one. Empty when there is none. It looks at a tab of one pane, the terminal on
+    /// screen: otherwise it says why it could not look.
+    private static func linesOverTerminal(_ c: TerminalWindowController) async -> String {
+        guard let window = c.window, let group = c.activeGroup, !group.isSplit, !c.terminalRailed,
+              !group.view.isHiddenOrHasHiddenAncestor else { return "could not look: the tab in front is split, or the terminal is folded" }
+        window.displayIfNeeded()
+        await pause(0.4)
+        guard let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming, .nominalResolution]),
+              image.width > 0 else { return "could not look: no capture of the window" }
+        let scale = CGFloat(image.width) / window.frame.width
+        let width = image.width, height = image.height
+        var data = [UInt8](repeating: 0, count: width * height * 4)
+        guard let context = CGContext(data: &data, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            return "could not look: no bitmap"
+        }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        func pixel(_ x: Int, _ y: Int) -> [Int] {
+            let i = (y * width + x) * 4
+            return [Int(data[i]), Int(data[i + 1]), Int(data[i + 2])]
+        }
+        // In the window (y up), then in the image (top down).
+        let frame = group.view.convert(group.view.bounds, to: nil)
+        func row(_ y: CGFloat) -> Int { min(height - 1, max(0, Int((window.frame.height - y) * scale))) }
+        func column(_ x: CGFloat) -> Int { min(width - 1, max(0, Int(x * scale))) }
+        let background = pixel(column(frame.minX + 4), row(frame.maxY - 2))
+        func isBackground(_ x: Int, _ y: Int) -> Bool { !zip(pixel(x, y), background).contains { abs($0 - $1) > 6 } }
+        let top = row(frame.maxY - 2), edge = column(frame.minX)
+        let across = (column(frame.minX)..<column(frame.maxX)).filter { !isBackground($0, top) }
+        let down = (row(frame.maxY - 8)..<row(frame.minY + 16)).filter { !isBackground(edge, $0) }
+        var found: [String] = []
+        if !across.isEmpty { found.append("across the top margin at x \(across.prefix(4).map { CGFloat($0) / scale })") }
+        if !down.isEmpty { found.append("down the first column, \(down.count) pixels") }
+        return found.joined(separator: "; ")
     }
 
     /// A press at `from`, moved to `to` in `steps` and released there (window coordinates): real mouse events
@@ -4034,7 +4081,7 @@ enum SelfTest {
             case .left: placed = t.maxX <= e.minX + 1
             }
             if let split = area.superview as? NSSplitView {
-                check(split.dividerColor != Theme.background && split.dividerThickness >= 1,
+                check(split.dividerColor != Theme.background && split.dividerColor.alphaComponent == 1 && split.dividerThickness >= 1,
                       "\(position.rawValue): a visible line between editor and terminal")
             }
             check(placed && e.width > 200 && t.width > 200 && e.height > 90 && t.height > 90, "terminal on the \(position.rawValue)",

@@ -25,18 +25,39 @@ final class TerminalWindow: NSWindow {
     }
 }
 
-/// Split view with a quiet one-pixel divider in the theme's colour.
-final class ThemedSplitView: NSSplitView {
-    override var dividerColor: NSColor { Theme.background }
+/// A split view whose one-point lines show only between panes that both show: never beside a hidden pane
+/// (the editor with nothing open, a hidden sidebar), where there is nothing on the other side to set apart.
+///
+/// AppKit (macOS 26) puts each divider in a layer of its own, above the panes, in `dividerColor`, and keeps
+/// one beside a hidden pane showing: where the divider last was (the editor's share, before its last file
+/// closed) until the split is laid out again, then along the edge of the pane that took the room. That drew
+/// a line down through the terminal and its tab bar, over its text. So while a pane is hidden the lines are
+/// clear (AppKit colours a split's dividers alike; these splits have two panes, and a tab's panes never
+/// hide), and a pane showing or hiding lays them out and colours them again at once.
+class HairlineSplitView: NSSplitView {
+    /// The line between two panes that show.
+    var lineColor: NSColor { Theme.background }
+    override var dividerColor: NSColor { arrangedSubviews.contains(where: \.isHidden) ? .clear : lineColor }
     override var dividerThickness: CGFloat { 1 }
+
+    /// The window controller calls this as a pane shows or hides. Left alone, AppKit moves and recolours a
+    /// divider only at the next resize; laid out now, it takes the colour that goes with the panes at once.
+    /// Redrawn too, for an AppKit that draws the dividers itself instead of in layers of their own.
+    override func adjustSubviews() {
+        super.adjustSubviews()
+        needsLayout = true
+        needsDisplay = true
+    }
 }
+
+/// Between the sidebar and the work area: a quiet line in the theme's colour.
+final class ThemedSplitView: HairlineSplitView {}
 
 /// Between the editor and the terminal: both have the same background, so the line between them must
 /// show (a hairline a few shades lighter), and it is easy to grab (see effectiveRect).
-final class WorkSplitView: NSSplitView {
+final class WorkSplitView: HairlineSplitView {
     static let line = NSColor(hex: 0x393B40)
-    override var dividerColor: NSColor { Self.line }
-    override var dividerThickness: CGFloat { 1 }
+    override var lineColor: NSColor { Self.line }
 }
 
 final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSplitViewDelegate, NSMenuItemValidation,
