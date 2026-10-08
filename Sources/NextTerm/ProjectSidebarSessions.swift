@@ -31,39 +31,42 @@ extension ProjectSidebarView {
         return nil
     }
 
-    /// Resume (Go to Tab when a tab has it open), Fork where the agent can, Copy Resume Command.
+    /// Resume (Go to Tab when a tab has it open; Open's ⌘↓), Fork where the agent can, Copy Resume Command.
     func sessionMenu(for item: SessionItem) -> NSMenu {
         let menu = NSMenu(title: "Session")
         let session = item.session
-        add(to: menu, item.inTab ? "Go to Tab" : "Resume", #selector(resumeSessionFromMenu(_:)), session)
-        if session.agent.canFork { add(to: menu, "Fork", #selector(forkSessionFromMenu(_:)), session) }
+        add(to: menu, item.inTab ? "Go to Tab" : "Resume", #selector(resumeSessionFromMenu(_:)), session, "sidebar.open")
+        if session.agent.canFork { add(to: menu, "Fork", #selector(forkSessionFromMenu(_:)), session, "sidebar.forkSession") }
         menu.addItem(.separator())
-        add(to: menu, "Copy Resume Command", #selector(copyResumeCommand(_:)), session)
+        add(to: menu, "Copy Resume Command", #selector(copyResumeCommand(_:)), session, "sidebar.copyResumeCommand")
         return menu
     }
 
-    /// Continue Latest for each agent that has a session in this folder, the whole list, Refresh.
+    /// Continue Latest for each agent that has a session in this folder, the whole list (File › Resume Agent Session…,
+    /// with its key), Refresh. Continue Latest Session's key is the first agent's: one key can do one of them.
     func sessionsGroupMenu() -> NSMenu {
         let menu = NSMenu(title: "Agent Sessions")
         if let root {
             for agent in sessionsGroup.agents(in: root.path) {
-                let item = add(to: menu, "Continue Latest \(agent.name) Session", #selector(continueLatestFromMenu(_:)), nil)
+                let command = menu.items.isEmpty ? "sidebar.continueLatest" : nil
+                let item = add(to: menu, "Continue Latest \(agent.name) Session", #selector(continueLatestFromMenu(_:)), nil, command)
                 item.representedObject = agent.rawValue
                 item.toolTip = agent.continueCommand
             }
         }
         if !menu.items.isEmpty { menu.addItem(.separator()) }
-        let all = add(to: menu, "Show All Sessions…", #selector(showAllSessionsFromMenu(_:)), nil)
-        KeyboardShortcuts.set(KeyboardShortcuts.shared.chord(for: "resumeSession:"), on: all)
-        add(to: menu, "Refresh Sessions", #selector(refreshSessionsFromMenu(_:)), nil)
+        add(to: menu, "Show All Sessions…", #selector(showAllSessionsFromMenu(_:)), nil, "resumeSession:")
+        add(to: menu, "Refresh Sessions", #selector(refreshSessionsFromMenu(_:)), nil, "sidebar.refresh")
         return menu
     }
 
+    /// An item, as `command` with its key (KeyboardShortcuts.show), or with none.
     @discardableResult
-    private func add(to menu: NSMenu, _ title: String, _ action: Selector, _ session: AgentSession?) -> NSMenuItem {
+    private func add(to menu: NSMenu, _ title: String, _ action: Selector, _ session: AgentSession?, _ command: String?) -> NSMenuItem {
         let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
         item.target = self
         if let session { item.representedObject = SessionBox(session) }
+        if let command { KeyboardShortcuts.show(command, on: item) }
         return item
     }
 

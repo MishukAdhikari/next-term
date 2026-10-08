@@ -111,19 +111,41 @@ public struct KeyBindings: Equatable, Sendable {
         public var takesPlainKeys: Bool { self == .sidebar || self == .gitLists }
     }
 
-    /// A command outside the menus, kept to one part of the window, with its default key.
+    /// A command outside the menus, kept to one part of the window, with its default key (nil: none until you give it one).
     public struct PartCommand: Equatable, Sendable {
         public let id: String
         public let title: String
         public let part: Part
-        public let chord: KeyChord
+        public let chord: KeyChord?
     }
 
-    /// The keys outside the menus, which Settings lists with the part they belong to.
+    /// The keys outside the menus, which Settings lists with the part they belong to. The sidebar's are the items of its
+    /// right-click menu, in the menu's order, the rows' own after the files'; the menu shows each one's key. Its Send to
+    /// Agent, Show Changes and Show All Sessions… are the menu bar's commands, which act on the sidebar's selection.
     public static let partCommands: [PartCommand] = [
         PartCommand(id: "sidebar.open", title: "Open", part: .sidebar, chord: KeyChord(key: "\u{F701}", command: true)),
+        PartCommand(id: "sidebar.openTab", title: "Open in New Tab", part: .sidebar, chord: nil),
+        PartCommand(id: "sidebar.openProject", title: "Open as Project", part: .sidebar, chord: nil),
+        // VS Code's; File › Rename Tab… has ⌥⌘R everywhere else (a terminal command: the two share it).
+        PartCommand(id: "sidebar.reveal", title: "Reveal in Finder", part: .sidebar, chord: KeyChord(key: "r", command: true, option: true)),
+        // ⌘N is File › New Window, everywhere, so New File can't have it. ⇧⌘N is Finder's New Folder.
+        PartCommand(id: "sidebar.newFile", title: "New File", part: .sidebar, chord: KeyChord(key: "n", command: true, option: true)),
+        PartCommand(id: "sidebar.newFolder", title: "New Folder", part: .sidebar, chord: KeyChord(key: "n", command: true, shift: true)),
         PartCommand(id: "sidebar.rename", title: "Rename", part: .sidebar, chord: KeyChord(key: "\r")),
         PartCommand(id: "sidebar.trash", title: "Move to Trash", part: .sidebar, chord: KeyChord(key: "\u{8}", command: true)),
+        PartCommand(id: "sidebar.insertPath", title: "Insert Path in Terminal", part: .sidebar, chord: nil),
+        // VS Code's, as Finder's Copy as Pathname is ⌥⌘C.
+        PartCommand(id: "sidebar.copyPath", title: "Copy Path", part: .sidebar, chord: KeyChord(key: "c", command: true, option: true)),
+        PartCommand(id: "sidebar.copyRelativePath", title: "Copy Relative Path", part: .sidebar,
+                    chord: KeyChord(key: "c", command: true, shift: true, option: true)),
+        PartCommand(id: "sidebar.refresh", title: "Refresh", part: .sidebar, chord: nil),
+        PartCommand(id: "sidebar.openInTablePlus", title: "Open in TablePlus", part: .sidebar, chord: nil),
+        PartCommand(id: "sidebar.openInVercel", title: "Open in Vercel", part: .sidebar, chord: nil),
+        PartCommand(id: "sidebar.copyName", title: "Copy Connection Name", part: .sidebar, chord: nil),
+        PartCommand(id: "sidebar.revealSource", title: "Reveal Source File", part: .sidebar, chord: nil),
+        PartCommand(id: "sidebar.forkSession", title: "Fork Session", part: .sidebar, chord: nil),
+        PartCommand(id: "sidebar.copyResumeCommand", title: "Copy Resume Command", part: .sidebar, chord: nil),
+        PartCommand(id: "sidebar.continueLatest", title: "Continue Latest Session", part: .sidebar, chord: nil),
         PartCommand(id: "gitLists.open", title: "Open Commit or File", part: .gitLists, chord: KeyChord(key: "\r")),
         PartCommand(id: "diff.accept", title: "Accept", part: .diff, chord: KeyChord(key: "\r", command: true)),
         PartCommand(id: "branchPopup.fetch", title: "Fetch", part: .branchPopup, chord: KeyChord(key: "r", command: true)),

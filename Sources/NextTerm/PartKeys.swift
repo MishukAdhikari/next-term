@@ -1,10 +1,10 @@
 import AppKit
 import NextTermCore
 
-// The keys outside the menus (KeyBindings.partCommands): the sidebar's Rename, Move to Trash and Open, the Git
-// lists' Open, a proposed edit's Accept and the branch popup's keys. Settings › Keyboard Shortcuts lists them with
-// the part of the window they belong to, and changes them as it changes a menu command's; each part answers its
-// own keys, only where it always did.
+// The keys outside the menus (KeyBindings.partCommands): the sidebar's right-click menu's commands, the Git lists'
+// Open, a proposed edit's Accept and the branch popup's keys. Settings › Keyboard Shortcuts lists them with the part
+// of the window they belong to, and changes them as it changes a menu command's; each part answers its own keys,
+// only while it has the keyboard (Accept: while it shows).
 extension KeyboardShortcuts {
     /// The commands outside the menus, as Settings lists them: the part of the window in place of a menu path.
     static var partCommands: [Command] {
@@ -21,6 +21,15 @@ extension KeyboardShortcuts {
     func hint(_ words: String, command id: String) -> String {
         guard let chord = chord(for: id) else { return words }
         return "\(words) (\(chord.display))"
+    }
+
+    /// A right-click or ⋯ menu's item as the command it is in Settings (its identifier), with the key that command has
+    /// now, shown as the menu bar shows one; none while it has none. Only shown: AppKit looks for keys in the menu bar
+    /// alone, never in a view's menu, so the key still goes to the command's own handler (the sidebar's, or the menu
+    /// bar's for a menu command), and only where that handler answers it. Menus built when they open show a change at once.
+    static func show(_ command: String, on item: NSMenuItem) {
+        item.identifier = NSUserInterfaceItemIdentifier(command)
+        set(shared.chord(for: command), on: item)
     }
 }
 

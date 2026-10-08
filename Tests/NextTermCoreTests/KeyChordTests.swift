@@ -79,12 +79,37 @@ import Testing
         #expect(KeyBindings.scope(of: "sidebar.trash") == .part(.sidebar) && KeyBindings.scope(of: "duplicateLine:") == .part(.editor))
         #expect(KeyBindings.scope(of: "splitRight:") == .terminal && KeyBindings.scope(of: "newTab:") == .everywhere)
         // No two commands of one part start on one key, and no default clashes with another.
-        let defaults = Dictionary(uniqueKeysWithValues: commands.map { ($0.id, Optional($0.chord)) })
+        let defaults = Dictionary(uniqueKeysWithValues: commands.map { ($0.id, $0.chord) })
             .merging(["copy:": KeyChord(key: "c", command: true), "deleteLine:": KeyChord(key: "\u{8}", command: true)]) { first, _ in first }
         let bindings = KeyBindings()
         for command in commands {
-            #expect(bindings.owners(of: command.chord, defaults: defaults, except: command.id).isEmpty, "\(command.id)")
+            guard let chord = command.chord else { continue }
+            #expect(bindings.owners(of: chord, defaults: defaults, except: command.id).isEmpty, "\(command.id)")
         }
+    }
+
+    @Test func theSidebarMenusItemsAreCommands() {
+        func chord(_ id: String) -> KeyChord? { KeyBindings.partCommands.first { $0.id == id }?.chord }
+        // The keys the other apps use where the sidebar has them free; the rest wait for one.
+        let keyed = ["sidebar.reveal", "sidebar.newFile", "sidebar.newFolder", "sidebar.copyPath", "sidebar.copyRelativePath"]
+        #expect(keyed.compactMap { chord($0)?.display } == ["⌥⌘R", "⌥⌘N", "⇧⌘N", "⌥⌘C", "⌥⇧⌘C"])
+        let unkeyed = ["sidebar.openTab", "sidebar.openProject", "sidebar.insertPath", "sidebar.refresh", "sidebar.openInTablePlus",
+                       "sidebar.openInVercel", "sidebar.copyName", "sidebar.revealSource", "sidebar.forkSession", "sidebar.copyResumeCommand",
+                       "sidebar.continueLatest"]
+        #expect(unkeyed.allSatisfy { id in KeyBindings.partCommands.contains { $0.id == id } && chord(id) == nil })
+        #expect((keyed + unkeyed).allSatisfy { KeyBindings.scope(of: $0) == .part(.sidebar) })
+        // Reveal in Finder shares ⌥⌘R with Rename Tab, a terminal command; New File can't have New Window's ⌘N.
+        let menus: [String: KeyChord?] = ["renameTab:": KeyChord(key: "r", command: true, option: true), "newWindow:": KeyChord(key: "n", command: true)]
+        let defaults = Dictionary(uniqueKeysWithValues: KeyBindings.partCommands.map { ($0.id, $0.chord) }).merging(menus) { first, _ in first }
+        let bindings = KeyBindings()
+        #expect(bindings.owners(of: KeyChord(key: "r", command: true, option: true), defaults: defaults, except: "sidebar.reveal").isEmpty)
+        #expect(bindings.sharers(of: KeyChord(key: "r", command: true, option: true), defaults: defaults, except: "sidebar.reveal") == ["renameTab:"])
+        #expect(bindings.owners(of: KeyChord(key: "n", command: true), defaults: defaults, except: "sidebar.newFile") == ["newWindow:"])
+        // VS Code's set moves New Window to ⇧⌘N, so New Folder has no key there.
+        let vsCode = KeymapPreset.vsCode
+        #expect(vsCode.chord(for: "newWindow:", default: nil) == chord("sidebar.newFolder"))
+        #expect(vsCode.chord(for: "sidebar.newFolder", default: chord("sidebar.newFolder")) == nil)
+        #expect(KeymapPreset.jetBrains.chord(for: "sidebar.newFolder", default: chord("sidebar.newFolder"))?.display == "⇧⌘N")
     }
 
     @Test func aKeyBelongsToOneCommandPerPart() {

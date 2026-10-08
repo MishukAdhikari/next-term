@@ -33,11 +33,14 @@ enum DatabaseAction { case open, tablePlus, terminal, vercel }
 enum SessionAction: Equatable { case resume, fork, continueLatest(AgentKind), showAll }
 
 /// Outline view with the keys a file tree needs: Return renames (as in Finder), ⌘⌫ moves to the Trash,
-/// ⌘↓ opens (by default: Settings can change them). It notes how each click began, for "Open files with a single click".
+/// ⌘↓ opens, and the right-click menu's other commands have theirs (by default: Settings can change them). It notes
+/// how each click began, for "Open files with a single click".
 final class SidebarOutlineView: NSOutlineView {
     var onRename: (() -> Void)?
     var onTrash: (() -> Void)?
     var onOpen: (() -> Void)?
+    /// The right-click menu's other commands (Copy Path, New File…), by their ids in KeyBindings.partCommands.
+    var onCommand: ((String) -> Void)?
     /// The row the last click went down on (a click released over another row dragged across rows).
     private(set) var mouseDownRow = -1
     /// A rename was going on when the last click went down: that click only ends it.
@@ -74,13 +77,15 @@ final class SidebarOutlineView: NSOutlineView {
         return super.performKeyEquivalent(with: event)
     }
 
-    /// Rename, Move to Trash and Open on their keys: ↩ (or Enter), ⌘⌫ and ⌘↓, or what Settings › Keyboard Shortcuts says.
+    /// Rename, Move to Trash and Open on their keys: ↩ (or Enter), ⌘⌫ and ⌘↓, or what Settings › Keyboard Shortcuts says;
+    /// the menu's other commands on theirs (⌥⌘C Copy Path, ⌥⌘N New File…).
     private func perform(_ event: NSEvent) -> Bool {
-        switch KeyboardShortcuts.shared.partCommand(for: event, in: .sidebar) {
+        guard let id = KeyboardShortcuts.shared.partCommand(for: event, in: .sidebar) else { return false }
+        switch id {
         case "sidebar.rename": onRename?()
         case "sidebar.trash": onTrash?()
         case "sidebar.open": onOpen?()
-        default: return false
+        default: onCommand?(id)
         }
         return true
     }
@@ -171,6 +176,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         outline.onRename = { [weak self] in self?.renameSelected() }
         outline.onTrash = { [weak self] in self?.trashSelected() }
         outline.onOpen = { [weak self] in self?.openSelected() }
+        outline.onCommand = { [weak self] id in self?.perform(command: id) }
         let menu = NSMenu()
         menu.delegate = self
         outline.menu = menu
@@ -843,9 +849,13 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         outline.selectedRowIndexes.compactMap { outline.item(atRow: $0) as? FileNode }
     }
 
+    /// The row in place of the right-clicked one while a menu is built for it (`fill`), and while a command's key runs
+    /// (the selection's first).
+    private var menuRow: Int?
+
     /// Right-click acts on the clicked row, or on the whole selection if the clicked row is part of it.
     private var menuNodes: [FileNode] {
-        let clicked = outline.clickedRow
+        let clicked = menuRow ?? outline.clickedRow
         if clicked >= 0, !outline.selectedRowIndexes.contains(clicked) {
             return (outline.item(atRow: clicked) as? FileNode).map { [$0] } ?? []
         }
@@ -860,9 +870,17 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     // MARK: context menu
 
-    func menuNeedsUpdate(_ menu: NSMenu) {
+    func menuNeedsUpdate(_ menu: NSMenu) { fill(menu, forRow: outline.clickedRow) }
+
+    /// The right-click menu of `row` (of the selection, when `row` is part of it), each item showing the key its command
+    /// has in Settings › Keyboard Shortcuts (KeyboardShortcuts.show). Built as it opens, so a key changed there shows
+    /// the next time.
+    func fill(_ menu: NSMenu, forRow row: Int) {
+        menuRow = row
+        defer { menuRow = nil }
         menu.removeAllItems()
-        if let item = outline.item(atRow: outline.clickedRow) as? DatabaseItem {
+        let clicked = row >= 0 ? outline.item(atRow: row) : nil
+        if let item = clicked as? DatabaseItem {
             let built = databaseMenu(for: item.database)
             for entry in built.items {
                 built.removeItem(entry)
@@ -870,56 +888,75 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             }
             return
         }
-        if outline.item(atRow: outline.clickedRow) is DatabasesGroup {
-            add(menu, "Refresh Databases", #selector(refreshDatabasesFromMenu))
+        if clicked is DatabasesGroup {
+            add(menu, "Refresh Databases", #selector(refreshDatabasesFromMenu), "sidebar.refresh")
             return
         }
-        if let built = sessionsMenu(forRow: outline.clickedRow) {
+        if let built = sessionsMenu(forRow: row) {
             for entry in built.items {
                 built.removeItem(entry)
                 menu.addItem(entry)
             }
             return
         }
-        if let entry = outline.item(atRow: outline.clickedRow) as? DeletedEntry {
+        if let entry = clicked as? DeletedEntry {
             // Not on disk: nothing to open, rename or move; what it was is still in git.
-            if !entry.isDirectory { add(menu, "Show What Was Deleted", #selector(showDeletedFromMenu)).representedObject = entry }
-            add(menu, "Copy Path", #selector(copyDeletedPath(_:))).representedObject = entry
-            add(menu, "Copy Relative Path", #selector(copyDeletedPath(_:))).representedObject = entry
+            if !entry.isDirectory {
+                add(menu, "Show What Was Deleted", #selector(showDeletedFromMenu), "showChanges:").representedObject = entry
+            }
+            add(menu, "Copy Path", #selector(copyDeletedPath(_:)), "sidebar.copyPath").representedObject = entry
+            add(menu, "Copy Relative Path", #selector(copyDeletedPath(_:)), "sidebar.copyRelativePath").representedObject = entry
             return
         }
         let nodes = menuNodes
         guard let node = nodes.first else { return }
         let single = nodes.count == 1
-        if single && !node.isDirectory { add(menu, "Open", #selector(openNode)) }
-        if single && !node.isDirectory, change(of: node) != nil { add(menu, "Show Changes", #selector(showChangesFromMenu)) }
+        if single && !node.isDirectory { add(menu, "Open", #selector(openNode), "sidebar.open") }
+        if single && !node.isDirectory, change(of: node) != nil { add(menu, "Show Changes", #selector(showChangesFromMenu), "showChanges:") }
         if single {
             let folder = node.isDirectory ? node.path : node.url.deletingLastPathComponent().path
-            add(menu, node.isDirectory ? "Open in New Tab" : "Open Folder in New Tab", #selector(openTab)).representedObject = folder
+            let title = node.isDirectory ? "Open in New Tab" : "Open Folder in New Tab"
+            add(menu, title, #selector(openTab), "sidebar.openTab").representedObject = folder
             if node.isDirectory && node !== root {
-                add(menu, "Open as Project", #selector(openAsProject)).representedObject = node.path
+                add(menu, "Open as Project", #selector(openAsProject), "sidebar.openProject").representedObject = node.path
             }
         }
-        add(menu, "Reveal in Finder", #selector(revealNode))
+        add(menu, "Reveal in Finder", #selector(revealNode), "sidebar.reveal")
         menu.addItem(.separator())
-        add(menu, "New File", #selector(newFile))
-        add(menu, "New Folder", #selector(newFolder))
-        if single && node !== root { add(menu, "Rename…", #selector(renameFromMenu)) }
-        if !nodes.contains(where: { $0 === root }) { add(menu, "Move to Trash", #selector(trashFromMenu)) }
+        add(menu, "New File", #selector(newFile), "sidebar.newFile")
+        add(menu, "New Folder", #selector(newFolder), "sidebar.newFolder")
+        if single && node !== root { add(menu, "Rename…", #selector(renameFromMenu), "sidebar.rename") }
+        if !nodes.contains(where: { $0 === root }) { add(menu, "Move to Trash", #selector(trashFromMenu), "sidebar.trash") }
         menu.addItem(.separator())
-        add(menu, nodes.count == 1 ? "Send to Agent" : "Send \(nodes.count) Items to Agent", #selector(sendToAgentFromMenu))
-        add(menu, "Insert Path in Terminal", #selector(insertPath))
-        add(menu, "Copy Path", #selector(copyPath))
-        add(menu, "Copy Relative Path", #selector(copyRelativePath))
+        // The menu bar's Send to Agent, which sends the sidebar's selection while it has the keyboard.
+        add(menu, nodes.count == 1 ? "Send to Agent" : "Send \(nodes.count) Items to Agent", #selector(sendToAgentFromMenu), "sendToAgent:")
+        add(menu, "Insert Path in Terminal", #selector(insertPath), "sidebar.insertPath")
+        add(menu, "Copy Path", #selector(copyPath), "sidebar.copyPath")
+        add(menu, "Copy Relative Path", #selector(copyRelativePath), "sidebar.copyRelativePath")
         menu.addItem(.separator())
-        add(menu, "Refresh", #selector(refreshFromMenu))
+        add(menu, "Refresh", #selector(refreshFromMenu), "sidebar.refresh")
     }
 
+    /// An item of the menu, as `command` (a sidebar command, or the menu bar's that acts on the sidebar's selection).
     @discardableResult
-    private func add(_ menu: NSMenu, _ title: String, _ action: Selector) -> NSMenuItem {
+    private func add(_ menu: NSMenu, _ title: String, _ action: Selector, _ command: String) -> NSMenuItem {
         let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
         item.target = self
+        KeyboardShortcuts.show(command, on: item)
         return item
+    }
+
+    /// A sidebar command's key, pressed while the tree has the keyboard: the item for it in the menu a right-click on
+    /// the selection shows, so the key does what that item says, to the same rows. A command that menu doesn't offer
+    /// (Open as Project on a file) does nothing. Rename, Move to Trash and Open have handlers of their own.
+    func perform(command id: String) {
+        let row = outline.selectedRowIndexes.first ?? -1
+        let menu = NSMenu()
+        fill(menu, forRow: row)
+        guard let item = menu.items.first(where: { $0.identifier?.rawValue == id }), let action = item.action else { return }
+        menuRow = row
+        defer { menuRow = nil }
+        NSApp.sendAction(action, to: item.target, from: item)
     }
 
     @objc private func showDeletedFromMenu(_ sender: NSMenuItem) {

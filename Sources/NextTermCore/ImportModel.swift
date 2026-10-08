@@ -17,7 +17,8 @@ public enum KeymapPreset: String, CaseIterable, Codable, Sendable {
         }
     }
 
-    /// The commands whose shortcut differs from Next Term's (nil: no shortcut). Ids as menus give them.
+    /// The commands whose shortcut differs from Next Term's (nil: no shortcut). Ids as menus give them, or as
+    /// `KeyBindings.partCommands` does for the keys outside the menus.
     public var overrides: [String: KeyChord?] {
         let cmd = { (key: String) in KeyChord(key: key, command: true) }
         switch self {
@@ -27,6 +28,7 @@ public enum KeymapPreset: String, CaseIterable, Codable, Sendable {
             let none: KeyChord? = nil
             return [
                 "newWindow:": KeyChord(key: "n", command: true, shift: true),
+                "sidebar.newFolder": none,         // ⇧⌘N is New Window there, and VS Code's explorer has no key for it
                 "splitRight:": cmd("\\"),          // ⌘D is Add Selection to Next Find Match there
                 "duplicateLine:": none,            // so ⌘D does nothing unexpected; ⇧⌥↓ can't be a menu shortcut here (needs ⌘ or ⌃)
                 "replaceInFiles:": KeyChord(key: "h", command: true, shift: true),

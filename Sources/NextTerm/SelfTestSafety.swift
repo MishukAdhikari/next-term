@@ -1,12 +1,13 @@
 import AppKit
 import NextTermCore
 
-/// The keys outside the menus as commands in Settings › Keyboard Shortcuts (the sidebar's, the Git lists', a proposed
-/// edit's Accept, the branch popup's), an editor save that keeps a private file private (SafeWrite), and where
-/// LangGraph Studio links open.
+/// The keys outside the menus as commands in Settings › Keyboard Shortcuts (the sidebar's, shown in its right-click
+/// menu, the Git lists', a proposed edit's Accept, the branch popup's), an editor save that keeps a private file private
+/// (SafeWrite), and where LangGraph Studio links open.
 extension SelfTest {
     static func safetyChecks(_ c: TerminalWindowController, proj: URL) async {
         partKeyChecks(c, proj: proj)
+        await sidebarMenuKeyChecks(c, proj: proj)
         await privateSaveChecks(c, proj: proj)
         unseenSaveChecks(c, proj: proj)
         studioLinkChecks()

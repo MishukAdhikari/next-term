@@ -3,28 +3,31 @@ import NextTermCore
 
 /// The Databases rows' menu (right-click and ⋯) and what its items do.
 extension ProjectSidebarView {
-    /// Open (SQLite), the hand-offs that apply, Copy Connection Name, Reveal Source File. Remote rows get
-    /// no terminal hand-off, and TablePlus asks first (its title ends in an ellipsis).
+    /// Open (SQLite), the hand-offs that apply, Copy Connection Name, Reveal Source File, each with the key of its
+    /// sidebar command (Open's ⌘↓; the client in a new tab is Open in New Tab's). Remote rows get no terminal hand-off,
+    /// and TablePlus asks first (its title ends in an ellipsis).
     func databaseMenu(for db: DetectedDatabase) -> NSMenu {
         let menu = NSMenu(title: "Database")
-        func add(_ title: String, _ action: Selector) {
+        func add(_ title: String, _ action: Selector, _ command: String) {
             let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
             item.target = self
             item.representedObject = db
+            KeyboardShortcuts.show(command, on: item)
         }
-        if db.engine == .sqlite, db.isConnection { add("Open", #selector(openDatabaseFromMenu(_:))) }
+        if db.engine == .sqlite, db.isConnection { add("Open", #selector(openDatabaseFromMenu(_:)), "sidebar.open") }
         if DatabaseHandOff.tablePlusOpens(db), DatabaseHandOff.tablePlus != nil {
-            add(db.environment == .remote ? "Open in TablePlus…" : "Open in TablePlus", #selector(openInTablePlusFromMenu(_:)))
+            let title = db.environment == .remote ? "Open in TablePlus…" : "Open in TablePlus"
+            add(title, #selector(openInTablePlusFromMenu(_:)), "sidebar.openInTablePlus")
         }
         if let client = DatabaseHandOff.terminalClient(for: db) {
-            add("Open \(client.name) in New Tab", #selector(openInTerminalFromMenu(_:)))
+            add("Open \(client.name) in New Tab", #selector(openInTerminalFromMenu(_:)), "sidebar.openTab")
         }
         if databaseScan.isVercelLinked || db.providers.contains(.vercel), DatabaseHandOff.vercelCLI != nil {
-            add("Open in Vercel", #selector(openInVercelFromMenu(_:)))
+            add("Open in Vercel", #selector(openInVercelFromMenu(_:)), "sidebar.openInVercel")
         }
         if !menu.items.isEmpty { menu.addItem(.separator()) }
-        add("Copy Connection Name", #selector(copyDatabaseName(_:)))
-        if db.sourceFile != nil { add("Reveal Source File", #selector(revealDatabaseSource(_:))) }
+        add("Copy Connection Name", #selector(copyDatabaseName(_:)), "sidebar.copyName")
+        if db.sourceFile != nil { add("Reveal Source File", #selector(revealDatabaseSource(_:)), "sidebar.revealSource") }
         return menu
     }
 
