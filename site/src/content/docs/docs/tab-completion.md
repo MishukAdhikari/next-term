@@ -85,7 +85,7 @@ With the hook, a server tab works as a zsh tab on your Mac does: zsh’s own lis
 
 Some zsh plugins answer <kbd>⇥</kbd> themselves: fzf-tab opens fzf, and zsh-autocomplete lists as you type. Where one of them, or any other widget of your own, is bound to <kbd>⇥</kbd>, the first <kbd>⇥</kbd> asks whether to use Next Term’s list or keep the plugin:
 
-- **Use Next Term’s List**: Next Term’s list answers <kbd>⇥</kbd>, with zsh’s completions. With zsh-autocomplete, its list as you type turns off too, in Next Term’s tabs only and for as long as each shell runs; your files stay as they are, and other terminals keep it.
+- **Use Next Term’s List**: Next Term’s list answers <kbd>⇥</kbd>, with zsh’s completions. With zsh-autocomplete, its list as you type turns off too, in Next Term’s tabs only and for as long as each shell runs (from a new tab’s first prompt, and in a server tab from its first <kbd>⇥</kbd>); your files stay as they are, and other terminals keep it.
 - **Keep fzf-tab** (or whichever it is): <kbd>⇥</kbd> stays the plugin’s.
 - **Not Now**, or <kbd>⎋</kbd>: the plugin keeps <kbd>⇥</kbd> until Next Term starts again, and Next Term asks again then. The second time, the plugin keeps it for good.
 
