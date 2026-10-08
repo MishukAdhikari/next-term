@@ -71,9 +71,40 @@ public struct KeyBindings: Equatable, Sendable {
     public mutating func reset(_ id: String) { overrides.removeValue(forKey: id) }
     public mutating func resetAll() { overrides.removeAll() }
 
-    /// Which other command already uses `chord`, given every command's default.
+    /// Commands that act only while the editor has the keyboard (Edit › Line), and commands that act on the
+    /// terminal wherever the keyboard is (File › Split Right). One of each can have the same key: the editor's
+    /// command answers it while the editor has the keyboard, the other everywhere else, so ⌘D duplicates a line
+    /// in the editor and splits the terminal elsewhere. Any other two commands on one key clash.
+    public static let editorCommands: Set<String> = ["duplicateLine:", "deleteLine:", "moveLineUp:", "moveLineDown:", "copyPathWithLine:"]
+    public static let terminalCommands: Set<String> = [
+        "newRemoteTab:", "splitRight:", "splitDown:", "renameTab:", "clearBuffer:", "selectPaneLeft:", "selectPaneRight:",
+        "selectPaneAbove:", "selectPaneBelow:", "selectNextPane:", "selectPreviousPane:", "toggleZoomPane:", "equalizePanes:",
+    ]
+
+    /// Whether two commands can have the same key: one acts in the editor, the other on the terminal.
+    public static func canShareKey(_ first: String, _ second: String) -> Bool {
+        if editorCommands.contains(first) { return terminalCommands.contains(second) }
+        if editorCommands.contains(second) { return terminalCommands.contains(first) }
+        return false
+    }
+
+    /// The other commands that already use `chord` and can't share it with `id`, given every command's default.
+    public func owners(of chord: KeyChord, defaults: [String: KeyChord?], except id: String) -> [String] {
+        defaults.keys.sorted().filter { other in
+            other != id && !Self.canShareKey(id, other) && self.chord(for: other, default: defaults[other] ?? nil) == chord
+        }
+    }
+
+    /// The first of `owners(of:)`.
     public func owner(of chord: KeyChord, defaults: [String: KeyChord?], except id: String) -> String? {
-        defaults.keys.sorted().first { other in other != id && self.chord(for: other, default: defaults[other] ?? nil) == chord }
+        owners(of: chord, defaults: defaults, except: id).first
+    }
+
+    /// The command that has `chord` too, in the other part (`canShareKey`).
+    public func sharer(of chord: KeyChord, defaults: [String: KeyChord?], except id: String) -> String? {
+        defaults.keys.sorted().first { other in
+            other != id && Self.canShareKey(id, other) && self.chord(for: other, default: defaults[other] ?? nil) == chord
+        }
     }
 
     // Saved as JSON: { id: chord } with an empty object for "none".
