@@ -187,7 +187,8 @@ extension SelfTest {
         var now = timespec()
         let replaced = kevent(events, nil, 0, &event, 1, &now) > 0
         let mode = (try? FileManager.default.attributesOfItem(atPath: lockPath))?[.posixPermissions] as? Int
-        check(listed && watching && before != nil && inode() == before && !replaced && mode == 0o600,
+        let sameFile = before != nil && inode() == before && !replaced
+        check(listed && watching && sameFile && mode == 0o600,
               "a tab in a new folder rewrites Copilot's lock in place (a connected copilot keeps its link)",
               "listed \(listed), watching \(watching), inode \(String(describing: before)) → \(String(describing: inode())), replaced \(replaced)")
         check(CopilotIDEServer.shared.connected.contains { $0.id == session && $0.streaming }, "and the copilot's event stream is still open")
