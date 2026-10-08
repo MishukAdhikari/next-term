@@ -21,6 +21,8 @@ import Foundation
 public enum ShellIntegration {
     public static let oscCode = 6973
     public static let nonceVariable = "NEXTTERM_NONCE"
+    /// Set to 1 for a shell that loads Tab completion's hook at its first prompt (the setting when it starts).
+    public static let completionVariable = "NEXTTERM_COMPLETION"
     /// Longest command line kept (it is only shown in tooltips and used to name the program).
     public static let maxCommandLength = 4096
     static let maxPayloadBytes = 65_536
@@ -72,14 +74,17 @@ public enum ShellIntegration {
         return String(data: data, encoding: .utf8)
     }
 
-    /// Writes `.zshenv` under `directory` (if it changed) and returns the directory to use as `ZDOTDIR`.
+    /// Writes `.zshenv`, and Tab completion's `completion.zsh` beside it, under `directory` (each only if it
+    /// changed) and returns the directory to use as `ZDOTDIR`.
     public static func install(in directory: URL) throws -> URL {
         let zdotdir = directory.appendingPathComponent("shell/zsh", isDirectory: true)
         try FileManager.default.createDirectory(at: zdotdir, withIntermediateDirectories: true)
-        let file = zdotdir.appendingPathComponent(".zshenv")
-        let data = Data(zshenvScript.utf8)
-        if (try? Data(contentsOf: file)) != data {
-            try data.write(to: file, options: .atomic)
+        for (name, script) in [(".zshenv", zshenvScript), ("completion.zsh", ZshCompletionScript.script)] {
+            let file = zdotdir.appendingPathComponent(name)
+            let data = Data(script.utf8)
+            if (try? Data(contentsOf: file)) != data {
+                try data.write(to: file, options: .atomic)
+            }
         }
         return zdotdir
     }
@@ -92,6 +97,10 @@ public enum ShellIntegration {
 # starts) can see it.
 typeset -g __nextterm_nonce="${NEXTTERM_NONCE-}"
 unset NEXTTERM_NONCE
+# Tab completion was on when this tab opened: its hook (completion.zsh, beside this file) loads at the first
+# prompt.
+typeset -g __nextterm_completion="${NEXTTERM_COMPLETION-}" __nextterm_dir="${${(%):-%x}:h}"
+unset NEXTTERM_COMPLETION
 
 if [[ -n "$NEXTTERM_USER_ZDOTDIR" ]]; then
   ZDOTDIR="$NEXTTERM_USER_ZDOTDIR"
@@ -146,6 +155,11 @@ if [[ -o interactive && -n "${__nextterm_nonce-}" && -z "${__nextterm_hooked-}" 
     local k
     for k in ${(k)jobstates}; do js+=("${jobtexts[$k]-} (${jobstates[$k]%%:*})"); done
     builtin printf '\033]6973;%s;jobs;%s;%s\007' "$__nextterm_nonce" "${#js}" "$(__nextterm_b64 "${(pj:\n:)js}")"
+    # Tab completion's hook, once, now that the user's config and plugins have loaded.
+    if [[ -n $__nextterm_completion ]]; then
+      __nextterm_completion=
+      [[ -r $__nextterm_dir/completion.zsh ]] && builtin source "$__nextterm_dir/completion.zsh"
+    fi
   }
 
   # Register in a function: the user's .zshenv may already have set options such as nounset or
@@ -160,7 +174,7 @@ if [[ -o interactive && -n "${__nextterm_nonce-}" && -z "${__nextterm_hooked-}" 
   __nextterm_install
   unfunction __nextterm_install
 else
-  unset __nextterm_nonce
+  unset __nextterm_nonce __nextterm_completion __nextterm_dir
 fi
 """#
 }

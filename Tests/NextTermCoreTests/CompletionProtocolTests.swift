@@ -154,6 +154,31 @@ import Testing
         #expect(assembler.isIncomplete(7) && !assembler.isIncomplete(6))
     }
 
+    @Test func installWritesBothFiles() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let zdotdir = try ShellIntegration.install(in: dir)
+        let hook = try String(contentsOf: zdotdir.appendingPathComponent("completion.zsh"), encoding: .utf8)
+        #expect(hook == ZshCompletionScript.script)
+        #expect(!hook.contains("@NT_"), "a placeholder is left in the installed hook")
+        #expect(hook.range(of: #"\beval\b"#, options: .regularExpression) == nil, "the hook evaluates text")
+        let env = try String(contentsOf: zdotdir.appendingPathComponent(".zshenv"), encoding: .utf8)
+        #expect(env.contains("NEXTTERM_COMPLETION") && env.contains("completion.zsh"))
+    }
+
+    /// The placeholders are plain literals (the zsh test reads them too): each must say what the constant says.
+    @Test func placeholdersMatchTheConstants() {
+        let values = Dictionary(uniqueKeysWithValues: ZshCompletionScript.values)
+        #expect(values["@NT_PREFIX@"]?.replacingOccurrences(of: #"\e"#, with: "\u{1b}") == CompletionProtocol.prefix)
+        #expect(values["@NT_VERSION@"] == String(CompletionProtocol.version))
+        #expect(values["@NT_WAIT@"].flatMap(Double.init) == CompletionProtocol.shellWait)
+        #expect(values["@NT_MAX_LINE@"] == String(CompletionProtocol.maxLineBytes))
+        #expect(CompletionProtocol.answerWithin < CompletionProtocol.shellWait)
+        // Every placeholder has a use, and none is left once filled.
+        #expect(values.keys.allSatisfy { ZshCompletionScript.template.contains($0) })
+        #expect(!ZshCompletionScript.script.contains("@NT_"))
+    }
+
     /// The prefix is never the start of a reply a terminal sends (DA, CPR, DECRQSS, window reports, kitty
     /// keyboard flags), so a reply waiting in the input queue can't run the hook's widget.
     @Test func prefixIsNoReply() {
