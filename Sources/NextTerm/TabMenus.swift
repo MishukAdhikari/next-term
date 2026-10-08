@@ -45,15 +45,12 @@ enum ClosedTabs {
 
 extension NSMenu {
     /// A right-click menu's command. It runs `run` on what was clicked, and shows the key its menu-bar
-    /// command has now (`command` is that command's id, as Settings › Keyboard Shortcuts lists it).
+    /// command has now (`command` is that command's id, as Settings › Keyboard Shortcuts lists it), as the
+    /// sidebar's menu does (KeyboardShortcuts.show).
     @discardableResult
     func addCommand(_ title: String, _ command: String?, enabled: Bool = true, _ run: @escaping () -> Void) -> NSMenuItem {
         let item = addBlock(title, enabled: enabled, run)
-        if let command {
-            item.identifier = NSUserInterfaceItemIdentifier(command)
-            let menuBarItem = KeyboardShortcuts.shared.commands.first { $0.id == command }?.item
-            KeyboardShortcuts.set(menuBarItem.flatMap(KeyboardShortcuts.chord(of:)), on: item)
-        }
+        if let command { KeyboardShortcuts.show(command, on: item) }
         return item
     }
 }
