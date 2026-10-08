@@ -91,7 +91,7 @@ Some zsh plugins answer <kbd>⇥</kbd> themselves: fzf-tab opens fzf, and zsh-au
 
 No button answers <kbd>↩︎</kbd>, so a habitual <kbd>↩︎</kbd> chooses nothing. Next Term remembers the choice on this Mac. **Settings › Terminal** lists each one with **Ask Again**.
 
-zsh’s own <kbd>⇥</kbd>, and the widgets oh-my-zsh and fzf put on it (fzf’s `**` keeps working), are not plugins here: there is nothing to ask.
+zsh’s own <kbd>⇥</kbd>, and the widgets oh-my-zsh and fzf put on it, are not plugins here: there is nothing to ask. fzf’s `**` keeps working, and so does its process list after `kill ` in fzf 0.30 and older.
 
 ## Turn it off
 
