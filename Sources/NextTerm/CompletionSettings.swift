@@ -1,11 +1,13 @@
 import AppKit
 import NextTermCore
 
-/// Settings › Terminal › Tab completion: Auto, Next Term or Off, and a note on what each means. Its own row
-/// (TerminalSettingsView's `row` is local to it), with the same 110 pt right-aligned label.
+/// Settings › Terminal › Tab completion: Auto, Next Term or Off, a note on what each means, and the choices
+/// remembered where a plugin owns Tab, each with Ask Again. Its own row (TerminalSettingsView's `row` is local
+/// to it), with the same 110 pt right-aligned label.
 final class CompletionSettingsView: NSStackView {
     private let mode = NSPopUpButton()
     private let note = NSTextField(wrappingLabelWithString: "")
+    private let choices = NSStackView()
 
     init() {
         super.init(frame: .zero)
@@ -26,11 +28,18 @@ final class CompletionSettingsView: NSStackView {
         line.spacing = 10
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 11)
-        note.preferredMaxLayoutWidth = 420
-        let indented = NSStackView(views: [note])
+        note.preferredMaxLayoutWidth = 330
+        choices.orientation = .vertical
+        choices.alignment = .leading
+        choices.spacing = 2
+        let indented = NSStackView(views: [note, choices])
+        indented.orientation = .vertical
+        indented.alignment = .leading
+        indented.spacing = 4
         indented.edgeInsets = NSEdgeInsets(top: 0, left: 120, bottom: 0, right: 0)
         addArrangedSubview(line)
         addArrangedSubview(indented)
+        NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: CompletionPreferences.changed, object: nil)
         refresh()
     }
 
@@ -41,21 +50,47 @@ final class CompletionSettingsView: NSStackView {
         if window != nil { refresh() }
     }
 
-    func refresh() {
+    @objc func refresh() {
         let current = CompletionPreferences.mode
         mode.selectItem(at: TabCompletionMode.allCases.firstIndex(of: current) ?? 0)
         note.stringValue = Self.note(current)
+        choices.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for item in CompletionPreferences.remembered {
+            let label = NSTextField(labelWithString: Self.choiceText(item.plugin, item.choice, byDismissal: item.byDismissal))
+            label.font = .systemFont(ofSize: 11)
+            label.lineBreakMode = .byTruncatingMiddle
+            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            let again = NSButton(title: "Ask Again", target: self, action: #selector(askAgain(_:)))
+            again.controlSize = .small
+            again.font = .systemFont(ofSize: 11)
+            again.bezelStyle = .rounded
+            again.identifier = NSUserInterfaceItemIdentifier(item.plugin.id)
+            again.setAccessibilityLabel("Ask again about \(item.plugin.name)")
+            let row = NSStackView(views: [label, again])
+            row.spacing = 8
+            choices.addArrangedSubview(row)
+        }
     }
 
     static func note(_ mode: TabCompletionMode) -> String {
         switch mode {
-        case .auto:
-            return "Tab at a zsh prompt opens Next Term’s list: zsh’s own completions when zsh has them, else folders and files. Where a plugin such as fzf-tab already owns Tab, Next Term asks once. Turning it on reaches new tabs."
-        case .nextTerm:
-            return "Tab at a zsh prompt always opens Next Term’s list, even where a plugin owns Tab. Turning it on reaches new tabs."
-        case .off:
-            return "Tab is the shell’s own, as in any terminal."
+        case .auto: return "Next Term’s list at a zsh prompt; where a plugin owns Tab, it asks once. New tabs get it."
+        case .nextTerm: return "Next Term’s list at every zsh prompt, plugins or not. New tabs get it."
+        case .off: return "Tab is the shell’s own, as in any terminal."
         }
+    }
+
+    static func choiceText(_ plugin: CompletionOwner.Plugin, _ choice: PluginChoice, byDismissal: Bool) -> String {
+        switch choice {
+        case .nextTerm: return "\(plugin.name): Next Term’s list answers Tab"
+        case .plugin: return byDismissal ? "\(plugin.name) keeps Tab (the question was closed twice)" : "\(plugin.name) keeps Tab"
+        }
+    }
+
+    @objc private func askAgain(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue else { return }
+        CompletionPreferences.choose(nil, for: CompletionOwner.Plugin(id: id))
+        CompletionSession.syncAll()
     }
 
     @objc private func modeChanged() {
@@ -66,12 +101,12 @@ final class CompletionSettingsView: NSStackView {
 }
 
 extension CompletionPreferences {
-    /// Sets the mode for every window: lists open now close, and the tabs' tooltips say who answers Tab.
+    /// Sets the mode for every window: lists open now close, zsh-autocomplete follows, and the tabs' tooltips
+    /// say who answers Tab.
     static func set(_ chosen: TabCompletionMode) {
         mode = chosen
-        for controller in AppDelegate.shared?.controllers ?? [] {
-            controller.completions.closeShown()
-            for tab in controller.tabs { tab.delegate?.tabDidChange(tab) }
-        }
+        for controller in AppDelegate.shared?.controllers ?? [] { controller.completions.closeShown() }
+        CompletionSession.syncAll()
+        NotificationCenter.default.post(name: changed, object: nil)
     }
 }

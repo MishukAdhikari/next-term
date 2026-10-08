@@ -47,6 +47,10 @@ final class CompletionSession {
         case privateKey(Int)
     }
     private(set) var lastTab = TabOutcome.none
+    /// Writes to the shell so far: a question answered after one came lets its Tab go.
+    private(set) var writes = 0
+    /// Config keys sent since the shell last said where zsh-autocomplete stands (a few at most).
+    private var configs = 0
 
     init(tab: TerminalTab) {
         self.tab = tab
@@ -64,6 +68,7 @@ final class CompletionSession {
     /// Every write to the shell passes here (NextTermView.send, after interceptInput). True: it waits, and goes
     /// out later in order.
     func gate(_ data: ArraySlice<UInt8>) -> Bool {
+        writes += 1
         // Only a key the user pressed may go on with the list open; an agent's text, a drop, a paste close it.
         if isListOpen {
             var probe = inPaste
@@ -154,6 +159,19 @@ final class CompletionSession {
         return true
     }
 
+    /// A real Tab the plugin that owns Tab keeps: a plain ^I. False: the key goes on as it is
+    /// (CompletionController).
+    func plainTab() -> Bool {
+        lastTab = .plain
+        return false
+    }
+
+    /// The plain ^I for a Tab that waited for the question: what the key would have sent.
+    func sendPlainTab() {
+        lastTab = .plain
+        view?.send(txt: "\t")
+    }
+
     /// 120 ms: on Next Term's own path the answer is "native" now; either way the held writes go out.
     private func holdExpired(_ id: Int) {
         if state.holdExpired(id) { write(CompletionProtocol.nativeAnswer(id: id)) }
@@ -218,10 +236,16 @@ final class CompletionSession {
     func handle(_ message: CompletionProtocol.Message) {
         switch message {
         case .arm(let arm):
-            // A new line or keymap: a list still open on the shell's side is over.
-            if let id = state.openID { write(CompletionProtocol.close(id: id)) }
-            state.armed(arm)
-            listClosed()
+            if state.arm?.sameLine(as: arm) == true, state.phase != .disarmed {
+                // Only zsh-autocomplete's state changed (a config key): the line and anything in flight stay.
+                state.update(arm)
+            } else {
+                // A new line or keymap: a list still open on the shell's side is over.
+                if let id = state.openID { write(CompletionProtocol.close(id: id)) }
+                state.armed(arm)
+                listClosed()
+            }
+            syncQuiet()
         case .tab(let report):
             guard state.pendingID == report.id, state.path == .engine else { return }
             reports += 1
@@ -281,10 +305,45 @@ final class CompletionSession {
         state.forget()
     }
 
+    /// The plugin that owns Tab in this shell, if one does.
+    var owner: CompletionOwner.Plugin? { state.arm.flatMap(CompletionOwner.plugin) }
+
     /// Who answers this tab's Tab, for its tooltip.
     var engineLabel: String {
         guard CompletionPreferences.isOn, let arm = state.arm else { return "Tab completion: the shell’s own" }
+        if let owner {
+            switch CompletionPreferences.answer(for: owner) {
+            case .plugin: return "Tab completion: \(owner.name), your choice"
+            case .ask: return "Tab completion: \(owner.name) until you choose (Next Term asks at the first Tab)"
+            case .nextTerm: break
+            }
+        }
         return arm.completionSystem ? "Tab completion: Next Term’s list, with zsh’s completions" : "Tab completion: Next Term’s list of folders and files"
+    }
+
+    /// zsh-autocomplete's list as you type goes off where Next Term's list answers Tab, and back on where it
+    /// doesn't: a config key to a shell at its prompt whose last `arm` says otherwise.
+    func syncQuiet() {
+        guard let arm = state.arm, arm.plugins.contains("autocomplete"), state.isArmed else { return }
+        let want = CompletionPreferences.quietsAutocomplete
+        guard want != arm.quieted else {
+            configs = 0
+            return
+        }
+        guard configs < 3 else { return }
+        configs += 1
+        write(CompletionProtocol.frame(.config, id: 0, fields: [want ? "q1" : "q0"]))
+    }
+
+    /// A choice or the mode changed: every tab's zsh-autocomplete follows it.
+    static func syncAll() {
+        for controller in AppDelegate.shared?.controllers ?? [] {
+            for tab in controller.tabs {
+                tab.completion.configs = 0
+                tab.completion.syncQuiet()
+                tab.delegate?.tabDidChange(tab)
+            }
+        }
     }
 
     // MARK: the list

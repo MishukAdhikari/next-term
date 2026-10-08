@@ -46,8 +46,42 @@ final class CompletionController {
         guard !view.hasMarkedText(), !view.getTerminal().isCurrentBufferAlternate else { return false }
         // Scrolled back: the line being completed is at the bottom.
         if view.canScroll, view.scrollPosition < 1 { view.scroll(toPosition: 1) }
+        // Where a plugin owns Tab, the user's choice decides; the first time, they are asked.
+        if !session.state.holding, let plugin = session.owner {
+            switch CompletionPreferences.answer(for: plugin) {
+            case .nextTerm: break
+            case .plugin: return session.plainTab()
+            case .ask:
+                ask(plugin, session, tab)
+                return true
+            }
+        }
         watch(session)
         return session.realTab()
+    }
+
+    /// The question, over the window; the Tab that raised it waits for the answer. If the shell moved on
+    /// meanwhile (an agent typed, a command started), that Tab goes nowhere.
+    private func ask(_ plugin: CompletionOwner.Plugin, _ session: CompletionSession, _ tab: TerminalTab) {
+        guard let window = owner?.window, window.attachedSheet == nil else { return }
+        let writes = session.writes
+        let arm = session.state.arm
+        CompletionPluginQuestion.ask(plugin, in: window) { [weak self] answer in
+            switch answer {
+            case .nextTerm: CompletionPreferences.choose(.nextTerm, for: plugin)
+            case .plugin: CompletionPreferences.choose(.plugin, for: plugin)
+            case .notNow: CompletionPreferences.dismissed(plugin)
+            }
+            CompletionSession.syncAll()
+            let unchanged = session.state.isArmed && session.state.arm?.sameLine(as: arm) == true && session.writes == writes
+            guard unchanged, tab.view.window === window, window.makeFirstResponder(tab.view) else { return }
+            if answer == .nextTerm {
+                self?.watch(session)
+                if !session.realTab() { session.sendPlainTab() }
+            } else {
+                session.sendPlainTab()
+            }
+        }
     }
 
     /// Tab with no ⌘, ⌥, ⌃ or ⇧.
@@ -65,7 +99,7 @@ final class CompletionController {
         switch (event.keyCode, flags) {
         case (48, []), (36, []), (76, []): // Tab, Return, Enter
             // While Loading, or before the list shows, there is nothing to insert yet.
-            if session.isShown, session.list?.rows.isEmpty == false { session.accept(popup.selected) }
+            if session.isShown, shown === session, session.list?.rows.isEmpty == false { session.accept(popup.selected) }
             return true
         case (125, []): // ↓
             popup.move(by: 1)

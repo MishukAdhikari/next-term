@@ -7,10 +7,15 @@ import NextTermCore
 /// is checked. Each part keeps to a time budget and says how long it took.
 extension SelfTest {
     static func completionChecks(_ c: TerminalWindowController) async {
-        let saved = UserDefaults.standard.object(forKey: CompletionPreferences.modeKey)
+        // The user's own Tab completion settings are put back after the run.
+        let keys = [CompletionPreferences.modeKey, CompletionPreferences.choicesKey, CompletionPreferences.dismissalsKey]
+        let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
+        let dismissed = CompletionPreferences.dismissedThisLaunch
         defer {
-            if let saved { UserDefaults.standard.set(saved, forKey: CompletionPreferences.modeKey) }
-            else { UserDefaults.standard.removeObject(forKey: CompletionPreferences.modeKey) }
+            for (key, value) in zip(keys, saved) {
+                if let value { UserDefaults.standard.set(value, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+            }
+            CompletionPreferences.dismissedThisLaunch = dismissed
         }
         #if DEBUG
         let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nt-complete-\(getpid())")
@@ -21,6 +26,7 @@ extension SelfTest {
         await completionPopupChecks(c, dir: dir)
         await completionZshChecks(c, dir: dir)
         await completionSettingChecks(c, dir: dir)
+        await completionOwnerChecks(c, dir: dir)
         #else
         note("Tab completion: skipped in a release build (its tabs need the debug build's own zsh config)")
         #endif
@@ -32,6 +38,15 @@ extension SelfTest {
                                            windowNumber: window.windowNumber, context: nil, characters: characters,
                                            charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code) else { return }
         window.sendEvent(event)
+    }
+
+    /// A key down through the app, as the keyboard's goes: key equivalents first (a sheet's Esc button), then
+    /// the key window.
+    static func pressAppKey(_ window: NSWindow, _ characters: String, code: UInt16) {
+        guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                           windowNumber: window.windowNumber, context: nil, characters: characters,
+                                           charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code) else { return }
+        NSApp.sendEvent(event)
     }
 
     /// Letters typed as real keys (the list stays open for them; a write that isn't a key closes it).
@@ -371,6 +386,18 @@ extension SelfTest {
             check(await wait(2) { !popup.isVisible }, "Tab completion: a drop closes the list")
             await clearLine(tab)
         }
+        if await open("cd ") {
+            // A paste closes it too, though ⌘V is a key: the clipboard is put back after.
+            let clipboard = NSPasteboard.general.string(forType: .string)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString("Tes", forType: .string)
+            tab.view.paste(self)
+            check(await wait(2) { !popup.isVisible } && promptLine(tab).hasSuffix("cd Tes"), "Tab completion: a paste closes the list",
+                  promptLine(tab))
+            NSPasteboard.general.clearContents()
+            if let clipboard { NSPasteboard.general.setString(clipboard, forType: .string) }
+            await clearLine(tab)
+        }
         tab.view.send(txt: "(sleep 1.2; print bg-output) &!\r")
         _ = await wait(3) { session.state.isArmed }
         if await open("cd ") {
@@ -499,6 +526,117 @@ extension SelfTest {
         let smallest = row.convert(row.bounds, to: view)
         note("Tab completion: at Settings' smallest size the row is \(view.bounds.contains(smallest) ? "whole" : "cut") (\(smallest) in \(view.bounds))")
         settings.close()
+    }
+
+    /// AE4, with a stand-in for a plugin (a widget of the config's own on ^I): the first Tab asks once; the
+    /// choice is remembered and shown in Settings; Not Now leaves Tab to it until a relaunch, twice for good;
+    /// Return chooses nothing; an agent's text while the question is up drops that Tab; no file changes.
+    private static func completionOwnerChecks(_ c: TerminalWindowController, dir: URL) async {
+        let started = Date()
+        defer { note("Tab completion, a plugin that owns Tab: \(String(format: "%.1f", Date().timeIntervalSince(started))) s (budget 60 s)") }
+        guard let window = c.window as? TerminalWindow else { return }
+        let owner = CompletionOwner.Plugin(id: "widget:nt-own-tab")
+        CompletionPreferences.choose(nil, for: owner)
+        CompletionPreferences.mode = .auto
+        let zshrc = plainZshrc + "nt-own-tab() { zle expand-or-complete }\nzle -N nt-own-tab\nbindkey '^I' nt-own-tab\n"
+        let zdotdir = dir.appendingPathComponent(".zdot-owner")
+        guard let tab = await completionTab(c, in: dir, zshrc: zshrc, name: "owner") else { return }
+        defer { c.remove(tab) }
+        let session = tab.completion
+        let popup = c.completions.popup
+        func files() -> [String: Data] {
+            var found: [String: Data] = [:]
+            for name in (try? FileManager.default.contentsOfDirectory(atPath: zdotdir.path)) ?? [] where !name.hasPrefix(".zsh_history") {
+                found[name] = FileManager.default.contents(atPath: zdotdir.appendingPathComponent(name).path) ?? Data()
+            }
+            return found
+        }
+        let before = files()
+        check(session.owner == owner, "Tab completion: a widget of the user's own on Tab counts as a plugin", "\(String(describing: session.owner))")
+        func tabKey() { pressKey(window, "\t", code: 48) }
+        func question() async -> NSAlert? {
+            _ = await wait(3) { CompletionPluginQuestion.current != nil && window.attachedSheet != nil }
+            return CompletionPluginQuestion.current
+        }
+        func answered() async -> Bool { await wait(3) { CompletionPluginQuestion.current == nil && window.attachedSheet == nil } }
+
+        // The first Tab asks; Return chooses nothing; Next Term's list then opens for that Tab.
+        tab.view.send(txt: "cd ")
+        await pause(0.3)
+        tabKey()
+        guard let alert = await question() else { return check(false, "AE4: the first Tab where a plugin owns Tab asks once") }
+        check(alert.informativeText.contains("nt-own-tab"), "AE4: the question names what owns Tab", alert.informativeText)
+        if let sheet = window.attachedSheet { pressAppKey(sheet, "\r", code: 36) }
+        await pause(0.4)
+        check(CompletionPluginQuestion.current != nil, "Tab completion: Return answers nothing while the question is up")
+        alert.buttons.first?.performClick(nil)
+        check(await answered(), "Tab completion: Use Next Term’s List answers it")
+        check(await wait(3) { popup.isVisible }, "AE4: then Next Term’s list opens for that Tab", "\(session.state.phase)")
+        check(CompletionPreferences.choice(for: owner) == .nextTerm, "and the choice is remembered")
+        pressKey(window, "\u{1b}", code: 53)
+        await clearLine(tab)
+        tab.view.send(txt: "cd ")
+        await pause(0.3)
+        tabKey()
+        check(await wait(3) { popup.isVisible } && CompletionPluginQuestion.current == nil, "Tab completion: the next Tab asks nothing")
+        pressKey(window, "\u{1b}", code: 53)
+        await clearLine(tab)
+        let settings = CompletionSettingsView()
+        settings.refresh()
+        func texts(_ view: NSView) -> [String] { view.subviews.flatMap { ($0 as? NSTextField).map { [$0.stringValue] } ?? texts($0) } }
+        check(texts(settings).contains("nt-own-tab: Next Term’s list answers Tab"), "Tab completion: Settings shows the choice", "\(texts(settings))")
+
+        // Ask Again; Not Now: the plugin keeps Tab, this launch.
+        CompletionPreferences.choose(nil, for: owner)
+        tab.view.send(txt: "cd ")
+        await pause(0.3)
+        tabKey()
+        guard let again = await question() else { return check(false, "Tab completion: Ask Again asks again") }
+        again.buttons.last?.performClick(nil)
+        _ = await answered()
+        check(await wait(2) { session.lastTab == .plain } && !popup.isVisible, "Tab completion: Not Now gives the plugin this Tab", "\(session.lastTab)")
+        await clearLine(tab)
+        tab.view.send(txt: "cd ")
+        await pause(0.3)
+        tabKey()
+        await pause(0.4)
+        check(CompletionPluginQuestion.current == nil && !popup.isVisible && session.lastTab == .plain,
+              "and every Tab until Next Term starts again", "\(session.lastTab)")
+        check(tab.tooltip.contains("Tab completion: nt-own-tab"), "Tab completion: the tooltip names the plugin that keeps Tab",
+              tab.tooltip.replacingOccurrences(of: "\n", with: " | "))
+        await clearLine(tab)
+
+        // After a relaunch it asks again; Esc is Not Now, and the second one settles it.
+        CompletionPreferences.dismissedThisLaunch = []
+        tab.view.send(txt: "cd ")
+        await pause(0.3)
+        tabKey()
+        if await question() != nil, let sheet = window.attachedSheet { pressAppKey(sheet, "\u{1b}", code: 53) }
+        check(await answered() && CompletionPreferences.choice(for: owner) == .plugin, "Tab completion: a second Not Now settles on the plugin")
+        settings.refresh()
+        check(texts(settings).contains("nt-own-tab keeps Tab (the question was closed twice)"), "and Settings says so", "\(texts(settings))")
+        await clearLine(tab)
+
+        // An agent's text while the question is up: the Tab that raised it is dropped.
+        CompletionPreferences.choose(nil, for: owner)
+        tab.view.send(txt: "cd ")
+        await pause(0.3)
+        tabKey()
+        if let alert = await question(), let mcp = MCPTestClient(socket: MCPControlServer.shared.path) {
+            _ = await mcp.call(1, "initialize", ["protocolVersion": "2025-06-18", "capabilities": [:], "clientInfo": ["name": "selftest", "version": "1"]])
+            _ = await mcp.call(2, "tools/call", ["name": "send_to_tab", "arguments": ["tab_id": tab.id.uuidString.lowercased(), "text": "Tes", "submit": false]])
+            alert.buttons.first?.performClick(nil)
+            _ = await answered()
+            await pause(0.6)
+            check(!popup.isVisible && promptLine(tab).hasSuffix("cd Tes"), "Tab completion: an agent's text while the question is up drops that Tab",
+                  promptLine(tab))
+            mcp.close()
+        } else {
+            check(false, "Tab completion: the question comes back after Ask Again")
+        }
+        await clearLine(tab)
+        check(files() == before, "AE4: no file in the shell's config folder changed")
+        CompletionPreferences.choose(nil, for: owner)
     }
     #endif
 }
