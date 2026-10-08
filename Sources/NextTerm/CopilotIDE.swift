@@ -117,20 +117,25 @@ final class CopilotIDEServer: @unchecked Sendable { // mutable state lives on `q
             case .failed(let error):
                 NSLog("Next Term: Copilot IDE link stopped: \(error)")
                 stopOnQueue()
+                rmdir(socketFolder)
                 ready.signal()
             default:
                 break
             }
         }
         listener.newConnectionHandler = { [unowned self] connection in accept(connection) }
-        listener.start(queue: queue)
         self.listener = listener
+        listener.start(queue: queue)
         _ = ready.wait(timeout: .now() + 1)
-        let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + 30, repeating: 30)
-        timer.setEventHandler { [weak self] in self?.keepStreamsAlive() }
-        timer.resume()
-        heartbeat = timer
+        // Event streams get a comment every 30 s, so a CLI that went away is noticed.
+        queue.sync {
+            guard self.listener != nil else { return }
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            timer.schedule(deadline: .now() + 30, repeating: 30)
+            timer.setEventHandler { [weak self] in self?.keepStreamsAlive() }
+            timer.resume()
+            heartbeat = timer
+        }
     }
 
     func stop() {
