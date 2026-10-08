@@ -6,8 +6,9 @@ import Foundation
 /// opencode reads Claude Code's lock files, but in a Next Term tab, where `CLAUDE_CODE_SSE_PORT` is set,
 /// it connects to that port without the token (and without the "mcp" subprotocol). ClaudeIDEServer takes
 /// such a connection only when the process holding its socket is opencode running in one of this app's own
-/// tabs: it is looked for among the descendants of the tabs' shells, by the two ports of its TCP socket.
-/// Any other client without the token is refused, as before.
+/// tabs: it is looked for among the tabs' shells and their descendants, by the two ports of its TCP socket.
+/// Any other client without the token is refused, as before. opencode inside tmux is not found: tmux runs
+/// its panes under its own server, not under the tab's shell.
 public enum IDEPeer {
     /// How processes are looked up: the kernel's (libproc), or a stand-in for the tests.
     public struct Processes: Sendable {
@@ -28,18 +29,19 @@ public enum IDEPeer {
         public static let system = Processes(children: { childPids($0) }, sockets: { tcpSockets($0) }, path: { executablePath($0) })
     }
 
-    /// How deep and how many processes under the tabs' shells are looked at (a shell, a wrapper, the agent
-    /// and its helpers are a few levels at most).
+    /// How deep and how many processes from the tabs' shells down are looked at (a shell, a wrapper, the
+    /// agent and its helpers are a few levels at most).
     static let maximumDepth = 8
     static let maximumProcesses = 512
 
-    /// The processes under `shells` (not the shells themselves) holding the client end of the connection
-    /// from `clientPort` to `serverPort`, nearest first.
+    /// The processes holding the client end of the connection from `clientPort` to `serverPort`, nearest
+    /// first: the shells themselves (a tab whose shell ran `exec opencode` is opencode now) and everything
+    /// under them.
     public static func holders(clientPort: UInt16, serverPort: UInt16, under shells: [pid_t],
                                processes: Processes = .system) -> [pid_t] {
         var found: [pid_t] = []
-        var seen = Set(shells)
-        var level = shells.flatMap(processes.children)
+        var seen = Set<pid_t>()
+        var level = shells
         var depth = 0
         while !level.isEmpty, depth < maximumDepth, seen.count < maximumProcesses {
             var next: [pid_t] = []
@@ -62,7 +64,7 @@ public enum IDEPeer {
         return name == "opencode" || name == "opencode.exe"
     }
 
-    /// The opencode process in one of the tabs (under `shells`) that holds this connection's socket, or nil.
+    /// The opencode process in one of the tabs (`shells` or under them) that holds this connection's socket, or nil.
     public static func opencode(clientPort: UInt16, serverPort: UInt16, under shells: [pid_t],
                                 processes: Processes = .system) -> pid_t? {
         holders(clientPort: clientPort, serverPort: serverPort, under: shells, processes: processes)

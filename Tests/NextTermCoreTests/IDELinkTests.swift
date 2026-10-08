@@ -223,10 +223,14 @@ import Testing
         #expect(IDEPeer.opencode(clientPort: 50000, serverPort: 4000, under: [100], processes: table.processes) == nil)
         table.paths[300] = "/tmp/opencode-helper"
         #expect(IDEPeer.opencode(clientPort: 50000, serverPort: 4000, under: [100], processes: table.processes) == nil)
-        // The shell itself holding it does not count: it is not a process the tab runs.
+        // The tab's own process holding it: refused while it is the shell, taken once it is opencode
+        // (`exec opencode` in the tab).
         table.paths[300] = "/x/opencode"
         table.sockets = [100: [(local: 50000, remote: 4000)]]
+        #expect(IDEPeer.holders(clientPort: 50000, serverPort: 4000, under: [100], processes: table.processes) == [100])
         #expect(IDEPeer.opencode(clientPort: 50000, serverPort: 4000, under: [100], processes: table.processes) == nil)
+        table.paths[100] = "/opt/homebrew/bin/opencode"
+        #expect(IDEPeer.opencode(clientPort: 50000, serverPort: 4000, under: [100], processes: table.processes) == 100)
         #expect(IDEPeer.isOpencode(path: "/opt/homebrew/Cellar/opencode/1.18.34/bin/opencode"))
         #expect(!IDEPeer.isOpencode(path: "/usr/local/bin/opencode.sh") && !IDEPeer.isOpencode(path: "/bin/node"))
         #expect(!IDEPeer.isOpencode(path: "/tmp/opencode-helper") && !IDEPeer.isOpencode(path: "/tmp/opencode.exe.sh"))
@@ -267,12 +271,15 @@ import Testing
         let me = getpid()
         let sockets = IDEPeer.tcpSockets(me)
         #expect(sockets.contains { $0.local == clientPort && $0.remote == serverPort })
-        // Looked up as the only child of a made-up shell, with the kernel's sockets and paths.
-        let processes = IDEPeer.Processes(children: { $0 == -5 ? [me] : [] }, sockets: { IDEPeer.tcpSockets($0) },
+        // Looked up as the only child of a made-up shell (a pid no process has), with the kernel's sockets and paths.
+        let shell = pid_t.max
+        let processes = IDEPeer.Processes(children: { $0 == shell ? [me] : [] }, sockets: { IDEPeer.tcpSockets($0) },
                                           path: { IDEPeer.executablePath($0) })
-        #expect(IDEPeer.holders(clientPort: clientPort, serverPort: serverPort, under: [-5], processes: processes) == [me])
+        #expect(IDEPeer.holders(clientPort: clientPort, serverPort: serverPort, under: [shell], processes: processes) == [me])
+        // Or as the tab's own process.
+        #expect(IDEPeer.holders(clientPort: clientPort, serverPort: serverPort, under: [me], processes: processes) == [me])
         // This test runner is not opencode.
-        #expect(IDEPeer.opencode(clientPort: clientPort, serverPort: serverPort, under: [-5], processes: processes) == nil)
+        #expect(IDEPeer.opencode(clientPort: clientPort, serverPort: serverPort, under: [shell], processes: processes) == nil)
         #expect(IDEPeer.executablePath(me)?.hasPrefix("/") == true)
     }
 }
