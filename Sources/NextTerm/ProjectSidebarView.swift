@@ -21,10 +21,16 @@ protocol ProjectSidebarDelegate: AnyObject {
     func sidebar(_ sidebar: ProjectSidebarView, showChanges url: URL)
     /// A Databases row's Open or hand-off.
     func sidebar(_ sidebar: ProjectSidebarView, database: DetectedDatabase, perform action: DatabaseAction)
+    /// An Agent Sessions row's Resume (Go to Tab when it is open in one) or Fork, an agent's Continue
+    /// Latest, or More… (the whole list).
+    func sidebar(_ sidebar: ProjectSidebarView, session: AgentSession?, perform action: SessionAction)
 }
 
 /// What a Databases row can do beyond copying and revealing.
 enum DatabaseAction { case open, tablePlus, terminal, vercel }
+
+/// What the Agent Sessions rows can do.
+enum SessionAction: Equatable { case resume, fork, continueLatest(AgentKind), showAll }
 
 /// Outline view with the keys a file tree needs: Return renames (as in Finder), ⌘⌫ moves to the Trash,
 /// ⌘↓ opens. It notes how each click began, for "Open files with a single click".
@@ -109,6 +115,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// Projects whose Databases group you closed: it stays closed for them.
     private var collapsedDatabaseRoots: Set<String> = []
     private var expandDatabasesWithRoot = false
+
+    /// "Agent Sessions" under it: the newest sessions any agent kept for this folder.
+    let sessionsGroup = SessionsGroup()
 
     /// Trees of recently shown roots, so switching between tabs in different projects keeps
     /// what was expanded and where you had scrolled.
@@ -206,6 +215,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         let row = outline.row(at: point)
         guard row >= 0, outline.visibleRect.contains(point) else { return "" }
         if let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? DatabaseCellView { return cell.tipText }
+        if let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? SessionRowCellView { return cell.tipText }
         guard let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? FileCellView else { return "" }
         return cell.tipText
     }
@@ -240,6 +250,8 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         git.watch(canonical)
         showDatabases(DatabaseScan())
         scanDatabases()
+        showSessions([], tabs: SessionTabs())
+        loadSessions()
     }
 
     // MARK: databases
@@ -303,6 +315,72 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             if outline.isItemExpanded(root) { outline.expandItem(databasesGroup) } else { expandDatabasesWithRoot = true }
         }
         updateToolTips()
+    }
+
+    // MARK: agent sessions
+
+    /// Reads the folder's agent sessions, and the tabs any are open in, off the main thread.
+    func loadSessions() {
+        guard let root else { return }
+        let path = root.path
+        sessionsGroup.token += 1
+        let token = sessionsGroup.token
+        SessionStore.load(path) { [weak self] listing, tabs in
+            guard let self, token == self.sessionsGroup.token, self.root?.path == path else { return }
+            self.showSessions(listing.sessions, tabs: tabs)
+        }
+    }
+
+    /// Reads them again soon: an agent started or stopped, or the window came to the front.
+    func scheduleSessionsReload() {
+        guard root != nil, !sessionsGroup.reloadQueued else { return }
+        sessionsGroup.reloadQueued = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.sessionsGroup.reloadQueued = false
+            self?.loadSessions()
+        }
+    }
+
+    func showSessions(_ sessions: [AgentSession], tabs: SessionTabs) {
+        let group = sessionsGroup
+        let hadRows = !group.items.isEmpty
+        let before = group.children.map(ObjectIdentifier.init)
+        let old = Dictionary(group.items.map { ($0.session.identity, $0) }, uniquingKeysWith: { a, _ in a })
+        group.all = sessions
+        group.tabs = tabs
+        group.items = sessions.prefix(SessionsGroup.shown).map { session in
+            let inTab = tabs.tab(of: session) != nil
+            guard let item = old[session.identity] else { return SessionItem(session, inTab: inTab) }
+            item.session = session
+            item.inTab = inTab
+            return item
+        }
+        guard let root else { return }
+        rowCache[ObjectIdentifier(root)] = nil
+        rowCache[ObjectIdentifier(group)] = nil
+        let hasRows = !group.items.isEmpty
+        if hadRows != hasRows {
+            outline.reloadItem(root, reloadChildren: true)
+        } else if hasRows {
+            // The same rows in the same order: only their text changed, and the outline keeps its selection.
+            if before == group.children.map(ObjectIdentifier.init) {
+                outline.reloadItem(group, reloadChildren: false)
+                for item in group.children { outline.reloadItem(item) }
+            } else {
+                outline.reloadItem(group, reloadChildren: true)
+            }
+        }
+        if !hadRows, hasRows, !group.collapsedRoots.contains(root.path) {
+            if outline.isItemExpanded(root) { outline.expandItem(group) } else { group.expandWithRoot = true }
+        }
+        updateToolTips()
+    }
+
+    /// The row of a session, for the self-test.
+    func sessionRow(_ identity: String) -> Int? {
+        guard let item = sessionsGroup.items.first(where: { $0.session.identity == identity }) else { return nil }
+        let row = outline.row(forItem: item)
+        return row >= 0 ? row : nil
     }
 
     /// The row of a database, for the self-test.
@@ -513,9 +591,12 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
                 }.map(\.item)
             }
             if let hidden = hiddenRows[id] { rows.append(hidden) }
+            if node === root, !sessionsGroup.items.isEmpty { rows.insert(sessionsGroup, at: 0) }
             if node === root, !databasesGroup.items.isEmpty { rows.insert(databasesGroup, at: 0) }
         } else if item === databasesGroup {
             rows = databasesGroup.items
+        } else if item === sessionsGroup {
+            rows = sessionsGroup.children
         } else if let entry = item as? DeletedEntry, entry.isDirectory, let snapshot = git.snapshot {
             rows = snapshot.deletedEntries(in: entry.relative, existing: []).map {
                 deletedEntry(in: entry.relative, $0.name, isDirectory: $0.isDirectory, gitRoot: snapshot.root, realFolder: entry.realFolder)
@@ -560,12 +641,12 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
-        if item is DatabasesGroup { return true }
+        if item is DatabasesGroup || item is SessionsGroup { return true }
         return (item as? FileNode)?.isDirectory ?? (item as? DeletedEntry)?.isDirectory ?? false
     }
 
     func outlineView(_ outlineView: NSOutlineView, shouldExpandItem item: Any) -> Bool {
-        if item is DeletedEntry || item is DatabasesGroup { return true }
+        if item is DeletedEntry || item is DatabasesGroup || item is SessionsGroup { return true }
         guard let node = item as? FileNode else { return false }
         if node.isLoaded { return true }
         load(node) { [weak self] in self?.outline.expandItem(node) }
@@ -586,9 +667,18 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             if notification.name == NSOutlineView.itemDidExpandNotification { collapsedDatabaseRoots.remove(root.path) }
             return
         }
+        if item is SessionsGroup, let root {
+            if notification.name == NSOutlineView.itemDidCollapseNotification, outline.isItemExpanded(root) { sessionsGroup.collapsedRoots.insert(root.path) }
+            if notification.name == NSOutlineView.itemDidExpandNotification { sessionsGroup.collapsedRoots.remove(root.path) }
+            return
+        }
         if item as AnyObject === root, notification.name == NSOutlineView.itemDidExpandNotification, expandDatabasesWithRoot {
             expandDatabasesWithRoot = false
             if !databasesGroup.items.isEmpty { outline.expandItem(databasesGroup) }
+        }
+        if item as AnyObject === root, notification.name == NSOutlineView.itemDidExpandNotification, sessionsGroup.expandWithRoot {
+            sessionsGroup.expandWithRoot = false
+            if !sessionsGroup.items.isEmpty { outline.expandItem(sessionsGroup) }
         }
         let row = outline.row(forItem: item)
         guard row >= 0, let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? FileCellView else { return }
@@ -616,6 +706,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             }
             return cell
         }
+        if item is SessionsGroup || item is SessionItem || item is MoreSessionsItem {
+            return sessionCell(for: item)
+        }
         let id = NSUserInterfaceItemIdentifier("cell")
         let cell = outlineView.makeView(withIdentifier: id, owner: self) as? FileCellView ?? FileCellView()
         cell.identifier = id
@@ -634,13 +727,17 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat { 24 }
 
     func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
-        item is FileNode || item is DeletedEntry || item is DatabaseItem
+        item is FileNode || item is DeletedEntry || item is DatabaseItem || item is SessionItem
     }
 
     /// A click, sent on mouse-up (the first click of a double-click too). With "Open files with a single
     /// click" on, a plain click on one file the editor can show cheaply opens it in the preview tab and
     /// leaves the keyboard in the tree. Every other click only selects, as it does with the setting off.
     @objc private func clicked() {
+        // "More…" is a link: one click shows the whole list, whatever the setting.
+        if outline.clickedRow >= 0, outline.item(atRow: outline.clickedRow) is MoreSessionsItem {
+            return delegate?.sidebar(self, session: nil, perform: .showAll) ?? ()
+        }
         guard AppDelegate.shared.sidebarSingleClickOpens, let event = NSApp.currentEvent else { return }
         let row = outline.clickedRow
         let item = row >= 0 ? outline.item(atRow: row) : nil
@@ -669,6 +766,12 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         if outline.item(atRow: outline.clickedRow) is DatabasesGroup {
             return outline.isItemExpanded(databasesGroup) ? outline.collapseItem(databasesGroup) : outline.expandItem(databasesGroup)
         }
+        if let item = outline.item(atRow: outline.clickedRow) as? SessionItem {
+            return delegate?.sidebar(self, session: item.session, perform: .resume) ?? ()
+        }
+        if outline.item(atRow: outline.clickedRow) is SessionsGroup {
+            return outline.isItemExpanded(sessionsGroup) ? outline.collapseItem(sessionsGroup) : outline.expandItem(sessionsGroup)
+        }
         guard let node = outline.item(atRow: outline.clickedRow) as? FileNode else { return }
         if node.isDirectory {
             outline.isItemExpanded(node) ? outline.collapseItem(node) : outline.expandItem(node)
@@ -684,6 +787,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         for case let node as FileNode in items where !node.isDirectory { delegate?.sidebar(self, openFile: node.url) }
         for case let entry as DeletedEntry in items where !entry.isDirectory { openDeleted(entry) }
         for case let item as DatabaseItem in items { openDatabase(item.database) }
+        for case let item as SessionItem in items { delegate?.sidebar(self, session: item.session, perform: .resume) }
     }
 
     /// A deleted file opens as what was removed; a deleted folder opens and closes.
@@ -735,6 +839,13 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         }
         if outline.item(atRow: outline.clickedRow) is DatabasesGroup {
             add(menu, "Refresh Databases", #selector(refreshDatabasesFromMenu))
+            return
+        }
+        if let built = sessionsMenu(forRow: outline.clickedRow) {
+            for entry in built.items {
+                built.removeItem(entry)
+                menu.addItem(entry)
+            }
             return
         }
         if let entry = outline.item(atRow: outline.clickedRow) as? DeletedEntry {

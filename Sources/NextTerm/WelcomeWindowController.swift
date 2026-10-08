@@ -418,6 +418,13 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// For the self-test.
     var resumeTitle: String { resumeButton.title }
     var canFork: Bool { forkButton.isEnabled }
+    var filterIsMenu: Bool { !agentMenu.isHidden }
+
+    /// Selects the shown session with this title (the self-test's click).
+    func selectSession(titled title: String) {
+        guard let row = shownSessions.firstIndex(where: { $0.title == title }) else { return }
+        sessionsTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+    }
 
     @objc func resumeSelected() {
         guard let session = selectedSession, let project = selectedProject else { return NSSound.beep() }
