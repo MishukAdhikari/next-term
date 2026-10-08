@@ -237,6 +237,20 @@ import Testing
         }
     }
 
+    @Test func theQuestionSaysThisProjectOrTheseProjectsByTheCount() {
+        // The prompt's title, and the checkbox on the save-changes and "Quitting stops…" alerts.
+        #expect(QuitPolicy.promptTitle([app]) == "Reopen this project next time?")
+        #expect(QuitPolicy.promptTitle([app, api]) == "Reopen these projects next time?")
+        #expect(QuitPolicy.checkboxTitle([app]) == "Reopen this project next time")
+        #expect(QuitPolicy.checkboxTitle([app, api, "/Users/x/Code/web"]) == "Reopen these projects next time")
+        // Two windows on one project are one project.
+        #expect(QuitPolicy.promptTitle([app, app]) == "Reopen this project next time?")
+        #expect(QuitPolicy.checkboxTitle([app, app]) == "Reopen this project next time")
+        // Two folders of one name are two projects.
+        let alike: [String] = ["/Users/x/work/app", "/Users/x/home/app"]
+        #expect(QuitPolicy.promptTitle(alike) == "Reopen these projects next time?")
+    }
+
     @Test func theOtherChoiceTakesACommandKey() {
         // NSAlert gives the default Return and "Cancel" ⎋. The other choice, added last, is not left to a click:
         // "Don’t Reopen" takes ⌘D, as "Don’t Save" does in the save-changes alert, and "Reopen" ⌘R.

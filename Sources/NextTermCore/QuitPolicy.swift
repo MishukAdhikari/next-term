@@ -50,15 +50,15 @@ public struct QuitInput: Sendable {
     }
 }
 
-/// One question a quit asks, in turn. `reopenCheckbox` is the starting state of "Reopen the open projects
-/// next time" on that alert, nil for no checkbox.
+/// One question a quit asks, in turn. `reopenCheckbox` is the starting state of "Reopen these projects next
+/// time" (`checkboxTitle`) on that alert, nil for no checkbox.
 public enum QuitQuestion: Equatable, Sendable {
     /// "Save changes to … before quitting?"
     case saveChanges(reopenCheckbox: Bool?)
     /// "Quit Next Term?", "Quitting stops …".
     case busy(reopenCheckbox: Bool?)
-    /// "Reopen these projects next time?", alone. `returnKeyReopens`: "Reopen" is the default button,
-    /// else "Don’t Reopen" is.
+    /// "Reopen these projects next time?" (`promptTitle`), alone. `returnKeyReopens`: "Reopen" is the
+    /// default button, else "Don’t Reopen" is.
     case reopen(returnKeyReopens: Bool)
 }
 
@@ -68,7 +68,7 @@ public enum QuitAnswer: Equatable, Sendable {
     case reopen(dontAskAgain: Bool)
     /// The prompt's "Don’t Reopen".
     case dontReopen(dontAskAgain: Bool)
-    /// The alert's "Reopen the open projects next time", as it was when the quit went ahead.
+    /// The alert's "Reopen these projects next time", as it was when the quit went ahead.
     case checkbox(checked: Bool)
 }
 
@@ -117,7 +117,7 @@ public enum QuitPolicy {
     }
 }
 
-/// A button of the reopen prompt, "Reopen these projects next time?".
+/// A button of the reopen prompt, "Reopen these projects next time?" (`QuitPolicy.promptTitle`).
 public enum QuitPromptButton: CaseIterable, Sendable {
     case reopen, cancel, dontReopen
 
@@ -156,6 +156,22 @@ extension QuitPolicy {
     /// between them.
     public static func promptButtons(returnKeyReopens: Bool) -> [QuitPromptButton] {
         returnKeyReopens ? [.reopen, .cancel, .dontReopen] : [.dontReopen, .cancel, .reopen]
+    }
+
+    /// The prompt's title: "Reopen this project next time?" for one project, "Reopen these projects next time?"
+    /// for more. Two windows on one project are one project.
+    public static func promptTitle(_ paths: [String]) -> String {
+        reopenWhat(paths) + " next time?"
+    }
+
+    /// The checkbox on the save-changes and "Quitting stops…" alerts: "Reopen this project next time", or
+    /// "Reopen these projects next time" for more than one.
+    public static func checkboxTitle(_ paths: [String]) -> String {
+        reopenWhat(paths) + " next time"
+    }
+
+    private static func reopenWhat(_ paths: [String]) -> String {
+        Set(paths).count == 1 ? "Reopen this project" : "Reopen these projects"
     }
 
     /// The open projects by their folders' names, each once, in order. Folders with one name get their parent

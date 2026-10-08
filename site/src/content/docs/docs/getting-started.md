@@ -59,7 +59,7 @@ Then the **Welcome** window opens. It lists your recent projects, each with the 
 
 Later launches show the Welcome window too, where you pick the project or the agent conversation to carry on with. To have Next Term reopen the projects that were open instead, choose **Reopen the projects that were open** in **Settings › General**. A launch that names a folder, such as `nxtrm .` or a folder dropped on the Dock icon, opens it directly. See [General](/docs/settings/#general). When the last project closes, the Welcome window comes back.
 
-When you quit with projects open, Next Term asks whether to reopen them next time, and your answer becomes that setting. If it is already asking about unsaved files or about work that quitting stops, the question is a checkbox in that dialog, **Reopen the open projects next time**. Otherwise **Reopen these projects next time?** asks on its own, with **Reopen** and **Don’t Reopen**. **Cancel** keeps Next Term open and changes nothing.
+When you quit with projects open, Next Term asks whether to reopen them next time, and your answer becomes that setting. If it is already asking about unsaved files or about work that quitting stops, the question is a checkbox in that dialog, **Reopen these projects next time** (**Reopen this project next time** with one open). Otherwise **Reopen these projects next time?** (**Reopen this project next time?**) asks on its own, with **Reopen** and **Don’t Reopen**. **Cancel** keeps Next Term open and changes nothing.
 
 macOS also asks whether Next Term may send notifications. Allow them: that is how an agent waiting on your decision, or done with its work, reaches you while you are in another tab or app.
 

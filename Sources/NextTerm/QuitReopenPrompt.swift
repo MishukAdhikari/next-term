@@ -2,8 +2,9 @@ import AppKit
 import NextTermCore
 
 /// The reopen question at a quit (QuitPolicy): "Reopen these projects next time?" on its own, when no other quit
-/// alert shows, or the checkbox on the save-changes or "Quitting stops…" alert. The answer sets Settings › General's
-/// "When Next Term opens" once the quit goes ahead. And why the quit happens, read from its Apple event.
+/// alert shows, or the checkbox on the save-changes or "Quitting stops…" alert, each saying "this project" when one is
+/// open. The answer sets Settings › General's "When Next Term opens" once the quit goes ahead. And why the quit happens,
+/// read from its Apple event.
 final class QuitReopenPrompt {
     let alert = NSAlert()
     /// The buttons in the order they were added: the choice that matches the setting first, so it is the default.
@@ -12,7 +13,7 @@ final class QuitReopenPrompt {
     /// For the windows' projects, each once, in order.
     init(projects: [String], returnKeyReopens: Bool) {
         buttons = QuitPolicy.promptButtons(returnKeyReopens: returnKeyReopens)
-        alert.messageText = "Reopen these projects next time?"
+        alert.messageText = QuitPolicy.promptTitle(projects)
         alert.informativeText = "Next time Next Term opens, it can reopen \(QuitPolicy.projectList(projects)), or show the "
             + "Welcome window. You can change this in Settings › General."
         // NSAlert gives the first button Return, and the button titled "Cancel" the ⎋ key, which ⌘. presses too. The
@@ -39,12 +40,12 @@ final class QuitReopenPrompt {
         return buttons[index].answer(dontAskAgain: dontAskAgain)
     }
 
-    /// "Reopen the open projects next time", on the save-changes or "Quitting stops…" alert, starting at the current
-    /// setting. Its tooltip names the projects. The alert has no "Don’t ask again": its checkbox sets only "When Next
-    /// Term opens". Read once the alert returns.
+    /// "Reopen this project next time", or "Reopen these projects next time", on the save-changes or "Quitting stops…"
+    /// alert, starting at the current setting. Its tooltip names the projects. The alert has no "Don’t ask again": its
+    /// checkbox sets only "When Next Term opens". Read once the alert returns.
     @discardableResult
     static func addCheckbox(to alert: NSAlert, checked: Bool, projects: [String]) -> NSButton {
-        let checkbox = NSButton(checkboxWithTitle: "Reopen the open projects next time", target: nil, action: nil)
+        let checkbox = NSButton(checkboxWithTitle: QuitPolicy.checkboxTitle(projects), target: nil, action: nil)
         checkbox.state = checked ? .on : .off
         checkbox.toolTip = "Checked: Next Term reopens \(QuitPolicy.projectList(projects)) next time it opens. Unchecked: it "
             + "shows the Welcome window. You can change this in Settings › General."

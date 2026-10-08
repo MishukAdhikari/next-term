@@ -87,6 +87,9 @@ extension SelfTest {
         check(prompt.alert.messageText == "Reopen these projects next time?" && named && dontAsk,
               "the reopen prompt names each open project once, says both outcomes, and has Don’t ask again",
               "\(prompt.alert.messageText) \(text), Don’t ask again \(dontAsk)")
+        let one = QuitReopenPrompt(projects: [app, app], returnKeyReopens: false)
+        check(one.alert.messageText == "Reopen this project next time?" && one.alert.informativeText.contains("reopen “app”, or"),
+              "with one project open, the reopen prompt asks about this project", one.alert.messageText)
         let alike = QuitReopenPrompt(projects: ["/Users/x/work/app", "/Users/x/home/app"], returnKeyReopens: false)
         check(alike.alert.informativeText.contains("reopen “work/app” and “home/app”,"),
               "two projects in folders of one name are told apart by their parent folders", alike.alert.informativeText)
@@ -97,6 +100,10 @@ extension SelfTest {
         checkboxChecks(save, "the save-changes alert", checked: false, projects: [app, api])
         let stops = AppDelegate.quitStopsAlert([])
         checkboxChecks(stops, "the Quitting stops alert", checked: true, projects: [app, api])
+        let saveOne = AppDelegate.saveBeforeQuittingAlert(["notes.md"])
+        checkboxChecks(saveOne, "the save-changes alert", checked: true, projects: [app])
+        let stopsOne = AppDelegate.quitStopsAlert([])
+        checkboxChecks(stopsOne, "the Quitting stops alert", checked: false, projects: [app])
 
         reasonChecks()
 
@@ -144,15 +151,17 @@ extension SelfTest {
         }
     }
 
-    /// The reopen checkbox on a quit alert: its title, its starting state, the projects in its tooltip, and no Don’t
-    /// ask again.
+    /// The reopen checkbox on a quit alert: its title by the count of projects ("app" alone, or "app" and "api"), its
+    /// starting state, the projects in its tooltip, and no Don’t ask again.
     private static func checkboxChecks(_ alert: NSAlert, _ name: String, checked: Bool, projects: [String]) {
         let box = QuitReopenPrompt.addCheckbox(to: alert, checked: checked, projects: projects)
         let tip = box.toolTip ?? ""
         let state = box.state == .on
-        check(box.title == "Reopen the open projects next time" && state == checked && tip.contains("“app” and “api”")
-              && alert.accessoryView === box && !alert.showsSuppressionButton,
-              "\(name) carries the reopen checkbox, \(checked ? "checked" : "unchecked") as the setting is, naming the projects, with no Don’t ask again",
+        let several = projects.count > 1
+        let title = several ? "Reopen these projects next time" : "Reopen this project next time"
+        let named = tip.contains(several ? "reopens “app” and “api” next" : "reopens “app” next")
+        check(box.title == title && state == checked && named && alert.accessoryView === box && !alert.showsSuppressionButton,
+              "\(name) carries \(title), \(checked ? "checked" : "unchecked") as the setting is, naming the projects, with no Don’t ask again",
               "\(box.title), on \(state), tooltip \(tip), suppression \(alert.showsSuppressionButton)")
     }
 
