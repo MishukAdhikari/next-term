@@ -7,8 +7,9 @@ import NextTermCore
 /// is checked. Each part keeps to a time budget and says how long it took.
 extension SelfTest {
     static func completionChecks(_ c: TerminalWindowController) async {
-        // The user's own Tab completion settings are put back after the run.
-        let keys = [CompletionPreferences.modeKey, CompletionPreferences.choicesKey, CompletionPreferences.dismissalsKey]
+        // The user's own Tab completion and Suggest a Command settings are put back after the run.
+        let keys = [CompletionPreferences.modeKey, CompletionPreferences.choicesKey, CompletionPreferences.dismissalsKey,
+                    CompletionPreferences.suggestionKey]
         let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
         let dismissed = CompletionPreferences.dismissedThisLaunch
         defer {
@@ -29,6 +30,7 @@ extension SelfTest {
         await completionOwnerChecks(c, dir: dir)
         await completionServerChecks(c, dir: dir)
         await completionServerHookChecks(c, dir: dir)
+        await commandSuggestionChecks(c, dir: dir)
         #else
         note("Tab completion: skipped in a release build (its tabs need the debug build's own zsh config)")
         #endif
