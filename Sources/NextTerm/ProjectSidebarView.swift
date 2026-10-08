@@ -993,12 +993,15 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             return report(error)
         }
         registerUndo("New \(isFolder ? "Folder" : "File")") { [weak self] in self?.trash([url], confirm: false) }
-        // Show it, select it, and start renaming it.
+        // Show it, select it, and start renaming it. The folder's rows are built again from the listing just
+        // read: those kept from before lack the new item, and without its row there is nothing to rename.
         parent.reload()
         syncHiddenRow(for: parent)
+        rowCache[ObjectIdentifier(parent)] = nil
         outline.reloadItem(parent, reloadChildren: true)
         outline.expandItem(parent)
-        if let node = parent.children?.first(where: { $0.url == url }) { beginRename(node) }
+        // By name: a folder's URL read back from the disk ends in "/", the one it was made with does not.
+        if let node = parent.children?.first(where: { $0.name == name }) { beginRename(node) }
     }
 
     @objc private func renameFromMenu() {
