@@ -217,7 +217,7 @@ extension SelfTest {
         let last = w.addTab(directory: folder.path)
         _ = await wait(20) { last.status.integrated }
         first.userTitle = "Reopen me"
-        first.view.send(txt: "sleep 30\r")
+        first.view.send(txt: "\u{15}sleep 30\r")
         _ = await wait(5) { first.status.running }
         guard let lastIndex = w.groups.firstIndex(where: { $0.contains(last) }) else { return }
         _ = run("Close Other Tabs", in: w.terminalTabMenu(at: lastIndex) ?? NSMenu())
@@ -246,6 +246,7 @@ extension SelfTest {
         _ = run("Close Tabs to the Right", in: w.terminalTabMenu(at: 0) ?? NSMenu())
         check(await wait(3) { w.groups.count == 1 }, "menus: Close Tabs to the Right closes the tabs after the one clicked")
         let extra = w.addTab(directory: folder.path)
+        _ = await wait(20) { extra.status.integrated } // a shell still starting up may have children to warn about
         w.select(0)
         _ = run("Close Tab", in: w.terminalTabMenu(at: 1) ?? NSMenu())
         check(await wait(3) { w.groups.count == 1 && !w.tabs.contains { $0 === extra } }, "menus: Close Tab closes the tab clicked")
