@@ -27,6 +27,7 @@ extension SelfTest {
         await completionZshChecks(c, dir: dir)
         await completionSettingChecks(c, dir: dir)
         await completionOwnerChecks(c, dir: dir)
+        await completionServerChecks(c, dir: dir)
         #else
         note("Tab completion: skipped in a release build (its tabs need the debug build's own zsh config)")
         #endif
