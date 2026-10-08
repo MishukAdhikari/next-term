@@ -342,8 +342,13 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         guard !sessionsGroup.reloadQueued else { return }
         sessionsGroup.reloadQueued = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            self?.sessionsGroup.reloadQueued = false
-            self?.loadSessions()
+            guard let self else { return }
+            self.sessionsGroup.reloadQueued = false
+            if self.isHiddenOrHasHiddenAncestor {
+                self.sessionsGroup.reloadWhenShown = true // hidden meanwhile
+            } else {
+                self.loadSessions()
+            }
         }
     }
 
