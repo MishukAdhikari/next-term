@@ -17,6 +17,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// More are in the sheet behind Connect to Server…: the projects keep the room.
     static let serverLimit = 3
     private let projectsTable = NSTableView()
+    /// Open…, the panel to choose a folder: Return's button while no project is chosen (`updateReturnKey`).
+    private let openPanelButton = NSButton(title: "Open…", target: nil, action: nil)
     private let sessionsTable = NSTableView()
     private let projectName = NSTextField(labelWithString: "")
     private let projectPath = NSTextField(labelWithString: "")
@@ -92,8 +94,12 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         search.action = #selector(searchChanged)
         let projectsLabel = Self.heading("Projects")
         configure(projectsTable, rowHeight: 44, action: #selector(projectClicked), double: #selector(openSelectedProject))
+        // A click below the rows keeps the chosen project, and Return's button with it.
+        projectsTable.allowsEmptySelection = false
         let projectsScroll = Self.scroll(projectsTable)
-        let open = NSButton(title: "Open…", target: NSApp.delegate, action: #selector(AppDelegate.openProjectPanel(_:)))
+        let open = openPanelButton
+        open.target = NSApp.delegate
+        open.action = #selector(AppDelegate.openProjectPanel(_:))
         open.bezelStyle = .rounded
         openTip = ShortcutToolTip(open, "Open a folder as a project", #selector(AppDelegate.openProjectPanel(_:)))
         let terminal = NSButton(title: "New Terminal", target: self, action: #selector(newTerminal))
@@ -119,7 +125,6 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         projectPath.textColor = Theme.textDim
         Typography.singleLine(projectPath, truncation: .byTruncatingMiddle)
         openButton.bezelStyle = .rounded
-        openButton.keyEquivalent = "\r"
         openButton.target = self
         openButton.action = #selector(openSelectedProject)
         sessionsTitle.attributedStringValue = Self.headingText("Agent sessions")
@@ -265,7 +270,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     var shownProjects: [String] { projects }
     var shownSessionTitles: [String] { shownSessions.map(\.title) }
 
-    private func reloadProjects() {
+    /// The recent and open projects, read again: when the window shows, and when the recent ones change under it.
+    func reloadProjects() {
         let open = AppDelegate.shared.controllers.compactMap(\.project)
         var seen = Set<String>()
         allProjects = (AppDelegate.shared.recentProjects + open).filter { seen.insert($0).inserted }
@@ -279,6 +285,27 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
                 self.reselect()
             }
         }
+        applySearch()
+    }
+
+    /// Return opens the chosen project, or with none chosen (none listed yet, or none matching the search), the Open…
+    /// panel: never a button that is off. It never resumes a session: a double-click on it or the Resume button does
+    /// that. Set each time the project shown changes.
+    private func updateReturnKey() {
+        let none = current == nil
+        openPanelButton.keyEquivalent = none ? "\r" : ""
+        openButton.keyEquivalent = none ? "" : "\r"
+    }
+
+    /// For the self-test: these projects listed instead of the recent and open ones.
+    func list(projects paths: [String]) {
+        allProjects = paths
+        applySearch()
+    }
+
+    /// For the self-test: the search field holding `text`, as if typed.
+    func searchProjects(_ text: String) {
+        search.stringValue = text
         applySearch()
     }
 
@@ -315,6 +342,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     private func showProject() {
         current = projects[safe: projectsTable.selectedRow]
+        updateReturnKey()
         guard let project = current else {
             projectName.stringValue = allProjects.isEmpty ? "No projects yet" : "No project matches"
             projectPath.stringValue = allProjects.isEmpty ? "Open a folder to start; it will be listed here." : ""
@@ -449,8 +477,6 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             }
             empty.stringValue = text
         }
-        resumeButton.keyEquivalent = none ? "" : "\r"
-        openButton.keyEquivalent = none ? "\r" : ""
         updateSessionButtons()
     }
 

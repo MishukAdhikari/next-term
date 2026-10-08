@@ -610,8 +610,12 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         window.minSize = NSSize(width: 480, height: 320)
         window.isReleasedWhenClosed = false
         super.init(window: window)
-        // The editor's settings, the terminal's, notifications, every shortcut, and imports.
+        // What a launch shows, the editor's settings, the terminal's, notifications, every shortcut, and imports.
+        // General is first, so it is the tab Settings opens on.
         let tabs = NSTabView()
+        let generalTab = NSTabViewItem(identifier: "general")
+        generalTab.label = "General"
+        generalTab.view = GeneralSettingsView()
         let editorTab = NSTabViewItem(identifier: "editor")
         editorTab.label = "Editor"
         editorTab.view = EditorSettingsView()
@@ -627,6 +631,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         let importTab = NSTabViewItem(identifier: "import")
         importTab.label = "Import"
         importTab.view = ImportSettingsView()
+        tabs.addTabViewItem(generalTab)
         tabs.addTabViewItem(editorTab)
         tabs.addTabViewItem(terminalTab)
         tabs.addTabViewItem(notificationsTab)

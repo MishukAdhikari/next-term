@@ -20,9 +20,11 @@ enum SelfTest {
 
     static func run() {
         Task { @MainActor in
+            await launchChecks() // first: it opens the window the checks after it use
             await runAll()
-            await welcomeReopenChecks() // last: it closes every window
+            await welcomeReopenChecks() // it closes every window
             await welcomeRemoteChecks() // with only the Welcome window left
+            await noWindowDockChecks()
             finish()
         }
     }
@@ -1022,6 +1024,7 @@ enum SelfTest {
         check(await wait(10) { welcome.shownSessionTitles.count == 3 }, "Welcome lists the project's agent sessions (subfolders too)",
               welcome.shownSessionTitles.joined(separator: " | ") + " — listed \(welcome.shownProjects.contains(project)), selected \(welcome.selectedProject ?? "none"), direct \(direct.sessions.map(\.title)) \(direct.problems), home \(SessionStore.home)")
         check(welcome.shownSessionTitles.first == "Fix the login redirect loop", "newest first, with the agent's own title")
+        welcomeReturnKeyChecks(welcome, project: project)
         await pause(0.3)
         await screenshot(welcomeWindow, suffix: "welcome")
         welcome.resumeSelected()

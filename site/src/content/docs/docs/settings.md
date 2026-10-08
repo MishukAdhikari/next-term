@@ -1,9 +1,24 @@
 ---
 title: Settings
-description: "Next Term’s Settings (⌘,): fonts, wrap, clean-up on save, hidden files, git fetch, terminal colours, cursor, scrollback, agents, notifications, imports."
+description: "Next Term’s Settings (⌘,): what a launch opens, fonts, wrap, clean-up on save, hidden files, git fetch, terminal colours, cursor, agents, notifications."
 ---
 
-Open **Next Term › Settings…** (<kbd>⌘,</kbd>). Settings has five tabs: **Editor**, **Terminal**, **Notifications**, **Keyboard Shortcuts** and **Import**. Every change applies at once, to every window.
+Open **Next Term › Settings…** (<kbd>⌘,</kbd>). Settings has seven tabs: **General**, **Editor**, **Terminal**, **Notifications**, **Keyboard Shortcuts**, **Import** and **Skills**. Every change is saved at once and applies to every window; General’s apply from the next launch, Dock click or quit.
+
+## General
+
+What Next Term shows when it opens, and whether a quit asks about reopening your projects.
+
+| Setting | Default | What it does |
+|---|---|---|
+| **At launch** | Show the Welcome window | **Show the Welcome window** lists your recent projects and their agent conversations, with **Open…** and **New Terminal**. **Reopen the projects that were open** opens the project windows that were open when you quit, those that still exist; when none do, the Welcome window shows. A folder or file named at launch, from `nxtrm`, a drop on the Dock icon or Finder’s **Open With**, always opens directly. |
+| **At quit: Ask whether to reopen projects when quitting** | On | A quit with project windows open asks whether to reopen them next time, and the answer sets **At launch**. When Next Term already asks about unsaved files or about work that quitting stops, the question is a checkbox in that dialog, **Reopen these projects next time**, or **Reopen this project next time** with one open. Otherwise **Reopen these projects next time?** (**Reopen this project next time?**) asks on its own; its **Don’t ask again** turns this setting off. |
+
+Unsaved files and running work are always asked about at a quit, whatever is chosen here. The reopen question doesn’t show at a logout, restart or shutdown, or while a dialog is open on a window, and the setting stays as it was. Nor does it when you click **Relaunch Now** for an update: the projects that were open come back whatever is chosen here.
+
+With every window closed, a click on the Dock icon shows the Welcome window, or with **Reopen the projects that were open**, reopens only the most recent project.
+
+macOS’s own **Reopen windows when logging back in** starts Next Term as any launch does: with the default setting, you get the Welcome window.
 
 ## Editor
 
@@ -77,4 +92,4 @@ Some choices live where you use them. The File and View menus, and the ⋯ butto
 | Option as Meta (for Emacs-style keys in the terminal) | **File › Use Option as Meta Key** | Off |
 | Daily update check | **Next Term › Check for Updates Automatically** | On |
 
-Next Term remembers the window layout, the split between editor and terminal, the sidebar’s width, and the project windows that were open when you quit.
+Next Term remembers the window layout, the split between editor and terminal, the sidebar’s width, and the project windows that were open when you quit, which it reopens at launch when **At launch** in [General](#general) says so.

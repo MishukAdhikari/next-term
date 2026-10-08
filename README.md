@@ -74,8 +74,8 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   the project sidebar on the left or right. From the ⋯ buttons or the View menu. ⌘J folds the terminal
   away so the editor gets the room, and brings it back at its size.
 - **Projects.** Open a folder as a project (⌘O): its window keeps the project in the sidebar, and new tabs
-  open in it by default. Next Term reopens your last projects at launch (on first launch it asks for a
-  folder). Open Recent, Close Project, and a Welcome window, like an IDE.
+  open in it by default. Next Term opens to a Welcome window, or reopens your last projects if you choose,
+  like an IDE. Open Recent and Close Project too.
 - **Project sidebar with git.** The project as a live file tree: changed files and folders coloured, with
   `+12 −3` line counts like a pull request, and the branch and total changes at the top, with a **Pull 152**
   button when the upstream has commits you don't (Next Term fetches every 10 minutes, so it appears

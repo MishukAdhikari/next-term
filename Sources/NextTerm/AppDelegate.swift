@@ -312,10 +312,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     // MARK: lifecycle
 
+    /// Where a launch reads Settings › General and the flag "Relaunch Now" leaves. The update that keeps sessions
+    /// passes its test harness's own suite here.
+    let launchDefaults = UserDefaults.standard
+    /// Kept remote tabs (tmux, herdr) wait for the first terminal window: they never open one of their own while the
+    /// Welcome window is up.
+    private(set) var remoteRestorePending = false
+    /// A folder or file came through `application(_:open:)`. Read once, as the launch finishes: the launch named one.
+    private var openedAtLaunch = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         RemotePoller.shared.start() // status of remote tabs, from their hosts
-        // Kept remote tabs (tmux, herdr) reattach once the launch has opened its windows, however it opened them.
-        DispatchQueue.main.async { RemoteConnection.restoreTabs() }
         // Claude Code's IDE link, before the first tab so every tab can use it.
         if shareWithClaude { startClaudeLink() }
         if shareWithCopilot { startCopilotLink() } // Copilot CLI's, in CopilotIDE.swift
@@ -338,23 +345,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                                                             name: .init(CommandLineOpen.notificationName), object: nil,
                                                             suspensionBehavior: .deliverImmediately)
         if SelfTest.isRequested {
-            newWindow(nil)
+            // A normal launch, with the Welcome window whatever is saved and no import offer. The self-test's first
+            // check opens the window the others use.
+            openAtLaunch(kind: .normal, settings: LaunchSettings(), mayOfferImport: false)
+            restoreRemoteTabsOnceAWindowOpens()
             SelfTest.run()
             return
         }
+        // `nxtrm` started us: what it asked for opens, and the launch shows nothing more. A folder dropped on the app,
+        // `open -a "Next Term" dir` and Finder's Open With usually arrive before this and open themselves.
+        let command = Self.openRequest(in: CommandLine.arguments)
+        // First, so the flag "Relaunch Now" leaves never outlives the launch after it.
+        let kind = Self.takeLaunchKind(request: command != nil || openedAtLaunch, defaults: launchDefaults, now: Date())
         // `nxtrm` in other terminals: linked where that needs no password, else offered once with one.
         CommandLineTool.registerQuietly()
         MainActor.assumeIsolated { Updater.shared.start() }
-        // `nxtrm` started us: open what it asked for, not the last session.
-        let arguments = CommandLine.arguments
-        if let flag = arguments.firstIndex(of: "--open-request"), flag + 1 < arguments.count,
-           let command = try? JSONDecoder().decode(OpenCommand.self, from: Data(arguments[flag + 1].utf8)) {
-            handle(command)
-            if !controllers.isEmpty { return }
+        // An update's disk image and folder that a quit or a crash left mid-staging.
+        Updater.removeLeftovers()
+        if let command { handle(command) }
+        let show = { [self] in
+            openAtLaunch(kind: kind)
+            restoreRemoteTabsOnceAWindowOpens()
         }
-        // A folder dropped on the app or `open -a "Next Term" dir` arrives before this and opens itself.
-        guard controllers.isEmpty else { return }
-        if !reopenLastProjects() { offerImportThenChooseFolder() }
+        // A launch to open a document can get it just after this: a turn later, its window is open, and the launch
+        // shows nothing more.
+        let isDefault = notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool ?? true
+        if isDefault { show() } else { DispatchQueue.main.async { show() } }
+    }
+
+    /// What `nxtrm` asked for, when it started Next Term (`--open-request`).
+    private static func openRequest(in arguments: [String]) -> OpenCommand? {
+        guard let flag = arguments.firstIndex(of: "--open-request"), flag + 1 < arguments.count else { return nil }
+        return try? JSONDecoder().decode(OpenCommand.self, from: Data(arguments[flag + 1].utf8))
+    }
+
+    /// The relaunch after "Relaunch Now" (the flag `Updater.flagRelaunch` left, 0 to 15 minutes old), else a launch
+    /// that named a folder or file, else a normal one. The flag is taken either way. Until the update that keeps
+    /// sessions, whose launch hook tells its relaunch.
+    static func takeLaunchKind(request: Bool, defaults: UserDefaults, now: Date) -> LaunchKind {
+        let flagged = defaults.object(forKey: Updater.relaunchFlagKey) as? Date
+        defaults.removeObject(forKey: Updater.relaunchFlagKey)
+        if LaunchDecision.isUpdateRelaunch(flaggedAt: flagged, now: now) { return .updateRelaunch }
+        return request ? .request : .normal
+    }
+
+    /// What a launch shows, and a Dock click with no window (LaunchDecision): the projects to reopen, the Welcome
+    /// window, or on the first run "Coming from another app?" and then the Welcome window. Nothing more once a
+    /// terminal window is open. Settings › General is read each time, so a change applies from the next one.
+    private func openAtLaunch(kind: LaunchKind) {
+        let settings = LaunchSettings(defaults: launchDefaults)
+        let offered = UserDefaults.standard.bool(forKey: "importOffered")
+        openAtLaunch(kind: kind, settings: settings, mayOfferImport: !offered && recentProjects.isEmpty)
+    }
+
+    private func openAtLaunch(kind: LaunchKind, settings: LaunchSettings, mayOfferImport: Bool) {
+        // Nothing restores yet: the update that keeps sessions fills in `restore`.
+        let input = LaunchInput(kind: kind, restore: .notRun, terminalWindowOpen: !controllers.isEmpty, settings: settings,
+                                sessionProjects: sessionProjects, recentProjects: recent.paths, mayOfferImport: mayOfferImport)
+        switch LaunchDecision.opening(input, exists: isFolder) {
+        case .nothing: break
+        case .reopen(let paths): for path in paths { openWindow(directory: path, project: path) }
+        case .welcome: showWelcome(nil)
+        case .importThenWelcome: offerImportThenWelcome()
+        }
+    }
+
+    /// Kept remote tabs reattach once the launch has a terminal window: now if it opened one, else when the first one
+    /// opens (`openWindow`).
+    private func restoreRemoteTabsOnceAWindowOpens() {
+        if controllers.isEmpty { remoteRestorePending = true } else { restoreRemoteTabs() }
+    }
+
+    private func restoreRemoteTabs() {
+        remoteRestorePending = false
+        // A turn later: the window may have closed by then, and the Welcome window come back, so the tabs wait for the
+        // next one rather than open a window of their own. Closed while the restore reads the login shell, in the first
+        // seconds after launch, they still open one, until the update that keeps sessions holds them.
+        DispatchQueue.main.async { [self] in
+            if controllers.isEmpty { remoteRestorePending = true } else { RemoteConnection.restoreTabs() }
+        }
     }
 
     // MARK: nxtrm
@@ -444,19 +513,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         CommandLineTool.install(from: NSApp.keyWindow)
     }
 
-    /// The project windows open when Next Term last quit, so it starts where you left off.
+    /// The project windows open when Next Term last quit: a launch reopens them when Settings › General says so, and
+    /// the relaunch after "Relaunch Now" does whatever it says. Written at every quit, so changing the setting later
+    /// works.
     private var sessionProjects: [String] {
         get { UserDefaults.standard.stringArray(forKey: "sessionProjects") ?? [] }
         set { UserDefaults.standard.set(newValue, forKey: "sessionProjects") }
-    }
-
-    /// Reopens the projects from last time, or the most recent one. False when there is none to reopen.
-    @discardableResult
-    private func reopenLastProjects() -> Bool {
-        let last = sessionProjects.isEmpty ? Array(recent.paths.prefix(1)) : sessionProjects
-        let existing = last.filter(isFolder)
-        for path in existing { openWindow(directory: path, project: path) }
-        return !existing.isEmpty
     }
 
     private func isFolder(_ path: String) -> Bool {
@@ -464,36 +526,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
     }
 
-    /// The first launch (or when the last folder is gone): ask where to start. That folder opens as the
-    /// project, and next time Next Term opens there by itself.
-    /// First launch: "Coming from another app?" (only when one is found, and only once), then the folder.
-    private func offerImportThenChooseFolder() {
-        let offered = UserDefaults.standard.bool(forKey: "importOffered")
-        guard !offered, recentProjects.isEmpty, !ImportSources.detect().isEmpty else { return chooseStartingFolder() }
+    /// The first run: "Coming from another app?" when an app to import from is found (only once), then the Welcome
+    /// window, which lists the projects brought over and their agents' sessions.
+    private func offerImportThenWelcome() {
+        guard !ImportSources.detect().isEmpty else { return showWelcome(nil) }
         UserDefaults.standard.set(true, forKey: "importOffered")
-        ImportWindowController.shared.showChooser(firstRun: true) { [weak self] plan in
+        ImportWindowController.shared.showChooser(firstRun: true) { [weak self] _ in
+            // Not when a window opened meanwhile (`nxtrm`, a folder dropped on the Dock icon).
             guard let self, self.controllers.isEmpty else { return }
-            // Projects came over: the Welcome window lists them (and their agents' sessions).
-            if let plan, !plan.recentProjects.isEmpty, !self.recentProjects.isEmpty { self.showWelcome(nil) } else { self.chooseStartingFolder() }
-        }
-    }
-
-    private func chooseStartingFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Open"
-        panel.message = "Choose the folder to work in. Next Term opens it as a project, and reopens it next time."
-        let code = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Code")
-        panel.directoryURL = isFolder(code.path) ? code : URL(fileURLWithPath: NSHomeDirectory())
-        if panel.runModal() == .OK, let url = panel.url, isFolder(url.path) {
-            let path = canonicalPath(url.path)
-            recent.add(path)
-            openWindow(directory: path, project: path)
-        } else {
-            newWindow(nil) // a terminal in the home folder; ⌘O opens a project any time
+            self.showWelcome(nil)
         }
     }
 
@@ -516,47 +557,122 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             window.deminiaturize(nil)
             return false
         }
-        // No windows open: back to the last project, else a terminal.
-        if let path = recent.existing().first { openWindow(directory: path, project: path) } else { newWindow(nil) }
-        return true
+        // No windows open: what Settings › General says, the Welcome window or the most recent project. AppKit's own
+        // reopen adds nothing. A moment later, as `nxtrm` with no window open sends its request and this reopen in
+        // either order: when the request has opened its window, or the Welcome window is up, nothing more.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [self] in
+            guard controllers.isEmpty, welcome?.window?.isVisible != true else { return }
+            openAtLaunch(kind: .dockReopen)
+        }
+        return false
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
+    /// Set while a quit asks its questions. They are app-modal, and main-queue work still runs under them (a download
+    /// that ends, an MCP call): a second quit then is cancelled, and "Relaunch Now" is not offered (`Updater`).
+    var askingToQuit = false
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        let dirty = controllers.flatMap(\.editorArea.dirtyDocuments)
-        if !dirty.isEmpty && !SelfTest.isRequested {
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = dirty.count == 1 ? "Save changes to “\(dirty[0].name)” before quitting?"
-                : "Save changes to \(dirty.count) files before quitting?"
-            alert.informativeText = "Your changes are lost if you don’t save them."
-            alert.addButton(withTitle: dirty.count == 1 ? "Save" : "Save All")
-            alert.addButton(withTitle: "Cancel")
-            alert.addButton(withTitle: "Don’t Save").keyEquivalent = "d"
-            switch alert.runModal() {
-            case .alertFirstButtonReturn:
-                guard controllers.allSatisfy({ $0.editorArea.saveAll() }) else { return .terminateCancel }
-            case .alertThirdButtonReturn:
-                break
-            default:
-                return .terminateCancel
-            }
-        }
-        let busy = controllers.flatMap(\.busyTabs)
-        if !busy.isEmpty && !SelfTest.isRequested {
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = "Quit Next Term?"
-            alert.informativeText = "Quitting stops " + TerminalWindowController.stopList(busy)
-            alert.addButton(withTitle: "Quit")
-            alert.addButton(withTitle: "Cancel")
-            if alert.runModal() != .alertFirstButtonReturn { return .terminateCancel }
-        }
+        guard !askingToQuit else { return .terminateCancel }
+        askingToQuit = true
+        defer { askingToQuit = false }
+        guard askBeforeQuitting() else { return .terminateCancel }
         isTerminating = true
         // A skill change part-way finishes, and records its Undo, before Next Term quits.
         SkillsStore.waitForChanges()
         return .terminateNow
+    }
+
+    /// The quit's questions (QuitPolicy), one at a time: the save-changes and "Quitting stops…" alerts whenever they
+    /// apply, as always, with the reopen question on one of them, or else on its own. False when one cancels the
+    /// quit. The reopen answer is saved only once the quit goes ahead.
+    private func askBeforeQuitting() -> Bool {
+        let dirty = controllers.flatMap(\.editorArea.dirtyDocuments)
+        let projects = openProjects
+        let settings = LaunchSettings(defaults: launchDefaults)
+        let sheetAttached = NSApp.windows.contains { $0.attachedSheet != nil }
+        let busyCount = controllers.flatMap(\.busyTabs).count
+        let input = QuitInput(unsavedFiles: dirty.count, busyTabs: busyCount, projectWindows: projects.count,
+                              sheetAttached: sheetAttached, reason: quitReason, settings: settings)
+        let questions: [QuitQuestion] = QuitPolicy.questions(input)
+        guard !questions.isEmpty else { return true }
+        // A quit from the Dock while Next Term is behind another app: its first question shows in front.
+        NSApp.activate(ignoringOtherApps: true)
+        var answer: QuitAnswer?
+        var busyCheckbox: Bool?
+        for question in questions {
+            switch question {
+            case .saveChanges(let checkbox):
+                let alert = Self.saveBeforeQuittingAlert(dirty.map(\.name))
+                let reopen = checkbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
+                switch alert.runModal() {
+                case .alertFirstButtonReturn:
+                    guard controllers.allSatisfy({ $0.editorArea.saveAll() }) else { return false }
+                case .alertThirdButtonReturn:
+                    break
+                default:
+                    return false
+                }
+                if let reopen { answer = .checkbox(checked: reopen.state == .on) }
+            case .busy(let checkbox):
+                busyCheckbox = checkbox // asked below, once the busy tabs are read again
+            case .reopen(let returnKeyReopens):
+                let prompt = QuitReopenPrompt(projects: projects, returnKeyReopens: returnKeyReopens)
+                guard let reopen = prompt.run() else { return false }
+                answer = reopen
+            }
+        }
+        // Read again, as today: a tab that turned busy under a question before still gets "Quitting stops…". Only the
+        // alert the policy chose carries the checkbox, so the question is never asked twice; when that alert no longer
+        // applies, nothing is asked about reopening and the setting stays as it is.
+        let busy = controllers.flatMap(\.busyTabs)
+        if !busy.isEmpty {
+            let alert = Self.quitStopsAlert(busy)
+            let reopen = busyCheckbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
+            guard alert.runModal() == .alertFirstButtonReturn else { return false }
+            if let reopen { answer = .checkbox(checked: reopen.state == .on) }
+        }
+        if let answer { QuitPolicy.settings(after: answer, from: settings).save(to: launchDefaults) }
+        return true
+    }
+
+    /// Why this quit happens: the self-test, "Relaunch Now", a logout, restart or shutdown (the quit Apple event), or
+    /// else the user.
+    private var quitReason: QuitReason {
+        if SelfTest.isRequested { return .selfTest }
+        if MainActor.assumeIsolated({ Updater.shared.relaunching }) { return .updateRelaunch }
+        return QuitReopenPrompt.reason(of: NSAppleEventManager.shared().currentAppleEvent)
+    }
+
+    /// The windows' projects, each once, in window order: what the reopen question names.
+    private var openProjects: [String] {
+        var seen = Set<String>()
+        return controllers.compactMap(\.project).filter { seen.insert($0).inserted }
+    }
+
+    /// "Save changes to … before quitting?", for the unsaved files' names: Save (Save All), Cancel, Don’t Save (⌘D).
+    static func saveBeforeQuittingAlert(_ names: [String]) -> NSAlert {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = names.count == 1 ? "Save changes to “\(names[0])” before quitting?"
+            : "Save changes to \(names.count) files before quitting?"
+        alert.informativeText = "Your changes are lost if you don’t save them."
+        alert.addButton(withTitle: names.count == 1 ? "Save" : "Save All")
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Don’t Save").keyEquivalent = "d"
+        return alert
+    }
+
+    /// "Quit Next Term?", with what quitting stops: Quit, Cancel.
+    static func quitStopsAlert(_ busy: [TerminalTab]) -> NSAlert {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Quit Next Term?"
+        alert.informativeText = "Quitting stops " + TerminalWindowController.stopList(busy)
+        alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "Cancel")
+        return alert
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -610,6 +726,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             controller.window?.center()
         }
         controllers.append(controller)
+        if remoteRestorePending { restoreRemoteTabs() } // the launch's first terminal window
         projectsChanged()
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
@@ -624,7 +741,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private var recent: RecentProjects {
         get { RecentProjects(UserDefaults.standard.stringArray(forKey: "recentProjects") ?? []) }
-        set { UserDefaults.standard.set(newValue.paths, forKey: "recentProjects") }
+        set {
+            UserDefaults.standard.set(newValue.paths, forKey: "recentProjects")
+            // A folder dropped as missing, Clear Menu, or an import under the Welcome window: it lists them as they are now.
+            if welcome?.window?.isVisible == true { welcome?.reloadProjects() }
+        }
     }
 
     var recentProjects: [String] { recent.existing() }
@@ -749,6 +870,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// Folders dropped on the Dock icon, or `open -a "Next Term" ~/Code/app`.
     func application(_ application: NSApplication, open urls: [URL]) {
+        // Read as the launch finishes: it named something, even when every item below is skipped. It then goes on
+        // as a normal launch, without the first run's import offer.
+        openedAtLaunch = true
         for url in urls {
             var isDir: ObjCBool = false
             guard url.isFileURL, FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { continue }

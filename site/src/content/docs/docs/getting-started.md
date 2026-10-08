@@ -1,6 +1,6 @@
 ---
 title: Install and get started
-description: "Install Next Term on macOS 13 or later, get past the first-launch warning with Open Anyway, choose a project folder and run your first agents side by side."
+description: "Install Next Term on macOS 13 or later, allow the first launch with Open Anyway, open a project from the Welcome window and run two agents side by side."
 ---
 
 Next Term is one app: a terminal with tabs, a code editor above it, and a project sidebar with git. This page takes you from the download to two agents running side by side.
@@ -51,15 +51,15 @@ shasum -a 256 -c NextTerm.dmg.sha256
 
 `NextTerm.dmg: OK` means your file matches the checksum published with the release, byte for byte. Releases are built by GitHub Actions from the public source.
 
-## First launch: choose a folder
+## First launch: the Welcome window
 
-The first time it starts, Next Term asks which folder to work in. That folder opens as a **project**: the sidebar shows its files, and new tabs start in it. Next time, Next Term reopens it by itself (it reopens every project window that was open when you quit).
+If Next Term finds an editor or terminal it can read settings from, such as VS Code, Cursor, a JetBrains IDE, Zed, iTerm2, Ghostty or Terminal, it first asks **Coming from another app?** Choose one to see exactly what it would bring over (your shortcuts, fonts, terminal colours and recent projects), or keep Next Term’s own. You can do it later from **Next Term › Import Settings and Shortcuts…**. See [Switching to Next Term](/docs/switching/).
 
-If you cancel, you get a plain terminal in your home folder. You can open a project at any time with **File › Open Project…** (<kbd>⌘O</kbd>). More in [Projects and git](/docs/projects-and-git/).
+Then the **Welcome** window opens. It lists your recent projects, each with the agent conversations kept for it, and up to three of the servers you saved; on a new Mac the lists are empty, unless an import brought your recent projects over. Click **Open…** and choose a folder to work in: it opens as a **project**, so the sidebar shows its files and new tabs start in it. **New Terminal** opens a plain terminal in your home folder instead, and **Connect to Server…** opens a [remote tab](/docs/remote/); a click on a saved server opens a window with a tab on it. You can open a project at any time with **File › Open Project…** (<kbd>⌘O</kbd>). More in [Projects and git](/docs/projects-and-git/).
 
-When the last project closes, the **Welcome** window appears: your projects, each with its agents’ sessions, and up to three of the servers you saved. Start from its buttons: **Open…** a folder, a **New Terminal**, or **Connect to Server…** for a [remote tab](/docs/remote/). A click on a saved server opens a window with a tab on it.
+Later launches show the Welcome window too, where you pick the project or the agent conversation to carry on with. To have Next Term reopen the projects that were open instead, choose **Reopen the projects that were open** in **Settings › General**. A launch that names a folder, such as `nxtrm .` or a folder dropped on the Dock icon, opens it directly. See [General](/docs/settings/#general). When the last project closes, the Welcome window comes back.
 
-If Next Term finds an editor or terminal it can read settings from, such as VS Code, Cursor, a JetBrains IDE, Zed, iTerm2, Ghostty or Terminal, it asks **Coming from another app?** Choose one to see exactly what it would bring over (your shortcuts, fonts, terminal colours and recent projects), or keep Next Term’s own. You can do it later from **Next Term › Import Settings and Shortcuts…**. See [Switching to Next Term](/docs/switching/).
+When you quit with projects open, Next Term asks whether to reopen them next time, and your answer becomes that setting. If it is already asking about unsaved files or about work that quitting stops, the question is a checkbox in that dialog, **Reopen these projects next time** (**Reopen this project next time** with one open). Otherwise **Reopen these projects next time?** (**Reopen this project next time?**) asks on its own, with **Reopen** and **Don’t Reopen**. **Cancel** keeps Next Term open and changes nothing.
 
 macOS also asks whether Next Term may send notifications. Allow them: that is how an agent waiting on your decision, or done with its work, reaches you while you are in another tab or app.
 

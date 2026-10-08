@@ -27,8 +27,9 @@ final class Updater {
     private var observers: [NSObjectProtocol] = []
     private var checking = false
     private var progress: UpdateProgressWindow?
-    /// A new app staged next to this one, swapped in when Next Term quits.
-    private var staged: (newApp: URL, version: AppVersion)? { didSet { changed() } }
+    /// A new app staged next to this one, swapped in when Next Term quits, with what the install script
+    /// checks it and this app against before either is moved or opened.
+    private var staged: (newApp: URL, version: AppVersion, requirement: String, oldRequirement: String)? { didSet { changed() } }
     /// A newer version a check found, until it is installed: the Update button offers it.
     private(set) var available: ReleaseInfo? { didSet { changed() } }
     /// The releases whose notes the window shows for `available`, newest first.
@@ -318,17 +319,20 @@ final class Updater {
                 }
                 signed = true
                 if quietly { downloading = true } // the Update button hides, as it does under the progress window
-                let dmg = try await fetch(dmgURL)
-                progress?.message = "Checking the download…"
-                let actual = try await Task.detached { try Self.sha256(of: dmg) }.value
-                guard actual == expected else {
-                    try? FileManager.default.removeItem(at: dmg)
-                    throw ReleaseSignature.Refusal.mismatch
+                let folder = try await fetch(dmgURL)
+                let app: (url: URL, requirement: String, oldRequirement: String)
+                do {
+                    // The folder and the disk image in it go once staging ends, whether it worked or not.
+                    defer { folder.remove() }
+                    progress?.message = "Checking the download…"
+                    let dmg = folder.url.appendingPathComponent(Self.diskImageName)
+                    let actual = try await Task.detached { try Self.sha256(of: dmg) }.value
+                    guard actual == expected else { throw ReleaseSignature.Refusal.mismatch }
+                    progress?.message = "Preparing…"
+                    let version = release.version
+                    app = try await Task.detached { try Self.stage(in: folder, version: version) }.value
                 }
-                progress?.message = "Preparing…"
-                let version = release.version
-                let app = try await Task.detached { try Self.stage(dmg: dmg, version: version) }.value
-                staged = (app, release.version)
+                staged = (app.url, release.version, app.requirement, app.oldRequirement)
                 installing = false
                 hideProgress()
                 if !quietly { relaunchPrompt(release.version) }
@@ -417,13 +421,54 @@ final class Updater {
 
     struct UpdateError: Error { let text: String; init(_ text: String) { self.text = text } }
 
-    private func fetch(_ url: URL) async throws -> URL {
+    /// The disk image's name in its private folder.
+    private nonisolated static let diskImageName = "NextTerm-update.dmg"
+    /// The start of the private folders' names.
+    private nonisolated static let folderPrefix = "NextTerm-update-"
+    /// Where the private folders are made: Next Term's own folder in Application Support, out of the temporary folder
+    /// and the workspace, which sandboxed agents in a tab can write.
+    private nonisolated static var downloadsFolder: URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return support.appendingPathComponent("Next Term/Updates", isDirectory: true)
+    }
+
+    /// Downloads the disk image and copies it into a new private folder (`diskImageName` in it), where nothing else can
+    /// swap it between the checksum check and the mount. The caller removes the folder.
+    private func fetch(_ url: URL) async throws -> PrivateFolder {
         let (file, response) = try await URLSession.shared.download(from: url, delegate: progress)
+        // URLSession leaves the downloaded file in the temporary folder: it goes when this returns.
+        defer { try? FileManager.default.removeItem(at: file) }
         if let http = response as? HTTPURLResponse, http.statusCode != 200 { throw UpdateError("The download failed (HTTP \(http.statusCode)).") }
-        // The temporary file goes away when this returns: keep it.
-        let kept = FileManager.default.temporaryDirectory.appendingPathComponent("NextTerm-update-\(UUID().uuidString).dmg")
-        try FileManager.default.moveItem(at: file, to: kept)
-        return kept
+        let folder = try PrivateFolder.make(in: Self.downloadsFolder, prefix: Self.folderPrefix)
+        let dmg = folder.url.appendingPathComponent(Self.diskImageName)
+        do {
+            // A copy, not the downloaded file: a new file only this folder names, which a link or an open handle to the
+            // download, made in the temporary folder, can't change after its check. Hashed and mounted by its path, so a
+            // plain file of this user's.
+            try FileManager.default.copyItem(at: file, to: dmg)
+            guard PrivateFolder.isOwnFile(dmg.path) else { throw UpdateError("The download could not be kept for its check.") }
+        } catch {
+            folder.remove()
+            throw error
+        }
+        return folder
+    }
+
+    /// Removes the private folders a quit or a crash left mid-staging, in the background: only ones over an hour old,
+    /// as a newer one may be another Next Term's, staging now. A disk image still mounted in one is detached first; a
+    /// folder whose image stays mounted is kept.
+    nonisolated static func removeLeftovers() {
+        DispatchQueue.global(qos: .utility).async {
+            let cutoff = Date(timeIntervalSinceNow: -60 * 60)
+            for folder in PrivateFolder.leftovers(in: downloadsFolder, prefix: folderPrefix, madeBefore: cutoff) {
+                let mount = folder.url.appendingPathComponent("mount").path
+                if PrivateFolder.isMountPoint(mount) {
+                    _ = try? runTool("/usr/bin/hdiutil", ["detach", mount, "-force", "-quiet"])
+                    if PrivateFolder.isMountPoint(mount) { continue }
+                }
+                folder.remove()
+            }
+        }
     }
 
     private nonisolated static func sha256(of file: URL) throws -> String {
@@ -434,33 +479,41 @@ final class Updater {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Copies the app out of the disk image into a folder on the same volume as this app, and checks
-    /// it is Next Term at the expected version with an intact signature.
-    private nonisolated static func stage(dmg: URL, version: AppVersion) throws -> URL {
-        let mount = FileManager.default.temporaryDirectory.appendingPathComponent("NextTerm-mount-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)
-        defer {
-            _ = try? Self.runTool("/usr/bin/hdiutil", ["detach", mount.path, "-force", "-quiet"])
-            try? FileManager.default.removeItem(at: mount)
-            try? FileManager.default.removeItem(at: dmg)
-        }
+    /// Copies the app out of the disk image in `folder`, mounted in that folder too, into a folder on the same volume as
+    /// this app, and checks it is Next Term at the expected version with an intact signature that meets the requirement
+    /// the install script checks it against again (see `CodeSignature.updateRequirement`). The caller removes `folder`.
+    private nonisolated static func stage(in folder: PrivateFolder, version: AppVersion) throws -> (url: URL, requirement: String, oldRequirement: String) {
+        let dmg = folder.url.appendingPathComponent(diskImageName)
+        let mount = folder.url.appendingPathComponent("mount")
+        try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: false)
+        defer { _ = try? Self.runTool("/usr/bin/hdiutil", ["detach", mount.path, "-force", "-quiet"]) }
         guard try Self.runTool("/usr/bin/hdiutil", ["attach", dmg.path, "-nobrowse", "-readonly", "-noautoopen", "-quiet", "-mountpoint", mount.path]) else {
             throw UpdateError("The disk image could not be opened.")
         }
         let source = mount.appendingPathComponent("Next Term.app")
+        guard let running = CodeSignature.running(), let image = CodeSignature.of(source) else {
+            throw UpdateError("The signatures of this app and the new one could not be read.")
+        }
+        let requirement = CodeSignature.updateRequirement(running: running, staged: image)
         let here = Bundle.main.bundleURL
-        let folder = try FileManager.default.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: here, create: true)
-        let target = folder.appendingPathComponent("Next Term.app")
-        guard try Self.runTool("/usr/bin/ditto", [source.path, target.path]) else { throw UpdateError("The new app could not be copied.") }
-        let info = Bundle(url: target)
-        guard info?.bundleIdentifier == Bundle.main.bundleIdentifier,
-              (info?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String).flatMap(AppVersion.init) == version else {
-            throw UpdateError("The disk image does not hold Next Term \(version).")
+        let staging = try FileManager.default.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: here, create: true)
+        do {
+            let target = staging.appendingPathComponent("Next Term.app")
+            guard try Self.runTool("/usr/bin/ditto", [source.path, target.path]) else { throw UpdateError("The new app could not be copied.") }
+            let info = Bundle(url: target)
+            guard info?.bundleIdentifier == Bundle.main.bundleIdentifier,
+                  (info?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String).flatMap(AppVersion.init) == version else {
+                throw UpdateError("The disk image does not hold Next Term \(version).")
+            }
+            guard try Self.runTool("/usr/bin/codesign", ["--verify", "--deep", "--strict", "-R", "=" + requirement, target.path]) else {
+                throw UpdateError("The new app's signature is broken.")
+            }
+            return (target, requirement, running.requirement)
+        } catch {
+            // Not staged: the copy goes with its folder. A staged one stays there until the quit installs it.
+            try? FileManager.default.removeItem(at: staging)
+            throw error
         }
-        guard try Self.runTool("/usr/bin/codesign", ["--verify", "--deep", "--strict", target.path]) else {
-            throw UpdateError("The new app's signature is broken.")
-        }
-        return target
     }
 
     private nonisolated static func runTool(_ path: String, _ arguments: [String]) throws -> Bool {
@@ -476,35 +529,52 @@ final class Updater {
     }
 
     private func relaunchPrompt(_ version: AppVersion) {
-        if testing, UserDefaults.standard.bool(forKey: "updateInstallWithoutAsking") { return NSApp.terminate(nil) }
+        // Not under a quit's question (a download can end there): the staged update stays on the Update button.
+        if AppDelegate.shared.askingToQuit { return }
+        if testing, UserDefaults.standard.bool(forKey: "updateInstallWithoutAsking") { return relaunchNow() }
         let alert = NSAlert()
         alert.messageText = "Next Term \(version) is ready"
         alert.informativeText = "It replaces this version when Next Term quits. Relaunch now? Running commands and agents stop."
         alert.addButton(withTitle: "Relaunch Now")
         alert.addButton(withTitle: "When I Quit")
-        if alert.runModal() == .alertFirstButtonReturn { NSApp.terminate(nil) }
+        if alert.runModal() == .alertFirstButtonReturn { relaunchNow() }
     }
 
-    /// Called as Next Term quits: if an update is staged, a small script waits for this process to end,
-    /// swaps the apps (putting the old one back if anything fails) and starts the new one.
+    /// "Relaunch Now" is quitting: the quit asks nothing about reopening (unsaved files and running work are still
+    /// asked about), and the install flags the relaunch. Until the update that keeps sessions.
+    private(set) var relaunching = false
+
+    /// Quits so the update goes in, and the new version reopens the projects open now. "When I Quit" never comes
+    /// here: that quit is the user's own, and the launch after it follows Settings › General.
+    private func relaunchNow() {
+        relaunching = true
+        NSApp.terminate(nil)
+        relaunching = false // the quit was cancelled: only then does `terminate` return
+    }
+
+    /// Where the flag "Relaunch Now" leaves is kept in the defaults.
+    nonisolated static let relaunchFlagKey = "updateRelaunchAt"
+
+    /// Marks the next launch as the relaunch after "Relaunch Now", which reopens the projects that were open whatever
+    /// Settings › General says. The next launch takes the flag (`AppDelegate.takeLaunchKind`); one more than 15
+    /// minutes old counts for nothing.
+    nonisolated static func flagRelaunch(in defaults: UserDefaults, now: Date) {
+        defaults.set(now, forKey: relaunchFlagKey)
+    }
+
+    /// Called as Next Term quits: if an update is staged, a small script (see `InstallScript`) waits for
+    /// this process to end, checks the new app's signature again, swaps the apps (putting the old one back
+    /// if anything fails) and starts the new one.
     func installStagedUpdateOnQuit() {
         guard let staged else { return }
-        let here = Bundle.main.bundleURL.path
-        let backup = staged.newApp.deletingLastPathComponent().appendingPathComponent("Next Term (previous).app").path
-        let script = """
-        while /bin/kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do /bin/sleep 0.2; done
-        if /bin/mv \(ShellQuote.quote(here)) \(ShellQuote.quote(backup)); then
-          if /bin/mv \(ShellQuote.quote(staged.newApp.path)) \(ShellQuote.quote(here)); then
-            /bin/rm -rf \(ShellQuote.quote(backup)) \(ShellQuote.quote(staged.newApp.deletingLastPathComponent().path))
-          else
-            /bin/mv \(ShellQuote.quote(backup)) \(ShellQuote.quote(here))
-          fi
-        fi
-        /usr/bin/open \(ShellQuote.quote(here))
-        """
+        if relaunching { Self.flagRelaunch(in: AppDelegate.shared.launchDefaults, now: Date()) }
+        let staging = staged.newApp.deletingLastPathComponent()
+        let script = InstallScript(pid: ProcessInfo.processInfo.processIdentifier, app: Bundle.main.bundleURL.path,
+                                   newApp: staged.newApp.path, staging: staging.path, requirement: staged.requirement,
+                                   oldRequirement: staged.oldRequirement, relaunch: true)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = ["-c", script]
+        process.arguments = ["-c", script.text]
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice

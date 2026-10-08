@@ -72,7 +72,7 @@ A tab never retries by itself when ssh refused the login (a wrong password, a ke
 
 ### When Next Term quits, or the server restarts
 
-At quit, the connections close and kept sessions go on running on the server. At the next launch, Next Term opens the tmux and herdr tabs again, in their order, and reattaches them. Split panes come back as separate tabs. A host you pointed somewhere else since (another address or port) is not followed: those tabs stay closed, and Next Term tells you.
+At quit, the connections close and kept sessions go on running on the server. Once the first window opens after the next launch, Next Term opens the tmux and herdr tabs again, in their order, and reattaches them, each in its project’s window if that is open, else in the first window. Split panes come back as separate tabs. A host you pointed somewhere else since (another address or port) is not followed: those tabs stay closed, and Next Term tells you.
 
 If the server itself restarts, tmux sessions are gone. herdr brings its layout back when Next Term reconnects to it, and resumes the agents it supports from their saved conversations.
 
@@ -120,6 +120,7 @@ Agents that use Next Term’s [MCP server](/docs/orchestration/) get seven tools
 ## Limits
 
 - Split panes come back as separate tabs after a relaunch.
+- When a launch shows the Welcome window, a kept tab whose project you don’t open reattaches in the first window you open, which can be another project’s.
 - The **Session** list, and `host_sessions`, need a connection to the server: a tab connected to it, or up to 10 minutes after the last one closed. After that, open a tab on the server to see them.
 - An 8th tab on one server asks you to log in once more (see above).
 - A jump host written as `ProxyCommand ssh …` instead of `ProxyJump` follows your own ssh config for its host key. The server itself is still asked about.
