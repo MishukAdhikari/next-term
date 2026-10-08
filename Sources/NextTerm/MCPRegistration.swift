@@ -8,32 +8,66 @@ enum MCPRegistration {
     /// Per agent (`MCPRegistrar.Target.id`, and "claude"), what the last pass found.
     nonisolated(unsafe) private(set) static var statuses: [String: MCPRegistrar.Status] = [:]
     private static let queue = DispatchQueue(label: "nextterm.mcp-registration")
-
-    static var names: [String: String] {
-        var names = ["claude": "Claude Code"]
-        for target in MCPRegistrar.targets() { names[target.id] = target.name }
-        return names
-    }
+    /// What waits for the Claude app to quit: true adds Next Term, false takes it out (nil: nothing). Its file is
+    /// edited only while it is closed (see `MCPRegistrar.claudeAppBundle`).
+    nonisolated(unsafe) private static var claudeAppWaiting: Bool?
+    /// The desktop apps the last pass found (`MCPRegistrar.Target.apps`), named in the summary.
+    nonisolated(unsafe) private static var appsFound: Set<String> = []
 
     /// Posted on the main thread when a pass is done (Settings shows the result).
     static let changed = Notification.Name("NextTermMCPRegistrationsChanged")
 
-    /// Registers (on) or unregisters (off) everywhere, off the main thread.
-    static func update(on: Bool) {
+    /// Registers (on) or unregisters (off) everywhere, off the main thread. `claudeAppOnly`: just the Claude app's
+    /// files (when it quits, and at launch with the setting off, in case it was open when the setting was turned off);
+    /// `quit`: the Claude app that just quit, not counted as open.
+    static func update(on: Bool, claudeAppOnly: Bool = false, quit: pid_t? = nil) {
         guard !SelfTest.isRequested, let script = CommandLineTool.script, CommandLineTool.isInStableLocation else { return }
         let command = script.path
+        let apps = installedApps
         queue.async {
-            let programs = LoginShell.programs
-            var results: [String: MCPRegistrar.Status] = [:]
-            for target in MCPRegistrar.targets() {
-                let installed = MCPRegistrar.isInstalled(target, found: programs)
-                results[target.id] = on ? MCPRegistrar.register(target, command: command, programInstalled: installed)
-                                        : MCPRegistrar.unregister(target)
-            }
-            results["claude"] = claude(on: on, command: command, program: programs["claude"])
+            // The Claude app has no program to look for, so its own pass needs no login shell.
+            let programs = claudeAppOnly ? [:] : LoginShell.programs
+            let found = programs.merging(apps) { program, _ in program }
+            let targets = MCPRegistrar.targets().filter { !claudeAppOnly || $0.readOnceBy != nil }
+            let pass = MCPRegistrar.pass(targets, command: on ? command : nil, found: found) { isOpen($0, except: quit) }
+            var results = pass.statuses
+            if !claudeAppOnly { results["claude"] = claude(on: on, command: command, program: found["claude"]) }
             DispatchQueue.main.async {
-                statuses = results
+                statuses = MCPRegistrar.merged(statuses, results, whole: !claudeAppOnly)
+                claudeAppWaiting = pass.waiting
+                appsFound = Set(apps.keys)
                 NotificationCenter.default.post(name: changed, object: nil)
+            }
+        }
+    }
+
+    /// An app is running, not counting `quit` (the one that just quit may still be listed when its notice comes).
+    private static func isOpen(_ bundle: String, except quit: pid_t?) -> Bool {
+        NSRunningApplication.runningApplications(withBundleIdentifier: bundle).contains { !$0.isTerminated && $0.processIdentifier != quit }
+    }
+
+    /// Desktop apps that read an agent's file (`MCPRegistrar.Target.apps`): bundle identifier → path.
+    private static var installedApps: [String: String] {
+        var found: [String: String] = [:]
+        for id in MCPRegistrar.targets().flatMap(\.apps) {
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) { found[id] = url.path }
+        }
+        return found
+    }
+
+    /// When the Claude app quits, the edit that waited for it is made, with the setting as it is then. When it opens
+    /// (installed or opened since the last pass), nothing is written, but what now waits for it to quit is worked out,
+    /// so the line under the setting says so.
+    static func watchClaudeApp() {
+        let center = NSWorkspace.shared.notificationCenter
+        let terminated = NSWorkspace.didTerminateApplicationNotification
+        for name in [NSWorkspace.didLaunchApplicationNotification, terminated] {
+            _ = center.addObserver(forName: name, object: nil, queue: .main) { note in
+                let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                guard let app, app.bundleIdentifier == MCPRegistrar.claudeAppBundle else { return }
+                let on = MainActor.assumeIsolated { AppDelegate.shared.agentControl }
+                let quit = note.name == terminated ? app.processIdentifier : nil
+                update(on: on, claudeAppOnly: true, quit: quit)
             }
         }
     }
@@ -65,16 +99,12 @@ enum MCPRegistration {
     }
 
     /// For Settings: "Registered in Claude Code, Codex and Cursor."
-    static var summary: String {
-        let names = self.names
-        let registered = statuses.filter { $0.value == .registered || $0.value == .alreadyRegistered }.keys
-            .compactMap { names[$0] }.sorted()
-        let taken = statuses.filter { $0.value == .nameTaken }.keys.compactMap { names[$0] }.sorted()
-        var text = registered.isEmpty ? "Not registered in any agent yet." : "Registered in " + ListFormatter.localizedString(byJoining: registered) + "."
-        if !taken.isEmpty {
-            text += " " + ListFormatter.localizedString(byJoining: taken) + " already " + (taken.count == 1 ? "has" : "have") + " another server named “next-term”, left as it is."
-        }
-        return text
+    static var summary: String { MCPRegistrar.summary(statuses, apps: appsFound) }
+
+    /// For Settings: " Quit and reopen the Claude app to add it there too." while that waits (`on`: the setting), or
+    /// why its file was left alone.
+    static func claudeAppNote(on: Bool) -> String {
+        MCPRegistrar.claudeAppNote(waiting: claudeAppWaiting, on: on, statuses: statuses)
     }
 }
 

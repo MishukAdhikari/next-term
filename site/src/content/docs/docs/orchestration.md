@@ -24,13 +24,20 @@ Next Term is an MCP server, so one agent can run the others. An orchestrator —
 | Amp | `~/.config/amp/settings.json` |
 | Junie | `~/.junie/mcp/mcp.json` |
 | Command Code | `~/.commandcode/mcp.json` |
+| Claude desktop app | `~/Library/Application Support/Claude/claude_desktop_config.json` (`Claude-3p` instead of `Claude` when Claude is set up to use a third-party platform) |
 
 Agents you start after that see Next Term’s tools. The line under the setting says where it is registered, for example “Registered in Claude Code, Codex and Cursor.”
 
 - **Only Next Term’s own entry is written,** named `next-term`, and by text: comments and every other server in the file stay byte for byte as they were.
 - **Someone else’s `next-term` entry is never touched;** Settings tells you it is there.
-- **Turning the setting off removes Next Term’s entries** and stops the server.
+- **Turning the setting off removes Next Term’s entries** and stops the server. The Claude desktop app’s goes once Claude is closed (see below).
+- **A file it cannot edit safely is left alone,** for example a read-only one; for the Claude desktop app, the line under the setting says why.
 - Only the installed app registers itself, never a copy running from the disk image, so the entries never point at a path that is about to disappear.
+
+### The Claude and ChatGPT desktop apps
+
+- **Claude:** the desktop app reads `claude_desktop_config.json` only when it starts, for its chats and for the local sessions in its Code tab (there this entry is used instead of Claude Code’s). It also saves the whole file from the copy it read, so Next Term changes the file only while Claude is closed. If Claude is open, Next Term adds itself (or, with the setting off, takes itself out) when you quit Claude, or at its own next launch if it was not running then, and the line under the setting says so; open Claude again to load it. Next Term adds only its own server there; the app’s preferences in the same file stay as they were.
+- **ChatGPT:** the desktop app reads Codex’s `~/.codex/config.toml`, so the Codex entry covers it, and the line under the setting names both. Next Term writes it when the ChatGPT app or Codex is installed. Restart ChatGPT if it was open when Next Term added itself.
 
 ### Any other MCP client
 

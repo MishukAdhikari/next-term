@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
 
 /// Registers Next Term's MCP server (`nxtrm mcp`) in the AI agents on this Mac, so any of them can drive
 /// Next Term. Each agent keeps its servers in its own file and format; only Next Term's entry is
@@ -16,7 +19,8 @@ public enum MCPRegistrar {
         case notInstalled
         /// A `next-term` entry that is not Next Term's.
         case nameTaken
-        /// The file could not be edited safely (comments in a strict-JSON file, not parseable, odd shape).
+        /// The file could not be edited safely (comments or trailing commas in a strict-JSON file, repeated keys,
+        /// read-only, changed while being edited, not parseable, odd shape), or the Claude app is open.
         case skipped(String)
     }
 
@@ -29,8 +33,15 @@ public enum MCPRegistrar {
         /// Program names: when one is installed, a missing configuration file is created.
         public let programs: [String]
         /// Folders whose existence also means the agent is installed (Cursor's command is now the
-        /// generic `agent`, too common a name to look for; its ~/.cursor folder says it is there).
+        /// generic `agent`, too common a name to look for; its ~/.cursor folder says it is there; the
+        /// Claude app has no command at all).
         public var markers: [String] = []
+        /// Bundle identifiers of desktop apps that read this file too (the ChatGPT app runs its own codex):
+        /// one installed also means the agent is.
+        public var apps: [String] = []
+        /// The bundle identifier of a desktop app that reads this file only when it starts and saves the whole file
+        /// from that copy (the Claude app): the file is edited only while it is closed (see `pass`).
+        public var readOnceBy: String?
         public let file: String
         public let format: Format
         /// JSON: the top-level key holding the servers (`mcpServers`, `mcp`, `amp.mcpServers`).
@@ -42,6 +53,9 @@ public enum MCPRegistrar {
     }
 
     public static let serverName = "next-term"
+
+    /// The Claude app's own folder, in the home folder.
+    static let claudeAppFolder = "Library/Application Support/Claude"
 
     /// The agents, from claudedocs/research_next-term-mcp-registration (paths and shapes checked against
     /// each agent's source). Claude Code is registered through its own command line instead.
@@ -55,8 +69,8 @@ public enum MCPRegistrar {
         let opencode = existing([path(".config/opencode/opencode.jsonc"), path(".config/opencode/opencode.json")])
         let amp = existing([path(".config/amp/settings.json"), path(".config/amp/settings.jsonc")])
         return [
-            Target(id: "codex", name: "Codex", programs: ["codex"], file: path(".codex/config.toml"), format: .toml,
-                   container: "mcp_servers", preamble: [:], entry: standard),
+            Target(id: "codex", name: "Codex", programs: ["codex"], markers: [path(".codex")], apps: ["com.openai.codex"],
+                   file: path(".codex/config.toml"), format: .toml, container: "mcp_servers", preamble: [:], entry: standard),
             Target(id: "gemini", name: "Gemini CLI", programs: ["gemini"], file: path(".gemini/settings.json"),
                    format: .json(strict: false), container: "mcpServers", preamble: [:], entry: standard),
             Target(id: "qwen", name: "Qwen Code", programs: ["qwen"], file: path(".qwen/settings.json"),
@@ -79,6 +93,16 @@ public enum MCPRegistrar {
             Target(id: "commandcode", name: "Command Code", programs: ["commandcode", "command-code"], file: path(".commandcode/mcp.json"),
                    format: .json(strict: true), container: "mcpServers", preamble: [:],
                    entry: { ["transport": "stdio", "command": $0, "args": ["mcp"], "enabled": true] }),
+            // The Claude app reads this file only when it starts, for its chats and the local sessions in its Code
+            // tab (where this entry wins over Claude Code's). It keeps its preferences here too, saving the whole
+            // file from the copy it read, so Next Term edits it only while Claude is closed (`whileClaudeAppIsOpen`).
+            Target(id: "claude-desktop", name: "the Claude app", programs: [], markers: [path(claudeAppFolder)],
+                   readOnceBy: claudeAppBundle, file: path(claudeAppFolder + "/claude_desktop_config.json"),
+                   format: .json(strict: true), container: "mcpServers", preamble: [:], entry: standard),
+            // Set up for a third-party platform (Bedrock, Vertex), the Claude app keeps its files in a folder of its own.
+            Target(id: "claude-desktop-3p", name: "the Claude app", programs: [], markers: [path(claudeAppFolder + "-3p")],
+                   readOnceBy: claudeAppBundle, file: path(claudeAppFolder + "-3p/claude_desktop_config.json"),
+                   format: .json(strict: true), container: "mcpServers", preamble: [:], entry: standard),
         ]
     }
 
@@ -94,9 +118,11 @@ public enum MCPRegistrar {
         return (command as NSString).lastPathComponent == "nxtrm" && command.contains(".app/Contents/Resources/bin/")
     }
 
-    /// Installed: one of its programs is on the PATH (`found` maps names to paths), or a marker folder exists.
+    /// Installed: one of its programs is on the PATH or one of its apps is installed (`found` maps program names
+    /// and bundle identifiers to paths), or a marker folder exists.
     public static func isInstalled(_ target: Target, found: [String: String]) -> Bool {
-        target.programs.contains { found[$0] != nil } || target.markers.contains { FileManager.default.fileExists(atPath: $0) }
+        let program = target.programs.contains { found[$0] != nil } || target.apps.contains { found[$0] != nil }
+        return program || target.markers.contains { FileManager.default.fileExists(atPath: $0) }
     }
 
     // MARK: register / unregister
@@ -104,103 +130,335 @@ public enum MCPRegistrar {
     /// `programInstalled`: one of the target's programs is on the user's PATH (a missing file is created).
     @discardableResult
     public static func register(_ target: Target, command: String, programInstalled: Bool) -> Status {
-        let exists = FileManager.default.fileExists(atPath: target.file)
-        guard exists || programInstalled else { return .notInstalled }
-        switch target.format {
-        case .toml: return registerTOML(target, command: command)
-        case .json(let strict): return registerJSON(target, command: command, strict: strict)
-        }
+        write(plan(target, command: command, programInstalled: programInstalled), to: target.file)
     }
 
     @discardableResult
     public static func unregister(_ target: Target) -> Status {
-        guard FileManager.default.fileExists(atPath: target.file) else { return .notInstalled }
-        switch target.format {
-        case .toml: return unregisterTOML(target)
-        case .json(let strict): return unregisterJSON(target, strict: strict)
+        write(plan(target, command: nil, programInstalled: false), to: target.file)
+    }
+
+    /// An edit worked out from the file as it was read, not written yet.
+    struct Plan {
+        var status: Status
+        /// What to write (nil: nothing).
+        var text: String?
+        /// The file's bytes when it was read (nil: there was no file).
+        var original: Data?
+
+        init(_ status: Status, text: String? = nil) {
+            self.status = status
+            self.text = text
         }
+    }
+
+    /// Registering `command`, or unregistering (nil).
+    static func plan(_ target: Target, command: String?, programInstalled: Bool) -> Plan {
+        let exists = FileManager.default.fileExists(atPath: target.file)
+        guard exists || (command != nil && programInstalled) else { return Plan(.notInstalled) }
+        // A link to a file that is not there (on a volume not mounted): a write would put a file in its place.
+        if !exists, (try? FileManager.default.destinationOfSymbolicLink(atPath: target.file)) != nil {
+            return Plan(.skipped("a link to a file that is not there"))
+        }
+        let file = exists ? read(target.file) : nil
+        if exists && file == nil { return Plan(.skipped("unreadable")) }
+        var planned = plan(target, text: file?.text, command: command)
+        planned.original = file?.data
+        // Said before anything waits on it (the Claude app's file waits for it to quit); `write` checks again.
+        if planned.text != nil, exists, !FileManager.default.isWritableFile(atPath: target.file) { return Plan(.skipped("read-only")) }
+        return planned
+    }
+
+    /// The edit of a file's text (nil: there is no file).
+    static func plan(_ target: Target, text: String?, command: String?) -> Plan {
+        switch (target.format, command) {
+        case (.toml, let command?): return registerTOML(text ?? "", command: command)
+        case (.toml, nil): return unregisterTOML(text ?? "")
+        case (.json(let strict), let command?): return registerJSON(target, text, command: command, strict: strict)
+        case (.json(let strict), nil): return unregisterJSON(target, text ?? "", strict: strict)
+        }
+    }
+
+    /// Atomic and private throughout (see `replace`), through symlinks, keeping the file's permissions and a UTF-8 byte
+    /// order mark. A read-only file is left alone, and so is one that changed since it was read (its agent saving it:
+    /// this edit would undo that). `beforeRename`: called with the temporary file once it is ready (for tests).
+    static func write(_ planned: Plan, to path: String, beforeRename: (_ temporary: String) -> Void = { _ in }) -> Status {
+        guard let text = planned.text else { return planned.status }
+        let mark = Data([0xEF, 0xBB, 0xBF])
+        let marked = planned.original?.starts(with: mark) == true
+        let data = (marked ? mark : Data()) + Data(text.utf8)
+        let current = FileManager.default.contents(atPath: path)
+        if current == data { return planned.status }
+        guard current == planned.original else { return .skipped("changed while being edited") }
+        if current != nil, !FileManager.default.isWritableFile(atPath: path) { return .skipped("read-only") }
+        if current == nil {
+            let folder = (path as NSString).deletingLastPathComponent
+            try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        }
+        switch replace(path, with: data, original: planned.original, beforeRename: beforeRename) {
+        case .done: return planned.status
+        case .changed: return .skipped("changed while being edited")
+        case .failed: return .skipped("write")
+        }
+    }
+
+    enum Replacement { case done, changed, failed }
+
+    /// Puts `data` in the file `path` points at (through symlinks, so a link stays a link), atomically. It is written to
+    /// a temporary file beside it that only its owner can read from the start (an agent's file can hold its servers'
+    /// tokens, and its folder can be open to other accounts), made with O_EXCL and O_NOFOLLOW so nothing already there
+    /// is used; flushed to disk, given the file's permissions (0600 for a new file), and renamed over the file. Just
+    /// before the rename the file is read again: when it no longer has the bytes `original` (nil: no file), its agent
+    /// saved it meanwhile, and the edit, made from the older bytes, is dropped. (A save between that read and the rename
+    /// is still undone: the agents offer no lock.) A new file is put in place only if there is still none: by an
+    /// exclusive rename (`exclusiveRename`, replaced in tests), or on a volume without one (exFAT), by a rename once
+    /// there is still nothing there.
+    static func replace(_ path: String, with data: Data, original: Data?, beforeRename: (_ temporary: String) -> Void,
+                        exclusiveRename: (_ from: String, _ to: String) -> Int32 = { renamex_np($0, $1, UInt32(RENAME_EXCL)) }) -> Replacement {
+        let target = canonicalPath(path)
+        var info = stat()
+        let permissions: mode_t = stat(target, &info) == 0 ? info.st_mode & 0o7777 : 0o600
+        let folder = (target as NSString).deletingLastPathComponent
+        let temporary = folder + "/." + (target as NSString).lastPathComponent + ".nextterm-" + UUID().uuidString
+        let descriptor = open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { return .failed }
+        let written = data.withUnsafeBytes { buffer -> Bool in
+            var offset = 0
+            while offset < buffer.count, let start = buffer.baseAddress {
+                let count = Darwin.write(descriptor, start + offset, buffer.count - offset)
+                if count < 0, errno == EINTR { continue }
+                guard count > 0 else { return false }
+                offset += count
+            }
+            return true
+        }
+        let ready = written && fchmod(descriptor, permissions) == 0 && fsync(descriptor) == 0
+        guard close(descriptor) == 0, ready else {
+            unlink(temporary)
+            return .failed
+        }
+        beforeRename(temporary)
+        guard FileManager.default.contents(atPath: path) == original else {
+            unlink(temporary)
+            return .changed
+        }
+        // A new file: only if there is still none.
+        var renamed: Int32
+        var failure: Int32 = 0
+        if original == nil {
+            renamed = exclusiveRename(temporary, target)
+            failure = errno
+            if renamed != 0, failure == ENOTSUP || failure == EINVAL {
+                let absent = lstat(target, &info) != 0 && errno == ENOENT
+                renamed = absent ? rename(temporary, target) : -1
+                failure = absent ? errno : EEXIST
+            }
+        } else {
+            renamed = rename(temporary, target)
+            failure = errno
+        }
+        guard renamed == 0 else {
+            unlink(temporary)
+            return original == nil && failure == EEXIST ? .changed : .failed
+        }
+        return .done
+    }
+
+    // MARK: The Claude app
+
+    /// The Claude app reads its file when it starts, and saves the whole file from that copy whenever one of its
+    /// settings changes: an edit made while it runs would be undone. So its file waits until it quits.
+    public static let claudeAppBundle = "com.anthropic.claudefordesktop"
+
+    /// While the Claude app is open nothing is written. `waiting`: what the edit does once it quits (true: adds
+    /// Next Term, false: takes it out; nil: nothing to do, or nothing it could do: a read-only file).
+    public static func whileClaudeAppIsOpen(_ target: Target, command: String?, programInstalled: Bool) -> (status: Status, waiting: Bool?) {
+        let planned = plan(target, command: command, programInstalled: programInstalled)
+        guard planned.text != nil else { return (planned.status, nil) }
+        return (.skipped(claudeAppIsOpen), command != nil)
+    }
+
+    static let claudeAppIsOpen = "the Claude app is open"
+
+    /// For Settings: what waits for the Claude app to quit, once that matches the setting (`on`: a pass for a
+    /// setting just changed may still be running), or why its file was left as it is; "" for nothing.
+    public static func claudeAppNote(waiting: Bool?, on: Bool, statuses: [String: Status] = [:]) -> String {
+        if let waiting {
+            guard waiting == on else { return "" }
+            return on ? " Quit and reopen the Claude app to add it there too." : " Quit the Claude app to remove it there too."
+        }
+        for id in ["claude-desktop", "claude-desktop-3p"] {
+            if case .skipped(let reason)? = statuses[id], reason != claudeAppIsOpen { return " The Claude app's file was left as it is (\(reason))." }
+        }
+        return ""
+    }
+
+    // MARK: A pass over the agents
+
+    /// What a pass found: each target's status, and what waits for the Claude app to quit (see `whileClaudeAppIsOpen`).
+    public struct Pass: Equatable, Sendable {
+        public var statuses: [String: Status] = [:]
+        public var waiting: Bool?
+    }
+
+    /// Registers `command` in `targets` (nil: unregisters). The file of an app that reads it once (`Target.readOnceBy`)
+    /// is left for later while `isOpen` (asked just before the file would be edited) says that app runs. `found`: the
+    /// programs and apps found (see `isInstalled`).
+    public static func pass(_ targets: [Target], command: String?, found: [String: String], isOpen: (String) -> Bool) -> Pass {
+        var result = Pass()
+        for target in targets {
+            let installed = isInstalled(target, found: found)
+            if let app = target.readOnceBy, isOpen(app) {
+                let open = whileClaudeAppIsOpen(target, command: command, programInstalled: installed)
+                result.statuses[target.id] = open.status
+                result.waiting = result.waiting ?? open.waiting
+            } else if let command {
+                result.statuses[target.id] = register(target, command: command, programInstalled: installed)
+            } else {
+                result.statuses[target.id] = unregister(target)
+            }
+        }
+        return result
+    }
+
+    /// The statuses after a pass: one over every agent (`whole`) replaces them, one over the Claude app's files only
+    /// updates those.
+    public static func merged(_ previous: [String: Status], _ pass: [String: Status], whole: Bool) -> [String: Status] {
+        whole ? pass : previous.merging(pass) { _, new in new }
+    }
+
+    /// Desktop apps named beside the agent whose file they read (`Target.apps`).
+    public static let appNames = ["com.openai.codex": "the ChatGPT app"]
+
+    /// For Settings: "Registered in Claude Code, Codex, the ChatGPT app and the Claude app." (`statuses` by target id,
+    /// and "claude" for Claude Code; `apps`: the bundle identifiers of the desktop apps found).
+    public static func summary(_ statuses: [String: Status], apps: Set<String>, home: String = NSHomeDirectory()) -> String {
+        var names: [String: [String]] = ["claude": ["Claude Code"]]
+        for target in targets(home: home) {
+            names[target.id] = [target.name] + target.apps.filter { apps.contains($0) }.compactMap { appNames[$0] }
+        }
+        func sortKey(_ name: String) -> String { (name.hasPrefix("the ") ? String(name.dropFirst(4)) : name).lowercased() }
+        func named(_ wanted: (Status) -> Bool) -> [String] {
+            let found = Set(statuses.filter { wanted($0.value) }.keys.flatMap { names[$0] ?? [] })
+            return found.sorted { sortKey($0) < sortKey($1) }
+        }
+        let registered = named { $0 == .registered || $0 == .alreadyRegistered }
+        let taken = named { $0 == .nameTaken }
+        var text = "Not registered in any agent yet."
+        if !registered.isEmpty { text = "Registered in " + ListFormatter.localizedString(byJoining: registered) + "." }
+        if !taken.isEmpty {
+            let list = ListFormatter.localizedString(byJoining: taken)
+            let verb = taken.count == 1 ? " already has" : " already have"
+            text += " " + list.prefix(1).uppercased() + list.dropFirst() + verb + " another server named “next-term”, left as it is."
+        }
+        return text
     }
 
     // MARK: JSON (and JSON with comments)
 
-    private static func registerJSON(_ target: Target, command: String, strict: Bool) -> Status {
-        let entry = target.entry(command)
-        guard let entryText = compact(entry) else { return .skipped("entry") }
-        guard FileManager.default.fileExists(atPath: target.file) else {
-            try? FileManager.default.createDirectory(atPath: (target.file as NSString).deletingLastPathComponent,
-                                                     withIntermediateDirectories: true)
+    /// `text`: nil when there is no file yet.
+    private static func registerJSON(_ target: Target, _ text: String?, command: String, strict: Bool) -> Plan {
+        guard let entryText = compact(target.entry(command)) else { return Plan(.skipped("entry")) }
+        let ours = quote(serverName) + ": " + entryText
+        guard let text else {
             var members = target.preamble.sorted { $0.key < $1.key }.map { "  \(quote($0.key)): \($0.value)" }
-            members.append("  \(quote(target.container)): {\n    \(quote(serverName)): \(entryText)\n  }")
+            members.append("  \(quote(target.container)): {\n    \(ours)\n  }")
             let body = "{\n" + members.joined(separator: ",\n") + "\n}\n"
-            return verifiedWrite(body, to: target.file, target: target, expecting: command) ? .registered : .skipped("write")
+            return verified(body, target: target, command: command, whole: true)
         }
-        guard let text = read(target.file) else { return .skipped("unreadable") }
-        guard let document = JSONC(text) else { return .skipped("not valid JSON") }
-        if strict && document.hasComments { return .skipped("comments in a file that must be plain JSON") }
-        guard case .object(let root)? = document.root else { return .skipped("not a JSON object") }
+        guard let document = JSONC(text) else { return Plan(.skipped("not valid JSON")) }
+        if let refused = refusal(document, strict: strict) { return Plan(.skipped(refused)) }
+        guard case .object(let root)? = document.root else { return Plan(.skipped("not a JSON object")) }
+        // JSON parsers take the last of repeated keys; this edit would go to the first.
+        if root.hasRepeatedKeys { return Plan(.skipped("repeated keys")) }
+        let newline = document.lineEnding
         var updated = text
+        let insertion: (text: String, at: String.Index)
         if let container = root.member(target.container) {
-            guard case .object(let servers) = container.value else { return .skipped("\(target.container) is not an object") }
-            let outer = document.indent(of: container.keyRange.lowerBound)
+            guard case .object(let servers) = container.value else { return Plan(.skipped("\(target.container) is not an object")) }
+            if servers.hasRepeatedKeys { return Plan(.skipped("repeated keys")) }
             if let existing = servers.member(serverName) {
+                // Foundation reads the first of a repeated command, the agents the last: whose entry it is cannot be told.
+                if case .object(let entry) = existing.value, entry.hasRepeatedKeys { return Plan(.skipped("repeated keys")) }
                 let current = Self.command(of: existing.value.object(in: text))
-                guard isOurs(command: current) else { return .nameTaken }
-                if current == command { return .alreadyRegistered }
-                // Ours, from another copy of the app (moved, or a development build): point it here.
-                updated.replaceSubrange(existing.value.range, with: entryText)
-            } else if let first = servers.members.first {
-                let insertion = "\n" + document.indent(of: first.keyRange.lowerBound) + quote(serverName) + ": " + entryText + ","
-                updated.insert(contentsOf: insertion, at: text.index(after: servers.open))
-            } else {
-                // An empty object: ours on its own line. Comments inside it stay after ours.
-                let inside = text.index(after: servers.open)..<text.index(before: servers.close)
-                let line = "\n" + outer + "  " + quote(serverName) + ": " + entryText
-                if text[inside].allSatisfy(\.isWhitespace) {
-                    updated.replaceSubrange(inside, with: line + "\n" + outer)
-                } else {
-                    updated.insert(contentsOf: line, at: inside.lowerBound)
-                }
+                guard isOurs(command: current) else { return Plan(.nameTaken) }
+                if current == command { return Plan(.alreadyRegistered) }
+                // Ours, from another copy of the app (moved, or a development build): only its command changes,
+                // so what the user added to the entry (env, disabled) stays.
+                guard let range = commandRange(of: existing.value, in: document) else { return Plan(.skipped("odd shape")) }
+                updated.unicodeScalars.replaceSubrange(range, with: quote(command).unicodeScalars)
+                return verified(updated, target: target, command: command, whole: false)
             }
+            // Ours goes first, where taking it out gives the text back as it was (see `JSONC.insertion`). An empty {}
+            // takes it on the same line, which also keeps it apart from a container registering added.
+            insertion = document.insertion(into: servers, spread: false) { _ in ours }
         } else {
-            let indent = root.members.first.map { document.indent(of: $0.keyRange.lowerBound) } ?? "  "
-            let block = quote(target.container) + ": {\n" + indent + "  " + quote(serverName) + ": " + entryText + "\n" + indent + "}"
-            let insertion = "\n" + indent + block + (root.members.isEmpty ? "\n" : ",")
-            updated.insert(contentsOf: insertion, at: text.index(after: root.open))
+            // The container goes first, in the shape `unregisterJSON` looks for (for the indent of the line it starts on).
+            insertion = document.insertion(into: root, spread: true) { indent in
+                quote(target.container) + ": {" + newline + indent + "  " + ours + newline + indent + "}"
+            }
         }
-        return verifiedWrite(updated, to: target.file, target: target, expecting: command) ? .registered : .skipped("check failed")
+        updated.unicodeScalars.insert(contentsOf: insertion.text.unicodeScalars, at: insertion.at)
+        return verified(updated, target: target, command: command, whole: true)
     }
 
-    private static func unregisterJSON(_ target: Target, strict: Bool) -> Status {
-        guard let text = read(target.file), let document = JSONC(text), case .object(let root)? = document.root else {
-            return .skipped("not valid JSON")
-        }
-        guard let container = root.member(target.container), case .object(let servers) = container.value,
-              let existing = servers.member(serverName) else { return .removed }
-        guard isOurs(command: command(of: existing.value.object(in: text))) else { return .nameTaken }
-        if strict && document.hasComments { return .skipped("comments in a file that must be plain JSON") }
-        // Ours alone in its container (which registering added): the container goes too.
-        let alone = servers.members.count == 1 && JSONC(String(document.text[servers.open..<servers.close]))?.hasComments == false
+    private static func unregisterJSON(_ target: Target, _ text: String, strict: Bool) -> Plan {
+        guard let document = JSONC(text), case .object(let root)? = document.root else { return Plan(.skipped("not valid JSON")) }
+        if root.hasRepeatedKeys { return Plan(.skipped("repeated keys")) }
+        guard let container = root.member(target.container), case .object(let servers) = container.value else { return Plan(.removed) }
+        if servers.hasRepeatedKeys { return Plan(.skipped("repeated keys")) }
+        guard let existing = servers.member(serverName) else { return Plan(.removed) }
+        if case .object(let entry) = existing.value, entry.hasRepeatedKeys { return Plan(.skipped("repeated keys")) }
+        guard isOurs(command: command(of: existing.value.object(in: text))) else { return Plan(.nameTaken) }
+        if let refused = refusal(document, strict: strict) { return Plan(.skipped(refused)) }
+        // Ours alone in a container that registering added (it is in the shape registering writes): the container
+        // goes too. One that was there before keeps what it had, since registering puts ours in it in another shape;
+        // unless the agent has saved the file in its own format since, which can give it that shape.
+        let indent = document.indent(of: container.keyRange.lowerBound)
+        let line = indent + "  " + quote(serverName) + ": " + document.string(existing.value.range)
+        let added = "{" + document.lineEnding + line + document.lineEnding + indent + "}"
+        let alone = servers.members.count == 1 && document.string(container.value.range) == added
         let updated = alone ? document.removing(container, from: root) : document.removing(existing, from: servers)
-        guard let check = JSONC(updated), case .object(let newRoot)? = check.root else { return .skipped("check failed") }
+        guard let check = JSONC(updated), case .object(let newRoot)? = check.root else { return Plan(.skipped("check failed")) }
         if alone {
-            guard newRoot.member(target.container) == nil, newRoot.members.count == root.members.count - 1 else { return .skipped("check failed") }
+            guard newRoot.member(target.container) == nil, newRoot.members.count == root.members.count - 1 else { return Plan(.skipped("check failed")) }
         } else {
             guard let newContainer = newRoot.member(target.container), case .object(let newServers) = newContainer.value,
                   newServers.member(serverName) == nil, newServers.members.count == servers.members.count - 1,
-                  newRoot.members.count == root.members.count else { return .skipped("check failed") }
+                  newRoot.members.count == root.members.count else { return Plan(.skipped("check failed")) }
         }
-        return writeRaw(updated, to: target.file) ? .removed : .skipped("write")
+        return Plan(.removed, text: updated)
     }
 
-    /// Writes only when the result parses and has exactly our command under our name.
-    private static func verifiedWrite(_ text: String, to path: String, target: Target, expecting command: String) -> Bool {
+    /// Why a strict agent's file is left alone: Foundation's parser takes comments and trailing commas, the
+    /// agent's own would not.
+    private static func refusal(_ document: JSONC, strict: Bool) -> String? {
+        guard strict else { return nil }
+        if document.hasComments { return "comments in a file that must be plain JSON" }
+        if document.hasTrailingCommas { return "trailing commas in a file that must be plain JSON" }
+        return nil
+    }
+
+    /// The edit, when the result parses and has our command under our name (`whole`: and exactly our entry),
+    /// as plain JSON for a strict agent.
+    private static func verified(_ text: String, target: Target, command: String, whole: Bool) -> Plan {
         guard let document = JSONC(text), case .object(let root)? = document.root,
               let container = root.member(target.container), case .object(let servers) = container.value,
-              let entry = servers.member(serverName),
-              let written = entry.value.object(in: text) as? [String: Any],
-              NSDictionary(dictionary: written).isEqual(to: target.entry(command)) else { return false }
-        if case .json(strict: true) = target.format, (try? JSONSerialization.jsonObject(with: Data(text.utf8))) == nil { return false }
-        return writeRaw(text, to: path)
+              let written = servers.member(serverName)?.value.object(in: text) as? [String: Any],
+              Self.command(of: written) == command else { return Plan(.skipped("check failed")) }
+        if whole, !NSDictionary(dictionary: written).isEqual(to: target.entry(command)) { return Plan(.skipped("check failed")) }
+        if case .json(strict: true) = target.format, (try? JSONSerialization.jsonObject(with: Data(text.utf8))) == nil {
+            return Plan(.skipped("check failed"))
+        }
+        return Plan(.registered, text: text)
+    }
+
+    /// Where an entry's command string is: `command`, or the first word of a `command` array (opencode).
+    private static func commandRange(of entry: JSONC.Value, in document: JSONC) -> Range<String.Index>? {
+        guard case .object(let object) = entry, let command = object.member("command") else { return nil }
+        if case .scalar(let range) = command.value { return range }
+        guard case .scalar(let range)? = document.elements(of: command.value)?.first else { return nil }
+        return range
     }
 
     // MARK: Claude Code
@@ -211,9 +469,11 @@ public enum MCPRegistrar {
         case taken
     }
 
-    /// The `next-term` server in Claude Code's user configuration (`~/.claude.json`, top-level `mcpServers`).
+    /// The `next-term` server in Claude Code's user configuration (`~/.claude.json`, top-level `mcpServers`). A file
+    /// nested too deeply for Foundation's parser (see `JSONC.maxDepth`) is read as one it cannot parse.
     public static func claudeEntry(configuration text: String?) -> ClaudeEntry {
-        guard let text, let json = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any],
+        guard let text, JSONC.isShallow(text),
+              let json = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any],
               let entry = (json["mcpServers"] as? [String: Any])?[serverName] else { return .absent }
         guard let command = command(of: entry), isOurs(command: command) else { return .taken }
         return .ours(command: command)
@@ -226,108 +486,98 @@ public enum MCPRegistrar {
 
     // MARK: TOML (Codex)
 
-    /// Any form of a `next-term` server Codex would read: a duplicate stops Codex loading its whole config.
-    static func tomlMentions(_ text: String) -> Bool {
-        let patterns = [#"(?m)^[ \t]*\[[ \t]*mcp_servers[ \t]*\.[ \t]*["']?next-term["']?[ \t]*[\].]"#,
-                        #"(?m)^[ \t]*["']?next-term["']?[ \t]*=[ \t]*\{"#,
-                        #"(?m)^[ \t]*mcp_servers[ \t]*\.[ \t]*["']?next-term["']?[ \t]*[.=]"#]
-        return patterns.contains { text.range(of: $0, options: .regularExpression) != nil }
+    /// Where Codex keeps its servers, and ours among them.
+    private static let tomlServers = ["mcp_servers"]
+    private static let tomlOurs = ["mcp_servers", serverName]
+
+    /// What Codex's file has under mcp_servers.next-term.
+    enum TOMLEntry: Equatable {
+        case absent
+        /// One [mcp_servers.next-term] table, with its subtables (Codex adds `[mcp_servers.next-term.tools.<tool>]`
+        /// on "Always allow"): `whole` runs from its header to the end of its last line and the blank lines after it,
+        /// short of the next table that is not one of them and the comments just above that; comments after ours
+        /// are the user's (ours goes at the end, so what the user adds later comes after it). `command`, its command
+        /// string, and `value`, what that says.
+        case table(whole: Range<String.Index>, command: Range<String.Index>, value: String)
+        /// Written some other way (dotted keys, inline, as an array), or without a command string: not Next Term's
+        /// to change. Codex refuses its whole file over a second definition, so ours is never added beside it.
+        case other
     }
 
-    /// Our table: from its header line to the next header that is not one of its subtables (Codex adds
-    /// `[mcp_servers.next-term.tools.<tool>]` on "Always allow"). `body` is the table's own keys.
-    static func tomlTable(_ text: String) -> (whole: Range<String.Index>, body: Range<String.Index>)? {
-        guard let header = text.range(of: #"(?m)^\[mcp_servers\.next-term\][ \t]*(#[^\n]*)?(\n|$)"#, options: .regularExpression) else {
-            return nil
+    static func tomlEntry(_ outline: TOMLOutline) -> TOMLEntry {
+        func isUnder(_ path: [String]) -> Bool { path.starts(with: tomlOurs) }
+        let headers = outline.headers.filter { isUnder($0.path) }
+        let keys = outline.keys.filter { isUnder($0.table + $0.path) }
+        guard !headers.isEmpty || !keys.isEmpty else { return .absent }
+        let own = headers.filter { $0.path == tomlOurs }
+        guard own.count == 1, let header = own.first, headers.allSatisfy({ !$0.isArray }),
+              keys.allSatisfy({ isUnder($0.table) }) else { return .other }
+        let commands = keys.filter { $0.table == tomlOurs && $0.path == ["command"] }
+        guard commands.count == 1, let command = outline.string(at: commands[0].value) else { return .other }
+        // The table and its subtables, in one run: up to the last line that is ours, and the blank lines after it.
+        let lastLines = headers.map(\.line.upperBound) + keys.map(\.line.upperBound)
+        var end = outline.blankLinesAfter(lastLines.max() ?? header.line.upperBound)
+        if let next = outline.headers.first(where: { $0.line.lowerBound > header.line.lowerBound && !isUnder($0.path) }) {
+            end = min(end, outline.commentsAbove(next.line.lowerBound))
         }
-        var bodyEnd: String.Index?
-        var end = text.endIndex
-        var search = header.upperBound
-        while search < text.endIndex,
-              let next = text.range(of: #"(?m)^[ \t]*\["#, options: .regularExpression, range: search..<text.endIndex) {
-            if bodyEnd == nil { bodyEnd = next.lowerBound }
-            let lineEnd = text[next.lowerBound...].firstIndex(of: "\n").map { text.index(after: $0) } ?? text.endIndex
-            if text[next.lowerBound..<lineEnd].trimmingCharacters(in: .whitespaces).hasPrefix("[mcp_servers.next-term.") {
-                search = lineEnd
-                continue
-            }
-            end = next.lowerBound
-            break
-        }
-        return (header.lowerBound..<end, header.upperBound..<(bodyEnd ?? end))
+        guard headers.allSatisfy({ $0.line.lowerBound < end }) else { return .other }
+        return .table(whole: header.line.lowerBound..<end, command: command.range, value: command.value)
     }
 
-    /// The `command = "…"` line in a table body: its range and its value.
-    static func tomlCommand(in text: String, body: Range<String.Index>) -> (line: Range<String.Index>, value: String)? {
-        guard let match = text.range(of: #"(?m)^[ \t]*command[ \t]*=[^\n]*"#, options: .regularExpression, range: body) else { return nil }
-        let line = text[match]
-        guard let equals = line.firstIndex(of: "=") else { return nil }
-        let raw = line[line.index(after: equals)...].trimmingCharacters(in: .whitespaces)
-        if raw.hasPrefix("'") {
-            let rest = raw.dropFirst()
-            guard let close = rest.firstIndex(of: "'") else { return nil }
-            return (match, String(rest[..<close]))
-        }
-        guard raw.hasPrefix("\"") else { return nil }
-        var value = ""
-        var i = raw.index(after: raw.startIndex)
-        while i < raw.endIndex, raw[i] != "\"" {
-            if raw[i] == "\\" {
-                i = raw.index(after: i)
-                guard i < raw.endIndex else { return nil }
-                switch raw[i] {
-                case "n": value.append("\n")
-                case "t": value.append("\t")
-                case "u", "U":
-                    let digits = raw[i] == "u" ? 4 : 8
-                    let start = raw.index(after: i)
-                    guard let end = raw.index(start, offsetBy: digits, limitedBy: raw.endIndex),
-                          let code = UInt32(raw[start..<end], radix: 16), let scalar = Unicode.Scalar(code) else { return nil }
-                    value.unicodeScalars.append(scalar)
-                    i = raw.index(before: end)
-                default: value.append(raw[i])
-                }
-            } else {
-                value.append(raw[i])
-            }
-            i = raw.index(after: i)
-        }
-        return i < raw.endIndex ? (match, value) : nil
+    /// mcp_servers written inline (`mcp_servers = { … }`) or as an array of tables: a table of ours cannot go beside it.
+    static func tomlServersAreNotATable(_ outline: TOMLOutline) -> Bool {
+        outline.keys.contains { $0.table + $0.path == tomlServers } || outline.headers.contains { $0.isArray && $0.path.starts(with: tomlServers) }
     }
 
-    private static func registerTOML(_ target: Target, command: String) -> Status {
-        let text = FileManager.default.fileExists(atPath: target.file) ? read(target.file) : ""
-        guard let text else { return .skipped("unreadable") }
-        if tomlMentions(text) {
-            guard let table = tomlTable(text), let current = tomlCommand(in: text, body: table.body),
-                  isOurs(command: current.value) else { return .nameTaken }
-            if current.value == command { return .alreadyRegistered }
-            // Ours, from another copy of the app: only the command line changes.
-            var updated = text
-            updated.replaceSubrange(current.line, with: "command = " + tomlString(command))
-            return writeRaw(updated, to: target.file) ? .registered : .skipped("write")
+    private static func registerTOML(_ text: String, command: String) -> Plan {
+        guard let outline = TOMLOutline(text) else { return Plan(.skipped("not valid TOML")) }
+        if tomlServersAreNotATable(outline) { return Plan(.skipped("mcp_servers is not a table of its own")) }
+        var updated = text
+        switch tomlEntry(outline) {
+        case .other:
+            return Plan(.nameTaken)
+        case .table(_, let range, let current):
+            guard isOurs(command: current) else { return Plan(.nameTaken) }
+            if current == command { return Plan(.alreadyRegistered) }
+            // Ours, from another copy of the app: only the command's string changes (its line's indent and comment stay).
+            updated.unicodeScalars.replaceSubrange(range, with: tomlString(command).unicodeScalars)
+        case .absent:
+            // At the end, set apart by a blank line, ending as the file did (with a line break or not), so taking it
+            // out gives the file back as it was.
+            let newline = text.contains("\r\n") ? "\r\n" : "\n"
+            let ending = text.isEmpty || text.hasSuffix(newline) ? newline : ""
+            let table = "[mcp_servers.next-term]" + newline + "command = " + tomlString(command) + newline + "args = [\"mcp\"]" + ending
+            let separator = text.isEmpty ? "" : text.hasSuffix(newline) ? newline : newline + newline
+            updated = text + separator + table
         }
-        try? FileManager.default.createDirectory(atPath: (target.file as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
-        let table = "[mcp_servers.next-term]\ncommand = \(tomlString(command))\nargs = [\"mcp\"]\n"
-        let separator = text.isEmpty || text.hasSuffix("\n\n") ? "" : text.hasSuffix("\n") ? "\n" : "\n\n"
-        return writeRaw(text + separator + table, to: target.file) ? .registered : .skipped("write")
+        // The result read back: one table of ours, with this command.
+        guard let check = TOMLOutline(updated), !tomlServersAreNotATable(check),
+              case .table(_, _, let written) = tomlEntry(check), written == command else { return Plan(.skipped("check failed")) }
+        return Plan(.registered, text: updated)
     }
 
-    private static func unregisterTOML(_ target: Target) -> Status {
-        guard let text = read(target.file) else { return .skipped("unreadable") }
-        guard let table = tomlTable(text) else { return tomlMentions(text) ? .nameTaken : .removed }
-        guard let current = tomlCommand(in: text, body: table.body), isOurs(command: current.value) else { return .nameTaken }
-        var before = String(text[..<table.whole.lowerBound])
-        let after = String(text[table.whole.upperBound...])
-        // The blank line that set our table apart goes with it.
-        if after.isEmpty {
-            while before.hasSuffix("\n\n") { before.removeLast() }
-        } else if before.hasSuffix("\n\n") && after.hasPrefix("\n") == false {
-            // [a]\n\n[ours]\n\n[b] → [a]\n\n[b]: the blank line after ours stays as the separator.
+    private static func unregisterTOML(_ text: String) -> Plan {
+        guard let outline = TOMLOutline(text) else { return Plan(text.contains(serverName) ? .skipped("not valid TOML") : .removed) }
+        guard case .table(let whole, _, let current) = tomlEntry(outline) else {
+            if tomlEntry(outline) == .other { return Plan(.nameTaken) }
+            let inline = tomlServersAreNotATable(outline) && text.contains(serverName)
+            return Plan(inline ? .skipped("mcp_servers is not a table of its own") : .removed)
+        }
+        guard isOurs(command: current) else { return Plan(.nameTaken) }
+        let newline = text.contains("\r\n") ? "\r\n" : "\n"
+        var before = String(text.unicodeScalars[..<whole.lowerBound])
+        let after = String(text.unicodeScalars[whole.upperBound...])
+        // Last in the file: the blank line that set it apart goes with it, and the file ends as our table did.
+        if after.isEmpty, text.unicodeScalars[whole].last == "\n" {
+            if before.hasSuffix(newline + newline) { before.removeLast() }
+        } else if after.isEmpty {
+            while before.hasSuffix(newline) { before.removeLast() }
         }
         var updated = before + after
-        if !text.contains("\n\n\n") { while updated.contains("\n\n\n") { updated = updated.replacingOccurrences(of: "\n\n\n", with: "\n\n") } }
-        return writeRaw(updated, to: target.file) ? .removed : .skipped("write")
+        let three = newline + newline + newline
+        if !text.contains(three) { while updated.contains(three) { updated = updated.replacingOccurrences(of: three, with: newline + newline) } }
+        guard let check = TOMLOutline(updated), tomlEntry(check) == .absent else { return Plan(.skipped("check failed")) }
+        return Plan(.removed, text: updated)
     }
 
     static func tomlString(_ value: String) -> String {
@@ -336,15 +586,11 @@ public enum MCPRegistrar {
 
     // MARK: files
 
-    private static func read(_ path: String) -> String? {
-        guard isRegularFile(canonicalPath(path)), let data = FileManager.default.contents(atPath: path) else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    /// Atomic, through symlinks, keeping the file's permissions (0600 stays 0600); nothing if unchanged.
-    private static func writeRaw(_ text: String, to path: String) -> Bool {
-        if let current = FileManager.default.contents(atPath: path), current == Data(text.utf8) { return true }
-        return (try? TextFile.write(Data(text.utf8), to: URL(fileURLWithPath: path))) != nil
+    /// A regular file's bytes and text (the text leaves out a UTF-8 byte order mark; `write` puts it back).
+    private static func read(_ path: String) -> (data: Data, text: String)? {
+        guard isRegularFile(canonicalPath(path)), let data = FileManager.default.contents(atPath: path),
+              let text = String(data: data, encoding: .utf8) else { return nil }
+        return (data, text)
     }
 
     static func compact(_ value: Any) -> String? {
@@ -358,7 +604,8 @@ public enum MCPRegistrar {
 }
 
 /// JSON that may have comments (`//`, `/* */`) and trailing commas, parsed with the position of every
-/// value, so an edit can change one member and leave every other byte of the file alone.
+/// value, so an edit can change one member and leave every other byte of the file alone. It is read by
+/// Unicode scalar: by Character, a combining mark just after a quote would join the quote.
 struct JSONC {
     struct Member {
         let key: String
@@ -373,6 +620,8 @@ struct JSONC {
         let close: String.Index
         let members: [Member]
         func member(_ key: String) -> Member? { members.first { $0.key == key } }
+        /// A key that is there twice: JSON parsers take the last one, `member` the first.
+        var hasRepeatedKeys: Bool { Set(members.map(\.key)).count < members.count }
     }
 
     enum Value {
@@ -389,39 +638,87 @@ struct JSONC {
 
         /// The value as Foundation objects.
         func object(in text: String) -> Any? {
-            JSONC.plain(String(text[range])).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8), options: .fragmentsAllowed) }
+            JSONC.plain(String(text.unicodeScalars[range])).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8), options: .fragmentsAllowed) }
         }
     }
 
+    /// Arrays and objects (in TOML, arrays and inline tables) in one another deeper than this make a file unreadable here,
+    /// so it is left alone: no agent writes one like that. Foundation's parser then reads what passes (an entry, a strict
+    /// agent's whole file): it follows objects by recursion and does not stop before it overflows the stack of a queue's
+    /// thread (512 KB, from about 460 levels), so this leaves it room.
+    static let maxDepth = 256
+
+    /// The text has no arrays or objects in one another deeper than `maxDepth`, counted over its bytes outside strings (a
+    /// bracket in a comment counts too). For text that only Foundation's parser reads, which may be large.
+    static func isShallow(_ text: String) -> Bool {
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for byte in text.utf8 {
+            if inString {
+                if escaped {
+                    escaped = false
+                } else if byte == UInt8(ascii: "\\") {
+                    escaped = true
+                } else if byte == UInt8(ascii: "\"") {
+                    inString = false
+                }
+                continue
+            }
+            switch byte {
+            case UInt8(ascii: "\""):
+                inString = true
+            case UInt8(ascii: "{"), UInt8(ascii: "["):
+                depth += 1
+                if depth > maxDepth { return false }
+            case UInt8(ascii: "}"), UInt8(ascii: "]"):
+                depth -= 1
+            default:
+                break
+            }
+        }
+        return true
+    }
+
     let text: String
+    private let scalars: String.UnicodeScalarView
     private(set) var root: Value?
     private(set) var hasComments = false
+    /// A comma just before `}` or `]`.
+    private(set) var hasTrailingCommas = false
     private var i: String.Index
 
     init?(_ text: String) {
         self.text = text
+        self.scalars = text.unicodeScalars
         self.i = text.startIndex
         skipSpace()
         guard let value = parseValue() else { return nil }
         skipSpace()
-        guard i == text.endIndex else { return nil }
+        guard i == scalars.endIndex else { return nil }
         root = value
     }
 
+    /// The text of a range in this document.
+    func string(_ range: Range<String.Index>) -> String { String(scalars[range]) }
+
+    private mutating func advance() { i = scalars.index(after: i) }
+
     private mutating func skipSpace() {
-        while i < text.endIndex {
-            let c = text[i]
-            if c.isWhitespace || c == "\u{FEFF}" { i = text.index(after: i); continue }
-            let next = text.index(after: i)
-            if c == "/", next < text.endIndex {
-                if text[next] == "/" {
+        while i < scalars.endIndex {
+            let c = scalars[i]
+            if c.properties.isWhitespace || c == "\u{FEFF}" { advance(); continue }
+            let next = scalars.index(after: i)
+            if c == "/", next < scalars.endIndex {
+                if scalars[next] == "/" {
                     hasComments = true
-                    while i < text.endIndex, text[i] != "\n" { i = text.index(after: i) }
+                    while i < scalars.endIndex, scalars[i] != "\n" { advance() }
                     continue
                 }
-                if text[next] == "*" {
+                if scalars[next] == "*" {
                     hasComments = true
-                    guard let end = text.range(of: "*/", range: text.index(after: next)..<text.endIndex) else { i = text.endIndex; return }
+                    let rest = scalars.index(after: next)..<scalars.endIndex
+                    guard let end = text.range(of: "*/", options: .literal, range: rest) else { i = scalars.endIndex; return }
                     i = end.upperBound
                     continue
                 }
@@ -430,193 +727,359 @@ struct JSONC {
         }
     }
 
+    /// Past a comma and the space after it (a `}` or `]` next makes it a trailing comma).
+    private mutating func skipComma() {
+        advance()
+        skipSpace()
+        if i < scalars.endIndex, scalars[i] == "}" || scalars[i] == "]" { hasTrailingCommas = true }
+    }
+
+    /// An array or object being read: where it starts, its members so far, and the key of the member being read.
+    private struct Open {
+        let start: String.Index
+        let isObject: Bool
+        var members: [Member] = []
+        var key: (name: String, range: Range<String.Index>)?
+        var close: Unicode.Scalar { isObject ? "}" : "]" }
+    }
+
+    /// A value and all it holds. Arrays and objects in one another are followed with a list of those still open, not by
+    /// recursion, so a file nested deeply does not overflow the stack of a queue's thread; past `maxDepth`, it is unread.
     private mutating func parseValue() -> Value? {
-        guard i < text.endIndex else { return nil }
-        switch text[i] {
-        case "{":
-            return parseObject().map(Value.object)
-        case "[":
-            let start = i
-            i = text.index(after: i)
-            skipSpace()
-            while i < text.endIndex, text[i] != "]" {
-                guard parseValue() != nil else { return nil }
+        var open: [Open] = []
+        while true {
+            // At a value: an array or object starts, or a string, number or literal is read whole.
+            guard i < scalars.endIndex else { return nil }
+            var value: Value
+            let c = scalars[i]
+            if c == "{" || c == "[" {
+                guard open.count < Self.maxDepth else { return nil }
+                open.append(Open(start: i, isObject: c == "{"))
+                advance()
                 skipSpace()
-                guard i < text.endIndex else { return nil }
-                if text[i] == "," { i = text.index(after: i); skipSpace() } else if text[i] != "]" { return nil }
+                guard i < scalars.endIndex else { return nil }
+                if scalars[i] != open[open.count - 1].close {
+                    guard parseKey(of: &open[open.count - 1]) else { return nil }
+                    continue
+                }
+                advance()
+                value = closed(open.removeLast())
+            } else if c == "\"" {
+                guard let string = parseStringValue() else { return nil }
+                value = string
+            } else {
+                guard let bare = parseBareValue() else { return nil }
+                value = bare
             }
-            guard i < text.endIndex else { return nil }
-            i = text.index(after: i)
-            return .array(start..<i)
-        case "\"":
-            let start = i
-            guard parseString() != nil else { return nil }
-            return .scalar(start..<i)
-        default:
-            let start = i
-            while i < text.endIndex, !",}]:".contains(text[i]), !text[i].isWhitespace, text[i] != "/" { i = text.index(after: i) }
-            guard i > start,
-                  (try? JSONSerialization.jsonObject(with: Data(text[start..<i].utf8), options: .fragmentsAllowed)) != nil else { return nil }
-            return .scalar(start..<i)
+            // The value is done: it goes in the array or object it is in, then a comma (the next member), or the close
+            // of that one, which is then done too.
+            while let last = open.indices.last {
+                if let key = open[last].key {
+                    open[last].members.append(Member(key: key.name, keyRange: key.range, value: value))
+                }
+                skipSpace()
+                guard i < scalars.endIndex else { return nil }
+                if scalars[i] == "," {
+                    skipComma()
+                } else if scalars[i] != open[last].close {
+                    return nil
+                }
+                guard i < scalars.endIndex, scalars[i] == open[last].close else {
+                    guard parseKey(of: &open[last]) else { return nil }
+                    break
+                }
+                advance()
+                value = closed(open.removeLast())
+            }
+            if open.isEmpty { return value }
         }
+    }
+
+    /// The value of an array or object just closed (`i` is just past its close).
+    private func closed(_ container: Open) -> Value {
+        guard container.isObject else { return .array(container.start..<i) }
+        return .object(Object(open: container.start, close: i, members: container.members))
+    }
+
+    private mutating func parseStringValue() -> Value? {
+        let start = i
+        guard parseString() != nil else { return nil }
+        return .scalar(start..<i)
+    }
+
+    /// A number, true, false or null.
+    private mutating func parseBareValue() -> Value? {
+        let start = i
+        let ends: Set<Unicode.Scalar> = [",", "}", "]", ":", "/"]
+        while i < scalars.endIndex, !ends.contains(scalars[i]), !scalars[i].properties.isWhitespace { advance() }
+        guard i > start,
+              (try? JSONSerialization.jsonObject(with: Data(text.utf8[start..<i]), options: .fragmentsAllowed)) != nil else { return nil }
+        return .scalar(start..<i)
     }
 
     private mutating func parseString() -> String? {
         let start = i
-        i = text.index(after: i)
-        while i < text.endIndex, text[i] != "\"" {
-            if text[i] == "\\" {
-                i = text.index(after: i)
-                guard i < text.endIndex else { return nil }
+        advance()
+        while i < scalars.endIndex, scalars[i] != "\"" {
+            if scalars[i] == "\\" {
+                advance()
+                guard i < scalars.endIndex else { return nil }
             }
-            i = text.index(after: i)
+            advance()
         }
-        guard i < text.endIndex else { return nil }
-        i = text.index(after: i)
-        return (try? JSONSerialization.jsonObject(with: Data(text[start..<i].utf8), options: .fragmentsAllowed)) as? String
+        guard i < scalars.endIndex else { return nil }
+        advance()
+        return (try? JSONSerialization.jsonObject(with: Data(text.utf8[start..<i]), options: .fragmentsAllowed)) as? String
     }
 
-    private mutating func parseObject() -> Object? {
-        let open = i
-        i = text.index(after: i)
-        var members: [Member] = []
+    /// In an object, the key of its next member, and past the colon after it (an array's elements have none).
+    private mutating func parseKey(of container: inout Open) -> Bool {
+        guard container.isObject else { return true }
+        guard i < scalars.endIndex, scalars[i] == "\"" else { return false }
+        let start = i
+        guard let key = parseString() else { return false }
+        container.key = (key, start..<i)
         skipSpace()
-        while i < text.endIndex, text[i] != "}" {
-            guard text[i] == "\"" else { return nil }
-            let keyStart = i
-            guard let key = parseString() else { return nil }
-            let keyRange = keyStart..<i
-            skipSpace()
-            guard i < text.endIndex, text[i] == ":" else { return nil }
-            i = text.index(after: i)
-            skipSpace()
-            guard let value = parseValue() else { return nil }
-            members.append(Member(key: key, keyRange: keyRange, value: value))
-            skipSpace()
-            guard i < text.endIndex else { return nil }
-            if text[i] == "," { i = text.index(after: i); skipSpace() } else if text[i] != "}" { return nil }
-        }
-        guard i < text.endIndex else { return nil }
-        i = text.index(after: i)
-        return Object(open: open, close: i, members: members)
+        guard i < scalars.endIndex, scalars[i] == ":" else { return false }
+        advance()
+        skipSpace()
+        return true
     }
 
     /// The elements of an array in this document, by position like members (nothing is converted).
     func elements(of array: Value) -> [Value]? {
         guard case .array(let range) = array else { return nil }
         var cursor = self
-        cursor.i = text.index(after: range.lowerBound)
+        cursor.i = scalars.index(after: range.lowerBound)
         var values: [Value] = []
         cursor.skipSpace()
-        while cursor.i < range.upperBound, text[cursor.i] != "]" {
+        while cursor.i < range.upperBound, scalars[cursor.i] != "]" {
             guard let value = cursor.parseValue() else { return nil }
             values.append(value)
             cursor.skipSpace()
             guard cursor.i < range.upperBound else { return nil }
-            if text[cursor.i] == "," {
-                cursor.i = text.index(after: cursor.i)
-                cursor.skipSpace()
-            } else if text[cursor.i] != "]" {
+            if scalars[cursor.i] == "," {
+                cursor.skipComma()
+            } else if scalars[cursor.i] != "]" {
                 return nil
             }
         }
         return values
     }
 
-    /// The whitespace that starts the line holding `index`.
-    func indent(of index: String.Index) -> String {
+    /// Where the line holding `index` starts.
+    func lineStart(of index: String.Index) -> String.Index {
         var start = index
-        while start > text.startIndex, text[text.index(before: start)] != "\n" { start = text.index(before: start) }
-        return String(text[start..<index].prefix { $0 == " " || $0 == "\t" })
+        while start > scalars.startIndex, scalars[scalars.index(before: start)] != "\n" { start = scalars.index(before: start) }
+        return start
     }
 
-    private func isBlank(_ c: Character) -> Bool { c == " " || c == "\t" }
+    /// The whitespace that starts the line holding `index`.
+    func indent(of index: String.Index) -> String {
+        let line = scalars[lineStart(of: index)..<index]
+        return String(line.prefix { $0 == " " || $0 == "\t" })
+    }
 
-    /// The text without one member of `object`: the member and one comma, and its line when it has one
-    /// to itself.
+    private func isBlank(_ c: Unicode.Scalar) -> Bool { c == " " || c == "\t" || c == "\r" }
+
+    /// The file's line break: "\r\n" when it has one, so lines added match the others.
+    var lineEnding: String { text.contains("\r\n") ? "\r\n" : "\n" }
+
+    /// Just past a comment that starts at `index`, if one does (`//` up to its line break, `/* */` to its end).
+    private func commentEnd(at index: String.Index) -> String.Index? {
+        let next = scalars.index(after: index)
+        guard scalars[index] == "/", next < scalars.endIndex else { return nil }
+        if scalars[next] == "/" {
+            var end = next
+            while end < scalars.endIndex, scalars[end] != "\n" { end = scalars.index(after: end) }
+            return end
+        }
+        guard scalars[next] == "*" else { return nil }
+        return text.range(of: "*/", options: .literal, range: scalars.index(after: next)..<scalars.endIndex)?.upperBound
+    }
+
+    /// The start of the next line, when only blanks and comments follow `index` on its line (nil: something else
+    /// does, or the text ends).
+    func lineAfter(_ index: String.Index) -> String.Index? {
+        var i = scalars.index(after: index)
+        while i < scalars.endIndex {
+            if scalars[i] == "\n" { return scalars.index(after: i) }
+            if isBlank(scalars[i]) {
+                i = scalars.index(after: i)
+            } else if let end = commentEnd(at: i) {
+                i = end
+            } else {
+                return nil
+            }
+        }
+        return nil
+    }
+
+    /// Where a new first member goes in `object`, so that `removing` it gives this text back: on a line of its own
+    /// at the start of the line after the `{` line when the members start on a later line (a comment on the `{`
+    /// line, or above the first member, stays where it was), and before the first member when it is on the `{` line.
+    /// In an object with only space inside, just after the `{`, the space kept after it; one with only comments
+    /// gets it on the line after the `{` line. `spread`: an empty {} gets it on a line of its own, not inside the
+    /// braces on their line. `member`: its text, for the indent of the line it starts on.
+    func insertion(into object: Object, spread: Bool, member: (String) -> String) -> (text: String, at: String.Index) {
+        let newline = lineEnding
+        let afterOpen = scalars.index(after: object.open)
+        if let first = object.members.first {
+            let indent = indent(of: first.keyRange.lowerBound)
+            if let next = lineAfter(object.open) { return (indent + member(indent) + "," + newline, next) }
+            return (member(indent) + ", ", first.keyRange.lowerBound)
+        }
+        let inner = indent(of: object.open) + "  "
+        let inside = scalars[afterOpen..<scalars.index(before: object.close)]
+        if inside.isEmpty, spread { return (newline + inner + member(inner) + newline, afterOpen) }
+        if !inside.allSatisfy(\.properties.isWhitespace), let next = lineAfter(object.open) {
+            return (inner + member(inner) + newline, next)
+        }
+        return (member(indent(of: object.open)), afterOpen)
+    }
+
+    /// `member`'s line, when it has one to itself: from the line's start to just past its line break, with only blanks
+    /// before the member and only blanks, a comma (`comma`: one is needed) and a comment on one line after it.
+    private func ownLine(_ member: Member, comma needed: Bool) -> Range<String.Index>? {
+        var start = member.keyRange.lowerBound
+        while start > scalars.startIndex, isBlank(scalars[scalars.index(before: start)]) { start = scalars.index(before: start) }
+        guard start == scalars.startIndex || scalars[scalars.index(before: start)] == "\n" else { return nil }
+        var end = member.value.range.upperBound
+        var comma = false
+        while end < scalars.endIndex {
+            let c = scalars[end]
+            if c == "\n" { return comma || !needed ? start..<scalars.index(after: end) : nil }
+            if isBlank(c) || (c == "," && !comma) {
+                comma = comma || c == ","
+                end = scalars.index(after: end)
+            } else if let after = commentEnd(at: end), !scalars[end..<after].contains("\n") {
+                end = after
+            } else {
+                return nil
+            }
+        }
+        return nil
+    }
+
+    /// Where the comma after `index` is, past blanks, line breaks and comments (nil: something else comes first).
+    private func comma(after index: String.Index) -> String.Index? {
+        var i = index
+        while i < scalars.endIndex {
+            if scalars[i] == "," { return i }
+            if scalars[i].properties.isWhitespace {
+                i = scalars.index(after: i)
+            } else if let end = commentEnd(at: i) {
+                i = end
+            } else {
+                return nil
+            }
+        }
+        return nil
+    }
+
+    /// The text without one member of `object`: the member and one comma, and its line when it has one to itself.
+    /// What else is around it (comments above or beside it, line breaks, the space in its object) stays, so
+    /// taking out a member put where `insertion` puts one gives the text back as it was.
     func removing(_ member: Member, from object: Object) -> String {
         guard let index = object.members.firstIndex(where: { $0.keyRange == member.keyRange }) else { return text }
-        var start = member.keyRange.lowerBound
-        var end = member.value.range.upperBound
+        let key = member.keyRange.lowerBound
+        let valueEnd = member.value.range.upperBound
+        // Blanks before the member on its line.
+        var lead = key
+        while lead > scalars.startIndex, isBlank(scalars[scalars.index(before: lead)]) { lead = scalars.index(before: lead) }
+        var removals: [Range<String.Index>] = []
         if index + 1 < object.members.count {
-            // Up to where the next member's line starts (taking our comma and line break).
-            end = object.members[index + 1].keyRange.lowerBound
-            while end > member.value.range.upperBound, isBlank(text[text.index(before: end)]) { end = text.index(before: end) }
-            var lineStart = start
-            while lineStart > text.startIndex, isBlank(text[text.index(before: lineStart)]) { lineStart = text.index(before: lineStart) }
-            if lineStart == text.startIndex || text[text.index(before: lineStart)] == "\n" { start = lineStart }
-            // Same line as the next member ({"a": 1, "b": 2}): keep that line's start.
-            if !text[member.value.range.upperBound..<end].contains("\n") {
-                end = object.members[index + 1].keyRange.lowerBound
-                start = member.keyRange.lowerBound
+            let next = object.members[index + 1].keyRange.lowerBound
+            if !scalars[valueEnd..<next].contains("\n") {
+                // The next member on the same line ({"a": 1, "b": 2}): up to it.
+                removals = [key..<next]
+            } else if let line = ownLine(member, comma: true) {
+                removals = [line]
+            } else if let comma = comma(after: valueEnd) {
+                removals = [lead..<scalars.index(after: comma)]
             }
         } else if index > 0 {
-            // The last member: from the end of the previous one, so its comma goes.
-            start = object.members[index - 1].value.range.upperBound
-            // A trailing comma after us stays valid JSONC, but drop it too.
-            var after = end
-            while after < text.endIndex, text[after].isWhitespace { after = text.index(after: after) }
-            if after < text.endIndex, text[after] == "," { end = text.index(after: after) }
+            // The last member: the comma before it goes (a trailing comma after it instead, when it has one).
+            let before = comma(after: object.members[index - 1].value.range.upperBound)
+            let trailing = comma(after: valueEnd)
+            if let line = ownLine(member, comma: false) {
+                removals = [line] + (before.map { [$0..<scalars.index(after: $0)] } ?? [])
+            } else if let trailing {
+                removals = [lead..<scalars.index(after: trailing)]
+            } else if let before {
+                removals = [lead..<valueEnd, before..<scalars.index(after: before)]
+            }
         } else {
-            // The only member: the object becomes {} with its closing brace where it was.
-            start = text.index(after: object.open)
-            end = text.index(before: object.close)
+            let afterOpen = scalars.index(after: object.open)
+            let inside = afterOpen..<scalars.index(before: object.close)
+            if let line = ownLine(member, comma: false) {
+                // On a line of its own: that line goes, and with only space left the object becomes {}.
+                let rest = scalars[afterOpen..<line.lowerBound] + scalars[line.upperBound..<inside.upperBound]
+                removals = [rest.allSatisfy(\.properties.isWhitespace) ? inside : line]
+            } else {
+                let trailing = comma(after: valueEnd)
+                removals = [key..<(trailing.map { scalars.index(after: $0) } ?? valueEnd)]
+            }
         }
         var result = text
-        result.removeSubrange(start..<end)
+        for range in removals.sorted(by: { $0.lowerBound > $1.lowerBound }) { result.unicodeScalars.removeSubrange(range) }
         return result
     }
 
     /// Plain JSON: comments removed, trailing commas dropped.
     static func plain(_ text: String) -> String? {
-        var out = ""
-        var i = text.startIndex
-        while i < text.endIndex {
-            let c = text[i]
+        let scalars = text.unicodeScalars
+        var out = String.UnicodeScalarView()
+        var i = scalars.startIndex
+        /// Just past the `*/` that closes a comment opened before `from`.
+        func commentEnd(_ from: String.Index) -> String.Index? {
+            text.range(of: "*/", options: .literal, range: from..<scalars.endIndex)?.upperBound
+        }
+        while i < scalars.endIndex {
+            let c = scalars[i]
             if c == "\"" {
                 let start = i
-                i = text.index(after: i)
-                while i < text.endIndex, text[i] != "\"" {
-                    if text[i] == "\\" {
-                        i = text.index(after: i)
-                        if i == text.endIndex { return nil }
+                i = scalars.index(after: i)
+                while i < scalars.endIndex, scalars[i] != "\"" {
+                    if scalars[i] == "\\" {
+                        i = scalars.index(after: i)
+                        if i == scalars.endIndex { return nil }
                     }
-                    i = text.index(after: i)
+                    i = scalars.index(after: i)
                 }
-                guard i < text.endIndex else { return nil }
-                i = text.index(after: i)
-                out += text[start..<i]
+                guard i < scalars.endIndex else { return nil }
+                i = scalars.index(after: i)
+                out.append(contentsOf: scalars[start..<i])
                 continue
             }
-            let next = text.index(after: i)
-            if c == "/", next < text.endIndex, text[next] == "/" {
-                while i < text.endIndex, text[i] != "\n" { i = text.index(after: i) }
+            let next = scalars.index(after: i)
+            if c == "/", next < scalars.endIndex, scalars[next] == "/" {
+                while i < scalars.endIndex, scalars[i] != "\n" { i = scalars.index(after: i) }
                 continue
             }
-            if c == "/", next < text.endIndex, text[next] == "*" {
-                guard let end = text.range(of: "*/", range: text.index(after: next)..<text.endIndex) else { return nil }
-                i = end.upperBound
+            if c == "/", next < scalars.endIndex, scalars[next] == "*" {
+                guard let end = commentEnd(scalars.index(after: next)) else { return nil }
+                i = end
                 out.append(" ")
                 continue
             }
             if c == "," {
                 // A comma followed (past space and comments) by } or ] is a trailing comma.
                 var j = next
-                while j < text.endIndex {
-                    if text[j].isWhitespace { j = text.index(after: j); continue }
-                    let after = text.index(after: j)
-                    if text[j] == "/", after < text.endIndex, text[after] == "/" {
-                        while j < text.endIndex, text[j] != "\n" { j = text.index(after: j) }
+                while j < scalars.endIndex {
+                    if scalars[j].properties.isWhitespace { j = scalars.index(after: j); continue }
+                    let after = scalars.index(after: j)
+                    if scalars[j] == "/", after < scalars.endIndex, scalars[after] == "/" {
+                        while j < scalars.endIndex, scalars[j] != "\n" { j = scalars.index(after: j) }
                         continue
                     }
-                    if text[j] == "/", after < text.endIndex, text[after] == "*",
-                       let end = text.range(of: "*/", range: text.index(after: after)..<text.endIndex) {
-                        j = end.upperBound
+                    if scalars[j] == "/", after < scalars.endIndex, scalars[after] == "*", let end = commentEnd(scalars.index(after: after)) {
+                        j = end
                         continue
                     }
                     break
                 }
-                if j < text.endIndex, text[j] == "}" || text[j] == "]" {
+                if j < scalars.endIndex, scalars[j] == "}" || scalars[j] == "]" {
                     i = next
                     continue
                 }
@@ -624,6 +1087,295 @@ struct JSONC {
             out.append(c)
             i = next
         }
-        return out
+        return String(out)
+    }
+}
+
+/// TOML read only as far as editing one table safely needs: where each table header and each key is, with its full
+/// path, past strings, comments, and arrays and inline tables over several lines. Read by Unicode scalar, like `JSONC`.
+/// nil for text it cannot follow (a string or bracket left open, a line that is neither a header nor a key).
+struct TOMLOutline {
+    struct Header {
+        let path: [String]
+        /// `[[…]]`.
+        let isArray: Bool
+        /// From the line's start to just past its line break.
+        let line: Range<String.Index>
+    }
+
+    struct Key {
+        /// The table it is in, and its own path (`a.b = 1` in [t]: ["t"] and ["a", "b"]).
+        let table: [String]
+        let path: [String]
+        /// Where its value starts.
+        let value: String.Index
+        /// From its line's start to just past the line break after its value (which can take several lines).
+        let line: Range<String.Index>
+    }
+
+    let text: String
+    private let scalars: String.UnicodeScalarView
+    private(set) var headers: [Header] = []
+    private(set) var keys: [Key] = []
+    /// The lines that hold only a comment: where each ends (just past its line break) → where it starts.
+    private var comments: [String.Index: String.Index] = [:]
+    private var i: String.Index
+
+    init?(_ text: String) {
+        self.text = text
+        scalars = text.unicodeScalars
+        i = scalars.startIndex
+        var table: [String] = []
+        while i < scalars.endIndex {
+            let lineStart = i
+            skipBlanks()
+            guard i < scalars.endIndex else { break }
+            if scalars[i] == "#" {
+                guard endOfLine() else { return nil }
+                comments[i] = lineStart
+                continue
+            }
+            if scalars[i] == "\r" || scalars[i] == "\n" {
+                guard endOfLine() else { return nil }
+                continue
+            }
+            if scalars[i] == "[" {
+                advance()
+                let isArray = i < scalars.endIndex && scalars[i] == "["
+                if isArray { advance() }
+                guard let path = parseKey(), take("]"), !isArray || take("]"), endOfLine() else { return nil }
+                headers.append(Header(path: path, isArray: isArray, line: lineStart..<i))
+                table = path
+                continue
+            }
+            guard let path = parseKey(), take("=") else { return nil }
+            skipBlanks()
+            let value = i
+            guard skipValue(), endOfLine() else { return nil }
+            keys.append(Key(table: table, path: path, value: value, line: lineStart..<i))
+        }
+    }
+
+    /// Where the blank lines from `lineStart` on end: the start of the next line with something on it, or the end of the
+    /// text when only blank lines are left.
+    func blankLinesAfter(_ lineStart: String.Index) -> String.Index {
+        var start = lineStart
+        var i = lineStart
+        while i < scalars.endIndex {
+            let c = scalars[i]
+            if c == "\n" {
+                i = scalars.index(after: i)
+                start = i
+            } else if c == " " || c == "\t" || c == "\r" {
+                i = scalars.index(after: i)
+            } else {
+                return start
+            }
+        }
+        return scalars.endIndex
+    }
+
+    /// Where the comment lines just above `lineStart` start (`lineStart` when there are none).
+    func commentsAbove(_ lineStart: String.Index) -> String.Index {
+        var start = lineStart
+        while let above = comments[start] { start = above }
+        return start
+    }
+
+    /// The single-line string that starts at `index`: its range and what it says.
+    func string(at index: String.Index) -> (range: Range<String.Index>, value: String)? {
+        var cursor = self
+        cursor.i = index
+        guard let value = cursor.parseString(), !cursor.isMultiLine(at: index) else { return nil }
+        return (index..<cursor.i, value)
+    }
+
+    /// What a bare key is made of.
+    private static let bare = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-".unicodeScalars)
+
+    private mutating func advance() { i = scalars.index(after: i) }
+
+    private func isMultiLine(at index: String.Index) -> Bool {
+        let quote = scalars[index]
+        return scalars[index...].prefix(3).elementsEqual([quote, quote, quote])
+    }
+
+    private mutating func skipBlanks() {
+        while i < scalars.endIndex, scalars[i] == " " || scalars[i] == "\t" { advance() }
+    }
+
+    /// Past blanks, line breaks and comments (inside an array or inline table).
+    private mutating func skipSpace() {
+        while i < scalars.endIndex {
+            if scalars[i] == "#" {
+                while i < scalars.endIndex, scalars[i] != "\n" { advance() }
+            } else if scalars[i].properties.isWhitespace {
+                advance()
+            } else {
+                return
+            }
+        }
+    }
+
+    private mutating func take(_ c: Unicode.Scalar) -> Bool {
+        skipBlanks()
+        guard i < scalars.endIndex, scalars[i] == c else { return false }
+        advance()
+        return true
+    }
+
+    /// Past blanks, a comment and the line break (or the end of the text); false when something else is there.
+    private mutating func endOfLine() -> Bool {
+        skipBlanks()
+        if i < scalars.endIndex, scalars[i] == "#" {
+            while i < scalars.endIndex, scalars[i] != "\n", scalars[i] != "\r" { advance() }
+        }
+        if i < scalars.endIndex, scalars[i] == "\r" { advance() }
+        guard i < scalars.endIndex else { return true }
+        guard scalars[i] == "\n" else { return false }
+        advance()
+        return true
+    }
+
+    /// A key, dotted or not: bare words and quoted strings between dots.
+    private mutating func parseKey() -> [String]? {
+        var path: [String] = []
+        while true {
+            skipBlanks()
+            guard i < scalars.endIndex else { return nil }
+            if scalars[i] == "\"" || scalars[i] == "'" {
+                guard !isMultiLine(at: i), let part = parseString() else { return nil }
+                path.append(part)
+            } else {
+                var part = String.UnicodeScalarView()
+                while i < scalars.endIndex, Self.bare.contains(scalars[i]) {
+                    part.append(scalars[i])
+                    advance()
+                }
+                guard !part.isEmpty else { return nil }
+                path.append(String(part))
+            }
+            skipBlanks()
+            guard i < scalars.endIndex, scalars[i] == "." else { return path }
+            advance()
+        }
+    }
+
+    /// A single-line string, basic ("…", with escapes) or literal ('…').
+    private mutating func parseString() -> String? {
+        guard i < scalars.endIndex, scalars[i] == "\"" || scalars[i] == "'" else { return nil }
+        let quote = scalars[i]
+        advance()
+        var value = String.UnicodeScalarView()
+        while i < scalars.endIndex, scalars[i] != quote {
+            guard scalars[i] != "\n", scalars[i] != "\r" else { return nil }
+            guard quote == "\"", scalars[i] == "\\" else {
+                value.append(scalars[i])
+                advance()
+                continue
+            }
+            advance()
+            guard i < scalars.endIndex else { return nil }
+            let escape = scalars[i]
+            advance()
+            switch escape {
+            case "n": value.append("\n")
+            case "t": value.append("\t")
+            case "r": value.append("\r")
+            case "b": value.append("\u{8}")
+            case "f": value.append("\u{C}")
+            case "e": value.append("\u{1B}")
+            case "\"", "\\": value.append(escape)
+            case "u", "U":
+                let digits = escape == "u" ? 4 : 8
+                guard let end = scalars.index(i, offsetBy: digits, limitedBy: scalars.endIndex),
+                      let code = UInt32(String(scalars[i..<end]), radix: 16), let scalar = Unicode.Scalar(code) else { return nil }
+                value.append(scalar)
+                i = end
+            default: return nil
+            }
+        }
+        guard i < scalars.endIndex else { return nil }
+        advance()
+        return String(value)
+    }
+
+    /// Past a value: a string of any kind, an array, an inline table, or a bare one (a number, a date, true). Arrays and
+    /// inline tables in one another are followed with a list of those still open, not by recursion (see `JSONC.parseValue`).
+    private mutating func skipValue() -> Bool {
+        // What closes each array or inline table still open, the innermost last.
+        var open: [Unicode.Scalar] = []
+        while true {
+            // At a value.
+            guard i < scalars.endIndex else { return false }
+            let c = scalars[i]
+            if c == "[" || c == "{" {
+                guard open.count < JSONC.maxDepth else { return false }
+                open.append(c == "[" ? "]" : "}")
+                advance()
+            } else {
+                guard skipScalar() else { return false }
+                if open.isEmpty { return true }
+                guard separator(in: open) else { return false }
+            }
+            // At the next element, or at the close of the innermost one, and what that closes in turn.
+            while true {
+                skipSpace()
+                guard i < scalars.endIndex else { return false }
+                guard scalars[i] == open.last else { break }
+                advance()
+                open.removeLast()
+                if open.isEmpty { return true }
+                guard separator(in: open) else { return false }
+            }
+            // An element of an inline table starts with its key.
+            if open.last == "}" {
+                guard parseKey() != nil, take("=") else { return false }
+                skipBlanks()
+            }
+        }
+    }
+
+    /// After an element: past a comma, or at the close of the innermost of `open`; false when something else is there.
+    private mutating func separator(in open: [Unicode.Scalar]) -> Bool {
+        skipSpace()
+        guard i < scalars.endIndex else { return false }
+        if scalars[i] == "," {
+            advance()
+            return true
+        }
+        return scalars[i] == open.last
+    }
+
+    /// Past a string of any kind, or a bare value.
+    private mutating func skipScalar() -> Bool {
+        let c = scalars[i]
+        if c == "\"" || c == "'" {
+            guard isMultiLine(at: i) else { return parseString() != nil }
+            // """…""" or '''…''': up to three quotes in a row, with up to two more just before them inside.
+            i = scalars.index(i, offsetBy: 3)
+            while i < scalars.endIndex {
+                if c == "\"", scalars[i] == "\\" {
+                    advance()
+                    if i < scalars.endIndex { advance() }
+                    continue
+                }
+                if isMultiLine(at: i) {
+                    i = scalars.index(i, offsetBy: 3)
+                    var extra = 0
+                    while extra < 2, i < scalars.endIndex, scalars[i] == c {
+                        advance()
+                        extra += 1
+                    }
+                    return true
+                }
+                advance()
+            }
+            return false
+        }
+        let start = i
+        let ends: Set<Unicode.Scalar> = [",", "]", "}", "#", "\n", "\r"]
+        while i < scalars.endIndex, !ends.contains(scalars[i]) { advance() }
+        return i > start
     }
 }

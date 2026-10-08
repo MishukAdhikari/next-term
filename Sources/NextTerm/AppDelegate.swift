@@ -311,8 +311,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         DispatchQueue.main.async { RemoteConnection.restoreTabs() }
         // Claude Code's IDE link, before the first tab so every tab can use it.
         if shareWithClaude { startClaudeLink() }
-        // The MCP socket too: tabs are told where it is.
-        if agentControl { startAgentControl() }
+        // The MCP socket too: tabs are told where it is. Off, the Claude app may still have the entry: it was
+        // open when the setting was turned off, and closed after Next Term.
+        if agentControl { startAgentControl() } else { MCPRegistration.update(on: false, claudeAppOnly: true) }
+        MCPRegistration.watchClaudeApp()
         NSApp.mainMenu = buildMenu()
         KeyboardShortcuts.shared.capture(NSApp.mainMenu!) // the menus as built are the defaults
         setUpNotifications()
@@ -411,6 +413,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var settings: SettingsWindowController?
 
     @objc func showSettings(_ sender: Any?) {
+        // The Claude app may have been opened since the last pass: what waits for it to quit, under the setting, is
+        // worked out again (nothing is written while it is open).
+        MCPRegistration.update(on: agentControl, claudeAppOnly: true)
         if settings == nil { settings = SettingsWindowController() }
         settings?.reload()
         settings?.showWindow(nil)
