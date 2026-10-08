@@ -207,6 +207,27 @@ final class CodeTextView: NSTextView {
         performFindPanelAction(action)
     }
 
+    /// ⌘F starts from the selection, as ⇧⌘F does: double-click a name, press ⌘F, and the find bar marks
+    /// every use of it in the file (⌘G steps through them). Without a selection, or with more than one
+    /// line selected, the find bar keeps what it last searched for.
+    override func performFindPanelAction(_ sender: Any?) {
+        if (sender as? NSMenuItem)?.tag == Int(NSFindPanelAction.showFindPanel.rawValue), findSeed != nil {
+            let set = NSMenuItem()
+            set.tag = Int(NSFindPanelAction.setFindString.rawValue)
+            super.performFindPanelAction(set)
+        }
+        super.performFindPanelAction(sender)
+    }
+
+    /// The selection, when it is one line of at most 200 characters with something to find in it.
+    var findSeed: String? {
+        let range = selectedRange()
+        guard range.length > 0, range.length <= 200, NSMaxRange(range) <= (string as NSString).length else { return nil }
+        let text = (string as NSString).substring(with: range)
+        guard !text.contains("\n"), !text.contains("\r"), !text.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        return text
+    }
+
     /// A sheet or panel in front has the keyboard (the commit sheet, Go to File, the branch popup). The menu
     /// still finds this view, down the main window's responder chain, and would act on the editor behind it.
     private var isBehindKeyWindow: Bool { NSApp.keyWindow.map { $0 !== window } ?? false }

@@ -63,12 +63,13 @@ PHP files are coloured with the grammar that also understands the HTML around `<
 | Comment or uncomment lines, in the file’s language | <kbd>⌘/</kbd> |
 | Go to a line | <kbd>⌘L</kbd> |
 | Indent, outdent | <kbd>⌘]</kbd>, <kbd>⌘[</kbd>, or <kbd>⇥</kbd>, <kbd>⇧⇥</kbd> on selected lines |
-| Find, next, previous | <kbd>⌘F</kbd>, <kbd>⌘G</kbd>, <kbd>⇧⌘G</kbd> |
+| Find (from the selected name), next, previous | <kbd>⌘F</kbd>, <kbd>⌘G</kbd>, <kbd>⇧⌘G</kbd> |
 | Replace in this file | <kbd>⌥⌘F</kbd> |
 | Use the selection for Find | <kbd>⌘E</kbd> |
 | Undo, redo | <kbd>⌘Z</kbd>, <kbd>⇧⌘Z</kbd> |
 | Save, Save All | <kbd>⌘S</kbd>, <kbd>⌥⌘S</kbd> |
 
+- **Where a name is used, without an indexer:** double-click a function, method, class or variable name to select it, then press <kbd>⌘F</kbd> to mark every use in this file (<kbd>⌘G</kbd> steps through them), or <kbd>⇧⌘F</kbd> to list every use across the project, each a click away. Both start from the selection. This is a text search, not code intelligence: it finds the name wherever it is written, comments and strings included, and it has no Go to Definition or refactoring. That keeps the editor light, and nothing indexes your project in the background.
 - **Replace** (**Edit › Find › Replace…**, <kbd>⌥⌘F</kbd>) opens the find bar with a Replace field under the search field: replace the match you are on, or every match in the file. It works in the editor only; in the terminal, a notebook or a diff the menu item is off. To replace across the project, use [Replace in Files](/docs/search/#replace) (<kbd>⇧⌘R</kbd>).
 - **Auto-indent:** Return keeps the line’s indent. After an opening bracket it indents one more level, and between a pair of brackets it puts the closing one on its own line.
 - **Line numbers** run down the left, and the current line is highlighted.

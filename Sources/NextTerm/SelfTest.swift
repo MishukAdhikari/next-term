@@ -3624,6 +3624,22 @@ enum SelfTest {
               "find bar \(findHeight) then \(scroll?.findBarView?.frame.height ?? 0) points high")
         view.performFindPanelAction(finderAction(.hideFindInterface))
         _ = await wait(2) { scroll?.isFindBarVisible == false }
+        // ⌘F starts from a selected name, as ⇧⌘F does (the lightweight way to find where it is used); a
+        // selection over more than one line leaves the search as it was.
+        let findBoard = NSPasteboard(name: .find)
+        let findBefore = findBoard.string(forType: .string)
+        view.setSelectedRange((view.string as NSString).range(of: "greet"))
+        view.performFindPanelAction(finderAction(.showFindInterface))
+        check(findBoard.string(forType: .string) == "greet", "⌘F with a name selected searches for that name",
+              findBoard.string(forType: .string) ?? "nothing")
+        view.setSelectedRange(NSRange(location: 0, length: min(20, (view.string as NSString).length)))
+        view.performFindPanelAction(finderAction(.showFindInterface))
+        check(findBoard.string(forType: .string) == "greet", "a selection of more than one line leaves the search as it was",
+              findBoard.string(forType: .string) ?? "nothing")
+        view.performFindPanelAction(finderAction(.hideFindInterface))
+        _ = await wait(2) { scroll?.isFindBarVisible == false }
+        findBoard.clearContents()
+        if let findBefore { findBoard.setString(findBefore, forType: .string) }
         window.makeFirstResponder(view)
 
         // Save keeps the file's CRLF line endings.

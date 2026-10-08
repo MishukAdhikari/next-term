@@ -11,7 +11,7 @@ Find in Files searches the whole project as you type and lists the matches by fi
 
 Press <kbd>⇧⌘F</kbd> (**Edit › Find › Find in Files…**).
 
-- **It starts from your selection**, or the word at the caret, in the editor; or from the text selected in the terminal.
+- **It starts from your selection**, or the word at the caret, in the editor; or from the text selected in the terminal. Double-click a function or class name and press <kbd>⇧⌘F</kbd> to see everywhere it is used: the lightweight way to find references, with no indexing.
 - **Results update as you type**, grouped by file, with the line number and the line itself, the match highlighted.
 - **Click a result** to open the file at that line.
 - **Very large result sets** stop at 20,000 matches; narrow the search with a file mask.
