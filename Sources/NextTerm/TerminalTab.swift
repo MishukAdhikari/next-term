@@ -185,7 +185,7 @@ final class NextTermView: LocalProcessTerminalView {
         guard let controller = window?.windowController as? TerminalWindowController,
               let tab = controller.tabs.first(where: { $0.view === self }) else { return super.menu(for: event) }
         var link: String?
-        if event.type == .rightMouseDown {
+        if event.type == .rightMouseDown || event.type == .leftMouseDown { // a right-click, or a Control-click
             let point = convert(event.locationInWindow, from: nil)
             lastClickPoint = point // the row a traceback's line number is read from
             link = self.link(at: point)
