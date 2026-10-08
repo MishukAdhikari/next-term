@@ -47,7 +47,7 @@ Each agent keeps its sessions in its own files, and Next Term reads them where t
 | Cursor Agent | `~/.cursor/chats` |
 | Copilot CLI | `~/.copilot/session-state` |
 
-It reads only what the lists show (titles, dates, branches and models), from the first and last 64 KB of a long conversation or a row of a database, never a whole conversation. Gemini CLI sessions saved before its version 0.39, one JSON file each, are not listed for that reason. It removes anything that looks like a secret from titles, writes nothing, and sends nothing anywhere. Sessions an agent ran for itself are left out: sub-agents’, `claude -p` and `codex exec` runs, archived ones, and ones where nothing was asked yet. Claude Code and Gemini CLI delete conversations after 30 days unless you change their `cleanupPeriodDays` and `general.sessionRetention` settings.
+It reads only what the lists show (titles, dates, branches and models), from the first and last 64 KB of a long conversation or a row of a database, never a whole conversation. Gemini CLI sessions saved before its version 0.39, one JSON file each, are not listed for that reason. It removes anything that looks like a secret from titles, writes nothing, and sends nothing anywhere. Some sessions are left out: sub-agents’, `claude -p` and `codex exec` runs, archived ones, and ones where nothing was asked yet. Claude Code and Gemini CLI delete conversations after 30 days unless you change their `cleanupPeriodDays` and `general.sessionRetention` settings.
 
 ### Where a project opens
 
