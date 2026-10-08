@@ -392,11 +392,14 @@ public enum AgentSessions {
         #"(?i)(password|passwd|token|secret|api[_-]?key)\s*[=:]\s*\S+"#, #"\b[A-Fa-f0-9]{32,}\b"#, #"\b[A-Za-z0-9+/]{40,}={0,2}"#,
     ]
 
-    /// Credentials with a known shape. MCP output redaction (MCPRedaction) hides these too.
+    /// Credentials with a known shape. MCP output redaction (MCPRedaction) hides these too. `sk-` and
+    /// `eyJ` only where a run starts: `task-1234-fix-login` holds no key, and a run of `eyJeyJ…` is read
+    /// once rather than once for each.
     static let tokenPatterns = [
-        #"sk-ant-[A-Za-z0-9_\-]{8,}"#, #"sk-[A-Za-z0-9_\-]{16,}"#, #"(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}"#,
+        #"(?<![A-Za-z0-9_\-])sk-ant-[A-Za-z0-9_\-]{8,}"#, #"(?<![A-Za-z0-9_\-])sk-[A-Za-z0-9_\-]{16,}"#,
+        #"(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}"#,
         #"github_pat_[A-Za-z0-9_]{20,}"#, #"xox[abpr]-[A-Za-z0-9\-]{10,}"#, #"AKIA[0-9A-Z]{16}"#, #"AIza[0-9A-Za-z_\-]{30,}"#,
-        #"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}"#, #"-----BEGIN [A-Z ]*PRIVATE KEY-----"#,
+        #"(?<![A-Za-z0-9_\-])eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}"#, #"-----BEGIN [A-Z ]*PRIVATE KEY-----"#,
         // Keys RAG and agent projects carry: LangSmith, Hugging Face, Groq, Tavily, Replicate, xAI, Pinecone.
         #"lsv2_(pt|sk)_[A-Za-z0-9_]{16,}"#, #"hf_[A-Za-z0-9]{30,}"#, #"gsk_[A-Za-z0-9]{20,}"#, #"tvly-[A-Za-z0-9_\-]{16,}"#,
         #"r8_[A-Za-z0-9]{20,}"#, #"xai-[A-Za-z0-9]{20,}"#, #"pcsk_[A-Za-z0-9_]{20,}"#,

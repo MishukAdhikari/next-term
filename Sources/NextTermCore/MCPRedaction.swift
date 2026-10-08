@@ -14,19 +14,26 @@ public enum MCPRedaction {
         pattern: #"-----BEGIN [A-Z0-9 ]*PRIVATE KEY( BLOCK)?-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY( BLOCK)?-----|\z)"#)
 
     /// "https://user:password@host": the password.
-    static let urlPassword = try! NSRegularExpression(pattern: #"\b([a-z][a-z0-9+.\-]*://[^\s:/@]+:)([^\s@/]+)(@)"#, options: [.caseInsensitive])
+    static let urlPassword = try! NSRegularExpression(
+        pattern: #"(?<![a-z0-9+.\-])([a-z][a-z0-9+.\-]*+://[^\s:/@]++:)([^\s@/]++)(@)"#, options: [.caseInsensitive])
 
-    static let secretName = #"[A-Za-z0-9_.\-]*(?:password|passwd|passphrase|secret|token|api[_\-]?key|access[_\-]?key|private[_\-]?key|credential)[A-Za-z0-9_.\-]*"#
+    /// A name with one of these in it is a secret's: `DB_PASSWORD`, `client_secret`, `apiKey`.
+    static let secretWord = try! NSRegularExpression(
+        pattern: #"password|passwd|passphrase|secret|token|api[_\-]?key|access[_\-]?key|private[_\-]?key|credential"#,
+        options: [.caseInsensitive])
+
+    /// A name (the first group), read whole from where its run starts and at most 256 long, then checked
+    /// for a secret word: a long run of names is read once, not again from each place a name could start.
+    static let assignedName = #"(?<![A-Za-z0-9_.\-])([A-Za-z0-9_.\-]{1,256}+)"#
 
     /// `api_key = "…"`, `"password": "…"`, `'token' => '…'`: the quoted value.
     static let quotedValue = try! NSRegularExpression(
-        pattern: #"\b"# + secretName + #"["']?\s*(?:=>|:=|[:=])\s*(?:"([^"\n]{4,})"|'([^'\n]{4,})'|`([^`\n]{4,})`)"#,
-        options: [.caseInsensitive])
+        pattern: assignedName + #"["']?\s*+(?:=>|:=|[:=])\s*+(?:"([^"\n]{4,}+)"|'([^'\n]{4,}+)'|`([^`\n]{4,}+)`)"#)
 
     /// `API_KEY=…` or `password: …` on a line of its own (env, YAML, INI): the bare value. In a diff the
     /// line starts with its + or -.
     static let bareValue = try! NSRegularExpression(
-        pattern: #"^[+\-]?\s*(?:export\s+)?"# + secretName + #"\s*[:=]\s*([^\s"'`#]{6,})\s*$"#,
+        pattern: #"^[+\-]?[ \t]*+(?:export\s++)?+"# + assignedName + #"\s*+[:=]\s*+([^\s"'`#]{6,}+)\s*$"#,
         options: [.caseInsensitive, .anchorsMatchLines])
 
     /// A run long enough to be a key; masked only if it looks random (see `looksRandom`).
@@ -34,31 +41,35 @@ public enum MCPRedaction {
 
     /// The text with credentials masked, and how many were.
     public static func redact(_ text: String) -> (text: String, count: Int) {
-        redact(text, maskingRun: { (run: String) -> String? in looksRandom(run) ? mask : nil })
+        let redacted = redact(text, maskingRun: { (run: String) -> String? in looksRandom(run) ? mask : nil })
+        return (redacted.text, redacted.count)
     }
 
-    /// As `redact(_:)`, with `maskingRun` deciding what a long run becomes (nil keeps it). Command lines
-    /// pass one that spares paths (CommandSecrets).
-    static func redact(_ text: String, maskingRun: (String) -> String?) -> (text: String, count: Int) {
+    /// As `redact(_:)`, with `maskingRun` deciding what a long run becomes (nil keeps it), and whether
+    /// every pattern read the whole text (see `replace`). Command lines pass one that spares paths
+    /// (CommandSecrets).
+    static func redact(_ text: String, maskingRun: (String) -> String?) -> (text: String, count: Int, complete: Bool) {
         var result = text
         var count = 0
+        var complete = true
         // Line by line inside a key block, so line numbers around it stay right.
-        count += replace(privateKey, in: &result) { match, ns in
+        count += replace(privateKey, in: &result, complete: &complete) { match, ns in
             let block = ns.substring(with: match.range)
             return block.split(separator: "\n", omittingEmptySubsequences: false).map { line in
                 line.hasPrefix("-----") ? String(line) : mask
             }.joined(separator: "\n")
         }
         for token in tokens {
-            count += replace(token, in: &result) { _, _ in mask }
+            count += replace(token, in: &result, complete: &complete) { _, _ in mask }
         }
-        count += replace(urlPassword, in: &result) { match, ns in
+        count += replace(urlPassword, in: &result, complete: &complete) { match, ns in
             ns.substring(with: match.range(at: 1)) + mask + "@"
         }
         for expression in [quotedValue, bareValue] {
-            count += replace(expression, in: &result) { match, ns in
+            count += replace(expression, in: &result, complete: &complete) { match, ns in
+                guard isSecretName(ns.substring(with: match.range(at: 1))) else { return nil }
                 let whole = ns.substring(with: match.range)
-                for group in 1..<match.numberOfRanges where match.range(at: group).location != NSNotFound {
+                for group in 2..<match.numberOfRanges where match.range(at: group).location != NSNotFound {
                     let value = ns.substring(with: match.range(at: group))
                     guard isValue(value) else { return nil }
                     let offset = match.range(at: group).location - match.range.location
@@ -67,16 +78,20 @@ public enum MCPRedaction {
                 return nil
             }
         }
-        count += replace(longRun, in: &result) { match, ns in
+        count += replace(longRun, in: &result, complete: &complete) { match, ns in
             maskingRun(ns.substring(with: match.range))
         }
-        return (result, count)
+        return (result, count, complete)
+    }
+
+    static func isSecretName(_ name: String) -> Bool {
+        secretWord.firstMatch(in: name, range: NSRange(location: 0, length: (name as NSString).length)) != nil
     }
 
     /// A value worth hiding: not a placeholder (`${TOKEN}`, `<your key>`, `xxxx`), not code
     /// (`getToken()`, `config.secret`), and not a short plain word (`"bearer"`, `String`).
     static func isValue(_ value: String) -> Bool {
-        if value == mask || value.contains(mask) { return false }
+        if value == mask { return false }
         if let first = value.first, "$<{%[(&*".contains(first) { return false }
         if value.contains("(") || value.range(of: #"^[A-Za-z_]+\.[A-Za-z_.]+$"#, options: .regularExpression) != nil { return false }
         if Set(value.lowercased()).isSubset(of: ["x", "*", ".", "-", "_"]) { return false }
@@ -99,11 +114,20 @@ public enum MCPRedaction {
         return upper && lower && digits >= 3
     }
 
-    /// Replaces each match with what `body` gives (nil keeps it). Returns how many it replaced.
-    static func replace(_ expression: NSRegularExpression, in text: inout String,
+    /// Replaces each match with what `body` gives (nil keeps it). Returns how many it replaced. ICU can
+    /// give up partway, as on a run of a few hundred thousand characters, and the matches after that
+    /// point are then missing: `complete` turns false.
+    static func replace(_ expression: NSRegularExpression, in text: inout String, complete: inout Bool,
                         _ body: (NSTextCheckingResult, NSString) -> String?) -> Int {
         let ns = text as NSString
-        let matches = expression.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        var matches: [NSTextCheckingResult] = []
+        var gaveUp = false
+        expression.enumerateMatches(in: text, options: [.reportCompletion], range: NSRange(location: 0, length: ns.length)) {
+            (match: NSTextCheckingResult?, flags: NSRegularExpression.MatchingFlags, _: UnsafeMutablePointer<ObjCBool>) in
+            if let match { matches.append(match) }
+            if flags.contains(.internalError) { gaveUp = true }
+        }
+        if gaveUp { complete = false }
         guard !matches.isEmpty else { return 0 }
         let output = NSMutableString(string: ns)
         var count = 0
