@@ -1,9 +1,9 @@
 ---
 title: Diffs and Git Diff
-description: "See everything a branch changed in the Git Diff tab (⌃⌘G), a file’s changes side by side or unified with ⌥⌘G, and stage, unstage or revert one hunk at a time, without overwriting an agent’s concurrent edit."
+description: "The Git Diff tab (⌃⌘G) shows all a branch changed, ⌥⌘G one file, side by side or unified. Stage, unstage or revert a hunk, never over an agent’s edit."
 head:
   - tag: title
-    content: Git diffs side by side or unified, with hunk staging — Next Term
+    content: Git diffs side by side or unified, hunk by hunk — Next Term
 ---
 
 An agent just touched twelve files. Before you commit, you want to see each change the way a pull request shows it, keep the good parts and throw out the rest. The **Git Diff** tab does that next to the terminal where the agent is still running: the changed files on the left, their diff on the right.
