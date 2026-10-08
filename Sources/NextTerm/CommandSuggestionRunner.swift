@@ -140,11 +140,9 @@ final class CommandSuggestionRunner {
         let deadline = DispatchWorkItem { [weak self] in self?.stop(because: "timed out") }
         DispatchQueue.global().asyncAfter(deadline: .now() + Self.limit, execute: deadline)
 
-        // The prompt, then the end of input (an agent that quits first is no SIGPIPE for Next Term); the answer and
-        // the errors, read side by side.
-        _ = fcntl(input[1], F_SETNOSIGPIPE, 1)
-        Self.writeAll(input[1], Array(prompt.utf8))
-        close(input[1])
+        // The answer and the errors, read side by side from the start (an agent that writes before it reads its
+        // input never waits on a full pipe); then the prompt and the end of input (an agent that quits first is no
+        // SIGPIPE for Next Term).
         var answer = Data(), complaint = Data()
         let reading = DispatchGroup()
         reading.enter()
@@ -157,6 +155,9 @@ final class CommandSuggestionRunner {
             complaint = Self.readAll(errors[0], limit: 16_384)
             reading.leave()
         }
+        _ = fcntl(input[1], F_SETNOSIGPIPE, 1)
+        Self.writeAll(input[1], Array(prompt.utf8))
+        close(input[1])
         // Its exit, seen before it is reaped: its group goes then, while its id can't belong to anything else.
         var info = siginfo_t()
         _ = waitid(P_PID, id_t(child), &info, WEXITED | WNOWAIT)
