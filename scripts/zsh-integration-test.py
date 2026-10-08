@@ -775,6 +775,33 @@ after = tree_hash(quietdot)
 changed = [k for k in set(before) | set(after) if before.get(k) != after.get(k) and not k.startswith(".zsh_history")]
 check(not changed, "[quiet] no file in the user's ZDOTDIR changed (AE4)", str(changed))
 
+# 7d. fzf 0.30 and older list processes for `kill ` with no `**`: there the hook steps back, as for `**`, and fzf's
+# widget runs. A stand-in with that rule (fzf's own in the plugin matrix, when NT_PLUGIN_DIR has it).
+fzfdot = tempfile.mkdtemp()
+open(os.path.join(fzfdot, ".zshrc"), "w").write(
+    "PS1='$ '\nfzf-completion() {\n  local -a w=(${(z)LBUFFER})\n  local cmd=$w[1]\n"
+    "  if [ \"$cmd\" = kill -a ${LBUFFER[-1]} = ' ' ]; then print -n FZF-KILL; fi\n  zle expand-or-complete\n}\n"
+    "zle -N fzf-completion\nbindkey '^I' fzf-completion\n")
+sh = Shell("fzf's kill", fzfdot, cwd=tree)
+def tab_marks(shell, line, ident):
+    mark = len(shell.buf)
+    shell.send(line, 0.3)
+    tab_key(shell, ident, 0.6)
+    kinds = [k for _, k, _ in shell.marks(mark)]
+    shell.send(frame("a", ident, ["n"]), 0.3)
+    screen = shell.screen(mark)
+    shell.send("\x03", 0.4)
+    return kinds, screen
+kinds, screen = tab_marks(sh, "kill ", 61)
+check("done" in kinds and "tab" not in kinds and "FZF-KILL" in screen, "[fzf] `kill ` is fzf's where its widget lists processes with no `**`",
+      str(kinds))
+check("tab" in tab_marks(sh, "sudo kill ", 62)[0] and "tab" in tab_marks(sh, "ls ", 63)[0], "[fzf] `sudo kill ` and `ls ` are not")
+# fzf 0.31 and later give `kill ` zsh's own Tab: Next Term's list answers it.
+sh.send("fzf-completion() { zle expand-or-complete }\r", 0.5)
+check("tab" in tab_marks(sh, "kill ", 64)[0], "[fzf] nor `kill ` where its widget has no such rule")
+check(not sh.errors(), "[fzf] no errors from the hook")
+sh.close()
+
 # 8. The user's own config, driven: whichever path it is on, Tab never leaves junk.
 sh = Shell("user config, driven", os.environ.get("ZDOTDIR", ""), cwd=tree)
 a = arms(sh)
@@ -839,6 +866,21 @@ if plugins:
                 skip(f"plugin matrix: {name} is not in NT_PLUGIN_DIR")
         open(os.path.join(d, ".zshrc"), "w").write("\n".join(lines) + "\n" + extra)
         return d
+    # fzf's own completion.zsh: `kill ` is fzf's only where its version lists processes with no `**` (0.30 and older).
+    fzf_completion = os.path.join(plugins, "fzf", "shell", "completion.zsh")
+    if os.path.exists(fzf_completion):
+        d = tempfile.mkdtemp()
+        open(os.path.join(d, ".zshrc"), "w").write(f"PS1='$ '\nautoload -Uz compinit && compinit -u -D\nsource {fzf_completion}\n")
+        sh = Shell("plugin fzf", d, cwd=tree, settle=5)
+        old_rule = "Kill completion" in open(fzf_completion).read()
+        kinds, _ = tab_marks(sh, "kill ", 71)
+        check(("comp" not in kinds and "done" in kinds) == old_rule, f"[plugin fzf] `kill ` is fzf's only with its old rule ({old_rule})", str(kinds))
+        kinds, _ = tab_marks(sh, "vim **", 72)
+        check("done" in kinds and "comp" not in kinds, "[plugin fzf] `vim **` is fzf's", str(kinds))
+        check(not sh.errors(), "[plugin fzf] no errors from the completion hook")
+        sh.close()
+    else:
+        skip("plugin matrix: fzf (shell/completion.zsh) is not in NT_PLUGIN_DIR")
     for name in ("zsh-autocomplete", "fzf-tab", "zsh-autosuggestions", "zsh-syntax-highlighting", "zsh-vi-mode"):
         if not os.path.isdir(os.path.join(plugins, name)):
             continue
