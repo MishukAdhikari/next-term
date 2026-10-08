@@ -234,7 +234,8 @@ extension SelfTest {
         let tab = c.addTab(directory: stale)
         _ = await wait(20) { tab.status.integrated }
         tab.view.send(txt: "PATH=\(bin.path):$PATH claude\r")
-        _ = await wait(5) { tab.status.running && tab.status.kind == .agent }
+        // The popup finds the agent tabs as it lists the worktrees: the agent first.
+        check(await wait(10) { tab.status.running && tab.status.kind == .agent }, "a stand-in agent runs in a worktree's tab", tab.status.program)
 
         c.showBranches(at: repo, query: "")
         let staleRow = { popup.rowTitles.first { $0.hasPrefix("worktree work-stale") } ?? "" }
