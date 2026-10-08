@@ -63,6 +63,19 @@ import Testing
         #expect(SaveCleanUp.collapsed(few, in: "a \nb ") == few)
     }
 
+    @Test func aLongFileIsCleanedInOnePass() {
+        // 100,000 lines with spaces at the end: built one replacement after another, not by moving the rest of the
+        // file along for each line, which took seconds.
+        let lines = (1...100_000).map { "line \($0)" }
+        let text = lines.map { $0 + "  " }.joined(separator: "\n") as NSString
+        let started = Date()
+        let replacements = SaveCleanUp.replacements(in: text, trimTrailingWhitespace: true, insertFinalNewline: true)
+        let one = SaveCleanUp.collapsed(replacements, in: text)
+        #expect(Date().timeIntervalSince(started) < 0.5)
+        #expect(one.count == 1)
+        #expect(SaveCleanUp.applying(one, to: text) == lines.joined(separator: "\n") + "\n")
+    }
+
     @Test func markdownAndPatchesKeepTheirSpaces() {
         for name in ["README.md", "notes.markdown", "page.MDX", "fix.diff", "0001-fix.patch"] { #expect(!SaveCleanUp.trims(fileNamed: name)) }
         for name in ["main.swift", "Makefile", ".env", "md"] { #expect(SaveCleanUp.trims(fileNamed: name)) }

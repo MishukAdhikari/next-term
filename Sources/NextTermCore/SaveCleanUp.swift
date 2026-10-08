@@ -61,14 +61,25 @@ public enum SaveCleanUp {
     public static func collapsed(_ replacements: [Replacement], in text: NSString, beyond limit: Int = 100) -> [Replacement] {
         guard replacements.count > limit, let first = replacements.first, let last = replacements.last else { return replacements }
         let span = NSRange(location: first.range.location, length: NSMaxRange(last.range) - first.range.location)
-        let shifted = replacements.map { Replacement(range: NSRange(location: $0.range.location - span.location, length: $0.range.length), text: $0.text) }
-        return [Replacement(range: span, text: applying(shifted, to: text.substring(with: span) as NSString))]
+        return [Replacement(range: span, text: built(replacements, from: text, in: span))]
     }
 
     /// The text with the replacements made (for tests, and for a document no editor shows).
     public static func applying(_ replacements: [Replacement], to text: NSString) -> String {
-        let result = NSMutableString(string: text)
-        for replacement in replacements.reversed() { result.replaceCharacters(in: replacement.range, with: replacement.text) }
+        built(replacements, from: text, in: NSRange(location: 0, length: text.length))
+    }
+
+    /// The part of the text in `range` with the replacements in it made, in one pass from the start: replacing one
+    /// at a time would move the rest of a long file along for every line.
+    static func built(_ replacements: [Replacement], from text: NSString, in range: NSRange) -> String {
+        let result = NSMutableString(capacity: range.length)
+        var from = range.location
+        for replacement in replacements {
+            result.append(text.substring(with: NSRange(location: from, length: replacement.range.location - from)))
+            result.append(replacement.text)
+            from = NSMaxRange(replacement.range)
+        }
+        result.append(text.substring(with: NSRange(location: from, length: NSMaxRange(range) - from)))
         return result as String
     }
 
