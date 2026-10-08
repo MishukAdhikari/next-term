@@ -767,6 +767,15 @@ final class BranchCell: NSTableCellView {
         didSet { if let shown, backgroundStyle != oldValue { show(shown.0, model: shown.1) } }
     }
 
+    /// For the self-test: the name as drawn, with its paragraph style.
+    var titleText: NSAttributedString { title.attributedStringValue }
+
+    /// Attributed text keeps the label's truncation only with a paragraph style of its own (Theme.swift):
+    /// names are cut in the middle, so both ends show; notes and headings at the end.
+    private func setTitle(_ text: NSAttributedString, _ mode: NSLineBreakMode = .byTruncatingMiddle) {
+        title.attributedStringValue = Typography.truncating(text, mode)
+    }
+
     private func symbol(_ name: String, _ color: NSColor = Theme.textDim) {
         icon.image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: 11, weight: .medium))
         icon.contentTintColor = color
@@ -788,12 +797,12 @@ final class BranchCell: NSTableCellView {
         case let .header(text):
             icon.isHidden = true
             leading.constant = 0
-            title.attributedStringValue = NSAttributedString(string: text.uppercased(), attributes: [
+            setTitle(NSAttributedString(string: text.uppercased(), attributes: [
                 .font: NSFont.systemFont(ofSize: 10.5, weight: .semibold), .foregroundColor: Theme.textDim, .kern: 0.6,
-            ])
+            ]), .byTruncatingTail)
         case let .note(text):
             symbol("info.circle")
-            title.attributedStringValue = NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: Theme.textDim])
+            setTitle(NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: Theme.textDim]), .byTruncatingTail)
         case let .action(action, hint, enabled):
             symbol(action.symbol, enabled ? Theme.accent : Theme.textDim)
             title.stringValue = action.title
@@ -803,7 +812,7 @@ final class BranchCell: NSTableCellView {
             let open = (superview?.superview as? NSTableView).flatMap { ($0.delegate as? BranchPopupController)?.isOpen(id) } ?? false
             symbol(open ? "chevron.down" : "chevron.right")
             leading.constant = 14 + CGFloat(depth) * 16
-            title.attributedStringValue = NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium), .foregroundColor: Theme.text])
+            setTitle(NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium), .foregroundColor: Theme.text]))
             detail.stringValue = "\(count)"
         case let .branch(ref, label, depth, positions):
             leading.constant = 14 + CGFloat(depth) * 16
@@ -819,7 +828,7 @@ final class BranchCell: NSTableCellView {
                 text.addAttributes([.font: NSFont.systemFont(ofSize: 13, weight: .bold), .foregroundColor: chosen ? NSColor.white : NSColor(hex: 0x6EA4F7)],
                                    range: NSRange(location: start, length: length))
             }
-            title.attributedStringValue = text
+            setTitle(text)
             var parts: [String] = []
             if ref.upstreamGone { parts.append("gone") }
             if ref.behind > 0 { parts.append("↓\(ref.behind)") }
@@ -843,10 +852,10 @@ final class BranchCell: NSTableCellView {
             tipText = RecentProjects.abbreviate(w.path) + (w.lockReason.map { "\nLocked" + ($0.isEmpty ? "" : ": \($0)") } ?? "")
         case let .create(name):
             symbol("plus", Theme.accent)
-            title.attributedStringValue = NSAttributedString(string: "New Branch “\(name)”", attributes: [.font: font, .foregroundColor: Theme.text])
+            setTitle(NSAttributedString(string: "New Branch “\(name)”", attributes: [.font: font, .foregroundColor: Theme.text]))
         case let .revision(rev):
             symbol("tag")
-            title.attributedStringValue = NSAttributedString(string: "Checkout “\(rev)” (tag or revision)", attributes: [.font: font, .foregroundColor: Theme.text])
+            setTitle(NSAttributedString(string: "Checkout “\(rev)” (tag or revision)", attributes: [.font: font, .foregroundColor: Theme.text]))
         }
         setAccessibilityLabel([title.stringValue, detail.stringValue].filter { !$0.isEmpty }.joined(separator: ", "))
     }
