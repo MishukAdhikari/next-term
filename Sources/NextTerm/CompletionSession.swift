@@ -58,8 +58,6 @@ final class CompletionSession {
     private(set) var lastTab = TabOutcome.none
     /// Writes to the shell so far: a question answered after one came lets its Tab go.
     private(set) var writes = 0
-    /// Config keys sent since the shell last said where zsh-autocomplete stands (a few at most).
-    private var configs = 0
 
     /// A server tab with no hook: the word its Tab is for, read off the screen, and the Tab's deadline.
     private var screenWord: ScreenWord?
@@ -207,7 +205,7 @@ final class CompletionSession {
         heldPaste = inPaste
         list = nil
         assembler.reset()
-        write(CompletionProtocol.tabKey(id: id, wait: serverWait))
+        write(CompletionProtocol.tabKey(id: id, wait: serverWait, quiet: quietWanted))
         let hold = DispatchWorkItem { [weak self] in self?.holdExpired(id) }
         holdTimer?.cancel()
         holdTimer = hold
@@ -309,7 +307,7 @@ final class CompletionSession {
         switch message {
         case .arm(let arm):
             if state.arm?.sameLine(as: arm) == true, state.phase != .disarmed {
-                // Only zsh-autocomplete's state changed (a config key): the line and anything in flight stay.
+                // Only zsh-autocomplete's state changed (a config key, or a Tab key's q): the line and anything in flight stay.
                 state.update(arm)
             } else {
                 // A new line or keymap: a list still open on the shell's side is over, and a Tab that waits with it.
@@ -318,7 +316,6 @@ final class CompletionSession {
                 state.armed(arm)
                 listClosed()
             }
-            syncQuiet()
         case .tab(let report):
             guard state.pendingID == report.id, state.path == .engine else { return }
             reports += 1
@@ -396,17 +393,19 @@ final class CompletionSession {
         return arm.completionSystem ? "Tab completion: Next Term’s list, with zsh’s completions" : "Tab completion: Next Term’s list of folders and files"
     }
 
-    /// zsh-autocomplete's list as you type goes off where Next Term's list answers Tab, and back on where it
-    /// doesn't: a config key to a shell at its prompt whose last `arm` says otherwise.
-    func syncQuiet() {
-        guard let arm = state.arm, arm.plugins.contains("autocomplete"), state.isArmed, tab?.shellAlone == true else { return }
+    /// zsh-autocomplete's list as you type: off where Next Term's list answers Tab, on where it doesn't. nil when the
+    /// shell's last `arm` says it is so already, or it isn't loaded.
+    private var quietWanted: Bool? {
+        guard let arm = state.arm, arm.plugins.contains("autocomplete") else { return nil }
         let want = CompletionPreferences.quietsAutocomplete
-        guard want != arm.quieted else {
-            configs = 0
-            return
-        }
-        guard configs < 3 else { return }
-        configs += 1
+        return want == arm.quieted ? nil : want
+    }
+
+    /// The choice changed (Settings, the question): a config key to a shell at its prompt whose last `arm` says
+    /// otherwise. Never at a new prompt by itself, where a command typed ahead of it would read the key: a tab starts
+    /// as the choice stands (TerminalTab.environment), and each Tab key says it again where it differs.
+    func syncQuiet() {
+        guard state.isArmed, tab?.shellAlone == true, let want = quietWanted else { return }
         write(CompletionProtocol.frame(.config, id: 0, fields: [want ? "q1" : "q0"]))
     }
 
@@ -414,7 +413,6 @@ final class CompletionSession {
     static func syncAll() {
         for controller in AppDelegate.shared?.controllers ?? [] {
             for tab in controller.tabs {
-                tab.completion.configs = 0
                 tab.completion.syncQuiet()
                 tab.delegate?.tabDidChange(tab)
             }

@@ -1053,7 +1053,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             env["NEXTTERM_USER_ZDOTDIR"] = Self.userZDOTDIR(env)
             env["ZDOTDIR"] = zdotdir.path
             env[ShellIntegration.nonceVariable] = nonce // the shell removes it from its environment at once
-            if CompletionPreferences.isOn { env[ShellIntegration.completionVariable] = "1" } // Tab completion's hook loads
+            // Tab completion's hook loads; `q`: with zsh-autocomplete's list as you type off from the first prompt.
+            if CompletionPreferences.isOn { env[ShellIntegration.completionVariable] = CompletionPreferences.quietsAutocomplete ? "q" : "1" }
         }
         environmentPath = env["PATH"] ?? ""
         claudePort = env["CLAUDE_CODE_SSE_PORT"]

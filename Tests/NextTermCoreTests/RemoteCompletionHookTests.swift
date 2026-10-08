@@ -123,6 +123,9 @@ import Testing
         #expect(String(decoding: wait, as: UTF8.self).hasSuffix("t000007000004w150"))
         #expect(String(decoding: CompletionProtocol.tabKey(id: 8, wait: 2), as: UTF8.self).hasSuffix("w600"))
         #expect(CompletionProtocol.tabKey(id: 9) == CompletionProtocol.frame(.tab, id: 9))
+        // zsh-autocomplete's list as you type rides on the Tab too, after the wait (where an older hook looks for it).
+        #expect(String(decoding: CompletionProtocol.tabKey(id: 10, wait: 0.2, quiet: true), as: UTF8.self).hasSuffix("t000010000007w200;q1"))
+        #expect(CompletionProtocol.tabKey(id: 11, quiet: false) == CompletionProtocol.frame(.tab, id: 11, fields: ["q0"]))
         #expect(ZshCompletionScript.script.contains("w<150-600>") && ZshCompletionScript.script.contains("Ptmux;"))
         #expect(RemoteCompletionHook.parse("noise\n\(RemoteShell.marker)\nshell\tbash\n") == .otherShell("bash"))
         #expect(RemoteCompletionHook.parse("no marker") == nil)

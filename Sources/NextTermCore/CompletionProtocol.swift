@@ -320,7 +320,8 @@ public enum CompletionProtocol {
     // MARK: app to shell
 
     public enum Key: UInt8, Sendable {
-        /// A real Tab. On a server, with how long its hook waits for an answer (w<ms>, 150 to 600).
+        /// A real Tab. On a server, with how long its hook waits for an answer (w<ms>, 150 to 600); and where
+        /// zsh-autocomplete's list as you type isn't as the user chose, q1 or q0.
         case tab = 0x74 // t
         /// The answer to `tab`: native, open, or insert with the new word (Next Term's own engine only).
         case answer = 0x61 // a
@@ -328,7 +329,8 @@ public enum CompletionProtocol {
         case take = 0x6B // k
         /// zsh's own list can't be shown: zsh runs its own Tab.
         case native = 0x6E // n
-        /// A plugin choice changed: zsh-autocomplete's list off (q1) or on (q0) in this shell.
+        /// A plugin choice changed (Settings, the question): zsh-autocomplete's list off (q1) or on (q0) in this
+        /// shell. Never sent at a prompt by itself.
         case config = 0x63 // c
     }
 
@@ -384,12 +386,18 @@ public enum CompletionProtocol {
     /// Suggest a Command's answer: the whole line, replaced (one line or several). It never runs.
     public static func takeLine(_ line: String) -> [UInt8] { frame(.take, id: 0, fields: ["l", line]) }
     /// A real Tab, under `id`. `wait` (a server's): how long its hook waits for the answer to its `tab` report,
-    /// 150 to 600 ms. It rides on the Tab, never as a key of its own sent at each prompt: a program started by a
-    /// Return typed ahead of that key would read it.
-    public static func tabKey(id: Int, wait: Double? = nil) -> [UInt8] {
-        guard let wait else { return frame(.tab, id: id) }
-        let milliseconds = min(600, max(150, Int((wait * 1000).rounded())))
-        return frame(.tab, id: id, fields: ["w\(milliseconds)"])
+    /// 150 to 600 ms. `quiet`: zsh-autocomplete's list as you type off (q1) or on (q0), where the shell's last `arm`
+    /// says otherwise (a server's hook starts with it on). Both ride on the Tab, never as a key of their own sent at
+    /// each prompt: a program started by a Return typed ahead of that key would read it. The wait comes first, where
+    /// an older hook looks for it.
+    public static func tabKey(id: Int, wait: Double? = nil, quiet: Bool? = nil) -> [UInt8] {
+        var fields: [String] = []
+        if let wait {
+            let milliseconds = min(600, max(150, Int((wait * 1000).rounded())))
+            fields.append("w\(milliseconds)")
+        }
+        if let quiet { fields.append(quiet ? "q1" : "q0") }
+        return frame(.tab, id: id, fields: fields)
     }
 }
 
