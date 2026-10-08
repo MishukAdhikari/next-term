@@ -463,7 +463,7 @@ final class UnifiedDiffPart: NSObject, NSTextViewDelegate {
     /// The diff the rows were made from: a right-click's hunk action acts on it.
     private var shownFile: FileDiff?
     /// The rows are an older diff's, shown until the whole file of the new one is read: their changes
-    /// aren't the diff's own, so selecting them picks none.
+    /// aren't the diff's own, so selecting, clicking or scrolling them picks none.
     private var stale = false
     /// The rows are being laid out: the selection that moves with them picks nothing.
     private var rendering = false
@@ -504,7 +504,7 @@ final class UnifiedDiffPart: NSObject, NSTextViewDelegate {
         ])
         column.onFoldClick = { [weak self] fold in self?.open(fold) }
         column.onRowClick = { [weak self] row in
-            guard let self, let hunk = self.rows[safe: row]?.hunk else { return }
+            guard let self, !self.stale, let hunk = self.rows[safe: row]?.hunk else { return }
             self.pane?.pick(hunk: hunk)
         }
         column.onScroll = { [weak self] in self?.scrolled() }
@@ -586,7 +586,7 @@ final class UnifiedDiffPart: NSObject, NSTextViewDelegate {
     /// When you scroll, the change at the top of the view becomes the one the buttons act on (unless the
     /// whole diff fits: then only the stepper or a click picks it).
     private func scrolled() {
-        guard !steering, isOn, column.isTallerThanView, let pane else { return }
+        guard !steering, !stale, isOn, column.isTallerThanView, let pane else { return }
         let top = column.topRow
         let starts = column.hunkStarts.sorted { $0.value < $1.value }
         guard let hunk = starts.last(where: { $0.value <= top })?.key ?? starts.first?.key else { return }
@@ -610,7 +610,7 @@ final class UnifiedDiffPart: NSObject, NSTextViewDelegate {
                 }
                 menu.addBlock(title) { [weak self, weak pane] in
                     guard let pane else { return }
-                    if self?.stale == false { pane.pick(hunk: hunk) }
+                    if let self, !self.stale, self.shownFile == shown { pane.pick(hunk: hunk) } // the rows are still these
                     if action == .revert { pane.confirmRevert(hunk: hunk, of: shown) } else { pane.perform(action, hunk: hunk, of: shown) }
                 }
             }
