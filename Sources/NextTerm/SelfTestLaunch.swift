@@ -37,10 +37,10 @@ extension SelfTest {
         }
     }
 
-    /// The General tab: its controls show the defaults, each one saves its choice as it changes, and a new tab shows
-    /// what was saved.
+    /// The General tab: its controls show the defaults, each one saves its choice as it changes, where the launch and
+    /// the quit read it, and a new tab shows what was saved.
     private static func generalSettingsChecks() {
-        let defaults = UserDefaults.standard
+        let defaults = AppDelegate.shared.launchDefaults
         let restore = defaultLaunchSettings(defaults)
         defer { restore() }
         let view = GeneralSettingsView(frame: .zero)
@@ -55,6 +55,10 @@ extension SelfTest {
         check(group.isAccessibilityElement() && role == .radioGroup && group.accessibilityLabel() == "When Next Term opens",
               "VoiceOver reads the two choices as one radio group, When Next Term opens",
               "\(role?.rawValue ?? "no role"), \(group.accessibilityLabel() ?? "no label")")
+        let help: [String] = (view.opens + [view.askToReopen]).map { $0.accessibilityHelp() ?? "" }
+        let opensHelp = help.dropLast().allSatisfy { $0.contains("always opens directly") }
+        check(opensHelp && help.last?.contains("always asked about") == true,
+              "VoiceOver reads each General note as the help of the controls it is about", "\(help)")
 
         view.radio(.lastProjects).performClick(nil)
         view.askToReopen.performClick(nil)

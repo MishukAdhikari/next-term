@@ -10,6 +10,8 @@ final class GeneralSettingsView: NSView {
     /// The radio buttons, which VoiceOver reads as one group.
     let opensGroup = NSStackView()
     let askToReopen = NSButton(checkboxWithTitle: "Ask whether to reopen projects when quitting", target: nil, action: nil)
+    /// Where the choices are kept: the defaults the launch and the quit read them from.
+    private let defaults: UserDefaults = AppDelegate.shared?.launchDefaults ?? .standard
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -28,15 +30,21 @@ final class GeneralSettingsView: NSView {
         askToReopen.target = self
         askToReopen.action = #selector(askToReopenChanged)
 
+        // No wider than the widest control above them, which the column never gets narrower than: a note squeezed in a
+        // narrow window would wrap to a line its height leaves out.
+        let noteWidth: CGFloat = (opens + [askToReopen]).map(\.fittingSize.width).max() ?? 290
         func note(_ text: String) -> NSTextField {
             let note = NSTextField(wrappingLabelWithString: text)
             note.textColor = .secondaryLabelColor
             note.font = .systemFont(ofSize: 11)
-            note.preferredMaxLayoutWidth = 380
+            note.preferredMaxLayoutWidth = noteWidth
             return note
         }
-        let opensNote = note("A folder or file named at launch, from nxtrm or a drop on the Dock icon, always opens directly. With every window closed, a click on the Dock icon reopens only the most recent project.")
+        let opensNote = note("A folder or file named at launch, from nxtrm or a drop on the Dock icon, always opens directly. With every window closed, a click on the Dock icon shows the Welcome window or, with Reopen chosen, opens only the most recent project.")
         let askNote = note("Asks only when project windows are open. Unsaved files and running work are always asked about.")
+        // VoiceOver reads each note with the controls it is about.
+        for radio in opens { radio.setAccessibilityHelp(opensNote.stringValue) }
+        askToReopen.setAccessibilityHelp(askNote.stringValue)
         let column = NSStackView(views: [opensGroup, opensNote, askToReopen, askNote])
         column.orientation = .vertical
         column.alignment = .leading
@@ -44,6 +52,8 @@ final class GeneralSettingsView: NSView {
         column.setCustomSpacing(24, after: opensNote)
         let label = NSTextField(labelWithString: "When Next Term opens:")
         label.alignment = .right
+        // The radio group already has this name: VoiceOver reads it once.
+        label.setAccessibilityElement(false)
         let stack = NSStackView(views: [label, column])
         stack.alignment = .firstBaseline
         stack.spacing = 10
@@ -70,7 +80,7 @@ final class GeneralSettingsView: NSView {
     }
 
     func refresh() {
-        let settings = LaunchSettings(defaults: .standard)
+        let settings = LaunchSettings(defaults: defaults)
         for choice in LaunchOpens.allCases {
             radio(choice).state = choice == settings.opens ? .on : .off
         }
@@ -80,15 +90,15 @@ final class GeneralSettingsView: NSView {
     @objc private func opensChanged(_ sender: NSButton) {
         let choices = LaunchOpens.allCases
         guard choices.indices.contains(sender.tag) else { return }
-        var settings = LaunchSettings(defaults: .standard)
+        var settings = LaunchSettings(defaults: defaults)
         settings.opens = choices[sender.tag]
-        settings.save(to: .standard)
+        settings.save(to: defaults)
         for radio in opens { radio.state = radio === sender ? .on : .off }
     }
 
     @objc private func askToReopenChanged() {
-        var settings = LaunchSettings(defaults: .standard)
+        var settings = LaunchSettings(defaults: defaults)
         settings.askToReopenOnQuit = askToReopen.state == .on
-        settings.save(to: .standard)
+        settings.save(to: defaults)
     }
 }
