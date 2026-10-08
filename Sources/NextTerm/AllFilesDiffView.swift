@@ -68,9 +68,10 @@ final class AllFilesView: NSView {
 
     // MARK: showing
 
-    /// The files in the list's order with their diffs (a large file's left out). What is folded, opened and
-    /// scrolled to stays; a file whose diff is the same keeps its rows as they are, so nothing flashes.
-    func show(files: [ChangedFile], diffs: [String: FileDiff], root: String, message text: String?) {
+    /// The files in the list's order with their diffs (a large file's left out), and the rows of those that
+    /// changed, made off the main thread (`rows(for:known:)`). What is folded, opened and scrolled to stays; a
+    /// file whose diff is the same keeps its rows as they are, so nothing flashes.
+    func show(files: [ChangedFile], diffs: [String: FileDiff], rows made: [String: [UnifiedRow]] = [:], root: String, message text: String?) {
         self.root = root
         let anchor = topEntry()
         let old = Dictionary(entries.map { ($0.file.path, $0) }, uniquingKeysWith: { first, _ in first })
@@ -90,7 +91,7 @@ final class AllFilesView: NSView {
                 if reopen {
                     readFill(entry)
                 } else {
-                    entry.rows = UnifiedRows.rows(for: fresh, expanded: entry.expanded)
+                    entry.rows = Self.waits(fresh, entry) ? [] : made[file.path] ?? UnifiedRows.rows(for: fresh)
                     drop(entry)
                 }
             } else if fresh == nil, !isNew, entry.forced, !entry.reading {
@@ -116,6 +117,24 @@ final class AllFilesView: NSView {
         relayout(keeping: anchor)
         for entry in rereads { read(entry, lines: UnifiedRows.context) }
     }
+
+    /// Each diff's rows, for `show`, off the main thread: of the diffs not shown already (`known`), and not
+    /// of one too long to lay out unasked.
+    nonisolated static func rows(for diffs: [String: FileDiff], known: [String: FileDiff]) -> [String: [UnifiedRow]] {
+        var rows: [String: [UnifiedRow]] = [:]
+        for (path, diff) in diffs where known[path] != diff && !Changes.isLarge(diff) { rows[path] = UnifiedRows.rows(for: diff) }
+        return rows
+    }
+
+    /// The diffs shown, by path: a re-read lays out only the others.
+    var shownDiffs: [String: FileDiff] {
+        var diffs: [String: FileDiff] = [:]
+        for entry in entries { diffs[entry.file.path] = entry.diff }
+        return diffs
+    }
+
+    /// A diff whose lines are too long to lay out until "Show anyway" is clicked.
+    private static func waits(_ diff: FileDiff, _ entry: Entry) -> Bool { !entry.forced && Changes.isLarge(diff) }
 
     /// For the self-test and the list: the files on the page, in order.
     var paths: [String] { entries.map(\.file.path) }
@@ -157,6 +176,7 @@ final class AllFilesView: NSView {
         if entry.failed { return .note("Git could not read this file’s changes.", action: nil) }
         guard let diff = entry.diff else { return .note(Self.largeText(entry.file), action: "Show anyway") }
         if diff.isBinary { return .note("A binary file: its contents can’t be compared line by line.", action: nil) }
+        if Self.waits(diff, entry) { return .note(Self.longText(entry.file, diff), action: "Show anyway") }
         if entry.rows.isEmpty { return .note(Self.emptyText(entry.file, diff), action: nil) }
         if entry.rows.count > Self.maxRows, !entry.forced { return .note(Self.largeText(entry.file), action: "Show anyway") }
         return .rows
@@ -166,6 +186,13 @@ final class AllFilesView: NSView {
         guard let added = file.added else { return "Large diff: not shown." }
         let lines = added + (file.removed ?? 0)
         return "Large diff: \(lines.formatted()) lines changed."
+    }
+
+    /// "Large diff: 2 lines changed, 3.1 MB."
+    private static func longText(_ file: ChangedFile, _ diff: FileDiff) -> String {
+        let size = ByteCountFormatter.string(fromByteCount: Int64(Changes.bytes(of: diff)), countStyle: .file)
+        let lines = (file.added ?? 0) + (file.removed ?? 0)
+        return "Large diff: \(lines.formatted()) \(lines == 1 ? "line" : "lines") changed, \(size)."
     }
 
     private static func emptyText(_ file: ChangedFile, _ diff: FileDiff) -> String {
@@ -209,7 +236,7 @@ final class AllFilesView: NSView {
     private func showAnyway(_ entry: Entry) {
         entry.forced = true
         if entry.diff == nil { return read(entry, lines: UnifiedRows.context) }
-        refresh(entry)
+        if entry.rows.isEmpty { rebuildRows(entry) } else { refresh(entry) }
     }
 
     /// A fold was clicked: its lines show, now if they are known, else once the whole file is read.

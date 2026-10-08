@@ -21,8 +21,11 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
     private(set) var selectedPath: String?
     /// The selected file's diff.
     private(set) var diffPane: DiffPane?
-    /// Every file's diff, while All files is selected.
+    /// Every file's diff on one page: shown while All files is selected, kept (hidden) while a file is, so
+    /// coming back keeps what was folded, opened and scrolled to.
     private(set) var allFiles: AllFilesView?
+    /// The scope and base the page was read for (another one's page is not shown again).
+    private var allFilesKey: String?
     private(set) var isLoading = false
     private(set) var failure: String?
     /// The repository has changes not committed yet (the Uncommitted row shows while it does).
@@ -155,11 +158,14 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
         let token = newest.next()
         let root = self.root, scope = self.scope, chosen = Self.chosenBase(of: root), wantsDiffs = selectedPath == nil
         let known = refsSignature, knownQuery = commitQuery
+        let shown = wantsDiffs ? allFiles?.shownDiffs ?? [:] : [:]
         newest.async(on: Self.queue, for: token) { [weak self] in
             let context = Changes.context(in: root, git: git, chosen: chosen)
             let set = context.flatMap { Changes.files(scope, context: $0, in: root, git: git) }
             var diffs: [String: FileDiff]?
             if wantsDiffs, let context, let set { diffs = Changes.diffs(scope, context: context, set: set, in: root, git: git) }
+            // The page's rows, here rather than on the main thread: of the diffs it doesn't show yet.
+            let rows = diffs.map { AllFilesView.rows(for: $0, known: shown) } ?? [:]
             let signature = CommitLog.refsSignature(in: root, git: git)
             let query = context.flatMap(Self.commitQuery(for:))
             var order: CommitOrder?, page: [Commit]?
@@ -189,7 +195,7 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
                     self.commits = page
                 }
                 // Listed, but git's diff of them could not be read: the page says so rather than staying blank.
-                self.apply(diffs: diffs, unreadable: wantsDiffs && set != nil && diffs == nil)
+                self.apply(diffs: diffs, rows: rows, unreadable: wantsDiffs && set != nil && diffs == nil)
                 // The file selected went (another scope, or it is no longer changed): All files needs its diffs.
                 if !wantsDiffs, set != nil, self.selectedPath == nil { self.reload(quietly: true) }
             }
@@ -236,7 +242,7 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
     }
 
     /// Shows what was read: the list, the scopes, the header, and the right side.
-    private func apply(diffs: [String: FileDiff]? = nil, unreadable: Bool = false) {
+    private func apply(diffs: [String: FileDiff]? = nil, rows: [String: [UnifiedRow]] = [:], unreadable: Bool = false) {
         let tree = ChangeTree.build(changes?.files ?? [])
         list.show(tree: tree, totals: changes?.totals ?? LineStats(), root: root, selected: selectedPath, message: listMessage)
         showScopes()
@@ -245,7 +251,8 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
         if let page = allFiles, selectedPath == nil, diffs != nil || unreadable {
             page.reader = reader()
             let text = listMessage ?? (unreadable ? "Git could not read these changes." : nil)
-            page.show(files: ChangeTree.files(in: tree), diffs: diffs ?? [:], root: root, message: text)
+            page.show(files: ChangeTree.files(in: tree), diffs: diffs ?? [:], rows: rows, root: root, message: text)
+            allFilesKey = changesScope.map { pageKey(for: $0) }
         }
         onTitleChange?()
     }
@@ -289,6 +296,11 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
     private func placeDetail() {
         guard let path = selectedPath else {
             removeDiffPane()
+            // Kept from another scope or base: made again, rather than showing those files until the read.
+            if let page = allFiles, page.isHidden, allFilesKey != pageKey(for: scope) {
+                page.removeFromSuperview()
+                allFiles = nil
+            }
             if allFiles == nil {
                 let page = AllFilesView(frame: detail.bounds)
                 page.onOpenFile = { [weak self] file in self?.openFile(file) }
@@ -299,11 +311,11 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
                 fill(page)
                 allFiles = page
             }
+            allFiles?.isHidden = false
             message.isHidden = true
             return
         }
-        allFiles?.removeFromSuperview()
-        allFiles = nil
+        allFiles?.isHidden = true
         let key = paneKey(for: path)
         guard let key else {
             // The scope's base is not read yet: what shows stays until it is.
@@ -320,6 +332,9 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
         diffPane = pane
         shownKey = key
     }
+
+    /// What the All files page of `scope` shows: the scope, and where All changes counts from.
+    private func pageKey(for scope: ChangeScope) -> String { "\(scope) \(context?.mergeBase ?? "")" }
 
     /// What tells one file's diff from another's: the path, the scope and what it compares with. Nil while
     /// that is not known yet.

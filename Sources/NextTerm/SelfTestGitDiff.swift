@@ -214,6 +214,13 @@ extension SelfTest {
                 clickRow(blockColumn, foldRow)
                 check(await wait(5) { entry?.rows.contains { $0.fold?.count == 26 } == false && (entry?.rows.count ?? 0) > 26 },
                       "a fold on the page opens on a click", page.blockTitles.joined(separator: " | "))
+                // A file shown, then All files again: the same page, its fold still open, not read and laid out anew.
+                tab.select(path: "src/app.txt")
+                let hidden = await wait(5) { c.editorArea.activeDiff?.path == "src/app.txt" } && page.isHidden
+                tab.select(path: nil)
+                let back = await wait(5) { tab.allFiles === page && !page.isHidden && !tab.isLoading }
+                check(hidden && back && page.entry(at: "src/app.txt") === entry && entry?.rows.contains { $0.fold?.count == 26 } == false,
+                      "back to All files from a file: the same page, the fold opened still open", page.blockTitles.joined(separator: " | "))
             } else {
                 check(false, "the page folds the unchanged run between two changes", page.blockTitles.joined(separator: " | "))
             }

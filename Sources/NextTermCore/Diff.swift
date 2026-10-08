@@ -314,12 +314,14 @@ public enum SideBySide {
 public enum WordDiff {
     /// Lines longer than this are highlighted whole rather than word by word.
     static let maxTokens = 400
+    /// Lines longer than this (UTF-16) too, without reading their words: a minified file's megabyte line.
+    static let maxLength = 20_000
 
     public static func changes(old: String, new: String) -> (old: [NSRange], new: [NSRange]) {
+        let whole = ([NSRange(location: 0, length: (old as NSString).length)], [NSRange(location: 0, length: (new as NSString).length)])
+        if whole.0[0].length > maxLength || whole.1[0].length > maxLength { return whole }
         let a = tokens(old), b = tokens(new)
-        if a.count > maxTokens || b.count > maxTokens {
-            return ([NSRange(location: 0, length: (old as NSString).length)], [NSRange(location: 0, length: (new as NSString).length)])
-        }
+        if a.count > maxTokens || b.count > maxTokens { return whole }
         let diff = b.map(\.text).difference(from: a.map(\.text))
         var removedTokens = Set<Int>(), insertedTokens = Set<Int>()
         for change in diff {

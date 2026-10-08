@@ -16,7 +16,7 @@ An agent just touched twelve files. Before you commit, you want to see each chan
 
 - **The changed files**, on the left, as a tree of only the folders that hold changes, all open. Each file has its icon, its `+12 −3`, and **A**, **D** or **R** when it was added, deleted or renamed. <kbd>↑</kbd> and <kbd>↓</kbd> move from file to file; <kbd>↩</kbd> goes to the diff.
 - **A file’s diff**, on the right, is the one described below, with everything it has: All Changes, Unstaged and Staged, the hunk buttons, Send to Agent. Past its last change, the arrow goes on to the next file’s first one (and back the other way), and the list follows.
-- **All files**, above the files, shows every file’s diff on one page: a header row for each (its name and folder, `+/−`, a chevron that folds it away, and buttons to open the file or show it side by side), then its lines, unified. Long unchanged runs are folded into rows like “67 unmodified lines”: click one to see them. **Collapse All** folds every file away. A file with a very large diff says so, with **Show anyway**. The page is laid out as you scroll, so a large change stays quick.
+- **All files**, above the files, shows every file’s diff on one page: a header row for each (its name and folder, `+/−`, a chevron that folds it away, and buttons to open the file or show it side by side), then its lines, unified. Long unchanged runs are folded into rows like “67 unmodified lines”: click one to see them. **Collapse All** folds every file away. A file with a very large diff, or very long lines (a minified file), says so, with **Show anyway**. The page is laid out as you scroll, so a large change stays quick, and it keeps its place, its folds and what you collapsed while you look at one file.
 
 ### What it compares
 

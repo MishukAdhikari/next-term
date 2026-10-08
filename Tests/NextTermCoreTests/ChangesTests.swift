@@ -312,6 +312,28 @@ import Testing
     }
 }
 
+/// A minified file: two lines changed, a megabyte each.
+@Suite struct LongLinesTests {
+    @Test func aDiffOfVeryLongLinesIsLargeAndMarkedWhole() {
+        let old = String(repeating: "var a=1;", count: 140_000), new = old + "var b=2;"
+        var hunk = DiffHunk(oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, section: "", lines: [])
+        hunk.lines = [DiffLine(kind: .removed, text: old, oldNumber: 1, newNumber: nil), DiffLine(kind: .added, text: new, oldNumber: nil, newNumber: 1)]
+        var file = FileDiff()
+        file.oldPath = "app.min.js"
+        file.newPath = "app.min.js"
+        file.hunks = [hunk]
+        #expect(Changes.isLarge(file) && !Changes.isLarge(ChangedFile(path: "app.min.js", status: .modified, added: 1, removed: 1)))
+        #expect(Changes.bytes(of: file) == old.utf8.count + new.utf8.count)
+        #expect(Changes.bytes(of: file, upTo: 10) == old.utf8.count) // counting stops past the limit
+        file.hunks[0].lines.removeLast()
+        file.hunks[0].lines[0] = DiffLine(kind: .removed, text: "short", oldNumber: 1, newNumber: nil)
+        #expect(!Changes.isLarge(file))
+        // Too long to read word by word: each side marked whole.
+        let marks = WordDiff.changes(old: old, new: new)
+        #expect(marks.old == [NSRange(location: 0, length: old.utf16.count)] && marks.new == [NSRange(location: 0, length: new.utf16.count)])
+    }
+}
+
 /// The scopes on a real repository: a branch with commits since main, and uncommitted work on top.
 @Suite struct ChangeScopeTests {
     func run(_ git: String, _ root: URL, _ args: String...) -> String {

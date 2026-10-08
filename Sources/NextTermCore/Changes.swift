@@ -137,6 +137,9 @@ public enum Changes {
     public static let fileLimit = 3000
     /// A file with more lines changed than this waits for "Show anyway" on the All files page.
     public static let largeLines = 3000
+    /// So does a diff whose lines add up to more than this many bytes: a minified file changes a line or
+    /// two, megabytes long.
+    public static let largeBytes = 1_000_000
 
     /// Paths are file names, never patterns; reading a diff never rewrites the index.
     static func base(_ root: String) -> [String] {
@@ -273,6 +276,21 @@ public enum Changes {
 
     /// Whether the All files page waits for "Show anyway" before showing a file's diff.
     public static func isLarge(_ file: ChangedFile) -> Bool { (file.added ?? 0) + (file.removed ?? 0) > largeLines }
+
+    /// Whether a diff read for the page waits for "Show anyway" too, for the length of its lines.
+    public static func isLarge(_ diff: FileDiff) -> Bool { bytes(of: diff, upTo: largeBytes) > largeBytes }
+
+    /// The bytes of a diff's lines, counted up to just past `limit`.
+    public static func bytes(of diff: FileDiff, upTo limit: Int = .max) -> Int {
+        var total = 0
+        for hunk in diff.hunks {
+            for line in hunk.lines {
+                total += line.text.utf8.count
+                if total > limit { return total }
+            }
+        }
+        return total
+    }
 
     /// Every listed file's diff in `scope`, three lines of context, by path: the tracked files' from one git
     /// run (in parts when some are left out), the untracked ones' from the disk. Large files are left out,
