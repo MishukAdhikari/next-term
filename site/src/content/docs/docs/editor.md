@@ -126,7 +126,7 @@ Agents edit the files you have open. Next Term checks them about once a second:
 - **A file that was deleted or moved** shows a banner too: **Keep My Changes** or **Close**.
 - **Renames and moves in the sidebar** carry open files along.
 
-To see exactly what an agent changed, press <kbd>⌥⌘G</kbd>. See [Side-by-side diffs](/docs/diffs/).
+To see exactly what an agent changed, press <kbd>⌥⌘G</kbd>. See [Diffs and Git Diff](/docs/diffs/).
 
 ## Jupyter notebooks
 

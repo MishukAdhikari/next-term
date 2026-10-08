@@ -75,6 +75,11 @@ enum SelfTest {
         // The notifications checked along the way (a decision, below) come as they do by default.
         let restoreNotificationSettings = defaultNotificationSettings()
         defer { restoreNotificationSettings() }
+        // Diffs side by side, as the checks read them (a run stopped part-way may have left Unified on), and the
+        // user's choice back afterwards.
+        let restoreDiffSettings = keepDiffSettings()
+        defer { restoreDiffSettings() }
+        DiffLayout.current = .sideBySide
         guard let c = AppDelegate.shared.controllers.first, let window = c.window else {
             check(false, "a window opens at launch")
             return
@@ -545,6 +550,7 @@ enum SelfTest {
         await gitLogPagingChecks(c)
         await gitLeftoverChecks(c)
         await branchCompareChecks(c)
+        await gitDiffChecks(c, proj: proj)
         await backgroundFetchChecks(c)
         await ragColorChecks(c, proj: proj)
         await envValueChecks(c, proj: proj)

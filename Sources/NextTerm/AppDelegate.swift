@@ -1161,6 +1161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         view.addItem(withTitle: "Terminal Position", action: nil, keyEquivalent: "").submenu = positions
         item(view, "Show Changes", #selector(TerminalWindowController.showChanges(_:)), "g", [.command, .option])
+        item(view, "Unified Diffs", #selector(DiffLayoutMenu.toggleUnifiedDiffs(_:)), "", target: DiffLayoutMenu.shared) // checked: one column
         item(view, "Annotate with Git Blame", #selector(toggleBlameAnnotations(_:)), "", target: self)
         item(view, "Current Line Blame", #selector(toggleCurrentLineBlame(_:)), "", target: self)
         view.addItem(.separator())
@@ -1194,6 +1195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(git, "New Branch…", #selector(TerminalWindowController.gitNewBranch(_:)), "")
         git.addItem(.separator())
         item(git, "Git Log", #selector(TerminalWindowController.showGitLog(_:)), "l", [.command, .option])
+        item(git, "Git Diff", #selector(TerminalWindowController.showGitDiff(_:)), "g", [.command, .control])
         item(git, "Git Commands", #selector(TerminalWindowController.showGitCommands(_:)), "")
 
         let window = submenu(main, "Window")

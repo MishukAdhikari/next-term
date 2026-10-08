@@ -68,7 +68,7 @@ No. Agents run in Next Term’s tabs: on your Mac, or in [remote tabs](/docs/rem
 
 - [Agent status in every tab](/docs/agent-status/)
 - [Orchestrate agents (MCP)](/docs/orchestration/)
-- [Side-by-side diffs](/docs/diffs/)
+- [Diffs and Git Diff](/docs/diffs/)
 - [Security and privacy](/docs/security-and-privacy/)
 - [Next Term compared with other tools](/compare/)
 

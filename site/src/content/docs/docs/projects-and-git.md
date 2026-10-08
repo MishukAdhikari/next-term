@@ -86,11 +86,11 @@ Toggle it with <kbd>⌘B</kbd> (**View › Hide Project Sidebar**). Put it on th
 
 **Deleted files keep their rows** until the deletion is committed: struck through, where they were, with the lines they had (`−10`). A folder’s count always adds up to the rows inside it, and a folder deleted whole opens to show what was in it. Double-click a deleted file (or press <kbd>⌥⌘G</kbd>) to see what was removed.
 
-**The header** shows the branch and the total lines added and removed: `main +41 −10`. Hover it for the full story, such as “Branch main, tracking origin/main: 2 ahead, 1 behind. 3 modified, 1 added, 2 untracked.”
+**The header** shows the branch and the total lines added and removed: `main +41 −10`. Hover it for the full story, such as “Branch main, tracking origin/main: 2 ahead, 1 behind. 3 modified, 1 added, 2 untracked.” Click the `+41 −10` to see those changes, the ones not committed yet, in the [Git Diff](/docs/diffs/#git-diff) tab.
 
 When the upstream has commits your branch doesn’t, a blue button with git’s commit mark says how many: **Pull 152**. Click it to pull them (the same as **Update Project**). When your branch has commits the upstream doesn’t, it says **Push 3**; when both have changed, it shows both counts, `↓152 ↑3`, and a click asks whether to rebase or merge. When room is short, the header’s line counts make way first (they stay in its tooltip and on the rows), then the branch icon before the name, and only then does the button shorten to `↓152`. The commit counts are as of the last fetch, and the button’s tooltip says when that was. Next Term fetches by itself every 10 minutes, so new commits on the remote show up without a click (see [Background fetch](#background-fetch)). While Next Term fetches, pulls or pushes, the mark turns into a spinning sync arrow. A background fetch only spins a button that is already there: it never makes one appear.
 
-The sidebar reads git with `--no-optional-locks`, so it never holds the index lock while your own git commands, or your agents’, are running. To see a file’s changes in full, press <kbd>⌥⌘G</kbd>: see [Side-by-side diffs](/docs/diffs/).
+The sidebar reads git with `--no-optional-locks`, so it never holds the index lock while your own git commands, or your agents’, are running. To see a file’s changes in full, press <kbd>⌥⌘G</kbd>, and for every changed file, <kbd>⌃⌘G</kbd>: see [Diffs and Git Diff](/docs/diffs/).
 
 ### Background fetch
 
@@ -109,7 +109,7 @@ The sidebar’s “Last fetched” counts these fetches too, although they leave
 
 Click the branch name at the top of the sidebar, or press <kbd>⌥⌘B</kbd> (**Git › Branches…**). One search covers branches, tags and actions: type a few letters of any of them.
 
-- **Actions** come first: **Update Project** (with how many commits are waiting, `↓3`), **Commit…** (with your uncommitted `+/−`), **Push…** (`↑2`, or **Publish** for a new branch), **New Branch…**, **Checkout Tag or Revision…** and **Git Log**. The ⟳ button (<kbd>⌘R</kbd>) fetches. Opening the popup fetches too when the last fetch is over 5 minutes old, and the counts update in place.
+- **Actions** come first: **Update Project** (with how many commits are waiting, `↓3`), **Commit…** (with your uncommitted `+/−`), **Push…** (`↑2`, or **Publish** for a new branch), **New Branch…**, **Checkout Tag or Revision…**, **Git Log** and **Git Diff**. The ⟳ button (<kbd>⌘R</kbd>) fetches. Opening the popup fetches too when the last fetch is over 5 minutes old, and the counts update in place.
 - **Recent**: the last branches this folder was on, including switches made in a terminal or by an agent.
 - **Local**: the current branch first, then folders by prefix (`feat/`, `fix/`), and **Agent branches**, where branches agents make (`claude/…`, `codex/…`, `worktree-…`) stay out of your way. Each shows `↓` and `↑` against its upstream, `gone` when the upstream was deleted, and the worktree it is checked out in.
 - **Worktrees**, when there are any: each with its branch, a padlock when it is locked, and the agent tabs working in it with their status marks. Claude Code locks the worktrees it works in, and names its process in the lock; when that process has ended, the row says **stale lock**, and **Unlock** in its menu frees the worktree (with **Undo**). A lock whose process still runs can’t be unlocked from here; any other lock can, after a question.

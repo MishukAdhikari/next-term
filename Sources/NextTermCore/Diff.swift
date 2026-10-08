@@ -73,10 +73,9 @@ public enum UnifiedDiff {
                 var file = FileDiff()
                 file.header.append(line)
                 // Paths from "diff --git a/x b/y", in case ---/+++ never come (binary or mode-only changes).
-                let parts = line.dropFirst("diff --git ".count).components(separatedBy: " b/")
-                if parts.count == 2 {
-                    file.oldPath = parts[0].hasPrefix("a/") ? String(parts[0].dropFirst(2)) : parts[0]
-                    file.newPath = parts[1]
+                if let names = gitLineNames(String(line.dropFirst("diff --git ".count))) {
+                    file.oldPath = names.old
+                    file.newPath = names.new
                 }
                 current = file
                 inHeader = true
@@ -97,8 +96,8 @@ public enum UnifiedDiff {
                 else if line.hasPrefix("+++ ") { current?.newPath = path(String(line.dropFirst(4))) }
                 else if line.hasPrefix("new file mode") { current?.oldPath = nil }
                 else if line.hasPrefix("deleted file mode") { current?.newPath = nil }
-                else if line.hasPrefix("rename from ") { current?.oldPath = String(line.dropFirst("rename from ".count)) }
-                else if line.hasPrefix("rename to ") { current?.newPath = String(line.dropFirst("rename to ".count)) }
+                else if line.hasPrefix("rename from ") { current?.oldPath = name(String(line.dropFirst("rename from ".count))) }
+                else if line.hasPrefix("rename to ") { current?.newPath = name(String(line.dropFirst("rename to ".count))) }
                 else if line.hasPrefix("Binary files ") || line == "GIT binary patch" { current?.isBinary = true }
                 else if line.hasPrefix("index "), let ids = line.dropFirst(6).split(separator: " ").first {
                     let pair = ids.components(separatedBy: "..")
@@ -136,12 +135,66 @@ public enum UnifiedDiff {
         return files
     }
 
-    /// "a/src/x.swift" -> "src/x.swift"; "/dev/null" -> nil.
+    /// "a/src/x.swift" -> "src/x.swift"; "/dev/null" -> nil; a name git quoted ("a/tab\there.txt" in quotes)
+    /// read back.
     static func path(_ field: String) -> String? {
-        let trimmed = field.split(separator: "\t").first.map(String.init) ?? field
+        let trimmed = field.hasPrefix("\"") ? unquote(field).name : field.split(separator: "\t").first.map(String.init) ?? field
         if trimmed == "/dev/null" { return nil }
         if trimmed.hasPrefix("a/") || trimmed.hasPrefix("b/") { return String(trimmed.dropFirst(2)) }
         return trimmed
+    }
+
+    /// A name as git writes it after "rename from": quoted when it holds a quote, a backslash or a control
+    /// character, read back.
+    static func name(_ field: String) -> String { field.hasPrefix("\"") ? unquote(field).name : field }
+
+    /// The two names of "diff --git a/x b/y" without a/ and b/, either of them quoted ("a/tab\there.txt").
+    static func gitLineNames(_ names: String) -> (old: String, new: String)? {
+        func drop(_ prefix: String, _ name: String) -> String { name.hasPrefix(prefix) ? String(name.dropFirst(prefix.count)) : name }
+        if names.hasPrefix("\"") {
+            let first = unquote(names)
+            let rest = first.rest.drop { $0 == " " }
+            let second = rest.hasPrefix("\"") ? unquote(String(rest)).name : String(rest)
+            return (drop("a/", first.name), drop("b/", second))
+        }
+        if names.hasSuffix("\""), let at = names.range(of: " \"b/", options: .backwards) {
+            let second = unquote(String(names[names.index(after: at.lowerBound)...])).name
+            return (drop("a/", String(names[..<at.lowerBound])), drop("b/", second))
+        }
+        let parts = names.components(separatedBy: " b/")
+        guard parts.count == 2 else { return nil }
+        return (drop("a/", parts[0]), parts[1])
+    }
+
+    private static let escapes: [UInt8: UInt8] = [UInt8(ascii: "a"): 7, UInt8(ascii: "b"): 8, UInt8(ascii: "t"): 9, UInt8(ascii: "n"): 10,
+                                                  UInt8(ascii: "v"): 11, UInt8(ascii: "f"): 12, UInt8(ascii: "r"): 13]
+
+    /// A C-quoted name read back: \" \\ \t \n and the other escapes, and \ooo octal bytes (how git writes
+    /// what isn't ASCII when core.quotepath is on). `rest`: what follows the closing quote.
+    static func unquote(_ field: String) -> (name: String, rest: String) {
+        let utf8 = Array(field.utf8)
+        var bytes: [UInt8] = []
+        var i = 1 // past the opening quote
+        func octal(_ at: Int) -> UInt8? {
+            guard at < utf8.count, (UInt8(ascii: "0")...UInt8(ascii: "7")).contains(utf8[at]) else { return nil }
+            return utf8[at] - UInt8(ascii: "0")
+        }
+        while i < utf8.count, utf8[i] != UInt8(ascii: "\"") {
+            guard utf8[i] == UInt8(ascii: "\\"), i + 1 < utf8.count else {
+                bytes.append(utf8[i])
+                i += 1
+                continue
+            }
+            if let a = octal(i + 1), let b = octal(i + 2), let c = octal(i + 3) {
+                bytes.append(a &* 64 &+ b &* 8 &+ c)
+                i += 4
+                continue
+            }
+            bytes.append(escapes[utf8[i + 1]] ?? utf8[i + 1]) // \" and \\ stand for themselves
+            i += 2
+        }
+        let rest = i + 1 < utf8.count ? String(decoding: utf8[(i + 1)...], as: UTF8.self) : ""
+        return (String(decoding: bytes, as: UTF8.self), rest)
     }
 
     /// "@@ -12,7 +12,9 @@ func x()" ; a missing count means 1.
@@ -261,12 +314,14 @@ public enum SideBySide {
 public enum WordDiff {
     /// Lines longer than this are highlighted whole rather than word by word.
     static let maxTokens = 400
+    /// Lines longer than this (UTF-16) too, without reading their words: a minified file's megabyte line.
+    static let maxLength = 20_000
 
     public static func changes(old: String, new: String) -> (old: [NSRange], new: [NSRange]) {
+        let whole = ([NSRange(location: 0, length: (old as NSString).length)], [NSRange(location: 0, length: (new as NSString).length)])
+        if whole.0[0].length > maxLength || whole.1[0].length > maxLength { return whole }
         let a = tokens(old), b = tokens(new)
-        if a.count > maxTokens || b.count > maxTokens {
-            return ([NSRange(location: 0, length: (old as NSString).length)], [NSRange(location: 0, length: (new as NSString).length)])
-        }
+        if a.count > maxTokens || b.count > maxTokens { return whole }
         let diff = b.map(\.text).difference(from: a.map(\.text))
         var removedTokens = Set<Int>(), insertedTokens = Set<Int>()
         for change in diff {

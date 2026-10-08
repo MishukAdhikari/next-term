@@ -76,7 +76,7 @@ Yes, through Next Term’s MCP server, as described under [Use both](#use-both).
 - [Agent status in every tab](/docs/agent-status/)
 - [Agents and the IDE link](/docs/agents/)
 - [Orchestrate agents (MCP)](/docs/orchestration/)
-- [Side-by-side diffs](/docs/diffs/)
+- [Diffs and Git Diff](/docs/diffs/)
 - [Next Term compared with other tools](/compare/)
 
 ## Sources

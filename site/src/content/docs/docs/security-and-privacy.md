@@ -82,7 +82,7 @@ Opening a file from the sidebar, or with <kbd>⌘</kbd>-click in the terminal, a
 - **Saves are atomic** and keep the file’s permissions, encoding and line endings.
 - **Named pipes are never read**, so a pipe in a project cannot freeze the app.
 - **The sidebar’s git calls are read-only** and use `--no-optional-locks`, so the sidebar never holds the index lock while your own git commands or your agents’ run.
-- **Every change you make through Next Term’s git tools is checked first:** a hunk is staged, unstaged or reverted only if the file still matches the diff you saw. See [Side-by-side diffs](/docs/diffs/#safe-while-agents-keep-working).
+- **Every change you make through Next Term’s git tools is checked first:** a hunk is staged, unstaged or reverted only if the file still matches the diff you saw. See [Diffs and Git Diff](/docs/diffs/#safe-while-agents-keep-working).
 - **Replace in Files** re-reads each file and skips anything that changed since the search.
 - **The Git Log and blame only read,** with `--no-optional-locks` as well. In a partial clone, the Git Log lists a commit’s files without downloading them.
 - **Write with Agent sends the changes, not their secrets:** the commit sheet’s agent runs in an empty folder of its own, without the repository’s settings or hooks, and only when you press the button. `.env` files, keys and certificates, ssh keys and credentials files are named but not sent, and secret-looking values in the rest are masked as `•••`, as the MCP tools do. See [Branches](/docs/projects-and-git/#branches).

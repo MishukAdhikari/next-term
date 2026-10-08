@@ -11,7 +11,14 @@ final class SidebarHeaderView: NSView {
     var onBranchClick: (() -> Void)?
     private let chevron = NSImageView()
     private var hoveringBranch = false { didSet { if hoveringBranch != oldValue { needsDisplay = true } } }
-    private let summary = NSTextField(labelWithString: "")
+    /// The lines added and removed; a click shows them in the Git Diff tab.
+    private let summary = HeaderCountsLabel(labelWithString: "")
+    var onSummaryClick: (() -> Void)? {
+        get { summary.onClick }
+        set { summary.onClick = newValue }
+    }
+    /// For the self-test: where the counts are.
+    var summaryFrame: NSRect { summary.frame }
     /// Commits to pull or push, as a button; a spinning sync arrow while a fetch, pull or push runs.
     let syncButton = SyncButton()
     /// The sync button was clicked: pull (true) or push (false).
@@ -94,6 +101,7 @@ final class SidebarHeaderView: NSView {
         if moreButton.frame.contains(local) { return moreButton }
         if hideButton.frame.contains(local) { return hideButton }
         if !syncButton.isHidden, syncButton.frame.contains(local) { return syncButton }
+        if summary.onClick != nil, !summary.isHidden, summary.frame.contains(local) { return summary }
         return self
     }
     override func mouseDown(with event: NSEvent) {
@@ -289,7 +297,7 @@ final class SidebarHeaderView: NSView {
             right = syncButton.frame.minX - 4
         }
         var summaryWidth = min(summaryText, max(0, right - nameKept))
-        if summaryWidth < 28 { summaryWidth = 0 } // an ellipsis alone says nothing
+        if summaryWidth < summaryText, summaryWidth < 28 { summaryWidth = 0 } // cut to an ellipsis, it says nothing
         if !syncButton.isHidden && syncButton.isShortened { summaryWidth = 0 } // the counts went before the word did
         summary.isHidden = summaryWidth == 0
         summary.frame = NSRect(x: right - summaryWidth, y: summaryY, width: summaryWidth, height: summaryHeight)

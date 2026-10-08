@@ -19,8 +19,8 @@ final class EditorArea: NSView, TabBarViewDelegate {
     private let banner = EditorBanner()
     private var bannerHeight: NSLayoutConstraint!
     /// Tabs in order: files being edited (CodeEditorView), diffs (DiffPane), notebooks (NotebookPane),
-    /// SQLite files (DatabasePane), large data files (DataPane), commit histories (GitLogPane) and
-    /// branch comparisons (BranchComparePane).
+    /// SQLite files (DatabasePane), large data files (DataPane), commit histories (GitLogPane), branch
+    /// comparisons (BranchComparePane) and a repository's changes (GitDiffPane).
     private(set) var panes: [NSView] = []
     /// The 5-second recheck of the open file's committed text (off in the self-test, to prove that a
     /// commit is noticed on its own).
@@ -32,20 +32,23 @@ final class EditorArea: NSView, TabBarViewDelegate {
     private(set) weak var previewPane: NSView?
 
     var editors: [CodeEditorView] { panes.compactMap { $0 as? CodeEditorView } }
-    var diffs: [DiffPane] { panes.compactMap { $0 as? DiffPane } }
+    /// Diff tabs, and the file's diff shown in a Git Diff tab.
+    var diffs: [DiffPane] { panes.compactMap { $0 as? DiffPane ?? ($0 as? GitDiffPane)?.diffPane } }
     var notebooks: [NotebookPane] { panes.compactMap { $0 as? NotebookPane } }
     var databases: [DatabasePane] { panes.compactMap { $0 as? DatabasePane } }
     var dataFiles: [DataPane] { panes.compactMap { $0 as? DataPane } }
     var gitLogs: [GitLogPane] { panes.compactMap { $0 as? GitLogPane } }
     var comparisons: [BranchComparePane] { panes.compactMap { $0 as? BranchComparePane } }
+    var gitDiffs: [GitDiffPane] { panes.compactMap { $0 as? GitDiffPane } }
     var activePane: NSView? { panes[safe: activeIndex] }
     var activeEditor: CodeEditorView? { activePane as? CodeEditorView }
-    var activeDiff: DiffPane? { activePane as? DiffPane }
+    var activeDiff: DiffPane? { activePane as? DiffPane ?? activeGitDiff?.diffPane }
     var activeNotebook: NotebookPane? { activePane as? NotebookPane }
     var activeDatabase: DatabasePane? { activePane as? DatabasePane }
     var activeData: DataPane? { activePane as? DataPane }
     var activeGitLog: GitLogPane? { activePane as? GitLogPane }
     var activeComparison: BranchComparePane? { activePane as? BranchComparePane }
+    var activeGitDiff: GitDiffPane? { activePane as? GitDiffPane }
     /// Send to Agent was clicked in a SQLite viewer.
     var onSendToAgent: (([ContextItem]) -> Void)?
     /// The file in front: the one being edited, the notebook, database or data file being read, or the
@@ -318,6 +321,8 @@ final class EditorArea: NSView, TabBarViewDelegate {
             window?.makeFirstResponder(log.focusView)
         } else if let comparison = panes[index] as? BranchComparePane, focus {
             window?.makeFirstResponder(comparison.focusView)
+        } else if let gitDiff = panes[index] as? GitDiffPane, focus {
+            window?.makeFirstResponder(gitDiff.focusView)
         }
         refresh()
         delegate?.editorAreaSelectionChanged(self)
@@ -343,9 +348,10 @@ final class EditorArea: NSView, TabBarViewDelegate {
 
     var proposals: [DiffPane] { diffs.filter { $0.proposal != nil } }
 
-    /// Closes a tab without asking (a decided proposal, a diff).
+    /// Closes a tab without asking (a decided proposal, a diff). A file's diff in a Git Diff tab closes that tab.
     func close(_ pane: NSView) {
         if let editor = pane as? CodeEditorView { return requestClose(editor) }
+        if let diff = pane as? DiffPane, let owner = gitDiffs.first(where: { $0.diffPane === diff }) { return remove(owner) }
         remove(pane)
     }
 
@@ -400,6 +406,26 @@ final class EditorArea: NSView, TabBarViewDelegate {
         diff.onTitleChange = { [weak self] in self?.refresh() }
         insert(diff)
         select(activeIndex)
+    }
+
+    /// The Git Diff tab of the repository at `root` (the one open, else a new one), showing `path`'s changes
+    /// on `base` with the file list beside them, or all the files on one page without a path (in `scope`, if
+    /// given).
+    @discardableResult
+    func openGitDiff(root: String, path: String? = nil, base: GitRunner.DiffBase = .head, scope: ChangeScope? = nil) -> GitDiffPane {
+        let pane: GitDiffPane
+        if let index = panes.firstIndex(where: { ($0 as? GitDiffPane)?.root == root }), let open = panes[index] as? GitDiffPane {
+            pane = open
+            select(index, focus: false)
+        } else {
+            pane = GitDiffPane(root: root)
+            pane.onTitleChange = { [weak self] in self?.refresh() }
+            insert(pane)
+            select(activeIndex, focus: false)
+        }
+        if let path { pane.show(path: path, base: base) } else { pane.showOverview(scope: scope) }
+        window?.makeFirstResponder(pane.focusView)
+        return pane
     }
 
     // MARK: history
@@ -685,6 +711,10 @@ final class EditorArea: NSView, TabBarViewDelegate {
                 return TabBarItem(title: comparison.title, state: .idle, tooltip: comparison.tooltip, accessibilityStatus: "branch comparison",
                                   icon: BranchComparePane.tabIcon, modified: false)
             }
+            if let gitDiff = pane as? GitDiffPane {
+                return TabBarItem(title: gitDiff.title, state: .idle, tooltip: gitDiff.tooltip, accessibilityStatus: "changes", icon: GitDiffPane.tabIcon,
+                                  modified: false)
+            }
             if let notebook = pane as? NotebookPane {
                 return TabBarItem(title: title(notebook.url), state: .idle, tooltip: RecentProjects.abbreviate(notebook.path) + " (notebook, read-only)",
                                   accessibilityStatus: "notebook, read-only", icon: FileIcons.icon(for: notebook.url, size: 16), modified: false)
@@ -719,6 +749,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
     func applyFont() {
         editors.forEach { $0.applyFont() }
         diffs.forEach { $0.applyFont() }
+        gitDiffs.forEach { $0.applyFont() }
         notebooks.forEach { $0.applyFont() }
     }
 
