@@ -159,7 +159,8 @@ enum MCPWriteControl {
 
 /// Whether a tab's input line is the user's own. Tools that act on a tab refuse one whose line is not:
 /// typing there would join, run or lose text that someone else put on it. MCPControl's send_to_tab,
-/// press_keys and answer_agent ask it, and so do focus_tab, split_pane, close_pane and zoom_pane.
+/// press_keys, answer_agent and close_tab ask it, and so do focus_tab, split_pane, close_pane and
+/// zoom_pane.
 ///
 /// Features that put text on a tab's line add a rule here; update-resume's put-back line is not the
 /// user's own until they type in that tab. A rule says why, in a sentence for the agent, or nil.

@@ -694,6 +694,8 @@ enum MCPControl {
             return reply(fail("No tab with that id; list_tabs shows them."))
         }
         if tab === caller { return reply(fail("That is your own tab.")) }
+        // Closing would lose text someone else put on its line, force or not.
+        if let why = MCPInputLine.refusal(tab) { return reply(fail(why)) }
         let force = arguments["force"] as? Bool ?? false
         let id = tab.id.uuidString.lowercased()
         // The window's last tab, with files unsaved in its editor: closing it closes the window, so the user
