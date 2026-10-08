@@ -10,6 +10,8 @@ import Foundation
 ///     ESC ] 6973 ; <nonce> ; cwd ; <base64 directory> BEL                    precmd, the working directory
 ///     ESC ] 6973 ; <nonce> ; jobs ; <count> ; <base64 job list> BEL          precmd, suspended/background jobs
 ///
+/// Tab completion's hook (ZshCompletionScript) adds arm, tab, comp, done and line (see CompletionProtocol).
+///
 /// "expanded" is the line with aliases expanded, so `claude-auto` (an alias for `claude …`) is seen as an agent.
 ///
 /// Anything printed to the terminal can contain these bytes (a `cat` of a log, a remote host over ssh),
@@ -32,6 +34,7 @@ public enum ShellIntegration {
         case commandFinished(Int32)
         case directory(String)
         case jobs(Int, summary: String)
+        case completion(CompletionProtocol.Message)
     }
 
     /// Parses an OSC 6973 payload (everything after `6973;`). Returns nil unless it carries `nonce`.
@@ -56,6 +59,8 @@ public enum ShellIntegration {
         case "cwd":
             guard let dir = decode(value), dir.hasPrefix("/"), dir.utf8.count <= 4096 else { return nil }
             return .directory(dir)
+        case let kind where CompletionProtocol.markKinds.contains(kind):
+            return CompletionProtocol.parse(kind: kind, value: value).map(Event.completion)
         default:
             return nil
         }

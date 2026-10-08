@@ -750,6 +750,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     private func handle(_ event: ShellIntegration.Event) {
         switch event {
+        case .completion:
+            return // Tab completion's marks: not read yet
         case .commandStarted(let line, let expanded):
             programTitle = nil
             // Its output starts below the line the command was typed on.
