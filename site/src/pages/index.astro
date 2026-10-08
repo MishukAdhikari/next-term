@@ -69,7 +69,7 @@ const head = [
 			'Gemini CLI and Qwen Code IDE integration',
 			'Send to Agent (⌥⌘K) in each agent’s own syntax',
 			'MCP server for orchestration: one agent starts, prompts, waits for and reads the others across projects',
-			'Agent sessions per project: resume or fork Claude Code, Codex and Command Code conversations',
+			'Agent sessions per project: resume or fork the conversations of Claude Code, Codex, Gemini CLI, opencode, Cursor Agent, Copilot CLI, Qwen Code and Command Code',
 			'Remote tabs on your own servers over ssh, kept running in tmux or herdr',
 			'Split panes',
 			'Go to File: fuzzy search over the project’s files',
@@ -590,8 +590,10 @@ const faq = [
 				<li>
 					<h3>Pick up any conversation</h3>
 					<p>
-						The Welcome window lists the sessions Claude Code, Codex and Command Code kept for each project.{' '}
-						<strong>Resume</strong> or <strong>Fork</strong> one in a tab; <kbd>⌥⌘O</kbd> does it in a project window.
+						The Welcome window lists the sessions eight agents kept for each project, Claude Code, Codex,
+						Gemini CLI, opencode, Cursor Agent and Copilot CLI among them.{' '}
+						<strong>Resume</strong> or <strong>Fork</strong> one in a tab, or go to the tab it is open in;{' '}
+						<kbd>⌥⌘O</kbd> and the sidebar do it in a project window.
 					</p>
 				</li>
 				<li>
@@ -709,11 +711,6 @@ const faq = [
 		<section class="band band--next" aria-labelledby="next">
 			<h2 id="next">What comes next</h2>
 			<ul class="next">
-				<li>
-					<span class="nt-soon">Coming next</span> <strong>Sessions from more agents.</strong> The conversations
-					Gemini CLI, opencode, Copilot CLI and Cursor keep, in the Welcome window beside Claude Code’s, Codex’s
-					and Command Code’s.
-				</li>
 				<li>
 					<span class="nt-soon">Coming later</span> <strong>A server’s files in the editor and sidebar</strong>, next
 					to its remote tabs, and then dev containers.

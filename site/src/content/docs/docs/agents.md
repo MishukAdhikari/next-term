@@ -10,14 +10,15 @@ Agents in a terminal work blind: they cannot see what you are looking at, and th
 
 ## What each agent gets
 
-| Agent | Tab status | IDE link: live selection, edits as diffs | MCP tools, set up for you | Send to Agent (<kbd>⌥⌘K</kbd>) |
-|---|---|---|---|---|
-| Claude Code | From its screen | Yes | Yes | Yes, as an @-mention |
-| Gemini CLI | From its screen | Yes, with the open files | Yes | Yes |
-| Qwen Code | From output timing | Yes, with the open files | Yes | Yes |
-| Codex, Command Code | From its screen | — | Yes | Yes |
-| Cursor Agent, opencode, Copilot CLI, Amp, Junie | From output timing | — | Yes | Yes |
-| Other agents | From output timing, for the ones it recognises by name | — | Add `nxtrm mcp` yourself | Yes |
+| Agent | Tab status | IDE link: live selection, edits as diffs | MCP tools, set up for you | Send to Agent (<kbd>⌥⌘K</kbd>) | Its sessions, to resume |
+|---|---|---|---|---|---|
+| Claude Code | From its screen | Yes | Yes | Yes, as an @-mention | Yes |
+| Gemini CLI | From its screen | Yes, with the open files | Yes | Yes | Yes |
+| Qwen Code | From output timing | Yes, with the open files | Yes | Yes | Yes |
+| Codex, Command Code | From its screen | — | Yes | Yes | Yes |
+| Cursor Agent, opencode, Copilot CLI | From output timing | — | Yes | Yes | Yes |
+| Amp, Junie | From output timing | — | Yes | Yes | — |
+| Other agents | From output timing, for the ones it recognises by name | — | Add `nxtrm mcp` yourself | Yes | — |
 
 - **From its screen:** the spinner follows the agent’s own “esc to interrupt” hint, so it stops the moment the agent stops, and its permission questions turn the tab amber. The hints are checked against that agent’s own screen.
 - **From output timing:** printing counts as working and 2.5 seconds of silence as done. An idle agent that keeps redrawing its screen can keep the spinner going, and a question turns the tab amber only if the agent words it the way Claude Code or Codex does, or rings the bell. Next Term reads every agent’s screen the same way, so if one of these agents shows the same hints, its tab follows them.
@@ -99,7 +100,30 @@ More in [Security and privacy](/docs/security-and-privacy/).
 
 ## Pick up any agent’s conversation
 
-The Welcome window lists every conversation Claude Code, Codex and Command Code kept for a project, and resumes one in a click, in a tab in the right folder. In a project window, <kbd>⌥⌘O</kbd> does the same. See [The Welcome window and agent sessions](/docs/projects-and-git/#the-welcome-window-and-agent-sessions).
+Next Term lists the conversations eight agents keep for a folder: Claude Code, Codex, Command Code, Gemini CLI, Qwen Code, opencode, Cursor Agent and Copilot CLI. You find them in three places:
+
+- **The Welcome window**, for each of your projects: every session, newest first, to filter by agent.
+- **<kbd>⌥⌘O</kbd>** in a project window: the same list as a panel, to filter by typing.
+- **Agent Sessions** at the top of the project sidebar: the folder’s newest five, and **More…** for the rest.
+
+Resume types the agent’s own command into a new tab, in the folder the session was started in. Fork continues a copy and leaves the original as it was; it is offered only for the agents that can fork from the command line.
+
+| Agent | Resume | Fork | Continue latest |
+|---|---|---|---|
+| Claude Code | `claude --resume <id>` | `--fork-session` | `claude --continue` |
+| Codex | `codex resume <id> -C <folder>` | `codex fork <id>` | `codex resume --last` |
+| Command Code | `command-code --resume <id>` | `--fork-session` | `command-code --continue` |
+| Gemini CLI | `gemini --resume <id>` | — | `gemini --resume latest` |
+| Qwen Code | `qwen --resume <id>` | `--fork-session` | `qwen --continue` |
+| opencode | `opencode --session <id>` | `--fork` | `opencode --continue` |
+| Cursor Agent | `cursor-agent --resume=<id>` | — | `cursor-agent resume` |
+| Copilot CLI | `copilot --resume=<id>` | — | `copilot --continue` |
+
+**A session open in a tab says so.** It is marked “open in a tab” in the lists and “running” in the sidebar, and Resume becomes **Go to Tab**: it shows that tab rather than start the session a second time. Next Term knows a tab’s session when the tab resumed it by id, or when the agent started there without one and the session began after it did. A Claude Code or Copilot CLI session that the agent has open in another terminal is marked “open in a running agent”; for Claude Code, Fork is the safe way to continue it.
+
+**Continue Latest** is in the ⋯ menu of the sidebar’s Agent Sessions group, for each agent with a session in that folder. It runs the agent’s own command from the last column, which picks up its latest session in the folder.
+
+See [The Welcome window and agent sessions](/docs/projects-and-git/#the-welcome-window-and-agent-sessions) for where Next Term reads them from.
 
 ## One agent can run the others
 
@@ -109,8 +133,6 @@ Next Term is also an MCP server. An orchestrator agent can list every project an
 
 A remote tab (<kbd>⌥⌘T</kbd>) runs an agent on a server you reach with ssh, kept running in tmux or herdr while your Mac sleeps, with the same marks as a local one. Agents can open and check those tabs through MCP too. See [Remote tabs on your servers](/docs/remote/).
 
-## Coming next
-
-<span class="nt-soon">Coming next</span> **Sessions from more agents:** the conversations Gemini CLI, opencode, Copilot CLI and Cursor keep, in the Welcome window beside Claude Code’s, Codex’s and Command Code’s.
+## Coming later
 
 <span class="nt-soon">Coming later</span> An IDE link for GitHub Copilot CLI, and remote access to the MCP server for agents outside your Mac.

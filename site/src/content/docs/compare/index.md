@@ -30,10 +30,8 @@ Next Term is a native macOS terminal and code editor built for one job: running 
 - **One agent can run the others.** Next Term is an MCP server: an orchestrator agent can list every tab with its agent’s state, start agents in new tabs, send prompts, wait for them and read their screens, across projects.
 - **Review next to the agents.** An editor with 112 grammars, Go to File (<kbd>⌘P</kbd>), side-by-side diffs with per-hunk stage, unstage and revert (<kbd>⌥⌘G</kbd>), the Git Log and blame, Find and Replace in Files, and a project sidebar with git status and line counts, in the same window as the agents.
 - **Agents on your servers too.** A remote tab (<kbd>⌥⌘T</kbd>) runs an agent on a server you reach with ssh, kept running in tmux or herdr while your Mac sleeps, with the same status marks.
-- **Pick up where an agent left off.** The Welcome window lists the conversations Claude Code, Codex and Command Code kept for each project, to resume or fork in a tab.
+- **Pick up where an agent left off.** The Welcome window, <kbd>⌥⌘O</kbd> and the sidebar list the conversations eight agents kept for each project (Claude Code, Codex, Gemini CLI, opencode, Cursor Agent, Copilot CLI, Qwen Code and Command Code), to resume or fork in a tab, or to go to the tab one is open in.
 - **Small and native.** Swift and AppKit, a universal app, about a {{DOWNLOAD_SIZE}} download. Free and open source under the MIT licence.
-
-<span class="nt-soon">Coming next</span> **Sessions from more agents:** the conversations Gemini CLI, opencode, Copilot CLI and Cursor keep, in the Welcome window beside the ones it lists today.
 
 ## What Next Term does not do
 
