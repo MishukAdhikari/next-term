@@ -17,7 +17,10 @@ struct GitActions {
     private func run(_ title: String, _ steps: [[String]], activity: GitWriter.Activity? = nil, then: @escaping (GitWriter.Result) -> Void) {
         let popup = self.popup
         let controller = self.controller
+        let root = self.root
+        AgentPlaces.shared.noteOwnGit(steps, in: root) // a switch it makes is yours, not an agent's
         GitWriter.shared.run(title, in: root, repository: model?.commonDir ?? root, steps: steps, activity: activity) { result in
+            AgentPlaces.shared.noteOwnGit(steps, in: root)
             controller?.sidebar.git.refresh()
             popup.reload()
             then(result)

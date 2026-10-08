@@ -68,6 +68,40 @@ enum ProcessInspector {
         return path.isEmpty ? nil : path
     }
 
+    /// The files a process has open (its descriptors on files, by path).
+    static func openFiles(of pid: pid_t) -> [String] {
+        guard pid > 0 else { return [] }
+        let stride = MemoryLayout<proc_fdinfo>.stride
+        let size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
+        guard size > 0 else { return [] }
+        var fds = [proc_fdinfo](repeating: proc_fdinfo(), count: Int(size) / stride + 8)
+        let filled = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, &fds, Int32(fds.count * stride))
+        guard filled > 0 else { return [] }
+        return fds.prefix(Int(filled) / stride).compactMap { fd -> String? in
+            guard fd.proc_fdtype == UInt32(PROX_FDTYPE_VNODE) else { return nil }
+            var info = vnode_fdinfowithpath()
+            let wanted = Int32(MemoryLayout<vnode_fdinfowithpath>.size)
+            guard proc_pidfdinfo(pid, fd.proc_fd, PROC_PIDFDVNODEPATHINFO, &info, wanted) == wanted else { return nil }
+            let path = withUnsafeBytes(of: &info.pvip.vip_path) { raw in String(decoding: raw.prefix(while: { $0 != 0 }), as: UTF8.self) }
+            return path.isEmpty ? nil : path
+        }
+    }
+
+    /// A process and the processes it started, two generations down: an agent run by a wrapper (node
+    /// starting Codex's own binary) does its work in a child.
+    static func family(of pid: pid_t) -> [pid_t] {
+        func children(_ parent: pid_t) -> [pid_t] {
+            let count = proc_listchildpids(parent, nil, 0)
+            guard count > 0 else { return [] }
+            var pids = [pid_t](repeating: 0, count: Int(count) + 8)
+            let filled = proc_listchildpids(parent, &pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+            return filled > 0 ? pids.prefix(Int(filled)).filter { $0 > 0 } : []
+        }
+        guard pid > 0 else { return [] }
+        let first = children(pid)
+        return [pid] + first + first.flatMap(children)
+    }
+
     /// Helper daemons that prompt frameworks keep as children of the shell; not the user's jobs.
     private static let shellHelpers = ["gitstatusd", "zsh", "bash", "fish", "sh"]
 
