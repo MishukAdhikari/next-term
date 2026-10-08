@@ -66,7 +66,7 @@ Toggle it with <kbd>⌘B</kbd> (**View › Hide Project Sidebar**). Put it on th
 - **It is live.** Files your agents create, change or delete show up on their own, and commits and checkouts refresh the git state.
 - **It stays fast on big projects.** Folders are read in the background, and a folder too big to list in full ends with “… 12,345 more items”.
 - **It remembers.** Switching between tabs in different projects keeps what you had expanded and where you had scrolled.
-- **It leaves out what you never open.** `.git`, `.svn`, `.hg` and `.DS_Store` never show. **Settings › Editor › Hide** leaves out more, by pattern, between commas, read as `.gitignore` reads them: `node_modules` or `*.log` in every folder, `/build` only at the top of the folder the sidebar shows, `out/` only folders. Go to File (<kbd>⌘P</kbd>) and Find in Files don’t use these patterns: they list the files git does.
+- **It leaves out what you never open.** `.git`, `.svn`, `.hg` and `.DS_Store` never show. **Settings › Editor › Hide** leaves out more, by pattern, between commas, read as `.gitignore` reads them: `node_modules` or `*.log` in every folder, `/build` only at the top of the folder the sidebar shows, `out/` only folders, and `!keep.log` after `*.log` shows that one file again. Go to File (<kbd>⌘P</kbd>) and Find in Files don’t use these patterns: they list the files git does.
 - **Hover a row** for its full path, git state and line counts.
 
 ## Git at a glance

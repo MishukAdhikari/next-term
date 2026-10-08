@@ -4,12 +4,16 @@ import Foundation
 /// way .gitignore reads them. A pattern without "/" hides that name at any depth ("node_modules", "*.pyc"); one
 /// with "/" is relative to the folder the sidebar shows ("/build", "docs/_site"); a "/" at the end hides only
 /// folders. "*" and "?" stay within a name, "**" spans folders, "[abc]" is one of those characters and "{a,b}"
-/// either word. The sidebar's own (.git, .DS_Store) are hidden whatever this holds.
+/// either word. A "!" first shows again what a pattern before it hid ("*.log, !keep.log"), as the last pattern
+/// that matches decides; inside a hidden folder nothing shows. The sidebar's own (.git, .DS_Store) are hidden
+/// whatever this holds.
 public struct FileHiding: Sendable {
     struct Pattern: Sendable {
         /// Matched against the whole path below the root (anchored), else against the last name.
         let anchored: Bool
         let foldersOnly: Bool
+        /// "!": what it matches is shown.
+        let negated: Bool
         /// The pattern with its braces spelled out, one per alternative.
         let globs: [[Character]]
     }
@@ -93,6 +97,8 @@ public struct FileHiding: Sendable {
 
     static func pattern(_ raw: String) -> Pattern? {
         var text = raw.trimmingCharacters(in: .whitespaces)
+        let negated = text.hasPrefix("!")
+        if negated { text.removeFirst() }
         var foldersOnly = false
         while text.count > 1, text.hasSuffix("/") {
             text.removeLast()
@@ -104,7 +110,7 @@ public struct FileHiding: Sendable {
             anchored = true
         }
         guard !text.isEmpty, text != "/" else { return nil }
-        return Pattern(anchored: anchored, foldersOnly: foldersOnly, globs: expandBraces(text).map(Array.init))
+        return Pattern(anchored: anchored, foldersOnly: foldersOnly, negated: negated, globs: expandBraces(text).map(Array.init))
     }
 
     /// Whether the sidebar leaves out this file or folder (`path` absolute, below the root).
@@ -114,9 +120,9 @@ public struct FileHiding: Sendable {
         guard path.hasPrefix(prefix), path.count > prefix.count else { return false }
         let relative = Array(path.dropFirst(prefix.count))
         let name = Array((path as NSString).lastPathComponent)
-        for pattern in patterns where isDirectory || !pattern.foldersOnly {
+        for pattern in patterns.reversed() where isDirectory || !pattern.foldersOnly {
             let subject = pattern.anchored ? relative : name
-            if pattern.globs.contains(where: { Self.matches($0[...], subject[...]) }) { return true }
+            if pattern.globs.contains(where: { Self.matches($0[...], subject[...]) }) { return !pattern.negated }
         }
         return false
     }

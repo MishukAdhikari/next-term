@@ -89,7 +89,7 @@ final class EditorSavingControls: NSObject, NSTextFieldDelegate {
         newline.action = #selector(newlineChanged)
         newline.toolTip = "Adds a line break after the last line as you save, unless it is empty."
         hidden.placeholderString = "node_modules, *.log, /build"
-        hidden.toolTip = "Patterns as in .gitignore, between commas: a name hides it in every folder, a path from the project’s folder (/build) only there, and a / at the end only folders. Press Return to apply."
+        hidden.toolTip = "Patterns as in .gitignore, between commas: a name hides it in every folder, a path from the project’s folder (/build) only there, a / at the end only folders, and a ! first shows it again. Press Return to apply."
         hidden.target = self
         hidden.action = #selector(hiddenChanged)
         hidden.delegate = self

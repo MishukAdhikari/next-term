@@ -45,6 +45,16 @@ import Testing
         #expect(hides(["\\*star"], "*star") && !hides(["\\*star"], "xstar"))
     }
 
+    @Test func aBangShowsAgain() {
+        // As in .gitignore: the last pattern that matches decides.
+        #expect(!hides(["*.log", "!keep.log"], "keep.log") && hides(["*.log", "!keep.log"], "other.log"))
+        #expect(hides(["!keep.log", "*.log"], "keep.log"), "a later pattern hides it again")
+        #expect(!hides(["!keep.log"], "keep.log"), "on its own it hides nothing")
+        #expect(!hides(["/build/", "!/build/"], "build", folder: true))
+        // "\!" is a name that starts with "!".
+        #expect(hides(["\\!important"], "!important") && !hides(["\\!important"], "important"))
+    }
+
     @Test func onlyBelowTheRoot() {
         let hiding = FileHiding(patterns: ["*.log"], root: root + "/")
         #expect(hiding.hides(root + "/a.log", isDirectory: false))
