@@ -1009,7 +1009,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let away = ["down": "up", "up": "down", "left": "right", "right": "left"][toward]!
         let words = terminalCollapsed ? "Expand the terminal" : "Collapse the terminal"
         tabBar.setCollapseButton(symbol: "chevron.\(terminalCollapsed ? away : toward)",
-                                 toolTip: KeyboardShortcuts.shared.hint(words, #selector(toggleTerminalCollapsed(_:))))
+                                 toolTip: KeyboardShortcuts.shared.hint(words, #selector(toggleTerminalCollapsed(_:))), label: words)
         updateUpdateButton()
         updateRail()
     }

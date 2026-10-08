@@ -82,7 +82,7 @@ final class TabBarView: NSView {
     }
     private let sidebarButton = HoverButton()
     static let sidebarButtonWidth: CGFloat = 30
-    private var tabsStart: CGFloat { leadingInset + (sidebarButton.isHidden ? 0 : Self.sidebarButtonWidth) }
+    private var tabsStart: CGFloat { leadingInset + (sidebarButton.isHidden ? 0 : Self.sidebarButtonWidth + room(sidebarHint)) }
 
     /// A button at the right end that shows the open file in the project sidebar (the editor's tab bar).
     var onReveal: (() -> Void)? {
@@ -92,7 +92,7 @@ final class TabBarView: NSView {
         }
     }
     private let revealButton = HoverButton()
-    private var revealWidth: CGFloat { revealButton.isHidden ? 0 : Self.collapseButtonWidth }
+    private var revealWidth: CGFloat { revealButton.isHidden ? 0 : Self.collapseButtonWidth + room(revealHint) }
 
     /// A collapse/expand button before the ⋯ (the terminal, when the editor shares the window).
     var onToggleCollapse: (() -> Void)? {
@@ -102,15 +102,32 @@ final class TabBarView: NSView {
         }
     }
     /// The arrow points the way a click moves the bar: toward the window's edge to collapse, back to expand.
-    func setCollapseButton(symbol: String, toolTip: String) {
-        collapseButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: toolTip)?
+    /// VoiceOver hears `label`, and the key in the button's help.
+    func setCollapseButton(symbol: String, toolTip: String, label: String) {
+        collapseButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?
             .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
         collapseButton.toolTip = toolTip
-        collapseButton.setAccessibilityLabel(toolTip)
+        collapseButton.setAccessibilityLabel(label)
+        needsLayout = true // its key goes just before the arrow, which may be narrower now
     }
     private let collapseButton = HoverButton()
     static let collapseButtonWidth: CGFloat = 28
-    private var collapseWidth: CGFloat { collapseButton.isHidden ? 0 : Self.collapseButtonWidth }
+    private var collapseWidth: CGFloat { collapseButton.isHidden ? 0 : Self.collapseButtonWidth + room(collapseHint) }
+
+    /// The buttons' keys, as the tabs show theirs: "⌘B" before the sidebar icon, "⌘T" before the +, "⌘J"
+    /// before the arrow. They give way before the tabs would narrow (`fitKeyHints`).
+    private lazy var sidebarHint = KeyHint(#selector(TerminalWindowController.toggleProjectSidebar(_:)), for: sidebarButton)
+    private lazy var newTabHint = KeyHint(#selector(TerminalWindowController.newTab(_:)), for: newTabButton)
+    private lazy var collapseHint = KeyHint(#selector(TerminalWindowController.toggleTerminalCollapsed(_:)), for: collapseButton)
+    private lazy var revealHint = KeyHint(#selector(TerminalWindowController.revealInSidebar(_:)), for: revealButton)
+    /// The room each key shown takes before its button; a key that gave way has none.
+    private var hintRooms: [KeyHint: CGFloat] = [:]
+    private func room(_ hint: KeyHint) -> CGFloat { hintRooms[hint] ?? 0 }
+    /// The keys as they show now, nil for one that gave way or has no key (for the self-test).
+    var shownKeys: (sidebar: String?, newTab: String?, collapse: String?, reveal: String?) {
+        layoutSubtreeIfNeeded()
+        return (sidebarHint.shownKey, newTabHint.shownKey, collapseHint.shownKey, revealHint.shownKey)
+    }
 
     /// The blue Update button (in the bar at the window's top-right corner, while an update waits).
     var onUpdate: (() -> Void)?
@@ -201,6 +218,7 @@ final class TabBarView: NSView {
         sidebarButton.isHidden = true
         setSidebarButton(onRight: false)
         addSubview(sidebarButton)
+        [sidebarHint, newTabHint, collapseHint, revealHint].forEach(addSubview)
 
         overflowButton.target = self
         overflowButton.action = #selector(showOverflowMenu)
@@ -254,9 +272,10 @@ final class TabBarView: NSView {
     // MARK: layout
 
     /// Width for tabs, keeping a strip on the right for dragging the window.
-    private var availableWidth: CGFloat {
-        max(0, bounds.width - tabsStart - (allowsNewTab ? Self.newTabButtonWidth : 0) - (moreButton == nil ? 0 : Self.moreButtonWidth)
-            - collapseWidth - revealWidth - updateWidth - 24)
+    private var availableWidth: CGFloat { max(0, spareWidth) }
+    private var spareWidth: CGFloat {
+        bounds.width - tabsStart - (allowsNewTab ? Self.newTabButtonWidth + room(newTabHint) : 0) - (moreButton == nil ? 0 : Self.moreButtonWidth)
+            - collapseWidth - revealWidth - updateWidth - 24
     }
 
     /// How many tabs fit at a readable width.
@@ -289,8 +308,27 @@ final class TabBarView: NSView {
         return NSRect(x: tabsStart + slot * tabWidth, y: 0, width: tabWidth, height: bounds.height - 1)
     }
 
+    /// Each button's key shows while the tabs keep the room they have without the keys: in a narrow bar the
+    /// keys go first (the reveal's, the +'s, the arrow's, then the sidebar's), before a tab narrows or goes
+    /// behind the ».
+    private func fitKeyHints() {
+        hintRooms = [:]
+        let widest = (shown: capacity, width: tabWidth)
+        let candidates: [(KeyHint, NSButton, CGFloat)] = [
+            (sidebarHint, sidebarButton, Self.sidebarButtonWidth), (collapseHint, collapseButton, Self.collapseButtonWidth),
+            (newTabHint, newTabButton, Self.newTabButtonWidth), (revealHint, revealButton, Self.collapseButtonWidth),
+        ]
+        for (hint, button, width) in candidates where !button.isHidden && !hint.key.isEmpty {
+            hintRooms[hint] = hint.room(buttonWidth: width)
+            let tabs = CGFloat(capacity) * tabWidth + (isOverflowing ? Self.overflowButtonWidth : 0)
+            let sameTabs = capacity == widest.shown && (tabViews.isEmpty || tabWidth == widest.width)
+            if !sameTabs || tabs > spareWidth { hintRooms[hint] = nil }
+        }
+    }
+
     override func layout() {
         super.layout()
+        fitKeyHints()
         let range = visibleRange
         firstVisible = range.lowerBound
         for (i, view) in tabViews.enumerated() where view !== dragging?.view {
@@ -298,15 +336,15 @@ final class TabBarView: NSView {
             if !view.isHidden { view.frame = frameForTab(at: i) }
         }
         var x = tabsStart + CGFloat(range.count) * tabWidth
-        sidebarButton.frame = NSRect(x: leadingInset, y: 0, width: Self.sidebarButtonWidth, height: bounds.height - 1)
+        sidebarButton.frame = NSRect(x: leadingInset + room(sidebarHint), y: 0, width: Self.sidebarButtonWidth, height: bounds.height - 1)
         overflowButton.isHidden = !isOverflowing
         if isOverflowing {
             overflowButton.frame = NSRect(x: x, y: 0, width: Self.overflowButtonWidth, height: bounds.height - 1)
             x += Self.overflowButtonWidth
         }
         let more: CGFloat = moreButton == nil ? 0 : Self.moreButtonWidth
-        newTabButton.frame = NSRect(x: min(x, bounds.width - Self.newTabButtonWidth - more - collapseWidth - revealWidth - updateWidth), y: 0,
-                                    width: Self.newTabButtonWidth, height: bounds.height - 1)
+        newTabButton.frame = NSRect(x: min(x + room(newTabHint), bounds.width - Self.newTabButtonWidth - more - collapseWidth - revealWidth - updateWidth),
+                                    y: 0, width: Self.newTabButtonWidth, height: bounds.height - 1)
         moreButton?.frame = NSRect(x: bounds.width - Self.moreButtonWidth - 4, y: 0, width: Self.moreButtonWidth, height: bounds.height - 1)
         collapseButton.frame = NSRect(x: bounds.width - more - 4 - Self.collapseButtonWidth, y: 0,
                                       width: Self.collapseButtonWidth, height: bounds.height - 1)
@@ -317,6 +355,7 @@ final class TabBarView: NSView {
             updateButton.frame = NSRect(x: bounds.width - more - 4 - collapseWidth - revealWidth - 4 - width, y: 0,
                                         width: width, height: bounds.height - 1)
         }
+        for hint in [sidebarHint, newTabHint, collapseHint, revealHint] { hint.place(shown: hintRooms[hint] != nil) }
         updateOverflowButton()
     }
 
