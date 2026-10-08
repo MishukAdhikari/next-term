@@ -424,14 +424,14 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         }
     }
 
-    /// Worktrees' rows: the agent tabs whose folder is in each (and not in a worktree nested inside it),
-    /// and whether the process its lock names still runs.
+    /// Worktrees' rows: the agent tabs whose agent works in each (and not in a worktree nested inside it), by
+    /// the agent's own folder rather than its shell's, and whether the process its lock names still runs.
     private func worktreeRows(_ worktrees: [Worktree], in model: BranchModel) -> [Item] {
         // Each agent tab's worktree, found once.
         let tabs = AppDelegate.shared.controllers.flatMap(\.tabs).filter { $0.remote == nil && $0.status.running && $0.status.kind == .agent }
         var agentsByPath: [String: [WorktreeRow.Agent]] = [:]
         for tab in tabs {
-            guard let worktree = model.worktree(containing: tab.liveDirectory) else { continue }
+            guard let worktree = model.worktree(containing: AgentPlaces.shared.agentFolder(of: tab)) else { continue }
             let agent = WorktreeRow.Agent(name: AgentName.of(program: tab.status.program), state: tab.status.state, tab: tab.title)
             agentsByPath[canonicalPath(worktree.path), default: []].append(agent)
         }
