@@ -273,7 +273,7 @@ struct CommitWriter {
             guard let git = GitWriter.git else { return DispatchQueue.main.async { done(.failed("git is not installed.")) } }
             let prompt = CommitMessageAgent.prompt(recentSubjects: CommitMessageAgent.recentSubjects(at: root, git: git))
             let changes = CommitMessageAgent.changes(at: root, git: git, staged: newFiles == nil, newFiles: newFiles ?? [])
-            let outcome = run.run(agent, path: path, prompt: prompt, changes: changes, in: root, environment: Self.environment)
+            let outcome = run.run(agent, path: path, prompt: prompt, changes: changes, environment: Self.environment)
             DispatchQueue.main.async { done(outcome) }
         }
         return run

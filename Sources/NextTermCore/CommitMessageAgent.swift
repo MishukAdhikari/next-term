@@ -1,7 +1,8 @@
 import Foundation
 
 // Write with Agent, in the commit sheet: an agent CLI that is installed writes the commit message from
-// the changes that will be committed. It runs headless in the repository, with the changes on standard
+// the changes that will be committed. It runs headless in an empty folder of its own, never in the
+// repository (whose settings could run hooks or send the changes elsewhere), with the changes on standard
 // input, for a minute at most; its answer goes in the message field, and nothing is committed. The changes
 // go to that agent and nowhere else. Design: claudedocs/research_next-term-git-branches (8.14).
 
@@ -15,7 +16,8 @@ public struct CommitMessageAgent: Equatable, Sendable {
     /// the two together); otherwise both go on standard input.
     let promptAsArgument: Bool
 
-    /// Claude Code with no tools at all (it only writes), no MCP servers, and no session kept.
+    /// Claude Code with no tools at all (it only writes), no MCP servers, no session kept, and only your
+    /// own settings: none of a project's hooks or environment.
     public static let claude = CommitMessageAgent(program: "claude", name: "Claude Code", promptAsArgument: false)
     /// Codex in a read-only sandbox, nothing kept; its last message goes to a file.
     public static let codex = CommitMessageAgent(program: "codex", name: "Codex", promptAsArgument: false)
@@ -30,7 +32,7 @@ public struct CommitMessageAgent: Equatable, Sendable {
         switch program {
         case "claude":
             // --tools takes a list: last, so nothing after it is read as a tool's name.
-            return ["-p", "--output-format", "text", "--no-session-persistence", "--strict-mcp-config", "--tools", ""]
+            return ["-p", "--output-format", "text", "--no-session-persistence", "--strict-mcp-config", "--setting-sources", "user", "--tools", ""]
         case "codex":
             return ["exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "--color", "never", "--output-last-message", answerFile, "-"]
         default:
@@ -155,8 +157,11 @@ public final class CommitMessageRun: @unchecked Sendable {
         return isStopped
     }
 
-    /// Asks `agent` (at `path`) in `root`, the changes on standard input; its answer, or why there is none.
-    public func run(_ agent: CommitMessageAgent, path: String, prompt: String, changes: String, in root: String,
+    /// Asks `agent` (at `path`), the changes on standard input; its answer, or why there is none. It runs in
+    /// the run's own folder, not the repository: an agent reads the settings of the folder it starts in
+    /// (Claude Code's hooks and environment, Gemini CLI's MCP servers), and a repository you cloned can set
+    /// those to run its commands or send what the agent reads to another server.
+    public func run(_ agent: CommitMessageAgent, path: String, prompt: String, changes: String,
                     environment: [String: String], timeout: TimeInterval = 60) -> Outcome {
         let fm = FileManager.default
         let folder = fm.temporaryDirectory.appendingPathComponent("next-term-message-\(UUID().uuidString)")
@@ -173,7 +178,7 @@ public final class CommitMessageRun: @unchecked Sendable {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = agent.arguments(prompt: prompt, answerFile: answer.path)
-        process.currentDirectoryURL = URL(fileURLWithPath: root)
+        process.currentDirectoryURL = folder
         process.environment = environment
         process.standardInput = stdin
         process.standardOutput = stdout

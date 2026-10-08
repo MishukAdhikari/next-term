@@ -12,7 +12,7 @@ import Testing
         #expect(CommitMessageAgent.find(in: ["/a"], isExecutable: { _ in false }) == nil)
 
         let claude = CommitMessageAgent.claude.arguments(prompt: "P", answerFile: "/t/a")
-        #expect(claude == ["-p", "--output-format", "text", "--no-session-persistence", "--strict-mcp-config", "--tools", ""])
+        #expect(claude == ["-p", "--output-format", "text", "--no-session-persistence", "--strict-mcp-config", "--setting-sources", "user", "--tools", ""])
         #expect(CommitMessageAgent.claude.input(prompt: "P", changes: "C") == "P\n\nC")
         let codex = CommitMessageAgent.codex.arguments(prompt: "P", answerFile: "/t/a")
         #expect(codex.first == "exec" && codex.contains("read-only") && codex.contains("--ephemeral") && codex.suffix(3) == ["--output-last-message", "/t/a", "-"])
@@ -64,27 +64,34 @@ import Testing
             return path
         }
         let environment = ["PATH": "/usr/bin:/bin"]
-        let echo = try agent("claude", "cat > \"$PWD/seen\"; printf '```\\nFix the login (%s)\\n```\\n' \"$1\"")
-        let outcome = CommitMessageRun().run(.claude, path: echo, prompt: "Write it.", changes: "diff --git a/x b/x", in: folder.path, environment: environment)
+        let seenFile = folder.appendingPathComponent("seen").path, whereFile = folder.appendingPathComponent("where").path
+        let echo = try agent("claude", "cat > '\(seenFile)'; pwd -P > '\(whereFile)'; ls -A >> '\(whereFile)'; printf '```\\nFix the login (%s)\\n```\\n' \"$1\"")
+        let outcome = CommitMessageRun().run(.claude, path: echo, prompt: "Write it.", changes: "diff --git a/x b/x", environment: environment)
         #expect(outcome == .message("Fix the login (-p)"))
         let seen = (try? String(contentsOf: folder.appendingPathComponent("seen"), encoding: .utf8)) ?? ""
         #expect(seen == "Write it.\n\ndiff --git a/x b/x")
+        // It runs in a folder of its own, never where Next Term (or the repository) is: a folder's settings
+        // could run hooks. The folder holds only the run's own files, and is gone once the run ends.
+        let ranIn = ((try? String(contentsOfFile: whereFile, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+        #expect(ranIn.first?.contains("next-term-message-") == true, "\(ranIn)")
+        #expect(Set(ranIn.dropFirst()).isSubset(of: ["input", "output", "errors", "answer"]), "\(ranIn)")
+        #expect(ranIn.first.map { !FileManager.default.fileExists(atPath: $0) } == true)
 
         // Codex writes its answer to the file named after --output-last-message.
         let codex = try agent("codex", "while [ \"$1\" != --output-last-message ]; do shift; done; echo 'From the file' > \"$2\"; echo 'progress'")
-        #expect(CommitMessageRun().run(.codex, path: codex, prompt: "P", changes: "C", in: folder.path, environment: environment) == .message("From the file"))
+        #expect(CommitMessageRun().run(.codex, path: codex, prompt: "P", changes: "C", environment: environment) == .message("From the file"))
 
         let failing = try agent("failing", "echo 'Error: not logged in' >&2; exit 1")
-        #expect(CommitMessageRun().run(.claude, path: failing, prompt: "P", changes: "C", in: folder.path, environment: environment) == .failed("Error: not logged in"))
+        #expect(CommitMessageRun().run(.claude, path: failing, prompt: "P", changes: "C", environment: environment) == .failed("Error: not logged in"))
         let silent = try agent("silent", "exit 0")
-        #expect(CommitMessageRun().run(.claude, path: silent, prompt: "P", changes: "C", in: folder.path, environment: environment) == .failed("It answered with nothing."))
+        #expect(CommitMessageRun().run(.claude, path: silent, prompt: "P", changes: "C", environment: environment) == .failed("It answered with nothing."))
 
         let slow = try agent("slow", "exec sleep 30")
         let started = Date()
-        #expect(CommitMessageRun().run(.claude, path: slow, prompt: "P", changes: "C", in: folder.path, environment: environment, timeout: 0.5) == .timedOut)
+        #expect(CommitMessageRun().run(.claude, path: slow, prompt: "P", changes: "C", environment: environment, timeout: 0.5) == .timedOut)
         #expect(Date().timeIntervalSince(started) < 10)
         let run = CommitMessageRun()
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { run.stop() }
-        #expect(run.run(.claude, path: slow, prompt: "P", changes: "C", in: folder.path, environment: environment) == .stopped)
+        #expect(run.run(.claude, path: slow, prompt: "P", changes: "C", environment: environment) == .stopped)
     }
 }
