@@ -493,8 +493,8 @@ final class EditorArea: NSView, TabBarViewDelegate {
     }
 
     /// Close Others and Close Tabs to the Right: several tabs at once, asking once about the unsaved files
-    /// among them (Save, Cancel or Don't Save, as closing one asks). `keeping` comes to the front if the tab
-    /// in front was among them.
+    /// among them (Save, Cancel or Don't Save, as closing one asks) and the agents' proposals closing would
+    /// reject. `keeping` comes to the front if the tab in front was among them.
     func close(_ closing: [NSView], keeping: NSView) {
         let front = activePane
         let done = { [weak self] in
@@ -505,15 +505,12 @@ final class EditorArea: NSView, TabBarViewDelegate {
             }
         }
         let dirty = closing.compactMap { ($0 as? CodeEditorView)?.document }.filter(\.isDirty)
-        guard !dirty.isEmpty, let window else { return done() }
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = dirty.count == 1 ? "Save changes to “\(dirty[0].name)” before closing?" : "Save changes to \(dirty.count) files before closing?"
-        alert.informativeText = dirty.count == 1 ? "Your changes are lost if you don’t save them."
-            : "Your changes to \(TerminalWindowController.nameList(dirty.map(\.name))) are lost if you don’t save them."
-        alert.addButton(withTitle: dirty.count == 1 ? "Save" : "Save All")
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Don’t Save").keyEquivalent = "d"
+        let undecided = closing.compactMap { $0 as? DiffPane }.filter { $0.proposal != nil && !$0.isDecided }
+        guard !dirty.isEmpty || !undecided.isEmpty, let window else { return done() }
+        let alert = dirty.isEmpty ? Self.closeAlert(closing) : Self.saveAlert(dirty)
+        if !undecided.isEmpty {
+            alert.informativeText = [alert.informativeText, Self.rejectNote(undecided)].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        }
         alert.beginSheetModal(for: window) { [weak self] response in
             guard let self else { return }
             switch response {
@@ -526,6 +523,43 @@ final class EditorArea: NSView, TabBarViewDelegate {
                 break
             }
         }
+    }
+
+    /// Asks before closing tabs with no unsaved file among them (an agent's proposal is): Close, or Cancel.
+    private static func closeAlert(_ closing: [NSView]) -> NSAlert {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        let one = closing.count == 1 ? (closing[0] as? DiffPane)?.title : nil
+        alert.messageText = one.map { "Close “\($0)”?" } ?? "Close \(closing.count) tabs?"
+        alert.addButton(withTitle: closing.count == 1 ? "Close Tab" : "Close Tabs")
+        alert.addButton(withTitle: "Cancel")
+        return alert
+    }
+
+    /// Asks about the unsaved files among tabs to close: Save, Cancel or Don't Save.
+    private static func saveAlert(_ dirty: [EditorDocument]) -> NSAlert {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        if dirty.count == 1 {
+            alert.messageText = "Save changes to “\(dirty[0].name)” before closing?"
+            alert.informativeText = "Your changes are lost if you don’t save them."
+        } else {
+            alert.messageText = "Save changes to \(dirty.count) files before closing?"
+            alert.informativeText = "Your changes to \(TerminalWindowController.nameList(dirty.map(\.name))) are lost if you don’t save them."
+        }
+        alert.addButton(withTitle: dirty.count == 1 ? "Save" : "Save All")
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Don’t Save").keyEquivalent = "d"
+        return alert
+    }
+
+    /// What closing tells the agents whose proposals are among the tabs: “Closing rejects the changes Claude
+    /// proposes to “a.swift”.”
+    private static func rejectNote(_ proposals: [DiffPane]) -> String {
+        let files = TerminalWindowController.nameList(proposals.map(\.path))
+        let authors = Set(proposals.compactMap { $0.proposal?.author })
+        guard authors.count == 1, let author = authors.first else { return "Closing rejects the changes proposed to \(files)." }
+        return "Closing rejects the changes \(author) proposes to \(files)."
     }
 
     /// Closes every editor without asking (the window is closing and the user already chose).

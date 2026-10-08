@@ -291,20 +291,60 @@ extension SelfTest {
         check(c2.isSidebarVisible, "menus: Show in Project Sidebar brings the sidebar back to show it")
         if !sidebarWasVisible { c2.toggleProjectSidebar(nil) } // as it was (the setting is the user's)
 
-        // Close Others asks once about the unsaved file among them.
+        // Close Others asks once about the unsaved file among them, and the agent's proposal it would reject.
         b.textView.insertText("edited ", replacementRange: NSRange(location: 0, length: 0))
         check(b.document.isDirty, "menus: a file with unsaved changes")
-        _ = run("Close Others", in: c2.editorTabMenu(at: 0) ?? NSMenu())
+        let proposal = openProposal(in: area, folder: folder)
+        func menuOfA() -> NSMenu { area.panes.firstIndex { $0 === a }.flatMap { c2.editorTabMenu(at: $0) } ?? NSMenu() }
+        _ = run("Close Others", in: menuOfA())
         let asked = await wait(3) { window.attachedSheet != nil }
-        check(asked && sheetText(window).contains("Save changes to “b.txt” before closing?"), "menus: Close Others asks about the unsaved file",
-              sheetText(window))
-        _ = await press("Don’t Save", inSheetOf: window)
-        check(await wait(3) { area.panes.count == 1 && area.panes.first === a }, "menus: Don’t Save closes the others, the tab clicked stays",
+        let words = sheetText(window)
+        check(asked && words.contains("Save changes to “b.txt” before closing?") && words.contains("Closing rejects the changes Self-test proposes to “c.txt”."),
+              "menus: Close Others asks about the unsaved file and the proposal it would reject", words)
+        _ = await press("Cancel", inSheetOf: window)
+        let kept = await wait(3) { window.attachedSheet == nil }
+        check(kept && area.panes.count == 4 && b.document.isDirty && !proposal.isDecided, "menus: Cancel closes nothing and rejects nothing",
               "\(area.panes.count) open")
+        let bFile = folder.appendingPathComponent("b.txt")
+        func bOnDisk() -> String { (try? String(contentsOf: bFile, encoding: .utf8)) ?? "" }
+        _ = run("Close Others", in: menuOfA())
+        _ = await wait(3) { window.attachedSheet != nil }
+        _ = await press("Save", inSheetOf: window)
+        check(await wait(3) { area.panes.count == 1 && area.panes.first === a } && bOnDisk() == "edited one\ntwo\nthree\n" && proposal.isDecided,
+              "menus: Save saves the file, then closes the others, rejecting the proposal", "\(area.panes.count) open, b.txt: \(bOnDisk())")
+
+        // Close Tabs to the Right with only a proposal there still asks, naming it.
+        let another = openProposal(in: area, folder: folder)
+        _ = run("Close Tabs to the Right", in: menuOfA())
+        _ = await wait(3) { window.attachedSheet != nil }
+        let rightWords = sheetText(window)
+        check(rightWords.contains("Close “c.txt ✻ Self-test”?") && rightWords.contains("Closing rejects the changes Self-test proposes"),
+              "menus: closing an agent's proposal among others asks first", rightWords)
+        _ = await press("Close Tab", inSheetOf: window)
+        check(await wait(3) { area.panes.count == 1 } && another.isDecided, "menus: Close Tab closes it, rejecting it")
+
+        // Don't Save closes the others and leaves the file as it was on disk.
+        c2.openFile(bFile)
+        if let again = area.editors.first(where: { $0.document.name == "b.txt" }) {
+            again.textView.insertText("again ", replacementRange: NSRange(location: 0, length: 0))
+        }
+        _ = run("Close Others", in: menuOfA())
+        let askedAgain = await wait(3) { window.attachedSheet != nil }
+        check(askedAgain && !sheetText(window).contains("rejects"), "menus: with no proposal among them, it asks about the file alone", sheetText(window))
+        _ = await press("Don’t Save", inSheetOf: window)
+        check(await wait(3) { area.panes.count == 1 && area.panes.first === a } && bOnDisk() == "edited one\ntwo\nthree\n",
+              "menus: Don’t Save closes the others, the tab clicked stays, the file as it was", "\(area.panes.count) open, b.txt: \(bOnDisk())")
         let alone = c2.editorTabMenu(at: 0) ?? NSMenu()
         check(alone.items.first { $0.title == "Close Others" }?.isEnabled == false, "menus: one file has no others to close")
         _ = run("Close", in: alone)
         check(await wait(3) { area.panes.isEmpty }, "menus: Close closes the file")
+    }
+
+    /// An agent's proposed change to c.txt, open in the editor.
+    private static func openProposal(in area: EditorArea, folder: URL) -> DiffPane {
+        let path = canonicalPath(folder.appendingPathComponent("c.txt").path)
+        let proposal = DiffPane.Proposal(original: "one\ntwo\nthree\n", proposed: "one\n2\nthree\n", author: "Self-test", tag: "close-others", client: nil)
+        return area.openProposal(for: path, proposal: proposal) { _, _ in }
     }
 
     // MARK: a window opened for one tab
