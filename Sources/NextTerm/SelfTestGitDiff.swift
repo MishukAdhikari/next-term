@@ -294,6 +294,19 @@ extension SelfTest {
         DiffLayout.current = layout
     }
 
+    /// The diff settings as they are now, put back by the closure returned: Side by Side or Unified, the Git
+    /// Diff tab's file column (the checks set both, and laying out its window moves the column's edge), and
+    /// the branches All changes counts from.
+    static func keepDiffSettings() -> () -> Void {
+        let keys = ["diffLayout", "gitDiffColumnWidth", "gitDiffColumnHidden", "gitDiffBases"]
+        let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
+        return {
+            for (key, value) in zip(keys, saved) {
+                if let value { UserDefaults.standard.set(value, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+            }
+        }
+    }
+
     /// A click on `row` of a unified column (a fold opens; nothing tracks the mouse after).
     private static func clickRow(_ column: UnifiedColumn, _ row: Int) {
         let text = column.textView
