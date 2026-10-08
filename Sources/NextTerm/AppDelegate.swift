@@ -558,40 +558,110 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
+    /// Set while a quit asks its questions. They are app-modal, and main-queue work still runs under them (a download
+    /// that ends, an MCP call): a second quit then is cancelled, and "Relaunch Now" is not offered (`Updater`).
+    var askingToQuit = false
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        let dirty = controllers.flatMap(\.editorArea.dirtyDocuments)
-        if !dirty.isEmpty && !SelfTest.isRequested {
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = dirty.count == 1 ? "Save changes to “\(dirty[0].name)” before quitting?"
-                : "Save changes to \(dirty.count) files before quitting?"
-            alert.informativeText = "Your changes are lost if you don’t save them."
-            alert.addButton(withTitle: dirty.count == 1 ? "Save" : "Save All")
-            alert.addButton(withTitle: "Cancel")
-            alert.addButton(withTitle: "Don’t Save").keyEquivalent = "d"
-            switch alert.runModal() {
-            case .alertFirstButtonReturn:
-                guard controllers.allSatisfy({ $0.editorArea.saveAll() }) else { return .terminateCancel }
-            case .alertThirdButtonReturn:
-                break
-            default:
-                return .terminateCancel
-            }
-        }
-        let busy = controllers.flatMap(\.busyTabs)
-        if !busy.isEmpty && !SelfTest.isRequested {
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = "Quit Next Term?"
-            alert.informativeText = "Quitting stops " + TerminalWindowController.stopList(busy)
-            alert.addButton(withTitle: "Quit")
-            alert.addButton(withTitle: "Cancel")
-            if alert.runModal() != .alertFirstButtonReturn { return .terminateCancel }
-        }
+        guard !askingToQuit else { return .terminateCancel }
+        askingToQuit = true
+        defer { askingToQuit = false }
+        guard askBeforeQuitting() else { return .terminateCancel }
         isTerminating = true
         // A skill change part-way finishes, and records its Undo, before Next Term quits.
         SkillsStore.waitForChanges()
         return .terminateNow
+    }
+
+    /// The quit's questions (QuitPolicy), one at a time: the save-changes and "Quitting stops…" alerts whenever they
+    /// apply, as always, with the reopen question on one of them, or else on its own. False when one cancels the
+    /// quit. The reopen answer is saved only once the quit goes ahead.
+    private func askBeforeQuitting() -> Bool {
+        let dirty = controllers.flatMap(\.editorArea.dirtyDocuments)
+        let projects = openProjects
+        let settings = LaunchSettings(defaults: launchDefaults)
+        let sheetAttached = NSApp.windows.contains { $0.attachedSheet != nil }
+        let busyCount = controllers.flatMap(\.busyTabs).count
+        let input = QuitInput(unsavedFiles: dirty.count, busyTabs: busyCount, projectWindows: projects.count,
+                              sheetAttached: sheetAttached, reason: quitReason, settings: settings)
+        let questions: [QuitQuestion] = QuitPolicy.questions(input)
+        guard !questions.isEmpty else { return true }
+        // A quit from the Dock while Next Term is behind another app: its first question shows in front.
+        NSApp.activate(ignoringOtherApps: true)
+        var answer: QuitAnswer?
+        var busyCheckbox: Bool?
+        for question in questions {
+            switch question {
+            case .saveChanges(let checkbox):
+                let alert = Self.saveBeforeQuittingAlert(dirty.map(\.name))
+                let reopen = checkbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
+                switch alert.runModal() {
+                case .alertFirstButtonReturn:
+                    guard controllers.allSatisfy({ $0.editorArea.saveAll() }) else { return false }
+                case .alertThirdButtonReturn:
+                    break
+                default:
+                    return false
+                }
+                if let reopen { answer = .checkbox(checked: reopen.state == .on) }
+            case .busy(let checkbox):
+                busyCheckbox = checkbox // asked below, once the busy tabs are read again
+            case .reopen(let returnKeyReopens):
+                let prompt = QuitReopenPrompt(projects: projects, returnKeyReopens: returnKeyReopens)
+                guard let reopen = prompt.run() else { return false }
+                answer = reopen
+            }
+        }
+        // Read again, as today: a tab that turned busy under a question before still gets "Quitting stops…". Only the
+        // alert the policy chose carries the checkbox, so the question is never asked twice; when that alert no longer
+        // applies, nothing is asked about reopening and the setting stays as it is.
+        let busy = controllers.flatMap(\.busyTabs)
+        if !busy.isEmpty {
+            let alert = Self.quitStopsAlert(busy)
+            let reopen = busyCheckbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
+            guard alert.runModal() == .alertFirstButtonReturn else { return false }
+            if let reopen { answer = .checkbox(checked: reopen.state == .on) }
+        }
+        if let answer { QuitPolicy.settings(after: answer, from: settings).save(to: launchDefaults) }
+        return true
+    }
+
+    /// Why this quit happens: the self-test, "Relaunch Now", a logout, restart or shutdown (the quit Apple event), or
+    /// else the user.
+    private var quitReason: QuitReason {
+        if SelfTest.isRequested { return .selfTest }
+        if MainActor.assumeIsolated({ Updater.shared.relaunching }) { return .updateRelaunch }
+        return QuitReopenPrompt.reason(of: NSAppleEventManager.shared().currentAppleEvent)
+    }
+
+    /// The windows' projects, each once, in window order: what the reopen question names.
+    private var openProjects: [String] {
+        var seen = Set<String>()
+        return controllers.compactMap(\.project).filter { seen.insert($0).inserted }
+    }
+
+    /// "Save changes to … before quitting?", for the unsaved files' names: Save (Save All), Cancel, Don’t Save (⌘D).
+    static func saveBeforeQuittingAlert(_ names: [String]) -> NSAlert {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = names.count == 1 ? "Save changes to “\(names[0])” before quitting?"
+            : "Save changes to \(names.count) files before quitting?"
+        alert.informativeText = "Your changes are lost if you don’t save them."
+        alert.addButton(withTitle: names.count == 1 ? "Save" : "Save All")
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Don’t Save").keyEquivalent = "d"
+        return alert
+    }
+
+    /// "Quit Next Term?", with what quitting stops: Quit, Cancel.
+    static func quitStopsAlert(_ busy: [TerminalTab]) -> NSAlert {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Quit Next Term?"
+        alert.informativeText = "Quitting stops " + TerminalWindowController.stopList(busy)
+        alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "Cancel")
+        return alert
     }
 
     func applicationWillTerminate(_ notification: Notification) {

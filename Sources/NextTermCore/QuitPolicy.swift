@@ -116,3 +116,66 @@ public enum QuitPolicy {
         return updated
     }
 }
+
+/// A button of the reopen prompt, "Reopen these projects next time?".
+public enum QuitPromptButton: CaseIterable, Sendable {
+    case reopen, cancel, dontReopen
+
+    public var title: String {
+        switch self {
+        case .reopen: return "Reopen"
+        case .cancel: return "Cancel"
+        case .dontReopen: return "Don’t Reopen"
+        }
+    }
+
+    /// What pressing it answers, with "Don’t ask again" as it was. Cancel has none: the quit is cancelled.
+    public func answer(dontAskAgain: Bool) -> QuitAnswer? {
+        switch self {
+        case .reopen: return .reopen(dontAskAgain: dontAskAgain)
+        case .cancel: return nil
+        case .dontReopen: return .dontReopen(dontAskAgain: dontAskAgain)
+        }
+    }
+}
+
+extension QuitPolicy {
+    /// The prompt's buttons in the order they are added. The choice that matches the setting comes first, so it is
+    /// the default, on the right, and takes Return: Return never changes "When Next Term opens". "Cancel" comes
+    /// next, as it does in the save-changes alert, and the other choice last.
+    public static func promptButtons(returnKeyReopens: Bool) -> [QuitPromptButton] {
+        returnKeyReopens ? [.reopen, .cancel, .dontReopen] : [.dontReopen, .cancel, .reopen]
+    }
+
+    /// The open projects by their folders' names, each once, in order. Folders with one name get their parent
+    /// folders too, as far up as it takes for them to read apart ("work/app", "home/app").
+    public static func projectNames(_ paths: [String]) -> [String] {
+        var seen = Set<String>()
+        let unique = paths.filter { seen.insert($0).inserted }
+        let parts: [[String]] = unique.map { path in path.split(separator: "/").map(String.init) }
+        var depths = [Int](repeating: 1, count: parts.count)
+        func name(_ index: Int) -> String {
+            let name = parts[index].suffix(depths[index]).joined(separator: "/")
+            return name.isEmpty ? unique[index] : name // "/"
+        }
+        while true {
+            let names = parts.indices.map(name)
+            var counts: [String: Int] = [:]
+            for name in names { counts[name, default: 0] += 1 }
+            // Each name two folders share goes one folder further up, where there is one.
+            let deeper = parts.indices.filter { counts[names[$0], default: 0] > 1 && depths[$0] < parts[$0].count }
+            if deeper.isEmpty { return names }
+            for index in deeper { depths[index] += 1 }
+        }
+    }
+
+    /// "app", "app and api", "app, api and web", or "a, b, c, d and 2 more": four names at most.
+    public static func projectList(_ paths: [String]) -> String {
+        let names = projectNames(paths)
+        let shown = Array(names.prefix(4))
+        let rest = names.count - shown.count
+        if rest > 0 { return shown.joined(separator: ", ") + " and \(rest) more" }
+        guard let last = shown.last, shown.count > 1 else { return shown.first ?? "" }
+        return shown.dropLast().joined(separator: ", ") + " and " + last
+    }
+}

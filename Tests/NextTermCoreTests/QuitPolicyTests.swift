@@ -198,3 +198,76 @@ import Testing
         #expect(QuitPolicy.settings(after: .checkbox(checked: false), from: welcome) == welcome)
     }
 }
+
+/// The reopen prompt's buttons and the names it lists, with made-up folders.
+@Suite struct QuitPromptTests {
+    let app = "/Users/x/Code/app"
+    let api = "/Users/x/Code/api"
+
+    /// The buttons' titles, as added: compared outside `#expect`, where arrays are slow to type-check.
+    func titles(returnKeyReopens: Bool) -> [String] {
+        let buttons: [QuitPromptButton] = QuitPolicy.promptButtons(returnKeyReopens: returnKeyReopens)
+        return buttons.map(\.title)
+    }
+
+    @Test func theChoiceThatMatchesTheSettingIsTheDefault() {
+        // AE6: added first, it sits on the right and takes Return; "Cancel" next to it, as in the
+        // save-changes alert; the other choice last, on the left.
+        let welcome: [String] = titles(returnKeyReopens: false)
+        let reopen: [String] = titles(returnKeyReopens: true)
+        let welcomeOrder: Bool = welcome == ["Don’t Reopen", "Cancel", "Reopen"]
+        let reopenOrder: Bool = reopen == ["Reopen", "Cancel", "Don’t Reopen"]
+        #expect(welcomeOrder, "\(welcome)")
+        #expect(reopenOrder, "\(reopen)")
+    }
+
+    @Test func eachButtonAnswersForItselfWhereverItSits() {
+        // The answer comes from the button pressed, never its place, since the place follows the setting.
+        #expect(QuitPromptButton.reopen.answer(dontAskAgain: false) == .reopen(dontAskAgain: false))
+        #expect(QuitPromptButton.reopen.answer(dontAskAgain: true) == .reopen(dontAskAgain: true))
+        #expect(QuitPromptButton.dontReopen.answer(dontAskAgain: false) == .dontReopen(dontAskAgain: false))
+        #expect(QuitPromptButton.dontReopen.answer(dontAskAgain: true) == .dontReopen(dontAskAgain: true))
+        // AE13: Cancel has no answer, even with "Don’t ask again" checked: nothing is written.
+        #expect(QuitPromptButton.cancel.answer(dontAskAgain: true) == nil)
+        #expect(QuitPromptButton.cancel.answer(dontAskAgain: false) == nil)
+        for reopens in [false, true] {
+            let buttons: [QuitPromptButton] = QuitPolicy.promptButtons(returnKeyReopens: reopens)
+            #expect(Set(buttons) == Set(QuitPromptButton.allCases), "\(buttons)")
+            #expect(buttons.count == 3 && buttons[1] == .cancel, "\(buttons)")
+        }
+    }
+
+    /// The names `paths` lists, compared outside `#expect`.
+    func expectNames(_ paths: [String], _ expected: [String], sourceLocation: SourceLocation = #_sourceLocation) {
+        let names: [String] = QuitPolicy.projectNames(paths)
+        let same: Bool = names == expected
+        #expect(same, "\(names)", sourceLocation: sourceLocation)
+    }
+
+    @Test func eachProjectIsNamedOnceByItsFolder() {
+        expectNames([app, api], ["app", "api"])
+        // Two windows on one project.
+        expectNames([app, api, app], ["app", "api"])
+        expectNames([], [])
+    }
+
+    @Test func twoFoldersWithOneNameGetTheirParentsToo() {
+        expectNames(["/Users/x/work/app", "/Users/x/home/app", api], ["work/app", "home/app", "api"])
+        // As far up as it takes, and only for the ones that read the same.
+        expectNames(["/Volumes/a/work/app", "/Users/x/work/app", "/Users/x/Code/web"],
+                    ["a/work/app", "x/work/app", "web"])
+        expectNames(["/app", "/Users/x/app"], ["app", "x/app"])
+    }
+
+    @Test func theListNamesFourAtMost() {
+        #expect(QuitPolicy.projectList([app]) == "app")
+        #expect(QuitPolicy.projectList([app, api]) == "app and api")
+        #expect(QuitPolicy.projectList([app, api, "/Users/x/Code/web"]) == "app, api and web")
+        let four: [String] = ["a", "b", "c", "d"].map { "/Users/x/Code/" + $0 }
+        #expect(QuitPolicy.projectList(four) == "a, b, c and d")
+        let six: [String] = ["a", "b", "c", "d", "e", "f"].map { "/Users/x/Code/" + $0 }
+        #expect(QuitPolicy.projectList(six) == "a, b, c, d and 2 more")
+        let five: [String] = ["a", "b", "c", "d", "e"].map { "/Users/x/Code/" + $0 }
+        #expect(QuitPolicy.projectList(five) == "a, b, c, d and 1 more")
+    }
+}

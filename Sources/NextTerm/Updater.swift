@@ -482,6 +482,8 @@ final class Updater {
     }
 
     private func relaunchPrompt(_ version: AppVersion) {
+        // Not under a quit's question (a download can end there): the staged update stays on the Update button.
+        if AppDelegate.shared.askingToQuit { return }
         if testing, UserDefaults.standard.bool(forKey: "updateInstallWithoutAsking") { return relaunchNow() }
         let alert = NSAlert()
         alert.messageText = "Next Term \(version) is ready"
