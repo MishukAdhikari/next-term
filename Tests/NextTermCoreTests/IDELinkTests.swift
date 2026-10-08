@@ -62,6 +62,9 @@ import Testing
         #expect(IDEHTTP.parse(Data("POST /mcp HTTP/1.1\r\nContent-Length: 100\r\n\r\n".utf8), maximumBody: 10) == .invalid)
         let chunks = "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n8\r\n12345678\r\n8\r\n12345678\r\n0\r\n\r\n"
         #expect(IDEHTTP.parse(Data(chunks.utf8), maximumBody: 10) == .invalid)
+        // A chunk size that would overflow when added to what has come so far.
+        let huge = "POST /mcp HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nA\r\n7fffffffffffffff\r\n"
+        #expect(IDEHTTP.parse(Data(huge.utf8)) == .invalid)
         // A head that never ends.
         #expect(IDEHTTP.parse(Data(repeating: 0x41, count: 70_000)) == .invalid)
     }

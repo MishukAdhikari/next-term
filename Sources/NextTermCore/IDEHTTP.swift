@@ -74,7 +74,8 @@ public enum IDEHTTP {
                   let size = Int(hex.trimmingCharacters(in: .whitespaces), radix: 16), size >= 0 else { return .invalid }
             position = lineRange.upperBound
             if size == 0 { break }
-            guard body.count + size <= maximumBody else { return .invalid }
+            // Not `body.count + size`: a size near Int.max would overflow (and stop the app) before the nonce is checked.
+            guard size <= maximumBody - body.count else { return .invalid }
             guard buffer.count - position >= size + 2 else { return .incomplete }
             guard buffer[(position + size)..<(position + size + 2)] == lineEnd else { return .invalid }
             body.append(buffer[position..<(position + size)])
