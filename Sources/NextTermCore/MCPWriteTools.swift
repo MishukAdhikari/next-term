@@ -95,7 +95,7 @@ extension MCPServer {
              inputSchema: #"{"type": "object", "properties": {\#(tabArgument), "force": {"type": "boolean"}, \#(reasonArgument)}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: true, timeout: 60),
         Tool(name: "zoom_pane", title: "Zoom a pane",
-             description: "Makes one pane of a split tab fill the tab while the others keep running behind it (zoomed true, the default), or brings every pane back (zoomed false), as Window › Maximize Pane does. The zoomed pane takes its window's keyboard. The user is asked on the Mac first; a call that changes nothing answers at once.",
+             description: "Makes one pane of a split tab fill the tab while the others keep running behind it (zoomed true, the default), or brings every pane back (zoomed false), as Window › Maximize Pane does. The zoomed pane takes its window's keyboard; bringing the panes back leaves the keyboard where it is. The user is asked on the Mac first; a call that changes nothing answers at once.",
              inputSchema: #"{"type": "object", "properties": {\#(tabArgument), "zoomed": {"type": "boolean", "description": "Default true."}, \#(reasonArgument)}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
         Tool(name: "set_layout", title: "Set the layout",

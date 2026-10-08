@@ -290,12 +290,14 @@ extension MCPWriteControl {
 extension TerminalWindowController {
     /// zoom_pane: `tab` fills its tab (nil: every pane comes back), as Maximize Pane does for the focused
     /// pane. The zoomed pane takes the window's keyboard, since the one that had it may be hidden now.
+    /// Bringing the panes back keeps the keyboard where it is: in the pane that had it, or in the editor.
     func setZoomed(_ tab: TerminalTab?, in group: PaneGroup) {
+        let paneHadKeyboard = group.panes.contains { window?.firstResponder === $0.view }
         group.zoomed = tab
         if let tab { group.focused = tab }
         group.layout()
         window?.contentView?.layoutSubtreeIfNeeded()
-        if group === activeGroup { window?.makeFirstResponder(group.focused.view) }
+        if group === activeGroup, tab != nil || paneHadKeyboard { window?.makeFirstResponder(group.focused.view) }
         group.updateDimming()
         refreshVisibility()
         refresh()
