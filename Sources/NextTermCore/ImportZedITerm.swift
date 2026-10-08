@@ -132,15 +132,10 @@ public enum ImportZed {
 
     static let notRecognised = "value not recognised"
 
-    /// Top-level keys turned into settings, and the ones inside `terminal` and `project_panel`: only their values
-    /// are ever converted.
+    /// Top-level keys turned into settings: only their values are ever converted. Inside `terminal` and
+    /// `project_panel`, `report` names only the keys in `nestedReasons`.
     static let mappedKeys: Set<String> = ["base_keymap", "buffer_font_family", "buffer_font_size", "buffer_line_height", "soft_wrap",
                                           "remove_trailing_whitespace_on_save", "ensure_final_newline_on_save", "file_scan_exclusions"]
-    static let mappedNested: [String: Set<String>] = [
-        "terminal": ["font_family", "option_as_meta", "dock", "font_size", "working_directory", "cursor_shape", "blinking",
-                     "max_scroll_history_lines"],
-        "project_panel": ["dock"],
-    ]
 
     /// The settings Next Term has too: font size, line height, soft wrap, clean-up on save and hidden files for the
     /// editor; Option as Meta, where it sits, its cursor, scrollback and start folder for the terminal; and the
@@ -259,7 +254,7 @@ public enum ImportZed {
             case "off"?: settings.append(PlannedSetting(.terminalCursorBlink(false), source: "terminal.blinking off"))
             case "terminal_controlled"?:
                 settings.append(PlannedSetting(.terminalCursorBlink(false), source: "terminal.blinking terminal_controlled",
-                                               note: "a program can still make it blink, as in Zed"))
+                                               note: "a program can still ask for a blinking bar or underline"))
             default: skipped.append(SkippedItem("terminal.blinking", notRecognised))
             }
         }

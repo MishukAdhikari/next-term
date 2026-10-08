@@ -238,7 +238,7 @@ import Testing
             """#)
         #expect(terminal.settings == [
             PlannedSetting(.terminalCursorShape("block"), source: "terminal.cursor_shape hollow", note: "a hollow block isn't supported, so it is filled"),
-            PlannedSetting(.terminalCursorBlink(false), source: "terminal.blinking terminal_controlled", note: "a program can still make it blink, as in Zed"),
+            PlannedSetting(.terminalCursorBlink(false), source: "terminal.blinking terminal_controlled", note: "a program can still ask for a blinking bar or underline"),
             PlannedSetting(.terminalScrollback(100_000), source: "terminal.max_scroll_history_lines 250000", note: "Next Term keeps at most 100,000 lines"),
             PlannedSetting(.terminalStartFolder("home"), source: "terminal.working_directory always_home", ticked: false,
                            note: "in project windows too, where new tabs otherwise open in the project's folder"),
