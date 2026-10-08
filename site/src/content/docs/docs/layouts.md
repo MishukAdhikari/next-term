@@ -22,11 +22,14 @@ Any tab can hold several terminals, side by side or one above the other, as many
 | Close the pane (the menu says **Close Pane**) | <kbd>⌘W</kbd> |
 
 - **A new pane starts in the folder** of the pane you split.
-- **You can tell where your typing goes:** the panes without the keyboard are shaded.
+- **Each pane has a header** while the tab shows more than one: the pane’s mark, its title (a pane on a server with its server mark) and a **×** that closes that pane alone. The × shows on the pane with the keyboard and on the one under the pointer. Like <kbd>⌘W</kbd> on that pane, it asks first when something runs there, or when the pane’s session is kept on a server. Middle-click a header to close its pane too.
+- **Click a header** to type in that pane. **Double-click it** to rename the pane; the tab shows that name while the pane has the keyboard. An empty name goes back to the automatic one.
+- **You can tell where your typing goes:** the pane with the keyboard has the header with the blue line, as the selected tab has, and the others are shaded.
+- **The header takes its room from the pane,** above the terminal. It is never part of the terminal’s rows: programs in the pane see a terminal a little shorter, and nothing of the header. A tab of one pane, or a maximized pane, has no header.
 - **The tab bar still shows one tab,** named after the pane with the keyboard plus how many others there are, such as “claude +2”. Its mark is the most urgent of its panes, so a pane waiting on you is never hidden.
 - **Drag a divider** to resize. Panes keep their proportions when the window resizes or you split again.
 - **Maximize Pane** gives one pane the whole tab while the others keep running; press it again to bring them back.
-- **The tab’s ×** closes all its panes, asking once if that would stop anything. A pane whose shell exits closes, and its neighbour takes its room and the keyboard.
+- **The tab’s ×** closes all its panes, asking once if that would stop anything. A pane closed by its own × or whose shell exits goes, and its neighbour takes its room (and the keyboard, if it had it).
 - **Agents can split too:** an orchestrator can open a worker in a pane beside another tab ([`new_tab` with `split_beside`](/docs/orchestration/#the-tools)).
 
 ## Where the terminal goes
