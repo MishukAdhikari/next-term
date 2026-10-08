@@ -226,6 +226,25 @@ import Testing
         let steps = try self.plan("keybind = ctrl+a>ctrl+n=new_tab\nkeybind = control+a>control+n=unbind")
         #expect(reasons(steps)["keybind ctrl+a>ctrl+n → new_tab"] == nil)
         #expect(reasons(steps)["1 keybind"] != nil)
+
+        // Ghostty refuses a two-step key with global: or all:, so such a line replaces nothing: the earlier line
+        // for the same steps still applies, and the refused one says why it does nothing.
+        let flagged = try self.plan("""
+            keybind = ctrl+a>ctrl+n=new_tab
+            keybind = global:ctrl+a>ctrl+n=unbind
+            keybind = all:control+a>control+n=new_window
+            keybind = unconsumed:all:ctrl+a>ctrl+n=unbind
+            """)
+        #expect(reasons(flagged)["keybind ctrl+a>ctrl+n → new_tab"] == ImportShortcuts.twoStep)
+        #expect(reasons(flagged)["keybind all:control+a>control+n → new_window"] == ImportGhostty.refusedSequence)
+        #expect(ImportGhostty.triggerID("global:ctrl+a>ctrl+n") == nil && ImportGhostty.triggerID("unconsumed:all:a>b") == nil)
+        // One step with a flag is still the same key as without: a later line replaces it.
+        #expect(ImportGhostty.triggerID("all:ctrl+a") == ImportGhostty.triggerID("ctrl+a"))
+        let single = try self.plan("keybind = super+t=new_tab\nkeybind = all:super+t=unbind")
+        #expect(single.shortcuts.isEmpty)
+        // Without those flags a flagged two-step line is read as usual, and replaces the unflagged one.
+        let performable = try self.plan("keybind = ctrl+a>ctrl+n=new_tab\nkeybind = performable:ctrl+a>ctrl+n=unbind")
+        #expect(reasons(performable)["keybind ctrl+a>ctrl+n → new_tab"] == nil)
     }
 
     @Test func safety() throws {

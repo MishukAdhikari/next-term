@@ -438,6 +438,24 @@ public enum ImportGhostty {
         return text
     }
 
+    /// The flags a trigger starts with, lowercased, in its order.
+    static func leadingFlags(_ trigger: String) -> [String] {
+        var text = trigger.lowercased()
+        var found: [String] = []
+        while let flag = flags.first(where: { text.hasPrefix($0) }) {
+            found.append(flag)
+            text.removeFirst(flag.count)
+        }
+        return found
+    }
+
+    /// A two-step key with `global:` or `all:`: Ghostty refuses the line, so it binds nothing and replaces nothing.
+    static func isRefusedSequence(_ trigger: String) -> Bool {
+        withoutFlags(trigger).contains(">") && leadingFlags(trigger).contains { $0 == "global:" || $0 == "all:" }
+    }
+
+    static let refusedSequence = "Ghostty doesn't take a two-step key with global: or all:, so it ignores this line"
+
     /// A trigger's parts between "+" signs, split as Ghostty splits them: an empty part is the + key, and a "+"
     /// at the very end starts no part.
     static func triggerParts(_ text: String) -> [String] {
@@ -473,8 +491,10 @@ public enum ImportGhostty {
 
     /// A trigger as Ghostty tells them apart: without its flags, its modifiers in a set order, and its key by place
     /// or by character (`bracket_left` and `left_bracket` are one key, `[` another). A two-step key is read a step
-    /// at a time between ">" signs, as Ghostty reads it. Nil for one Ghostty turns down, an empty step among them.
+    /// at a time between ">" signs, as Ghostty reads it. Nil for one Ghostty turns down: an empty step among them,
+    /// or a two-step key with `global:` or `all:`.
     static func triggerID(_ trigger: String) -> String? {
+        if isRefusedSequence(trigger) { return nil }
         var steps: [String] = []
         for step in withoutFlags(trigger).split(separator: ">", omittingEmptySubsequences: false) {
             guard let parsed = parseTrigger(String(step)) else { return nil }
@@ -486,6 +506,7 @@ public enum ImportGhostty {
     /// A Ghostty trigger ("super+shift+d", "cmd+bracket_left") read the way VS Code's keys are. Key
     /// sequences and system-wide keys aren't supported.
     static func key(_ trigger: String, usKeyboard: Bool) -> ImportShortcuts.ParsedKey {
+        if isRefusedSequence(trigger) { return .notSupported(refusedSequence) }
         var text = trigger.lowercased()
         for prefix in ["unconsumed:", "performable:", "all:"] where text.hasPrefix(prefix) { text.removeFirst(prefix.count) }
         if text.hasPrefix("global:") { return .notSupported("system-wide keys aren't supported") }
