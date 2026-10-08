@@ -98,7 +98,8 @@ public struct PlaceSighting {
 public struct PlaceTracker {
     /// A switch is the developer's or a shell tab's when theirs came this long before it was seen.
     public static let ownWindow: TimeInterval = 10
-    /// An agent counts as working at a switch when it was working this soon before it was seen.
+    /// An agent counts as working at a switch when it was working this soon before it was first seen (not
+    /// after: one that starts during the hold didn't make it).
     public static let workingWindow: TimeInterval = 2
 
     public private(set) var places: [String: AgentPlace] = [:]
@@ -115,9 +116,16 @@ public struct PlaceTracker {
         var startedAt: Date
         var location = Held<String>()
         var hadTurn = false
-        var lastWorking: Date?
+        /// Its stretches of work lately, each from the first look that saw it working to the last.
+        var stretches: [(from: Date, to: Date)] = []
+        var workingNow = false
         var workingBranch: CheckoutHead?
         var switched: BranchSwitch?
+
+        /// It was working at some look from `start` to `end`: one that only started later wasn't.
+        func worked(from start: Date, to end: Date) -> Bool {
+            stretches.contains { $0.from <= end && $0.to >= start }
+        }
     }
 
     public init() {}
@@ -195,12 +203,16 @@ public struct PlaceTracker {
             _ = state.location.see(held, at: now)
         }
         if agent.working {
-            state.lastWorking = now
+            var from = now // a new stretch, or the one going on
+            if state.workingNow, let last = state.stretches.popLast() { from = last.from }
+            state.stretches.append((from, now))
             if !state.hadTurn, let path = state.location.value {
                 state.hadTurn = true
                 state.workingBranch = headNow(of: path)
             }
         }
+        state.workingNow = agent.working
+        state.stretches.removeAll { now.timeIntervalSince($0.to) > 60 }
         agents[agent.key] = state
     }
 
@@ -241,7 +253,8 @@ public struct PlaceTracker {
             credited.insert(Self.creditKey(latest))
             return .tab(key: latest.key, title: latest.title)
         }
-        let working = here.filter { ($0.value.lastWorking ?? .distantPast) >= since.addingTimeInterval(-Self.workingWindow) }
+        let start = since.addingTimeInterval(-Self.workingWindow)
+        let working = here.filter { $0.value.worked(from: start, to: since) }
         guard working.count == 1, let key = working.first?.key else { return .unknown(working: working.count) }
         return .agent(key: key, title: seen.agents.first { $0.key == key }?.title ?? "")
     }

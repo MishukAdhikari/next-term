@@ -516,6 +516,25 @@ import Testing
         for key in ["5", "7"] { #expect(tracker.places[key]?.switched?.by == .unknown(working: 2)) }
     }
 
+    /// An agent that starts a turn while a switch is being held wasn't working at it: the one that was made it.
+    /// One that paused just before the switch and works again during the hold was working at it.
+    @Test func anAgentThatStartsDuringTheHoldWasNotWorkingAtTheSwitch() {
+        var tracker = PlaceTracker()
+        run(&tracker, sighting(.branch("main"), [("7", root, true), ("8", root, true)]), from: 0, to: 1)
+        run(&tracker, sighting(.branch("main"), [("7", root, true), ("8", root, false)]), from: 2, to: 9)
+        run(&tracker, sighting(.branch("fix/x"), [("7", root, true), ("8", root, false)]), from: 10, to: 10)
+        run(&tracker, sighting(.branch("fix/x"), [("7", root, true), ("8", root, true)]), from: 11, to: 14)
+        #expect(tracker.places["7"]?.switched == nil && tracker.places["7"]?.workingBranch == .branch("fix/x"))
+        #expect(tracker.places["8"]?.switched?.by == .agent(key: "7", title: "tab 7"))
+
+        run(&tracker, sighting(.branch("fix/x"), [("7", root, true), ("8", root, false)]), from: 15, to: 19)
+        tracker.keepGoing("8")
+        run(&tracker, sighting(.branch("fix/y"), [("7", root, false), ("8", root, false)]), from: 20, to: 20)
+        run(&tracker, sighting(.branch("fix/y"), [("7", root, true), ("8", root, false)]), from: 21, to: 24)
+        #expect(tracker.places["7"]?.switched == nil && tracker.places["7"]?.workingBranch == .branch("fix/y"))
+        #expect(tracker.places["8"]?.switched?.by == .agent(key: "7", title: "tab 7"))
+    }
+
     /// AE2a and a shell tab: their switches are theirs, even with one agent working.
     @Test func yourSwitchAndAShellTabsAreTheirs() {
         var tracker = PlaceTracker()
