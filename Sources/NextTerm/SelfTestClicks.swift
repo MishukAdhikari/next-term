@@ -618,7 +618,7 @@ extension SelfTest {
         return row >= 0 && c.sidebar.outline.selectedRowIndexes == IndexSet(integer: row)
     }
 
-    private static func doubleClickRow(_ c: TerminalWindowController, _ url: URL) {
+    static func doubleClickRow(_ c: TerminalWindowController, _ url: URL) {
         clickRow(c, url)
         clickRow(c, url, count: 2)
     }
