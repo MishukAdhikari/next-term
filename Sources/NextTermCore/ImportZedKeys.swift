@@ -136,19 +136,25 @@ extension ImportZed {
         return actionMap[action]
     }
 
-    /// The bindings as rows, as Zed reads them: a binding further down wins a key, so of one command's keys the
-    /// last one comes over (or else the last that is free to take), and of two commands on one key the one
-    /// further down keeps it. A key turned off (`null`) has no command to name, so it changes nothing here.
+    /// The bindings as rows, as Zed reads them: a binding further down in the same place (the whole window, the
+    /// editor or the terminal) replaces one on its key, and `null` there turns it off; of one command's keys left,
+    /// the last one comes over (or else the last that is free to take). Two commands on one key are settled by
+    /// `settled`.
     static func shortcuts(_ bindings: [Binding], usKeyboard: Bool) -> (shortcuts: [PlannedShortcut], skipped: [SkippedItem]) {
         struct Added {
             let index: Int
             let binding: Binding
             let chord: KeyChord
+            let scope: ImportVSCode.Scope
             let note: String?
         }
         var skipped: [SkippedItem] = []
         var order: [String] = []
         var added: [String: [Added]] = [:]
+        let keys = bindings.map { binding -> KeyChord? in
+            if case .chord(let chord) = keystroke(binding.key, usKeyboard: usKeyboard) { return chord }
+            return nil
+        }
         for (index, binding) in bindings.enumerated() {
             let label = describe(binding)
             guard let action = binding.action, !noAction.contains(action) else {
@@ -159,8 +165,9 @@ extension ImportZed {
                 skipped.append(SkippedItem(label, ImportShortcuts.noCommand))
                 continue
             }
+            let place = scope(of: binding.context)
             let note: String?
-            switch scope(of: binding.context) {
+            switch place {
             case .everywhere: note = nil
             case .editor: note = KeyBindings.editorCommands.contains(target) ? nil : "kept to the editor in Zed"
             case .terminal where ImportShortcuts.terminalCommands.contains(target): note = "kept to the terminal in Zed"
@@ -180,35 +187,83 @@ extension ImportZed {
             case .chord(let chord):
                 if let reason = ImportShortcuts.unusable(chord) {
                     skipped.append(SkippedItem(label, reason))
+                } else if let later = replacement(of: index, in: bindings, keys: keys) {
+                    let off = later.action.map { noAction.contains($0) } ?? true
+                    skipped.append(SkippedItem(label, off ? "turned off further down" : "replaced further down by " + ImportShortcuts.shown(later.action ?? "")))
                 } else {
                     if !order.contains(target) { order.append(target) }
-                    added[target, default: []].append(Added(index: index, binding: binding, chord: chord, note: note))
+                    added[target, default: []].append(Added(index: index, binding: binding, chord: chord, scope: place, note: note))
                 }
             }
         }
 
-        var rows: [(index: Int, row: PlannedShortcut)] = []
+        var rows: [KeyRow] = []
         for target in order {
             guard let list = added[target], let last = list.last else { continue }
             let pick = list.last { ImportShortcuts.isFree($0.chord) } ?? last
-            rows.append((pick.index, ImportShortcuts.row(target, pick.chord, source: "keymap.json: " + describe(pick.binding), note: pick.note)))
+            let row = ImportShortcuts.row(target, pick.chord, source: "keymap.json: " + describe(pick.binding), note: pick.note)
+            rows.append(KeyRow(index: pick.index, row: row, scope: pick.scope))
             for other in list where other.index != pick.index {
                 skipped.append(SkippedItem(describe(other.binding), "one shortcut per command here; \(pick.chord.display) comes over"))
             }
         }
-        // One key on two commands: the binding further down wins it, so the other row is unticked.
-        var winner: [KeyChord: (index: Int, title: String)] = [:]
-        for (index, row) in rows where row.ticked {
-            if let chord = row.chord, (winner[chord]?.index ?? -1) < index { winner[chord] = (index, row.title) }
+        return (settled(rows), skipped)
+    }
+
+    /// The binding further down that takes the key of the one at `index` in the same place, as Zed reads a keymap:
+    /// another action, or `null` turning it off (nil: none does). One for a narrower place leaves it working
+    /// everywhere else, and one for the whole window doesn't reach the editor's or the terminal's own.
+    static func replacement(of index: Int, in bindings: [Binding], keys: [KeyChord?]) -> Binding? {
+        guard let chord = keys[index], index + 1 < bindings.count else { return nil }
+        let binding = bindings[index]
+        let place = scope(of: binding.context)
+        for later in (index + 1)..<bindings.count where keys[later] == chord {
+            let other = bindings[later]
+            guard scope(of: other.context) == place else { continue }
+            if other.action != binding.action || other.tabIndex != binding.tabIndex { return other }
         }
-        let shortcuts = rows.map { entry -> PlannedShortcut in
+        return nil
+    }
+
+    /// A row with where its binding applies in Zed, and its place in the file.
+    struct KeyRow {
+        let index: Int
+        let row: PlannedShortcut
+        let scope: ImportVSCode.Scope
+    }
+
+    /// One key on two commands, as Zed picks between them: a binding for the editor or the terminal wins there over
+    /// one for the whole window, and of two for the same place the one further down wins. The other row is
+    /// unticked, unless Next Term can share the key the way Zed does (KeyBindings.canShareKey): an editor-only
+    /// binding with one for the window, or a terminal-only one with anything, each keeps it in its own part.
+    static func settled(_ rows: [KeyRow]) -> [PlannedShortcut] {
+        rows.map { entry -> PlannedShortcut in
             var row = entry.row
-            guard row.ticked, let chord = row.chord, let win = winner[chord], win.index != entry.index else { return row }
+            guard row.ticked, let chord = row.chord else { return row }
+            let rivals = rows.filter { $0.index != entry.index && $0.row.ticked && $0.row.chord == chord }
+            guard let win = rivals.last(where: { beats($0, entry) && !shareKey($0, entry) }) else { return row }
             row.ticked = false
-            row.note = ImportShortcuts.join("a binding further down gives \(chord.display) to \(win.title)", row.note)
+            let place = win.scope == .editor ? "for the editor" : win.scope == .terminal ? "for the terminal" : "further down"
+            row.note = ImportShortcuts.join("a binding \(place) gives \(chord.display) to \(win.row.title)", row.note)
             return row
         }
-        return (shortcuts, skipped)
+    }
+
+    /// Whether Zed obeys `first` over `second` where both apply: the deeper context, else the one further down.
+    static func beats(_ first: KeyRow, _ second: KeyRow) -> Bool {
+        let deeper = first.scope != .everywhere
+        if deeper != (second.scope != .everywhere) { return deeper }
+        return first.index > second.index
+    }
+
+    /// Whether two rows on one key both work in Zed the way Next Term would share it: the editor's command in the
+    /// editor, the other everywhere else.
+    static func shareKey(_ first: KeyRow, _ second: KeyRow) -> Bool {
+        guard KeyBindings.canShareKey(first.row.command, second.row.command) else { return false }
+        let editorFirst = KeyBindings.editorCommands.contains(first.row.command)
+        let editor = editorFirst ? first : second
+        let other = editorFirst ? second : first
+        return other.scope == .terminal || (editor.scope == .editor && other.scope == .everywhere)
     }
 
     /// "cmd-shift-d → editor::DuplicateLineDown", for a preview line (a part that looks like a credential is
