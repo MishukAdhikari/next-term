@@ -145,7 +145,7 @@ extension SelfTest {
         let removed = header.shownHideKey
         shortcuts.reset("toggleProjectSidebar:")
         let changed = zip(withKey, withoutKey).filter { $0 != $1 }.map { "\($0) vs \($1)" }
-        check(changed.isEmpty && narrow == nil, "key hints: in a narrow header the key gives way before the branch name is cut",
+        check(changed.isEmpty && narrow == nil, "key hints: in a narrow header the key gives way before anything in it is cut or shortened",
               "at 300: \(narrow ?? "none"); " + changed.prefix(3).joined(separator: "; "))
         check(removed == nil, "key hints: the header's goes when ⌘B is removed", removed ?? "none")
     }
