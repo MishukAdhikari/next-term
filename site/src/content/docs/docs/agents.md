@@ -66,7 +66,8 @@ Copilot CLI connects to an editor through the protocol VS Code’s Copilot exten
 - **What it sees:** the lines you select go with your next prompt, and Copilot shows which ones. With nothing selected, it knows which file you have open.
 - **<kbd>⌥⌘K</kbd> puts an @-mention straight into Copilot’s prompt**, such as `@app/User.php:10-20`.
 - **Proposed edits** open as a diff to accept or reject, as with Claude. Copilot asks in the terminal at the same time; answer in either place, and the other closes.
-- **Where it connects:** Copilot connects when it starts in a folder Next Term lists for it: an open project, or the folder a tab is in. A `copilot` started in another terminal in one of those folders finds Next Term too. If VS Code has the same folder open, Copilot may connect to VS Code instead; `/ide` in Copilot switches.
+- **Where it connects:** Copilot connects by itself when it starts in a folder Next Term lists for it: an open project, or the folder a tab is in, except your home folder and `/`. It takes the first editor it finds with that folder, so where VS Code has the same folder open, a `copilot` in a Next Term tab may connect to VS Code, and one in VS Code’s own terminal may connect to Next Term. `/ide` in Copilot switches.
+- **From another terminal:** a `copilot` started outside Next Term in one of those folders connects too, as does one that picks Next Term in `/ide`. It sees the selection of the Next Term window that has its folder open (the window’s project, a tab’s folder, or a folder inside one of them), and its proposed edits open in that window. If no window has its folder open, it is sent no selection, and its proposed edits open in the front window.
 - **Nothing to set up**, and nothing of Copilot’s is changed: Next Term only adds its own lock file to `~/.copilot/ide`, and only when `~/.copilot` exists (Copilot makes it the first time it runs). Copilot still asks its own question about trusting a folder; Next Term never answers it for you.
 
 ## opencode
@@ -75,6 +76,7 @@ opencode reads Claude Code’s lock files and connects to Next Term the same way
 
 - **What it sees:** the lines you select, which go with your next prompt, and the @-mentions <kbd>⌥⌘K</kbd> sends.
 - **No proposals:** opencode does not ask an editor to show its edits, and without the token it could not.
+- **Not in tmux or a remote tab:** opencode inside tmux, even tmux started in a Next Term tab, or in a [remote tab](/docs/remote/), is not linked, because Next Term cannot tell it is in one of its tabs.
 
 ## Send to Agent (⌥⌘K)
 
@@ -93,10 +95,11 @@ Send to Agent hands your context to the agent in a tab, in that agent’s own sy
 | Agent | Lines 10–20 of a file | One line | A folder |
 |---|---|---|---|
 | Claude Code, opencode | `@app/User.php#L10-20` | `@app/User.php#L10` | `@app/` |
-| Gemini CLI, Qwen Code, Copilot CLI | `@app/User.php (lines 10-20)` | `@app/User.php (line 10)` | `app/ (folder)` |
+| Gemini CLI, Qwen Code | `@app/User.php (lines 10-20)` | `@app/User.php (line 10)` | `app/ (folder)` |
+| Copilot CLI | `@app/User.php:10-20` | `@app/User.php:10` | `app/ (folder)` |
 | Codex and every other agent | `app/User.php:10-20` | `app/User.php:10` | `app/ (folder)` |
 
-Several items go on one line for agents that use @-mentions; for the others they become a short “Context:” list. A path with spaces is quoted. When Claude, opencode or Copilot CLI is connected through the IDE link, files go in as real @-mentions instead of typed text, in the agent’s own form (`@app/User.php:10-20` for Copilot). A folder, or a reference with a note such as “(unsaved changes in the editor)” or “(as staged)”, is still typed: a mention carries only a file and its lines.
+Several items go on one line for agents that use @-mentions; for the others they become a short “Context:” list. A path with spaces is quoted; for Copilot CLI it is typed without the `@` and with the lines in words, because Copilot’s @-mentions end at a space. When Claude, opencode or Copilot CLI is connected through the IDE link, files go in as real @-mentions instead of typed text. A folder, or a reference with a note such as “(unsaved changes in the editor)” or “(as staged)”, is still typed: a mention carries only a file and its lines.
 
 **Unsaved changes:** if the file has edits you have not saved, the reference says “(unsaved changes in the editor)” and the selected code is pasted after it as a fenced code block, so the agent sees what you see.
 

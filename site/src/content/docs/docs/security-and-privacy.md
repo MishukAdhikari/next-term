@@ -23,7 +23,7 @@ Claude Code, opencode, Gemini CLI, Qwen Code and GitHub Copilot CLI connect to N
 | Claude Code | A program with the token from Next Term’s lock file in `~/.claude/ide` | The selected lines, or which file is open; <kbd>⌥⌘K</kbd>’s @-mentions | To show a proposed edit |
 | opencode | From a Next Term tab: opencode itself, with no token. Elsewhere: with the token, as Claude Code | The selected lines; <kbd>⌥⌘K</kbd>’s @-mentions | Nothing from a tab |
 | Gemini CLI, Qwen Code | A program with the token from the tab’s environment or Next Term’s discovery file | Up to 10 open files, the caret and the selection | To show a proposed edit |
-| Copilot CLI | A program with the nonce from Next Term’s lock file in `~/.copilot/ide` | The selected lines, or which file is open; <kbd>⌥⌘K</kbd>’s @-mentions | To show a proposed edit; the last selection it was sent |
+| Copilot CLI | A program with the nonce from Next Term’s lock file in `~/.copilot/ide`. A `copilot` started in another terminal in a folder Next Term has open connects by itself | The selected lines, or which file is open, in the window of its tab (started elsewhere: the window that has its folder open, or nothing); <kbd>⌥⌘K</kbd>’s @-mentions | To show a proposed edit; the last selection it was sent |
 
 The lock and discovery files are readable only by you, so the secrets keep out other users of this Mac and web pages. They do not keep out programs you run yourself, which can read your files anyway.
 
