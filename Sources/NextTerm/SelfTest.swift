@@ -680,6 +680,7 @@ enum SelfTest {
         await paneChecks(c)
 
         await sessionChecks(proj: proj)
+        await moreSessionChecks(proj: proj)
 
         await lastTabChecks()
         await dockReopenChecks(c)
@@ -4654,7 +4655,7 @@ enum SelfTest {
         await screenshot(window, suffix: suffix)
     }
 
-    private static func screenshot(_ window: NSWindow, suffix: String) async {
+    static func screenshot(_ window: NSWindow, suffix: String) async {
         guard let base = reportPath else { return }
         await pause(0.4)
         guard let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber),
