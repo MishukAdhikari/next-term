@@ -348,3 +348,234 @@ import Testing
     }
 }
 
+/// Text and files that add MCP servers, or fetch server code outside the commit (R14).
+@Suite struct SkillReviewServerWarningsTests {
+    static let addsServer = "Adds an MCP server to an agent's settings (… mcp add)."
+    static let installsPlugin = "Installs a plugin or extension, which can bring its own MCP servers and hooks."
+    static let unpinnedNPX = "Runs an npm package without a pinned version (npx)."
+    static let unpinnedServer = SkillReview.unpinnedServerText
+    static let settings = "Holds MCP server settings (mcpServers or [mcp_servers]). An agent may copy them into its own settings."
+    static let bundle = "An MCP bundle (.mcpb or .dxt): a packed server that Claude Code unpacks and runs. Its contents are not reviewed here."
+    static let bundleLink = "A link to an MCP bundle: a server fetched from the web, outside this commit."
+
+    static func texts(_ text: String, file: String = "notes.md") -> [String] {
+        SkillReview.textFlags(text, file: file).map(\.text)
+    }
+
+    /// The review's flags for one file of a fixture.
+    static func flags(_ review: SkillReview, _ file: String) -> [String] {
+        review.flags.filter { $0.file == file }.map(\.text)
+    }
+
+    // MARK: commands
+
+    @Test(arguments: ["codex mcp add linear --url https://mcp.linear.app/mcp", "claude mcp add docs -- node x.js",
+                      #"claude mcp add-json x '{"type": "http", "url": "https://x.example/mcp"}'"#, "gemini mcp add x",
+                      "Then run `qwen mcp add docs node server.js`."])
+    func commandsThatAddAServerWarn(_ line: String) {
+        #expect(Self.texts(line).contains(Self.addsServer), "\(Self.texts(line))")
+    }
+
+    @Test(arguments: ["Ask the mcp server for a list.", "Our mcp added a tool.", "Install the mcp addon.", "claude mcp list",
+                      "the mcp-add tool", "xmcp add", "-mcp add"])
+    func proseAboutServersDoesNot(_ line: String) {
+        #expect(!Self.texts(line).contains(Self.addsServer), "\(Self.texts(line))")
+    }
+
+    @Test(arguments: ["Run codex\nmcp add x.", "cursor-agent  mcp add x", "some-very-long-hyphenated-program-name-that-goes-on mcp add x"])
+    func theProgramIsAnyWordBeforeIt(_ line: String) {
+        #expect(Self.texts(line).contains(Self.addsServer), "\(Self.texts(line))")
+    }
+
+    @Test(arguments: ["claude plugin install x", "Run /plugin install x@m in Claude Code.", "gemini extensions install https://github.com/example/ext",
+                      "gemini extension install x", "codex plugin add x"])
+    func pluginInstallsWarn(_ line: String) {
+        #expect(Self.texts(line).contains(Self.installsPlugin), "\(Self.texts(line))")
+    }
+
+    @Test(arguments: ["The plugin installs itself.", "claude plugin installed", "a Claude plugin installer", "codex plugin list"])
+    func otherPluginWordsDoNot(_ line: String) {
+        #expect(!Self.texts(line).contains(Self.installsPlugin), "\(Self.texts(line))")
+    }
+
+    // MARK: npx in prose
+
+    @Test(arguments: ["npx -y some-tool", "npx some-tool@latest now", "npx some-tool@next", "npx some-tool@^1 run", "npx some-tool@1",
+                      "npx some-tool@~1.2.3", "npx some-tool@1.x", "Run `npx -y some-tool` first.", "(npx some-tool)", "'npx some-tool'",
+                      "npx @scope/tool", "npx -y @scope/tool@latest"])
+    func unpinnedNPXWarns(_ line: String) {
+        #expect(Self.texts(line).contains(Self.unpinnedNPX), "\(Self.texts(line))")
+    }
+
+    @Test(arguments: ["npx some-tool@1.2.3 run", "Run `npx -y some-tool@1.2.0` first.", "npx -y mcp-remote@0.1.29", "npx @scope/tool@1.2.3-beta.1.",
+                      "(npx -y @scope/tool@2.0.0)", "npx some-tool@1.2.3+build.5"])
+    func pinnedNPXDoesNot(_ line: String) {
+        #expect(!Self.texts(line).contains(Self.unpinnedNPX), "\(Self.texts(line))")
+    }
+
+    @Test func pythonRunnersFollowTheSameEnds() {
+        #expect(Self.texts("Run `uvx some-tool` first.").contains("Runs a Python package without a pinned version."))
+        #expect(Self.texts("uvx some-tool@latest").contains("Runs a Python package without a pinned version."))
+        #expect(!Self.texts("uvx some-tool@1.2.3").contains("Runs a Python package without a pinned version."))
+    }
+
+    // MARK: server JSON quoted in prose
+
+    @Test(arguments: [#"["npx", "-y", "mcp-remote"]"#, #"{ "command": "npx", "args": ["-y", "mcp-remote", "https://example.com/mcp"] }"#,
+                      #"{ "args": ["mcp-remote", "https://example.com/mcp"], "command": "npx" }"#,
+                      "{\n  \"command\": \"npx\",\n  \"args\": [\"mcp-remote@latest\"]\n}", #"{"command": "bunx", "args": ["some-server"]}"#,
+                      #"{"command": "uvx", "args": ["mcp-server-fetch"]}"#, #"{"command": "pnpm", "args": ["dlx", "some-server"]}"#,
+                      #"{"args": ["dlx", "--yes", "some-server@^2"], "command": "yarn"}"#])
+    func quotedServerJSONWarns(_ text: String) {
+        #expect(Self.texts(text).contains(Self.unpinnedServer), "\(Self.texts(text))")
+    }
+
+    @Test(arguments: [#"["npx", "-y", "mcp-remote@0.1.29"]"#, #"{ "command": "npx", "args": ["-y", "mcp-remote@0.1.29"] }"#,
+                      #"{ "args": ["mcp-remote@0.1.29"], "command": "npx" }"#, #"{"command": "pnpm", "args": ["run", "some-script"]}"#,
+                      #"{"command": "node", "args": ["server.js"]}"#, #"{"command": "npx"} {"args": ["mcp-remote"]}"#])
+    func pinnedOrOtherQuotedJSONDoesNot(_ text: String) {
+        #expect(!Self.texts(text).contains(Self.unpinnedServer), "\(Self.texts(text))")
+    }
+
+    /// A crafted file can't make the new patterns slow. Read forward from each word part, `a-a-a-… mcp` took
+    /// time that grew with the square of its length, and many runners after one `{` took seconds per MB.
+    @Test func craftedTextStaysQuick() {
+        let parts = String(repeating: "a-", count: 250_000) + " mcp"
+        let runners = String(repeating: "{" + String(repeating: #""command":"npx""#, count: 130), count: 500)
+        let patterns = [SkillReview.mcpAdd, SkillReview.pluginInstall] + SkillReview.quotedServerPatterns.map(\.pattern)
+        let start = Date()
+        for text in [parts, runners] {
+            for pattern in patterns { #expect(text.range(of: pattern, options: .regularExpression) == nil) }
+        }
+        #expect(Date().timeIntervalSince(start) < 2)
+    }
+
+    // MARK: server JSON files
+
+    @Test(arguments: [#"["mcp-remote"]"#, #"["-y", "mcp-remote@latest"]"#, #"["mcp-remote@next"]"#, #"["mcp-remote@^1"]"#, #"["mcp-remote@1"]"#,
+                      #"["--yes", "@scope/server"]"#])
+    func aServerFileRunningAnUnpinnedPackageWarns(_ args: String) throws {
+        let fixture = try SkillFixture().write("servers.json", #"{"mcpServers": {"remote": {"command": "npx", "args": "# + args + "}}}")
+        #expect(Self.flags(fixture.review, "servers.json").contains(Self.unpinnedServer))
+    }
+
+    @Test(arguments: [#"{"command": "bunx", "args": ["some-server"]}"#, #"{"command": "uvx", "args": ["--from", "mcp-server-fetch", "mcp-server-fetch"]}"#,
+                      #"{"command": "pnpm", "args": ["dlx", "some-server"]}"#, #"{"command": "yarn", "args": ["dlx", "some-server@latest"]}"#,
+                      #"{"command": "/usr/local/bin/npx", "args": ["-y", "some-server"]}"#, #"{"type": "local", "command": ["npx", "-y", "some-server"]}"#])
+    func everyRunnerIsChecked(_ server: String) throws {
+        let fixture = try SkillFixture().write("config/servers.json", #"{"servers": {"x": "# + server + "}}")
+        #expect(Self.flags(fixture.review, "config/servers.json").contains(Self.unpinnedServer))
+    }
+
+    @Test(arguments: [#"{"command": "npx", "args": ["-y", "mcp-remote@0.1.29"]}"#, #"{"command": "uvx", "args": ["mcp-server-fetch==2025.1.0"]}"#,
+                      #"{"command": "uvx", "args": ["mcp-server-fetch@2025.1.0"]}"#, #"{"command": "node", "args": ["server.js"]}"#,
+                      #"{"command": "pnpm", "args": ["run", "serve"]}"#, #"{"command": "npx", "args": ["./server"]}"#,
+                      #"{"command": "npx", "args": ["-y"]}"#])
+    func pinnedOrOtherServersDoNot(_ server: String) throws {
+        let fixture = try SkillFixture().write("servers.json", #"{"servers": {"x": "# + server + "}}")
+        #expect(!Self.flags(fixture.review, "servers.json").contains(Self.unpinnedServer))
+    }
+
+    /// A JSON file Next Term doesn't read as JSON is checked by the prose patterns instead.
+    @Test func aBrokenServerFileFallsBackToTheProsePatterns() throws {
+        let fixture = try SkillFixture().write("servers.json", #"{"mcpServers": {"x": {"command": "npx", "args": ["mcp-remote"],}}}"#)
+            .write("twice.json", #"{"mcpServers": {"x": {"command": "node", "command": "npx", "args": ["mcp-remote"]}}}"#)
+        let review = fixture.review
+        #expect(Self.flags(review, "servers.json").contains(Self.unpinnedServer))
+        #expect(Self.flags(review, "twice.json").contains(Self.unpinnedServer))
+    }
+
+    // MARK: MCP server settings
+
+    @Test func serverSettingsOutsideTheListedFilesWarn() throws {
+        let fixture = try SkillFixture().write("setup.md", "Add this to ~/.codex/config.toml:\n\n[mcp_servers.docs]\nurl = \"https://mcp.example.com/mcp\"\n")
+            .write("scripts/setup.js", "const config = {\n  \"mcpServers\": {\n    docs: { url: \"https://mcp.example.com/mcp\" },\n  },\n};\n")
+            .write("notes.md", "In Amp's settings:\n\n```yaml\nmcpServers:\n  docs:\n    url: https://mcp.example.com/mcp\n```\n")
+            .write("plain.md", "Codex keeps them under [mcp_servers] in its config.\n")
+            .write(".mcp.json", #"{"mcpServers": {"docs": {"url": "https://mcp.example.com/mcp"}}}"#)
+            .write("other.md", "The mcpServers key is described elsewhere.\n")
+        let review = fixture.review
+        for file in ["setup.md", "scripts/setup.js", "notes.md", "plain.md", ".mcp.json"] {
+            #expect(Self.flags(review, file).contains(Self.settings), "\(file): \(Self.flags(review, file))")
+        }
+        #expect(!Self.flags(review, "other.md").contains(Self.settings))
+    }
+
+    /// A file the review already lists as declaring servers is shown there; it gets no second warning.
+    @Test func theFilesARowListsDoNotWarn() throws {
+        let fixture = try SkillFixture().claudeManifest("demo", #""mcpServers": "./.mcp.json""#)
+            .write(".mcp.json", #"{"mcpServers": {"docs": {"command": "node", "args": ["server.js"]}}}"#)
+            .write("gemini-extension.json", #"{"name": "demo", "version": "1.0.0", "mcpServers": {"g": {"command": "node"}}}"#)
+            .write("agents/openai.yaml", "dependencies:\n  tools:\n    - type: mcp\n      value: docs\n      url: https://mcp.example.com/mcp\n")
+        let review = fixture.review
+        for file in [".mcp.json", ".claude-plugin/plugin.json", "gemini-extension.json", "agents/openai.yaml"] {
+            #expect(!Self.flags(review, file).contains(Self.settings), "\(file): \(Self.flags(review, file))")
+        }
+    }
+
+    /// The listed file is found however the volume spells it, and through a link inside the folder.
+    @Test func listedFilesMatchAnySpellingAndTheirLinks() throws {
+        let linked = try SkillFixture().claudeManifest()
+            .write("conf/servers.json", #"{"mcpServers": {"docs": {"command": "node"}}}"#)
+            .link(".mcp.json", to: "conf/servers.json")
+        #expect(!Self.flags(linked.review, "conf/servers.json").contains(Self.settings), "\(linked.review.flags)")
+        guard SkillFixture.caseInsensitive else { return }
+        let shouting = try SkillFixture().claudeManifest().write(".MCP.json", #"{"mcpServers": {"docs": {"command": "node"}}}"#)
+        #expect(shouting.review.servers.files == [".MCP.json"])
+        #expect(!Self.flags(shouting.review, ".MCP.json").contains(Self.settings), "\(shouting.review.flags)")
+    }
+
+    @Test func aServerFileNoAgentReadsWarns() throws {
+        let fixture = try SkillFixture().write(".mcp.json", #"{"mcpServers": {"docs": {"command": "node"}}}"#)
+        #expect(Self.flags(fixture.review, ".mcp.json").contains(Self.settings))
+    }
+
+    /// SKILL.md's front matter is skipped only when the Amp row shows what its mcpServers holds.
+    @Test func skillFrontMatterIsSkippedOnlyWhenRead() throws {
+        let read = try SkillFixture(skill: "---\nname: demo\ndescription: D.\nmcpServers:\n  docs:\n    url: https://mcp.example.com/mcp\n---\nUse it.\n")
+        #expect(read.review.servers.frontMatterServersRead)
+        #expect(!Self.flags(read.review, "SKILL.md").contains(Self.settings), "\(read.review.flags)")
+        let unread = try SkillFixture(skill: "---\nname: demo\ndescription: D.\nmcpServers:\n  docs: {command: npx}\n---\nUse it.\n")
+        #expect(!unread.review.servers.frontMatterServersRead)
+        #expect(Self.flags(unread.review, "SKILL.md").contains(Self.settings), "\(unread.review.flags)")
+        let body = "---\nname: demo\ndescription: D.\nmcpServers:\n  docs:\n    url: https://mcp.example.com/mcp\n---\nAlso add\n\"mcpServers\": {}\n"
+        #expect(Self.flags(try SkillFixture(skill: body).review, "SKILL.md").contains(Self.settings))
+    }
+
+    // MARK: bundles
+
+    @Test func bundleFilesAndLinksWarn() throws {
+        let fixture = try SkillFixture(skill: "---\nname: demo\ndescription: D.\n---\nGet https://example.com/tool.dxt?x=1 first.\n")
+            .data("server.mcpb", Data([0x50, 0x4B, 0x03, 0x04, 0x14, 0x00]))
+            .data("tools/tool.dxt", Data([0x50, 0x4B, 0x03, 0x04, 0x14, 0x00]))
+            .data("other.zip", Data([0x50, 0x4B, 0x03, 0x04, 0x14, 0x00]))
+            .data("large.mcpb", Data(count: SkillReview.maxReadSize + 1))
+            .write("notes.md", "Or download https://example.com/releases/server.MCPB.\n")
+            .write("guide.md", "See https://example.com/mcpb-guide and https://example.com/dxt.\n")
+        let review = fixture.review
+        // A bundle too large to read is still named as one.
+        for file in ["server.mcpb", "tools/tool.dxt", "large.mcpb"] {
+            #expect(Self.flags(review, file).contains(Self.bundle), "\(file): \(Self.flags(review, file))")
+            #expect(!Self.flags(review, file).contains { $0.hasPrefix("An archive") })
+        }
+        #expect(Self.flags(review, "other.zip").contains("An archive: its contents are not reviewed here."))
+        #expect(Self.flags(review, "SKILL.md").contains(Self.bundleLink))
+        #expect(Self.flags(review, "notes.md").contains(Self.bundleLink))
+        #expect(!Self.flags(review, "guide.md").contains(Self.bundleLink))
+    }
+
+    /// AE9 and AE10: each file gives its own warning.
+    @Test func eachWarningNamesItsFile() throws {
+        let fixture = try SkillFixture(skill: "---\nname: demo\ndescription: D.\n---\nRun `codex mcp add linear --url https://mcp.linear.app/mcp`.\n")
+            .write("README.md", "```json\n{ \"args\": [\"mcp-remote\", \"https://example.com/mcp\"], \"command\": \"npx\" }\n```\n")
+            .write("servers.json", #"{"mcpServers": {"remote": {"command": "npx", "args": ["mcp-remote@latest"]}}}"#)
+            .write("setup.md", "[mcp_servers.docs]\nurl = \"https://mcp.example.com/mcp\"\n")
+        let review = fixture.review
+        #expect(Self.flags(review, "SKILL.md").contains(Self.addsServer))
+        #expect(Self.flags(review, "README.md").contains(Self.unpinnedServer))
+        #expect(Self.flags(review, "servers.json").contains(Self.unpinnedServer))
+        #expect(Self.flags(review, "setup.md").contains(Self.settings))
+        let pinned = try SkillFixture(skill: "---\nname: demo\ndescription: D.\n---\nRun `npx -y mcp-remote@0.1.29`.\n")
+        #expect(!pinned.review.flags.contains { $0.text.contains("without a pinned version") }, "\(pinned.review.flags)")
+    }
+}

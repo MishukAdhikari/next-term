@@ -23,6 +23,11 @@ extension SelfTest {
         write("hooks/hooks.json", #"{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "/usr/bin/true"}]}]}}"#)
         write("agents/openai.yaml", "dependencies:\n  tools:\n    - type: \"mcp\"\n      value: \"docs\"\n      url: \"https://mcp.example.com/mcp\"\n")
         write("scripts/run.sh", "#!/bin/sh\necho hi\n")
+        // Text and files that add MCP servers, or fetch server code outside the commit.
+        write("setup.md", "Run `codex mcp add docs --url https://mcp.example.com/mcp`, or add this to ~/.codex/config.toml:\n\n"
+              + "[mcp_servers.docs]\nurl = \"https://mcp.example.com/mcp\"\n\nA packed copy: https://example.com/releases/docs.mcpb\n")
+        write("servers.json", #"{"mcpServers": {"remote": {"command": "npx", "args": ["-y", "mcp-remote@latest", "https://mcp.example.com/mcp"]}}}"#)
+        write("docs.mcpb", "PK")
         chmod(folder + "/scripts/run.sh", 0o755)
         let found = SkillsGitHub.Found(path: "skills/demo-plugin", tree: GitHash.folder(folder) ?? "")
         let source = SkillSource(owner: "example-org", repo: "plugin", path: "skills/demo-plugin")
@@ -61,5 +66,27 @@ extension SelfTest {
         let read = claude == ["demo"] && codex == ["docs"] && amp == ["docs", "helper"]
         check(read && agents == ["Claude Code", "Codex", "Amp"],
               "skills plugins: the review reads the servers Claude Code, Codex and Amp would use", "\(claude) \(codex) \(amp) \(agents)")
+        serverWarningChecks(details)
+    }
+
+    /// Worth a look names each file that adds MCP servers or fetches server code outside the commit, and
+    /// spares the files the review already lists as declaring servers.
+    static func serverWarningChecks(_ details: String) {
+        func warned(_ text: String, _ file: String) -> Bool { details.contains(text + " — " + file) }
+        let settings = "Holds MCP server settings (mcpServers or [mcp_servers]). An agent may copy them into its own settings."
+        let unpinned = "An MCP server runs a package without a pinned version (npx, bunx, pnpm dlx, yarn dlx or uvx). "
+            + "MCP clients start it with no question, fetching whatever version npm or PyPI has then."
+        let bundle = "An MCP bundle (.mcpb or .dxt): a packed server that Claude Code unpacks and runs. Its contents are not reviewed here."
+        let adds = warned("Adds an MCP server to an agent's settings (… mcp add).", "setup.md")
+        let link = warned("A link to an MCP bundle: a server fetched from the web, outside this commit.", "setup.md")
+        check(adds && warned(settings, "setup.md") && link,
+              "skills plugins: Worth a look warns about mcp add, [mcp_servers] and a link to an MCP bundle, with their file", details)
+        check(warned(unpinned, "servers.json") && warned(settings, "servers.json"),
+              "skills plugins: Worth a look warns about a server file that runs a package with no exact version", details)
+        check(warned(bundle, "docs.mcpb") && !warned("An archive: its contents are not reviewed here.", "docs.mcpb"),
+              "skills plugins: an MCP bundle in the folder is named as one, not as an archive", details)
+        let listed = [".mcp.json", "SKILL.md", ".claude-plugin/plugin.json", "agents/openai.yaml"]
+        check(!listed.contains { warned(settings, $0) },
+              "skills plugins: the files the review lists as declaring servers get no second warning for them", details)
     }
 }
