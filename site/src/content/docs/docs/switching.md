@@ -50,6 +50,8 @@ A built-in colour scheme or theme lives inside its app, so it can’t be read; t
 
 From Zed come its `buffer_font_size`, `buffer_line_height`, `soft_wrap`, the terminal’s `option_as_meta`, `font_size` and `dock`, and the project panel’s `dock` too.
 
+Only what you set comes over, never an app’s own defaults. Zed trims trailing spaces and ends files with a newline unless you turned that off, and JetBrains IDEs trim the lines you changed, so if you never touched those settings, turn them on under **Settings › Editor › On save**.
+
 - **Hidden files** are added to the patterns you have in **Settings › Editor › Hide**, written the way the sidebar reads them: VS Code’s `**/node_modules` becomes `node_modules`, and `build` (only at the top of the project there) becomes `/build`. The ones the sidebar hides anyway, such as `**/.git`, need nothing.
 - **A start folder** comes in unticked, whether it is the folder of the tab in front (iTerm2’s **Reuse previous session’s directory**, Ghostty’s `tab-inherit-working-directory = true`), your home folder or a folder of your own: ticked, it applies in project windows too, where new tabs otherwise open in the project’s folder. Ghostty’s `working-directory` counts only when `tab-inherit-working-directory` (before Ghostty 1.3, `window-inherit-working-directory`) is `false`; otherwise new tabs follow the tab in front, and Ghostty starts only its first window there. A folder that isn’t on this Mac is named by its setting only.
 - **Scrollback** is kept between 1,000 and 100,000 lines; iTerm2’s **Unlimited scrollback** comes in as 100,000. Ghostty’s `scrollback-limit` counts bytes rather than lines, so it is listed, not converted.

@@ -44,7 +44,7 @@ Ghostty is a free, MIT-licensed terminal emulator for macOS and Linux, developed
 ## Use both
 
 - **Keep Ghostty as your everyday terminal; open agent projects in Next Term.** `nxtrm .` in a Ghostty tab opens that folder as a Next Term project. Next Term links the command into a folder on your `PATH` at launch, or offers to install it with your password ([how](/docs/command-line/#installing-it)).
-- **Bring your Ghostty setup.** **Next Term › Import Settings and Shortcuts…** reads your Ghostty configuration, included files too: its font, your theme’s colours, and the keybinds that have a Next Term command. You see each change before it applies.
+- **Bring your Ghostty setup.** **Next Term › Import Settings and Shortcuts…** reads your Ghostty configuration, included files too: its font, your theme’s colours, the cursor, where new tabs open, and the keybinds that have a Next Term command. You see each change before it applies.
 - **Agents started in Ghostty can still use Next Term.** A `claude` started in Ghostty inside a project open in Next Term can connect to Next Term with `/ide`, and any agent with Next Term’s MCP server registered can start other agents in Next Term tabs.
 
 ## Questions
