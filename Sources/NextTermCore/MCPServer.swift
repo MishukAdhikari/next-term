@@ -31,7 +31,10 @@ public enum MCPServer {
         connected are in list_hosts: new_remote_tab opens a tab on one (then use it like any tab), \
         host_sessions lists the sessions kept there, host_changes shows what changed in a git work tree there. \
         list_skills shows the user's agent skills and which agent loads each; install_skill and remove_skill \
-        ask the user, who reviews and decides in Next Term (nothing changes on your say alone).
+        ask the user, who reviews and decides in Next Term (nothing changes on your say alone). \
+        propose_edit shows a file edit in the editor's diff for the user to accept; write_file, create_file, \
+        stage, commit, focus_tab, split_pane, close_pane, zoom_pane, set_layout and settings_set ask the user \
+        on the Mac first, and change nothing when declined or unanswered.
         """
 
     // MARK: tools
@@ -170,7 +173,7 @@ public enum MCPServer {
              description: "Opens a file in Next Term's editor, at a line and column if given (1-based).",
              inputSchema: #"{"type": "object", "properties": {"path": {"type": "string", "description": "Absolute file path."}, "line": {"type": "integer", "minimum": 1}, "column": {"type": "integer", "minimum": 1}}, "required": ["path"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 15),
-    ]
+    ] + controlTools
 
     public static func tool(named name: String) -> Tool? { tools.first { $0.name == name } }
 
@@ -189,7 +192,7 @@ public enum MCPServer {
                     "openWorldHint": tool.openWorld,
                 ],
                 // Claude Code defers MCP tools behind its tool search; these are few and worth having at hand.
-                "_meta": ["anthropic/alwaysLoad": true],
+                "_meta": tool.meta,
             ]
         }
     }
