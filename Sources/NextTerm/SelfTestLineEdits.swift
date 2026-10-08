@@ -73,10 +73,12 @@ extension SelfTest {
         view.moveLineUp(nil)
         check(doc.text == text && !doc.isDirty, "line edits: at the top, Move Line Up leaves the file as it is")
 
-        // Typing, then a line edit: ⌘Z undoes the edit and leaves the typing.
+        // Typing, then a line edit: ⌘Z undoes the edit and leaves the typing. A typed key is an event of its own, whose
+        // undo group AppKit closes once it has handled it: here an event handled stands for the key's (with the app in
+        // the background no other event would come to close it).
         place(line: 2)
         view.insertText("x", replacementRange: view.selectedRange())
-        await pause(0.1)
+        await endOfEvent(doc.undoManager)
         view.duplicateLine(nil)
         doc.undoManager.undo()
         check(doc.text == "one\ntwo\nxthree\n" && view.selectedRange() == NSRange(location: 9, length: 0),
@@ -148,6 +150,16 @@ extension SelfTest {
         check(contextMenu?.items.contains { $0.title == "Copy Path with Line" } == true, "Copy Path with Line is in the editor's right-click menu")
 
         await keyChecks(c, view: view, doc: doc, contextMenu: contextMenu ?? NSMenu())
+    }
+
+    /// What AppKit does after each event it handles, as after a typed key: the undo group of the edits it made closes.
+    /// An application-defined event, handled, ends the group the edits before it opened.
+    static func endOfEvent(_ undoManager: UndoManager) async {
+        if let event = NSEvent.otherEvent(with: .applicationDefined, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+                                          context: nil, subtype: 0, data1: 0, data2: 0) {
+            NSApp.postEvent(event, atStart: false)
+        }
+        _ = await wait(2) { undoManager.groupingLevel == 0 }
     }
 
     /// ⌘D in the editor and in the terminal, the menus' keys open and closed, and Settings' view of the pair.
