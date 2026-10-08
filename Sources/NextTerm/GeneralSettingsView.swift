@@ -5,11 +5,15 @@ import NextTermCore
 /// open asks about reopening them. Each choice is saved as it changes and read at the next launch, reopen or quit
 /// (LaunchSettings).
 final class GeneralSettingsView: NSView {
-    /// "When Next Term opens:", a radio button for each choice, in LaunchOpens' order.
+    /// A radio button for each choice, in LaunchOpens' order, beside "At launch:".
     let opens: [NSButton] = LaunchOpens.allCases.map { NSButton(radioButtonWithTitle: $0.title, target: nil, action: nil) }
-    /// The radio buttons, which VoiceOver reads as one group.
+    /// The radio buttons, which VoiceOver reads as one group, "When Next Term opens".
     let opensGroup = NSStackView()
+    /// Beside "At quit:".
     let askToReopen = NSButton(checkboxWithTitle: "Ask whether to reopen projects when quitting", target: nil, action: nil)
+    /// The labels in the 110 pt column on the left, as in the other tabs.
+    let launchLabel = NSTextField(labelWithString: "At launch:")
+    let quitLabel = NSTextField(labelWithString: "At quit:")
     /// Where the choices are kept: the defaults the launch and the quit read them from.
     private let defaults: UserDefaults = AppDelegate.shared?.launchDefaults ?? .standard
 
@@ -45,18 +49,26 @@ final class GeneralSettingsView: NSView {
         // VoiceOver reads each note with the controls it is about.
         for radio in opens { radio.setAccessibilityHelp(opensNote.stringValue) }
         askToReopen.setAccessibilityHelp(askNote.stringValue)
-        let column = NSStackView(views: [opensGroup, opensNote, askToReopen, askNote])
-        column.orientation = .vertical
-        column.alignment = .leading
-        column.spacing = 8
-        column.setCustomSpacing(24, after: opensNote)
-        let label = NSTextField(labelWithString: "When Next Term opens:")
-        label.alignment = .right
-        // The radio group already has this name: VoiceOver reads it once.
-        label.setAccessibilityElement(false)
-        let stack = NSStackView(views: [label, column])
-        stack.alignment = .firstBaseline
-        stack.spacing = 10
+        // A label in the 110 pt column on the left, as in the other tabs, and its controls beside it: on the first line's
+        // baseline, for the radio buttons' two lines.
+        func row(_ label: NSTextField, _ views: [NSView]) -> NSStackView {
+            label.alignment = .right
+            label.widthAnchor.constraint(equalToConstant: 110).isActive = true
+            let stack = NSStackView(views: [label] + views)
+            stack.alignment = .firstBaseline
+            stack.spacing = 10
+            return stack
+        }
+        // The radio group already has its name, "When Next Term opens": VoiceOver reads it, not this label.
+        launchLabel.setAccessibilityElement(false)
+        let launchRow = row(launchLabel, [opensGroup])
+        let opensNoteRow = row(NSTextField(labelWithString: ""), [opensNote])
+        let quitRow = row(quitLabel, [askToReopen])
+        let stack = NSStackView(views: [launchRow, opensNoteRow, quitRow, row(NSTextField(labelWithString: ""), [askNote])])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.setCustomSpacing(20, after: opensNoteRow)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([

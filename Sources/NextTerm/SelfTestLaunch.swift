@@ -48,7 +48,7 @@ extension SelfTest {
         let welcome = view.radio(.welcome).state == .on && view.radio(.lastProjects).state == .off
         let asks = view.askToReopen.state == .on
         check(titles == ["Show the Welcome window", "Reopen the projects that were open"] && welcome && asks,
-              "Settings › General: When Next Term opens shows the Welcome window, and a quit asks whether to reopen projects, until changed",
+              "Settings › General: At launch shows the Welcome window, and At quit asks whether to reopen projects, until changed",
               "\(titles), Welcome \(welcome), asks \(asks)")
         let group = view.opensGroup
         let role = group.accessibilityRole()
@@ -59,6 +59,7 @@ extension SelfTest {
         let opensHelp = help.dropLast().allSatisfy { $0.contains("always opens directly") }
         check(opensHelp && help.last?.contains("always asked about") == true,
               "VoiceOver reads each General note as the help of the controls it is about", "\(help)")
+        generalLayoutChecks()
 
         view.radio(.lastProjects).performClick(nil)
         view.askToReopen.performClick(nil)
@@ -72,6 +73,29 @@ extension SelfTest {
         let shown = reopened.radio(.lastProjects).state == .on && reopened.radio(.welcome).state == .off
         check(shown && reopened.askToReopen.state == .off, "and a new General tab shows it",
               "Reopen on \(shown), asks \(reopened.askToReopen.state == .on)")
+    }
+
+    /// The General tab's rows, laid out as the other tabs' are: "At launch:" beside the radio buttons and "At quit:" beside
+    /// the checkbox, in a 110 pt label column, so the controls start at one edge. The radio group keeps its own name, so
+    /// VoiceOver does not read "At launch:" too.
+    private static func generalLayoutChecks() {
+        let view = GeneralSettingsView(frame: NSRect(x: 0, y: 0, width: 640, height: 420))
+        view.layoutSubtreeIfNeeded()
+        let launch: NSTextField = view.launchLabel
+        let quit: NSTextField = view.quitLabel
+        let titles = launch.stringValue == "At launch:" && quit.stringValue == "At quit:"
+        let widths: [CGFloat] = [launch.frame.width, quit.frame.width]
+        let column = widths.allSatisfy { abs($0 - 110) < 0.5 }
+        let besideRadios = launch.superview != nil && launch.superview === view.opensGroup.superview
+        let besideCheckbox = quit.superview != nil && quit.superview === view.askToReopen.superview
+        let radiosX: CGFloat = view.opensGroup.convert(view.opensGroup.bounds, to: view).minX
+        let checkboxX: CGFloat = view.askToReopen.convert(view.askToReopen.bounds, to: view).minX
+        let labelEnd: CGFloat = launch.convert(launch.bounds, to: view).maxX
+        let oneEdge = abs(radiosX - checkboxX) < 0.5 && radiosX > labelEnd
+        let readOnce = !launch.isAccessibilityElement()
+        check(titles && column && besideRadios && besideCheckbox && oneEdge && readOnce,
+              "Settings › General: At launch beside the radio buttons and At quit beside the checkbox, in a 110 pt label column as in the other tabs",
+              "titles \(titles), widths \(widths), beside \(besideRadios) \(besideCheckbox), radios at \(radiosX), checkbox at \(checkboxX), label ends at \(labelEnd), VoiceOver once \(readOnce)")
     }
 
     /// The quit's reopen question, with its dialogs built and never run (QuitReopenPrompt): the prompt alone, the
