@@ -36,6 +36,8 @@ final class AgentPlaces {
     private var checkoutCache: [String: (signature: String, checkouts: [Checkout])] = [:]
     /// Claude Code transcripts by session id, and when one was last looked for and not found.
     private var transcripts: [String: String] = [:]
+    /// The agents' session records, followed as they grow.
+    private var records = SessionRecords()
     private var missingTranscripts: [String: Date] = [:]
 
     private init() {
@@ -262,12 +264,13 @@ final class AgentPlaces {
     }
 
     /// The folder the agent's session record names last, for agents that record moves their process doesn't
-    /// make: Claude Code's shell `cd`, Codex's `/cd`, Copilot CLI's workspace. Only the record's end is read.
+    /// make: Claude Code's shell `cd`, Codex's `/cd`, Copilot CLI's workspace. Only what was written to the
+    /// record since the last look is read; the folder named before holds until a newer line names another.
     private func recordedFolder(_ probe: Probe, home: String) -> RecordedFolder? {
         switch probe.agent {
         case .claude?:
-            guard let session = AgentLocation.claudeSession(pid: probe.pid, home: home) else { return nil }
-            if let known = transcripts[session.id], isRegularFile(known) { return AgentLocation.claudeFolder(transcript: known) }
+            guard let session = records.claudeSession(pid: probe.pid, home: home) else { return nil }
+            if let known = transcripts[session.id], isRegularFile(known) { return records.folder(known, kind: .claude) }
             // Where it should be, each time; a look through every project folder at most every 10 s (a new
             // session has no transcript until its first message).
             let scanning = missingTranscripts[session.id].map { Date().timeIntervalSince($0) >= 10 } ?? true
@@ -278,17 +281,17 @@ final class AgentPlaces {
             }
             if transcripts.count > 200 { transcripts.removeAll() }
             transcripts[session.id] = found
-            return AgentLocation.claudeFolder(transcript: found)
+            return records.folder(found, kind: .claude)
         case .codex?:
             // The rollout its process holds open (node's child, when Codex runs through npm).
             for pid in ProcessInspector.family(of: probe.pid).prefix(12) {
                 if let rollout = ProcessInspector.openFiles(of: pid).first(where: { AgentLocation.isCodexRollout($0, home: home) }) {
-                    return AgentLocation.codexFolder(rollout: rollout)
+                    return records.folder(rollout, kind: .codex)
                 }
             }
             return nil
         case .copilot?:
-            return AgentLocation.copilotFolder(pid: probe.pid, home: home)
+            return records.copilotFolder(pid: probe.pid, home: home)
         default:
             return nil
         }
