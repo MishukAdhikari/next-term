@@ -62,12 +62,17 @@ final class DiffPane: NSView {
     }
     private(set) var branchChange: BranchChange?
     /// Show Diff with Working Tree (base `.ref`): where the branch has a file that was renamed on disk.
-    private var renamedFrom: String?
+    private(set) var renamedFrom: String?
+    /// What base `.ref` is called in the title, when not the ref's own name (the Git Diff tab compares with
+    /// where the branch parted from its base, a commit, and names the base).
+    private(set) var refLabel: String?
     /// The branch the file on disk is compared with (base `.ref`).
     var workingTreeBranch: String? {
         if case let .ref(name) = base { return name }
         return nil
     }
+    /// What that branch is called here: "feat/x", or the label it was given.
+    private var refName: String? { workingTreeBranch.map { refLabel ?? BranchCompare.displayName($0) } }
     /// Called once with the decision (true: accepted, with the proposed text).
     var onDecision: ((Bool, String) -> Void)?
     private var decided = false
@@ -75,8 +80,15 @@ final class DiffPane: NSView {
     private let right = DiffColumn(side: .right)
     private let columns = NSStackView()
 
-    private var file: FileDiff?
+    private(set) var file: FileDiff?
     private var rows: [SideBySideRow] = []
+    /// The Unified view and the Side by Side | Unified switch (UnifiedDiffView.swift).
+    let unified = UnifiedDiffPart()
+    /// Next or previous change past the last or the first: true when someone took it (the Git Diff tab
+    /// moves to the next or previous file); otherwise the stepper goes round this file.
+    var onStepPastEnd: ((_ forward: Bool) -> Bool)?
+    /// The change to go to once the diff is read (-1: the last), for a file stepped into from the one after.
+    var pendingHunk: Int?
     /// Row index of each hunk's header, in order.
     private var hunkRows: [Int] = []
     private(set) var currentHunk = 0
@@ -92,7 +104,7 @@ final class DiffPane: NSView {
         if let proposal { return (path as NSString).lastPathComponent + " ✻ " + proposal.author }
         if let commit { return (path as NSString).lastPathComponent + " @ " + commit.sha.prefix(7) }
         if let branchChange { return (path as NSString).lastPathComponent + " @ " + BranchCompare.displayName(branchChange.branch) }
-        if let branch = workingTreeBranch { return (path as NSString).lastPathComponent + " ↔ " + BranchCompare.displayName(branch) }
+        if let branch = refName { return (path as NSString).lastPathComponent + " ↔ " + branch }
         return (path as NSString).lastPathComponent + " ↔ " + ["HEAD", "Index", "HEAD"][Self.bases.firstIndex(of: base) ?? 0]
     }
     var tooltip: String {
@@ -105,9 +117,9 @@ final class DiffPane: NSView {
             let from = branchChange.oldPath.map { ", renamed from \($0)" } ?? ""
             return "\(path) as \(BranchCompare.displayName(branchChange.branch)) changed it\(from), since \(branchChange.base.prefix(7)), the commit it shares with HEAD"
         }
-        if let branch = workingTreeBranch {
+        if let branch = refName {
             let from = renamedFrom.map { " (\($0) there)" } ?? ""
-            return "\(path): \(BranchCompare.displayName(branch))’s version\(from) on the left, the file on disk on the right"
+            return "\(path): \(branch)’s version\(from) on the left, the file on disk on the right"
         }
         return "Changes in \(path) — " + ["working tree against HEAD", "working tree against the index (unstaged)", "index against HEAD (staged)"][Self.bases.firstIndex(of: base) ?? 0]
     }
@@ -188,15 +200,17 @@ final class DiffPane: NSView {
     }
 
     /// `path` on disk against its version on `branch`, which had it at `renamedFrom` when it was renamed since.
-    convenience init(root: String, path: String, workingTreeAgainst branch: String, renamedFrom: String?) {
-        self.init(root: root, path: path, base: .ref(branch), renamedFrom: renamedFrom)
+    /// `label`: what to call `branch` (a commit) in the title.
+    convenience init(root: String, path: String, workingTreeAgainst branch: String, renamedFrom: String?, label: String? = nil) {
+        self.init(root: root, path: path, base: .ref(branch), renamedFrom: renamedFrom, label: label)
     }
 
-    init(root: String, path: String, base: GitRunner.DiffBase, renamedFrom: String? = nil) {
+    init(root: String, path: String, base: GitRunner.DiffBase, renamedFrom: String? = nil, label: String? = nil) {
         self.root = root
         self.path = path
         self.base = base
         self.renamedFrom = renamedFrom
+        refLabel = label
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = Theme.background.cgColor
@@ -273,10 +287,10 @@ final class DiffPane: NSView {
             pathLabel.attributedStringValue = Typography.truncating(text, .byTruncatingMiddle)
             pathLabel.toolTip = tooltip
             header.setViews([pathLabel, counts, NSView(), previous, position, next], in: .leading)
-        } else if let branch = branchChange?.branch ?? workingTreeBranch {
+        } else if let branch = branchChange.map({ BranchCompare.displayName($0.branch) }) ?? refName {
             // Which branch, after the name: "@ feat/x" for its change, "↔ feat/x" for the disk against it.
             text.append(Typography.gap(8, font: .systemFont(ofSize: 12)))
-            text.append(NSAttributedString(string: (branchChange != nil ? "@ " : "↔ ") + BranchCompare.displayName(branch), attributes: [
+            text.append(NSAttributedString(string: (branchChange != nil ? "@ " : "↔ ") + branch, attributes: [
                 .font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: Theme.textDim,
             ]))
             pathLabel.attributedStringValue = Typography.truncating(text, .byTruncatingMiddle)
@@ -317,6 +331,7 @@ final class DiffPane: NSView {
             message.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 40),
             message.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -40),
         ])
+        unified.install(in: self, header: header, before: previous)
         // The sides scroll together, both ways.
         for (column, other) in [(left, right), (right, left)] {
             column.contentView.postsBoundsChangedNotifications = true
@@ -443,7 +458,7 @@ final class DiffPane: NSView {
             message.stringValue = "This commit changed the file’s name or mode, not its lines."
         } else if empty, let branch = (branchChange?.branch).map(BranchCompare.displayName) {
             message.stringValue = Self.emptyBranchChange(diff, on: branch)
-        } else if empty, let branch = workingTreeBranch.map(BranchCompare.displayName) {
+        } else if empty, let branch = refName {
             // Renamed since: the same as the file under its name there.
             let there = renamedFrom.map { "\($0) on" } ?? "on"
             message.stringValue = "The file on disk is the same as \(there) \(branch)."
@@ -452,15 +467,20 @@ final class DiffPane: NSView {
         }
         let showRows = !(empty || diff?.isBinary == true || text != nil)
         message.isHidden = showRows
-        columns.isHidden = !showRows
+        columns.isHidden = !showRows || unified.isOn
+        unified.column.isHidden = !showRows || !unified.isOn
         rows = showRows ? SideBySide.rows(for: diff!) : []
         hunkRows = rows.indices.filter { rows[$0].kind == .hunkHeader }
-        let origin = right.contentView.bounds.origin
-        let language = EditorLanguage.id(forFileName: (path as NSString).lastPathComponent)
-        left.show(rows, language: language)
-        right.show(rows, language: language)
-        right.contentView.scroll(to: NSPoint(x: origin.x, y: min(origin.y, max(0, right.textView.frame.height - right.contentView.bounds.height))))
-        right.reflectScrolledClipView(right.contentView)
+        if unified.isOn {
+            unified.update(self)
+        } else {
+            let origin = right.contentView.bounds.origin
+            let language = EditorLanguage.id(forFileName: (path as NSString).lastPathComponent)
+            left.show(rows, language: language)
+            right.show(rows, language: language)
+            right.contentView.scroll(to: NSPoint(x: origin.x, y: min(origin.y, max(0, right.textView.frame.height - right.contentView.bounds.height))))
+            right.reflectScrolledClipView(right.contentView)
+        }
         currentHunk = min(currentHunk, max(0, hunkRows.count - 1))
         steering = true
         defer { steering = false }
@@ -473,13 +493,29 @@ final class DiffPane: NSView {
         }
         counts.attributedStringValue = numbers
         updateButtons()
-        updateCurrentHunk()
+        if !unified.isOn { updateCurrentHunk() }
+        if let wanted = pendingHunk, !hunkRows.isEmpty {
+            pendingHunk = nil
+            go(toHunk: wanted < 0 ? hunkRows.count - 1 : wanted)
+        }
         onTitleChange?()
     }
 
     func applyFont() {
+        if unified.isOn { return unified.render(self) }
         left.show(rows, language: EditorLanguage.id(forFileName: (path as NSString).lastPathComponent))
         right.show(rows, language: EditorLanguage.id(forFileName: (path as NSString).lastPathComponent))
+    }
+
+    /// Side by Side or Unified was chosen (here, in another diff, or in the View menu): this diff shows
+    /// that way, at the change it was on.
+    func applyLayout() {
+        unified.control.selectedSegment = unified.isOn ? 1 : 0
+        let showRows = message.isHidden
+        columns.isHidden = !showRows || unified.isOn
+        unified.column.isHidden = !showRows || !unified.isOn
+        if unified.isOn { unified.update(self) } else { applyFont() }
+        if hunkRows.indices.contains(currentHunk) { go(toHunk: currentHunk) }
     }
 
     // MARK: send to agent
@@ -490,6 +526,7 @@ final class DiffPane: NSView {
     /// along as code; so do removed lines, selected on the old side alone. Nil for an agent's proposal (that
     /// agent is waiting for your answer in its terminal), and for removed lines too many to paste.
     func contextItem() -> ContextItem? {
+        if unified.isOn { return unified.contextItem(of: self) }
         guard proposal == nil else { return nil }
         var item = ContextItem(path: absolutePath)
         let language = EditorLanguage.id(forFileName: (path as NSString).lastPathComponent) ?? "text"
@@ -597,6 +634,24 @@ final class DiffPane: NSView {
         position.stringValue = "\(currentHunk + 1) of \(hunkRows.count)"
         left.currentHunkRow = hunkRows[currentHunk]
         right.currentHunkRow = hunkRows[currentHunk]
+        unified.column.currentHunk = currentHunk
+    }
+
+    /// The Unified view picked a change: a click in it, the selection, the scroll position.
+    func pick(hunk: Int) {
+        guard hunkRows.indices.contains(hunk) else { return }
+        currentHunk = hunk
+        showCurrentHunk()
+    }
+
+    /// What the hunk buttons offer here: nothing for an agent's proposal or a read-only diff.
+    var hunkActions: [HunkOps.Action] {
+        if proposal != nil || commit != nil || branchChange != nil || workingTreeBranch != nil { return [] }
+        switch base {
+        case .unstaged: return [.stage, .revert]
+        case .staged: return [.unstage]
+        default: return [.revert]
+        }
     }
 
     /// A click in a row picks its hunk.
@@ -606,12 +661,24 @@ final class DiffPane: NSView {
         showCurrentHunk()
     }
 
-    @objc private func previousHunk() { go(toHunk: currentHunk - 1) }
-    @objc private func nextHunk() { go(toHunk: currentHunk + 1) }
+    @objc private func previousHunk() {
+        if currentHunk <= 0, onStepPastEnd?(false) == true { return }
+        go(toHunk: currentHunk - 1)
+    }
+
+    @objc private func nextHunk() {
+        if currentHunk >= hunkRows.count - 1, onStepPastEnd?(true) == true { return }
+        go(toHunk: currentHunk + 1)
+    }
 
     func go(toHunk index: Int) {
         guard !hunkRows.isEmpty else { return }
         let target = (index + hunkRows.count) % hunkRows.count
+        if unified.isOn {
+            unified.go(toHunk: target)
+            currentHunk = target
+            return showCurrentHunk()
+        }
         let y = right.textView.textContainerInset.height + CGFloat(hunkRows[target]) * right.rowHeight - right.rowHeight
         steering = true
         right.contentView.scroll(to: NSPoint(x: 0, y: max(0, min(y, right.textView.frame.height - right.contentView.bounds.height))))
@@ -629,7 +696,7 @@ final class DiffPane: NSView {
     @objc private func stageHunk() { perform(.stage) }
     @objc private func unstageHunk() { perform(.unstage) }
 
-    @objc private func revertHunk() {
+    @objc func revertHunk() {
         guard let window else { return }
         // Unsaved edits to this file in the editor would be overwritten by the reload: ask to save first.
         if let open = (window.windowController as? TerminalWindowController)?.editorArea.documents.first(where: { $0.path == canonicalPath(absolutePath) }),
@@ -653,6 +720,7 @@ final class DiffPane: NSView {
 
     /// Runs a hunk operation; tells the user if the file changed meanwhile or git is busy.
     func perform(_ action: HunkOps.Action) {
+        if unified.isOn { unified.pickForAction(self) }
         guard let file, let git = Self.git, hunkRows.indices.contains(currentHunk), file.hunks.indices.contains(currentHunk) else { return NSSound.beep() }
         let hunk = file.hunks[currentHunk]
         let before = action == .revert ? try? Data(contentsOf: URL(fileURLWithPath: absolutePath)) : nil

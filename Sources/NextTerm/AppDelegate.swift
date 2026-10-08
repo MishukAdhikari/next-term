@@ -1077,6 +1077,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         view.addItem(withTitle: "Terminal Position", action: nil, keyEquivalent: "").submenu = positions
         item(view, "Show Changes", #selector(TerminalWindowController.showChanges(_:)), "g", [.command, .option])
+        item(view, "Unified Diffs", #selector(DiffLayoutMenu.toggleUnifiedDiffs(_:)), "", target: DiffLayoutMenu.shared) // checked: one column
         item(view, "Annotate with Git Blame", #selector(toggleBlameAnnotations(_:)), "", target: self)
         item(view, "Current Line Blame", #selector(toggleCurrentLineBlame(_:)), "", target: self)
         view.addItem(.separator())
