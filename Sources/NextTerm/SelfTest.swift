@@ -216,6 +216,7 @@ enum SelfTest {
         chmod(agent.path, 0o755)
         c.select(1)
         second.status.setVisible(true)
+        _ = await wait(3) { !second.status.running } // the bell rang before its command ended: what runs next is the agent
         second.view.send(txt: "PATH=\(dir.path):$PATH claude\r")
         _ = await wait(3) { second.status.running }
         check(second.status.kind == .agent, "agent is recognised", "\(second.status.kind)")
