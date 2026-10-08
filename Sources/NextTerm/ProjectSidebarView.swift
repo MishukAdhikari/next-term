@@ -517,8 +517,12 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         DispatchQueue.global(qos: .utility).async {
             let listing = FileNode.readChildren(of: url, hiding: hiding)
             DispatchQueue.main.async { [weak self] in
-                // The newest listing of each folder waits for a name being edited, keeping its row there.
-                self?.whenNotRenaming("refresh \(ObjectIdentifier(node))") { [weak self] in
+                guard let self else { return }
+                // While a name is edited the folder waits, keeping its row there, and is read again once the name
+                // is done: a listing read meanwhile is out of date by then (it has the name before), and put in
+                // place it would show that name again and lose the row's selection.
+                if self.isRenaming { return self.whenNotRenaming("refresh \(ObjectIdentifier(node))") { [weak self] in self?.refresh(node) } }
+                self.whenNotRenaming("refresh \(ObjectIdentifier(node))") { [weak self] in
                     guard let self, node.install(listing) else { return }
                     self.syncHiddenRow(for: node)
                     self.rowCache[ObjectIdentifier(node)] = nil
