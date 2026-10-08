@@ -703,6 +703,7 @@ enum SelfTest {
         await linkChecks(c)
         await notificationChecks(c)
         await skillsChecks()
+        await mcpWriteChecks(c, proj: proj)
 
         try? FileManager.default.removeItem(at: dir)
     }
