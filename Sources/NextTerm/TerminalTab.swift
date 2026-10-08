@@ -112,19 +112,31 @@ final class NextTermView: LocalProcessTerminalView {
     var openFile: ((URL, _ line: Int?, _ column: Int) -> Void)?
 
     override func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
+        guard let target = target(of: link) else { return NSSound.beep() }
+        open(target)
+    }
+
+    /// What a link in the output opens: a web or mail address, or a file on this Mac at a line.
+    enum LinkTarget: Equatable {
+        case web(URL)
+        case file(URL, line: Int?, column: Int)
+    }
+
+    /// What ⌘-click (or the right-click menu) does with `link`; nil when it opens nothing: another scheme
+    /// (custom app schemes can trigger actions in other apps), a path that is not there, or any path in a
+    /// tab on a server.
+    func target(of link: String) -> LinkTarget? {
         if let url = URL(string: link), let scheme = url.scheme?.lowercased(), scheme.count > 1 {
             switch scheme {
-            case "http", "https", "mailto": NSWorkspace.shared.open(url)
+            case "http", "https", "mailto": return .web(url)
             // ls/fd/rg hyperlinks name this Mac: file://my-mac.local/path
-            case "file" where opensFiles && LocalHost.contains(url.host):
-                if let openFile { openFile(url, nil, 1) } else { SafeOpen.open(url, from: window) }
-            default: NSSound.beep() // custom app schemes can trigger actions in other apps
+            case "file" where opensFiles && LocalHost.contains(url.host): return .file(url, line: nil, column: 1)
+            default: return nil
             }
-            return
         }
         // A plain path, relative to the tab's folder: "src/main.swift:12:4", a Python traceback's
         // `File "…/graph.py", line 42`, pytest's "tests/x.py:42:", or a graph's "graph.py:graph".
-        guard opensFiles else { return NSSound.beep() }
+        guard opensFiles else { return nil }
         let base = linkBaseDirectory?()
         guard let reference = FileReference.resolve(
             link: link, row: clickedLine(containing: link),
@@ -134,7 +146,7 @@ final class NextTermView: LocalProcessTerminalView {
                 return ((base as NSString).appendingPathComponent(path) as NSString).standardizingPath
             },
             exists: { FileManager.default.fileExists(atPath: $0) })
-        else { return NSSound.beep() }
+        else { return nil }
         let url = URL(fileURLWithPath: reference.path)
         var line = reference.line
         if let symbol = reference.symbol {
@@ -144,7 +156,17 @@ final class NextTermView: LocalProcessTerminalView {
                 line = FileReference.definitionLine(of: symbol, in: text)
             }
         }
-        if let openFile { openFile(url, line, reference.column ?? 1) } else { SafeOpen.open(url, from: window) }
+        return .file(url, line: line, column: reference.column ?? 1)
+    }
+
+    /// Opens a link's target: a web page in the browser, a file in the editor (or safely in its app).
+    func open(_ target: LinkTarget) {
+        switch target {
+        case .web(let url):
+            NSWorkspace.shared.open(url)
+        case let .file(url, line, column):
+            if let openFile { openFile(url, line, column) } else { SafeOpen.open(url, from: window) }
+        }
     }
 
     /// Where the mouse button went up last, in the view: which row a ⌘-click was on.
@@ -153,6 +175,38 @@ final class NextTermView: LocalProcessTerminalView {
     override func mouseUp(with event: NSEvent) {
         lastClickPoint = convert(event.locationInWindow, from: nil)
         super.mouseUp(with: event)
+    }
+
+    // MARK: right-click
+
+    /// The window's right-click menu for this terminal, with the link or path under the pointer if there is
+    /// one (SwiftTerm has no menu of its own).
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let controller = window?.windowController as? TerminalWindowController,
+              let tab = controller.tabs.first(where: { $0.view === self }) else { return super.menu(for: event) }
+        var link: String?
+        if event.type == .rightMouseDown {
+            let point = convert(event.locationInWindow, from: nil)
+            lastClickPoint = point // the row a traceback's line number is read from
+            link = self.link(at: point)
+        }
+        return controller.terminalMenu(for: tab, link: link)
+    }
+
+    /// The link or path at `point` (in the view), as ⌘-click finds it: an OSC 8 hyperlink, or a URL or
+    /// path in the text.
+    func link(at point: NSPoint) -> String? {
+        let terminal = getTerminal()
+        guard terminal.rows > 0, terminal.cols > 0 else { return nil }
+        // SwiftTerm keeps its cell size to itself: the height from the rows, the width from the font, as it does.
+        let cellHeight = getOptimalFrameSize().height / CGFloat(terminal.rows)
+        let scale = window?.backingScaleFactor ?? 2
+        let advance = font.advancement(forGlyph: font.glyph(withName: "W")).width
+        let cellWidth = max(1, (advance * scale).rounded() / scale)
+        let row = Int((frame.height - point.y) / cellHeight)
+        let col = Int(point.x / cellWidth)
+        guard row >= 0, row < terminal.rows, col >= 0, col < terminal.cols else { return nil }
+        return terminal.link(at: .screen(Position(col: col, row: row)), mode: .explicitAndImplicit)
     }
 
     /// The text of the line a link was clicked in, its wrapped rows joined: where a traceback says

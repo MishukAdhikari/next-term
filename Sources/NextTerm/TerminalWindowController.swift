@@ -414,6 +414,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if window?.firstResponder is NSTextView, tabBar.isEditing { window?.makeFirstResponder(nil) }
         let group = groups[index]
         let hadKeyboard = window?.firstResponder === tab.view
+        ClosedTabs.remember(tab, in: self) // for Reopen Closed Tab
         tab.terminate()
         if group.remove(tab) {
             // One pane fewer; the tab stays. Its neighbour takes the room and, if this one had it, the keyboard.
@@ -756,6 +757,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if let valid = validateTabCommand(item) { return valid } // TabMenus.swift
         let gitActions: [Selector] = [#selector(showBranches(_:)), #selector(gitFetch(_:)), #selector(gitUpdate(_:)), #selector(gitCommit(_:)),
                                       #selector(gitPush(_:)), #selector(gitNewBranch(_:))]
         if let action = item.action, gitActions.contains(action) { return gitFolder != nil }
@@ -773,7 +775,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(sendToAgent(_:)) {
             let sendable = editorArea.activePath != nil && editorArea.activeDiff?.proposal == nil
             let fromSidebar = window?.firstResponder === sidebar.outline && !sidebar.selection.isEmpty
-            return (isEditorFocused && sendable) || fromSidebar
+            return (isEditorFocused && sendable) || fromSidebar || terminalSelectionToSend != nil
         }
         if item.action == #selector(toggleEditorFocus(_:)) {
             item.title = isEditorFocused ? "Focus Terminal" : "Focus Editor"
@@ -1385,12 +1387,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return tabs.filter { $0.remote == nil && $0.status.running && $0.status.kind == .agent }.max { $0.lastSelected < $1.lastSelected }
     }
 
-    /// ⌥⌘K: the editor's selection (or its file), or the files and folders selected in the sidebar.
+    /// ⌥⌘K: the editor's selection (or its file), the files and folders selected in the sidebar, or the text
+    /// selected in the terminal.
     @objc func sendToAgent(_ sender: Any?) {
         if isEditorFocused {
             sendEditorSelection()
         } else if let window, window.firstResponder === sidebar.outline, !sidebar.selection.isEmpty {
             send(sidebar.selection.map { ContextItem(path: $0.url.path, isFolder: $0.isFolder) })
+        } else if let tab = terminalSelectionToSend {
+            sendSelection(of: tab)
         } else {
             NSSound.beep()
         }
@@ -1743,7 +1748,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     @objc func clearBuffer(_ sender: Any?) {
         if KeyboardShortcuts.shared.preset.clearsOnlyInTerminal && isEditorFocused { return }
         guard let tab = activeTab else { return }
-        // Wipe screen and scrollback locally; at a prompt, ask the shell to redraw it.
+        clear(tab)
+    }
+
+    /// Wipes a terminal's screen and scrollback locally; at a prompt, asks the shell to redraw it.
+    func clear(_ tab: TerminalTab) {
         tab.view.feed(text: "\u{1b}[H\u{1b}[2J\u{1b}[3J")
         if !tab.status.running { tab.view.send(txt: "\u{0c}") }
     }

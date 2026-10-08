@@ -54,6 +54,16 @@ final class EditorArea: NSView, TabBarViewDelegate {
         activeEditor?.document.path ?? activeNotebook?.path ?? activeDatabase?.path ?? activeData?.path ?? activeDiff?.absolutePath
     }
     var activeName: String? { activeEditor?.document.name ?? activeNotebook?.name ?? activeDatabase?.name ?? activeData?.name }
+
+    /// The file a tab shows, as `activePath` has it for the tab in front; nil for the Git Log and branch
+    /// comparisons, which are of a whole repository.
+    func path(of pane: NSView) -> String? {
+        if let editor = pane as? CodeEditorView { return editor.document.path }
+        if let notebook = pane as? NotebookPane { return notebook.path }
+        if let database = pane as? DatabasePane { return database.path }
+        if let data = pane as? DataPane { return data.path }
+        return (pane as? DiffPane)?.absolutePath
+    }
     /// Where its text is, for a selection to search for.
     var activeTextView: NSTextView? { activeEditor?.textView ?? activeNotebook?.textView }
     var documents: [EditorDocument] { editors.map(\.document) }
@@ -481,6 +491,42 @@ final class EditorArea: NSView, TabBarViewDelegate {
         select(activeIndex, focus: hadFocus)
     }
 
+    /// Close Others and Close Tabs to the Right: several tabs at once, asking once about the unsaved files
+    /// among them (Save, Cancel or Don't Save, as closing one asks). `keeping` comes to the front if the tab
+    /// in front was among them.
+    func close(_ closing: [NSView], keeping: NSView) {
+        let front = activePane
+        let done = { [weak self] in
+            guard let self else { return }
+            closing.forEach(self.remove)
+            if let front, closing.contains(where: { $0 === front }), let index = self.panes.firstIndex(where: { $0 === keeping }) {
+                self.select(index)
+            }
+        }
+        let dirty = closing.compactMap { ($0 as? CodeEditorView)?.document }.filter(\.isDirty)
+        guard !dirty.isEmpty, let window else { return done() }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = dirty.count == 1 ? "Save changes to “\(dirty[0].name)” before closing?" : "Save changes to \(dirty.count) files before closing?"
+        alert.informativeText = dirty.count == 1 ? "Your changes are lost if you don’t save them."
+            : "Your changes to \(TerminalWindowController.nameList(dirty.map(\.name))) are lost if you don’t save them."
+        alert.addButton(withTitle: dirty.count == 1 ? "Save" : "Save All")
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Don’t Save").keyEquivalent = "d"
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            switch response {
+            case .alertFirstButtonReturn:
+                // A file that could not be saved says why, and nothing closes.
+                if dirty.allSatisfy({ self.save($0) }) { done() }
+            case .alertThirdButtonReturn:
+                done()
+            default:
+                break
+            }
+        }
+    }
+
     /// Closes every editor without asking (the window is closing and the user already chose).
     func closeAll() {
         for pane in panes { remove(pane) }
@@ -685,6 +731,11 @@ final class EditorArea: NSView, TabBarViewDelegate {
     /// Double-clicking a preview's tab keeps it.
     func tabBar(_ bar: TabBarView, didDoubleClick index: Int) {
         if let pane = panes[safe: index], pane === previewPane { keepPreview() }
+    }
+
+    /// The window builds it: some of its commands reach the project sidebar.
+    func tabBar(_ bar: TabBarView, menuFor index: Int) -> NSMenu? {
+        (window?.windowController as? TerminalWindowController)?.editorTabMenu(at: index)
     }
 }
 
