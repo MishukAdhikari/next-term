@@ -22,9 +22,11 @@ extension SelfTest {
         }
         check(header(base).isHidden && abs(terminalTop(base) - 4) < 1, "pane headers: a tab of one pane has none", "\(terminalTop(base))")
 
-        // History the pane has before it is split, to find again after.
+        // History the pane has before it is split, to find whole after each split. Short lines: one row at any
+        // pane's width, a dozen at the two columns a squeeze would rewrap them to, far past the scrollback's
+        // 10,000. From the line's start, with blank lines after it where the prompt redraws on a resize.
         let marker = "pane history line"
-        base.view.feed(text: (1...3000).map { "\(marker) \($0) " + String(repeating: "x", count: 50) }.joined(separator: "\r\n") + "\r\n")
+        base.view.feed(text: "\r\n" + (1...3000).map { "\(marker) \($0)" }.joined(separator: "\r\n") + "\r\n\r\n\r\n\r\n")
         func history(_ tab: TerminalTab) -> Int {
             let terminal = tab.view.getTerminal()
             var row = 0, count = 0
@@ -34,12 +36,14 @@ extension SelfTest {
             }
             return count
         }
+        let before = history(base)
+        check(before == 3000, "the pane has its history before the split", "\(before) lines")
         guard let other = c.split(vertical: true, from: base) else { return check(false, "pane headers: Split Right adds a pane") }
         _ = await wait(20) { other.status.integrated }
-        let kept = history(base)
+        check(history(base) == before, "Split Right keeps the pane's history", "\(before) → \(history(base)) lines")
         guard let third = c.split(vertical: false, from: base) else { return check(false, "pane headers: Split Down adds a pane") }
         _ = await wait(20) { third.status.integrated }
-        check(history(base) == kept, "a pane split down beside another keeps its history", "\(kept) → \(history(base)) lines")
+        check(history(base) == before, "a pane split down beside another keeps its history", "\(before) → \(history(base)) lines")
         c.refresh()
         let all = [base, other, third]
         check(all.allSatisfy { !header($0).isHidden }, "a split shows a header on each pane")
