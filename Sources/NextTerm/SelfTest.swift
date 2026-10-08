@@ -538,6 +538,7 @@ enum SelfTest {
         await branchChecks(c, proj: proj)
         await gitLogChecks(c, proj: proj)
         await gitLogPagingChecks(c)
+        await gitLeftoverChecks(c)
         await branchCompareChecks(c)
         await backgroundFetchChecks(c)
         await ragColorChecks(c, proj: proj)
@@ -4665,7 +4666,7 @@ enum SelfTest {
         await screenshot(window, suffix: suffix)
     }
 
-    private static func screenshot(_ window: NSWindow, suffix: String) async {
+    static func screenshot(_ window: NSWindow, suffix: String) async {
         guard let base = reportPath else { return }
         await pause(0.4)
         guard let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber),
