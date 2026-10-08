@@ -50,6 +50,15 @@ final class TerminalRail: NSView {
     private(set) var changesNoticed = 0
     /// "Expand the terminal (⌘J)", with the key Settings gives it.
     private var expandTip: ShortcutToolTip?
+    /// "⌘J" just under the arrow, as a tab shows "⌘1", while every mark keeps its place below it.
+    private lazy var expandHint = KeyHint(#selector(TerminalWindowController.toggleTerminalCollapsed(_:)), for: nil)
+    /// The hint's height while it shows: the marks start that much lower.
+    private var hintRow: CGFloat = 0
+    /// The arrow's key as it shows now, nil once it gave way (for the self-test).
+    var shownKey: String? {
+        layoutSubtreeIfNeeded()
+        return expandHint.shownKey
+    }
     /// The states each tab pulsed for since the rail showed: an agent that goes done, working, done again
     /// (pauses in its output) pulses once, not every few seconds.
     private var pulsedFor: [ObjectIdentifier: Set<TabState>] = [:]
@@ -66,6 +75,7 @@ final class TerminalRail: NSView {
         moreButton.action = #selector(expandClicked)
         moreButton.isHidden = true
         addSubview(moreButton)
+        addSubview(expandHint)
         expandTip = ShortcutToolTip(self, "Expand the terminal", #selector(TerminalWindowController.toggleTerminalCollapsed(_:)))
         // A group, not a button: VoiceOver does not go into a button, and the tabs' buttons are in here.
         setAccessibilityElement(true)
@@ -132,8 +142,21 @@ final class TerminalRail: NSView {
 
     // MARK: layout
 
-    /// Where the marks start: under the arrow, which sits in the tab bars' strip along the top.
-    private var marksTop: CGFloat { topInset + TabBarView.height + 4 }
+    /// Where the marks start: under the arrow, which sits in the tab bars' strip along the top, and its key.
+    private var marksTop: CGFloat { topInset + TabBarView.height + 4 + hintRow }
+
+    /// The key shows under the arrow only if it fits across the rail and every mark shown without it still is.
+    private func placeExpandHint() {
+        let height = ceil(expandHint.intrinsicContentSize.height)
+        hintRow = 0
+        let without = shownCount
+        hintRow = height
+        let fits = !expandHint.key.isEmpty && expandHint.keyWidth <= bounds.width - 2 && shownCount == without
+        hintRow = fits ? height : 0
+        expandHint.isHidden = !fits
+        let width = expandHint.keyWidth
+        expandHint.frame = NSRect(x: ((bounds.width - width) / 2).rounded(), y: topInset + TabBarView.height + 2, width: width, height: height)
+    }
 
     /// How many marks fit; when some do not, the last place is the "+3".
     private var shownCount: Int {
@@ -147,6 +170,7 @@ final class TerminalRail: NSView {
         CATransaction.setDisableActions(true)
         glow.frame = bounds
         CATransaction.commit()
+        placeExpandHint()
         let shown = shownCount
         for (i, view) in markViews.enumerated() {
             view.isHidden = i >= shown
