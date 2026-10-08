@@ -34,6 +34,15 @@ final class TerminalWindow: NSWindow {
         }
         super.sendEvent(event)
     }
+
+    #if DEBUG
+    /// For the self-test: `body` runs as a key's dispatch does.
+    func asKey(_ body: () -> Void) {
+        dispatchingKey = true
+        body()
+        dispatchingKey = false
+    }
+    #endif
 }
 
 /// Split view with a quiet one-pixel divider in the theme's colour.

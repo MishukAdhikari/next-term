@@ -45,10 +45,10 @@ extension SelfTest {
         window.sendEvent(event)
     }
 
-    /// A key down through the app, as the keyboard's goes: key equivalents first (a sheet's Esc button), then
-    /// the key window.
-    static func pressAppKey(_ window: NSWindow, _ characters: String, code: UInt16) {
-        guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+    /// A key down through the app, as the keyboard's goes: key equivalents first (a sheet's Esc button, a menu's
+    /// ⌘ key), then the key window.
+    static func pressAppKey(_ window: NSWindow, _ characters: String, code: UInt16, flags: NSEvent.ModifierFlags = []) {
+        guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                                            windowNumber: window.windowNumber, context: nil, characters: characters,
                                            charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code) else { return }
         NSApp.sendEvent(event)
@@ -426,18 +426,26 @@ extension SelfTest {
             check(await wait(2) { !popup.isVisible }, "Tab completion: a drop closes the list")
             await clearLine(tab)
         }
+        // A paste closes it too, though ⌘V is a key. The clipboard is put back after.
+        let clipboard = NSPasteboard.general.string(forType: .string)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("Tes", forType: .string)
         if await open("cd ") {
-            // A paste closes it too, though ⌘V is a key: the clipboard is put back after.
-            let clipboard = NSPasteboard.general.string(forType: .string)
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString("Tes", forType: .string)
-            tab.view.paste(self)
-            check(await wait(2) { !popup.isVisible } && promptLine(tab).hasSuffix("cd Tes"), "Tab completion: a paste closes the list",
+            // ⌘V as the keyboard sends it, through the app: Edit › Paste.
+            pressAppKey(window, "v", code: 9, flags: .command)
+            check(await wait(2) { !popup.isVisible } && promptLine(tab).hasSuffix("cd Tes"), "Tab completion: ⌘V closes the list and pastes",
                   promptLine(tab))
-            NSPasteboard.general.clearContents()
-            if let clipboard { NSPasteboard.general.setString(clipboard, forType: .string) }
             await clearLine(tab)
         }
+        if await open("cd ") {
+            // A paste's bytes close it even while a key is dispatched, where the key's own bytes would keep it open.
+            window.asKey { tab.view.paste(self) }
+            check(await wait(2) { !popup.isVisible } && promptLine(tab).hasSuffix("cd Tes"), "Tab completion: a paste under a key closes the list too",
+                  promptLine(tab))
+            await clearLine(tab)
+        }
+        NSPasteboard.general.clearContents()
+        if let clipboard { NSPasteboard.general.setString(clipboard, forType: .string) }
         tab.view.send(txt: "(sleep 1.2; print bg-output) &!\r")
         _ = await wait(3) { session.state.isArmed }
         if await open("cd ") {
