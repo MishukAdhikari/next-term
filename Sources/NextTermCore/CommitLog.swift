@@ -373,17 +373,23 @@ public enum CommitLog {
          "-c", "core.precomposeUnicode=true"]
     }
 
-    /// Runs git on `paths` composed, then, when a path beyond ASCII matched nothing, as stored: a name
-    /// a git that did not compose names added (an old one on HFS+) is stored decomposed, and composed it
-    /// matches nothing. The later `-c` wins.
+    /// Runs git on `paths` composed, then, when a path is beyond ASCII, as stored too, and keeps the run
+    /// that found more (`score`): a name a git that did not compose names added (an old one on HFS+) is
+    /// stored decomposed, and composed it matches nothing. A lone path that matched is as asked; beside
+    /// other paths that match, or across a rename to an ASCII name, the decomposed one may still be
+    /// missing, so then both runs are made. The later `-c` wins.
     private static func run(_ git: String, _ args: [String], paths: [String], in root: String, timeout: TimeInterval,
-                            environment: [String: String] = [:]) -> Data? {
+                            environment: [String: String] = [:], score: (Data) -> Int) -> Data? {
         guard let data = GitRunner.run(git, base(root) + args, timeout: timeout, environment: environment) else { return nil }
         let beyondASCII = paths.contains { path in path.unicodeScalars.contains { !$0.isASCII } }
-        guard data.isEmpty, beyondASCII else { return data }
+        guard beyondASCII, data.isEmpty || paths.count > 1 else { return data }
         let stored = base(root) + ["-c", "core.precomposeUnicode=false"] + args
-        return GitRunner.run(git, stored, timeout: timeout, environment: environment) ?? data
+        guard let other = GitRunner.run(git, stored, timeout: timeout, environment: environment), score(other) > score(data) else { return data }
+        return other
     }
+
+    /// How many commits `git rev-list` listed: a line each.
+    static func lineCount(_ data: Data) -> Int { data.reduce(0) { $1 == 10 ? $0 + 1 : $0 } }
 
     /// Every commit the query lists, in order, as ids; nil when git fails (not a repository, a bad
     /// revision). A query whose text is a hash prefix of a commit lists that commit alone. One walk of
@@ -393,7 +399,7 @@ public enum CommitLog {
         // HEAD only when there is a commit: on an unborn branch, naming it is an error.
         let hasHead = query.scope != .all || resolve("HEAD", in: root, git: git) != nil
         guard let data = run(git, ["rev-list"] + query.arguments(includeHead: hasHead), paths: query.paths, in: root, timeout: timeout,
-                             environment: query.environment) else {
+                             environment: query.environment, score: lineCount) else {
             // A repository without a single commit has nothing to list.
             return hasHead || query.scope != .all ? nil : CommitOrder(ids: [])
         }
@@ -540,7 +546,13 @@ public enum CommitLog {
                        "--src-prefix=a/", "--dst-prefix=b/"]
         let against = parent.map { ["--end-of-options", $0, commit] } ?? ["--root", "--end-of-options", commit]
         let paths = [oldPath, path].compactMap { $0 }
-        guard let data = run(git, ["diff-tree", "-r", "--no-commit-id"] + options + against + ["--"] + paths, paths: paths, in: root, timeout: 15) else { return nil }
+        // The run whose patches name more of the paths asked for (Swift's == takes both spellings as one).
+        let score = { (data: Data) -> Int in
+            let files = UnifiedDiff.parse(String(decoding: data, as: UTF8.self))
+            return paths.filter { wanted in files.contains { $0.oldPath == wanted || $0.newPath == wanted } }.count
+        }
+        guard let data = run(git, ["diff-tree", "-r", "--no-commit-id"] + options + against + ["--"] + paths, paths: paths, in: root, timeout: 15,
+                             score: score) else { return nil }
         return file(at: path, in: UnifiedDiff.parse(String(decoding: data, as: UTF8.self)))
     }
 

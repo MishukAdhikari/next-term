@@ -315,6 +315,32 @@ import Testing
         }
     }
 
+    /// Beside a path that matches, a name stored decomposed is found all the same; and a rename from it
+    /// to an ASCII name is a rename, not a new file.
+    @Test func aPathStoredDecomposedIsFoundBesideOthers() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        repo.sh(["config", "core.precomposeUnicode", "false"])
+        try repo.write("a.txt", "a\n")
+        let one = repo.commit("One")
+        try repo.write("école.txt", "1\n2\n3\n4\n5\n6\n7\n")
+        let added = repo.commit("Add")
+        try repo.write("a.txt", "b\n")
+        let three = repo.commit("Three")
+        let stored = try #require(CommitLog.details(of: added, in: repo.work, git: repo.git)?.files.first?.path)
+        try #require(stored.unicodeScalars.contains { $0.value == 0x301 }, "stored decomposed: \(stored)")
+        repo.sh(["mv", stored, "ecole.txt"])
+        try repo.write("ecole.txt", "1\n2\n3\n4\n5\n6\n7\n8\n")
+        let renamed = repo.commit("Rename")
+        for setting in ["false", "true"] {
+            repo.sh(["config", "core.precomposeUnicode", setting])
+            let both = CommitLog.page(CommitQuery(paths: ["a.txt", "école.txt"]), in: repo.work, git: repo.git)?.map(\.sha)
+            #expect(both == [renamed, three, added, one], "\(setting)")
+            let diff = CommitLog.diff(of: "ecole.txt", oldPath: stored, commit: renamed, parent: three, in: repo.work, git: repo.git)
+            #expect(diff?.isNew == false && diff?.newPath == "ecole.txt" && diff?.oldPath == "école.txt", "\(setting)")
+        }
+    }
+
     /// In a partial clone, reading a commit's files downloads nothing: they are listed without counts.
     @Test func aPartialCloneIsNotFetchedFrom() throws {
         let repo = try #require(ScratchRepo())
