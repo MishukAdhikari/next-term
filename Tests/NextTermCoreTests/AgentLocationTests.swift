@@ -199,6 +199,105 @@ import Testing
         #expect(AgentLocation.claudeFolder(pid: 4242, home: home)?.folder == "/Code/xCloud/.claude/worktrees/pr-7050")
     }
 
+    /// A last line longer than the 64 KB read first (a big tool result), or a turn's worth of lines with no
+    /// folder in them, doesn't lose the folder named before it.
+    @Test func aFolderNamedBeforeALongLastLineOrALongTurnIsStillRead() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("nt-records-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: base) }
+        try FileManager.default.createDirectory(atPath: base, withIntermediateDirectories: true)
+        let worktree = "/Code/xCloud/.claude/worktrees/pr-7050"
+        let claude = base + "/claude.jsonl"
+        var text = #"{"type":"user","cwd":"/Code/xCloud","timestamp":"2026-10-09T09:00:00Z"}"# + "\n"
+        text += #"{"type":"assistant","cwd":"\#(worktree)","timestamp":"2026-10-09T09:05:00Z"}"# + "\n"
+        text += #"{"type":"file-history-snapshot","data":""# + String(repeating: "x", count: 70_000) + "\"}\n"
+        try text.write(toFile: claude, atomically: true, encoding: .utf8)
+        #expect(AgentLocation.claudeFolder(transcript: claude)?.folder == worktree)
+
+        let codex = base + "/rollout-1.jsonl"
+        text = #"{"type":"turn_context","timestamp":"2026-10-09T09:00:00Z","payload":{"cwd":"/Code/xCloud"}}"# + "\n"
+        text += #"{"type":"event_msg","timestamp":"2026-10-09T09:01:00Z","payload":{"type":"thread_settings_applied","thread_settings":{"cwd":"\#(worktree)"}}}"# + "\n"
+        let output = #"{"type":"response_item","payload":{"type":"function_call_output","output":""# + String(repeating: "y", count: 1000) + "\"}}\n"
+        text += String(repeating: output, count: 100) // 100 KB of a turn's output
+        try text.write(toFile: codex, atomically: true, encoding: .utf8)
+        #expect(AgentLocation.codexFolder(rollout: codex)?.folder == worktree)
+    }
+
+    /// Followed as it grows: each look reads what was written since, and a turn's worth of output without a
+    /// folder keeps the one named before; a replaced record is read anew.
+    @Test func aRecordFollowedAsItGrows() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("nt-follow-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: base) }
+        try FileManager.default.createDirectory(atPath: base, withIntermediateDirectories: true)
+        let rollout = base + "/rollout-1.jsonl"
+        func append(_ text: String) throws {
+            let handle = try #require(FileHandle(forWritingAtPath: rollout))
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data(text.utf8))
+            try handle.close()
+        }
+        func settings(_ folder: String) -> String {
+            #"{"type":"event_msg","timestamp":"2026-10-09T09:01:00Z","payload":{"type":"thread_settings_applied","thread_settings":{"cwd":"\#(folder)"}}}"# + "\n"
+        }
+        let output = #"{"type":"response_item","payload":{"type":"function_call_output","output":""# + String(repeating: "y", count: 1000) + "\"}}\n"
+        try (#"{"type":"turn_context","timestamp":"2026-10-09T09:00:00Z","payload":{"cwd":"/r"}}"# + "\n").write(toFile: rollout, atomically: false, encoding: .utf8)
+        var records = SessionRecords()
+        #expect(records.folder(rollout, kind: .codex)?.folder == "/r")
+        try append(settings("/r/.claude/worktrees/x"))
+        #expect(records.folder(rollout, kind: .codex)?.folder == "/r/.claude/worktrees/x") // a /cd
+        try append(String(repeating: output, count: 100)) // the rest of the turn: 100 KB without a folder
+        #expect(records.folder(rollout, kind: .codex)?.folder == "/r/.claude/worktrees/x")
+        try append(#"{"type":"response_item","payload":{"type":"message","content":"half a li"#) // still being written
+        #expect(records.folder(rollout, kind: .codex)?.folder == "/r/.claude/worktrees/x")
+        try append(#"ne"}}"# + "\n" + settings("/r/app"))
+        #expect(records.folder(rollout, kind: .codex)?.folder == "/r/app")
+        // Replaced by another file: read from its end again.
+        try settings("/elsewhere").write(toFile: rollout, atomically: true, encoding: .utf8)
+        #expect(records.folder(rollout, kind: .codex)?.folder == "/elsewhere")
+        try FileManager.default.removeItem(atPath: rollout)
+        #expect(records.folder(rollout, kind: .codex) == nil)
+
+        // Claude Code: a 70 KB line after the folder, written while it was followed.
+        let transcript = base + "/claude.jsonl"
+        try (#"{"type":"user","cwd":"/r/.claude/worktrees/x","timestamp":"2026-10-09T09:00:00Z"}"# + "\n").write(toFile: transcript, atomically: false, encoding: .utf8)
+        #expect(records.folder(transcript, kind: .claude)?.folder == "/r/.claude/worktrees/x")
+        let handle = try #require(FileHandle(forWritingAtPath: transcript))
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((#"{"type":"progress","data":""# + String(repeating: "x", count: 70_000) + "\"}\n").utf8))
+        try handle.close()
+        #expect(records.folder(transcript, kind: .claude)?.folder == "/r/.claude/worktrees/x")
+    }
+
+    @Test func claudeSessionsAndCopilotWorkspacesAreReadAgainOnlyWhenTheyChange() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("nt-records-home-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let fm = FileManager.default
+        try fm.createDirectory(atPath: home + "/.claude/sessions", withIntermediateDirectories: true)
+        let sessionFile = home + "/.claude/sessions/4242.json"
+        try #"{"pid": 4242, "sessionId": "s-one", "cwd": "/r"}"#.write(toFile: sessionFile, atomically: true, encoding: .utf8)
+        var records = SessionRecords()
+        #expect(records.claudeSession(pid: 4242, home: home)?.id == "s-one")
+        try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: sessionFile)
+        #expect(records.claudeSession(pid: 4242, home: home)?.id == "s-one") // unchanged: not read
+        try fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: sessionFile)
+        try #"{"pid": 4242, "sessionId": "s-two", "cwd": "/r"}"#.write(toFile: sessionFile, atomically: true, encoding: .utf8) // /clear
+        #expect(records.claudeSession(pid: 4242, home: home)?.id == "s-two")
+        #expect(records.claudeSession(pid: 4343, home: home) == nil)
+
+        let one = home + "/.copilot/session-state/s1", two = home + "/.copilot/session-state/s2"
+        for folder in [one, two] { try fm.createDirectory(atPath: folder, withIntermediateDirectories: true) }
+        try "cwd: /r\n".write(toFile: one + "/workspace.yaml", atomically: true, encoding: .utf8)
+        try "cwd: /r/.claude/worktrees/x\n".write(toFile: two + "/workspace.yaml", atomically: true, encoding: .utf8)
+        try "".write(toFile: one + "/inuse.777.lock", atomically: true, encoding: .utf8)
+        #expect(records.copilotFolder(pid: 777, home: home)?.folder == "/r")
+        try "cwd: /r/app\n".write(toFile: one + "/workspace.yaml", atomically: true, encoding: .utf8)
+        #expect(records.copilotFolder(pid: 777, home: home)?.folder == "/r/app")
+        // It moved to another session: its lock went with it.
+        try fm.moveItem(atPath: one + "/inuse.777.lock", toPath: two + "/inuse.777.lock")
+        #expect(records.copilotFolder(pid: 777, home: home)?.folder == "/r/.claude/worktrees/x")
+        try fm.removeItem(atPath: two + "/inuse.777.lock")
+        #expect(records.copilotFolder(pid: 777, home: home) == nil)
+    }
+
     @Test func copilotWorkspaceOfTheSessionItsProcessHasOpen() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent("nt-copilot-home-\(UUID().uuidString)").path
         defer { try? FileManager.default.removeItem(atPath: home) }

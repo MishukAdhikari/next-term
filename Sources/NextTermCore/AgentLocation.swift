@@ -174,52 +174,117 @@ public enum AgentLocation {
         return record.at >= processSince ? record.folder : process
     }
 
-    // MARK: session records (their tails only)
+    // MARK: session records (read from their ends)
 
-    /// The JSON lines in the last `bytes` of a file (the line cut at the start dropped), and when it was
-    /// last written. Never the whole file: transcripts can be megabytes.
-    static func tail(_ path: String, bytes: Int = 65536) -> (lines: [[String: Any]], modified: Date)? {
-        guard isRegularFile(path), let handle = FileHandle(forReadingAtPath: path) else { return nil }
-        defer { try? handle.close() }
-        guard let size = try? handle.seekToEnd() else { return nil }
-        let start = size > UInt64(bytes) ? size - UInt64(bytes) : 0
-        try? handle.seek(toOffset: start)
-        var data = (try? handle.read(upToCount: bytes)) ?? Data()
-        if start > 0, let newline = data.firstIndex(of: 0x0A) { data = data[(newline + 1)...] }
-        let lines = data.split(separator: 0x0A, omittingEmptySubsequences: true).compactMap {
-            (try? JSONSerialization.jsonObject(with: Data($0))) as? [String: Any]
+    /// Which lines of a session record can name a folder, and how to read one.
+    public enum RecordKind: Sendable {
+        /// A Claude Code transcript.
+        case claude
+        /// A Codex rollout.
+        case codex
+
+        /// What a line's bytes must hold to be worth parsing: most lines are output, not folders.
+        var needles: [Data] {
+            switch self {
+            case .claude: return [Data(#""cwd""#.utf8)]
+            case .codex: return [Data(#""turn_context""#.utf8), Data(#""thread_settings_applied""#.utf8)]
+            }
         }
-        let modified = (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date) ?? Date()
-        return (lines, modified)
+
+        func folder(_ line: [String: Any], modified: Date) -> RecordedFolder? {
+            switch self {
+            case .claude: return AgentLocation.claudeFolder(line: line, modified: modified)
+            case .codex: return AgentLocation.codexFolder(line: line, modified: modified)
+            }
+        }
+    }
+
+    /// A record is read backwards this much at a time, and at most this far back from its end: transcripts
+    /// can be megabytes.
+    static let recordStep = 65536
+    static let recordReach: UInt64 = 1 << 20
+
+    /// The folder the lines of the record at `path` name last, read backwards from `size` a step at a time
+    /// down to `start` (where a line starts; nil: the record's start), or `recordReach` back if that is
+    /// nearer; and where its last whole line ends. Only lines holding one of `kind`'s needles are parsed. A
+    /// line longer than a step (a big tool result) is read whole, so the line before it still counts.
+    static func lastFolder(_ path: String, kind: RecordKind, from start: UInt64?, size: UInt64, modified: Date) -> (found: RecordedFolder?, end: UInt64?) {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return (nil, nil) }
+        defer { try? handle.close() }
+        let floor = max(start ?? 0, size > recordReach ? size - recordReach : 0)
+        let cut = floor > (start ?? 0) // the line at `floor` started before it
+        var upper = size
+        var end: UInt64?
+        var carry = Data() // the start of a line that goes on past `upper`, read already
+        while upper > floor {
+            let lower = upper - min(UInt64(recordStep), upper - floor)
+            try? handle.seek(toOffset: lower)
+            guard let chunk = try? handle.read(upToCount: Int(upper - lower)), !chunk.isEmpty else { break }
+            if end == nil, let newline = chunk.lastIndex(of: 0x0A) { end = lower + UInt64(newline - chunk.startIndex) + 1 }
+            var data = chunk + carry
+            carry = Data()
+            if lower > floor || cut {
+                // The first line here may have started before `lower`: it is read whole with the next step.
+                guard let newline = data.firstIndex(of: 0x0A) else {
+                    carry = data
+                    upper = lower
+                    continue
+                }
+                carry = Data(data[..<newline])
+                data = Data(data[(newline + 1)...])
+            }
+            for line in data.split(separator: 0x0A).reversed() where kind.needles.contains(where: { line.range(of: $0) != nil }) {
+                guard let json = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any] else { continue }
+                if let found = kind.folder(json, modified: modified) { return (found, end) }
+            }
+            upper = lower
+        }
+        return (nil, end)
+    }
+
+    /// The folder the record at `path` names last, read back from its end.
+    static func lastFolder(_ path: String, kind: RecordKind) -> RecordedFolder? {
+        guard let file = RecordFile(path) else { return nil }
+        return lastFolder(path, kind: kind, from: nil, size: file.size, modified: file.modified).found
     }
 
     /// Claude Code: the `cwd` of the transcript's last line that has one (its shell's folder after a `cd`),
     /// sub-agents' lines left out, with that line's time.
     static func claudeFolder(_ lines: [[String: Any]], modified: Date) -> RecordedFolder? {
-        for line in lines.reversed() where line["isSidechain"] as? Bool != true {
-            guard let cwd = line["cwd"] as? String, !cwd.isEmpty else { continue }
-            let at = (line["timestamp"] as? String).flatMap(AgentSessions.parseDate) ?? modified
-            return RecordedFolder(folder: cwd, at: at)
+        for line in lines.reversed() {
+            if let found = claudeFolder(line: line, modified: modified) { return found }
         }
         return nil
+    }
+
+    /// One line of a Claude Code transcript: its `cwd`, unless a sub-agent wrote it.
+    static func claudeFolder(line: [String: Any], modified: Date) -> RecordedFolder? {
+        guard line["isSidechain"] as? Bool != true, let cwd = line["cwd"] as? String, !cwd.isEmpty else { return nil }
+        let at = (line["timestamp"] as? String).flatMap(AgentSessions.parseDate) ?? modified
+        return RecordedFolder(folder: cwd, at: at)
     }
 
     /// Codex: the folder of the last turn (`turn_context`), or of settings applied to the thread since
     /// (`/cd`), with that line's time.
     static func codexFolder(_ lines: [[String: Any]], modified: Date) -> RecordedFolder? {
         for line in lines.reversed() {
-            let payload = line["payload"] as? [String: Any]
-            var cwd: String?
-            if line["type"] as? String == "turn_context" {
-                cwd = payload?["cwd"] as? String
-            } else if line["type"] as? String == "event_msg", payload?["type"] as? String == "thread_settings_applied" {
-                cwd = (payload?["thread_settings"] as? [String: Any])?["cwd"] as? String
-            }
-            guard let cwd, !cwd.isEmpty else { continue }
-            let at = (line["timestamp"] as? String).flatMap(AgentSessions.parseDate) ?? modified
-            return RecordedFolder(folder: cwd, at: at)
+            if let found = codexFolder(line: line, modified: modified) { return found }
         }
         return nil
+    }
+
+    /// One line of a Codex rollout: the folder a `turn_context` or `thread_settings_applied` names.
+    static func codexFolder(line: [String: Any], modified: Date) -> RecordedFolder? {
+        let payload = line["payload"] as? [String: Any]
+        var cwd: String?
+        if line["type"] as? String == "turn_context" {
+            cwd = payload?["cwd"] as? String
+        } else if line["type"] as? String == "event_msg", payload?["type"] as? String == "thread_settings_applied" {
+            cwd = (payload?["thread_settings"] as? [String: Any])?["cwd"] as? String
+        }
+        guard let cwd, !cwd.isEmpty else { return nil }
+        let at = (line["timestamp"] as? String).flatMap(AgentSessions.parseDate) ?? modified
+        return RecordedFolder(folder: cwd, at: at)
     }
 
     /// The session the `claude` with process `pid` has open, and the folder it started in, from
@@ -247,8 +312,7 @@ public enum AgentLocation {
 
     /// The folder Claude Code's transcript at `path` names last.
     public static func claudeFolder(transcript path: String) -> RecordedFolder? {
-        guard let (lines, modified) = tail(path) else { return nil }
-        return claudeFolder(lines, modified: modified)
+        lastFolder(path, kind: .claude)
     }
 
     /// The folder the transcript of the `claude` with process `pid` names last.
@@ -260,8 +324,7 @@ public enum AgentLocation {
 
     /// The folder Codex's rollout at `path` (the one its process holds open) names last.
     public static func codexFolder(rollout path: String) -> RecordedFolder? {
-        guard let (lines, modified) = tail(path) else { return nil }
-        return codexFolder(lines, modified: modified)
+        lastFolder(path, kind: .codex)
     }
 
     /// Whether `path` is a Codex rollout under `home`: ~/.codex/sessions/…/rollout-….jsonl.
@@ -273,15 +336,22 @@ public enum AgentLocation {
     /// Copilot CLI: the `cwd` in workspace.yaml of the session the `copilot` with process `pid` has open
     /// (the folder holding its `inuse.<pid>.lock`), as of the file's last write.
     public static func copilotFolder(pid: Int32, home: String) -> RecordedFolder? {
+        copilotSession(pid: pid, home: home).flatMap(copilotFolder(session:))
+    }
+
+    /// The session folder the `copilot` with process `pid` has open: the one holding its `inuse.<pid>.lock`.
+    static func copilotSession(pid: Int32, home: String) -> String? {
         let base = (home as NSString).appendingPathComponent(".copilot/session-state")
-        for (name, path) in AgentStoreFiles.written(in: base, since: nil) where AgentStoreFiles.isPlainName(name) {
-            guard FileManager.default.fileExists(atPath: path + "/inuse.\(pid).lock") else { continue }
-            let workspace = path + "/workspace.yaml"
-            guard let text = AgentSessions.readHead(workspace, bytes: 65536).map({ String(decoding: $0, as: UTF8.self) }),
-                  let cwd = CopilotSessions.flatYAML(text)["cwd"], !cwd.isEmpty else { return nil }
-            return RecordedFolder(folder: cwd, at: AgentStoreFiles.modified(workspace) ?? .distantPast)
-        }
-        return nil
+        let sessions = AgentStoreFiles.written(in: base, since: nil).filter { AgentStoreFiles.isPlainName($0.name) }
+        return sessions.first { FileManager.default.fileExists(atPath: $0.path + "/inuse.\(pid).lock") }?.path
+    }
+
+    /// The `cwd` in a Copilot CLI session folder's workspace.yaml, as of the file's last write.
+    static func copilotFolder(session path: String) -> RecordedFolder? {
+        let workspace = path + "/workspace.yaml"
+        guard let text = AgentSessions.readHead(workspace, bytes: 65536).map({ String(decoding: $0, as: UTF8.self) }),
+              let cwd = CopilotSessions.flatYAML(text)["cwd"], !cwd.isEmpty else { return nil }
+        return RecordedFolder(folder: cwd, at: AgentStoreFiles.modified(workspace) ?? .distantPast)
     }
 
     // MARK: who switched
