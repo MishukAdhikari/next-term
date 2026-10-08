@@ -54,6 +54,7 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Go to File… | <kbd>⌘P</kbd> |
 | Resume Agent Session… | <kbd>⌥⌘O</kbd> |
 | Open Served URL (the address a dev server in the tab printed) | — |
+| Suggest a Command… (on when you turn it on in Settings › Terminal: see [Suggest a command](/docs/tab-completion/#suggest-a-command)) | <kbd>⌃⌘K</kbd> |
 | Open Recent, Open Projects In | — |
 | Close Project | — |
 | Save | <kbd>⌘S</kbd> |
@@ -187,6 +188,10 @@ These are fixed:
 | Terminal | Copy, Paste, Clear, Find, Split, Send Selection to Agent; open or reveal a link or path | Right-click |
 | Terminal | Open a path such as `src/app.ts:42:7`, or a link | <kbd>⌘</kbd>-click |
 | Terminal | Suspend the running program | <kbd>⌃Z</kbd> |
+| Terminal | [Tab completion](/docs/tab-completion/): list what completes the word, at a zsh prompt or in a remote tab | <kbd>⇥</kbd> |
+| Tab completion list | Choose a row | <kbd>↓</kbd> <kbd>↑</kbd>, <kbd>⌃N</kbd> <kbd>⌃P</kbd>, <kbd>⇧⇥</kbd> |
+| Tab completion list | Put the chosen name on the line | <kbd>↩︎</kbd> or <kbd>⇥</kbd> |
+| Tab completion list | Close it, sending the shell nothing | <kbd>⎋</kbd> |
 | Editor | Indent or outdent the selected lines | <kbd>⇥</kbd>, <kbd>⇧⇥</kbd> |
 | Sidebar | Open | Double-click (one click, with **Open files with a single click** on) |
 | Sidebar | Copy instead of move while dragging | Hold <kbd>⌥</kbd> |

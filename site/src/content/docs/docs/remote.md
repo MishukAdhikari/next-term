@@ -3,7 +3,7 @@ title: Remote tabs on your servers
 description: "Run agents on your own VPS from a Next Term tab: sessions that keep running while your Mac sleeps, reconnecting, and the host keys and logins left to ssh."
 ---
 
-A remote tab is a terminal tab on one of your servers. Start Claude Code or Codex there, close the lid, and with tmux or herdr on the server the agent keeps working there; open the Mac again and the tab is back where it was. Next Term connects with the ssh you already use, and installs nothing on the server.
+A remote tab is a terminal tab on one of your servers. Start Claude Code or Codex there, close the lid, and with tmux or herdr on the server the agent keeps working there; open the Mac again and the tab is back where it was. Next Term connects with the ssh you already use, and installs nothing on the server, except the Tab completion hook you allow.
 
 ## Open a remote tab
 
@@ -82,6 +82,8 @@ Agents in a remote tab get the same marks as local ones: the spinner while they 
 
 Links in a remote tab’s output open web pages only: a path there names a file on the server, not on your Mac.
 
+<kbd>⇥</kbd> at the prompt lists the server’s folders and files, read over the same connection without writing anything there. See [Tab completion on your servers](/docs/tab-completion/#on-your-servers).
+
 ## Closing a tab or ending the session
 
 Closing a **tmux** tab only detaches from its session. If something runs in it, Next Term says what keeps running and where (“claude keeps running on web-1, in tmux session nt-app-1a2b3c”) and offers:
@@ -109,7 +111,7 @@ Agents that use Next Term’s [MCP server](/docs/orchestration/) get seven tools
 ## Security
 
 - **Host keys are never accepted silently.** A new host key is asked about in the tab, and a changed one is refused, whatever your ssh config says, for jump hosts too. Background checks never log in, so they never meet a host key at all.
-- **Nothing is installed on a server.** tmux and herdr are used only if you installed them. Next Term keeps a few small files in `~/.cache/next-term` on the server: each tab’s shell process and Next Term’s tmux settings.
+- **Nothing is installed on a server, except the Tab hook you allow.** tmux and herdr are used only if you installed them. Next Term keeps a few small files in `~/.cache/next-term` on the server: each tab’s shell process and Next Term’s tmux settings. The [Tab completion hook](/docs/tab-completion/#the-hook-for-zsh-on-a-server) goes in `~/.cache/next-term/completion` only after you allow it for that server, and **Remove** deletes it.
 - **No passwords are stored.** Saved hosts hold a name, a destination, a port and a folder. ssh does every login.
 - **Your ssh config is never written.** Next Term reads it the way ssh does, through its own small config file that adds the host-key rule and includes yours unchanged.
 - **No port or socket is forwarded.** Next Term clears every port forward, even ones in your ssh config, and never forwards its own MCP socket or editor links, so nothing on the server can reach back to Next Term. Agent forwarding is as your ssh config sets it.

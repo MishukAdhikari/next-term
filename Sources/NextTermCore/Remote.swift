@@ -8,7 +8,8 @@ import Foundation
 //   here from fixed text plus values quoted for POSIX sh, then sent base64-encoded (an alphabet no shell
 //   reads specially) and decoded by /bin/sh on the host. See RemoteShell.command.
 // - A destination can never be read by ssh as an option (no leading "-", and ssh is given "--").
-// - Next Term installs nothing on a host: tmux and herdr are used only if the user installed them.
+// - Next Term installs nothing on a host, except Tab completion's hook where the user allowed it
+//   (RemoteCompletionHook): tmux and herdr are used only if the user installed them.
 
 /// How a host keeps agents running when this Mac disconnects, sleeps or is off.
 public enum KeepMode: String, Codable, Sendable, CaseIterable {
@@ -378,7 +379,10 @@ public enum RemoteShell {
     /// what runs in front of it.
     /// `token` is new for every connection: written beside the pid once the host runs this script (past
     /// ssh's login), it is how this tab, and only it, learns that its own connection is up.
-    public static func tabScript(keep: KeepMode, directory: String, session: String, tabID: String, token: String = "") -> String {
+    /// `completionHook`: the user allowed Tab completion's hook on this host (RemoteCompletionHook), so a plain
+    /// or tmux tab starts its shell through the hook's start command while the hook's files are there.
+    public static func tabScript(keep: KeepMode, directory: String, session: String, tabID: String, token: String = "",
+                                 completionHook: Bool = false) -> String {
         // K: this tab's files on the host. K.plain: tmux or herdr was missing, so this is a plain shell.
         // K.nodir: the folder was not there.
         var lines = [
@@ -399,7 +403,7 @@ public enum RemoteShell {
         ]
         switch keep {
         case .off:
-            lines.append(plainShell(nil))
+            lines.append(completionHook ? RemoteCompletionHook.offLaunch : plainShell(nil))
         case .tmux:
             lines += [
                 findTmux,
@@ -407,8 +411,9 @@ public enum RemoteShell {
                 "  : > \"$K.plain\" 2>/dev/null",
                 plainShell("tmux is not installed on this host: this is a plain shell, and what runs in it stops if the connection drops."),
                 "fi",
-                "printf '%s\\n' \(quote(tmuxConfig)) > \"$C/tmux.conf\" 2>/dev/null",
-                "exec \"$T\" -L nextterm -f \"$C/tmux.conf\" new-session -A -s \(quote(safeName(session))) -c \"$PWD\"",
+                "printf '%s\\n' \(quote(completionHook ? RemoteCompletionHook.tmuxConfig : tmuxConfig)) > \"$C/tmux.conf\" 2>/dev/null",
+                completionHook ? RemoteCompletionHook.tmuxLaunch(session: session)
+                    : "exec \"$T\" -L nextterm -f \"$C/tmux.conf\" new-session -A -s \(quote(safeName(session))) -c \"$PWD\"",
             ]
         case .herdr:
             lines += [

@@ -14,6 +14,7 @@ A terminal sees everything you type, and an agent link exposes your editor to pr
 - **Everything else only when you ask.** A fetch, update or push you choose in the branch popup talks to your git remote. A remote tab connects only to the server you opened it on, through your own ssh; a tmux or herdr tab reconnects to it by itself, and reopens at launch. **Open in TablePlus** hands a database to TablePlus, and **Open in Vercel** runs Vercel’s own command line in a new tab. Nothing else starts by itself.
 - **The Skills library asks GitHub only when you do:** when you review a skill, install or update one, or click Check for Updates in Settings › Skills. Opening Window › Skills also checks your installed skills for updates, at most once an hour, unless you turn that off in Settings › Skills. Each request names a public repository and a commit; nothing about you or your other skills is sent. See [Skills from GitHub](#skills-from-github).
 - **No AI of its own.** Next Term runs the agents you install. What those agents send to their providers is between you and them.
+- **Suggest a command is off until you turn it on,** and then sends only when you press <kbd>⌃⌘K</kbd> and submit a sentence. It goes to the agent you chose (Claude Code) or to Apple’s on-device model, which keeps it on this Mac. With your sentence go the folder, the shell’s name and the last command, secrets masked; recent output only when you include it, each time, after seeing it as it would be sent. The agent runs with no tools and no MCP, in an empty folder, without Next Term’s variables, and is stopped after 60 seconds. What comes back is put on the line and never run. See [Suggest a command](/docs/tab-completion/#suggest-a-command).
 
 ## The agent links
 
@@ -125,7 +126,7 @@ A [remote tab](/docs/remote/) runs the system’s `ssh` with your own configurat
 - **Host keys are never accepted silently.** A new key is asked about in the tab, and a changed one is refused, whatever your ssh config says, for jump hosts too.
 - **No password is stored,** and your `~/.ssh/config` is never written. ssh does every login.
 - **Nothing on a server can reach back to Next Term.** Every port forward is cleared, and the MCP socket and editor links are never forwarded. Agent forwarding is as your ssh config sets it.
-- **Nothing is installed.** tmux and herdr are used only if you installed them; a few small files go in `~/.cache/next-term` on the server.
+- **Nothing is installed, except the Tab hook you allow.** tmux and herdr are used only if you installed them; a few small files go in `~/.cache/next-term` on the server. Tab completion lists a server’s folders and files with a script that writes nothing. Its hook for zsh goes in `~/.cache/next-term/completion` only after you allow it for that server; it sends only Tab completion’s marks, under a secret that never appears on a command line, and **Remove** deletes it. See [Tab completion on your servers](/docs/tab-completion/#on-your-servers).
 - **Commands are never pieced together from text:** what runs on a server is a fixed script, with every name and folder quoted.
 
 ## Background fetch

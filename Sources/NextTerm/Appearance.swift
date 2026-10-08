@@ -219,7 +219,7 @@ final class TerminalSettingsView: NSView {
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 11)
         note.preferredMaxLayoutWidth = 420
-        let stack = NSStackView(views: [row("Font:", [font]), row("Colours:", [colours]), row("", [swatches])] + behaviour.rows(row) + [note])
+        let stack = NSStackView(views: [row("Font:", [font]), row("Colours:", [colours]), row("", [swatches])] + behaviour.rows(row) + [note, CompletionSettingsPane()])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 14

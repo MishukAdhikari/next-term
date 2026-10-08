@@ -18,6 +18,8 @@ final class NextTermView: LocalProcessTerminalView {
     var acceptsInput = true
     /// Takes keystrokes before the program would (a remote tab waiting to reconnect); true: handled.
     var interceptInput: ((ArraySlice<UInt8>) -> Bool)?
+    /// Tab completion's ordered writer (CompletionSession): true, the write waits and goes out later.
+    var completionGate: ((ArraySlice<UInt8>) -> Bool)?
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
         super.dataReceived(slice: slice) // parse first: OSC marks in this chunk update the status
@@ -27,8 +29,16 @@ final class NextTermView: LocalProcessTerminalView {
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
         if let interceptInput, interceptInput(data) { return }
         guard acceptsInput else { return }
+        if let completionGate, completionGate(data) { return }
         onInput?()
         super.send(source: source, data: Self.withoutScreenChecksum(data))
+    }
+
+    /// Tab completion's own keys, and the writes it held, past its gate.
+    func sendPastGate(_ data: ArraySlice<UInt8>) {
+        guard acceptsInput else { return }
+        onInput?()
+        super.send(source: self, data: Self.withoutScreenChecksum(data))
     }
 
     /// DECRQCRA asks the terminal for a checksum of a screen rectangle; for one cell, the checksum is the
@@ -315,6 +325,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     weak var delegate: TerminalTabDelegate?
     /// Fires when the shell process execs something else (`exec zsh`, `omz reload`).
     private var execWatcher: DispatchSourceProcess?
+    /// Tab completion in this tab.
+    private(set) lazy var completion = CompletionSession(tab: self)
     private var shellName: String { (shellPath as NSString).lastPathComponent }
 
     init(directory: String?, fontSize: CGFloat, remote: RemoteTab? = nil) {
@@ -330,16 +342,20 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         // Off by default: on most non-US layouts Option types # @ | [ ] { } ~ \. Toggle in the File menu.
         view.optionAsMetaKey = Preferences.optionAsMeta
 
-        view.onOutput = { [weak self] in self?.status.output(at: Self.now) }
+        view.onOutput = { [weak self] in
+            self?.status.output(at: Self.now)
+            self?.completion.output()
+        }
         view.onInput = { [weak self] in self?.status.input(at: Self.now) }
         view.onKeyboard = { [weak self] in if let self { MCPControl.typedByUser(self) } }
         view.onBell = { [weak self] in self?.attention() }
+        view.completionGate = { [weak self] data in self?.completion.gate(data) ?? false }
         view.linkBaseDirectory = { [weak self] in self?.liveDirectory ?? NSHomeDirectory() }
         view.opensFiles = remote == nil
 
         let terminal = view.getTerminal()
         terminal.registerOscHandler(code: ShellIntegration.oscCode) { [weak self] payload in
-            guard let self, let event = ShellIntegration.parse(payload, nonce: self.nonce) else { return }
+            guard let self, let event = ShellIntegration.parse(payload, nonce: self.nonce) ?? self.serverCompletionMark(payload) else { return }
             self.handle(event)
         }
         // OSC 52 clipboard. Reading is refused: any program, or a remote host over ssh, could harvest the
@@ -418,6 +434,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             guard let self, !self.exited else { return }
             self.programTitle = nil
             self.status.shellReplaced()
+            self.completion.shellReplaced()
             self.delegate?.tabDidChange(self)
         }
         watcher.resume()
@@ -751,6 +768,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         lines.append(remote == nil ? directory : "Folder on the host: \(directory)")
         if let servedURL { lines.append("Serving \(servedURL.absoluteString)") }
         if let remote { lines.append("Sessions kept: \(remote.keep.label)") }
+        lines.append(completion.engineLabel)
         return lines.joined(separator: "\n")
     }
 
@@ -758,7 +776,10 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     private func handle(_ event: ShellIntegration.Event) {
         switch event {
+        case .completion(let message):
+            return completion.handle(message)
         case .commandStarted(let line, let expanded):
+            completion.disarm()
             programTitle = nil
             // Its output starts below the line the command was typed on.
             pendingServingStart = (lastTextRow() ?? 0) + 1
@@ -786,6 +807,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {
         // Programs redraw after a resize; that is not work.
         status.resized(at: Self.now)
+        completion.viewChanged()
     }
 
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
@@ -897,6 +919,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         remoteReady = false
         loginPrompt = false
         status.shellReplaced()
+        completion.connectionLost()
         // What ran in a plain remote shell ended with the connection: mark it, as a failure would be.
         if stopped != nil { status.shellExited(code: 255) }
         // tmux or an agent left the terminal in their modes (alternate screen, mouse, keyboard protocol,
@@ -988,6 +1011,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         }
         status.jobsChanged(count: report.jobs, summary: report.jobSummary)
         if let folder = report.directory, folder.hasPrefix("/") { directory = folder }
+        completion.remoteReport(folder: report.directory != nil)
         // A title the remote prompt set is stale once a program runs, and the other way round.
         if (status.running, status.command) != (before.0, before.1) { programTitle = nil }
         if (status.running, status.command, directory, remoteConnected, fellBack) != before { delegate?.tabDidChange(self) }
@@ -1034,9 +1058,11 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         // Apps opened from Finder get no LANG; without it zsh and most CLIs mangle UTF-8.
         if env["LANG"]?.isEmpty ?? true { env["LANG"] = "en_US.UTF-8" }
         if shellName == "zsh", let zdotdir = AppSupport.zshIntegrationDirectory {
-            env["NEXTTERM_USER_ZDOTDIR"] = env["ZDOTDIR"] ?? ""
+            env["NEXTTERM_USER_ZDOTDIR"] = Self.userZDOTDIR(env)
             env["ZDOTDIR"] = zdotdir.path
             env[ShellIntegration.nonceVariable] = nonce // the shell removes it from its environment at once
+            // Tab completion's hook loads; `q`: with zsh-autocomplete's list as you type off from the first prompt.
+            if CompletionPreferences.isOn { env[ShellIntegration.completionVariable] = CompletionPreferences.quietsAutocomplete ? "q" : "1" }
         }
         environmentPath = env["PATH"] ?? ""
         claudePort = env["CLAUDE_CODE_SSE_PORT"]

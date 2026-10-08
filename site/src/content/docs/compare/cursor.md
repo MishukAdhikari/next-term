@@ -61,7 +61,7 @@ Yes. Anthropic publishes its Claude Code extension for Cursor. What Next Term ad
 
 ### Does Next Term have Tab completion or a model of its own?
 
-No. Next Term brings no AI and needs no account. Its editor colours code with 112 grammars and finds files fast, but completion and code generation come from the agents you run in its tabs.
+It has Tab completion for the shell, not for code. <kbd>⇥</kbd> at a zsh prompt lists zsh’s own completions, or folders and files, in a list at the cursor ([Tab completion](/docs/tab-completion/)). Next Term brings no AI and needs no account: its editor colours code with 112 grammars and finds files fast, but code completion and code generation come from the agents you run in its tabs.
 
 ### Is Cursor free?
 

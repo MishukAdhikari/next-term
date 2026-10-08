@@ -20,7 +20,7 @@ Yes. Next Term is free, and its source code is on [GitHub](https://github.com/Mi
 
 ## Does it include its own AI, or need an API key?
 
-No. Next Term brings no model and no account. It runs the agent command-line tools you already have, signed in the way each of them normally is.
+No. Next Term brings no model and no account. It runs the agent command-line tools you already have, signed in the way each of them normally is. One feature can ask them, and only if you turn it on: [Suggest a command](/docs/tab-completion/#suggest-a-command) turns a sentence into one shell command with your own Claude Code, or Apple’s on-device model, and puts it on the line without running it.
 
 ## Which Macs and macOS versions are supported?
 
@@ -62,7 +62,7 @@ Yes. Next Term is an MCP server, set up for you in Claude Code and the Claude de
 
 ## Can my agents run on a server?
 
-Yes. **File › New Remote Tab…** (<kbd>⌥⌘T</kbd>) opens a tab on any server you reach with ssh, using your `~/.ssh/config`, keys and agent. Choose **tmux** or **herdr**, and the session keeps running while your Mac sleeps or the network drops; the tab reconnects by itself and comes back at the next launch. Agents there get the same marks as local ones. Nothing is installed on the server and no password is stored. See [Remote tabs on your servers](/docs/remote/).
+Yes. **File › New Remote Tab…** (<kbd>⌥⌘T</kbd>) opens a tab on any server you reach with ssh, using your `~/.ssh/config`, keys and agent. Choose **tmux** or **herdr**, and the session keeps running while your Mac sleeps or the network drops; the tab reconnects by itself and comes back at the next launch. Agents there get the same marks as local ones, and Tab lists the server’s folders and files. Nothing is installed on the server, except the Tab completion hook you allow there, and no password is stored. See [Remote tabs on your servers](/docs/remote/).
 
 ## Can I split a tab into panes?
 
