@@ -288,6 +288,151 @@ extension SelfTest {
         server.flag("refused", false)
         await clear()
     }
+
+    /// Step 3, U12 and U13: the hook on a stand-in server, only after the question; zsh's own completions there
+    /// (AE7's second half, for zsh: bash's hook waits for the owner's word); a hook deleted on the server, Turn On
+    /// Again, Remove leaving the files as they were, and a home that can't be written.
+    static func completionServerHookChecks(_ c: TerminalWindowController, dir: URL) async {
+        let started = Date()
+        defer { note("Tab completion, the server hook: \(String(format: "%.1f", Date().timeIntervalSince(started))) s (budget 120 s)") }
+        guard let window = c.window as? TerminalWindow else { return }
+        let server = makeCompletionServer(in: dir.appendingPathComponent("hooked"))
+        let fm = FileManager.default
+        // A git repository with two branches, and zsh's completion system, on the server.
+        let repo = server.project.appendingPathComponent("repo")
+        try? fm.createDirectory(at: repo, withIntermediateDirectories: true)
+        for arguments in [["init", "-q", "-b", "main"], ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "first"],
+                          ["branch", "feature/x"]] {
+            let git = Process()
+            git.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            git.arguments = ["-C", repo.path] + arguments
+            git.standardOutput = FileHandle.nullDevice
+            git.standardError = FileHandle.nullDevice
+            try? git.run()
+            git.waitUntilExit()
+        }
+        try? "PS1='server%# '\nunsetopt beep\nautoload -Uz compinit && compinit -u -D\n".write(to: server.home.appendingPathComponent(".zshrc"),
+                                                                                              atomically: true, encoding: .utf8)
+        try? fm.createDirectory(at: server.home.appendingPathComponent(".cache/next-term/tabs"), withIntermediateDirectories: true)
+        RemoteConnection.testSSHPath = server.bin.appendingPathComponent("ssh").path
+        defer { RemoteConnection.testSSHPath = nil }
+        let savedHosts = RemoteHosts.all
+        defer { RemoteHosts.all = savedHosts }
+        let host = RemoteHost(name: "hooked", destination: "nt@hooked.invalid", directory: repo.path, keep: .off)
+        RemoteHosts.save(host)
+        // The user's own consents are put back after the run.
+        let savedConsents = UserDefaults.standard.object(forKey: "remoteCompletionHooks")
+        defer {
+            if let savedConsents { UserDefaults.standard.set(savedConsents, forKey: "remoteCompletionHooks") }
+            else { UserDefaults.standard.removeObject(forKey: "remoteCompletionHooks") }
+        }
+        CompletionPreferences.mode = .auto
+        let cache = server.home.appendingPathComponent(".cache/next-term")
+        func cacheFiles() -> [String] { (fm.subpaths(atPath: cache.path) ?? []).filter { !$0.hasPrefix("tabs") }.sorted() }
+        func allow() async -> String? {
+            var message: String?? = .none
+            RemoteCompletionConsent.allow(host, over: window) { message = .some($0) }
+            _ = await wait(3) { message != nil || RemoteCompletionConsent.question != nil }
+            RemoteCompletionConsent.question?.buttons.first?.performClick(nil)
+            _ = await wait(15) { message != nil }
+            return message ?? "no answer"
+        }
+
+        // No connection: nothing is asked and nothing is written.
+        let before = cacheFiles()
+        let refused = await allow()
+        check(refused?.contains("no open connection") == true && RemoteCompletionConsent.state(host) == .notAllowed && cacheFiles() == before,
+              "Tab completion, the server hook: with no connection, Allow says so and writes nothing", refused ?? "nil")
+        let master = CompletionStandInMaster(path: RemoteConnection.controlPath(host))
+        master.start()
+        defer { master.stop() }
+
+        // The question first; Return answers nothing; Cancel writes nothing.
+        var answer: String?? = .none
+        RemoteCompletionConsent.allow(host, over: window) { answer = .some($0) }
+        if await wait(3, { RemoteCompletionConsent.question != nil }), let sheet = window.attachedSheet {
+            pressAppKey(sheet, "\r", code: 36)
+            await pause(0.4)
+            check(RemoteCompletionConsent.question != nil, "Tab completion, the server hook: Return allows nothing")
+            RemoteCompletionConsent.question?.buttons.last?.performClick(nil)
+        }
+        check(await wait(3) { answer != nil } && cacheFiles() == before && RemoteCompletionConsent.state(host) == .notAllowed,
+              "Tab completion, the server hook: Cancel writes nothing")
+
+        // A home that can't be written: a message, and still not allowed.
+        try? fm.setAttributes([.posixPermissions: 0o500], ofItemAtPath: cache.path)
+        let failed = await allow()
+        try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cache.path)
+        check(failed?.contains("could not be written") == true && RemoteCompletionConsent.state(host) == .notAllowed && cacheFiles() == before,
+              "Tab completion, the server hook: a home that can't be written leaves it off, with a message", failed ?? "nil")
+
+        // Allowed: the files, and the nonce in a file only the user can read.
+        let allowed = await allow()
+        let nonceFile = cache.appendingPathComponent("completion/nonce")
+        let mode = (try? fm.attributesOfItem(atPath: nonceFile.path)[.posixPermissions] as? Int) ?? 0
+        let nonce = RemoteCompletionConsent.nonce(for: host) ?? "none"
+        check(allowed == nil && RemoteCompletionConsent.state(host) == .allowed && mode == 0o600
+              && (try? String(contentsOf: nonceFile, encoding: .utf8)) == nonce + "\n",
+              "Tab completion, the server hook: Allow writes the hook, its nonce in a 0600 file", "\(allowed ?? "nil") \(String(mode, radix: 8))")
+        let row = RemoteCompletionRow()
+        row.show(host, over: window)
+        check(row.buttonTitle == "Remove" && row.text.hasPrefix("On:"), "Tab completion, the server hook: New Remote Tab's line says it is on", row.text)
+
+        // A new tab starts through the hook: zsh's own completions on the server (AE7, zsh).
+        let tab = c.addRemoteTab(RemoteTab(host: host))
+        let session = tab.completion
+        let popup = c.completions.popup
+        let armed = await wait(20) { session.state.isArmed }
+        check(armed && !session.usesScreen && session.state.arm?.completionSystem == true,
+              "Tab completion, the server hook: a new tab's zsh arms under the host's nonce", "\(session.state.phase)")
+        check(!tab.status.integrated, "and sends no command marks: its status still comes from the status checks")
+        if armed, await focus(c, tab) {
+            tab.view.send(txt: "git checkout ")
+            await pause(0.5)
+            pressKey(window, "\t", code: 48)
+            check(await wait(5) { popup.shownTexts.contains("main") && popup.shownTexts.contains("feature/x") },
+                  "AE7: `git checkout ` on the server lists its branches, through the hook", "\(popup.shownTexts)")
+            if let index = popup.shownTexts.firstIndex(of: "main") {
+                for _ in 0..<index { pressKey(window, "", code: 125) }
+                pressKey(window, "\r", code: 36)
+                check(await wait(3) { promptLine(tab).hasSuffix("git checkout main") }, "and Return puts it on the line, zsh's way", promptLine(tab))
+            }
+            tab.view.send(txt: "\u{3}")
+            _ = await wait(3) { session.state.isArmed }
+        }
+        // Marks under another nonce are not taken.
+        tab.view.feed(text: "\u{1b}]6973;deadbeef;arm;1;main;start;1;0;x;builtin;;0\u{7}")
+        check(session.state.arm?.tabWidget != "x", "Tab completion, the server hook: a mark under another nonce is ignored")
+        c.remove(tab)
+
+        // Deleted on the server: the host says so, and the next tab starts plain. Never put back by Next Term.
+        try? fm.removeItem(at: cache.appendingPathComponent("completion"))
+        RemoteCompletionConsent.verify(host, force: true)
+        check(await wait(5) { RemoteCompletionConsent.state(host) == .removedOnServer }, "Tab completion, the server hook: one deleted there shows as removed")
+        let plain = c.addRemoteTab(RemoteTab(host: host))
+        _ = await wait(20) { plain.remoteConnected && plain.remoteReady }
+        await pause(1)
+        check(plain.completion.usesScreen && !fm.fileExists(atPath: cache.appendingPathComponent("completion").path),
+              "and the next tab starts plain, with the hook left deleted")
+        c.remove(plain)
+        row.show(host, over: window)
+        check(row.buttonTitle == "Turn On Again", "Tab completion, the server hook: New Remote Tab offers Turn On Again", row.buttonTitle)
+
+        // Turn On Again: a new nonce. Remove: the files as they were before Allow, and the nonce forgotten.
+        let again = await allow()
+        let second = RemoteCompletionConsent.nonce(for: host)
+        check(again == nil && second != nil && second != nonce, "Tab completion, the server hook: Turn On Again writes it with a new nonce")
+        var removed: String?? = .none
+        RemoteCompletionConsent.remove(host) { removed = .some($0) }
+        _ = await wait(10) { removed != nil }
+        check(removed == .some(nil) && cacheFiles() == before && RemoteCompletionConsent.nonce(for: host) == nil,
+              "Tab completion, the server hook: Remove leaves the server's files as they were", "\(Set(cacheFiles()).symmetricDifference(before).sorted())")
+
+        // A host removed from Next Term takes its consent with it.
+        _ = await allow()
+        RemoteHosts.remove(id: host.id)
+        check(RemoteCompletionConsent.state(host) == .notAllowed, "Tab completion, the server hook: a removed host's consent goes with it")
+    }
     #endif
 }
 
