@@ -18,6 +18,8 @@ final class NextTermView: LocalProcessTerminalView {
     var acceptsInput = true
     /// Takes keystrokes before the program would (a remote tab waiting to reconnect); true: handled.
     var interceptInput: ((ArraySlice<UInt8>) -> Bool)?
+    /// Tab completion's ordered writer (CompletionSession): true, the write waits and goes out later.
+    var completionGate: ((ArraySlice<UInt8>) -> Bool)?
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
         super.dataReceived(slice: slice) // parse first: OSC marks in this chunk update the status
@@ -27,8 +29,16 @@ final class NextTermView: LocalProcessTerminalView {
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
         if let interceptInput, interceptInput(data) { return }
         guard acceptsInput else { return }
+        if let completionGate, completionGate(data) { return }
         onInput?()
         super.send(source: source, data: Self.withoutScreenChecksum(data))
+    }
+
+    /// Tab completion's own keys, and the writes it held, past its gate.
+    func sendPastGate(_ data: ArraySlice<UInt8>) {
+        guard acceptsInput else { return }
+        onInput?()
+        super.send(source: self, data: Self.withoutScreenChecksum(data))
     }
 
     /// DECRQCRA asks the terminal for a checksum of a screen rectangle; for one cell, the checksum is the
@@ -307,6 +317,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     weak var delegate: TerminalTabDelegate?
     /// Fires when the shell process execs something else (`exec zsh`, `omz reload`).
     private var execWatcher: DispatchSourceProcess?
+    /// Tab completion in this tab.
+    private(set) lazy var completion = CompletionSession(tab: self)
     private var shellName: String { (shellPath as NSString).lastPathComponent }
 
     init(directory: String?, fontSize: CGFloat, remote: RemoteTab? = nil) {
@@ -326,6 +338,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         view.onInput = { [weak self] in self?.status.input(at: Self.now) }
         view.onKeyboard = { [weak self] in if let self { MCPControl.typedByUser(self) } }
         view.onBell = { [weak self] in self?.attention() }
+        view.completionGate = { [weak self] data in self?.completion.gate(data) ?? false }
         view.linkBaseDirectory = { [weak self] in self?.liveDirectory ?? NSHomeDirectory() }
         view.opensFiles = remote == nil
 
@@ -410,6 +423,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             guard let self, !self.exited else { return }
             self.programTitle = nil
             self.status.shellReplaced()
+            self.completion.disarm()
             self.delegate?.tabDidChange(self)
         }
         watcher.resume()
@@ -750,9 +764,10 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     private func handle(_ event: ShellIntegration.Event) {
         switch event {
-        case .completion:
-            return // Tab completion's marks: not read yet
+        case .completion(let message):
+            return completion.handle(message)
         case .commandStarted(let line, let expanded):
+            completion.disarm()
             programTitle = nil
             // Its output starts below the line the command was typed on.
             pendingServingStart = (lastTextRow() ?? 0) + 1
