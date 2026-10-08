@@ -34,6 +34,12 @@ public enum MCPRedaction {
 
     /// The text with credentials masked, and how many were.
     public static func redact(_ text: String) -> (text: String, count: Int) {
+        redact(text, maskingRun: { (run: String) -> String? in looksRandom(run) ? mask : nil })
+    }
+
+    /// As `redact(_:)`, with `maskingRun` deciding what a long run becomes (nil keeps it). Command lines
+    /// pass one that spares paths (CommandSecrets).
+    static func redact(_ text: String, maskingRun: (String) -> String?) -> (text: String, count: Int) {
         var result = text
         var count = 0
         // Line by line inside a key block, so line numbers around it stay right.
@@ -62,7 +68,7 @@ public enum MCPRedaction {
             }
         }
         count += replace(longRun, in: &result) { match, ns in
-            looksRandom(ns.substring(with: match.range)) ? mask : nil
+            maskingRun(ns.substring(with: match.range))
         }
         return (result, count)
     }
@@ -94,8 +100,8 @@ public enum MCPRedaction {
     }
 
     /// Replaces each match with what `body` gives (nil keeps it). Returns how many it replaced.
-    private static func replace(_ expression: NSRegularExpression, in text: inout String,
-                                _ body: (NSTextCheckingResult, NSString) -> String?) -> Int {
+    static func replace(_ expression: NSRegularExpression, in text: inout String,
+                        _ body: (NSTextCheckingResult, NSString) -> String?) -> Int {
         let ns = text as NSString
         let matches = expression.matches(in: text, range: NSRange(location: 0, length: ns.length))
         guard !matches.isEmpty else { return 0 }
