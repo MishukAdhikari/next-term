@@ -637,12 +637,13 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         let remoteLabelX = remoteMark.frame.maxX + 3
         let labelX: CGFloat = remoteMark.isHidden ? 29 : remoteLabelX
         let labelHeight = label.intrinsicContentSize.height
-        // The shortcut: in the close button's place while that is hidden, else just before it, as long as
-        // the title keeps room to be read.
+        // The shortcut: in the close button's place while that is hidden (ending where the × would, 14 points
+        // from the edge, so it doesn't crowd the next tab), else just before it, as long as the title keeps room
+        // to be read.
         let hintWidth = hint.stringValue.isEmpty ? 0 : ceil(hint.intrinsicContentSize.width)
         let titleStart = barHasRemote ? remoteLabelX : labelX
         func hintEnd(closeShown: Bool) -> CGFloat? {
-            let end = closeShown ? bounds.width - 27 : bounds.width - 9
+            let end = closeShown ? bounds.width - 27 : bounds.width - 14
             return hintWidth == 0 || end - hintWidth - 6 - titleStart < (closeShown ? 56 : 40) ? nil : end
         }
         func titleWidth(hintEnd: CGFloat?) -> CGFloat {
