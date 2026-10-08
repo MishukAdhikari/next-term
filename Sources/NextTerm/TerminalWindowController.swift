@@ -264,8 +264,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let new = directory == nil && from.remote != nil
             ? makeTab(directory: nil, remote: from.remote!.sibling(directory: from.directory))
             : makeTab(directory: directory ?? from.currentDirectory())
+        let focused = group.focused
         group.split(from, with: new, vertical: vertical)
-        if !focus { group.focused = from }
+        if !focus { group.focused = focused } // the keyboard stays with the pane that has it, beside `from` or not
         group.layout()
         container.layoutSubtreeIfNeeded() // the new pane's real size before its shell starts
         new.start()

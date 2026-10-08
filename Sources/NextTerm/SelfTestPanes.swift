@@ -4,7 +4,8 @@ import NextTermCore
 /// Pane headers: in a tab split into panes, each pane has a header with its mark and title, and a × that
 /// closes that pane alone, asking first when something runs there. A click on a header gives its pane the
 /// keyboard, a double-click renames it. One pane, or a maximized one, has no header, and a header never
-/// takes the terminal's rows. Splitting keeps a pane's history.
+/// takes the terminal's rows. Splitting keeps a pane's history. The pane you type in keeps the keyboard
+/// whatever happens to the panes beside it.
 extension SelfTest {
     static func paneHeaderChecks(_ c: TerminalWindowController) async {
         guard let window = c.window, let base = c.activeTab, let group = c.activeGroup, !group.isSplit else {
@@ -103,6 +104,7 @@ extension SelfTest {
         check(await wait(3) { !group.contains(third) } && window.attachedSheet == nil && group.panes.count == 2 && c.groups.count == tabsBefore,
               "a header's × closes only its pane, at once when nothing runs there")
         check(!header(base).isHidden && !header(other).isHidden, "the other panes keep their headers")
+        check(window.firstResponder === base.view && group.focused === base, "its neighbour takes the keyboard")
 
         // Maximized: no header, the terminal from the top as in a tab of one pane.
         c.show(base)
@@ -111,6 +113,25 @@ extension SelfTest {
         check(group.zoomed === base && header(base).isHidden && abs(terminalTop(base) - 4) < 1, "a maximized pane has no header", "\(terminalTop(base))")
         c.toggleZoomPane(nil)
         check(group.zoomed == nil && !header(base).isHidden && !header(other).isHidden, "and the headers come back with the panes")
+
+        // The panes built again around the pane you type in: it keeps the keyboard.
+        c.equalizePanes(nil)
+        check(window.firstResponder === base.view, "Make Panes Equal leaves the keyboard where it was")
+        guard let beside = c.split(vertical: false, from: other, focus: false) else { return check(false, "a pane opens beside another") }
+        check(window.firstResponder === base.view && group.focused === base,
+              "a pane opened beside another without the keyboard (an agent's split_beside) leaves it where it was")
+        _ = await wait(20) { beside.status.integrated }
+        beside.view.send(txt: "\u{15}exit\r")
+        check(await wait(5) { !group.contains(beside) } && window.firstResponder === base.view && group.focused === base,
+              "a pane whose shell exits beside the one you type in leaves you the keyboard")
+        // Maximized, on to the next pane, then all panes back: the keyboard stays with the pane you moved to.
+        c.toggleZoomPane(nil)
+        c.selectNextPane(nil)
+        c.toggleZoomPane(nil)
+        check(group.zoomed == nil && group.focused === other && window.firstResponder === other.view,
+              "the pane you moved to while one was maximized keeps the keyboard when the panes come back")
+        c.show(base)
+        window.makeFirstResponder(base.view)
 
         // Something runs in it: the × asks first, as ⌘W on that pane does, and Cancel keeps it.
         header(other).closeButton.performClick(nil)
@@ -125,7 +146,7 @@ extension SelfTest {
         _ = await wait(3) { window.attachedSheet != nil }
         if let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .alertFirstButtonReturn) }
         check(await wait(3) { !group.contains(other) } && group.panes.count == 1 && c.groups.count == tabsBefore, "Close Pane closes that pane alone")
+        check(window.firstResponder === base.view, "closing another pane leaves the keyboard where it was")
         check(header(base).isHidden && abs(terminalTop(base) - 4) < 1, "with one pane left, its header is gone", "\(terminalTop(base))")
-        window.makeFirstResponder(base.view)
     }
 }

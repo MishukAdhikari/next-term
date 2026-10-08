@@ -78,6 +78,27 @@ final class PaneView: NSView {
         super.layout()
     }
 
+    /// The terminal had the keyboard as the pane left the window (see viewDidMoveToWindow).
+    private var hadKeyboard = false
+
+    /// A split, a close or Make Panes Equal builds the split views again, which takes every pane out of the
+    /// window for a moment, and AppKit gives the keyboard to the window. The pane that had it takes it back
+    /// as it returns, if it is still the pane the keyboard belongs to (not one that was maximized before you
+    /// moved on to another pane).
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil { hadKeyboard = window?.firstResponder === tab.view }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return } // on its way out: keep what it had for its way back
+        defer { hadKeyboard = false }
+        guard hadKeyboard, window.firstResponder === window,
+              (window.windowController as? TerminalWindowController)?.activeTab === tab else { return }
+        window.makeFirstResponder(tab.view)
+    }
+
     private(set) var showsHeader = false {
         didSet {
             guard showsHeader != oldValue else { return }
