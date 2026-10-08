@@ -437,4 +437,23 @@ import Testing
         #expect(Set(all.files.map(\.path)) == Set(names + ["latin1.txt"]))
         #expect(Changes.diffs(.all, context: context, set: all, in: root.path, git: git)?["tab\there.txt"]?.hunks.first?.lines.last?.text == "two")
     }
+
+    /// Past the limit, only the files listed are kept as untracked: nothing else is looked up.
+    @Test func untrackedPastTheLimitAreTheListedOnes() throws {
+        guard let git = GitRunner.locateGit() else { return }
+        let root = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path)).appendingPathComponent("nt-changes-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("many"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = run(git, root, "init", "-q")
+        try write(root, "a.txt", "a\n")
+        _ = run(git, root, "add", "-A")
+        _ = run(git, root, "commit", "-qm", "Base")
+        for i in 0..<(Changes.fileLimit + 10) { try Data("x\n".utf8).write(to: root.appendingPathComponent("many/\(i).txt")) }
+        let context = try #require(Changes.context(in: root.path, git: git, chosen: nil))
+        let set = try #require(Changes.files(.uncommitted, context: context, in: root.path, git: git))
+        #expect(set.truncated && set.files.count == Changes.fileLimit)
+        #expect(set.untracked == Set(set.files.map(\.path)))
+        let diffs = try #require(Changes.diffs(.uncommitted, context: context, set: set, in: root.path, git: git))
+        #expect(diffs.count == Changes.fileLimit)
+    }
 }

@@ -53,7 +53,7 @@ public struct ChangeContext: Equatable, Sendable {
 /// The files a scope changes.
 public struct ChangeSet: Equatable, Sendable {
     public var files: [ChangedFile] = []
-    /// Files git doesn't track yet, listed as added: their lines come from the file on disk.
+    /// Which of the files git doesn't track yet: listed as added, their lines from the file on disk.
     public var untracked: Set<String> = []
     /// More files changed than are listed.
     public var truncated = false
@@ -208,9 +208,10 @@ public enum Changes {
         let new = untracked.filter { !listed.contains($0) }
         let counts = GitRunner.countLines(of: Array(new.prefix(fileLimit)), in: root)
         set.files += new.map { ChangedFile(path: $0, status: .added, added: counts[$0], removed: counts[$0] == nil ? nil : 0) }
-        set.untracked = Set(new)
         set.truncated = set.files.count > fileLimit
         set.files = Array(set.files.prefix(fileLimit))
+        // The listed ones only: 30,000 files of an unignored node_modules are not looked up one by one.
+        set.untracked = Set(set.files.map(\.path)).intersection(new)
         return set
     }
 
@@ -291,9 +292,8 @@ public enum Changes {
                 for file in files { result[file.path] = file }
             }
         }
-        for path in set.untracked {
-            guard let file = set.file(at: path), !isLarge(file), let diff = untrackedDiff(path, in: root) else { continue }
-            result[path] = diff
+        for file in set.files where set.untracked.contains(file.path) && !isLarge(file) {
+            if let diff = untrackedDiff(file.path, in: root) { result[file.path] = diff }
         }
         return result
     }
