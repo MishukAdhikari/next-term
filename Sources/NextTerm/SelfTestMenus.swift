@@ -43,9 +43,9 @@ extension SelfTest {
         func items(_ menu: NSMenu) -> [NSMenuItem] { menu.items.flatMap { [$0] + ($0.submenu.map(items) ?? []) } }
         let all = items(NSApp.mainMenu ?? NSMenu())
         let titles = ["Duplicate Tab", "Reopen Closed Tab", "Close Other Tabs", "Close Tabs to the Right", "Reveal in Finder", "Copy Path", "Copy Relative Path"]
-        let shell = NSApp.mainMenu?.items.first { $0.title == "Shell" }?.submenu?.items.map(\.title) ?? []
-        let missing = titles.filter { !shell.contains($0) }
-        check(missing.isEmpty, "menus: the Shell menu has the tab and file commands the right-click menus use", missing.joined(separator: ", "))
+        let file = NSApp.mainMenu?.items.first { $0.title == "File" }?.submenu?.items.map(\.title) ?? []
+        let missing = titles.filter { !file.contains($0) }
+        check(missing.isEmpty, "menus: the File menu has the tab and file commands the right-click menus use", missing.joined(separator: ", "))
         let reopen = all.first { $0.action == #selector(TerminalWindowController.reopenClosedTab(_:)) }
         check(reopen?.keyEquivalent == "t" && reopen?.keyEquivalentModifierMask == [.command, .shift], "menus: Reopen Closed Tab is ⇧⌘T")
         let ids = ["duplicateTab:", "reopenClosedTab:", "closeOtherTabs:", "closeTabsToTheRight:", "revealInFinder:", "copyFilePath:", "copyRelativeFilePath:"]
@@ -481,7 +481,7 @@ extension SelfTest {
         func items(_ menu: NSMenu) -> [NSMenuItem] { menu.items.flatMap { [$0] + ($0.submenu.map(items) ?? []) } }
         let remoteItem = items(NSApp.mainMenu ?? NSMenu()).first { $0.action == #selector(TerminalWindowController.newRemoteTab(_:)) }
         remoteItem?.menu?.update()
-        check(remoteItem?.isEnabled == true, "welcome: Shell › New Remote Tab… is on with only the Welcome window open", remoteItem?.title ?? "no such item")
+        check(remoteItem?.isEnabled == true, "welcome: File › New Remote Tab… is on with only the Welcome window open", remoteItem?.title ?? "no such item")
         NSApp.sendAction(#selector(TerminalWindowController.newRemoteTab(_:)), to: nil, from: nil)
         check(await wait(3) { welcomeWindow.attachedSheet?.title == "New Remote Tab" }, "welcome: ⌥⌘T brings the remote sheet over the Welcome window")
         _ = await press("Cancel", inSheetOf: welcomeWindow)

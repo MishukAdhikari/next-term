@@ -1,7 +1,7 @@
 import AppKit
 import NextTermCore
 
-/// Terminal tabs closed lately, for Shell › Reopen Closed Tab (⇧⌘T): where each one was and the name you
+/// Terminal tabs closed lately, for File › Reopen Closed Tab (⇧⌘T): where each one was and the name you
 /// gave it. What ran in it ended with it, so it comes back with a fresh shell. App-wide, newest last.
 enum ClosedTabs {
     struct Entry {
@@ -280,13 +280,13 @@ extension TerminalWindowController {
 
     // MARK: menu-bar commands
 
-    /// Shell › Duplicate Tab: a new tab in the folder of the one in front (on its server, for a remote tab).
+    /// File › Duplicate Tab: a new tab in the folder of the one in front (on its server, for a remote tab).
     @objc func duplicateTab(_ sender: Any?) {
         guard let group = activeGroup else { return NSSound.beep() }
         duplicate(group)
     }
 
-    /// Shell › Reopen Closed Tab (⇧⌘T): the terminal tab closed last comes back, in the window it was in
+    /// File › Reopen Closed Tab (⇧⌘T): the terminal tab closed last comes back, in the window it was in
     /// while that is open, else in this one.
     @objc func reopenClosedTab(_ sender: Any?) {
         guard let entry = ClosedTabs.takeLast() else { return NSSound.beep() }
@@ -317,7 +317,7 @@ extension TerminalWindowController {
         return tab
     }
 
-    /// Shell › Close Other Tabs: of the editor's tabs while it has the keyboard, else of the terminal's.
+    /// File › Close Other Tabs: of the editor's tabs while it has the keyboard, else of the terminal's.
     @objc func closeOtherTabs(_ sender: Any?) {
         if isEditorFocused, let pane = editorArea.activePane {
             return editorArea.close(editorArea.panes.filter { $0 !== pane }, keeping: pane)
@@ -326,7 +326,7 @@ extension TerminalWindowController {
         closeTabs(groups.filter { $0 !== group })
     }
 
-    /// Shell › Close Tabs to the Right: as Close Other Tabs, for the tabs after the one in front.
+    /// File › Close Tabs to the Right: as Close Other Tabs, for the tabs after the one in front.
     @objc func closeTabsToTheRight(_ sender: Any?) {
         if isEditorFocused, let pane = editorArea.activePane {
             return editorArea.close(Array(editorArea.panes.dropFirst(editorArea.activeIndex + 1)), keeping: pane)
@@ -335,19 +335,19 @@ extension TerminalWindowController {
         closeTabs(toTheRightOf: group)
     }
 
-    /// Shell › Reveal in Finder: the file in front in the editor.
+    /// File › Reveal in Finder: the file in front in the editor.
     @objc func revealInFinder(_ sender: Any?) {
         guard let path = editorArea.activePath else { return NSSound.beep() }
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
     }
 
-    /// Shell › Copy Path: the file in front in the editor.
+    /// File › Copy Path: the file in front in the editor.
     @objc func copyFilePath(_ sender: Any?) {
         guard let path = editorArea.activePath else { return NSSound.beep() }
         Self.copyToPasteboard(path)
     }
 
-    /// Shell › Copy Relative Path: the file in front in the editor, from the top of the sidebar's folder.
+    /// File › Copy Relative Path: the file in front in the editor, from the top of the sidebar's folder.
     @objc func copyRelativeFilePath(_ sender: Any?) {
         guard let path = editorArea.activePath else { return NSSound.beep() }
         Self.copyToPasteboard(relativePath(path))

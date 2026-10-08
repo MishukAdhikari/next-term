@@ -99,9 +99,9 @@ Status reports from the shell carry a random secret for each tab that programs n
 | Next or previous tab | <kbd>⇧⌘]</kbd> and <kbd>⇧⌘[</kbd>, or <kbd>⌃⇥</kbd> and <kbd>⌃⇧⇥</kbd> |
 | Rename a tab | <kbd>⌥⌘R</kbd>, or double-click it |
 | Split a tab into panes | <kbd>⌘D</kbd> right, <kbd>⇧⌘D</kbd> down |
-| Duplicate a tab (a new tab in its folder) | **Shell › Duplicate Tab** |
-| Reopen the tab you closed last | <kbd>⇧⌘T</kbd> (**Shell › Reopen Closed Tab**) |
-| Close the other tabs, or the tabs to the right | **Shell › Close Other Tabs**, **Close Tabs to the Right** |
+| Duplicate a tab (a new tab in its folder) | **File › Duplicate Tab** |
+| Reopen the tab you closed last | <kbd>⇧⌘T</kbd> (**File › Reopen Closed Tab**) |
+| Close the other tabs, or the tabs to the right | **File › Close Other Tabs**, **Close Tabs to the Right** |
 | Reorder | Drag a tab sideways |
 | Everything for one tab | Right-click it |
 
@@ -120,4 +120,4 @@ Each command except the link and path ones shows its shortcut and is in the menu
 
 ### Reopen a closed tab
 
-<kbd>⇧⌘T</kbd> (**Shell › Reopen Closed Tab**) brings back the terminal tab you closed last, in its folder and with the name you gave it, in the window it was in while that is open. Press it again for the one before. It comes back with a fresh shell: what ran in it ended when it closed. A tab that nothing ran in, that stayed in the folder it opened in and that has no name of its own isn’t kept. A [remote tab](/docs/remote/) comes back on its server; one that tmux kept reattaches to its session, which closing the tab only detached from.
+<kbd>⇧⌘T</kbd> (**File › Reopen Closed Tab**) brings back the terminal tab you closed last, in its folder and with the name you gave it, in the window it was in while that is open. Press it again for the one before. It comes back with a fresh shell: what ran in it ended when it closed. A tab that nothing ran in, that stayed in the folder it opened in and that has no name of its own isn’t kept. A [remote tab](/docs/remote/) comes back on its server; one that tmux kept reattaches to its session, which closing the tab only detached from.
