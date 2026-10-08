@@ -1,6 +1,6 @@
 ---
 title: Tab completion
-description: "Tab at a zsh prompt opens a list at the cursor: zsh’s own completions, or folders and files. Type to narrow it; ↑ ↓ and Return pick. Nothing runs."
+description: "Tab at a zsh prompt opens a list at the cursor: zsh’s own completions, or folders and files, on your Mac and on your servers. Type to narrow it; ↑ ↓ and Return pick. Nothing runs."
 ---
 
 Press Tab (<kbd>⇥</kbd>) at a zsh prompt and Next Term lists what can complete the word under the cursor, in a list at the cursor. Type to narrow it, pick with the arrow keys and <kbd>↩︎</kbd>, and the name goes on the line, quoted so the shell reads it back exactly. Nothing runs until you press <kbd>↩︎</kbd> again at the prompt.
@@ -43,10 +43,29 @@ The list opens only at a zsh prompt Next Term’s hook is ready at. <kbd>⇥</kb
 - in full-screen programs such as `less` and `vim`;
 - while an input method is composing text;
 - in vi command mode, during incremental search and in zsh’s own menu selection;
-- in bash and fish tabs, and in remote tabs;
+- in bash and fish tabs on your Mac (remote tabs list the server’s folders and files: see [On your servers](#on-your-servers));
 - when an agent sends keys to a tab over [MCP](/docs/orchestration/): its <kbd>⇥</kbd> is always the shell’s own.
 
-A tab’s tooltip says who answers its <kbd>⇥</kbd>: Next Term’s list with zsh’s completions, Next Term’s list of folders and files, a plugin you kept, or the shell’s own.
+A tab’s tooltip says who answers its <kbd>⇥</kbd>: Next Term’s list with zsh’s completions, Next Term’s list of folders and files (a server’s, over ssh, in a remote tab), a plugin you kept, or the shell’s own.
+
+## On your servers
+
+In a [remote tab](/docs/remote/), <kbd>⇥</kbd> lists the server’s folders and files, read over the tab’s own ssh connection by a short script that writes nothing on the server. It lists what it lists on your Mac:
+
+- after `cd`, `pushd`, `mkdir`, `rmdir` and `chdir`, folders;
+- after `ls`, `cat`, `less`, `vim` and the other commands that take files, files and folders;
+- for any word that looks like a path (it has a `/`, or starts with `~/` or `.`), files and folders.
+
+Next Term reads the word off the screen, so it answers only for a plain word: one with a quote, a backslash, `$`, a glob or a brace, or a line with a quote or a backslash anywhere before the word, gets the shell’s own <kbd>⇥</kbd>. The name you pick goes on the line as you would type it, quoted for the server’s shell: bash, zsh, sh or BusyBox’s ash. In fish and tcsh only names that need no quoting are listed.
+
+It answers only when it can be sure what is on the line, and otherwise <kbd>⇥</kbd> is the shell’s own, at once:
+
+- after <kbd>↩︎</kbd>, once the server has twice said its shell is back at the prompt. Next Term asks every two seconds, so that takes up to four;
+- once what you typed has come back on the screen;
+- when the listing comes within 0.8 seconds. Keys you type while it lists go to the shell after its own <kbd>⇥</kbd>, in order;
+- on a connection that carries fewer than 7 tabs. sshd allows about 10 sessions on one connection, and every tab and every check is one, so a crowded connection, or one that refused a session in the last 30 seconds, is left alone.
+
+A listing is kept for ten seconds. When the server reports the folder of the tab in front (tmux, or a Linux server), Next Term lists it as soon as it changes, so the first <kbd>⇥</kbd> there answers at once. herdr tabs, and tabs where a program runs, keep the shell’s own <kbd>⇥</kbd>.
 
 ## Plugins that already own Tab
 

@@ -82,6 +82,8 @@ Agents in a remote tab get the same marks as local ones: the spinner while they 
 
 Links in a remote tab’s output open web pages only: a path there names a file on the server, not on your Mac.
 
+<kbd>⇥</kbd> at the prompt lists the server’s folders and files, read over the same connection without writing anything there. See [Tab completion on your servers](/docs/tab-completion/#on-your-servers).
+
 ## Closing a tab or ending the session
 
 Closing a **tmux** tab only detaches from its session. If something runs in it, Next Term says what keeps running and where (“claude keeps running on web-1, in tmux session nt-app-1a2b3c”) and offers:
