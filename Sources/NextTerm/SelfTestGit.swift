@@ -82,6 +82,8 @@ extension SelfTest {
         await screenshot(popup.panelWindow, suffix: "branches-long")
         popup.close()
         if let log = c.openGitLog(root: repo) {
+            // Showing its history opens the folder it is in.
+            log.show(ref: "refs/heads/" + long)
             let listed = await wait(10) { log.refs.rowTitles.contains { $0.trimmingCharacters(in: .whitespaces) == longLabel } }
             let index = log.refs.rowTitles.firstIndex { $0.trimmingCharacters(in: .whitespaces) == longLabel }
             log.refs.outline.layoutSubtreeIfNeeded()
