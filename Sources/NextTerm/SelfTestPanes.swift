@@ -87,7 +87,7 @@ extension SelfTest {
 
         // Marks: an agent at work in one pane shows on that pane's header, not on the others'. It names its task in the
         // terminal's title, as Claude Code does: that title is the pane's whatever the shell's theme set before it.
-        try? "#!/bin/sh\nprintf '\\033]2;Split the panes\\007'\nwhile true; do printf '\\r\\342\\234\\273 Working (esc to interrupt) %s' $(date +%S); sleep 0.3; done\n"
+        try? "#!/bin/sh\n\(stopsOnCtrlC)\nprintf '\\033]2;Split the panes\\007'\nwhile true; do printf '\\r\\342\\234\\273 Working (esc to interrupt) %s' $(date +%S); sleep 0.3; done\n"
             .write(to: dir.appendingPathComponent("claude"), atomically: true, encoding: .utf8)
         chmod(dir.appendingPathComponent("claude").path, 0o755)
         other.view.send(txt: "PATH=\(dir.path):$PATH claude\r")

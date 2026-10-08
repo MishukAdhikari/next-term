@@ -42,6 +42,7 @@ extension SelfTest {
         // shows Claude's working hint while its working file is there.
         let script = """
         #!/bin/sh
+        \(stopsOnCtrlC)
         while true; do
           if [ -f "$CTL/dir" ]; then cd "$(cat "$CTL/dir")"; rm -f "$CTL/dir"; fi
           if [ -f "$CTL/working" ]; then printf '\\r\\342\\234\\273 Working (esc to interrupt) %s' "$(date +%S)"; else printf '\\r\\033[K> %s' "$(date +%S)"; fi

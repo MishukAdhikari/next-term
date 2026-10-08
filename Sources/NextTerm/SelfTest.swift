@@ -82,6 +82,11 @@ enum SelfTest {
         return false
     }
 
+    /// A stand-in agent's line after its `#!/bin/sh`, for one stopped with ^C as a real agent is. /bin/sh is bash 3.2:
+    /// a ^C that lands as its child (a `sleep`, a `date`) is exiting by itself is taken as the child's own, and the
+    /// script runs on; under load that is about one ^C in a hundred. A trap stops it every time.
+    static let stopsOnCtrlC = "trap 'exit 130' INT"
+
     /// Why `bringToFront` could not: for the note of a skipped check.
     static func notFrontmost(_ window: NSWindow) -> String {
         "the app is not frontmost (active \(NSApp.isActive), key window \(NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "none"), "
@@ -345,6 +350,7 @@ enum SelfTest {
         let asker = dir.appendingPathComponent("claude")
         try? """
         #!/bin/sh
+        \(stopsOnCtrlC)
         printf '\\342\\234\\273 Pondering\\342\\200\\246 (2s \\302\\267 esc to interrupt)\\n'; sleep 1.5
         printf 'Do you want to make this edit to a.txt?\\n\\342\\235\\257 1. Yes\\n  2. Yes, and don'"'"'t ask again this session\\n  3. No, and tell Claude what to do differently (esc)\\n'
         read answer
@@ -370,7 +376,7 @@ enum SelfTest {
         check(await wait(4) { second.status.question == nil && second.status.state == .working }, "answering clears it; working again")
         check(await wait(6) { second.status.state == .done }, "done while its status line keeps redrawing", second.status.state.rawValue)
         second.view.send(txt: "\u{03}")
-        _ = await wait(4) { !second.status.running }
+        check(await wait(4) { !second.status.running }, "and ^C stops it", second.screenTail(3).joined(separator: " | "))
         c.select(1)
         second.status.setVisible(true)
 
@@ -3625,7 +3631,7 @@ enum SelfTest {
     private static func screenshotAllStates(_ c: TerminalWindowController, dir: URL) async {
         let busyAgent = dir.appendingPathComponent("busy")
         try? FileManager.default.createDirectory(at: busyAgent, withIntermediateDirectories: true)
-        try? "#!/bin/sh\nwhile true; do printf '\\r\\342\\234\\273 Working (esc to interrupt) %s' $(date +%S); sleep 0.3; done\n"
+        try? "#!/bin/sh\n\(stopsOnCtrlC)\nwhile true; do printf '\\r\\342\\234\\273 Working (esc to interrupt) %s' $(date +%S); sleep 0.3; done\n"
             .write(to: busyAgent.appendingPathComponent("codex"), atomically: true, encoding: .utf8)
         chmod(busyAgent.appendingPathComponent("codex").path, 0o755)
         let commands = ["sleep 1", "sleep 1; false", "sleep 0.5; printf '\\a'", "PATH=\(busyAgent.path):$PATH codex"]
@@ -3639,7 +3645,8 @@ enum SelfTest {
             _ = await wait(3) { tab.status.running }
         }
         c.select(0)
-        _ = await wait(6) { made.prefix(3).allSatisfy { !$0.status.running } }
+        // The commands done, and the agent at work: under load it can take its time to start.
+        _ = await wait(10) { made.prefix(3).allSatisfy { !$0.status.running } && made.last?.status.state == .working }
         await pause(0.5)
         c.refresh()
         await screenshot(c, suffix: "")
