@@ -229,6 +229,15 @@ import Testing
         #expect(IDEPeer.opencode(clientPort: 50000, serverPort: 4000, under: [100], processes: table.processes) == nil)
         #expect(IDEPeer.isOpencode(path: "/opt/homebrew/Cellar/opencode/1.18.34/bin/opencode"))
         #expect(!IDEPeer.isOpencode(path: "/usr/local/bin/opencode.sh") && !IDEPeer.isOpencode(path: "/bin/node"))
+        #expect(!IDEPeer.isOpencode(path: "/tmp/opencode-helper") && !IDEPeer.isOpencode(path: "/tmp/opencode.exe.sh"))
+    }
+
+    /// `npm i -g opencode-ai` (and bun's) links the binary as bin/opencode.exe, and that is the path the kernel gives.
+    @Test func opencodeInstalledWithNpmIsOpencode() {
+        var table = table()
+        table.paths[300] = "/opt/homebrew/lib/node_modules/opencode-ai/bin/opencode.exe"
+        #expect(IDEPeer.isOpencode(path: "/opt/homebrew/lib/node_modules/opencode-ai/bin/opencode.exe"))
+        #expect(IDEPeer.opencode(clientPort: 50000, serverPort: 4000, under: [100], processes: table.processes) == 300)
     }
 
     @Test func aLoopInTheTableEnds() {

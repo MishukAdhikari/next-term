@@ -55,9 +55,11 @@ public enum IDEPeer {
         return found
     }
 
-    /// opencode's own executable: `opencode` (npm's platform package, Homebrew, its install script).
+    /// opencode's own executable: `opencode` (Homebrew, its install script, npm's platform package), or
+    /// `opencode.exe`, the name npm's and bun's `opencode-ai` link the same binary under (its bin/opencode.exe).
     public static func isOpencode(path: String) -> Bool {
-        (path as NSString).lastPathComponent.lowercased() == "opencode"
+        let name = (path as NSString).lastPathComponent.lowercased()
+        return name == "opencode" || name == "opencode.exe"
     }
 
     /// The opencode process in one of the tabs (under `shells`) that holds this connection's socket, or nil.
