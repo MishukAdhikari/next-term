@@ -4,6 +4,10 @@ import NextTermCore
 /// Window that handles Ctrl-Tab / Ctrl-Shift-Tab before the terminal sees it.
 final class TerminalWindow: NSWindow {
     var onControlTab: ((_ backwards: Bool) -> Void)?
+    /// A key down for a terminal, before the terminal gets it (Tab completion); true: taken.
+    var onTerminalKey: ((NSEvent, NextTermView) -> Bool)?
+    /// A real key is being dispatched to a terminal: what it writes now is the user's (CompletionSession).
+    private(set) var dispatchingKey = false
     /// Whatever took the keyboard (a click in a pane, a move between panes).
     var onFirstResponderChange: ((NSResponder?) -> Void)?
 
@@ -20,7 +24,14 @@ final class TerminalWindow: NSWindow {
             return
         }
         // A key pressed in a terminal: you are at that tab yourself (SwiftTerm's keyDown cannot be overridden).
-        if event.type == .keyDown, let terminal = firstResponder as? NextTermView { terminal.onKeyboard?() }
+        if event.type == .keyDown, let terminal = firstResponder as? NextTermView {
+            terminal.onKeyboard?()
+            if onTerminalKey?(event, terminal) == true { return }
+            dispatchingKey = true
+            super.sendEvent(event)
+            dispatchingKey = false
+            return
+        }
         super.sendEvent(event)
     }
 }
@@ -112,6 +123,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
         window.delegate = self
         window.onControlTab = { [weak self] backwards in self?.cycleTab(by: backwards ? -1 : 1) }
+        window.onTerminalKey = { [weak self] event, view in self?.completions.handle(event, in: view) ?? false }
         window.onFirstResponderChange = { [weak self] responder in
             guard let self, let view = responder as? NextTermView, let tab = self.tabs.first(where: { $0.view === view }) else { return }
             if self.terminalRailed { self.expandTerminal() } // typing into a terminal behind the rail: it opens
@@ -1262,6 +1274,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// Files opened in this window, newest first: what ⌘P lists before you type.
     private(set) var recentFiles: [String] = []
+
+    /// Tab completion at this window's keyboard.
+    private(set) lazy var completions = CompletionController(owner: self)
 
     private(set) lazy var fileFinder: GoToFileController = {
         let finder = GoToFileController()

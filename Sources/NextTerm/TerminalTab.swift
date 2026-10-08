@@ -1046,6 +1046,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             env["NEXTTERM_USER_ZDOTDIR"] = env["ZDOTDIR"] ?? ""
             env["ZDOTDIR"] = zdotdir.path
             env[ShellIntegration.nonceVariable] = nonce // the shell removes it from its environment at once
+            if CompletionPreferences.isOn { env[ShellIntegration.completionVariable] = "1" } // Tab completion's hook loads
         }
         environmentPath = env["PATH"] ?? ""
         claudePort = env["CLAUDE_CODE_SSE_PORT"]
