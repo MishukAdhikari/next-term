@@ -335,9 +335,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     // MARK: lifecycle
 
-    /// Where a launch reads Settings › General and the flag "Relaunch Now" leaves. The update that keeps sessions
-    /// passes its test harness's own suite here.
-    let launchDefaults = UserDefaults.standard
+    /// Where a launch reads Settings › General and the flag "Relaunch Now" leaves, and where the projects open at quit are
+    /// kept: the user's defaults, or the relaunch harness's own suite (`SelfTest.keptDefaults`).
+    let launchDefaults = SelfTest.keptDefaults ?? .standard
     /// Kept remote tabs (tmux, herdr) wait for the first terminal window: they never open one of their own while the
     /// Welcome window is up.
     private(set) var remoteRestorePending = false
@@ -367,6 +367,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(commandLineRequest(_:)),
                                                             name: .init(CommandLineOpen.notificationName), object: nil,
                                                             suspensionBehavior: .deliverImmediately)
+        #if DEBUG
+        // A step of the relaunch harness: a launch as the app's own, in the harness's folder and defaults, with no update
+        // check, no `nxtrm` link and no clean-up in Application Support. SelfTestRestore drives the rest.
+        if SelfTest.mode == .relaunchHarness {
+            let kind = Self.takeLaunchKind(request: false, defaults: launchDefaults, now: Date())
+            openAtLaunch(kind: kind, settings: LaunchSettings(defaults: launchDefaults), mayOfferImport: false)
+            restoreRemoteTabsOnceAWindowOpens()
+            return SelfTestRestore.run(launchKind: kind)
+        }
+        #endif
         if SelfTest.isRequested {
             // A normal launch, with the Welcome window whatever is saved and no import offer. The self-test's first
             // check opens the window the others use.
@@ -547,8 +557,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// the relaunch after "Relaunch Now" does whatever it says. Written at every quit, so changing the setting later
     /// works.
     private var sessionProjects: [String] {
-        get { UserDefaults.standard.stringArray(forKey: "sessionProjects") ?? [] }
-        set { UserDefaults.standard.set(newValue, forKey: "sessionProjects") }
+        get { launchDefaults.stringArray(forKey: "sessionProjects") ?? [] }
+        set { launchDefaults.set(newValue, forKey: "sessionProjects") }
     }
 
     private func isFolder(_ path: String) -> Bool {
@@ -667,10 +677,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return true
     }
 
-    /// Why this quit happens: the self-test, "Relaunch Now", a logout, restart or shutdown (the quit Apple event), or
-    /// else the user.
+    /// Why this quit happens: the plain self-test, the reason the relaunch harness sets, "Relaunch Now", a logout, restart
+    /// or shutdown (the quit Apple event), or else the user.
     private var quitReason: QuitReason {
-        if SelfTest.isRequested { return .selfTest }
+        if SelfTest.mode == .plain { return .selfTest }
+        #if DEBUG
+        if let reason = SelfTestRestore.quitReason { return reason }
+        #endif
         if MainActor.assumeIsolated({ Updater.shared.relaunching }) { return .updateRelaunch }
         return QuitReopenPrompt.reason(of: NSAppleEventManager.shared().currentAppleEvent)
     }
@@ -711,7 +724,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         GeminiIDEServer.shared.stop()
         CopilotIDEServer.shared.stop()
         MainActor.assumeIsolated { Updater.shared.installStagedUpdateOnQuit() }
-        if !SelfTest.isRequested { sessionProjects = controllers.compactMap(\.project) }
+        if SelfTest.mode != .plain { sessionProjects = controllers.compactMap(\.project) }
         RemoteConnection.saveTabs(controllers)
         for controller in controllers { for tab in controller.tabs { tab.terminate() } }
         RemoteConnection.shutdown() // the master connections; sessions kept by tmux or herdr stay on their hosts

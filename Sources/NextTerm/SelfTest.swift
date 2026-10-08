@@ -8,9 +8,66 @@ import SQLite3
 /// Run with `NextTerm --self-test <report-path>`; writes PASS/FAIL lines and quits.
 @MainActor
 enum SelfTest {
-    nonisolated static var isRequested: Bool { CommandLine.arguments.contains("--self-test") }
-    /// The self-test's own MCP socket, so it never answers for (or takes over from) the Next Term you use.
-    nonisolated static let mcpSocketPath = (NSTemporaryDirectory() as NSString).appendingPathComponent("nextterm-mcp-\(getpid()).sock")
+    /// How this process runs: as the app, as the plain self-test (`--self-test <report-path>`), or as a step of the
+    /// relaunch harness, whose arguments only a debug build reads (SelfTestRestore).
+    enum Mode: Equatable, Sendable {
+        case app
+        case plain
+        case relaunchHarness
+    }
+
+    nonisolated static let mode: Mode = {
+        #if DEBUG
+        if SelfTestRestore.harness != nil { return .relaunchHarness }
+        #endif
+        return CommandLine.arguments.contains("--self-test") ? .plain : .app
+    }()
+
+    /// Either self-test: the guards that keep it off the user's machine apply, except those the relaunch harness points
+    /// at its own folder (`keptDefaults`, `sessionsParent`, `mcpSocketPath`).
+    nonisolated static var isRequested: Bool { mode != .app }
+
+    /// Where the records one launch leaves the next are kept (the projects open at quit, kept remote tabs, Settings ›
+    /// General, the relaunch flag): the user's defaults, the relaunch harness's own suite, or none for the plain self-test,
+    /// which keeps none.
+    nonisolated static var keptDefaults: UserDefaults? {
+        switch mode {
+        case .app: return .standard
+        case .plain: return nil
+        case .relaunchHarness:
+            #if DEBUG
+            return SelfTestRestore.defaults
+            #else
+            return nil
+            #endif
+        }
+    }
+
+    /// Where the sessions folder is made (SessionFiles): Next Term's folder in the user's Application Support, the
+    /// relaunch harness's own, or none for the plain self-test, which never saves or restores sessions.
+    nonisolated static var sessionsParent: URL? {
+        switch mode {
+        case .app:
+            let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            return support?.appendingPathComponent("Next Term", isDirectory: true)
+        case .plain: return nil
+        case .relaunchHarness:
+            #if DEBUG
+            return SelfTestRestore.harness?.stateFolder
+            #else
+            return nil
+            #endif
+        }
+    }
+
+    /// The self-test's own MCP socket, so it never answers for (or takes over from) the Next Term you use: the relaunch
+    /// harness's in its folder, kept across its relaunch, else one for this process.
+    nonisolated static let mcpSocketPath: String = {
+        #if DEBUG
+        if let path = SelfTestRestore.harness?.mcpSocket { return path }
+        #endif
+        return (NSTemporaryDirectory() as NSString).appendingPathComponent("nextterm-mcp-\(getpid()).sock")
+    }()
     /// The home agents' sessions are read from in a self-test run: a folder never made, so nothing of yours is read
     /// (your Claude Code records and transcripts) for the sidebar's sessions or the agents in its tabs. The parts
     /// that list sessions point SessionStore at sessions of their own, and back here after.

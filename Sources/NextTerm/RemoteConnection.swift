@@ -368,9 +368,10 @@ enum RemoteConnection {
 
     /// Saves the open remote tabs that something keeps on their host (tmux, herdr), to reattach next
     /// time. Called as they change (by the poller) and at quit, so a crash loses nothing. Not before the
-    /// last launch's tabs were restored, which would forget them.
+    /// last launch's tabs were restored, which would forget them. In the user's defaults, or the relaunch
+    /// harness's own suite; never in the plain self-test (`SelfTest.keptDefaults`).
     static func saveTabs(_ controllers: [TerminalWindowController]) {
-        guard restored, !restoring, !SelfTest.isRequested else { return }
+        guard restored, !restoring, let defaults = SelfTest.keptDefaults else { return }
         let records = controllers.flatMap { controller in
             controller.groups.flatMap(\.panes).compactMap { tab -> RemoteTabRecord? in
                 guard let remote = tab.remote, !tab.exited, remote.keep != .off, !tab.fellBack else { return nil }
@@ -379,8 +380,8 @@ enum RemoteConnection {
                                        session: remote.session, keep: remote.keep, project: controller.project, title: tab.userTitle)
             }
         }
-        guard let data = try? JSONEncoder().encode(records), data != UserDefaults.standard.data(forKey: recordsKey) else { return }
-        UserDefaults.standard.set(data, forKey: recordsKey)
+        guard let data = try? JSONEncoder().encode(records), data != defaults.data(forKey: recordsKey) else { return }
+        defaults.set(data, forKey: recordsKey)
     }
 
     /// Reattaches the tabs kept last time, in the window of the project they were in, in their order
@@ -395,7 +396,7 @@ enum RemoteConnection {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { restoreTabs(attempt: attempt + 1) }
             return
         }
-        guard !SelfTest.isRequested, let data = UserDefaults.standard.data(forKey: recordsKey),
+        guard let data = SelfTest.keptDefaults?.data(forKey: recordsKey),
               let records = try? JSONDecoder().decode([RemoteTabRecord].self, from: data), !records.isEmpty else {
             restored = true
             return

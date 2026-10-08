@@ -490,13 +490,22 @@ final class Updater {
         guard try Self.runTool("/usr/bin/hdiutil", ["attach", dmg.path, "-nobrowse", "-readonly", "-noautoopen", "-quiet", "-mountpoint", mount.path]) else {
             throw UpdateError("The disk image could not be opened.")
         }
-        let source = mount.appendingPathComponent("Next Term.app")
+        let here = Bundle.main.bundleURL
+        return try stageCopy(of: mount.appendingPathComponent("Next Term.app"), version: version) {
+            try FileManager.default.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: here, create: true)
+        }
+    }
+
+    /// Copies the app at `source` into the folder `makeStaging` makes, and checks it is Next Term at `version` with an intact
+    /// signature that meets the requirement the install script checks it against again (see
+    /// `CodeSignature.updateRequirement`). The folder goes when the copy is refused.
+    private nonisolated static func stageCopy(of source: URL, version: AppVersion,
+                                              in makeStaging: () throws -> URL) throws -> (url: URL, requirement: String, oldRequirement: String) {
         guard let running = CodeSignature.running(), let image = CodeSignature.of(source) else {
             throw UpdateError("The signatures of this app and the new one could not be read.")
         }
         let requirement = CodeSignature.updateRequirement(running: running, staged: image)
-        let here = Bundle.main.bundleURL
-        let staging = try FileManager.default.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: here, create: true)
+        let staging = try makeStaging()
         do {
             let target = staging.appendingPathComponent("Next Term.app")
             guard try Self.runTool("/usr/bin/ditto", [source.path, target.path]) else { throw UpdateError("The new app could not be copied.") }
@@ -569,9 +578,11 @@ final class Updater {
         guard let staged else { return }
         if relaunching { Self.flagRelaunch(in: AppDelegate.shared.launchDefaults, now: Date()) }
         let staging = staged.newApp.deletingLastPathComponent()
-        let script = InstallScript(pid: ProcessInfo.processInfo.processIdentifier, app: Bundle.main.bundleURL.path,
+        let target = installTarget
+        var script = InstallScript(pid: ProcessInfo.processInfo.processIdentifier, app: target.app,
                                    newApp: staged.newApp.path, staging: staging.path, requirement: staged.requirement,
                                    oldRequirement: staged.oldRequirement, relaunch: true)
+        script.open = target.open
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.arguments = ["-c", script.text]
@@ -580,6 +591,44 @@ final class Updater {
         process.standardError = FileHandle.nullDevice
         try? process.run() // outlives this process
     }
+
+    /// Where the install puts the update, and what opens it after: this app's place and `open`, or the relaunch harness's.
+    var installTarget: (app: String, open: String) {
+        #if DEBUG
+        if let standIn { return (standIn.app.path, standIn.opener.path) }
+        #endif
+        return (Bundle.main.bundleURL.path, "/usr/bin/open")
+    }
+
+    #if DEBUG
+    /// The relaunch harness's install path and stub opener: its install moves only these, in the harness's folder, never
+    /// `Bundle.main.bundleURL`, and opens no app.
+    private var standIn: (app: URL, opener: URL)?
+
+    /// The relaunch harness's staged update (SelfTestRestore), in place of a download. `update` is a copy of this build that
+    /// the harness's driver signed ad hoc at a harness version. It is staged as a disk image's app is (`stageCopy`), in the
+    /// new folder `staging`, with the requirements `CodeSignature` picks for an app signed ad hoc: its own, and the running
+    /// copy's for the old app. The install at quit then puts it in place of `app` and runs `opener` in place of `open`.
+    /// It stands in for a checked download only: nothing quits or installs until the user's press on "Relaunch Now".
+    func stageStandIn(_ update: URL, in staging: URL, replacing app: URL, opener: URL) async throws -> AppVersion {
+        guard SelfTest.mode == .relaunchHarness else { throw UpdateError("Only the relaunch harness stages a stand-in.") }
+        let shortVersion = Bundle(url: update)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        guard let version = shortVersion.flatMap(AppVersion.init) else { throw UpdateError("The stand-in has no version.") }
+        let copy = try await Task.detached {
+            try Self.stageCopy(of: update, version: version) {
+                try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: false,
+                                                        attributes: [.posixPermissions: 0o700])
+                return staging
+            }
+        }.value
+        standIn = (app, opener)
+        staged = (copy.url, version, copy.requirement, copy.oldRequirement)
+        return version
+    }
+
+    /// The staged update's app and folder, for the harness's checks.
+    var stagedApp: URL? { staged?.newApp }
+    #endif
 
     private func tell(_ title: String, _ text: String) {
         let alert = NSAlert()
