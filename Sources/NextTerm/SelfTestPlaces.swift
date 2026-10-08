@@ -5,11 +5,12 @@ import NextTermCore
 /// stand-in Claude Code that moves its own process there while its shell stays in the repository's root.
 /// The branch popup credits it to that worktree, and a checkout in the main one doesn't warn about it
 /// (AE10); its tab gets the place mark only once the move has held, the header says "this tab:
-/// fix/7027-sso", down to the glyph in a narrow sidebar, and list_tabs says it is elsewhere (AE3, AE9).
-/// A switch from the branch popup marks the other agent, which had a turn, with "you switched it", and Keep
-/// Going clears that (AE2a). A Claude Code whose record says its shell cd'd into the worktree is there, though
-/// its process stays in the root; a cd within the main checkout marks nothing (AE11). Session records are
-/// made by hand, in a home of its own.
+/// fix/7027-sso", "this tab:" kept whole as the branch is cut, then the glyph, then nothing in a narrower
+/// sidebar, and list_tabs says it is elsewhere (AE3, AE9). A switch from the branch popup marks the other
+/// agent, which had a turn, with "you switched it", and not the one in the worktree, which had one too; Keep
+/// Going from the tab's right-click menu clears that (AE2a). A Claude Code whose record says its shell cd'd
+/// into the worktree is there, though its process stays in the root; a cd within the main checkout marks
+/// nothing (AE11). Session records are made by hand, in a home of its own.
 extension SelfTest {
     static func placeChecks(_ c: TerminalWindowController) async {
         guard let app = AppDelegate.shared, let git = GitRunner.locateGit() else { return }
@@ -95,16 +96,30 @@ extension SelfTest {
             header.needsLayout = true
             header.layoutSubtreeIfNeeded()
         }
+        // Laid out with `spare` points beside the whole branch name: the widths come from the header's own
+        // thresholds, not from the font's metrics.
+        func layOut(spare: CGFloat) {
+            for _ in 0..<3 { layOut(width: header.frame.width + spare - header.tabPlaceSpare) } // the ⌘B hint may come or go
+        }
         _ = await wait(3) { !header.tabPlace.isHidden }
         layOut(width: 520)
         check(header.tabPlace.shownText == "this tab: fix/7027-sso" && !header.tabPlace.isTruncated && !header.titleIsTruncated,
               "places: the header says “this tab: fix/7027-sso” after the window's own branch", "“\(header.tabPlace.shownText)”, \(header.tabPlace.frame)")
         check(header.tabPlace.toolTip?.contains("works in worktree pr-7050") == true, "places: and its tooltip has the facts", header.tabPlace.toolTip ?? "")
-        layOut(width: 330)
-        check(!header.tabPlace.isHidden && header.tabPlace.shownText.isEmpty && !header.titleIsTruncated
+        let full = 6 + header.tabPlace.fullWidth, readable = 6 + header.tabPlace.readableWidth, glyph = 6 + TabPlaceView.glyphWidth
+        layOut(spare: (full + readable) / 2)
+        check(header.tabPlace.shownText == "this tab: fix/7027-sso" && header.tabPlace.isTruncated && header.tabPlace.prefixIsWhole && !header.titleIsTruncated,
+              "places: with less room the branch is cut in the middle, and “this tab:” stays whole",
+              "spare \(header.tabPlaceSpare), \(header.tabPlace.frame)")
+        layOut(spare: (readable + glyph) / 2)
+        check(header.tabPlace.showsGlyph && header.tabPlace.shownText.isEmpty && !header.titleIsTruncated
               && header.tabPlace.frame.minX >= header.titleFrame.maxX,
               "places: in a narrow sidebar the label shrinks to the glyph and the branch keeps its name",
-              "“\(header.tabPlace.shownText)”, \(header.tabPlace.frame), name \(header.titleFrame)")
+              "spare \(header.tabPlaceSpare), “\(header.tabPlace.shownText)”, \(header.tabPlace.frame), name \(header.titleFrame)")
+        layOut(spare: glyph / 2)
+        check(!header.tabPlace.showsGlyph && header.tabPlace.frame.width == 0 && !header.titleIsTruncated,
+              "places: narrower still, the glyph goes too and takes nothing from the branch",
+              "spare \(header.tabPlaceSpare), \(header.tabPlace.frame), name \(header.titleFrame)")
         header.inset = inset
         layOut(width: frame.width)
 
@@ -138,6 +153,13 @@ extension SelfTest {
             check(false, "places: the branch popup reads the repository")
         }
         GitToast.dismiss()
+
+        // Seven has a turn in the worktree: were it counted in the main checkout, a switch there would mark it.
+        try? "".write(toFile: controlA + "/working", atomically: true, encoding: .utf8)
+        check(await wait(10) { seven.status.state == .working }, "places: the agent in the worktree has a turn", seven.status.state.rawValue)
+        await pause(2)
+        try? fm.removeItem(atPath: controlA + "/working")
+        _ = await wait(10) { seven.status.state != .working }
 
         // Claude Code in tab "five", in the root: a turn, then idle. A switch from the popup is yours.
         let five = holder.addTab(directory: repo)
@@ -179,7 +201,14 @@ extension SelfTest {
               "places: the header says “chat was on fix/7050-pr”, and a click offers Keep Going", header.tabPlace.shownText)
         header.inset = inset
         layOut(width: frame.width)
-        AgentPlaces.shared.keepGoing(five)
+        // Keep Going from the tab's right-click menu, without the header.
+        let menu = holder.terminalTabMenu(at: index(five))
+        let keep = menu?.items.firstIndex { $0.title == "Keep Going on fix/7611-3ds" }
+        check(keep == 0, "places: the right-click menu of a tab switched under leads with Keep Going",
+              menu?.items.map(\.title).joined(separator: ", ") ?? "no menu")
+        let sevenMenu = holder.terminalTabMenu(at: index(seven))?.items.map(\.title) ?? []
+        check(!sevenMenu.contains { $0.hasPrefix("Keep Going") }, "places: an agent that is only elsewhere has no Keep Going", sevenMenu.joined(separator: ", "))
+        if let menu, let keep { menu.performActionForItem(at: keep) }
         check(await wait(5) { !marked(five) }, "places: Keep Going clears the mark", tip(five))
 
         // Claude Code in tab "eleven", its process in the root; its transcript says where its shell went.
