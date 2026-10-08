@@ -510,14 +510,28 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         }
     }
 
-    /// Re-reads one loaded folder in the background; updates the outline if it changed.
+    /// Folders being read in the background, and those that changed again meanwhile.
+    private var reading: Set<ObjectIdentifier> = []
+    private var readAgain: Set<ObjectIdentifier> = []
+
+    /// Re-reads one loaded folder in the background; updates the outline if it changed. One read of a folder at a
+    /// time, then one more if it changed meanwhile: a busy folder (a home folder while agents run, /tmp) reports
+    /// changes faster than it can be read, and a read for each would take every background thread the app has.
     private func refresh(_ node: FileNode) {
         guard node.isLoaded else { return }
+        let id = ObjectIdentifier(node)
+        guard !reading.contains(id) else {
+            readAgain.insert(id)
+            return
+        }
+        reading.insert(id)
         let url = node.url, hiding = fileHiding
         DispatchQueue.global(qos: .utility).async {
             let listing = FileNode.readChildren(of: url, hiding: hiding)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
+                self.reading.remove(id)
+                if self.readAgain.remove(id) != nil { self.refresh(node) } // after this listing, the change since
                 // While a name is edited the folder waits, keeping its row there, and is read again once the name
                 // is done: a listing read meanwhile is out of date by then (it has the name before), and put in
                 // place it would show that name again and lose the row's selection.
