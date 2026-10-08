@@ -90,7 +90,7 @@ public struct KeyBindings: Equatable, Sendable {
             switch self {
             case .editor: return "Editor"
             case .sidebar: return "Project Sidebar"
-            case .gitLists: return "Git Log and Compare lists"
+            case .gitLists: return "Git Log, Git Diff and Compare lists"
             case .diff: return "Proposed Edit"
             case .branchPopup: return "Branch Popup"
             }
@@ -101,7 +101,7 @@ public struct KeyBindings: Equatable, Sendable {
             switch self {
             case .editor: return "while the editor has the keyboard"
             case .sidebar: return "while the project sidebar has the keyboard"
-            case .gitLists: return "while a Git Log or Compare list has the keyboard"
+            case .gitLists: return "while a Git Log, Git Diff or Compare list has the keyboard"
             case .diff: return "while an agent’s proposed edit is shown"
             case .branchPopup: return "while the branch popup is open"
             }

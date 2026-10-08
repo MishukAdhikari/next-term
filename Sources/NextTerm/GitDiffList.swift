@@ -433,9 +433,22 @@ final class GitDiffOutlineView: NSOutlineView, NSMenuDelegate {
         switch event.keyCode {
         case 126 where plain: list?.step(by: -1)
         case 125 where plain: list?.step(by: 1)
-        case 36 where plain, 76 where plain: list?.onReturn?()
-        default: super.keyDown(with: event)
+        default:
+            guard opens(event) else { return super.keyDown(with: event) }
+            list?.onReturn?()
         }
+    }
+
+    /// A key with ⌘ comes here before the menus (KeyBindings.canShareKey).
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard window?.firstResponder === self, opens(event) else { return super.performKeyEquivalent(with: event) }
+        list?.onReturn?()
+        return true
+    }
+
+    /// To the diff: ↩, or the key Settings gives the Git lists' Open Commit or File.
+    private func opens(_ event: NSEvent) -> Bool {
+        KeyboardShortcuts.shared.partCommand(for: event, in: .gitLists) == "gitLists.open"
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {

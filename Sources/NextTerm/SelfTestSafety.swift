@@ -31,7 +31,7 @@ extension SelfTest {
         }
         let rows = ["sidebar.rename", "sidebar.trash", "sidebar.open", "gitLists.open", "diff.accept", "branchPopup.fetch"].map(listed)
         check(rows == ["Rename · Project Sidebar · ↩", "Move to Trash · Project Sidebar · ⌘⌫", "Open · Project Sidebar · ⌘↓",
-                       "Open Commit or File · Git Log and Compare lists · ↩", "Accept · Proposed Edit · ⌘↩", "Fetch · Branch Popup · ⌘R"],
+                       "Open Commit or File · Git Log, Git Diff and Compare lists · ↩", "Accept · Proposed Edit · ⌘↩", "Fetch · Branch Popup · ⌘R"],
               "Settings lists the keys outside the menus, with the part of the window each belongs to", rows.joined(separator: " | "))
 
         // Key presses, read as Settings records them.
@@ -67,6 +67,20 @@ extension SelfTest {
         check(byDefault == 1 && trashed == 2 && listed("sidebar.trash") == "Move to Trash · Project Sidebar · ⌥⌘⌫",
               "the sidebar's Move to Trash moves to the key set in Settings", "\(byDefault) then \(trashed)")
         shortcuts.reset("sidebar.trash")
+
+        // The Git Diff tab's file list goes to the diff on the key Settings gives the Git lists' Open, and no longer on ↩.
+        let list = GitDiffListView(frame: .zero)
+        var opened = 0
+        list.onReturn = { opened += 1 }
+        if let returnKey { list.outline.keyDown(with: returnKey) }
+        let onReturn = opened
+        let optionReturn = press("\r", code: 36, .option)
+        shortcuts.set(KeyChord(key: "\r", option: true), for: "gitLists.open")
+        if let returnKey { list.outline.keyDown(with: returnKey) }
+        if let optionReturn { list.outline.keyDown(with: optionReturn) }
+        check(onReturn == 1 && opened == 2 && listed("gitLists.open") == "Open Commit or File · Git Log, Git Diff and Compare lists · ⌥↩",
+              "the Git Diff file list goes to the diff on the key set in Settings", "\(onReturn) then \(opened)")
+        shortcuts.reset("gitLists.open")
 
         // A proposed edit's Accept answers the key set in Settings from anywhere in the window, one with ⇧ too (a button's
         // own key equivalent would want "Y"), and no longer the old one; its tooltip names the key. The sidebar's keys
