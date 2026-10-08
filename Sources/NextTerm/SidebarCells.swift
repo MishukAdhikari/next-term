@@ -31,6 +31,12 @@ final class SidebarHeaderView: NSView {
     let moreButton = MoreButton(toolTip: "Project sidebar layout", menu: LayoutMenu.sidebar)
     /// Hides the sidebar (⌘B); the top bar then shows a button to bring it back.
     let hideButton = HoverButton()
+    /// After the branch, while the focused tab is marked: "this tab: fix/7027-sso" (see AgentPlaces).
+    let tabPlace = TabPlaceView()
+    var onTabPlaceClick: (() -> Void)? {
+        get { tabPlace.onClick }
+        set { tabPlace.onClick = newValue }
+    }
     var inset: CGFloat = 70 { didSet { needsLayout = true } }
     private var hideTip: ShortcutToolTip?
     /// "⌘B" just before the hide button, as a tab shows "⌘1", while the row has room for it; without, while
@@ -75,7 +81,8 @@ final class SidebarHeaderView: NSView {
         syncButton.target = self
         syncButton.action = #selector(syncClicked)
         syncButton.isHidden = true
-        [branchIcon, title, chevron, summary, syncButton, hideHint, hideButton, moreButton].forEach(addSubview)
+        tabPlace.isHidden = true
+        [branchIcon, title, chevron, tabPlace, summary, syncButton, hideHint, hideButton, moreButton].forEach(addSubview)
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
         setAccessibilityLabel("Project")
@@ -116,6 +123,7 @@ final class SidebarHeaderView: NSView {
         if moreButton.frame.contains(local) { return moreButton }
         if hideButton.frame.contains(local) { return hideButton }
         if !syncButton.isHidden, syncButton.frame.contains(local) { return syncButton }
+        if !tabPlace.isHidden, tabPlace.frame.contains(local) { return tabPlace }
         if summary.onClick != nil, !summary.isHidden, summary.frame.contains(local) { return summary }
         return self
     }
@@ -298,7 +306,8 @@ final class SidebarHeaderView: NSView {
         let nameNeeded = ceil(title.cell?.cellSize.width ?? title.intrinsicContentSize.width + 4) + 1
         // The text cell needs about 4 pt of its own margin beyond the text, or it truncates.
         let summaryText = summary.attributedStringValue.length > 0 ? ceil(summary.intrinsicContentSize.width) + 6 : 0
-        var right = placeHideHint(nameNeeded: nameNeeded + chevronWidth, summaryText: summaryText)
+        let placeFull = tabPlace.isHidden ? 0 : 6 + tabPlace.fullWidth
+        var right = placeHideHint(nameNeeded: nameNeeded + chevronWidth + placeFull, summaryText: summaryText)
         let spareWithoutGlyph = right - (inset + 4) - nameNeeded - chevronWidth - 6 - 4
         let glyphGoes = !syncButton.isHidden && syncButton.width(compact: false) > spareWithoutGlyph - 18
         branchIcon.isHidden = snapshot == nil || glyphGoes
@@ -311,7 +320,10 @@ final class SidebarHeaderView: NSView {
             syncButton.frame = NSRect(x: right - width, y: (h - SyncButton.height) / 2, width: width, height: SyncButton.height)
             right = syncButton.frame.minX - 4
         }
-        var summaryWidth = min(summaryText, max(0, right - nameKept))
+        // The focused tab's label after the name: whole beside the whole name, else cut in the middle, else the
+        // glyph alone. The line counts give way to it; the name keeps its own.
+        let placeWidth = tabPlaceWidth(spare: right - nameStart - nameNeeded - chevronWidth - 6)
+        var summaryWidth = min(summaryText, max(0, right - nameKept - placeWidth))
         if summaryWidth < summaryText, summaryWidth < 28 { summaryWidth = 0 } // cut to an ellipsis, it says nothing
         if !syncButton.isHidden && syncButton.isShortened { summaryWidth = 0 } // the counts went before the word did
         summary.isHidden = summaryWidth == 0
@@ -322,10 +334,37 @@ final class SidebarHeaderView: NSView {
             x += 18
         }
         // The name as wide as it is (the chevron right after it), up to the counts or the button.
-        let room = max(0, (summary.isHidden ? right : summary.frame.minX) - x - 6 - chevronWidth)
+        let room = max(0, (summary.isHidden ? right : summary.frame.minX) - x - 6 - chevronWidth - placeWidth)
         title.frame = NSRect(x: x, y: titleY, width: min(room, nameNeeded), height: titleHeight)
         chevron.frame = NSRect(x: title.frame.maxX + 2, y: (h - 10) / 2, width: 10, height: 10)
+        let placeX = (chevron.isHidden ? title.frame.maxX : chevron.frame.maxX) + 6
+        tabPlace.frame = NSRect(x: placeX, y: 0, width: max(0, placeWidth - 6), height: h)
         window?.invalidateCursorRects(for: self)
+    }
+
+    /// The focused tab's place, after the branch (nil: none, or the tab isn't marked).
+    func showTabPlace(_ place: TabPlace?) {
+        let spoken = [snapshot.map(Self.describe) ?? "Project", place.map { "This tab: " + $0.facts }].compactMap { $0 }.joined(separator: " ")
+        if accessibilityLabel() != spoken { setAccessibilityLabel(spoken) }
+        guard (place == nil) != tabPlace.isHidden || (place != nil && place != tabPlace.place) else { return }
+        if let place { tabPlace.show(place) }
+        tabPlace.isHidden = place == nil
+        needsLayout = true // its words take another width
+        window?.invalidateCursorRects(for: tabPlace)
+    }
+
+    /// The room the place label takes, with its gap: `spare` is what is left beside the whole name.
+    private func tabPlaceWidth(spare: CGFloat) -> CGFloat {
+        guard !tabPlace.isHidden else { return 0 }
+        let full = 6 + tabPlace.fullWidth
+        let readable: CGFloat = 6 + 17 + 56 // "this tab: f…sso" at least
+        tabPlace.compact = spare < min(full, readable)
+        return tabPlace.compact ? 6 + TabPlaceView.glyphWidth : min(full, spare)
+    }
+
+    /// The choices for the focused tab's place, under its label.
+    func popUpTabPlaceMenu(_ menu: NSMenu) {
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: tabPlace.bounds.height - 4), in: tabPlace)
     }
 
     /// "⌘B" before the hide button goes first when room is short: it shows only while the branch glyph and

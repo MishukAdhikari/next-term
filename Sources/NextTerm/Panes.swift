@@ -135,6 +135,9 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate {
     private let dot = StatusDotView()
     private let remoteMark = RemoteMarkView()
     private let label = NSTextField(labelWithString: "")
+    /// The place mark after the title (see AgentPlaces), and what it says.
+    private let placeMark = NSImageView()
+    private var place: String?
     let closeButton = NSButton()
     private var renameField: NSTextField?
     private var hovering = false { didSet { if hovering != oldValue { refresh() } } }
@@ -165,6 +168,10 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate {
         addSubview(dot)
         remoteMark.isHidden = true
         addSubview(remoteMark)
+        placeMark.image = PlaceGlyph.image()
+        placeMark.contentTintColor = Theme.textDim
+        placeMark.isHidden = true
+        addSubview(placeMark)
         closeButton.bezelStyle = .regularSquare
         closeButton.isBordered = false
         closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close Pane")?
@@ -192,6 +199,7 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate {
     var shownTitle: String { label.stringValue }
     var shownState: TabState { dot.state }
     var shownRemoteLink: RemoteLink? { remoteMark.isHidden ? nil : remoteMark.link }
+    var showsPlaceMark: Bool { !placeMark.isHidden }
     var isEditing: Bool { renameField != nil }
 
     /// Takes the pane's title, mark and server mark. Called several times a second: touch only what changed
@@ -209,8 +217,15 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate {
         if (remote == nil) != remoteMark.isHidden { needsLayout = true } // the title moves over, or back
         remoteMark.link = remote?.link
         remoteMark.isHidden = remote == nil
-        if toolTip != tab.tooltip { toolTip = tab.tooltip }
-        let parts = [title, tab.ownStateDescription ?? "", remote?.summary ?? "", focused ? "has the keyboard" : ""]
+        let place = controller?.placeFacts(of: tab)
+        if place != self.place {
+            if (place == nil) != (self.place == nil) { needsLayout = true }
+            self.place = place
+            placeMark.isHidden = place == nil
+        }
+        let tip = tab.tooltip + (place.map { "\n" + $0 } ?? "")
+        if toolTip != tip { toolTip = tip }
+        let parts = [title, tab.ownStateDescription ?? "", remote?.summary ?? "", place ?? "", focused ? "has the keyboard" : ""]
         let spoken = parts.filter { !$0.isEmpty }.joined(separator: ", ")
         if accessibilityLabel() != spoken { setAccessibilityLabel(spoken) }
         let closeLabel = "Close pane \(title)"
@@ -247,11 +262,13 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate {
         remoteMark.frame = NSRect(x: 22, y: (h - 16) / 2, width: RemoteMarkView.size.width, height: RemoteMarkView.size.height)
         let labelX: CGFloat = remoteMark.isHidden ? 25 : remoteMark.frame.maxX + 3
         // The ×'s room is kept while it is hidden, so the title stays put as the pointer passes.
-        let width = max(0, bounds.width - 28 - labelX)
+        let width = max(0, bounds.width - 28 - labelX - (placeMark.isHidden ? 0 : 15))
         let labelHeight = label.intrinsicContentSize.height
         label.frame = NSRect(x: labelX, y: (h - labelHeight) / 2, width: width, height: labelHeight)
         let words = fits(title, within: width) ? title : shorterTitles.first { fits($0, within: width) } ?? shorterTitles.last ?? title
         if label.stringValue != words { label.stringValue = words }
+        let text = ceil((words as NSString).size(withAttributes: [.font: Self.font]).width + 4)
+        placeMark.frame = NSRect(x: labelX + min(width, text) + 1, y: (h - 11) / 2, width: 11, height: 11)
         renameField?.frame = NSRect(x: labelX - 3, y: (h - 22) / 2, width: max(40, bounds.width - labelX - 26), height: 22)
     }
 
