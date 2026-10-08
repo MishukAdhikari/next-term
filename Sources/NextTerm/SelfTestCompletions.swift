@@ -304,6 +304,17 @@ extension SelfTest {
               promptLine(tab))
         await clearLine(tab)
 
+        // Tab twice at once: the second waits for the list, then puts its first row in, as zsh's second Tab does. zsh
+        // never gets it as ^I.
+        tab.view.send(txt: "cd ")
+        await pause(0.3)
+        let typed = session.lastWrite
+        tabKey()
+        tabKey()
+        check(await wait(3) { promptLine(tab).hasSuffix("cd many/") } && !popup.isVisible && session.lastWrite == typed,
+              "Tab completion: a second Tab before the list shows puts its first row in", "\(promptLine(tab)) \(session.lastWrite)")
+        await clearLine(tab)
+
         // Typing narrows the list, Backspace widens it; Esc closes it and the shell gets nothing.
         check(await open("cd "), "Tab completion: `cd ` + Tab lists the folders")
         let all = popup.shownTexts
@@ -491,6 +502,20 @@ extension SelfTest {
         pressKey(window, "\u{1b}", code: 53)
         await pause(1.5)
         check(!popup.isVisible && promptLine(tab).hasSuffix("ntslow"), "Tab completion: Esc while Loading drops the late matches", promptLine(tab))
+        await clearLine(tab)
+        // A second Tab while zsh works, past the hold and before the Loading row: zsh never gets it as ^I, which would
+        // run its own list beside Next Term's once the first is done.
+        tab.view.send(txt: "ntslow ")
+        await pause(0.3)
+        let typed = session.lastWrite
+        pressKey(window, "\t", code: 48)
+        try? await Task.sleep(nanoseconds: 130_000_000)
+        pressKey(window, "\t", code: 48)
+        check(await wait(3) { popup.shownTexts == ["one", "two"] } && session.lastWrite == typed,
+              "Tab completion: a second Tab while a slow completer works sends zsh no ^I", "\(session.lastWrite)")
+        pressKey(window, "\u{1b}", code: 53)
+        await pause(0.3)
+        check(!popup.isVisible && promptLine(tab).hasSuffix("ntslow") && session.state.isArmed, "and the line stays as it was", promptLine(tab))
         await clearLine(tab)
     }
 
