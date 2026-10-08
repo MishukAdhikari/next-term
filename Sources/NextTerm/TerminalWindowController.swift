@@ -1210,7 +1210,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return panel
     }()
 
-    /// ⌥⌘O: the project's agent sessions (Claude Code, Codex, Command Code), to pick one up again.
+    /// ⌥⌘O: the project's agent sessions, to pick one up again.
     @objc func resumeSession(_ sender: Any?) {
         guard let window else { return }
         sessionsPanel.show(project: project ?? searchRoot, over: window)

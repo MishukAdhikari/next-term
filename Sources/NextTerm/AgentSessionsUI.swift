@@ -186,15 +186,6 @@ extension AppDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    /// The agent's own "continue the latest session here" (`claude --continue`, `codex resume --last`), in
-    /// a new tab in the project's folder.
-    func continueLatest(_ agent: AgentKind, project: String) {
-        let controller = openFolder(project, newWindow: false)
-        controller.runInNewTab(directory: project, command: SessionStore.commandPrefix + agent.continueCommand, title: nil)
-        controller.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
     /// Brings a tab and its window to the front.
     func goTo(_ tab: TerminalTab, in controller: TerminalWindowController) {
         controller.show(tab)
