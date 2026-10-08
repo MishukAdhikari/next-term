@@ -82,7 +82,7 @@ Links in a remote tab’s output open web pages only: a path there names a file 
 
 Closing a **tmux** tab only detaches from its session. If something runs in it, Next Term says what keeps running and where (“claude keeps running on web-1, in tmux session nt-app-1a2b3c”) and offers:
 
-- **Close Tab:** the session keeps running. Reattach to it later from **New Remote Tab…**, under **Session**.
+- **Close Tab** (**Close Pane** for a pane of a split tab): the session keeps running. Reattach to it later from **New Remote Tab…**, under **Session**.
 - **End Session:** stops the session and everything in it. The tab closes only once the session has ended.
 
 Closing a window or a split tab names the sessions that keep running too. Closing an **Off** tab warns about what would stop, including jobs suspended or running in the background on the server.

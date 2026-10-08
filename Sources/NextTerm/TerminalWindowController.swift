@@ -354,7 +354,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             let alert = NSAlert()
             alert.messageText = "Close “\(tab.title)”?"
             alert.informativeText = note
-            alert.addButton(withTitle: "Close Tab")
+            alert.addButton(withTitle: group(of: tab)?.isSplit == true ? "Close Pane" : "Close Tab")
             alert.addButton(withTitle: "Cancel")
             alert.addButton(withTitle: "End Session")
             alert.beginSheetModal(for: window) { [weak self] response in
