@@ -90,7 +90,7 @@ Yes. Next Term loads your `.zshenv`, `.zprofile` and `.zshrc` exactly as before,
 
 ## Can I change the keyboard shortcuts?
 
-Yes, every menu command’s shortcut. Open **Settings** (<kbd>⌘,</kbd>) › **Keyboard Shortcuts**, click a shortcut and press the new keys. To keep the keys you know from another editor, choose a set in **Settings › Import › Shortcuts from**. A few keys outside the menus, such as <kbd>⌃⇥</kbd> for the next tab, are fixed. See [Keyboard shortcuts](/docs/keyboard-shortcuts/).
+Yes: every menu command’s shortcut, and the keys of the project sidebar, the Git lists, a proposed edit and the branch popup. Open **Settings** (<kbd>⌘,</kbd>) › **Keyboard Shortcuts**, click a shortcut and press the new keys. To keep the keys you know from another editor, choose a set in **Settings › Import › Shortcuts from**. A few keys outside the menus, such as <kbd>⌃⇥</kbd> for the next tab, are fixed. See [Keyboard shortcuts](/docs/keyboard-shortcuts/).
 
 ## How do I update Next Term?
 

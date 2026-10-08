@@ -29,6 +29,7 @@ More about the editor in [Code editor](/docs/editor/), and about the agent link 
 |---|---|---|
 | **Font** | Next Term default | The terminal’s font, from the monospaced fonts installed on this Mac. Its size is the editor’s. |
 | **Colours** | Next Term default | Your own terminal colours: the 16 ANSI colours, text, background, cursor and selection, shown as a row of swatches. An import brings them over; colours it doesn’t set keep Next Term’s. **Next Term default** goes back, and your colours stay in the menu to choose again. |
+| **Links: Open LangGraph Studio links in Chrome, Edge, Brave or Arc when Safari is the default browser** | On | Safari won’t let Studio reach a server on your Mac, so a <kbd>⌘</kbd>-click on a Studio link for one opens it in the first of these that is installed. Every other link opens in your default browser. See [`langgraph dev` in a tab](/docs/langchain-and-langgraph/#langgraph-dev-in-a-tab). |
 
 ## Notifications
 
@@ -51,7 +52,7 @@ Bring your shortcuts, settings, fonts, terminal colours and recent projects from
 
 ## Keyboard Shortcuts
 
-Every menu command, with its shortcut and where it lives in the menus. Search by command or by shortcut, click a shortcut and press new keys, <kbd>⌫</kbd> to remove it, <kbd>⎋</kbd> to cancel. **Default** puts one command back; **Restore All Defaults** puts them all back. See [Keyboard shortcuts](/docs/keyboard-shortcuts/) for the full default list.
+Every menu command, with its shortcut and where it lives in the menus, then the keys outside the menus (the project sidebar’s, the Git lists’, a proposed edit’s Accept and the branch popup’s), with the part of the window each belongs to. Search by command or by shortcut, click a shortcut and press new keys, <kbd>⌫</kbd> to remove it, <kbd>⎋</kbd> to cancel. **Default** puts one command back; **Restore All Defaults** puts them all back. See [Keyboard shortcuts](/docs/keyboard-shortcuts/) for the full default list.
 
 ## Preferences in the menus
 

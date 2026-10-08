@@ -1,6 +1,6 @@
 ---
 title: Security and privacy
-description: "What Next Term shares, and with whom: local-only agent links and MCP socket, no telemetry, background git fetch, the installer, databases, remote tabs."
+description: "What Next Term shares, and with whom: local agent links and MCP socket, no telemetry, git fetch, how files are written, databases, remote tabs."
 ---
 
 A terminal sees everything you type, and an agent link exposes your editor to programs. Next Term is built so that both stay on your Mac and under your control. The source is public under the MIT licence, so every claim on this page can be checked.
@@ -51,7 +51,7 @@ Agents can drive Next Term through its MCP server ([Orchestrate agents](/docs/or
 - **Servers only over your own logins:** `check_host`, `host_sessions` and `host_changes` run over a connection a remote tab already has, and never log in by themselves. `new_remote_tab` opens a tab where your own ssh logs in, and any password or host-key prompt appears there for you. The ones that save a host or run something on a server are marked so that your agent’s client asks you first.
 - **No self-control:** an agent cannot type into, or close, the tab it runs in.
 - **Busy tabs are protected:** closing a tab that runs something needs an explicit `force`.
-- **Your files are respected:** registering in an agent writes only Next Term’s own `next-term` entry, keeps comments and every other server, and never touches an entry it did not write. The edit is written to a temporary file only you can read, then put in place in one step with the file’s own permissions, so a private file such as Codex’s `config.toml` is never readable by others along the way. Just before putting its edit in place, Next Term checks that the agent has not saved the file since Next Term read it, and if it has, leaves the agent’s version. The agents offer no lock, so a save made at that very moment can still be lost.
+- **Your files are respected:** registering in an agent writes only Next Term’s own `next-term` entry, keeps comments and every other server, and never touches an entry it did not write. The edit is written as [every file Next Term writes](#how-files-are-written): to a temporary file only you can read, then put in place in one step with the file’s own permissions, so a private file such as Codex’s `config.toml` is never readable by others along the way. Just before putting its edit in place, Next Term checks that the agent has not saved the file since Next Term read it, and if it has, leaves the agent’s version. The agents offer no lock, so a save made at that very moment can still be lost.
 - **Off switch:** **Settings › Editor › Agents: “Let agents control Next Term”** closes the socket and removes the entries (the Claude desktop app’s once Claude is closed).
 
 ## Tabs start fresh
@@ -79,7 +79,7 @@ Opening a file from the sidebar, or with <kbd>⌘</kbd>-click in the terminal, a
 
 ## Files and git
 
-- **Saves are atomic** and keep the file’s permissions, encoding and line endings.
+- **Saves are atomic and private,** and keep the file’s permissions, encoding and line endings (see [How files are written](#how-files-are-written)).
 - **Named pipes are never read**, so a pipe in a project cannot freeze the app.
 - **The sidebar’s git calls are read-only** and use `--no-optional-locks`, so the sidebar never holds the index lock while your own git commands or your agents’ run.
 - **Every change you make through Next Term’s git tools is checked first:** a hunk is staged, unstaged or reverted only if the file still matches the diff you saw. See [Diffs and Git Diff](/docs/diffs/#safe-while-agents-keep-working).
@@ -89,6 +89,19 @@ Opening a file from the sidebar, or with <kbd>⌘</kbd>-click in the terminal, a
 - **The branch popup asks before it acts behind an agent:** anything that would change files in a folder where an agent is working asks first, and uncommitted changes go into a named stash rather than being overwritten.
 - **Nothing in a notebook runs.** Next Term has no kernel; it shows the outputs saved in the file. The head view for large data files never writes to them.
 - **Import only reads,** on this Mac. It never writes to the other app, and never opens a file that can hold credentials.
+
+## How files are written
+
+Every file Next Term writes for you is written the same way: an editor save, <kbd>⌘Z</kbd> after reverting a change in a diff (git itself does the revert), Replace in Files and its undo, Gemini CLI’s and Qwen Code’s IDE setting, Next Term’s entry in your agents’ MCP settings, and the Skills library’s lock file. Each write:
+
+- **Goes to a temporary file first,** beside the file. Next Term makes it new, readable only by you, so nothing already there (a file, or a link someone left) is used, and another account on your Mac never sees the new text of a file it could not read. Once the text is in, it gets the file’s permissions, is flushed to disk and replaces the file in one step. A program reading the file sees the old text or the new, never part of either.
+- **Keeps the file’s permissions,** so a script stays executable and a `.env` only you can read stays that way, and its group and extended attributes, such as Finder tags. A new file is readable only by you; a file the editor saves again after it was deleted on disk comes back readable by others, as files you make usually are.
+- **Writes through links:** the file a symlink points at is replaced, and the link stays a link. A link to a file that is not there is left alone.
+- **Leaves a read-only file alone.** The folder would let Next Term replace it, but the file says not to change it; the save says it is read-only.
+- **Keeps a save made meanwhile:** Replace in Files, the agents’ settings and the Skills lock file read the file again just before the new one goes in, and if another program saved it since they read it, its version stays. An editor save has no such check: the editor tells you when a file changes on disk while you edit it, and you choose (see [Files your agents change](/docs/editor/#files-your-agents-change)).
+- **Leaves nothing behind.** When anything fails (a full disk, a folder you can’t write in), the temporary file is removed and the file is as it was.
+
+What this does not do: it is not a lock. macOS has none that other programs respect, so a save made at the very moment the file is replaced can still be lost. And the file written is a new file under the old name: a program that has the file open keeps reading the old text, a hard link to it keeps the old text, and a file that belongs to another account (one you can write through its group) becomes yours.
 
 ## Databases
 

@@ -105,4 +105,4 @@ scripts/build-dmg.sh          # universal app, DMG and checksum in dist/
 - [Agents and the IDE link](/docs/agents/): what Claude Code, Gemini CLI, Qwen Code, Copilot CLI and opencode see, and Send to Agent.
 - [Orchestrate agents (MCP)](/docs/orchestration/): let one agent start and steer the others.
 - [Projects and git](/docs/projects-and-git/): the sidebar, agent sessions, the branch popup and the Git Log.
-- [Keyboard shortcuts](/docs/keyboard-shortcuts/): the full list, and how to change any menu shortcut.
+- [Keyboard shortcuts](/docs/keyboard-shortcuts/): the full list, and how to change any shortcut.

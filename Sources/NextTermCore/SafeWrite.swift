@@ -3,9 +3,9 @@ import Foundation
 import Darwin
 #endif
 
-/// The one way Next Term writes a file that is yours: an editor save, a diff's revert and its undo, Replace in
-/// Files and its undo, an agent's settings (MCP registration, Gemini's and Qwen's IDE switch), the skills lock
-/// file and records. A new writer of your files should come through here too.
+/// The one way Next Term writes a file that is yours: an editor save, ⌘Z after a diff's revert (git does the revert),
+/// Replace in Files and its undo, an agent's settings (MCP registration, Gemini's and Qwen's IDE switch), the skills
+/// lock file and records. A new writer of your files should come through here too.
 ///
 /// What `replace` guarantees:
 /// - **All or nothing.** The bytes go to a temporary file beside the file, are flushed to disk (`fsync`), and

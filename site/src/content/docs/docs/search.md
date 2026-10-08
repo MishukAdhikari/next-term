@@ -52,8 +52,8 @@ Press <kbd>⇧⌘R</kbd> (**Edit › Find › Replace in Files…**), or type in
 - **A preview of every replacement** appears in the results as you type, before anything is written. With regular expressions on, the replacement can use the captured groups as `$1`, `$2` and so on.
 - **Replace Selected** replaces only the matches you selected in the results; **Replace All** asks first and gives the count (“Replace 12 matches in 4 files?”).
 - **<kbd>⌘Z</kbd> undoes the whole replacement** as one step.
-- Files keep their line endings and permissions.
+- Files keep their line endings and permissions (see [How files are written](/docs/security-and-privacy/#how-files-are-written)).
 
 ## Agents keep working; nothing is overwritten
 
-Each file is read again just before it is changed. A match is replaced only if it is still on the same line with the same text. Matches on lines that you or an agent edited since the search are skipped, and Next Term tells you how many.
+Each file is read again just before it is changed. A match is replaced only if it is still on the same line with the same text. Matches on lines that you or an agent edited since the search are skipped, and Next Term tells you how many. A file saved again in the moment between that read and the write is left as it is, and named in the summary.

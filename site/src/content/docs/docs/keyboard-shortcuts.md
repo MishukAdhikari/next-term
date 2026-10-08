@@ -1,12 +1,12 @@
 ---
 title: Keyboard shortcuts
-description: "Every default keyboard shortcut in Next Term, menu by menu, and how to change any menu command’s shortcut in Settings › Keyboard Shortcuts."
+description: "Every default keyboard shortcut in Next Term, menu by menu, the keys outside the menus, and how to change any of them in Settings › Keyboard Shortcuts."
 head:
   - tag: title
     content: Keyboard shortcuts for Next Term on macOS
 ---
 
-These are the defaults. Every menu command’s shortcut can be changed, removed or given one it does not have: see [Change any menu shortcut](#change-any-menu-shortcut). Shortcuts are written the way macOS menus show them: <kbd>⌃</kbd> Control, <kbd>⌥</kbd> Option, <kbd>⇧</kbd> Shift, <kbd>⌘</kbd> Command.
+These are the defaults. Every menu command’s shortcut can be changed, removed or given one it does not have, and so can the keys of the project sidebar, the Git lists, a proposed edit and the branch popup: see [Change any shortcut](#change-any-shortcut). Shortcuts are written the way macOS menus show them: <kbd>⌃</kbd> Control, <kbd>⌥</kbd> Option, <kbd>⇧</kbd> Shift, <kbd>⌘</kbd> Command.
 
 ## The ones you will use most
 
@@ -124,11 +124,11 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Git Diff (the changed files and their diffs) | <kbd>⌃⌘G</kbd> |
 | Git Commands (what Next Term ran) | — |
 
-In the branch popup: <kbd>↩</kbd> checks out, <kbd>⌥↩</kbd> checks out and updates a branch that is behind its upstream, <kbd>→</kbd> opens the branch’s menu, <kbd>⌘R</kbd> fetches, <kbd>⌘↩</kbd> makes a new branch from the selected branch or tag, <kbd>⌘⌫</kbd> deletes the branch (one on a remote after asking), <kbd>⌘C</kbd> copies its name (a worktree’s path).
+In the branch popup: <kbd>↩</kbd> checks out, <kbd>⌥↩</kbd> checks out and updates a branch that is behind its upstream, <kbd>→</kbd> opens the branch’s menu, <kbd>⌘R</kbd> fetches, <kbd>⌘↩</kbd> makes a new branch from the selected branch or tag, <kbd>⌘⌫</kbd> deletes the branch (one on a remote after asking), <kbd>⌘C</kbd> copies its name (a worktree’s path). The last four can be changed: see [Keys outside the menus](#keys-outside-the-menus).
 
 In the Git Diff tab’s file list: <kbd>↑</kbd> and <kbd>↓</kbd> move from file to file, <kbd>↩</kbd> goes to the diff.
 
-In the Git Log: <kbd>↑</kbd> and <kbd>↓</kbd> move through the commits, <kbd>⌘F</kbd> goes to the search field, <kbd>↩</kbd> moves to the selected commit’s changed files (and <kbd>↩</kbd> there opens a file’s diff), <kbd>⌘C</kbd> copies the commit’s hash.
+In the Git Log: <kbd>↑</kbd> and <kbd>↓</kbd> move through the commits, <kbd>⌘F</kbd> goes to the search field, <kbd>↩</kbd> moves to the selected commit’s changed files (and <kbd>↩</kbd> there opens a file’s diff), <kbd>⌘C</kbd> copies the commit’s hash. <kbd>↩</kbd> can be changed.
 
 ## Window menu
 
@@ -148,7 +148,21 @@ In the Git Log: <kbd>↑</kbd> and <kbd>↓</kbd> move through the commits, <kbd
 
 ## Keys outside the menus
 
-These are fixed.
+Each of these belongs to one part of the window and works only there. **Settings › Keyboard Shortcuts** lists them after the menu commands, with the part each belongs to, and changes them as it changes a menu command’s.
+
+| Part of the window | Command | Default |
+|---|---|---|
+| Project Sidebar | Open | <kbd>⌘↓</kbd> |
+| Project Sidebar | Rename | <kbd>↩︎</kbd> (Enter too) |
+| Project Sidebar | Move to Trash | <kbd>⌘⌫</kbd> |
+| Git Log and Compare lists | Open Commit or File: from a commit to its changed files, or a file’s diff | <kbd>↩︎</kbd> |
+| Proposed Edit | Accept an agent’s proposed edit | <kbd>⌘↩︎</kbd> |
+| Branch Popup | Fetch | <kbd>⌘R</kbd> |
+| Branch Popup | New Branch from Selected (a branch or a tag) | <kbd>⌘↩︎</kbd> |
+| Branch Popup | Delete Branch (one on a remote after asking) | <kbd>⌘⌫</kbd> |
+| Branch Popup | Copy Name (a worktree’s path) | <kbd>⌘C</kbd> |
+
+These are fixed:
 
 | Where | Action | Keys |
 |---|---|---|
@@ -161,23 +175,21 @@ These are fixed.
 | Terminal | Open a path such as `src/app.ts:42:7`, or a link | <kbd>⌘</kbd>-click |
 | Terminal | Suspend the running program | <kbd>⌃Z</kbd> |
 | Editor | Indent or outdent the selected lines | <kbd>⇥</kbd>, <kbd>⇧⇥</kbd> |
-| Sidebar | Rename | <kbd>↩︎</kbd> |
-| Sidebar | Open | <kbd>⌘↓</kbd>, or double-click (one click, with **Open files with a single click** on) |
-| Sidebar | Move to the Trash | <kbd>⌘⌫</kbd> |
+| Sidebar | Open | Double-click (one click, with **Open files with a single click** on) |
 | Sidebar | Copy instead of move while dragging | Hold <kbd>⌥</kbd> |
-| Agent’s proposed edit | Accept | <kbd>⌘↩︎</kbd> |
+| Branch popup | Check out, check out and update, the branch’s menu | <kbd>↩︎</kbd>, <kbd>⌥↩︎</kbd>, <kbd>→</kbd> |
 | Go to File | Open at a line | Type `name:42` |
 
-## Change any menu shortcut
+## Change any shortcut
 
-Open **Next Term › Settings…** (<kbd>⌘,</kbd>) and choose **Keyboard Shortcuts**. Every menu command is listed with where it lives in the menus.
+Open **Next Term › Settings…** (<kbd>⌘,</kbd>) and choose **Keyboard Shortcuts**. Every menu command is listed with where it lives in the menus, and after them the [keys outside the menus](#keys-outside-the-menus), each with the part of the window it belongs to.
 
-1. Search by command name, menu or shortcut.
+1. Search by command name, menu, part of the window or shortcut.
 2. Click a command’s shortcut and press the new keys. <kbd>⌫</kbd> removes the shortcut; <kbd>⎋</kbd> cancels.
 3. If the keys already belong to another command, Next Term says which and offers **Use It Here**; the other command is then left without a shortcut.
 
-**Edit › Line**’s commands work only while the editor has the keyboard, so one of them can share a key with a command for the terminal (Split Right, Split Down, Clear Buffer, Rename Tab, New Remote Tab and the pane commands): the editor’s command has it while the editor has the keyboard, the terminal’s everywhere else. That is how <kbd>⌘D</kbd> duplicates a line in the editor and splits the terminal elsewhere. Settings lists both on the key and does not call that a clash; point at either shortcut to see which part has it. While the menus are open over the editor, the shared key shows on the editor’s command.
+A key can belong to one command in each part of the window. **Edit › Line**’s commands work only while the editor has the keyboard, so one of them can share a key with a command for the terminal (Split Right, Split Down, Clear Buffer, Rename Tab, New Remote Tab and the pane commands): the editor’s command has it while the editor has the keyboard, the terminal’s everywhere else. That is how <kbd>⌘D</kbd> duplicates a line in the editor and splits the terminal elsewhere. In the same way the sidebar’s Move to Trash and the editor’s Delete Line can both be <kbd>⌘⌫</kbd>, and Rename in the sidebar and Open in the Git Log are both <kbd>↩︎</kbd>. The branch popup has the keyboard while it is open, so its keys can be any other command’s too: its <kbd>⌘C</kbd> copies a branch’s name, and Edit › Copy is <kbd>⌘C</kbd> everywhere else. Settings lists all of them on the key and does not call that a clash; point at a shortcut to see which part has it. While the menus are open over the editor, the shared key shows on the editor’s command.
 
-A shortcut needs <kbd>⌘</kbd> or <kbd>⌃</kbd> (or a function key), so it can never swallow ordinary typing. A changed command shows a **Default** button that puts its shortcut back, and **Restore All Defaults** resets everything. Changes apply at once, in every menu, including the ⋯ menus and the right-click menus, and in the tooltips that name a key, such as the **+** button’s “New tab (⌘T)”. A command left without a shortcut shows none.
+A shortcut needs <kbd>⌘</kbd> or <kbd>⌃</kbd> (or a function key), so it can never swallow ordinary typing. In the project sidebar and the Git lists, where nothing is typed, <kbd>↩︎</kbd> will do on its own, and <kbd>↩︎</kbd>, <kbd>⌫</kbd> or <kbd>⌦</kbd> with <kbd>⇧</kbd> or <kbd>⌥</kbd>. A changed command shows a **Default** button that puts its shortcut back, and **Restore All Defaults** resets everything. Changes apply at once, in every menu, including the ⋯ menus and the right-click menus, and in the tooltips that name a key, such as the **+** button’s “New tab (⌘T)” and **Accept**’s on a proposed edit. A command left without a shortcut shows none.
 
 The window’s icon buttons show their key in dim text just before the icon, as each tab shows <kbd>⌘1</kbd>: <kbd>⌘B</kbd> by the sidebar icon, <kbd>⌘T</kbd> by the **+**, <kbd>⌘J</kbd> by the terminal’s fold arrow (on the folded rail, under it). These follow your keys too, and the scope button by the editor’s tabs shows one once you give **View › Show File in Project Sidebar** a key. When room is short they go first: in the sidebar’s header the hide button’s key shows only while the branch name, its icon, the line counts and the **Pull** or **Push** button all fit in full, and in a tab bar a key goes before the tabs narrow. A key that gave way still shows the moment the pointer is on its button, beside the icon (on the folded rail, under the arrow), over whatever is there, and goes as soon as the pointer leaves. Nothing moves for it, a key too long for its place doesn’t show, and a click there still reaches what is under it.

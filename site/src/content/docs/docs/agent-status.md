@@ -116,7 +116,7 @@ A split tab shows the mark of its most urgent pane; see [Split panes](/docs/layo
 - **A tab:** **Rename…**, **Split Right**, **Split Down**, **Duplicate Tab**, **Close Tab**, **Close Other Tabs** and **Close Tabs to the Right**. They act on the tab you clicked, in front or not. Closing several tabs asks once if that would stop anything, and names it, as closing one tab does.
 - **The terminal:** **Copy**, **Paste**, **Select All**, **Clear**, **Find…**, **Split Right** and **Split Down**, plus **Send Selection to Agent** when text is selected and an agent runs in the window (see [Send to Agent](/docs/agents/#send-to-agent-k)). On a link or a path, the ones <kbd>⌘</kbd>-click opens, the menu starts with **Open Link** and **Copy Link**, or **Open** (the file, in the editor at its line) and **Reveal in Finder**. The pane you click takes the keyboard first, as a click would.
 
-Each command except the link and path ones shows its shortcut and is in the menu bar too, so you can give it one in [Settings › Keyboard Shortcuts](/docs/keyboard-shortcuts/#change-any-menu-shortcut).
+Each command except the link and path ones shows its shortcut and is in the menu bar too, so you can give it one in [Settings › Keyboard Shortcuts](/docs/keyboard-shortcuts/#change-any-shortcut).
 
 ### Reopen a closed tab
 

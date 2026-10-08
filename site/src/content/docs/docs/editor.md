@@ -81,7 +81,7 @@ PHP files are coloured with the grammar that also understands the HTML around `<
   - **Duplicate Line** (<kbd>⌘D</kbd>) puts a copy below and moves the caret onto it, so pressing it again makes another. A selection within one line is duplicated right after itself instead.
   - **Delete Line** (<kbd>⇧⌘K</kbd>) removes the lines with their line breaks. **Move Line Up** and **Move Line Down** (<kbd>⌃⌘↑</kbd>, <kbd>⌃⌘↓</kbd>) swap them with the line above or below, and the selection moves with them.
   - **Copy Path with Line**, also in the editor’s right-click menu, copies the file’s path from the project folder with the caret’s line, `src/app.ts:42`, or the selected lines, `src/app.ts:42-48`. A <kbd>⌘</kbd>-click in the terminal opens that, and agents read it.
-  - Each is one step for <kbd>⌘Z</kbd>, which puts the caret or the selection back as it was, and each key can be changed in **Settings › Keyboard Shortcuts**. <kbd>⌘D</kbd> duplicates only while the editor has the keyboard: with the keyboard in the terminal, <kbd>⌘D</kbd> still splits it (see [Keyboard shortcuts](/docs/keyboard-shortcuts/#change-any-menu-shortcut)).
+  - Each is one step for <kbd>⌘Z</kbd>, which puts the caret or the selection back as it was, and each key can be changed in **Settings › Keyboard Shortcuts**. <kbd>⌘D</kbd> duplicates only while the editor has the keyboard: with the keyboard in the terminal, <kbd>⌘D</kbd> still splits it (see [Keyboard shortcuts](/docs/keyboard-shortcuts/#change-any-shortcut)).
 - **The whole line, with nothing selected:** <kbd>⌘C</kbd> copies the caret’s line with its line break, and <kbd>⌘X</kbd> cuts it. Pasted with nothing selected, such a line goes in whole above the caret’s line, wherever the caret is in it. Pasted over a selection, or in another app, it is ordinary text. The copy ends in a line break, so pasted at a shell prompt without bracketed paste it runs.
 - **Replace** (**Edit › Find › Replace…**, <kbd>⌥⌘F</kbd>) opens the find bar with a Replace field under the search field: replace the match you are on, or every match in the file. It works in the editor only; in the terminal, a notebook or a diff the menu item is off. To replace across the project, use [Replace in Files](/docs/search/#replace) (<kbd>⇧⌘R</kbd>).
 - **Auto-indent:** Return keeps the line’s indent. After an opening bracket it indents one more level, and between a pair of brackets it puts the closing one on its own line.
@@ -113,9 +113,10 @@ Saving writes the file back the way it was stored:
 
 - **Encoding:** UTF-8, UTF-8 with a byte-order mark, and UTF-16 (little- or big-endian, with a byte-order mark) are kept as they are.
 - **Line endings:** LF or CRLF are kept. A file with mixed endings keeps them exactly.
-- **Permissions:** a script stays executable.
+- **Permissions:** a script stays executable, and a file only you can read stays that way. Its group and extended attributes, such as Finder tags, stay too.
 - **Links:** saving through a symlink writes the file it points at, and the link stays a link.
-- **Atomic writes:** a save never leaves a half-written file behind.
+- **Atomic and private writes:** a save never leaves a half-written file behind, and never shows the new text to another account along the way (see [How files are written](/docs/security-and-privacy/#how-files-are-written)).
+- **Read-only files** are not saved over: the save says the file is read-only.
 
 ## Files your agents change
 

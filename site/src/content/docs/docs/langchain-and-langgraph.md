@@ -54,7 +54,11 @@ Run `langgraph dev` (or `npm run dev`, `uvicorn`, `langgraph up`) in a tab. Once
 
 - **No spinner while it serves.** The spinner is for agents. A server that stops with an error while you are in another tab gets a red cross.
 - **Links in its output open with <kbd>⌘</kbd>-click:** the API, the API docs and the Studio UI. The Studio link, with the server’s address nested inside it (`https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024`), is found as one link, and so are LangSmith run links, Weights & Biases Weave links and MLflow run links.
-- **Studio and Safari.** Links open in your default browser. LangChain’s docs say Safari cannot load Studio for a server on your Mac, because it blocks an HTTPS page from reaching plain-HTTP `127.0.0.1`. Copy the Studio link into Chrome or another Chromium browser instead (in Chrome 142 and later, allow “Local network access” in the site’s settings), or start the server with `langgraph dev --tunnel` and add the tunnel’s address to Studio’s allowed origins.
+- **Studio opens where it works.** Safari cannot load Studio for a server on your Mac: it blocks an HTTPS page from reaching plain-HTTP `127.0.0.1`, and Studio says “Failed to load assistants”. So when Safari is your default browser, a <kbd>⌘</kbd>-click on a Studio link for a server on your Mac (`smith.langchain.com/studio`, `eu.smith.langchain.com/studio`, or your own LangSmith’s, with a `baseUrl` on `127.0.0.1`, `localhost`, `0.0.0.0` or `[::1]`) opens it in Chrome, Edge, Brave or Arc, the first of them that is installed. Every other link opens in your default browser.
+  - In Chrome 142 and later, allow “Local network access” in the site’s settings the first time.
+  - With none of them installed, the link opens in Safari, and Next Term says once why Studio may not load there. Then start the server with `langgraph dev --tunnel` and add the tunnel’s address to Studio’s allowed origins; a Studio link through a tunnel opens in Safari.
+  - `langgraph dev` opens Studio in your default browser by itself when it starts, and Next Term cannot change that. With Safari, start it with `--no-browser` and <kbd>⌘</kbd>-click the Studio link instead.
+  - **Settings › Terminal › Links** turns this off.
 - **Agents can run it too.** An orchestrating agent can start `langgraph dev` in a new tab (`new_tab`), find its address in `list_tabs` (`served_url`) and read its output (`read_tab`). See [Orchestrate agents (MCP)](/docs/orchestration/).
 
 ## Tracebacks and graph references
