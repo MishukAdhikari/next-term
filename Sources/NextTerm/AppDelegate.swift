@@ -312,10 +312,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     // MARK: lifecycle
 
+    /// Where a launch reads Settings › General and the flag "Relaunch Now" leaves. The update that keeps sessions
+    /// passes its test harness's own suite here.
+    let launchDefaults = UserDefaults.standard
+    /// Kept remote tabs (tmux, herdr) wait for the first terminal window: they never open one of their own while the
+    /// Welcome window is up.
+    private(set) var remoteRestorePending = false
+    /// A folder or file came through `application(_:open:)`. Read once, as the launch finishes: the launch named one.
+    private var openedAtLaunch = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         RemotePoller.shared.start() // status of remote tabs, from their hosts
-        // Kept remote tabs (tmux, herdr) reattach once the launch has opened its windows, however it opened them.
-        DispatchQueue.main.async { RemoteConnection.restoreTabs() }
         // Claude Code's IDE link, before the first tab so every tab can use it.
         if shareWithClaude { startClaudeLink() }
         if shareWithCopilot { startCopilotLink() } // Copilot CLI's, in CopilotIDE.swift
@@ -338,23 +345,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                                                             name: .init(CommandLineOpen.notificationName), object: nil,
                                                             suspensionBehavior: .deliverImmediately)
         if SelfTest.isRequested {
-            newWindow(nil)
+            // A normal launch, with the Welcome window whatever is saved and no import offer. The self-test's first
+            // check opens the window the others use.
+            openAtLaunch(kind: .normal, settings: LaunchSettings(), mayOfferImport: false)
+            restoreRemoteTabsOnceAWindowOpens()
             SelfTest.run()
             return
         }
+        // `nxtrm` started us: what it asked for opens, and the launch shows nothing more. A folder dropped on the app,
+        // `open -a "Next Term" dir` and Finder's Open With usually arrive before this and open themselves.
+        let command = Self.openRequest(in: CommandLine.arguments)
+        // First, so the flag "Relaunch Now" leaves never outlives the launch after it.
+        let kind = Self.takeLaunchKind(request: command != nil || openedAtLaunch, defaults: launchDefaults, now: Date())
         // `nxtrm` in other terminals: linked where that needs no password, else offered once with one.
         CommandLineTool.registerQuietly()
         MainActor.assumeIsolated { Updater.shared.start() }
-        // `nxtrm` started us: open what it asked for, not the last session.
-        let arguments = CommandLine.arguments
-        if let flag = arguments.firstIndex(of: "--open-request"), flag + 1 < arguments.count,
-           let command = try? JSONDecoder().decode(OpenCommand.self, from: Data(arguments[flag + 1].utf8)) {
-            handle(command)
-            if !controllers.isEmpty { return }
+        if let command { handle(command) }
+        let show = { [self] in
+            openAtLaunch(kind: kind)
+            restoreRemoteTabsOnceAWindowOpens()
         }
-        // A folder dropped on the app or `open -a "Next Term" dir` arrives before this and opens itself.
-        guard controllers.isEmpty else { return }
-        if !reopenLastProjects() { offerImportThenChooseFolder() }
+        // A launch to open a document can get it just after this: a turn later, its window is open, and the launch
+        // shows nothing more.
+        let isDefault = notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool ?? true
+        if isDefault { show() } else { DispatchQueue.main.async { show() } }
+    }
+
+    /// What `nxtrm` asked for, when it started Next Term (`--open-request`).
+    private static func openRequest(in arguments: [String]) -> OpenCommand? {
+        guard let flag = arguments.firstIndex(of: "--open-request"), flag + 1 < arguments.count else { return nil }
+        return try? JSONDecoder().decode(OpenCommand.self, from: Data(arguments[flag + 1].utf8))
+    }
+
+    /// The relaunch after "Relaunch Now" (the flag `Updater.flagRelaunch` left, 0 to 15 minutes old), else a launch
+    /// that named a folder or file, else a normal one. The flag is taken either way. Until the update that keeps
+    /// sessions, whose launch hook tells its relaunch.
+    static func takeLaunchKind(request: Bool, defaults: UserDefaults, now: Date) -> LaunchKind {
+        let flagged = defaults.object(forKey: Updater.relaunchFlagKey) as? Date
+        defaults.removeObject(forKey: Updater.relaunchFlagKey)
+        if LaunchDecision.isUpdateRelaunch(flaggedAt: flagged, now: now) { return .updateRelaunch }
+        return request ? .request : .normal
+    }
+
+    /// What a launch shows, and a Dock click with no window (LaunchDecision): the projects to reopen, the Welcome
+    /// window, or on the first run "Coming from another app?" and then the Welcome window. Nothing more once a
+    /// terminal window is open. Settings › General is read each time, so a change applies from the next one.
+    private func openAtLaunch(kind: LaunchKind) {
+        let settings = LaunchSettings(defaults: launchDefaults)
+        let offered = UserDefaults.standard.bool(forKey: "importOffered")
+        openAtLaunch(kind: kind, settings: settings, mayOfferImport: !offered && recentProjects.isEmpty)
+    }
+
+    private func openAtLaunch(kind: LaunchKind, settings: LaunchSettings, mayOfferImport: Bool) {
+        // Nothing restores yet: the update that keeps sessions fills in `restore`.
+        let input = LaunchInput(kind: kind, restore: .notRun, terminalWindowOpen: !controllers.isEmpty, settings: settings,
+                                sessionProjects: sessionProjects, recentProjects: recent.paths, mayOfferImport: mayOfferImport)
+        switch LaunchDecision.opening(input, exists: isFolder) {
+        case .nothing: break
+        case .reopen(let paths): for path in paths { openWindow(directory: path, project: path) }
+        case .welcome: showWelcome(nil)
+        case .importThenWelcome: offerImportThenWelcome()
+        }
+    }
+
+    /// Kept remote tabs reattach once the launch has a terminal window: now if it opened one, else when the first one
+    /// opens (`openWindow`).
+    private func restoreRemoteTabsOnceAWindowOpens() {
+        if controllers.isEmpty { remoteRestorePending = true } else { restoreRemoteTabs() }
+    }
+
+    private func restoreRemoteTabs() {
+        remoteRestorePending = false
+        DispatchQueue.main.async { RemoteConnection.restoreTabs() }
     }
 
     // MARK: nxtrm
@@ -444,19 +506,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         CommandLineTool.install(from: NSApp.keyWindow)
     }
 
-    /// The project windows open when Next Term last quit, so it starts where you left off.
+    /// The project windows open when Next Term last quit: a launch reopens them when Settings › General says so, and
+    /// the relaunch after "Relaunch Now" does whatever it says. Written at every quit, so changing the setting later
+    /// works.
     private var sessionProjects: [String] {
         get { UserDefaults.standard.stringArray(forKey: "sessionProjects") ?? [] }
         set { UserDefaults.standard.set(newValue, forKey: "sessionProjects") }
-    }
-
-    /// Reopens the projects from last time, or the most recent one. False when there is none to reopen.
-    @discardableResult
-    private func reopenLastProjects() -> Bool {
-        let last = sessionProjects.isEmpty ? Array(recent.paths.prefix(1)) : sessionProjects
-        let existing = last.filter(isFolder)
-        for path in existing { openWindow(directory: path, project: path) }
-        return !existing.isEmpty
     }
 
     private func isFolder(_ path: String) -> Bool {
@@ -464,36 +519,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
     }
 
-    /// The first launch (or when the last folder is gone): ask where to start. That folder opens as the
-    /// project, and next time Next Term opens there by itself.
-    /// First launch: "Coming from another app?" (only when one is found, and only once), then the folder.
-    private func offerImportThenChooseFolder() {
-        let offered = UserDefaults.standard.bool(forKey: "importOffered")
-        guard !offered, recentProjects.isEmpty, !ImportSources.detect().isEmpty else { return chooseStartingFolder() }
+    /// The first run: "Coming from another app?" when an app to import from is found (only once), then the Welcome
+    /// window, which lists the projects brought over and their agents' sessions.
+    private func offerImportThenWelcome() {
+        guard !ImportSources.detect().isEmpty else { return showWelcome(nil) }
         UserDefaults.standard.set(true, forKey: "importOffered")
-        ImportWindowController.shared.showChooser(firstRun: true) { [weak self] plan in
+        ImportWindowController.shared.showChooser(firstRun: true) { [weak self] _ in
+            // Not when a window opened meanwhile (`nxtrm`, a folder dropped on the Dock icon).
             guard let self, self.controllers.isEmpty else { return }
-            // Projects came over: the Welcome window lists them (and their agents' sessions).
-            if let plan, !plan.recentProjects.isEmpty, !self.recentProjects.isEmpty { self.showWelcome(nil) } else { self.chooseStartingFolder() }
-        }
-    }
-
-    private func chooseStartingFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Open"
-        panel.message = "Choose the folder to work in. Next Term opens it as a project, and reopens it next time."
-        let code = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Code")
-        panel.directoryURL = isFolder(code.path) ? code : URL(fileURLWithPath: NSHomeDirectory())
-        if panel.runModal() == .OK, let url = panel.url, isFolder(url.path) {
-            let path = canonicalPath(url.path)
-            recent.add(path)
-            openWindow(directory: path, project: path)
-        } else {
-            newWindow(nil) // a terminal in the home folder; ⌘O opens a project any time
+            self.showWelcome(nil)
         }
     }
 
@@ -516,9 +550,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             window.deminiaturize(nil)
             return false
         }
-        // No windows open: back to the last project, else a terminal.
-        if let path = recent.existing().first { openWindow(directory: path, project: path) } else { newWindow(nil) }
-        return true
+        // No windows open: what Settings › General says, the Welcome window or the most recent project. AppKit's own
+        // reopen adds nothing.
+        openAtLaunch(kind: .dockReopen)
+        return false
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
@@ -610,6 +645,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             controller.window?.center()
         }
         controllers.append(controller)
+        if remoteRestorePending { restoreRemoteTabs() } // the launch's first terminal window
         projectsChanged()
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
@@ -749,6 +785,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// Folders dropped on the Dock icon, or `open -a "Next Term" ~/Code/app`.
     func application(_ application: NSApplication, open urls: [URL]) {
+        // Read as the launch finishes: it named something, even when every item below is skipped. It then goes on
+        // as a normal launch, without the first run's import offer.
+        openedAtLaunch = true
         for url in urls {
             var isDir: ObjCBool = false
             guard url.isFileURL, FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { continue }

@@ -482,13 +482,35 @@ final class Updater {
     }
 
     private func relaunchPrompt(_ version: AppVersion) {
-        if testing, UserDefaults.standard.bool(forKey: "updateInstallWithoutAsking") { return NSApp.terminate(nil) }
+        if testing, UserDefaults.standard.bool(forKey: "updateInstallWithoutAsking") { return relaunchNow() }
         let alert = NSAlert()
         alert.messageText = "Next Term \(version) is ready"
         alert.informativeText = "It replaces this version when Next Term quits. Relaunch now? Running commands and agents stop."
         alert.addButton(withTitle: "Relaunch Now")
         alert.addButton(withTitle: "When I Quit")
-        if alert.runModal() == .alertFirstButtonReturn { NSApp.terminate(nil) }
+        if alert.runModal() == .alertFirstButtonReturn { relaunchNow() }
+    }
+
+    /// "Relaunch Now" is quitting: the quit asks nothing about reopening (unsaved files and running work are still
+    /// asked about), and the install flags the relaunch. Until the update that keeps sessions.
+    private(set) var relaunching = false
+
+    /// Quits so the update goes in, and the new version reopens the projects open now. "When I Quit" never comes
+    /// here: that quit is the user's own, and the launch after it follows Settings › General.
+    private func relaunchNow() {
+        relaunching = true
+        NSApp.terminate(nil)
+        relaunching = false // the quit was cancelled: only then does `terminate` return
+    }
+
+    /// Where the flag "Relaunch Now" leaves is kept in the defaults.
+    nonisolated static let relaunchFlagKey = "updateRelaunchAt"
+
+    /// Marks the next launch as the relaunch after "Relaunch Now", which reopens the projects that were open whatever
+    /// Settings › General says. The next launch takes the flag (`AppDelegate.takeLaunchKind`); one more than 15
+    /// minutes old counts for nothing.
+    nonisolated static func flagRelaunch(in defaults: UserDefaults, now: Date) {
+        defaults.set(now, forKey: relaunchFlagKey)
     }
 
     /// Called as Next Term quits: if an update is staged, a small script (see `InstallScript`) waits for
@@ -496,6 +518,7 @@ final class Updater {
     /// if anything fails) and starts the new one.
     func installStagedUpdateOnQuit() {
         guard let staged else { return }
+        if relaunching { Self.flagRelaunch(in: AppDelegate.shared.launchDefaults, now: Date()) }
         let staging = staged.newApp.deletingLastPathComponent()
         let script = InstallScript(pid: ProcessInfo.processInfo.processIdentifier, app: Bundle.main.bundleURL.path,
                                    newApp: staged.newApp.path, staging: staging.path, requirement: staged.requirement,

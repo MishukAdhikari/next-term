@@ -20,9 +20,11 @@ enum SelfTest {
 
     static func run() {
         Task { @MainActor in
+            await launchChecks() // first: it opens the window the checks after it use
             await runAll()
-            await welcomeReopenChecks() // last: it closes every window
+            await welcomeReopenChecks() // it closes every window
             await welcomeRemoteChecks() // with only the Welcome window left
+            await noWindowDockChecks()
             finish()
         }
     }
