@@ -328,7 +328,8 @@ public enum CompletionProtocol {
         case take = 0x6B // k
         /// zsh's own list can't be shown: zsh runs its own Tab.
         case native = 0x6E // n
-        /// A plugin choice changed: zsh-autocomplete's list off (q1) or on (q0) in this shell.
+        /// A plugin choice changed: zsh-autocomplete's list off (q1) or on (q0) in this shell. On a server: how long
+        /// a Tab waits for an answer (w<ms>, 150 to 600).
         case config = 0x63 // c
     }
 
@@ -381,6 +382,11 @@ public enum CompletionProtocol {
     public static func takeMatch(id: Int, old: String, index: Int) -> [UInt8] { frame(.take, id: id, fields: ["m", old, String(index)]) }
     /// The list closed with nothing chosen: the shell stops reporting the line.
     public static func close(id: Int) -> [UInt8] { frame(.take, id: id, fields: ["c"]) }
+    /// A server's round trip: how long its hook waits for an answer to a `tab` report (150 to 600 ms).
+    public static func wait(seconds: Double) -> [UInt8] {
+        let milliseconds = min(600, max(150, Int((seconds * 1000).rounded())))
+        return frame(.config, id: 0, fields: ["w\(milliseconds)"])
+    }
 }
 
 /// zsh's matches arrive in chunks; a list is shown only once every chunk for its id is in.

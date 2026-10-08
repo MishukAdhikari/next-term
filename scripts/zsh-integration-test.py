@@ -11,7 +11,8 @@ Runs:
 - once on zsh 5.8 (macOS 13's) when one is found (NT_ZSH58 or a few usual places), else skipped;
 - the prefix through tmux with `extended-keys` and `user-keys`, when tmux is installed, else skipped;
 - with NT_PLUGIN_DIR pointing at plugin checkouts (zsh-autocomplete, fzf-tab, zsh-autosuggestions,
-  zsh-syntax-highlighting, zsh-vi-mode), the plugin matrix; local only.
+  zsh-syntax-highlighting, zsh-vi-mode), the plugin matrix; local only;
+- the hook as a server runs it (RemoteCompletionHook), started by its launch command under a fake home.
 
 This script plays Next Term's part: it sends the private keys (CompletionProtocol.frame) and reads the
 marks, so the hook is tested as Next Term drives it.
@@ -875,6 +876,86 @@ if plugins:
         sh.close()
 else:
     skip("the plugin matrix: set NT_PLUGIN_DIR to a folder of plugin checkouts to run it")
+
+# 12. Tab completion's hook on a server (RemoteCompletionHook), started the way a tab's launch command starts it,
+# under a fake home: completion marks only, with the host's nonce read from its file at each prompt, the `w`
+# config for the round trip, tmux's passthrough inside Next Term's own tmux, and silence inside any other.
+hsrc = open(os.path.join(ROOT, "Sources/NextTermCore/RemoteCompletionHook.swift")).read()
+server_zshenv = hsrc.split('zshenv = #"""\n', 1)[1].split('"""#', 1)[0]
+server_zshenv = server_zshenv.replace("@NT_FIRST_WAIT@", re.search(r'firstWait = "([0-9.]+)"', hsrc).group(1))
+server_start = hsrc.split('start = #"""\n', 1)[1].split('"""#', 1)[0]
+HOST_NONCE = "fedcba9876543210fedcba9876543210"
+
+class ServerShell(Shell):
+    """A server's login shell started by the hook's start command, as Next Term's tab script runs it."""
+    def __init__(self, label, rc, tmux=None, settle=3):
+        self.label = label
+        self.home = tempfile.mkdtemp()
+        self.zdot = os.path.join(self.home, ".cache/next-term/completion")
+        os.makedirs(os.path.join(self.zdot, "zsh"))
+        for name, text in (("completion.zsh", completion), ("zsh/.zshenv", server_zshenv), ("start", server_start)):
+            open(os.path.join(self.zdot, name), "w").write(text)
+        os.chmod(os.path.join(self.zdot, "start"), 0o700)
+        open(os.path.join(self.zdot, "nonce"), "w").write(HOST_NONCE + "\n")
+        open(os.path.join(self.home, ".zshrc"), "w").write(rc)
+        env = {"HOME": self.home, "SHELL": "/bin/zsh", "TERM": "xterm-256color", "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+               "LANG": os.environ.get("LANG") or "en_US.UTF-8"}
+        if tmux:
+            env["TMUX"] = tmux
+        self.pid, self.fd = pty.fork()
+        if self.pid == 0:
+            os.chdir(tree)
+            os.execve("/bin/sh", ["sh", os.path.join(self.zdot, "start")], env)
+        self.buf = b""
+        self.read_for(settle)
+
+for label, rc in (("server", "PS1='server$ '\n"), ("server, hostile", "setopt nounset ksh_arrays err_return\nPS1='server$ '\n")):
+    sh = ServerShell(label, rc)
+    a = arms(sh)
+    check(a and all(n == HOST_NONCE for n, _, _ in sh.marks()), f"[{label}] the hook arms with the host's nonce, from its file", str(a[-1:]))
+    sh.send("false\r", 0.8)
+    sh.send("cd /tmp\r", 0.8)
+    kinds = {k for _, k, _ in sh.marks()}
+    check(kinds and not kinds & {"cmd", "end", "cwd", "jobs"}, f"[{label}] it sends completion marks only, never the commands run", str(sorted(kinds)))
+    start = len(sh.buf)
+    sh.send('echo "ZD=${ZDOTDIR:-unset} NONCE=${#__nextterm_nonce}"\r', 0.8)
+    check("ZD=unset" in sh.screen(start) and "NONCE=32" in sh.screen(start), f"[{label}] the user's ZDOTDIR is back", repr(sh.screen(start)[-80:]))
+    sh.send("cd " + tree + "\r", 0.8)
+    # No answer: zsh's own Tab after the server's first wait (0.6 s); after `w200`, after 0.2 s.
+    def no_answer(ident):
+        mark = len(sh.buf)
+        sh.send("ls /Sys", 0.3)
+        sent = time.time()
+        tab_key(sh, ident, 0)
+        done = sh.wait_mark("done", mark, 2)
+        took = time.time() - sent
+        sh.send("\x03", 0.5)
+        return done, took
+    done, took = no_answer(11)
+    check(done == ["000011", "native"] and took > 0.45, f"[{label}] with no answer, the server's hook waits 0.6 s", f"{done} {took:.2f} s")
+    sh.send(frame("c", 0, ["w200"]), 0.3)
+    done, took = no_answer(12)
+    check(done == ["000012", "native"] and took < 0.45, f"[{label}] and `w200` makes it 0.2 s", f"{done} {took:.2f} s")
+    # A new nonce in the file (Remove, then Allow again): the next prompt's marks carry it.
+    open(os.path.join(sh.zdot, "nonce"), "w").write("ab" * 16 + "\n")
+    mark = len(sh.buf)
+    sh.send("\r", 0.8)
+    check(any(n == "ab" * 16 for n, k, _ in sh.marks(mark) if k == "arm"), f"[{label}] a new nonce is read at the next prompt")
+    errors = sh.errors()
+    check(not errors, f"[{label}] no errors from the server's hook", str(errors[:2]))
+    sh.close()
+    shutil.rmtree(sh.home, ignore_errors=True)
+
+wrapped = ServerShell("server in Next Term's tmux", "PS1='server$ '\n", tmux="/tmp/tmux-501/nextterm,123,0")
+check(b"\x1bPtmux;\x1b\x1b]6973;" + HOST_NONCE.encode() + b";arm;" in wrapped.buf,
+      "[server] inside Next Term's tmux, marks go through tmux's passthrough")
+wrapped.close()
+shutil.rmtree(wrapped.home, ignore_errors=True)
+other = ServerShell("server in another tmux", "PS1='server$ '\n", tmux="/tmp/tmux-501/default,123,0")
+other.send("true\r", 0.6)
+check(not other.marks() and b"6973" not in other.buf, "[server] inside the user's own tmux, the hook stays silent")
+other.close()
+shutil.rmtree(other.home, ignore_errors=True)
 
 shutil.rmtree(tree, ignore_errors=True)
 sys.exit(1 if failures else 0)

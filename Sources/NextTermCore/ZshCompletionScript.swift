@@ -68,9 +68,15 @@ __nextterm_cencall() {
   reply=( "${(@)argv//(#m)[^\!-\$\&-+\--:\<-~]/%${(l:2::0:)$(( [##16] #MATCH & 255 ))}}" )
 }
 
+# On a server, inside Next Term's own tmux, marks go through tmux's passthrough (RemoteCompletionHook sets
+# __nextterm_cwrap).
 __nextterm_cmark() {
   emulate -L zsh
-  builtin printf '\033]6973;%s;%s\007' "$__nextterm_nonce" "${(j:;:)argv}"
+  if [[ -n ${__nextterm_cwrap-} ]]; then
+    builtin printf '\033Ptmux;\033\033]6973;%s;%s\007\033\\' "$__nextterm_nonce" "${(j:;:)argv}"
+  else
+    builtin printf '\033]6973;%s;%s\007' "$__nextterm_nonce" "${(j:;:)argv}"
+  fi
 }
 
 __nextterm_cdone() { __nextterm_cmark done $1 $2; }
@@ -110,11 +116,16 @@ __nextterm_carm() {
   return 0
 }
 
-# The `config` key: zsh-autocomplete's list as you type off (q1) or back on (q0), in this shell only, by
-# taking its redraw hook out or putting it back. No file is touched. A config that is already in effect does
-# nothing; one that changed something says so with a new `arm`.
+# The `config` key: on a server, how long Tab waits for an answer (w<ms>); zsh-autocomplete's list as you type
+# off (q1) or back on (q0), in this shell only, by taking its redraw hook out or putting it back. No file is
+# touched. A config that is already in effect does nothing; one that changed something says so with a new `arm`.
 __nextterm_cconfig() {
   emulate -L zsh
+  # w<ms>: how long a Tab waits for Next Term's answer, from a server's round trip (150 to 600 ms).
+  if [[ ${__nextterm_cf[1]-} == w<150-600> ]]; then
+    typeset -gF __nextterm_cwait=$(( ${__nextterm_cf[1]#w} / 1000.0 ))
+    return 0
+  fi
   (( ${+functions[.autocomplete:async:complete]} )) || return 0
   local -a hooks
   zstyle -g hooks zle-line-pre-redraw widgets
@@ -233,7 +244,7 @@ __nextterm_cengine() {
   local -a fields=( "${reply[@]}" )
   __nextterm_cencall "${__nextterm_cwords[@]}"
   __nextterm_cmark tab $id "${fields[1]}" "${fields[2]}" "${fields[3]}" "${fields[4]}" "${(j: :)reply}" "${fields[5]}" "${fields[6]}" "${fields[7]}" "${fields[8]}"
-  local -F deadline=$(( EPOCHREALTIME + @NT_WAIT@ )) left
+  local -F deadline=$(( EPOCHREALTIME + ${__nextterm_cwait:-@NT_WAIT@} )) left
   local c rest
   while true; do
     (( left = deadline - EPOCHREALTIME ))
