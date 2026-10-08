@@ -44,6 +44,7 @@ public enum ImportGhostty {
         addFont(config, fonts: fonts, to: &plan)
         addOptionAsAlt(config, usKeyboard: usKeyboard, to: &plan)
         addColours(config, home: home, applications: apps, to: &plan)
+        addTerminal(config, home: home, to: &plan)
         addKeybinds(config, usKeyboard: usKeyboard, to: &plan)
         plan.skipped += skipped + report(config)
         return plan
@@ -154,10 +155,14 @@ public enum ImportGhostty {
         var palette: [Int: String] = [:]
         var colours: [String: String] = [:]
         var keybinds: [String] = []
+        /// The cursor, the scrollback and the folder new tabs start in: `cursor-style`, `cursor-style-blink`,
+        /// `scrollback-limit` and `working-directory`.
+        var terminal: [String: String] = [:]
         /// Other keys, in the order first seen.
         var others: [String] = []
 
         static let colourKeys = ["foreground", "background", "cursor-color", "selection-background"]
+        static let terminalKeys = ["cursor-style", "cursor-style-blink", "scrollback-limit", "working-directory"]
 
         init(_ entries: [Entry]) {
             for entry in entries { add(entry) }
@@ -177,6 +182,8 @@ public enum ImportGhostty {
             default:
                 if Self.colourKeys.contains(entry.key) {
                     colours[entry.key] = value
+                } else if Self.terminalKeys.contains(entry.key) {
+                    terminal[entry.key] = value
                 } else if !others.contains(entry.key) {
                     others.append(entry.key)
                 }
@@ -221,6 +228,43 @@ public enum ImportGhostty {
                                                 note: notes.isEmpty ? nil : notes.joined(separator: "; ")))
         default:
             plan.skipped.append(SkippedItem("macos-option-as-alt", "value not recognised"))
+        }
+    }
+
+    // MARK: cursor, scrollback and start folder
+
+    /// `cursor-style` (a hollow block comes over filled), `cursor-style-blink` (empty: Ghostty's default, so
+    /// nothing), `working-directory` (`inherit`, `home` or a folder). `scrollback-limit` counts bytes, not lines,
+    /// so it is reported, not converted.
+    static func addTerminal(_ config: Config, home: String, to plan: inout ImportPlan) {
+        if let style = config.terminal["cursor-style"] {
+            let shapes = ["block": CursorShape.block, "block_hollow": .block, "bar": .bar, "underline": .underline]
+            if let shape = shapes[style] {
+                let note = style == "block_hollow" ? "a hollow block isn't supported, so it is filled" : nil
+                plan.settings.append(PlannedSetting(.terminalCursorShape(shape.rawValue), source: "cursor-style \(style)", note: note))
+            } else {
+                plan.skipped.append(SkippedItem("cursor-style", "value not recognised"))
+            }
+        }
+        if let blink = config.terminal["cursor-style-blink"], !blink.isEmpty {
+            if blink == "true" || blink == "false" {
+                plan.settings.append(PlannedSetting(.terminalCursorBlink(blink == "true"), source: "cursor-style-blink \(blink)"))
+            } else {
+                plan.skipped.append(SkippedItem("cursor-style-blink", "value not recognised"))
+            }
+        }
+        if config.terminal["scrollback-limit"] != nil {
+            plan.skipped.append(SkippedItem("scrollback-limit", "Ghostty counts it in bytes and Next Term in lines, so it isn't converted"))
+        }
+        if let directory = config.terminal["working-directory"], !directory.isEmpty {
+            switch directory {
+            case "inherit": plan.settings.append(ImportRows.startFolder(.current, source: "working-directory inherit"))
+            case "home": plan.settings.append(ImportRows.startFolder(.home, source: "working-directory home"))
+            default:
+                let row = ImportRows.startFolder(directory, key: "working-directory", home: home)
+                plan.settings += [row.setting].compactMap { $0 }
+                plan.skipped += row.skipped
+            }
         }
     }
 
@@ -518,11 +562,9 @@ public enum ImportGhostty {
     // MARK: the rest
 
     static let reasons: [String: String] = [
-        "scrollback-limit": "a scrollback setting comes later",
-        "cursor-style": "cursor style comes later", "cursor-style-blink": "cursor style comes later",
         "font-feature": "font features aren't supported", "font-thicken": "font rendering follows macOS",
         "background-opacity": "the terminal is opaque here", "background-blur": "the terminal is opaque here",
-        "window-theme": "Next Term is dark", "working-directory": "a start folder setting comes later",
+        "window-theme": "Next Term is dark",
         "shell-integration": "Next Term sets up its own shell integration", "custom-shader": "shaders aren't supported",
     ]
 

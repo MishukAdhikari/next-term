@@ -262,12 +262,7 @@ public enum ImportJetBrains {
         let editorKeys: Set<String> = ["USE_SOFT_WRAPS", "SOFT_WRAP_FILE_MASKS", "STRIP_TRAILING_SPACES", "IS_ENSURE_NEWLINE_AT_EOF"]
         let editor = options(component(read(config, "options/editor.xml", keep: editorKeys), "EditorSettings"), keep: editorKeys)
         addSoftWrap(editor, to: &plan)
-        if editor.values["STRIP_TRAILING_SPACES"] != nil {
-            plan.skipped.append(SkippedItem("Strip trailing spaces on save", "trimming on save comes later"))
-        }
-        if editor.values["IS_ENSURE_NEWLINE_AT_EOF"] == "true" {
-            plan.skipped.append(SkippedItem("Ensure a newline at the end of files", "a final newline on save comes later"))
-        }
+        addCleanUp(editor, to: &plan)
         addTerminal(config: config, usKeyboard: usKeyboard, editorSize: editorSize, fonts: fonts, to: &plan)
         addRedacted(editor, file: "options/editor.xml", to: &plan)
 
@@ -364,6 +359,31 @@ public enum ImportJetBrains {
         }
         guard !everyFile, wraps || editor.values["USE_SOFT_WRAPS"] == nil else { return }
         plan.skipped.append(named("Soft wrap only for", masks ?? defaultSoftWrapMasks, reason: "Next Term wraps every file or none"))
+    }
+
+    /// "Strip trailing spaces on Save" (`STRIP_TRAILING_SPACES`: None, Changed or Whole; missing is Changed, the
+    /// IDE's default) and "Ensure every saved file ends with a line break". Next Term trims whole files only, so
+    /// Changed is offered unticked.
+    static func addCleanUp(_ editor: Options, to plan: inout ImportPlan) {
+        let file = "options/editor.xml"
+        switch editor.values["STRIP_TRAILING_SPACES"] {
+        case "Whole"?:
+            plan.settings.append(PlannedSetting(.trimTrailingWhitespace(true), source: "\(file) STRIP_TRAILING_SPACES Whole"))
+        case "None"?:
+            plan.settings.append(PlannedSetting(.trimTrailingWhitespace(false), source: "\(file) STRIP_TRAILING_SPACES None"))
+        case "Changed"?:
+            plan.settings.append(PlannedSetting(.trimTrailingWhitespace(true), source: "\(file) STRIP_TRAILING_SPACES Changed", ticked: false,
+                                                note: "the IDE trims only the lines you changed; Next Term trims every line of the file"))
+        case nil:
+            break
+        default:
+            plan.skipped.append(SkippedItem("\(file) STRIP_TRAILING_SPACES", "not a value Next Term can use"))
+        }
+        switch editor.values["IS_ENSURE_NEWLINE_AT_EOF"] {
+        case "true"?: plan.settings.append(PlannedSetting(.insertFinalNewline(true), source: "\(file) IS_ENSURE_NEWLINE_AT_EOF true"))
+        case "false"?: plan.settings.append(PlannedSetting(.insertFinalNewline(false), source: "\(file) IS_ENSURE_NEWLINE_AT_EOF false"))
+        default: break
+        }
     }
 
     static func addTerminal(config: String, usKeyboard: Bool, editorSize: Double?, fonts: FontCatalog = .system, to plan: inout ImportPlan) {

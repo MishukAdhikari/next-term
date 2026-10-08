@@ -70,7 +70,7 @@ public enum ImportVSCode {
                      fonts: FontCatalog = .system) -> ImportPlan {
         var plan = ImportPlan(preset: app.preset)
         guard family.contains(app.kind) else { return plan }
-        let settings = settingsPlan(user: app.configPath, appName: app.name, usKeyboard: usKeyboard, fonts: fonts)
+        let settings = settingsPlan(user: app.configPath, appName: app.name, usKeyboard: usKeyboard, fonts: fonts, home: home)
         plan.settings = settings.settings
         let keys = keybindingsPlan(user: app.configPath, usKeyboard: usKeyboard)
         plan.shortcuts = keys.shortcuts
@@ -101,22 +101,18 @@ public enum ImportVSCode {
         "editor.fontSize", "window.zoomLevel", "terminal.integrated.fontSize", "editor.lineHeight", "editor.wordWrap",
         "terminal.integrated.macOptionIsMeta", "workbench.sideBar.location", "workbench.panel.defaultLocation",
         "editor.fontFamily", "terminal.integrated.fontFamily", "workbench.colorCustomizations", "workbench.colorTheme",
+        "files.trimTrailingWhitespace", "files.insertFinalNewline", "files.exclude", "terminal.integrated.cursorStyle",
+        "terminal.integrated.cursorBlinking", "terminal.integrated.scrollback", "terminal.integrated.cwd",
     ]
 
-    /// Keys Next Term has no setting for yet (§3.5), reported by name when the user set them.
+    /// Keys Next Term has no setting for (§3.5), reported by name when the user set them.
     static let laterKeys: [String: String] = [
         "editor.tabSize": "tab width and spaces come later",
         "editor.insertSpaces": "tab width and spaces come later",
         "editor.detectIndentation": "tab width and spaces come later",
-        "files.trimTrailingWhitespace": "clean-up on save comes later",
-        "files.insertFinalNewline": "clean-up on save comes later",
-        "files.exclude": "hiding files by pattern comes later",
-        "search.exclude": "hiding files by pattern comes later",
-        "editor.cursorStyle": "cursor style comes later",
-        "editor.cursorBlinking": "cursor style comes later",
-        "terminal.integrated.cursorStyle": "cursor style comes later",
-        "terminal.integrated.cursorBlinking": "cursor style comes later",
-        "terminal.integrated.scrollback": "scrollback length comes later",
+        "search.exclude": "Find in Files skips what git ignores; a file mask such as !dist/** leaves out more",
+        "editor.cursorStyle": ImportRows.editorCaret,
+        "editor.cursorBlinking": ImportRows.editorCaret,
     ]
 
     /// Terminal profiles, shells and their arguments: they start programs, so they are never read.
@@ -170,7 +166,8 @@ public enum ImportVSCode {
     }
 
     /// The default profile's settings.json (`<User>/settings.json`) as preview rows.
-    static func settingsPlan(user: String, appName: String, usKeyboard: Bool, fonts: FontCatalog = .system) -> SettingsResult {
+    static func settingsPlan(user: String, appName: String, usKeyboard: Bool, fonts: FontCatalog = .system,
+                             home: String = NSHomeDirectory()) -> SettingsResult {
         let path = (user as NSString).appendingPathComponent("settings.json")
         guard isRegularFile(path) else { return SettingsResult() }
         guard let text = readText(path, limit: 4 << 20) else {
@@ -182,10 +179,11 @@ public enum ImportVSCode {
         guard let file = SettingsFile(text) else {
             return SettingsResult(skipped: [SkippedItem("settings.json", "couldn't be read as JSON; settings were skipped")])
         }
-        return settingsPlan(file, appName: appName, usKeyboard: usKeyboard, fonts: fonts)
+        return settingsPlan(file, appName: appName, usKeyboard: usKeyboard, fonts: fonts, home: home)
     }
 
-    static func settingsPlan(_ file: SettingsFile, appName: String, usKeyboard: Bool, fonts: FontCatalog = .system) -> SettingsResult {
+    static func settingsPlan(_ file: SettingsFile, appName: String, usKeyboard: Bool, fonts: FontCatalog = .system,
+                             home: String = NSHomeDirectory()) -> SettingsResult {
         var result = SettingsResult()
         let font = fontSize(file)
         result.settings += [font.setting].compactMap { $0 }
@@ -205,7 +203,96 @@ public enum ImportVSCode {
         let colours = terminalColours(file, appName: appName)
         result.settings += colours.settings
         result.skipped += colours.skipped
+        let saving = cleanUpAndHiding(file)
+        result.settings += saving.settings
+        result.skipped += saving.skipped
+        let terminal = terminalBehaviour(file, appName: appName, home: home)
+        result.settings += terminal.settings
+        result.skipped += terminal.skipped
         result.skipped += unmappedKeys(file)
+        return result
+    }
+
+    // MARK: saving, hiding files and the terminal
+
+    /// files.trimTrailingWhitespace and files.insertFinalNewline, and the patterns files.exclude turns on (VS Code
+    /// adds them to its own, which hide what the sidebar here hides anyway).
+    static func cleanUpAndHiding(_ file: SettingsFile) -> SettingsResult {
+        var result = SettingsResult()
+        for key in ["files.trimTrailingWhitespace", "files.insertFinalNewline"] where file.has(key) {
+            guard let on = bool(file.value(key)) else {
+                result.skipped.append(SkippedItem(key, notRecognised))
+                continue
+            }
+            let setting = key == "files.trimTrailingWhitespace" ? ImportedSetting.trimTrailingWhitespace(on) : .insertFinalNewline(on)
+            result.settings.append(PlannedSetting(setting, source: "\(key) \(on)"))
+        }
+        let key = "files.exclude"
+        guard file.has(key) else { return result }
+        guard let globs = file.value(key) as? [String: Any] else {
+            result.skipped.append(SkippedItem(key, notRecognised))
+            return result
+        }
+        var hidden: [String] = []
+        for glob in globs.keys.sorted() where !SecretGuard.looksSecret(glob) {
+            let on = bool(globs[glob])
+            if on == true {
+                hidden.append(glob)
+            } else if on == false {
+                // Showing what VS Code hides by default: the sidebar here hides only these, and always.
+                if FileHiding.pattern(fromProjectGlob: glob) == nil {
+                    result.skipped.append(SkippedItem("\(key) \(glob) false", "the project sidebar always hides .git, .svn, .hg and .DS_Store"))
+                }
+            } else {
+                result.skipped.append(SkippedItem("\(key) \(glob)", "hiding a file only when another is beside it isn't supported"))
+            }
+        }
+        if let row = ImportRows.hiddenFiles(hidden, source: key) { result.settings.append(row) }
+        return result
+    }
+
+    /// The terminal's cursor (VS Code's `line` is a bar), its scrollback and the folder it starts in.
+    static func terminalBehaviour(_ file: SettingsFile, appName: String, home: String) -> SettingsResult {
+        var result = SettingsResult()
+        let styleKey = "terminal.integrated.cursorStyle"
+        if file.has(styleKey) {
+            let shapes = ["block": CursorShape.block, "line": .bar, "underline": .underline]
+            if let style = string(file.value(styleKey)), let shape = shapes[style] {
+                result.settings.append(PlannedSetting(.terminalCursorShape(shape.rawValue), source: "\(styleKey) \(style)"))
+            } else {
+                result.skipped.append(SkippedItem(styleKey, notRecognised))
+            }
+        }
+        let blinkKey = "terminal.integrated.cursorBlinking"
+        if file.has(blinkKey) {
+            if let blinks = bool(file.value(blinkKey)) {
+                result.settings.append(PlannedSetting(.terminalCursorBlink(blinks), source: "\(blinkKey) \(blinks)"))
+            } else {
+                result.skipped.append(SkippedItem(blinkKey, notRecognised))
+            }
+        }
+        let scrollKey = "terminal.integrated.scrollback"
+        if file.has(scrollKey) {
+            if let lines = number(file.value(scrollKey)), lines >= 0, lines < 1e9 {
+                result.settings.append(ImportRows.scrollback(Int(lines), source: "\(scrollKey) \(format(lines))", app: appName))
+            } else {
+                result.skipped.append(SkippedItem(scrollKey, notRecognised))
+            }
+        }
+        let folderKey = "terminal.integrated.cwd"
+        if file.has(folderKey) {
+            if let path = file.value(folderKey) as? String {
+                if path.contains("${") {
+                    result.skipped.append(SkippedItem(folderKey, "uses a variable; only a full path to a folder is read"))
+                } else if !path.trimmingCharacters(in: .whitespaces).isEmpty {
+                    let row = ImportRows.startFolder(path, key: folderKey, home: home)
+                    result.settings += [row.setting].compactMap { $0 }
+                    result.skipped += row.skipped
+                }
+            } else {
+                result.skipped.append(SkippedItem(folderKey, notRecognised))
+            }
+        }
         return result
     }
 

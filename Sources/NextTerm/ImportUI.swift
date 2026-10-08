@@ -104,7 +104,7 @@ final class ImportCoordinator {
         var before: [String: Snapshot.Value] = [:]
         for key in Set(keys) {
             switch defaults.object(forKey: key) {
-            case let value as Bool where key == "softWrap" || key == "optionAsMeta": before[key] = .bool(value)
+            case let value as Bool where ImportedSetting.boolKeys.contains(key): before[key] = .bool(value)
             case let value as Data: before[key] = .data(value)
             case let value as Double: before[key] = .double(value)
             case let value as String: before[key] = .string(value)
@@ -169,6 +169,16 @@ extension AppDelegate {
         case .editorFontFamily(let family): setEditorFontFamily(family)
         case .terminalFontFamily(let family): setTerminalFontFamily(family)
         case .terminalPalette(let palette): setTerminalPalette(palette)
+        case .terminalScrollback(let lines): setTerminalScrollback(lines)
+        case .terminalStartFolder(let stored): Preferences.terminalStartFolder = StartFolder(stored: stored)
+        case .terminalCursorShape(let raw): if let shape = CursorShape(rawValue: raw) { setTerminalCursor(shape: shape) }
+        case .terminalCursorBlink(let on): setTerminalCursor(blinks: on)
+        case .trimTrailingWhitespace(let on): Preferences.trimTrailingWhitespace = on
+        case .insertFinalNewline(let on): Preferences.insertFinalNewline = on
+        case .hiddenFiles(let patterns):
+            // Added to the patterns you have.
+            let mine = Preferences.hiddenFilePatterns
+            setHiddenFilePatterns(mine + patterns.filter { !mine.contains($0) })
         }
     }
 
@@ -195,6 +205,28 @@ extension AppDelegate {
             // The saved bytes exactly as they were (none: Next Term's colours), then every terminal repainted.
             if case .data(let data)? = value { UserDefaults.standard.set(data, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
             for controller in controllers { for tab in controller.tabs { Theme.applyColours(to: tab.view) } }
+        default: restoreBehaviourSetting(key, to: value)
+        }
+    }
+
+    /// Undo for the cursor, scrollback, start folder, clean-up on save and hidden files: the value before, or
+    /// none, so the default returns.
+    private func restoreBehaviourSetting(_ key: String, to value: ImportCoordinator.Snapshot.Value?) {
+        let defaults = UserDefaults.standard
+        switch (key, value) {
+        case ("terminalScrollback", .double(let lines)?): setTerminalScrollback(Int(lines))
+        case ("terminalScrollback", nil): setTerminalScrollback(nil)
+        case ("terminalCursorShape", .string(let raw)?): setTerminalCursor(shape: CursorShape(rawValue: raw) ?? .block)
+        case ("terminalCursorBlink", .bool(let on)?): setTerminalCursor(blinks: on)
+        case ("terminalCursorShape", nil), ("terminalCursorBlink", nil):
+            defaults.removeObject(forKey: key)
+            setTerminalCursor()
+        case ("hiddenFilePatterns", .strings(let patterns)?): setHiddenFilePatterns(patterns)
+        case ("hiddenFilePatterns", nil): setHiddenFilePatterns([])
+        case ("terminalStartFolder", .string(let stored)?): defaults.set(stored, forKey: key)
+        case ("trimTrailingWhitespace", .bool(let on)?), ("insertFinalNewline", .bool(let on)?): defaults.set(on, forKey: key)
+        case ("terminalStartFolder", nil), ("trimTrailingWhitespace", nil), ("insertFinalNewline", nil):
+            defaults.removeObject(forKey: key)
         default: break
         }
     }
@@ -657,6 +689,26 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
             return "Terminal font \(Preferences.terminalFontFamily ?? Theme.defaultFontName) → \(family)"
         case .terminalPalette(let palette):
             return "Terminal colours \(Preferences.terminalPalette?.name ?? "Next Term default") → \(palette.name)"
+        case .terminalScrollback(let lines):
+            let now = TerminalBehaviourControls.formatted(Preferences.terminalScrollback)
+            return "Terminal scrollback \(now) → \(TerminalBehaviourControls.formatted(lines)) lines"
+        case .terminalStartFolder(let stored): return "New tabs open " + startFolderTitle(StartFolder(stored: stored))
+        case .terminalCursorShape(let raw):
+            let shape = CursorShape(rawValue: raw)?.title ?? raw
+            return "Terminal cursor \(Preferences.terminalCursorShape.title.lowercased()) → \(shape.lowercased())"
+        case .terminalCursorBlink(let on): return on ? "Terminal cursor blinks" : "Terminal cursor doesn’t blink"
+        case .trimTrailingWhitespace(let on): return on ? "Trim trailing spaces on save" : "Don’t trim trailing spaces on save"
+        case .insertFinalNewline(let on): return on ? "End files with a newline on save" : "Don’t add a final newline on save"
+        case .hiddenFiles(let patterns): return "Hide in the project sidebar: " + FileHiding.text(of: patterns)
+        }
+    }
+
+    static func startFolderTitle(_ folder: StartFolder) -> String {
+        switch folder {
+        case .project: return "in the project’s folder"
+        case .current: return "in the current tab’s folder"
+        case .home: return "in your home folder"
+        case .folder(let path): return "in " + RecentProjects.abbreviate(path)
         }
     }
 }

@@ -591,15 +591,25 @@ import Testing
         #expect(result.settings.map(\.setting) == [.softWrap(false)] && result.skipped.isEmpty)
     }
 
-    @Test func editorSettingsThatComeLater() throws {
+    @Test func cleanUpOnSave() throws {
         let plan = try self.plan([
             "options/editor.xml": component("EditorSettings", [("STRIP_TRAILING_SPACES", "Whole"), ("IS_ENSURE_NEWLINE_AT_EOF", "true")]),
             "codestyles/Default.xml": "<code_scheme name=\"Default\" version=\"173\" />",
         ])
-        #expect(plan.settings.isEmpty)
-        #expect(plan.skipped == [SkippedItem("Strip trailing spaces on save", "trimming on save comes later"),
-                                 SkippedItem("Ensure a newline at the end of files", "a final newline on save comes later"),
-                                 SkippedItem("Code style", "indentation settings come later")])
+        #expect(plan.settings == [PlannedSetting(.trimTrailingWhitespace(true), source: "options/editor.xml STRIP_TRAILING_SPACES Whole"),
+                                  PlannedSetting(.insertFinalNewline(true), source: "options/editor.xml IS_ENSURE_NEWLINE_AT_EOF true")])
+        #expect(plan.skipped == [SkippedItem("Code style", "indentation settings come later")])
+
+        // Only the lines you changed: offered unticked, since Next Term trims the whole file. None turns it off.
+        let changed = try self.plan(["options/editor.xml": component("EditorSettings", [("STRIP_TRAILING_SPACES", "Changed")])])
+        #expect(changed.settings.map(\.setting) == [.trimTrailingWhitespace(true)] && changed.settings.first?.ticked == false)
+        #expect(changed.settings.first?.note == "the IDE trims only the lines you changed; Next Term trims every line of the file")
+        let none = try self.plan(["options/editor.xml": component("EditorSettings", [("STRIP_TRAILING_SPACES", "None")])])
+        #expect(none.settings.map(\.setting) == [.trimTrailingWhitespace(false)] && none.settings.first?.ticked == true)
+        let odd = try self.plan(["options/editor.xml": component("EditorSettings", [("STRIP_TRAILING_SPACES", "Sometimes")])])
+        #expect(odd.settings.isEmpty && odd.skipped == [SkippedItem("options/editor.xml STRIP_TRAILING_SPACES", "not a value Next Term can use")])
+        // The IDE's defaults are never written, so nothing comes over for them.
+        #expect(try self.plan(["options/editor.xml": component("EditorSettings", [("CARET_BLINK_PERIOD", "500")])]).settings.isEmpty)
     }
 
     @Test func optionAsMeta() throws {

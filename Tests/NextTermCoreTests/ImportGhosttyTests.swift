@@ -247,6 +247,30 @@ import Testing
         #expect(reasons(performable)["keybind ctrl+a>ctrl+n → new_tab"] == nil)
     }
 
+    @Test func cursorScrollbackAndStartFolder() throws {
+        let plan = try self.plan("""
+            cursor-style = bar
+            cursor-style-blink = false
+            scrollback-limit = 20000000
+            working-directory = inherit
+            """)
+        #expect(plan.settings == [
+            PlannedSetting(.terminalCursorShape("bar"), source: "cursor-style bar"),
+            PlannedSetting(.terminalCursorBlink(false), source: "cursor-style-blink false"),
+            PlannedSetting(.terminalStartFolder("current"), source: "working-directory inherit"),
+        ])
+        #expect(reasons(plan)["scrollback-limit"] == "Ghostty counts it in bytes and Next Term in lines, so it isn't converted")
+
+        // A hollow block comes over filled; an empty blink is Ghostty's default, so nothing; home is offered unticked.
+        let other = try self.plan("cursor-style = block_hollow\ncursor-style-blink =\nworking-directory = home")
+        #expect(other.settings.map(\.setting) == [.terminalCursorShape("block"), .terminalStartFolder("home")])
+        #expect(other.settings.first?.note == "a hollow block isn't supported, so it is filled" && other.settings.last?.ticked == false)
+        let odd = try self.plan("cursor-style = beam\ncursor-style-blink = sometimes\nworking-directory = ../relative")
+        #expect(odd.settings.isEmpty)
+        #expect(reasons(odd)["cursor-style"] == "value not recognised" && reasons(odd)["cursor-style-blink"] == "value not recognised")
+        #expect(reasons(odd)["working-directory"] == "only a full path to a folder is read")
+    }
+
     @Test func safety() throws {
         let plan = try self.plan("""
             command = /bin/zsh -c 'export TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123'
@@ -266,7 +290,7 @@ import Testing
         #expect(plan.settings.map(\.setting) == [.fontSize(16)])
         #expect(reasons(plan)["command"] == "never imported: runs commands or can hold secrets")
         #expect(reasons(plan)["env"] == "never imported: runs commands or can hold secrets")
-        #expect(reasons(plan)["working-directory"] == "a start folder setting comes later")
+        #expect(reasons(plan)["working-directory"] == "the folder isn't on this Mac")
         #expect(reasons(plan)["config-file"] == "only files in Ghostty's own folders are read")
         #expect(reasons(plan)["other settings: window-padding-x"] == "no matching Next Term setting yet")
 
