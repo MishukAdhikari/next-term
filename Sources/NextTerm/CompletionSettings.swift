@@ -8,6 +8,8 @@ final class CompletionSettingsView: NSStackView {
     private let mode = NSPopUpButton()
     private let note = NSTextField(wrappingLabelWithString: "")
     private let choices = NSStackView()
+    /// The servers where the user allowed the hook (RemoteCompletionConsent).
+    private let servers = NSTextField(wrappingLabelWithString: "")
 
     init() {
         super.init(frame: .zero)
@@ -32,7 +34,10 @@ final class CompletionSettingsView: NSStackView {
         choices.orientation = .vertical
         choices.alignment = .leading
         choices.spacing = 2
-        let indented = NSStackView(views: [note, choices])
+        servers.textColor = .secondaryLabelColor
+        servers.font = .systemFont(ofSize: 11)
+        servers.preferredMaxLayoutWidth = 330
+        let indented = NSStackView(views: [note, choices, servers])
         indented.orientation = .vertical
         indented.alignment = .leading
         indented.spacing = 4
@@ -40,6 +45,7 @@ final class CompletionSettingsView: NSStackView {
         addArrangedSubview(line)
         addArrangedSubview(indented)
         NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: CompletionPreferences.changed, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: RemoteCompletionConsent.changed, object: nil)
         refresh()
     }
 
@@ -70,6 +76,15 @@ final class CompletionSettingsView: NSStackView {
             row.spacing = 8
             choices.addArrangedSubview(row)
         }
+        servers.stringValue = Self.serversText(RemoteCompletionConsent.allowedHosts.map(\.name))
+        servers.isHidden = servers.stringValue.isEmpty
+    }
+
+    /// "The hook is on at web-1 and db-2: zsh’s own completions there. New Remote Tab… removes it."
+    static func serversText(_ names: [String]) -> String {
+        guard !names.isEmpty else { return "" }
+        let list = names.count == 1 ? names[0] : names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1]
+        return "The hook is on at \(list): zsh’s own completions there. File › New Remote Tab… removes it."
     }
 
     static func note(_ mode: TabCompletionMode) -> String {

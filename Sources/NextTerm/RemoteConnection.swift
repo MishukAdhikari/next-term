@@ -180,7 +180,8 @@ enum RemoteConnection {
 
     /// ssh's arguments for a tab; `token` is this connection's (see RemoteShell.tabScript).
     static func tabArguments(_ remote: RemoteTab, path: String, tabKey: String, token: String) -> [String] {
-        let script = RemoteShell.tabScript(keep: remote.keep, directory: remote.directory, session: remote.session, tabID: tabKey, token: token)
+        let script = RemoteShell.tabScript(keep: remote.keep, directory: remote.directory, session: remote.session, tabID: tabKey, token: token,
+                                           completionHook: RemoteCompletionConsent.startsHooked(remote))
         return SSHArguments.tab(remote.host, controlPath: path, configFile: configFile, command: RemoteShell.command(script))
     }
 
@@ -226,7 +227,8 @@ enum RemoteConnection {
 
     /// Runs a script on the host (base64 to /bin/sh there) without a terminal. Never prompts (BatchMode):
     /// it rides on a tab's open connection, or on a key the agent holds. `completion` runs on the main thread.
-    static func run(_ host: RemoteHost, path chosen: String? = nil, script: String, timeout: TimeInterval = 20,
+    /// `input` goes to the script's stdin (a secret that must never be on a command line); without it, nothing.
+    static func run(_ host: RemoteHost, path chosen: String? = nil, script: String, input: Data? = nil, timeout: TimeInterval = 20,
                     completion: @escaping (Output) -> Void) {
         guard let path = chosen ?? alivePath(host), masterAlive(path: path) else {
             return completion(Output(status: -2, output: "", error: "There is no open connection to \(host.name): Next Term's checks never log in on their own. Open a remote tab on it first; checks then use that tab's connection."))
@@ -241,7 +243,8 @@ enum RemoteConnection {
             guard let eq = pair.firstIndex(of: "=") else { return nil }
             return (String(pair[..<eq]), String(pair[pair.index(after: eq)...]))
         }, uniquingKeysWith: { first, _ in first })
-        process.standardInput = FileHandle.nullDevice
+        let stdin = input.map { _ in Pipe() }
+        process.standardInput = stdin ?? FileHandle.nullDevice
         let out = Pipe(), err = Pipe()
         process.standardOutput = out
         process.standardError = err
@@ -249,6 +252,10 @@ enum RemoteConnection {
             do { try process.run() } catch {
                 DispatchQueue.main.async { completion(Output(status: -1, output: "", error: "Could not start ssh: \(error.localizedDescription)")) }
                 return
+            }
+            if let stdin, let input {
+                stdin.fileHandleForWriting.write(input)
+                try? stdin.fileHandleForWriting.close()
             }
             var timedOut = false
             let deadline = DispatchWorkItem { [weak process] in

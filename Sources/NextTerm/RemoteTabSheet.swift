@@ -32,6 +32,8 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
     /// Each load of the session list; an answer to an older one is dropped.
     private var sessionLoad = 0
     private let problemLabel = NSTextField(wrappingLabelWithString: "")
+    /// Tab completion's hook on the selected host (RemoteCompletionConsent).
+    private let completionRow = RemoteCompletionRow()
     private var hosts = RemoteHosts.all
 
     private init(open: @escaping (RemoteTab) -> Void) {
@@ -87,6 +89,7 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
             [NSGridCell.emptyContentView, keepNote],
             [label("Session:"), sessionPopup],
             [NSGridCell.emptyContentView, sessionNote],
+            [label("Tab completion:"), completionRow],
         ])
         grid.rowSpacing = 8
         grid.columnSpacing = 8
@@ -151,6 +154,7 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
         }
         keepChanged(nil)
         loadSessions()
+        completionRow.show(selectedHost, over: panel)
         problemLabel.isHidden = true
         panel.makeFirstResponder(destinationField.stringValue.isEmpty ? destinationField : folderField)
     }
