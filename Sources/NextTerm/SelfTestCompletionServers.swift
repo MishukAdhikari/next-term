@@ -417,6 +417,15 @@ extension SelfTest {
         row.show(host, over: window)
         check(row.buttonTitle == "Remove" && row.text.hasPrefix("On:"), "Tab completion, the server hook: New Remote Tab's line says it is on", row.text)
 
+        // With Tab completion Off, a new tab starts without the hook, as a zsh tab on this Mac does.
+        CompletionPreferences.set(.off)
+        let offTab = c.addRemoteTab(RemoteTab(host: host))
+        let offReady = await wait(20) { offTab.remoteConnected && offTab.remoteReady }
+        await pause(1)
+        check(offReady && offTab.completion.state.arm == nil, "Tab completion, the server hook: a tab opened while it is Off starts without it")
+        c.remove(offTab)
+        CompletionPreferences.set(.auto)
+
         // A new tab starts through the hook: zsh's own completions on the server (AE7, zsh).
         let tab = c.addRemoteTab(RemoteTab(host: host))
         let session = tab.completion
