@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import NextTermCore
 
 /// Window that handles Ctrl-Tab / Ctrl-Shift-Tab before the terminal sees it.
@@ -25,18 +26,119 @@ final class TerminalWindow: NSWindow {
     }
 }
 
-/// Split view with a quiet one-pixel divider in the theme's colour.
-final class ThemedSplitView: NSSplitView {
-    override var dividerColor: NSColor { Theme.background }
+/// A split view whose one-point lines show only between two panes that both show (the sidebar and the work
+/// area, the editor and the terminal, a tab's panes): never beside a hidden pane, where there is nothing on
+/// the other side to set apart, and never over a pane.
+///
+/// AppKit's own dividers are never drawn: on macOS 26 each is a layer of its own above the panes, and it kept
+/// the one beside a hidden pane showing, where the divider last was (the editor's share, once its last file
+/// closed) until the split was laid out again, then along the edge of the pane that took the room. That drew
+/// a line down through the terminal and its tab bar, over its text. The lines are this view's own instead,
+/// put where SplitDivider.lines says from where the panes are, each time a pane moves, shows or hides.
+class HairlineSplitView: NSSplitView {
+    /// The line between two panes that show.
+    var lineColor: NSColor { Theme.background }
+    override var dividerColor: NSColor { .clear }
     override var dividerThickness: CGFloat { 1 }
+
+    private var lines: [Line] = []
+    /// Each pane's isHidden, watched: whatever shows or hides a pane, its lines follow.
+    private var watching: [ObjectIdentifier: AnyCancellable] = [:]
+
+    /// The lines drawn, in this view's coordinates.
+    var drawnLines: [NSRect] { lines.filter { !$0.isHidden }.map(\.frame) }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        arrangesAllSubviews = false // the lines are subviews, not panes
+        NotificationCenter.default.addObserver(self, selector: #selector(panesMoved), name: NSSplitView.didResizeSubviewsNotification, object: self)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func layout() {
+        super.layout()
+        placeLines()
+    }
+
+    override func adjustSubviews() {
+        super.adjustSubviews()
+        placeLines()
+    }
+
+    override func resizeSubviews(withOldSize oldSize: NSSize) {
+        super.resizeSubviews(withOldSize: oldSize)
+        placeLines()
+    }
+
+    override func setPosition(_ position: CGFloat, ofDividerAt dividerIndex: Int) {
+        super.setPosition(position, ofDividerAt: dividerIndex)
+        placeLines()
+    }
+
+    /// A divider dragged.
+    @objc private func panesMoved() { placeLines() }
+
+    override func didAddSubview(_ subview: NSView) {
+        super.didAddSubview(subview)
+        guard !(subview is Line) else { return }
+        watching[ObjectIdentifier(subview)] = subview.publisher(for: \.isHidden, options: []).sink { [weak self] _ in self?.placeLines() }
+        needsLayout = true
+    }
+
+    override func willRemoveSubview(_ subview: NSView) {
+        super.willRemoveSubview(subview)
+        watching[ObjectIdentifier(subview)] = nil
+        needsLayout = true
+    }
+
+    private func placeLines() {
+        let panes = arrangedSubviews.map { SplitDivider.Pane(frame: $0.frame, hidden: $0.isHidden) }
+        let rects = SplitDivider.lines(between: panes, sideBySide: isVertical, thickness: dividerThickness)
+        while lines.count < rects.count {
+            let line = Line()
+            addSubview(line)
+            lines.append(line)
+        }
+        // On whole pixels: a divider can sit on a half point, which a 1x screen would draw as a blurred 2-pixel line.
+        let snap: AlignmentOptions = [.alignMinXNearest, .alignMinYNearest, .alignWidthNearest, .alignHeightNearest]
+        for (index, line) in lines.enumerated() {
+            let shows = index < rects.count
+            let rect = shows ? backingAlignedRect(rects[index], options: snap) : .zero
+            if shows, line.frame != rect { line.frame = rect }
+            if line.isHidden == shows { line.isHidden = !shows }
+            line.color = lineColor
+        }
+    }
+
+    /// One line: a layer's colour, no drawing of its own. Presses go through to the split view, which
+    /// grabs its divider there.
+    private final class Line: NSView {
+        var color: NSColor = .clear {
+            didSet { if color != oldValue { needsDisplay = true } }
+        }
+
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            wantsLayer = true
+        }
+
+        required init?(coder: NSCoder) { fatalError("not used") }
+
+        override var wantsUpdateLayer: Bool { true }
+        override func updateLayer() { layer?.backgroundColor = color.cgColor }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
 }
+
+/// Between the sidebar and the work area: a quiet line in the theme's colour.
+final class ThemedSplitView: HairlineSplitView {}
 
 /// Between the editor and the terminal: both have the same background, so the line between them must
 /// show (a hairline a few shades lighter), and it is easy to grab (see effectiveRect).
-final class WorkSplitView: NSSplitView {
+final class WorkSplitView: HairlineSplitView {
     static let line = NSColor(hex: 0x393B40)
-    override var dividerColor: NSColor { Self.line }
-    override var dividerThickness: CGFloat { 1 }
+    override var lineColor: NSColor { Self.line }
 }
 
 final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSplitViewDelegate, NSMenuItemValidation,

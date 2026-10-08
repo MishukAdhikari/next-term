@@ -533,6 +533,7 @@ enum SelfTest {
         await editorChecks(c, proj: proj, tab: inProject)
         await lineEditChecks(c, proj: proj, tab: inProject)
         await emptyEditorChecks(c, proj: proj, tab: inProject)
+        await dividerLineChecks(c, proj: proj, tab: inProject)
         await goToFileChecks(c, proj: proj)
         await gutterAndCollapseChecks(c, proj: proj)
         await railChecks(c, proj: proj)
@@ -4063,9 +4064,13 @@ enum SelfTest {
             case .right: placed = t.minX >= e.maxX - 1
             case .left: placed = t.maxX <= e.minX + 1
             }
-            if let split = area.superview as? NSSplitView {
-                check(split.dividerColor != Theme.background && split.dividerThickness >= 1,
-                      "\(position.rawValue): a visible line between editor and terminal")
+            if let split = area.superview as? HairlineSplitView {
+                // The line the split view draws itself, in the point between them, in a colour that shows.
+                let lines = split.drawnLines.map { split.convert($0, to: nil) }
+                let between = lines.count == 1 && (split.isVertical ? lines[0].width : lines[0].height) >= 1
+                    && !lines[0].intersects(e.insetBy(dx: 0.5, dy: 0.5)) && !lines[0].intersects(t.insetBy(dx: 0.5, dy: 0.5))
+                check(between && split.lineColor != Theme.background && split.lineColor.alphaComponent == 1,
+                      "\(position.rawValue): a visible line between editor and terminal", "\(lines)")
             }
             check(placed && e.width > 200 && t.width > 200 && e.height > 90 && t.height > 90, "terminal on the \(position.rawValue)",
                   "editor \(e.integral), terminal \(t.integral)")
@@ -4696,7 +4701,7 @@ enum SelfTest {
     }
 
     /// Captures the window exactly as it is on screen (an app may always capture its own windows).
-    private static func screenshot(_ c: TerminalWindowController, suffix: String) async {
+    static func screenshot(_ c: TerminalWindowController, suffix: String) async {
         guard let window = c.window else { return }
         await screenshot(window, suffix: suffix)
     }
