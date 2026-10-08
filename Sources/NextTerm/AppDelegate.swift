@@ -815,6 +815,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         newWindow(sender)
     }
 
+    /// The terminal window used last, for a tab command given while another window is in front (Welcome,
+    /// Settings).
+    private var lastUsedController: TerminalWindowController? { controllers.max { $0.lastKey < $1.lastKey } }
+
+    /// ⌥⌘T with no terminal window in front, and the Welcome window's Connect to Server…. From the Welcome
+    /// window (in front, or the only one open) the sheet comes over it: Connect opens a window for the tab,
+    /// Cancel leaves things as they were. Otherwise it comes over the terminal window used last (Settings in
+    /// front), or with no window at all, over a new one.
+    @objc func newRemoteTab(_ sender: Any?) {
+        if let window = welcome?.window, window.isVisible, window.isKeyWindow || controllers.isEmpty {
+            return RemoteTabSheet.show(over: window) { [weak self] remote in self?.openWindow(remote: remote) }
+        }
+        if let last = lastUsedController {
+            last.window?.makeKeyAndOrderFront(nil)
+            return last.newRemoteTab(sender)
+        }
+        openWindow(directory: nil).newRemoteTab(sender)
+    }
+
+    /// A window for a tab on a server: the shell a new window starts with makes way for it.
+    @discardableResult
+    func openWindow(remote: RemoteTab) -> TerminalWindowController {
+        let controller = openWindow(directory: nil)
+        closeFirstShell(of: controller, keeping: controller.addRemoteTab(remote))
+        return controller
+    }
+
+    /// The shell a new window starts with, closed for the tab the window was opened for. Only while the
+    /// window holds just the two and nothing has run in that shell: no other tab, and nothing that runs,
+    /// is ever closed this way.
+    func closeFirstShell(of controller: TerminalWindowController, keeping tab: TerminalTab) {
+        guard controller.tabs.count == 2, let first = controller.tabs.first, first !== tab, first.remote == nil else { return }
+        guard first.userTitle == nil, first.status.commandsStarted == 0, !first.leftStartFolder, !first.status.running else { return }
+        controller.remove(first)
+    }
+
+    /// A saved host on the Welcome window: a window with a tab on it, in its folder.
+    func connect(to host: RemoteHost) {
+        UserDefaults.standard.set(host.id, forKey: "lastRemoteHost") // the sheet offers it first next time
+        openWindow(remote: RemoteTab(host: host))
+    }
+
+    /// ⇧⌘T with no terminal window in front: in the terminal window used last, else in a new window that
+    /// holds the tab alone.
+    @objc func reopenClosedTab(_ sender: Any?) {
+        if let last = lastUsedController {
+            last.window?.makeKeyAndOrderFront(nil)
+            return last.reopenClosedTab(sender)
+        }
+        guard let entry = ClosedTabs.takeLast() else { return NSSound.beep() }
+        let controller = openWindow(directory: nil)
+        if let tab = controller.reopen(entry) { closeFirstShell(of: controller, keeping: tab) }
+    }
+
     // MARK: Option as Meta
 
     @objc func toggleOptionAsMeta(_ sender: Any?) {
@@ -823,6 +877,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(reopenClosedTab(_:)) { return !ClosedTabs.isEmpty }
         if item.action == #selector(toggleOptionAsMeta(_:)) { item.state = Preferences.optionAsMeta ? .on : .off }
         if item.action == #selector(setTerminalPosition(_:)) {
             item.state = item.representedObject as? String == terminalPosition.rawValue ? .on : .off
@@ -1017,6 +1072,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(shell, "New Tab", #selector(TerminalWindowController.newTab(_:)), "t")
         item(shell, "New Window", #selector(newWindow(_:)), "n", target: self)
         item(shell, "New Remote Tab…", #selector(TerminalWindowController.newRemoteTab(_:)), "t", [.command, .option])
+        item(shell, "Duplicate Tab", #selector(TerminalWindowController.duplicateTab(_:)), "")
+        item(shell, "Reopen Closed Tab", #selector(TerminalWindowController.reopenClosedTab(_:)), "t", [.command, .shift])
         shell.addItem(.separator())
         item(shell, "Open Project…", #selector(openProjectPanel(_:)), "o", target: self)
         item(shell, "Go to File…", #selector(TerminalWindowController.goToFile(_:)), "p")
@@ -1037,6 +1094,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         shell.addItem(.separator())
         item(shell, "Save", #selector(TerminalWindowController.saveDocument(_:)), "s")
         item(shell, "Save All", #selector(TerminalWindowController.saveAllDocuments(_:)), "s", [.command, .option])
+        // The file in front in the editor, as its tab's right-click menu has them.
+        item(shell, "Reveal in Finder", #selector(TerminalWindowController.revealInFinder(_:)), "")
+        item(shell, "Copy Path", #selector(TerminalWindowController.copyFilePath(_:)), "")
+        item(shell, "Copy Relative Path", #selector(TerminalWindowController.copyRelativeFilePath(_:)), "")
         shell.addItem(.separator())
         item(shell, "Split Right", #selector(TerminalWindowController.splitRight(_:)), "d")
         item(shell, "Split Down", #selector(TerminalWindowController.splitDown(_:)), "d", [.command, .shift])
@@ -1045,6 +1106,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(shell, "Use Option as Meta Key", #selector(toggleOptionAsMeta(_:)), "", target: self)
         shell.addItem(.separator())
         item(shell, "Close Tab", #selector(TerminalWindowController.closeTab(_:)), "w")
+        item(shell, "Close Other Tabs", #selector(TerminalWindowController.closeOtherTabs(_:)), "")
+        item(shell, "Close Tabs to the Right", #selector(TerminalWindowController.closeTabsToTheRight(_:)), "")
         item(shell, "Close Window", #selector(NSWindow.performClose(_:)), "w", [.command, .shift])
 
         let edit = submenu(main, "Edit")

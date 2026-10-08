@@ -122,12 +122,51 @@ public enum AgentPrompt {
         var result = [head]
         let blocks = items.compactMap { item -> String? in
             guard let code = item.code, !code.isEmpty else { return nil }
-            let clean = sanitize(code)
-            let fence = clean.contains("```") ? "````" : "```"
-            return fence + item.language + "\n" + clean + (clean.hasSuffix("\n") ? "" : "\n") + fence
+            return block(code, language: item.language)
         }
         if !blocks.isEmpty { result.append(blocks.joined(separator: "\n\n")) }
         return result
+    }
+
+    /// Code in a fence an agent reads as data. The fence is one backtick longer than the longest run of them
+    /// in the code, so no line in it can close the fence early and be read as what you wrote.
+    static func block(_ code: String, language: String) -> String {
+        let clean = sanitize(code)
+        let fence = String(repeating: "`", count: max(3, longestBacktickRun(clean) + 1))
+        return fence + language + "\n" + clean + (clean.hasSuffix("\n") ? "" : "\n") + fence
+    }
+
+    private static func longestBacktickRun(_ text: String) -> Int {
+        var longest = 0
+        var run = 0
+        for character in text {
+            if character == "`" {
+                run += 1
+                longest = max(longest, run)
+            } else {
+                run = 0
+            }
+        }
+        return longest
+    }
+
+    /// Text selected in a terminal (output, an error) for an agent's prompt: a fenced block, so it reads as
+    /// what the terminal showed, never as an instruction. Spaces at the ends of lines and blank lines around
+    /// it go.
+    public static func quote(_ text: String) -> String {
+        var lines = sanitize(text).components(separatedBy: "\n").map { line in
+            line.replacingOccurrences(of: #"[ \t]+$"#, with: "", options: .regularExpression)
+        }
+        while lines.last?.isEmpty == true { lines.removeLast() }
+        while lines.first?.isEmpty == true { lines.removeFirst() }
+        return block(lines.joined(separator: "\n"), language: "text")
+    }
+
+    /// The same on one line, for an agent that takes no pastes (a line break would send the prompt): the
+    /// words joined by single spaces, never starting with a command marker.
+    public static func quoteOnOneLine(_ text: String) -> String {
+        let words = sanitize(text).split(whereSeparator: \.isWhitespace)
+        return defuseLeadingCommand(words.joined(separator: " "))
     }
 
     /// Whether the instruction part is short enough for the dialect to keep it inline as typed text.

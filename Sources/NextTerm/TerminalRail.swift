@@ -48,6 +48,8 @@ final class TerminalRail: NSView {
     static var reducesMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     /// Tabs that became done, failed or needs-you while the rail showed (for the self-test).
     private(set) var changesNoticed = 0
+    /// "Expand the terminal (⌘J)", with the key Settings gives it.
+    private var expandTip: ShortcutToolTip?
     /// The states each tab pulsed for since the rail showed: an agent that goes done, working, done again
     /// (pauses in its output) pulses once, not every few seconds.
     private var pulsedFor: [ObjectIdentifier: Set<TabState>] = [:]
@@ -64,7 +66,7 @@ final class TerminalRail: NSView {
         moreButton.action = #selector(expandClicked)
         moreButton.isHidden = true
         addSubview(moreButton)
-        toolTip = "Expand the terminal (⌘J)"
+        expandTip = ShortcutToolTip(self, "Expand the terminal", #selector(TerminalWindowController.toggleTerminalCollapsed(_:)))
         // A group, not a button: VoiceOver does not go into a button, and the tabs' buttons are in here.
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
@@ -268,7 +270,9 @@ private final class RailExpandElement: NSAccessibilityElement {
     override func isAccessibilityElement() -> Bool { true }
     override func accessibilityRole() -> NSAccessibility.Role? { .button }
     override func accessibilityLabel() -> String? { "Expand terminal" }
-    override func accessibilityHelp() -> String? { "Brings the terminal back at its size (⌘J)." }
+    override func accessibilityHelp() -> String? {
+        KeyboardShortcuts.shared.hint("Brings the terminal back at its size", #selector(TerminalWindowController.toggleTerminalCollapsed(_:))) + "."
+    }
     override func accessibilityParent() -> Any? { rail }
     override func accessibilityFrame() -> NSRect {
         guard let rail else { return .zero }

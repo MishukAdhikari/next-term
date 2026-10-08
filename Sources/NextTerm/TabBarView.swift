@@ -35,6 +35,8 @@ protocol TabBarViewDelegate: AnyObject {
     func tabBarDidRequestNewTab(_ bar: TabBarView)
     /// A tab was double-clicked where tabs cannot be renamed (the editor's: it keeps a preview).
     func tabBar(_ bar: TabBarView, didDoubleClick index: Int)
+    /// A tab's right-click menu: what it says acts on that tab, selected or not.
+    func tabBar(_ bar: TabBarView, menuFor index: Int) -> NSMenu?
 }
 
 /// The tab strip along the top of the window, drawn in the title bar area.
@@ -407,6 +409,16 @@ final class TabBarView: NSView {
         trackDrag(of: view, from: event)
     }
 
+    /// A tab's right-click menu (for the self-test too).
+    func menu(forTabAt index: Int) -> NSMenu? {
+        guard items.indices.contains(index) else { return nil }
+        return delegate?.tabBar(self, menuFor: index)
+    }
+
+    fileprivate func itemMenu(_ view: TabItemView) -> NSMenu? {
+        index(of: view).flatMap(menu(forTabAt:))
+    }
+
     fileprivate func itemClose(_ view: TabItemView) {
         guard let index = index(of: view) else { return }
         delegate?.tabBar(self, didClose: index)
@@ -699,6 +711,15 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     // Middle-click closes, like a browser.
     override func otherMouseUp(with event: NSEvent) {
         if event.buttonNumber == 2 { bar?.itemClose(self) }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? { bar?.itemMenu(self) }
+
+    /// VoiceOver's "show menu": the right-click menu, under the tab.
+    override func accessibilityPerformShowMenu() -> Bool {
+        guard let menu = bar?.itemMenu(self) else { return false }
+        menu.popUp(positioning: nil, at: NSPoint(x: 8, y: bounds.height), in: self)
+        return true
     }
 
     @objc private func closeClicked() {

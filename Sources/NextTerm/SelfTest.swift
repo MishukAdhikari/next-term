@@ -22,6 +22,7 @@ enum SelfTest {
         Task { @MainActor in
             await runAll()
             await welcomeReopenChecks() // last: it closes every window
+            await welcomeRemoteChecks() // with only the Welcome window left
             finish()
         }
     }
@@ -683,6 +684,7 @@ enum SelfTest {
         check(c.tabs[0] === b && c.tabs[1] === a, "drag reorder moves the tab")
 
         await paneChecks(c)
+        await menuChecks(c)
 
         await sessionChecks(proj: proj)
         await moreSessionChecks(proj: proj)

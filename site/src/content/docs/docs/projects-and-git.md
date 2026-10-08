@@ -24,6 +24,8 @@ The **Welcome** window lists your projects on the left, with a search field, eac
 - **Fork** continues a copy and leaves the original as it was: the safe choice while the session is open in another terminal. Gemini CLI, Cursor Agent and Copilot CLI cannot fork from the command line, so their sessions have no Fork.
 - In a project window, **File › Resume Agent Session…** (<kbd>⌥⌘O</kbd>) shows the same list as a panel: type to filter, <kbd>↩</kbd> resumes (or goes to the tab), <kbd>⌘↩</kbd> forks.
 
+Under the projects, **Servers** lists up to three of the hosts you saved for [remote tabs](/docs/remote/#from-the-welcome-window), the one you connected to last first: click one for a window with a tab on it. **Connect to Server…** (<kbd>⌥⌘T</kbd>) is for another, above **Open…** and **New Terminal**.
+
 ### Agent Sessions in the sidebar
 
 When the folder has sessions, **Agent Sessions** sits at the top of the project sidebar, under Databases: the newest five, from any agent, and **More…** for the whole list (<kbd>⌥⌘O</kbd>). A session open in a tab has a **running** badge.

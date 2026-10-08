@@ -23,6 +23,8 @@ Each file opens in its own tab above the terminal; a dot in place of the close b
 
 Move between the editor and the terminal with <kbd>⌃&#96;</kbd> (**View › Focus Editor**). <kbd>⌘W</kbd> closes the file you are editing when the editor has the keyboard, and the terminal tab otherwise.
 
+Right-click a file’s tab for **Close**, **Close Others**, **Close Tabs to the Right**, **Show in Project Sidebar**, **Copy Path**, **Copy Relative Path** (from the top of the folder the sidebar shows) and **Reveal in Finder**, for that tab’s file. Closing several asks once about the unsaved files among them: **Save**, **Cancel** or **Don’t Save**. It also asks before it closes an agent’s [proposed change](/docs/agents/#proposed-edits-open-as-a-diff), since closing one rejects it. The same commands are in the menu bar for the file in front: **Shell › Close Other Tabs**, **Close Tabs to the Right**, **Reveal in Finder**, **Copy Path** and **Copy Relative Path**, and **View › Show File in Project Sidebar**.
+
 ### Preview tabs
 
 With **Open files with a single click** on (**Settings › Editor**, or the project sidebar’s ⋯ button), one click on a file in the sidebar opens it in a preview tab. Its name is in italics, and the next file you click opens in the same tab instead of a new one. The keyboard stays in the sidebar, so you can keep clicking or use the arrow keys; click in the text or press <kbd>⌃&#96;</kbd> to start typing.
