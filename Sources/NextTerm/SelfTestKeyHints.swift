@@ -17,6 +17,7 @@ extension SelfTest {
         tabBarKeyHintChecks()
         headerKeyHintChecks()
         railKeyHintChecks()
+        popupKeyHintChecks(c.branchPopup)
         // The window's own arrow: VoiceOver hears what it does, and the key once, in its help.
         let arrow = c.tabBar.subviews.compactMap { $0 as? NSButton }.first { $0.accessibilityLabel()?.hasSuffix("the terminal") == true }
         check(arrow?.accessibilityLabel()?.contains("⌘") == false && arrow?.accessibilityHelp() == shortcuts.chord(for: "toggleTerminalCollapsed:")?.display,
@@ -147,6 +148,17 @@ extension SelfTest {
         check(changed.isEmpty && narrow == nil, "key hints: in a narrow header the key gives way before the branch name is cut",
               "at 300: \(narrow ?? "none"); " + changed.prefix(3).joined(separator: "; "))
         check(removed == nil, "key hints: the header's goes when ⌘B is removed", removed ?? "none")
+    }
+
+    /// The branch popup's own ⌘R, before its fetch button.
+    private static func popupKeyHintChecks(_ popup: BranchPopupController) {
+        let background = popup.panelWindow.contentView
+        let fetch = background?.subviews.compactMap { $0 as? NSButton }.first { $0.toolTip?.hasPrefix("Fetch") == true }
+        let hints = background?.subviews.compactMap { $0 as? KeyHint } ?? []
+        let heard = voiceOverHears(hints, in: background)
+        check(hints.map(\.key) == ["⌘R"] && !heard && fetch?.accessibilityLabel() == "Fetch from all remotes" && fetch?.accessibilityHelp() == "⌘R",
+              "key hints: the branch popup's fetch button is heard by its words, with ⌘R once, in its help",
+              "\(hints.map(\.key)), heard \(heard), \(fetch?.accessibilityLabel() ?? "no button") | \(fetch?.accessibilityHelp() ?? "none")")
     }
 
     private static func railKeyHintChecks() {
