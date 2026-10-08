@@ -2356,11 +2356,15 @@ enum SelfTest {
         check(top != nil && nowTop == top, "and keeps the same commit at the top of the view",
               "\(log.commits.first { $0.sha == top }?.subject ?? "-") then \(log.commits.first { $0.sha == nowTop }?.subject ?? "-")")
 
-        // A commit no branch or tag lists: shown alone, and selected.
+        // A commit no branch or tag lists: shown alone, and selected; Aa and .* go off, as its query has them.
+        log.apply { $0.matchCase = true; $0.regex = true }
+        _ = await wait(8) { !log.isLoading }
         let orphan = run(["commit-tree", "HEAD^{tree}", "-m", "orphan"])
         c.showCommit(sha: orphan, root: repo.path)
         check(await wait(10) { log.commits.map(\.sha) == [orphan] && log.selectedCommit?.sha == orphan && log.query.text == orphan },
               "showCommit of a commit no branch lists shows it alone", log.commits.prefix(3).map(\.subject).joined(separator: " | "))
+        check(log.matchCaseToggle.state == .off && log.regexToggle.state == .off && !log.query.matchCase && !log.query.regex,
+              "and Aa and .* are off, as the query that shows it has them", "Aa \(log.matchCaseToggle.state.rawValue), .* \(log.regexToggle.state.rawValue)")
         c.editorArea.close(log)
     }
 

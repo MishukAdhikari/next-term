@@ -43,6 +43,7 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     private let caseButton = NSButton()
     /// For the self-test: the match-case toggle, beside .*.
     var matchCaseToggle: NSButton { caseButton }
+    var regexToggle: NSButton { regexButton }
     private let branchButton = GitLogFilterButton()
     private let authorButton = GitLogFilterButton()
     private let dateButton = GitLogFilterButton()
@@ -249,6 +250,8 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         // Not on the branches listed: the log shows that commit alone.
         searchField.stringValue = wanted.sha
         query = CommitQuery(text: wanted.sha)
+        regexButton.state = .off
+        caseButton.state = .off
         self.wanted = (wanted.sha, false)
         updateFilterTitles()
         reload(keepSelection: false)
