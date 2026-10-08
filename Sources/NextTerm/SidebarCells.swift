@@ -297,7 +297,7 @@ final class SidebarHeaderView: NSView {
             right = syncButton.frame.minX - 4
         }
         var summaryWidth = min(summaryText, max(0, right - nameKept))
-        if summaryWidth < 28 { summaryWidth = 0 } // an ellipsis alone says nothing
+        if summaryWidth < summaryText, summaryWidth < 28 { summaryWidth = 0 } // cut to an ellipsis, it says nothing
         if !syncButton.isHidden && syncButton.isShortened { summaryWidth = 0 } // the counts went before the word did
         summary.isHidden = summaryWidth == 0
         summary.frame = NSRect(x: right - summaryWidth, y: summaryY, width: summaryWidth, height: summaryHeight)

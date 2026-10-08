@@ -12,7 +12,7 @@ An agent just touched twelve files. Before you commit, you want to see each chan
 
 ## Git Diff
 
-**Git › Git Diff** (<kbd>⌃⌘G</kbd>) opens the repository’s changes in one tab. **Git Diff** in the [branch popup](/docs/projects-and-git/#branches) opens it too, and so does a click on the `+41 −10` at the top of the project sidebar.
+**Git › Git Diff** (<kbd>⌃⌘G</kbd>) opens the repository’s changes in one tab. **Git Diff** in the [branch popup](/docs/projects-and-git/#branches) opens it too, and so does a click on the `+41 −10` at the top of the project sidebar, on what those count: the changes not committed yet.
 
 - **The changed files**, on the left, as a tree of only the folders that hold changes, all open. Each file has its icon, its `+12 −3`, and **A**, **D** or **R** when it was added, deleted or renamed. <kbd>↑</kbd> and <kbd>↓</kbd> move from file to file; <kbd>↩</kbd> goes to the diff.
 - **A file’s diff**, on the right, is the one described below, with everything it has: All Changes, Unstaged and Staged, the hunk buttons, Send to Agent. Past its last change, the arrow goes on to the next file’s first one (and back the other way), and the list follows.

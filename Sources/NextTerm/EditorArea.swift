@@ -398,9 +398,10 @@ final class EditorArea: NSView, TabBarViewDelegate {
     }
 
     /// The Git Diff tab of the repository at `root` (the one open, else a new one), showing `path`'s changes
-    /// on `base` with the file list beside them, or all the files on one page without a path.
+    /// on `base` with the file list beside them, or all the files on one page without a path (in `scope`, if
+    /// given).
     @discardableResult
-    func openGitDiff(root: String, path: String? = nil, base: GitRunner.DiffBase = .head) -> GitDiffPane {
+    func openGitDiff(root: String, path: String? = nil, base: GitRunner.DiffBase = .head, scope: ChangeScope? = nil) -> GitDiffPane {
         let pane: GitDiffPane
         if let index = panes.firstIndex(where: { ($0 as? GitDiffPane)?.root == root }), let open = panes[index] as? GitDiffPane {
             pane = open
@@ -411,7 +412,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
             insert(pane)
             select(activeIndex, focus: false)
         }
-        if let path { pane.show(path: path, base: base) } else { pane.showOverview() }
+        if let path { pane.show(path: path, base: base) } else { pane.showOverview(scope: scope) }
         window?.makeFirstResponder(pane.focusView)
         return pane
     }

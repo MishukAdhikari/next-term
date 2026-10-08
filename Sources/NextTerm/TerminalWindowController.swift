@@ -163,7 +163,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         editorArea.tabBar.onReveal = { [weak self] in self?.revealInSidebar(nil) }
         sidebar.header.onBranchClick = { [weak self] in self?.showBranches(nil) }
         sidebar.header.onSync = { [weak self] pull in pull ? self?.gitUpdate(nil) : self?.gitPush(nil) }
-        sidebar.header.onSummaryClick = { [weak self] in self?.showGitDiff(nil) }
+        sidebar.header.onSummaryClick = { [weak self] in self?.showUncommittedChanges() }
         sidebar.onHeadChange = { [weak self] in self?.editorArea.headMoved() }
         // The collapse button's tooltip names ⌘J, or the key Settings gives it instead.
         NotificationCenter.default.addObserver(self, selector: #selector(shortcutsChanged), name: KeyboardShortcuts.changed, object: nil)

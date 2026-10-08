@@ -111,9 +111,16 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
         if scopeChanges || !hasRead { reload(quietly: hasRead) }
     }
 
-    /// All files, in the scope shown.
-    func showOverview() {
+    /// All files, in the scope shown, or in `scope` (Uncommitted, for the sidebar header's counts).
+    func showOverview(scope wanted: ChangeScope? = nil) {
+        guard let wanted, wanted != scope else { return select(path: nil) }
+        scope = wanted
+        askedFor = nil
+        // Selecting All files reads unless its page is already up: then the scope's change does.
+        let reads = selectedPath != nil || allFiles?.entries.isEmpty != false || !hasRead
         select(path: nil)
+        list.select(scope: listScope)
+        if !reads { reload(quietly: hasRead) }
     }
 
     /// Whether anything was read yet (a new tab reads when it is first asked to show something).
@@ -655,22 +662,29 @@ extension TerminalWindowController {
     /// The repository Git › Git Diff shows: the sidebar's, or that of a Git Diff tab already open.
     var gitDiffRoot: String? { sidebar.git.snapshot?.root ?? editorArea.activeGitDiff?.root ?? editorArea.gitDiffs.first?.root }
 
-    /// Git › Git Diff (and a click on the sidebar header's +N −M): the repository's changes in the Git Diff
-    /// tab, all its files on one page.
+    /// Git › Git Diff: the repository's changes in the Git Diff tab, all its files on one page.
     @objc func showGitDiff(_ sender: Any?) {
         guard let root = gitDiffRoot else { return NSSound.beep() }
         openGitDiff(root: root)
     }
 
-    /// The Git Diff tab of the repository containing `root`, all its files on one page; nil outside one.
+    /// A click on the sidebar header's +N −M: what they count, the changes not committed yet, in the Git Diff
+    /// tab (on a feature branch it would otherwise open on All changes, other numbers).
+    func showUncommittedChanges() {
+        guard let root = gitDiffRoot else { return NSSound.beep() }
+        openGitDiff(root: root, scope: .uncommitted)
+    }
+
+    /// The Git Diff tab of the repository containing `root`, all its files on one page (in `scope`, if given);
+    /// nil outside one.
     @discardableResult
-    func openGitDiff(root: String) -> GitDiffPane? {
+    func openGitDiff(root: String, scope: ChangeScope? = nil) -> GitDiffPane? {
         let top = canonicalPath(ProjectRoot.find(from: root))
         guard FileManager.default.fileExists(atPath: (top as NSString).appendingPathComponent(".git")) else {
             NSSound.beep()
             return nil
         }
-        return editorArea.openGitDiff(root: top)
+        return editorArea.openGitDiff(root: top, scope: scope)
     }
 }
 
