@@ -43,17 +43,19 @@ final class CompletionController {
         let session = tab.completion
         if session.isListOpen { return listKey(event, session) }
         guard CompletionPreferences.isOn, Self.isPlainTab(event) else { return false }
-        // A server tab with no hook: its own readiness (CompletionSession.screenReady).
-        guard session.state.isArmed || session.state.holding || session.usesScreen else { return false }
+        // A server tab with no hook: its own readiness (CompletionSession.screenReady). A Tab while another is in
+        // flight waits for its outcome (CompletionSession.realTab).
+        let inFlight = session.state.pendingID != nil
+        guard session.state.isArmed || inFlight || session.usesScreen else { return false }
         // A server tab kept in tmux is always on the alternate screen (tmux's); what runs in its pane, the status
         // checks and the hook say.
         guard !view.hasMarkedText(), !view.getTerminal().isCurrentBufferAlternate || session.inTmux else { return false }
         // A program a key binding started has the terminal (fzf's ⌃T): the key is its own, and nothing is asked.
-        if !session.state.holding, !session.usesScreen, !tab.shellAlone { return session.plainTab() }
+        if !inFlight, !session.usesScreen, !tab.shellAlone { return session.plainTab() }
         // Scrolled back: the line being completed is at the bottom.
         if view.canScroll, view.scrollPosition < 1 { view.scroll(toPosition: 1) }
         // Where a plugin owns Tab, the user's choice decides; the first time, they are asked.
-        if !session.state.holding, let plugin = session.owner {
+        if !inFlight, let plugin = session.owner {
             switch CompletionPreferences.answer(for: plugin) {
             case .nextTerm: break
             case .plugin: return session.plainTab()
@@ -105,8 +107,12 @@ final class CompletionController {
         let letter = flags == [.control] ? event.charactersIgnoringModifiers?.lowercased() : nil
         switch (event.keyCode, flags) {
         case (48, []), (36, []), (76, []): // Tab, Return, Enter
-            // While Loading, or before the list shows, there is nothing to insert yet.
-            if session.isShown, shown === session, session.list?.rows.isEmpty == false { session.accept(popup.selected) }
+            // While Loading, or before the list shows, there is nothing to insert yet; a Tab waits for the rows.
+            if session.isShown, shown === session, session.list?.rows.isEmpty == false {
+                session.accept(popup.selected)
+            } else if event.keyCode == 48 {
+                session.tabBeforeRows()
+            }
             return true
         case (125, []): // ↓
             popup.move(by: 1)

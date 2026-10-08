@@ -26,6 +26,9 @@ final class CompletionSession {
         case tab
     }
     private var held: [Held] = []
+    /// A Tab pressed while another was in flight, past the hold (zsh's own completion can take seconds): it waits for
+    /// that Tab's outcome (followTab). A key typed meanwhile drops it.
+    private var tabWaiting = false
     /// A bracketed paste runs on: its Return is text, not a key.
     private var inPaste = false
     private var heldPaste = false
@@ -95,6 +98,7 @@ final class CompletionSession {
             if !dispatching || scan.pasteStarts { closeList() }
         }
         guard state.holding else {
+            tabWaiting = false
             note(data)
             return false
         }
@@ -135,19 +139,43 @@ final class CompletionSession {
         view?.sendPastGate(ArraySlice(bytes))
     }
 
-    /// The held writes go out in order, up to a Tab that starts holding again.
+    /// The held writes go out in order, up to a Tab that starts holding again; then a Tab that waits follows the
+    /// state it now finds.
     private func release() {
         while !state.holding, !held.isEmpty {
             switch held.removeFirst() {
             case .bytes(let data):
+                // Typed after a Tab that waits: that Tab is dropped.
+                tabWaiting = false
                 note(data)
                 view?.sendPastGate(data)
             case .tab:
-                // A Tab pressed while the answer was owed follows the rule of the state the answer left.
-                if !realTab() { pass([0x09]) }
+                followTab()
             }
         }
         heldPaste = inPaste
+        if tabWaiting, !state.holding { followTab() }
+    }
+
+    /// A Tab pressed while another was in flight follows the rule of the state that one left. Still in flight, it
+    /// waits. An open list takes it as its own Tab once its rows show (the first row goes in, as zsh's second Tab
+    /// puts in its first match), and before that it waits; under the Loading row it does nothing, as a Tab pressed
+    /// there does. Armed: the private key again. Stepped back or Disarmed: a plain ^I, zsh's own second Tab. So it
+    /// never reaches zsh as ^I beside a list of Next Term's.
+    private func followTab() {
+        tabWaiting = false
+        if state.pendingID != nil {
+            tabWaiting = true
+        } else if isListOpen {
+            guard let list else { return } // Loading
+            if !state.shown || list.rows.isEmpty {
+                tabWaiting = true
+            } else {
+                accept(0)
+            }
+        } else if !realTab() {
+            pass([0x09])
+        }
     }
 
     private func pass(_ bytes: [UInt8]) {
@@ -161,8 +189,13 @@ final class CompletionSession {
     /// the key goes on as a plain ^I.
     func realTab() -> Bool {
         if usesScreen { return screenTab() }
+        // Another Tab is in flight: this one waits for its outcome, among the held writes while they are held.
         if state.holding {
             held.append(.tab)
+            return true
+        }
+        if state.pendingID != nil {
+            tabWaiting = true
             return true
         }
         // Armed, and nothing else has the terminal (TerminalTab.shellAlone): the private key.
@@ -188,6 +221,13 @@ final class CompletionSession {
         return true
     }
 
+    /// A Tab on an open list whose rows haven't come yet: it waits for them, as one pressed while the Tab was in
+    /// flight does (followTab). Under the Loading row it does nothing.
+    func tabBeforeRows() {
+        guard isListOpen, let list, !state.shown || list.rows.isEmpty else { return }
+        tabWaiting = true
+    }
+
     /// A real Tab the plugin that owns Tab keeps: a plain ^I. False: the key goes on as it is
     /// (CompletionController).
     func plainTab() -> Bool {
@@ -211,6 +251,7 @@ final class CompletionSession {
     /// 150 ms on zsh's path with nothing back: the list opens with a Loading row.
     private func loadingDue(_ id: Int) {
         state.loadingDue(id)
+        release()
         changed()
     }
 
@@ -271,8 +312,9 @@ final class CompletionSession {
                 // Only zsh-autocomplete's state changed (a config key): the line and anything in flight stay.
                 state.update(arm)
             } else {
-                // A new line or keymap: a list still open on the shell's side is over.
+                // A new line or keymap: a list still open on the shell's side is over, and a Tab that waits with it.
                 if let id = state.openID, state.path != .screen { write(CompletionProtocol.close(id: id)) }
+                tabWaiting = false
                 state.armed(arm)
                 listClosed()
             }
@@ -323,6 +365,7 @@ final class CompletionSession {
 
     /// A command started: nothing in flight survives it.
     func disarm() {
+        tabWaiting = false
         holdTimer?.cancel()
         state.disarm()
         listClosed()
@@ -383,6 +426,7 @@ final class CompletionSession {
     /// Puts row `index` on the line, and closes the list.
     func accept(_ index: Int) {
         guard isListOpen, let list else { return }
+        tabWaiting = false
         if state.path == .screen {
             guard let candidate = list.screenCandidate(index) else { return }
             return screenAccept(candidate, text: list.rows[index].text, list, since: TerminalTab.now)
@@ -402,6 +446,7 @@ final class CompletionSession {
     /// Closes the list with nothing chosen (Esc, a click elsewhere, the window going): the shell stops
     /// reporting the line.
     func closeList() {
+        tabWaiting = false
         guard let id = state.openID else { return }
         if state.path != .screen { write(CompletionProtocol.close(id: id)) }
         state.closed()
@@ -412,6 +457,7 @@ final class CompletionSession {
     /// The list can't be shown (its window isn't in front): on zsh's path zsh lists as it would by itself;
     /// Next Term's own list just closes.
     func cannotShow() {
+        tabWaiting = false
         guard let id = state.openID ?? state.pendingID else { return }
         if state.path == .completionSystem {
             write(CompletionProtocol.frame(.native, id: id))
