@@ -41,6 +41,10 @@ public enum ImportShortcuts {
             "toggleComment:": "Comment Line",
             "indentSelection:": "Indent",
             "outdentSelection:": "Outdent",
+            "duplicateLine:": "Duplicate Line",
+            "deleteLine:": "Delete Line",
+            "moveLineUp:": "Move Line Up",
+            "moveLineDown:": "Move Line Down",
             "clearBuffer:": "Clear Buffer",
             "toggleProjectSidebar:": "Hide or Show Project Sidebar",
             "toggleEditorFocus:": "Focus Editor or Terminal",
@@ -208,15 +212,17 @@ extension ImportPlan {
             rows.append(row)
         }
 
-        // Two rows on one key: the first keeps it (an importer puts the one the other app obeys first).
-        var claimed: [KeyChord: String] = [:]
+        // Two rows on one key: the first keeps it (an importer puts the one the other app obeys first), unless
+        // one acts in the editor and the other on the terminal (KeyBindings.canShareKey).
+        var claimed: [KeyChord: [String]] = [:]
         for i in rows.indices where rows[i].ticked {
             guard let chord = rows[i].chord else { continue }
-            if let first = claimed[chord] {
+            let command = rows[i].command
+            if let first = claimed[chord, default: []].first(where: { !KeyBindings.canShareKey($0, command) }) {
                 rows[i].ticked = false
                 rows[i].note = ImportShortcuts.join("\(name(first)) gets \(chord.display) in this import", rows[i].note)
             } else {
-                claimed[chord] = rows[i].command
+                claimed[chord, default: []].append(command)
             }
         }
 
@@ -225,18 +231,22 @@ extension ImportPlan {
         // which can clash with another row in turn, so this runs until nothing changes.
         var after = current
         for row in rows where row.ticked { after[row.command] = .some(row.chord) }
-        func owner(of chord: KeyChord, except id: String) -> String? {
-            after.keys.sorted().first { $0 != id && (after[$0] ?? nil) == chord }
+        func owners(of chord: KeyChord, except id: String) -> [String] {
+            after.keys.sorted().filter { $0 != id && (after[$0] ?? nil) == chord && !KeyBindings.canShareKey($0, id) }
         }
         var changed = true
         while changed {
             changed = false
             for i in rows.indices where rows[i].ticked {
                 guard let chord = rows[i].chord else { continue }
-                if let other = owner(of: chord, except: rows[i].command) {
+                let others = owners(of: chord, except: rows[i].command).map(name)
+                if !others.isEmpty {
+                    // ⌘D can be two commands' (one in the editor, one elsewhere): both are named.
+                    let whose = others.map { $0 + "’s" }.joined(separator: " and ")
+                    let left = others.joined(separator: " and ") + (others.count == 1 ? " is" : " are")
                     rows[i].ticked = false
                     rows[i].note = ImportShortcuts.join(
-                        "\(chord.display) is \(name(other))’s here; tick to move it (\(name(other)) is left without a shortcut)", rows[i].note)
+                        "\(chord.display) is \(whose) here; tick to move it (\(left) left without a shortcut)", rows[i].note)
                 } else if let alias = aliases[chord], alias != rows[i].command {
                     // A hidden menu item's key can't be moved.
                     rows[i].ticked = false
@@ -248,6 +258,16 @@ extension ImportPlan {
                 after[rows[i].command] = .some(current[rows[i].command] ?? nil)
                 changed = true
             }
+        }
+        // A key a row shares with a command in the other part: which one has it where.
+        for i in rows.indices where rows[i].ticked {
+            let command = rows[i].command
+            guard let chord = rows[i].chord,
+                  let other = after.keys.sorted().first(where: { $0 != command && (after[$0] ?? nil) == chord }) else { continue }
+            let editor = KeyBindings.editorCommands.contains(command) ? command : other
+            let elsewhere = editor == command ? other : command
+            let shared = "\(chord.display) is \(name(editor)) while the editor has the keyboard, \(name(elsewhere)) everywhere else"
+            if rows[i].note?.contains(shared) != true { rows[i].note = ImportShortcuts.join(shared, rows[i].note) }
         }
         plan.shortcuts = rows
         return plan

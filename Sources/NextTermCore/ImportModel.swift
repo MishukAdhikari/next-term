@@ -24,9 +24,11 @@ public enum KeymapPreset: String, CaseIterable, Codable, Sendable {
         case .nextTerm:
             return [:]
         case .vsCode:
+            let none: KeyChord? = nil
             return [
                 "newWindow:": KeyChord(key: "n", command: true, shift: true),
                 "splitRight:": cmd("\\"),          // ⌘D is Add Selection to Next Find Match there
+                "duplicateLine:": none,            // so ⌘D does nothing unexpected; ⇧⌥↓ there types a character here
                 "replaceInFiles:": KeyChord(key: "h", command: true, shift: true),
             ]
         case .jetBrains:
@@ -36,7 +38,8 @@ public enum KeymapPreset: String, CaseIterable, Codable, Sendable {
                 "saveDocument:": KeyChord(key: "s", command: true, option: true),
                 "saveAllDocuments:": cmd("s"),      // ⌘S saves everything in JetBrains IDEs
                 "replaceInFile:": cmd("r"),
-                "splitRight:": cmd("\\"),          // ⌘D is Duplicate Line there
+                "splitRight:": cmd("\\"),          // ⌘D is Duplicate Line there, as it is in Next Term's editor
+                "deleteLine:": cmd("\u{8}"),       // ⌘⌫, in the editor only (the sidebar's ⌘⌫ still trashes)
                 "indentSelection:": none,          // ⌘] and ⌘[ are Forward and Back there; ⇥ and ⇧⇥ indent
                 "outdentSelection:": none,
             ]

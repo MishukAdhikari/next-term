@@ -40,6 +40,11 @@ extension ImportVSCode {
             "editor.action.commentLine": "toggleComment:",
             "editor.action.indentLines": "indentSelection:",
             "editor.action.outdentLines": "outdentSelection:",
+            "editor.action.copyLinesDownAction": "duplicateLine:",
+            "editor.action.duplicateSelection": "duplicateLine:",
+            "editor.action.deleteLines": "deleteLine:",
+            "editor.action.moveLinesUpAction": "moveLineUp:",
+            "editor.action.moveLinesDownAction": "moveLineDown:",
             "workbench.action.terminal.clear": "clearBuffer:",
             "workbench.action.toggleSidebarVisibility": "toggleProjectSidebar:",
             "workbench.files.action.showActiveFileInExplorer": "revealInSidebar:",
@@ -145,7 +150,7 @@ extension ImportVSCode {
             let note: String?
             switch scope(of: rule.when) {
             case .everywhere: note = nil
-            case .editor: note = "kept to the editor in VS Code"
+            case .editor: note = KeyBindings.editorCommands.contains(target) ? nil : "kept to the editor in VS Code" // as here
             case .terminal where ImportShortcuts.terminalCommands.contains(target): note = "kept to the terminal in VS Code"
             case .terminal, .limited:
                 let when = ImportShortcuts.shown(rule.when ?? "")

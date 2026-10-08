@@ -23,6 +23,8 @@ import Testing
             "performFindPanelAction:#3": cmd("g", shift: true), "performFindPanelAction:#7": cmd("e"),
             "findInFiles:": cmd("f", shift: true), "replaceInFiles:": cmd("r", shift: true), "sendToAgent:": cmd("k", option: true),
             "goToLine:": cmd("l"), "toggleComment:": cmd("/"), "indentSelection:": cmd("]"), "outdentSelection:": cmd("["),
+            "duplicateLine:": cmd("d"), "deleteLine:": cmd("k", shift: true), "moveLineUp:": cmd("\u{F700}", control: true),
+            "moveLineDown:": cmd("\u{F701}", control: true), "copyPathWithLine:": nil,
             "clearBuffer:": cmd("k"), "toggleProjectSidebar:": cmd("b"), "toggleEditorFocus:": KeyChord(key: "`", control: true),
             "toggleTerminalCollapsed:": cmd("j"), "revealInSidebar:": nil, "showChanges:": cmd("g", option: true),
             "toggleSoftWrap:": nil, "toggleSidebarSide:": nil, "increaseFontSize:": cmd("+"), "decreaseFontSize:": cmd("-"),
@@ -152,6 +154,24 @@ import Testing
         #expect(only?.note == "⌘T is New Tab’s here; tick to move it (New Tab is left without a shortcut)")
         // The app's own keys (⌘H, ⌘Q) count as well.
         #expect(settled([row("goToFile:", Self.cmd("h"))]).shortcuts.first?.ticked == false)
+    }
+
+    @Test func aKeyTheOtherPartHasIsShared() {
+        // ⇧⌘D for Duplicate Line (a JetBrains keymap): Split Down keeps it outside the editor, and the row says so.
+        let shared = settled([row("duplicateLine:", Self.cmd("d", shift: true))])
+        #expect(shared.shortcuts.first?.ticked == true)
+        #expect(shared.shortcuts.first?.note == "⇧⌘D is Duplicate Line while the editor has the keyboard, Split Down everywhere else")
+        #expect(shared.settlingShortcuts(current: Self.current()) == shared)
+        // Split Down onto ⌘D: Split Right's (a clash); Duplicate Line keeps ⌘D in the editor.
+        let down = settled([row("splitDown:", Self.cmd("d"))]).shortcuts.first
+        #expect(down?.ticked == false && down?.note == "⌘D is Split Right’s here; tick to move it (Split Right is left without a shortcut)")
+        // A command for both parts on ⌘D clashes with both, and the row names both.
+        let line = settled([row("goToLine:", Self.cmd("d"))]).shortcuts.first
+        #expect(line?.ticked == false)
+        #expect(line?.note == "⌘D is Duplicate Line’s and Split Right’s here; tick to move it (Duplicate Line and Split Right are left without a shortcut)")
+        // Two rows on one key, one for each part: both stay ticked.
+        let both = settled([row("duplicateLine:", Self.cmd("y")), row("splitRight:", Self.cmd("y"))])
+        #expect(both.shortcuts.map(\.ticked) == [true, true])
     }
 
     @Test func swappingTwoKeysIsNoClash() {

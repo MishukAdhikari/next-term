@@ -805,7 +805,7 @@ import Testing
     @Test func keybindingsAsRows() throws {
         let result = try keybindings()
         let rows = result.shortcuts
-        #expect(rows.map(\.command) == ["goToFile:", "goToLine:", "splitRight:", "showNextTab:", "closeTab:",
+        #expect(rows.map(\.command) == ["goToFile:", "goToLine:", "splitRight:", "showNextTab:", "duplicateLine:", "closeTab:",
                                         "toggleTerminalCollapsed:", "toggleProjectSidebar:", "toggleComment:"])
         func row(_ id: String) -> PlannedShortcut? { rows.first { $0.command == id } }
 
@@ -817,6 +817,8 @@ import Testing
         // A terminal command kept to VS Code's terminal comes over; so does an editor-focused one.
         #expect(row("splitRight:")?.chord == KeyChord(key: "d", command: true, shift: true) && row("splitRight:")?.note == "kept to the terminal in VS Code")
         #expect(row("toggleComment:")?.chord == KeyChord(key: "l", command: true, shift: true) && row("toggleComment:")?.note == "kept to the editor in VS Code")
+        // Duplicate Line acts only in the editor here too, so that needs no word.
+        #expect(row("duplicateLine:")?.chord == KeyChord(key: "d", command: true) && row("duplicateLine:")?.note == nil)
         // A scan code, read as on a U.S. keyboard.
         #expect(row("showNextTab:")?.chord == KeyChord(key: "]", command: true, shift: true))
         // Only a removal: Close Tab loses ⌘W when Next Term uses ⌘W for it (decided when settled).
@@ -828,7 +830,6 @@ import Testing
 
         let skipped = Dictionary(result.skipped.map { ($0.item, $0.reason) }, uniquingKeysWith: { first, _ in first })
         #expect(skipped["cmd+k cmd+s → workbench.action.files.saveAll"] == "two-step keys aren't supported yet")
-        #expect(skipped["cmd+d → editor.action.copyLinesDownAction"] == "no matching Next Term command")
         #expect(skipped["cmd+/ → editor.action.commentLine"]?.hasPrefix("works only when “editorTextFocus && editorHasSelection”") == true)
         #expect(skipped["cmd+e → workbench.action.terminal.sendSequence"] == "no matching Next Term command")
         #expect(skipped["alt+z → editor.action.toggleWordWrap"] == "a menu shortcut needs ⌘ or ⌃ (Option alone types a character)")
@@ -838,7 +839,7 @@ import Testing
         #expect(skipped["cmd+i → aichat.newchataction"] == "no matching Next Term command")
         #expect(skipped["cmd+shift+p → workbench.action.quickOpen"] == "passes arguments in VS Code, which don't come over")
         #expect(skipped["1 shortcut removed in keybindings.json"] == "they belong to commands Next Term doesn't have, so nothing changes here")
-        #expect(result.skipped.count == 11)
+        #expect(result.skipped.count == 10)
         #expect(!"\(result)".contains("TOKEN") && !"\(result)".contains("sk-"))
     }
 
@@ -853,6 +854,8 @@ import Testing
         #expect(row("showNextTab:") == nil)
         #expect(row("closeTab:")?.ticked == true && row("toggleProjectSidebar:")?.ticked == true && row("toggleComment:")?.ticked == true)
         #expect(row("goToLine:")?.ticked == false && row("toggleTerminalCollapsed:")?.ticked == false)
+        // ⌘D is free under the VS Code keys (Split Right is ⌘\ there, Duplicate Line has none), so it comes over.
+        #expect(row("duplicateLine:")?.ticked == true && row("duplicateLine:")?.note == nil)
     }
 
     @Test func onOneKeyTheRuleFurtherDownWins() throws {
@@ -955,7 +958,7 @@ import Testing
         let user = try user(home)
         try write(Self.keybindings, to: user + "/keybindings.json")
         let found = plan(app(user), home: home)
-        #expect(found.preset == .vsCode && found.shortcuts.count == 8)
+        #expect(found.preset == .vsCode && found.shortcuts.count == 9)
         #expect(found.skipped.contains(SkippedItem("cmd+k cmd+s → workbench.action.files.saveAll", "two-step keys aren't supported yet")))
         // New files hold a comment and [] only; a broken one is said, and the settings still come.
         try write("// Place your key bindings in this file to override the defaults\n[\n]", to: user + "/keybindings.json")

@@ -196,7 +196,7 @@ import Testing
             "keymaps/macOS - Mishuk.xml": customKeymap("macOS - Mishuk", parent: "Mac OS X 10.5+", actions: ["GotoFile", "EditorDuplicate", "SaveAll"]),
         ])
         #expect(result.preset == .jetBrains && result.notes.isEmpty)
-        #expect(result.shortcuts.map(\.command) == ["goToFile:", "saveAllDocuments:"])
+        #expect(result.shortcuts.map(\.command) == ["goToFile:", "duplicateLine:", "saveAllDocuments:"])
 
         // A custom keymap on VS Code's, found by the name inside the file (the file name was made safe).
         result = try keymapResult([
@@ -280,7 +280,7 @@ import Testing
         try write(keymapChoice("macOS - Mishuk"), to: config + "/options/keymap.xml")
         try write(Self.ownKeymap, to: config + "/keymaps/macOS - Mishuk.xml")
         let plan = ImportJetBrains.plan(for: app(config), home: home)
-        #expect(plan.shortcuts.map(\.command) == ["toggleEditorFocus:", "closeTab:", "findInFiles:", "goToFile:", "goToLine:",
+        #expect(plan.shortcuts.map(\.command) == ["toggleEditorFocus:", "closeTab:", "duplicateLine:", "findInFiles:", "goToFile:", "goToLine:",
                                                   "showNextTab:", "splitRight:"])
         func row(_ id: String) -> PlannedShortcut? { plan.shortcuts.first { $0.command == id } }
         #expect(row("toggleEditorFocus:")?.chord == KeyChord(key: "t", command: true) && row("toggleEditorFocus:")?.ticked == true)
@@ -294,7 +294,7 @@ import Testing
         #expect(row("splitRight:")?.chord == KeyChord(key: "\\", command: true))
 
         let skipped = Dictionary(plan.skipped.map { ($0.item, $0.reason) }, uniquingKeysWith: { first, _ in first })
-        #expect(skipped["EditorDuplicate meta shift D"] == "no matching Next Term command")
+        #expect(row("duplicateLine:")?.chord == KeyChord(key: "d", command: true, shift: true))
         #expect(skipped["SelectNextOccurrence meta D"] == "no matching Next Term command")
         #expect(skipped["GotoAction"] == "no matching Next Term command")
         #expect(skipped["FindInPath meta button2"] == "mouse shortcuts aren't brought over")
@@ -305,11 +305,13 @@ import Testing
         #expect(skipped["1 action left without shortcuts in your keymap"] == "they have no matching Next Term command, so nothing changes here")
 
         // Settled under the JetBrains keys: ⌘T is New Tab's; Find in Files, Show Next Tab and Split Right
-        // already have these keys; ⌘P is free there, since Go to File is on ⇧⌘O.
+        // already have these keys; ⌘P is free there, since Go to File is on ⇧⌘O. Duplicate Line takes ⇧⌘D in the
+        // editor, and the row says Split Down keeps it everywhere else.
         let settled = plan.settlingShortcuts(current: ImportShortcutsTests.current(.jetBrains))
-        #expect(settled.shortcuts.map(\.command) == ["toggleEditorFocus:", "closeTab:", "goToFile:", "goToLine:"])
-        #expect(settled.shortcuts.map(\.ticked) == [false, false, true, false])
+        #expect(settled.shortcuts.map(\.command) == ["toggleEditorFocus:", "closeTab:", "duplicateLine:", "goToFile:", "goToLine:"])
+        #expect(settled.shortcuts.map(\.ticked) == [false, false, true, true, false])
         #expect(settled.shortcuts[0].note?.hasPrefix("⌘T is New Tab’s here") == true)
+        #expect(settled.shortcuts[2].note == "⇧⌘D is Duplicate Line while the editor has the keyboard, Split Down everywhere else")
     }
 
     @Test func keyStrokes() {
