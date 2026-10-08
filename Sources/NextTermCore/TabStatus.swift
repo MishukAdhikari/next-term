@@ -91,6 +91,9 @@ public struct TabStatus {
 
     public init() {}
 
+    /// When the running command started, on the clock the tab passes in as `now`; nil at the prompt.
+    public var runningSince: TimeInterval? { running ? startedAt : nil }
+
     /// The status mark. Only AI agents show "working", in step with what the agent itself shows;
     /// other programs show nothing while they run, then done or failed.
     public var state: TabState {

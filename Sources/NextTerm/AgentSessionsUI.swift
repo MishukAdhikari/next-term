@@ -9,12 +9,29 @@ enum SessionStore {
     nonisolated(unsafe) static var commandPrefix = ""
     private static let queue = DispatchQueue(label: "nextterm.sessions", qos: .userInitiated)
 
-    /// The sessions for a project (its subfolders included), off the main thread.
-    static func load(_ project: String, done: @escaping (AgentSessions.Listing) -> Void) {
+    /// The sessions for a project (its subfolders included), and the tabs any of them are open in, off the
+    /// main thread.
+    static func load(_ project: String, done: @escaping (AgentSessions.Listing, SessionTabs) -> Void) {
         let home = self.home
+        let running = runningAgents()
         queue.async {
             let listing = AgentSessions.list(project: project, home: home, subfolders: true)
-            DispatchQueue.main.async { done(listing) }
+            let open = AgentSessions.openSessions(running, home: home)
+            DispatchQueue.main.async { done(listing, SessionTabs(open: open)) }
+        }
+    }
+
+    /// The agents running in this Mac's tabs, each with when it started and the command that started it.
+    static func runningAgents() -> [RunningAgent] {
+        guard let app = AppDelegate.shared else { return [] }
+        return app.controllers.flatMap(\.tabs).compactMap { tab -> RunningAgent? in
+            let status = tab.status
+            guard tab.remote == nil, status.running, status.kind == .agent, let since = status.runningSince,
+                  let agent = AgentKind(program: status.program) ?? AgentKind(program: CommandClassifier.programName(status.expandedCommand))
+            else { return nil }
+            let line = status.expandedCommand.isEmpty ? status.command : status.command + " ; " + status.expandedCommand
+            return RunningAgent(key: tab.id.uuidString, agent: agent, directory: tab.liveDirectory, commandLine: line,
+                                startedAt: Date().addingTimeInterval(since - TerminalTab.now))
         }
     }
 
@@ -61,8 +78,24 @@ enum SessionStore {
     }
 }
 
+/// Which sessions are open in which of this Mac's tabs (from `AgentSessions.openSessions`).
+struct SessionTabs {
+    var open: [String: String] = [:]
+
+    /// The tab `session` is open in, while that tab still runs an agent.
+    func tab(of session: AgentSession) -> (controller: TerminalWindowController, tab: TerminalTab)? {
+        guard let key = AgentSessions.tab(of: session, in: open), let app = AppDelegate.shared else { return nil }
+        for controller in app.controllers {
+            if let tab = controller.tabs.first(where: { $0.id.uuidString == key }), tab.status.running, tab.status.kind == .agent {
+                return (controller, tab)
+            }
+        }
+        return nil
+    }
+}
+
 /// One session in a list: its title on the first line; the agent (with its colour), when, the branch and
-/// the model on the second. A session open in a running agent says so.
+/// the model on the second. A session open in a tab, or in an agent running elsewhere, says so.
 final class SessionCell: NSTableCellView {
     static let identifier = NSUserInterfaceItemIdentifier("SessionCell")
     private let title = NSTextField(labelWithString: "")
@@ -96,7 +129,7 @@ final class SessionCell: NSTableCellView {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    func show(_ session: AgentSession, project: String?) {
+    func show(_ session: AgentSession, project: String?, inTab: Bool = false) {
         // A name you gave it reads a little stronger than one the agent made up.
         title.attributedStringValue = NSAttributedString(string: session.title, attributes: [
             .font: NSFont.systemFont(ofSize: 13, weight: session.named ? .semibold : .regular), .foregroundColor: Theme.text,
@@ -109,8 +142,8 @@ final class SessionCell: NSTableCellView {
         if let branch = session.gitBranch { parts.append("⎇ " + branch) }
         if let model = session.model { parts.append(model) }
         let text = NSMutableAttributedString()
-        if session.isRunning {
-            text.append(NSAttributedString(string: "● open in a running agent   ", attributes: [
+        if inTab || session.isRunning {
+            text.append(NSAttributedString(string: inTab ? "● open in a tab   " : "● open in a running agent   ", attributes: [
                 .font: NSFont.systemFont(ofSize: 11, weight: .medium), .foregroundColor: Theme.done,
             ]))
         }
@@ -119,15 +152,18 @@ final class SessionCell: NSTableCellView {
         ]))
         detail.attributedStringValue = text
         let command = SessionStore.commandPrefix + session.resumeCommand()
-        toolTip = session.title + "\n" + session.cwd + "\n" + command
-        setAccessibilityLabel("\(session.title), \(session.agent.name), \(SessionStore.when(session.updatedAt))")
+        toolTip = session.title + "\n" + session.cwd + "\n" + (inTab ? "Open in a tab now" : command)
+        let state = inTab ? ", open in a tab" : session.isRunning ? ", open in a running agent" : ""
+        setAccessibilityLabel("\(session.title), \(session.agent.name), \(SessionStore.when(session.updatedAt))" + state)
     }
 }
 
 extension AppDelegate {
     /// Picks a session up again: the project's window (opened if needed), a new tab in the folder the
-    /// agent worked in, and its resume command typed and run there.
-    func resume(_ session: AgentSession, fork: Bool, project: String) {
+    /// agent worked in, and its resume command typed and run there. A session already open in a tab goes
+    /// to that tab instead of starting a second copy of it (`tabs`); a fork always gets a tab of its own.
+    func resume(_ session: AgentSession, fork: Bool, project: String, tabs: SessionTabs = SessionTabs()) {
+        if !fork, let open = tabs.tab(of: session) { return goTo(open.tab, in: open.controller) }
         let controller = openFolder(project, newWindow: false)
         let exists = FileManager.default.fileExists(atPath: session.cwd)
         let command = SessionStore.commandPrefix + session.resumeCommand(fork: fork)
@@ -135,10 +171,26 @@ extension AppDelegate {
         controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
+
+    /// The agent's own "continue the latest session here" (`claude --continue`, `codex resume --last`), in
+    /// a new tab in the project's folder.
+    func continueLatest(_ agent: AgentKind, project: String) {
+        let controller = openFolder(project, newWindow: false)
+        controller.runInNewTab(directory: project, command: SessionStore.commandPrefix + agent.continueCommand, title: nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Brings a tab and its window to the front.
+    func goTo(_ tab: TerminalTab, in controller: TerminalWindowController) {
+        controller.show(tab)
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
 }
 
-/// ⌥⌘O in a project window: the project's agent sessions, newest first; type to filter, ↩ resumes,
-/// ⌘↩ forks (a copy, leaving the original as it was).
+/// ⌥⌘O in a project window: the project's agent sessions, newest first; type to filter, ↩ resumes (or goes
+/// to the tab the session is open in), ⌘↩ forks (a copy, leaving the original as it was).
 final class SessionsPanelController: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate {
     var onResume: ((AgentSession, _ fork: Bool) -> Void)?
     private let panel = GoToFilePanel(contentRect: NSRect(x: 0, y: 0, width: 640, height: 100), styleMask: [.borderless],
@@ -146,8 +198,10 @@ final class SessionsPanelController: NSObject, NSTextFieldDelegate, NSTableViewD
     private let field = NSTextField()
     private let table = NSTableView()
     private let footer = NSTextField(labelWithString: "")
+    private let hints = NSTextField(labelWithString: "")
     private var all: [AgentSession] = []
     private var rows: [AgentSession] = []
+    private var tabs = SessionTabs()
     private var project = ""
 
     override init() {
@@ -160,7 +214,9 @@ final class SessionsPanelController: NSObject, NSTextFieldDelegate, NSTableViewD
         field.stringValue = ""
         all = []
         rows = []
+        tabs = SessionTabs()
         table.reloadData()
+        updateHints()
         footer.stringValue = "Reading sessions…"
         let frame = parent.frame
         let width = min(640, frame.width - 40)
@@ -170,9 +226,10 @@ final class SessionsPanelController: NSObject, NSTextFieldDelegate, NSTableViewD
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(field)
         let requested = self.project
-        SessionStore.load(requested) { [weak self] listing in
+        SessionStore.load(requested) { [weak self] listing, tabs in
             guard let self, self.project == requested, self.panel.isVisible else { return }
             self.all = listing.sessions
+            self.tabs = tabs
             self.filter()
             if !listing.problems.isEmpty {
                 self.footer.stringValue += "   Could not read: " + listing.problems.keys.map(\.name).sorted().joined(separator: ", ")
@@ -204,7 +261,23 @@ final class SessionsPanelController: NSObject, NSTextFieldDelegate, NSTableViewD
         let name = (project as NSString).lastPathComponent
         footer.stringValue = all.isEmpty ? "No agent sessions in \(name) yet."
             : "\(rows.count) of \(all.count) sessions in \(name)"
+        updateHints()
     }
+
+    /// What ↩ and ⌘↩ do for the selected session: go to its tab when it is open in one, and no fork for
+    /// an agent that cannot.
+    private func updateHints() {
+        let session = rows[safe: table.selectedRow]
+        let inTab = session.map { tabs.tab(of: $0) != nil } ?? false
+        var parts = [inTab ? "↩ go to tab" : "↩ resume"]
+        if session?.agent.canFork != false { parts.append("⌘↩ fork") }
+        parts.append("esc close")
+        hints.stringValue = parts.joined(separator: "   ")
+    }
+
+    var hintText: String { hints.stringValue }
+
+    func tableViewSelectionDidChange(_ notification: Notification) { updateHints() }
 
     func controlTextDidChange(_ obj: Notification) { filter() }
 
@@ -233,7 +306,12 @@ final class SessionsPanelController: NSObject, NSTextFieldDelegate, NSTableViewD
         let row = table.clickedRow >= 0 ? table.clickedRow : table.selectedRow
         guard rows.indices.contains(row) else { return NSSound.beep() }
         let session = rows[row]
+        if fork, !session.agent.canFork {
+            footer.stringValue = "\(session.agent.name) cannot fork a session from the command line."
+            return NSSound.beep()
+        }
         close()
+        if !fork, let open = tabs.tab(of: session) { return AppDelegate.shared.goTo(open.tab, in: open.controller) }
         onResume?(session, fork)
     }
 
@@ -289,7 +367,6 @@ final class SessionsPanelController: NSObject, NSTextFieldDelegate, NSTableViewD
         footer.font = .systemFont(ofSize: 11)
         footer.textColor = Theme.textDim
         footer.lineBreakMode = .byTruncatingTail
-        let hints = NSTextField(labelWithString: "↩ resume   ⌘↩ fork   esc close")
         hints.font = .systemFont(ofSize: 11)
         hints.textColor = Theme.textDim
         for view in [glass, field, rule, scroll, footer, hints] as [NSView] {
@@ -324,7 +401,7 @@ final class SessionsPanelController: NSObject, NSTextFieldDelegate, NSTableViewD
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { GoToFileRowView() }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let cell = tableView.makeView(withIdentifier: SessionCell.identifier, owner: self) as? SessionCell ?? SessionCell()
-        cell.show(rows[row], project: project)
+        cell.show(rows[row], project: project, inTab: tabs.tab(of: rows[row]) != nil)
         return cell
     }
 
