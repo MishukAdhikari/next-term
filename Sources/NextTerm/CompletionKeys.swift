@@ -52,8 +52,7 @@ final class CompletionController {
             case .nextTerm: break
             case .plugin: return session.plainTab()
             case .ask:
-                ask(plugin, session, tab)
-                return true
+                return ask(plugin, session, tab) || session.plainTab()
             }
         }
         watch(session)
@@ -61,9 +60,10 @@ final class CompletionController {
     }
 
     /// The question, over the window; the Tab that raised it waits for the answer. If the shell moved on
-    /// meanwhile (an agent typed, a command started), that Tab goes nowhere.
-    private func ask(_ plugin: CompletionOwner.Plugin, _ session: CompletionSession, _ tab: TerminalTab) {
-        guard let window = owner?.window, window.attachedSheet == nil else { return }
+    /// meanwhile (an agent typed, a command started), that Tab goes nowhere. False: another sheet is up, so
+    /// the Tab is the plugin's this time.
+    private func ask(_ plugin: CompletionOwner.Plugin, _ session: CompletionSession, _ tab: TerminalTab) -> Bool {
+        guard let window = owner?.window, window.attachedSheet == nil else { return false }
         let writes = session.writes
         let arm = session.state.arm
         CompletionPluginQuestion.ask(plugin, in: window) { [weak self] answer in
@@ -82,6 +82,7 @@ final class CompletionController {
                 session.sendPlainTab()
             }
         }
+        return true
     }
 
     /// Tab with no ⌘, ⌥, ⌃ or ⇧.
