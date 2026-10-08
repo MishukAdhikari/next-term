@@ -86,6 +86,13 @@ enum MCPWriteControl {
     private(set) static var pending: Asking?
     /// Askers who chose Decline and Stop Asking: refused without a window until Next Term quits.
     static var stopped = Set<String>()
+    static let stoppedText = "The user chose Decline and Stop Asking for your requests, until Next Term quits; nothing changed. Ask the user directly."
+
+    /// Whether the asker chose Decline and Stop Asking. Only asking on the Mac stops: a grant asks nothing.
+    static func isStopped(_ context: Context) -> Bool {
+        guard case .askOnMac = context.approval else { return false }
+        return stopped.contains(context.asker)
+    }
 
     /// What the user is asked: a title such as “An agent asks to change a file”, and what would change.
     struct Ask {
@@ -100,9 +107,7 @@ enum MCPWriteControl {
     static func approve(_ ask: Ask, _ context: Context, reply: @escaping Reply,
                         change: @escaping (_ approved: String, _ window: AgentApprovalWindow?) -> Void) {
         if case .preApprovedByGrant(let grant) = context.approval { return change("by grant \(grant)", nil) }
-        if stopped.contains(context.asker) {
-            return reply(MCPControl.fail("The user chose Decline and Stop Asking for your requests, until Next Term quits; nothing changed. Ask the user directly."))
-        }
+        if isStopped(context) { return reply(MCPControl.fail(stoppedText)) }
         if pending != nil {
             return reply(MCPControl.fail("Another change is waiting for the user's answer on the Mac; nothing changed. Try again once it is answered."))
         }

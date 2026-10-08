@@ -14,10 +14,15 @@ extension MCPWriteControl {
     final class Proposal {
         let id = String(UUID().uuidString.prefix(8)).lowercased()
         let change: MCPFileChange
+        /// Who proposed it (Context.asker): each asker has one proposal open at a time.
+        let asker: String
         var answer: [String: Any]?
         var waiters: [(token: UUID, reply: Reply)] = []
 
-        init(change: MCPFileChange) { self.change = change }
+        init(change: MCPFileChange, asker: String) {
+            self.change = change
+            self.asker = asker
+        }
     }
 
     /// Proposals by id; answered ones are forgotten ten minutes after their answer.
@@ -51,13 +56,18 @@ extension MCPWriteControl {
     }
 
     private static func propose(_ change: MCPFileChange, _ context: Context, reply: @escaping Reply) {
+        // A proposal opens a tab in the user's editor: none after Decline and Stop Asking, and one at a time.
+        if isStopped(context) { return reply(MCPControl.fail(stoppedText)) }
+        if let open = proposals.values.first(where: { $0.asker == context.asker && $0.answer == nil }) {
+            return reply(MCPControl.fail("Your proposal for \(open.change.file.relative) is still open in Next Term; wait for the user's answer (propose_edit with proposal_id \(open.id)) before proposing another."))
+        }
         guard change.changesText else {
             return reply(MCPControl.ok(["status": "unchanged", "path": change.file.relative, "note": "The file has that text already; nothing to propose."]))
         }
         guard let controller = window(for: change.file.path, context) else {
             return reply(MCPControl.fail("No Next Term window is open to show the proposal in."))
         }
-        let proposal = Proposal(change: change)
+        let proposal = Proposal(change: change, asker: context.asker)
         proposals[proposal.id] = proposal
         let shown = DiffPane.Proposal(original: change.original ?? "", proposed: change.content, author: author(context),
                                       tag: "mcp:" + proposal.id, client: nil)
@@ -182,6 +192,8 @@ extension MCPWriteControl {
                 }
             }
         }
+        // An accepted proposal is written without asking, but not after Decline and Stop Asking.
+        if isStopped(context) { return reply(MCPControl.fail(stoppedText)) }
         if takeAccepted(change) { return run("accepted in the proposal", nil) }
         approve(ask, context, reply: reply, change: run)
     }
