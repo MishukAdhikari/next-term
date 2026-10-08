@@ -165,7 +165,8 @@ final class CompletionSession {
             held.append(.tab)
             return true
         }
-        guard let id = state.startTab() else {
+        // Armed, and nothing else has the terminal (TerminalTab.shellAlone): the private key.
+        guard state.isArmed, tab?.shellAlone == true, let id = state.startTab() else {
             lastTab = .plain
             return false
         }
@@ -355,7 +356,7 @@ final class CompletionSession {
     /// zsh-autocomplete's list as you type goes off where Next Term's list answers Tab, and back on where it
     /// doesn't: a config key to a shell at its prompt whose last `arm` says otherwise.
     func syncQuiet() {
-        guard let arm = state.arm, arm.plugins.contains("autocomplete"), state.isArmed else { return }
+        guard let arm = state.arm, arm.plugins.contains("autocomplete"), state.isArmed, tab?.shellAlone == true else { return }
         let want = CompletionPreferences.quietsAutocomplete
         guard want != arm.quieted else {
             configs = 0

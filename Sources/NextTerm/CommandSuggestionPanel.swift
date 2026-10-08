@@ -368,10 +368,10 @@ final class CommandSuggestionController: NSObject, NSMenuItemValidation {
         (NSApp.keyWindow?.windowController as? TerminalWindowController)?.activeTab
     }
 
-    /// A shell waits at its prompt: nothing runs in front (no agent, no editor, no full-screen program), and a
-    /// server tab is connected.
+    /// A shell waits at its prompt: nothing runs in front (no agent, no editor, no full-screen program, nothing a key
+    /// binding started), and a server tab is connected.
     static func atPrompt(_ tab: TerminalTab) -> Bool {
-        guard !tab.exited, !tab.status.running else { return false }
+        guard !tab.exited, !tab.status.running, tab.shellAlone else { return false }
         guard !tab.view.getTerminal().isCurrentBufferAlternate || tab.completion.inTmux else { return false }
         if tab.remote != nil { return tab.remoteConnected && tab.remoteReady && !tab.disconnected }
         return true

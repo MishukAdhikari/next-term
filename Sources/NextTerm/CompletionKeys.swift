@@ -3,8 +3,9 @@ import NextTermCore
 
 /// Tab completion at the window, one per window: a real Tab in a tab whose shell can take it becomes the
 /// private key (CompletionSession), and while a list is open, the keys that work it. Everything else goes on
-/// as it was: ⌘ chords, Shift-Tab, a Tab while a program runs, on the alternate screen, with marked text, or
-/// with Tab completion off. Agents' keys over MCP never pass the window, so they are never caught.
+/// as it was: ⌘ chords, Shift-Tab, a Tab while a program runs (one a key binding started too), on the alternate
+/// screen, with marked text, or with Tab completion off. Agents' keys over MCP never pass the window, so they are
+/// never caught.
 final class CompletionController {
     private weak var owner: TerminalWindowController?
     private(set) lazy var popup: CompletionPopup = {
@@ -47,6 +48,8 @@ final class CompletionController {
         // A server tab kept in tmux is always on the alternate screen (tmux's); what runs in its pane, the status
         // checks and the hook say.
         guard !view.hasMarkedText(), !view.getTerminal().isCurrentBufferAlternate || session.inTmux else { return false }
+        // A program a key binding started has the terminal (fzf's ⌃T): the key is its own, and nothing is asked.
+        if !session.state.holding, !session.usesScreen, !tab.shellAlone { return session.plainTab() }
         // Scrolled back: the line being completed is at the bottom.
         if view.canScroll, view.scrollPosition < 1 { view.scroll(toPosition: 1) }
         // Where a plugin owns Tab, the user's choice decides; the first time, they are asked.
@@ -232,5 +235,26 @@ final class CompletionController {
     private func removeMonitors() {
         monitors.forEach(NSEvent.removeMonitor)
         monitors = []
+    }
+
+    /// The pty's process group in front is `shell`'s, and holds nothing but the shell.
+    static func aloneInFront(fd: Int32, shell: pid_t) -> Bool {
+        guard fd >= 0, shell > 0, tcgetpgrp(fd) == shell else { return false }
+        // It fills the buffer and returns how many pids it put there (not bytes): room for two is enough to tell.
+        var pids = [pid_t](repeating: 0, count: 2)
+        let count = proc_listpgrppids(shell, &pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+        return count == 1 && pids[0] == shell
+    }
+}
+
+extension TerminalTab {
+    /// The shell has its terminal to itself, so a private key reaches only its line editor. A program a key binding
+    /// starts sends no mark: one run as it is gets a process group of its own, and one in a command substitution
+    /// (fzf's ⌃T, ⌃R and ⌥C) joins the shell's. So on this Mac the group in front must be the shell's, with nothing
+    /// else in it. A builtin such a binding runs (`read`) can't be seen. A server's processes are out of sight: its
+    /// status checks must say nothing runs.
+    var shellAlone: Bool {
+        if remote != nil { return !status.running }
+        return CompletionController.aloneInFront(fd: view.process.childfd, shell: view.process.shellPid)
     }
 }
