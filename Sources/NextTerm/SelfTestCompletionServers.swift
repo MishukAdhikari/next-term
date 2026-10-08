@@ -472,6 +472,21 @@ extension SelfTest {
                   "and a Tab in the plain shell it reconnects to sends no private key", "\(session.lastTab) | \(promptLine(tab))")
             if popup.isVisible { pressKey(window, "\u{1b}", code: 53) }
             tab.view.send(txt: "\u{15}")
+            // Off, its status reports check nothing on the server (the hook deleted there still reads as on here); on
+            // again, they do.
+            CompletionPreferences.set(.off)
+            await pause(1)
+            RemoteCompletionConsent.forgetChecks()
+            if RemoteCompletionConsent.state(host) == .allowed {
+                let reports = session.reportsSinceReturn
+                _ = await wait(8) { session.reportsSinceReturn >= reports + 2 }
+                check(RemoteCompletionConsent.state(host) == .allowed, "Tab completion, the server hook: Off, the status reports check nothing there")
+                CompletionPreferences.set(.auto)
+                check(await wait(8) { RemoteCompletionConsent.state(host) == .removedOnServer }, "and on, they check it again")
+            } else {
+                note("Tab completion, the server hook: the Off check is skipped (a check had already found the hook gone)")
+            }
+            CompletionPreferences.set(.auto)
         } else {
             check(false, "Tab completion, the server hook: the tab reconnects to the stand-in server", tab.screenTail(3).joined(separator: " | "))
         }

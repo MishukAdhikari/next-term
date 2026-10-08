@@ -128,6 +128,11 @@ enum RemoteCompletionConsent {
     /// When each host was last checked.
     nonisolated(unsafe) private static var checked: [String: TimeInterval] = [:]
 
+    #if DEBUG
+    /// For the self-test: every host is due a check again.
+    static func forgetChecks() { checked = [:] }
+    #endif
+
     /// Whether an allowed host still has its hook (once a minute at most, over a tab's connection): one deleted
     /// there is marked removed and never put back by Next Term; one from an older Next Term is brought up to date.
     static func verify(_ host: RemoteHost, force: Bool = false) {
