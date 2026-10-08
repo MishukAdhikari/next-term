@@ -117,7 +117,7 @@ extension SelfTest {
             let before = cli.responses.count
             post(#"{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"get_selection","arguments":{}}}"#)
             _ = await wait(2) { cli.responses.count > before }
-            check(cli.toolJSON(20)?["current"] as? Bool == false, "and get_selection says the file it knows is no longer the current one")
+            check(cli.toolJSON(before)?["current"] as? Bool == false, "and get_selection says the file it knows is no longer the current one")
             c.editorArea.closeActive()
         }
         try? FileManager.default.removeItem(at: env)
