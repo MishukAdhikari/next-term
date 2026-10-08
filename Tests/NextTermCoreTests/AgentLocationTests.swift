@@ -310,11 +310,16 @@ import Testing
     }
 
     @Test func commandsThatMoveHead() {
-        for line in ["git switch fix/x", "git checkout -b y", "git -C .. rebase main", "git -c core.x=1 pull", "gh pr checkout 7050",
+        for line in ["git switch fix/x", "git checkout -b y", "git -C .. switch main", "git -c core.x=1 switch -", "gh pr checkout 7050",
                      "gh co 7050", "git branch -m new", "cd app && git checkout main", "git bisect start", "git reset --hard HEAD~1"] {
             #expect(AgentLocation.movesHead(line), "\(line)")
         }
         for line in ["git status", "git log --oneline", "git branch", "git branch -d old", "gh pr view 7050", "git", "ls", "npm run git"] {
+            #expect(!AgentLocation.movesHead(line), "\(line)")
+        }
+        // They keep the branch: a switch right after one is someone else's.
+        for line in ["git pull", "git -c core.x=1 pull --rebase", "git -C .. rebase main", "git merge fix/x", "git checkout -- app/a.txt",
+                     "git checkout main -- a.txt", "git checkout -p", "git reset --hard", "git reset -- a.txt"] {
             #expect(!AgentLocation.movesHead(line), "\(line)")
         }
     }
@@ -346,10 +351,20 @@ import Testing
     }
 
     @Test func nextTermsOwnStepsThatMoveHead() {
-        #expect(AgentLocation.movesHead(arguments: ["switch", "main"]) && AgentLocation.movesHead(arguments: ["rebase", "--autostash", "main"]))
-        #expect(AgentLocation.movesHead(arguments: ["-c", "x=1", "merge", "--no-edit", "fix/a"]))
+        #expect(AgentLocation.movesHead(arguments: ["switch", "main"]) && AgentLocation.movesHead(arguments: ["-c", "x=1", "switch", "--detach", "v1"]))
+        #expect(AgentLocation.movesHead(arguments: ["reset", "--soft", "abc1234"]) && AgentLocation.movesHead(arguments: ["branch", "-m", "a", "b"]))
+        // Update Project, Merge and Rebase keep the branch.
+        #expect(!AgentLocation.movesHead(arguments: ["rebase", "--autostash", "@{upstream}"]))
+        #expect(!AgentLocation.movesHead(arguments: ["-c", "x=1", "merge", "--no-edit", "--autostash", "fix/a"]))
+        #expect(!AgentLocation.movesHead(arguments: ["merge", "--ff-only", "@{upstream}"]) && !AgentLocation.movesHead(arguments: ["pull"]))
         #expect(!AgentLocation.movesHead(arguments: ["fetch", "origin"]) && !AgentLocation.movesHead(arguments: ["push", "-u", "origin", "x"]))
         #expect(!AgentLocation.movesHead(arguments: []))
+        // Where a switch goes.
+        #expect(AgentLocation.switchTarget(arguments: ["switch", "fix/a"]) == "fix/a")
+        #expect(AgentLocation.switchTarget(arguments: ["switch", "-c", "fix/a", "--track", "origin/fix/a"]) == "fix/a")
+        #expect(AgentLocation.switchTarget(arguments: ["-c", "x=1", "checkout", "-b", "fix/b", "main"]) == "fix/b")
+        #expect(AgentLocation.switchTarget(arguments: ["switch", "--detach", "v1"]) == nil && AgentLocation.switchTarget(arguments: ["switch", "-"]) == nil)
+        #expect(AgentLocation.switchTarget(arguments: ["checkout", "--", "a.txt"]) == nil && AgentLocation.switchTarget(arguments: ["reset", "--hard", "x"]) == nil)
     }
 
     @Test func theSignatureChangesWithAHeadOrAWorktree() throws {
@@ -517,6 +532,24 @@ import Testing
         run(&tracker, sighting(.branch("fix/z"), agents, shell: [elsewhere]), from: 20, to: 23)
         #expect(tracker.places["7"]?.switched == nil && tracker.places["7"]?.workingBranch == .branch("fix/z"))
         #expect(tracker.places["8"]?.switched?.by == .agent(key: "7", title: "tab 7") && tracker.places["8"]?.switched?.from == .branch("main"))
+    }
+
+    /// Your switch went to the branch you chose: when the checkout went to another one within the window (yours
+    /// failed, or an agent switched first), that switch is the agent's (AE1), and yours stays yours.
+    @Test func yourSwitchIsOnlyTheOneToYourBranch() {
+        var tracker = PlaceTracker()
+        let agents = [("7", root, true), ("8", root, false)]
+        run(&tracker, sighting(.branch("main"), [("7", root, true), ("8", root, true)]), from: 0, to: 1)
+        run(&tracker, sighting(.branch("main"), agents), from: 2, to: 4)
+        var seen = sighting(.branch("fix/agent"), agents, own: at(4.5))
+        seen.ownTargets[root] = "fix/mine"
+        run(&tracker, seen, from: 5, to: 9)
+        #expect(tracker.places["7"]?.switched == nil && tracker.places["7"]?.workingBranch == .branch("fix/agent"))
+        #expect(tracker.places["8"]?.switched?.by == .agent(key: "7", title: "tab 7"))
+        seen = sighting(.branch("fix/mine"), agents, own: at(4.5))
+        seen.ownTargets[root] = "fix/mine"
+        run(&tracker, seen, from: 10, to: 14)
+        #expect(tracker.places["7"]?.switched?.by == .you && tracker.places["8"]?.switched?.by == .you)
     }
 
     /// AE8: a rebase that detaches HEAD (long, while git says it is rebasing) marks nobody.

@@ -356,9 +356,10 @@ public enum AgentLocation {
 
     // MARK: who switched
 
-    /// A command line that can move a checkout's HEAD: `git switch`, `checkout`, `rebase`, `merge`,
-    /// `pull`, `reset`, `bisect`, `branch -m`/`-M`, `gh pr checkout` (or `gh co`). Run in a shell tab, it
-    /// says that tab switched (R4).
+    /// A command line that can change what a checkout's HEAD is on: `git switch`, `checkout` (not of files,
+    /// `checkout -- a.txt`), `reset` to a commit, `bisect`, `branch -m`/`-M`, `gh pr checkout` (or `gh co`).
+    /// Run in a shell tab, it says that tab switched (R4). A pull, merge or rebase keeps the branch, so it is
+    /// none: a switch soon after it is someone else's.
     public static func movesHead(_ commandLine: String) -> Bool {
         CommandClassifier.segments(commandLine).contains { segment in
             let (name, args) = CommandClassifier.parse(segment)
@@ -372,18 +373,37 @@ public enum AgentLocation {
 
     /// The same for git's arguments, as Next Term runs them (`["switch", "main"]`).
     public static func movesHead(arguments args: [String]) -> Bool {
-        // The subcommand is the first word after git's own options (`-C dir` and `-c key=value` take one).
+        let index = subcommand(args)
+        guard index < args.count else { return false }
+        let rest = args[(index + 1)...]
+        switch args[index] {
+        case "switch", "bisect": return true
+        case "checkout": return !rest.contains("--") && !rest.contains("-p") && !rest.contains("--patch")
+        case "reset": return !rest.contains("--") && rest.contains { !$0.hasPrefix("-") } // `reset --hard` alone stays put
+        case "branch": return rest.contains { $0 == "-m" || $0 == "-M" || $0 == "--move" }
+        default: return false
+        }
+    }
+
+    /// The branch git's `switch` or `checkout` arguments go to, when they name one (`["switch", "-c",
+    /// "fix/x", "--track", "origin/fix/x"]` is "fix/x"); nil for a detached HEAD, `-`, or another command.
+    public static func switchTarget(arguments args: [String]) -> String? {
+        let index = subcommand(args)
+        guard index < args.count, args[index] == "switch" || args[index] == "checkout" else { return nil }
+        let rest = Array(args[(index + 1)...])
+        guard !rest.contains("--detach"), !rest.contains("-d"), !rest.contains("--") else { return nil }
+        let creating: Set<String> = ["-c", "-C", "--create", "--force-create", "-b", "-B"]
+        if let flag = rest.firstIndex(where: creating.contains) { return flag + 1 < rest.count ? rest[flag + 1] : nil }
+        return rest.first { !$0.hasPrefix("-") }
+    }
+
+    /// Where git's subcommand is: the first word after git's own options (`-C dir` and `-c key=value` take one).
+    static func subcommand(_ args: [String]) -> Int {
         var index = 0
         while index < args.count, args[index].hasPrefix("-") {
             index += args[index] == "-C" || args[index] == "-c" ? 2 : 1
         }
-        guard index < args.count else { return false }
-        let rest = args[(index + 1)...]
-        switch args[index] {
-        case "switch", "checkout", "rebase", "merge", "pull", "reset", "bisect": return true
-        case "branch": return rest.contains { $0 == "-m" || $0 == "-M" || $0 == "--move" }
-        default: return false
-        }
+        return index
     }
 
     /// One entry of a HEAD reflog: where it moved from and to, and why ("commit: Fix it").

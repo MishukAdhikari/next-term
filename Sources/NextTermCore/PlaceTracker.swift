@@ -52,6 +52,8 @@ public struct PlaceSighting {
     public var agents: [Agent] = []
     /// When Next Term itself last switched each checkout (by its path).
     public var ownSwitches: [String: Date] = [:]
+    /// The branch that switch went to, when it named one: a switch to another branch is not it.
+    public var ownTargets: [String: String] = [:]
     /// `git` commands that move HEAD, run in shell tabs lately.
     public var shellCommands: [ShellCommand] = []
 
@@ -206,7 +208,7 @@ public struct PlaceTracker {
     /// along, and every other chat there that has had a turn is marked, unless it is back on its branch.
     private mutating func switched(_ path: String, to head: CheckoutHead, since: Date, at now: Date, seen: PlaceSighting) {
         let here = agents.filter { $0.value.location.value == path }
-        let author = author(of: path, since: since, at: now, seen: seen, here: here)
+        let author = author(of: path, to: head, since: since, at: now, seen: seen, here: here)
         var maker: String?
         if case let .agent(key, _) = author { maker = key }
         for (key, var state) in here where state.hadTurn {
@@ -220,12 +222,14 @@ public struct PlaceTracker {
         }
     }
 
-    /// R4: Next Term's own switch, then a shell tab's git command in that checkout, then the one agent
-    /// working there; else nobody.
-    private mutating func author(of path: String, since: Date, at now: Date, seen: PlaceSighting, here: [String: AgentState]) -> SwitchAuthor {
+    /// R4: Next Term's own switch (to that branch, when it named one), then a shell tab's git command in
+    /// that checkout, then the one agent working there; else nobody.
+    private mutating func author(of path: String, to head: CheckoutHead, since: Date, at now: Date, seen: PlaceSighting,
+                                 here: [String: AgentState]) -> SwitchAuthor {
         let from = since.addingTimeInterval(-Self.ownWindow)
         if credited.count > 500 { credited.removeAll() } // long past any window
-        if let own = seen.ownSwitches[path], own >= from, own <= now, credited.insert("own \(path) \(own.timeIntervalSince1970)").inserted {
+        let target = seen.ownTargets[path].map { head == .branch($0) } ?? true
+        if let own = seen.ownSwitches[path], own >= from, own <= now, target, credited.insert("own \(path) \(own.timeIntervalSince1970)").inserted {
             return .you
         }
         let all = Array(checkouts.values)
