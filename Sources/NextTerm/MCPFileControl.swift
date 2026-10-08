@@ -4,7 +4,8 @@ import NextTermCore
 /// propose_edit, write_file, create_file, stage and commit. The checks and the writes are MCPFileTools' and
 /// MCPGitTools' (off the main thread); asking, the editor and Git Commands are here.
 extension MCPWriteControl {
-    private static let git = GitRunner.locateGit()
+    /// git, for the approval window's summary of a file change (GitWriter has its own).
+    private static let diffGit = GitRunner.locateGit()
 
     // MARK: propose_edit
 
@@ -127,7 +128,7 @@ extension MCPWriteControl {
 
     static func writeFile(_ arguments: [String: Any], _ context: Context, creating: Bool, reply: @escaping Reply) {
         let projects = context.projects
-        let git = Self.git
+        let git = Self.diffGit
         DispatchQueue.global(qos: .userInitiated).async {
             let prepared = creating ? MCPFileTools.prepareCreate(arguments, in: projects) : MCPFileTools.prepareWrite(arguments, in: projects)
             guard case .success(let change) = prepared else {

@@ -112,7 +112,7 @@ Each change opens a small window on your Mac. It says what the agent asks to do,
 
 - **Approve** makes the change. Just before, Next Term checks that what you saw still holds: if the file changed meanwhile, or the staged files or the branch did, the change is refused.
 - **Decline** changes nothing, and the agent is told so.
-- **Decline and Stop Asking** also refuses that agent’s further changes, without a window, until Next Term quits.
+- **Decline and Stop Asking** also refuses further changes from the same tab, without a window, until Next Term quits. For a request from outside Next Term’s tabs, that is every agent outside them.
 
 Like the skills window, it does not take the keyboard and has no Return button, so typing meant for a terminal never answers it. One change waits at a time: another agent asking meanwhile is told to try again. With no answer in about 50 seconds the window closes and the change is refused, so the agent’s call never hangs.
 
