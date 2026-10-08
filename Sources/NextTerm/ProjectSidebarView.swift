@@ -457,9 +457,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             return
         }
         loading.insert(id)
-        let url = node.url
+        let url = node.url, hiding = fileHiding
         DispatchQueue.global(qos: .userInitiated).async {
-            let listing = FileNode.readChildren(of: url)
+            let listing = FileNode.readChildren(of: url, hiding: hiding)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.loading.remove(id)
@@ -478,9 +478,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// Re-reads one loaded folder in the background; updates the outline if it changed.
     private func refresh(_ node: FileNode) {
         guard node.isLoaded else { return }
-        let url = node.url
+        let url = node.url, hiding = fileHiding
         DispatchQueue.global(qos: .utility).async {
-            let listing = FileNode.readChildren(of: url)
+            let listing = FileNode.readChildren(of: url, hiding: hiding)
             DispatchQueue.main.async { [weak self] in
                 guard let self, node.install(listing) else { return }
                 self.syncHiddenRow(for: node)
@@ -994,7 +994,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         }
         registerUndo("New \(isFolder ? "Folder" : "File")") { [weak self] in self?.trash([url], confirm: false) }
         // Show it, select it, and start renaming it.
-        parent.reload()
+        parent.reload(hiding: fileHiding)
         syncHiddenRow(for: parent)
         outline.reloadItem(parent, reloadChildren: true)
         outline.expandItem(parent)

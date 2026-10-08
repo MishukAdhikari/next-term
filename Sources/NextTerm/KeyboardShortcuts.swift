@@ -346,7 +346,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     private var rows: [KeyboardShortcuts.Command] = []
 
     init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 560), styleMask: [.titled, .closable, .resizable],
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 640), styleMask: [.titled, .closable, .resizable],
                               backing: .buffered, defer: false)
         window.title = "Settings"
         window.minSize = NSSize(width: 480, height: 320)
@@ -610,6 +610,8 @@ final class EditorSettingsView: NSView {
     private let fontFamily = FontFamilyPopup()
     /// How often git fetches by itself, to keep the sidebar's "Pull 3" up to date.
     let backgroundFetch = NSPopUpButton()
+    /// Clean-up on save, and the files the sidebar hides (EditorSaving.swift).
+    let saving = EditorSavingControls()
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -673,8 +675,10 @@ final class EditorSettingsView: NSView {
             row("Line height:", [lineHeight, lineHeightValue]),
             row("", [wrap]),
             row("", [envValues]),
+            row("On save:", [saving.trim, saving.newline]),
             row("Sidebar:", [singleClick]),
             row("", [dotIcons]),
+            row("", [NSTextField(labelWithString: "Hide:"), saving.hidden]),
             row("Git:", [NSTextField(labelWithString: "Fetch in the background:"), backgroundFetch]),
             row("Agents:", [claude]),
             row("", [copilot]),
@@ -726,6 +730,7 @@ final class EditorSettingsView: NSView {
         fontSizeValue.stringValue = "\(Int(app.fontSize)) pt"
         fontFamily.show(Preferences.editorFontFamily)
         backgroundFetch.selectItem(at: FetchFrequency.allCases.firstIndex(of: BackgroundFetcher.shared.frequency) ?? 0)
+        saving.refresh()
     }
 
     @objc private func backgroundFetchChanged() {

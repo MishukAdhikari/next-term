@@ -581,6 +581,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
     @discardableResult
     func save(_ document: EditorDocument) -> Bool {
         do {
+            cleanUpBeforeSave(document)
             try document.save()
             editors.first { $0.document === document }?.refreshBaseline()
             return true
