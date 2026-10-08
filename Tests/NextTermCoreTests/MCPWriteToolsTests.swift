@@ -25,6 +25,16 @@ import Testing
         #expect(MCPServer.tool(named: "settings_get")?.scope == .read)
     }
 
+    /// The largest file a write takes reaches the app in one request, however JSON escapes its text: a
+    /// control character takes six bytes, a quote or a slash two.
+    @Test func theLargestWriteFitsInOneRequest() throws {
+        let path = "/Users/someone/Code/a-project/src/a-file.txt"
+        for text in [String(repeating: "\u{01}", count: MCPFileTools.maxBytes), String(repeating: "\"/", count: MCPFileTools.maxBytes / 2)] {
+            let request = try #require(MCPServer.request(tool: "write_file", arguments: ["path": path, "content": text, "reason": "Why."]))
+            #expect(request.count > 4_000_000 && request.count <= MCPServer.maxRequestBytes, "\(request.count)")
+        }
+    }
+
     @Test func theTagIsListed() throws {
         let tools = MCPServer.listing()
         for tool in tools {

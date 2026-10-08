@@ -110,6 +110,9 @@ final class MCPControlServer: @unchecked Sendable {
         }
     }
 
+    /// The longest request read (the self-test lowers it).
+    static var requestLimit = MCPServer.maxRequestBytes
+
     /// One request line in, one answer line out.
     private func serve(_ fd: Int32, peer: pid_t?) {
         var timeout = timeval(tv_sec: 10, tv_usec: 0)
@@ -118,11 +121,15 @@ final class MCPControlServer: @unchecked Sendable {
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
         var line = Data()
         var buffer = [UInt8](repeating: 0, count: 65536)
-        while !line.contains(0x0A), line.count < 4_000_000 {
+        var ended = false
+        // Only what just came is looked at for the line's end: a write's request can be tens of megabytes.
+        while !ended, line.count <= Self.requestLimit {
             let count = read(fd, &buffer, buffer.count)
             if count <= 0 { break }
+            ended = buffer[0..<count].contains(0x0A)
             line.append(contentsOf: buffer[0..<count])
         }
+        if !ended, line.count > Self.requestLimit { return refuseTooLarge(fd, buffer: &buffer) }
         guard let end = line.firstIndex(of: 0x0A),
               let request = (try? JSONSerialization.jsonObject(with: line[..<end])) as? [String: Any],
               let tool = request["tool"] as? String else {
@@ -139,6 +146,23 @@ final class MCPControlServer: @unchecked Sendable {
             }
         }
         done.wait()
+        send(answer, on: fd)
+    }
+
+    /// A request over the limit: the rest of it is read and dropped, so the caller has finished sending
+    /// and reads why, instead of a closed connection.
+    private func refuseTooLarge(_ fd: Int32, buffer: inout [UInt8]) {
+        while true {
+            let count = read(fd, &buffer, buffer.count)
+            if count <= 0 || buffer[0..<count].contains(0x0A) { break }
+        }
+        let limit = ByteCountFormatter.string(fromByteCount: Int64(Self.requestLimit), countStyle: .decimal)
+        let text = "The request is too large: Next Term reads up to \(limit) per call (files are written up to 5 MB). Nothing was done."
+        send(MCPServer.CallResult(text: text, isError: true), on: fd)
+    }
+
+    /// Writes the answer line and closes the connection.
+    private func send(_ answer: MCPServer.CallResult, on fd: Int32) {
         let data = MCPServer.encodeAnswer(answer)
         data.withUnsafeBytes { raw in
             var offset = 0

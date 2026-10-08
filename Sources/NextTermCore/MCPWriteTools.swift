@@ -113,6 +113,10 @@ extension MCPServer {
     ]
 
     public static func isControlTool(_ name: String) -> Bool { controlTools.contains { $0.name == name } }
+
+    /// The longest request line the app's socket reads: a write of the largest file with every byte
+    /// escaped as JSON escapes a control character (six bytes), and room for the rest of the call.
+    public static let maxRequestBytes = 6 * MCPFileTools.maxBytes + 65_536
 }
 
 extension MCPServer.Tool {
