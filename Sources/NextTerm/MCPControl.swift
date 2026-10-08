@@ -110,6 +110,9 @@ final class MCPControlServer: @unchecked Sendable {
         }
     }
 
+    /// The longest request read (the self-test lowers it).
+    static var requestLimit = MCPServer.maxRequestBytes
+
     /// One request line in, one answer line out.
     private func serve(_ fd: Int32, peer: pid_t?) {
         var timeout = timeval(tv_sec: 10, tv_usec: 0)
@@ -118,11 +121,15 @@ final class MCPControlServer: @unchecked Sendable {
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
         var line = Data()
         var buffer = [UInt8](repeating: 0, count: 65536)
-        while !line.contains(0x0A), line.count < 4_000_000 {
+        var ended = false
+        // Only what just came is looked at for the line's end: a write's request can be tens of megabytes.
+        while !ended, line.count <= Self.requestLimit {
             let count = read(fd, &buffer, buffer.count)
             if count <= 0 { break }
+            ended = buffer[0..<count].contains(0x0A)
             line.append(contentsOf: buffer[0..<count])
         }
+        if !ended, line.count > Self.requestLimit { return refuseTooLarge(fd, buffer: &buffer) }
         guard let end = line.firstIndex(of: 0x0A),
               let request = (try? JSONSerialization.jsonObject(with: line[..<end])) as? [String: Any],
               let tool = request["tool"] as? String else {
@@ -139,6 +146,23 @@ final class MCPControlServer: @unchecked Sendable {
             }
         }
         done.wait()
+        send(answer, on: fd)
+    }
+
+    /// A request over the limit: the rest of it is read and dropped, so the caller has finished sending
+    /// and reads why, instead of a closed connection.
+    private func refuseTooLarge(_ fd: Int32, buffer: inout [UInt8]) {
+        while true {
+            let count = read(fd, &buffer, buffer.count)
+            if count <= 0 || buffer[0..<count].contains(0x0A) { break }
+        }
+        let limit = ByteCountFormatter.string(fromByteCount: Int64(Self.requestLimit), countStyle: .decimal)
+        let text = "The request is too large: Next Term reads up to \(limit) per call (files are written up to 5 MB). Nothing was done."
+        send(MCPServer.CallResult(text: text, isError: true), on: fd)
+    }
+
+    /// Writes the answer line and closes the connection.
+    private func send(_ answer: MCPServer.CallResult, on fd: Int32) {
         let data = MCPServer.encodeAnswer(answer)
         data.withUnsafeBytes { raw in
             var offset = 0
@@ -212,7 +236,13 @@ enum MCPControl {
     static func fail(_ text: String) -> MCPServer.CallResult { MCPServer.CallResult(text: text, isError: true) }
     static func ok(_ value: Any) -> MCPServer.CallResult { MCPServer.CallResult(text: MCPServer.json(value)) }
 
-    static func call(_ tool: String, _ arguments: [String: Any], caller pid: pid_t?, reply: @escaping Reply) {
+    /// Runs a tool. `approval`, `requester` and `connection` are for the write tools that MCPWriteControl
+    /// runs, and for install_skill and remove_skill: who approves their change, who asks as the approval
+    /// window names it, and which remote connection (its grant id) a Decline and Stop Asking stops. The
+    /// local socket passes none, so a local agent's change always waits for Approve on the Mac; the remote
+    /// door passes its connection's policy, name and grant id (see MCPApproval).
+    static func call(_ tool: String, _ arguments: [String: Any], caller pid: pid_t?, approval: MCPApproval = .askOnMac,
+                     requester: String? = nil, connection: String? = nil, reply: @escaping Reply) {
         let caller = pid.flatMap { ClaudeIDEServer.tab(for: $0, among: allTabs) }
         switch tool {
         case "list_tabs": reply(listTabs(project: arguments["project"] as? String, caller: caller))
@@ -236,7 +266,13 @@ enum MCPControl {
         case "list_hosts", "add_host", "remove_host", "check_host", "new_remote_tab", "host_sessions", "host_changes":
             RemoteMCP.call(tool, arguments, caller: caller, reply: reply)
         case "list_skills", "install_skill", "remove_skill":
-            MainActor.assumeIsolated { SkillsMCP.call(tool, arguments, caller: caller, reply: reply) }
+            MainActor.assumeIsolated {
+                SkillsMCP.call(tool, arguments, caller: caller, approval: approval, connection: connection, requester: requester, reply: reply)
+            }
+        case _ where MCPServer.isControlTool(tool):
+            MainActor.assumeIsolated {
+                MCPWriteControl.call(tool, arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
+            }
         default: reply(fail("Unknown tool \(tool)"))
         }
     }
@@ -494,6 +530,7 @@ enum MCPControl {
             return .failure(MCPError("That remote tab is still connecting: ssh may be asking the user for a password or to confirm the host key. Wait, and try again once read_tab shows the host's prompt."))
         }
         if tab.exited || !tab.view.acceptsInput { return .failure(MCPError("That tab's shell has ended.")) }
+        if let why = MCPInputLine.refusal(tab) { return .failure(MCPError(why)) }
         return .success(tab)
     }
 
@@ -681,6 +718,8 @@ enum MCPControl {
             return reply(fail("No tab with that id; list_tabs shows them."))
         }
         if tab === caller { return reply(fail("That is your own tab.")) }
+        // Closing would lose text someone else put on its line, force or not.
+        if let why = MCPInputLine.refusal(tab) { return reply(fail(why)) }
         let force = arguments["force"] as? Bool ?? false
         let id = tab.id.uuidString.lowercased()
         // The window's last tab, with files unsaved in its editor: closing it closes the window, so the user

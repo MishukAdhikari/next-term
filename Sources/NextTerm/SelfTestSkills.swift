@@ -195,6 +195,7 @@ extension SelfTest {
         let racedAnswer = await ask("remove_skill", ["request_id": raced["request_id"] as? String ?? ""])
         check(racedAnswer["status"] as? String == "declined" && manager.fileExists(atPath: shared + "/SKILL.md"),
               "skills mcp: a Decline during the removal's re-check removes nothing", "\(racedAnswer)")
+        await skillsPolicyChecks(home: home)
     }
 
     /// Installing from a download, without the network: a commit's files as GitHub would send them.

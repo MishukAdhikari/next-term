@@ -67,8 +67,8 @@ public struct MCPProjects: Sendable {
     /// A file a call names: relative to the project, or absolute. It must be inside an open project
     /// once symlinks are resolved, and must not look like it holds secrets (checked on the name asked
     /// for and on the real one, since a harmless-looking link can point at `.env`). `mustExist: false`
-    /// allows a deleted file (get_diff).
-    public func file(_ raw: Any?, project: Any?, mustExist: Bool = true) -> Result<ProjectFile, MCPToolError> {
+    /// allows a deleted file (get_diff) or a new one. `writing`: the refusals say written, not read.
+    public func file(_ raw: Any?, project: Any?, mustExist: Bool = true, writing: Bool = false) -> Result<ProjectFile, MCPToolError> {
         guard let text = raw as? String, !text.trimmingCharacters(in: .whitespaces).isEmpty else {
             return .failure(.init("Give path: a file in an open project, relative to it or absolute."))
         }
@@ -90,7 +90,7 @@ public struct MCPProjects: Sendable {
             lexical = only
         }
         if let reason = Self.secretReason(expanded.hasPrefix("/") ? (lexical as NSString).lastPathComponent : expanded) {
-            return .failure(Self.refusal(text, reason))
+            return .failure(Self.refusal(text, reason, writing: writing))
         }
         guard Self.exists(lexical) || !mustExist else { return .failure(.init("No such file: \(text).")) }
         // A missing file (deleted) is resolved through its folder; ".." there could walk anywhere.
@@ -99,19 +99,24 @@ public struct MCPProjects: Sendable {
         }
         let real = Self.realPath(lexical)
         guard let root = root(holding: real) else {
-            return .failure(.init("\(text) is outside the projects open in Next Term (\(listed)); only files inside them are read."))
+            return .failure(.init("\(text) is outside the projects open in Next Term (\(listed)); only files inside them are \(writing ? "written" : "read")."))
         }
         let file = ProjectFile(root: root, path: real)
-        if let reason = Self.secretReason(file.relative) { return .failure(Self.refusal(text, reason)) }
+        if let reason = Self.secretReason(file.relative) { return .failure(Self.refusal(text, reason, writing: writing)) }
         if mustExist || Self.exists(real) {
-            if Self.isFolder(real) { return .failure(.init("\(text) is a folder; find_in_files searches one, and read_file reads a file in it.")) }
+            if Self.isFolder(real) {
+                return .failure(.init(writing ? "\(text) is a folder; name a file." : "\(text) is a folder; find_in_files searches one, and read_file reads a file in it."))
+            }
             guard isRegularFile(real) else { return .failure(.init("\(text) is not a regular file.")) }
         }
         return .success(file)
     }
 
-    static func refusal(_ asked: String, _ reason: String) -> MCPToolError {
-        .init("Not read: \(asked) \(reason). Next Term never gives such files to agents; ask the user for what you need from it.")
+    static func refusal(_ asked: String, _ reason: String, writing: Bool = false) -> MCPToolError {
+        guard writing else {
+            return .init("Not read: \(asked) \(reason). Next Term never gives such files to agents; ask the user for what you need from it.")
+        }
+        return .init("Not written: \(asked) \(reason). Next Term never lets agents change such files; ask the user to make the change.")
     }
 
     // MARK: secrets

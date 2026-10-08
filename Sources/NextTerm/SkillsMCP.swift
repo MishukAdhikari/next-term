@@ -9,6 +9,10 @@ import NextTermCore
 /// asked next; no asker gets more than ten requests a session. A call answers within `answerWithin`
 /// seconds, with `pending` and a request id to ask again with when the user has not decided yet (some
 /// clients give up on a tool after 60 seconds).
+///
+/// The remote door passes its connection's approval policy (MCPApproval), its name as `requester` and its
+/// grant id as `connection`, so a Decline and Stop Asking pauses that connection only. Under
+/// `.preApprovedByGrant` nothing asks: the install or removal runs at once (`runGranted`).
 @MainActor
 enum SkillsMCP {
     typealias Reply = MCPControl.Reply
@@ -23,8 +27,14 @@ enum SkillsMCP {
         let id = String(UUID().uuidString.prefix(8)).lowercased()
         /// What is asked, for spotting the same request again: "install:owner/repo" or "remove:name".
         let key: String
-        /// Who asked: a tab's id, or "outside" for callers outside Next Term's tabs.
+        /// Who asked (MCPWriteControl.asker): a tab's id, a remote connection by its grant id, or "outside"
+        /// for other callers outside Next Term's tabs.
         let asker: String
+        /// Approved by a remote grant: it runs without a window, and never makes others wait.
+        let granted: Bool
+        /// Under a grant, exactly what runs ("install:owner/repo/path@ref" or "remove:name"), so the same
+        /// request asked again waits for the one running.
+        var exact = ""
         /// The final answer, once the user has decided.
         var answer: [String: Any]?
         var waiters: [(token: UUID, reply: Reply)] = []
@@ -35,27 +45,45 @@ enum SkillsMCP {
         /// The fetch running after Fetch and Review, cancelled when the user declines.
         var task: Task<Void, Never>?
 
-        init(key: String, asker: String, callerTab: UUID?) {
+        init(key: String, asker: String, callerTab: UUID?, granted: Bool = false) {
             self.key = key
             self.asker = asker
             self.callerTab = callerTab
+            self.granted = granted
         }
     }
 
     /// Requests by id; answered ones are dropped ten minutes after their answer.
     static var requests: [String: Request] = [:]
-    static var open: Request? { requests.values.first { $0.answer == nil } }
+    /// The request the user is asked about now.
+    static var open: Request? { requests.values.first { $0.answer == nil && !$0.granted } }
     /// Sources and names declined until quit.
     static var declined = Set<String>()
     /// Askers refused until this date, or for good (Decline and Stop Asking).
     static var quietUntil: [String: Date] = [:]
     static var askedCount: [String: Int] = [:]
 
-    static func call(_ tool: String, _ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
+    /// Downloads a source for review (the self-test's stands in for GitHub).
+    static var fetch: (SkillSource) async throws -> SkillsInstaller.Fetched = { try await SkillsInstaller.fetch($0) }
+
+    static func call(_ tool: String, _ arguments: [String: Any], caller: TerminalTab?, approval: MCPApproval = .askOnMac,
+                     connection: String? = nil, requester: String? = nil, reply: @escaping Reply) {
         switch tool {
         case "list_skills": Task { reply(MCPControl.ok(await listSkills())) }
-        default: Task { await ask(tool, arguments, caller: caller, reply: reply) }
+        default:
+            let asker = MCPWriteControl.asker(connection: connection, requester: requester, caller: caller)
+            let who = Who(approval: approval, asker: asker, requester: requester ?? describe(caller))
+            Task { await ask(tool, arguments, caller: caller, who, reply: reply) }
         }
+    }
+
+    /// Who asks a request, and how it is approved.
+    struct Who {
+        let approval: MCPApproval
+        /// Whom a decline quiets (Request.asker).
+        let asker: String
+        /// As the window names it.
+        let requester: String
     }
 
     // MARK: listing
@@ -89,13 +117,13 @@ enum SkillsMCP {
 
     // MARK: requests
 
-    static func ask(_ tool: String, _ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) async {
+    static func ask(_ tool: String, _ arguments: [String: Any], caller: TerminalTab?, _ who: Who, reply: @escaping Reply) async {
         if let id = (arguments["request_id"] as? String)?.lowercased(), !id.isEmpty {
             guard let request = requests[id] else { return reply(MCPControl.fail("No request with that id; answered requests are forgotten after ten minutes.")) }
             return wait(request, reply: reply)
         }
         let reason = arguments["reason"] as? String
-        let asker = caller.map { $0.id.uuidString } ?? "outside"
+        let asker = who.asker
         let key: String
         var source: SkillSource?
         var removeName: String?
@@ -118,6 +146,9 @@ enum SkillsMCP {
         if declined.contains(key) {
             return reply(MCPControl.ok(["status": "declined", "note": "The user declined this earlier; it stays declined until Next Term quits."]))
         }
+        if case .preApprovedByGrant(let grant) = who.approval {
+            return runGranted(key: key, asker: asker, grant: grant, source: source, removeName: removeName, reply: reply)
+        }
         if let until = quietUntil[asker], until > Date() {
             return reply(MCPControl.ok(["status": "declined", "note": "The user declined a request from you; do not ask again for now."]))
         }
@@ -131,7 +162,7 @@ enum SkillsMCP {
         askedCount[asker, default: 0] += 1
         let request = Request(key: key, asker: asker, callerTab: caller?.id)
         requests[request.id] = request
-        let requester = describe(caller)
+        let requester = who.requester
         if let source {
             openInstall(request, source: source, requester: requester, reason: reason)
         } else if let removeName {
@@ -214,7 +245,7 @@ enum SkillsMCP {
         approval.setStatus("Fetching \(source.shortName)… Decline stops it.")
         request.task = Task {
             do {
-                let fetched = try await SkillsInstaller.fetch(source)
+                let fetched = try await fetch(source)
                 // Declined (or closed) while fetching: nothing opens.
                 guard request.answer == nil, !Task.isCancelled else { return fetched.discard() }
                 let sheet = SkillsReviewSheet(fetched: fetched) { names in
@@ -286,5 +317,79 @@ enum SkillsMCP {
         request.window = window
         window.present()
         watchRequester(request)
+    }
+
+    // MARK: under a grant
+
+    /// A request the user approved when pairing the remote connection (its “Ask on this Mac before
+    /// changes” is off): it runs at once, with no window, cooldown or count, and its answer names the
+    /// grant. A source or skill the user declined this session stays declined. The same request running
+    /// for the connection already is waited for, not run twice.
+    static func runGranted(key: String, asker: String, grant: String, source: SkillSource?, removeName: String?, reply: @escaping Reply) {
+        let exact = source.map { "install:\($0.shortName)/\($0.path)@\($0.ref ?? "")".lowercased() } ?? key
+        if let running = requests.values.first(where: { $0.granted && $0.answer == nil && $0.exact == exact && $0.asker == asker }) {
+            return wait(running, reply: reply)
+        }
+        let request = Request(key: key, asker: asker, callerTab: nil, granted: true)
+        request.exact = exact
+        requests[request.id] = request
+        let approved = "by grant \(grant)"
+        if let source {
+            request.task = Task { await installGranted(request, source: source, approved: approved) }
+        } else if let removeName {
+            request.task = Task { await removeGranted(request, name: removeName, approved: approved) }
+        }
+        wait(request, reply: reply)
+    }
+
+    /// Installs what the review would have ticked: the one skill the source holds, if it passes the
+    /// review's checks. A skill of that name from elsewhere, or one the user changed since installing it,
+    /// is never replaced without them.
+    static func installGranted(_ request: Request, source: SkillSource, approved: String) async {
+        let fetched: SkillsInstaller.Fetched
+        do {
+            fetched = try await fetch(source)
+        } catch {
+            return resolve(request, ["status": "failed", "note": (error as? SkillsGitHub.Failure)?.message ?? error.localizedDescription])
+        }
+        let names = fetched.candidates.map(\.name)
+        guard names.count == 1, let candidate = fetched.candidates.first else {
+            fetched.discard()
+            let listed = names.prefix(10).joined(separator: ", ")
+            return resolve(request, ["status": "failed", "note": "\(source.shortName) holds \(names.count) skills (\(listed)); give the folder of the one to install, as owner/repo/path/to/skill."])
+        }
+        guard candidate.installable else {
+            fetched.discard()
+            let flag = candidate.review.flags.first { $0.level == .refuse }?.text
+            let why = candidate.refusal ?? flag ?? "it did not pass the review's checks"
+            return resolve(request, ["status": "failed", "note": "\(candidate.name) can't be installed: \(why)"])
+        }
+        let claudeHere = FileManager.default.fileExists(atPath: (SkillsStore.home as NSString).appendingPathComponent(".claude"))
+        let link = claudeHere && fetched.inventory.root(.claude) != nil
+        let plan = SkillsInstaller.plan(candidate, fetched: fetched, linkForClaude: link)
+        let replaces = plan.existing == .conflict || fetched.editedSinceInstall.contains(candidate.name)
+        guard !replaces else {
+            fetched.discard()
+            return resolve(request, ["status": "failed", "note": "Installing would replace the user's own “\(candidate.name)” (made elsewhere, or changed since it was installed), which only they decide. Ask them to install it from Window › Skills."])
+        }
+        switch await SkillsInstaller.install([candidate], fetched: fetched, linkForClaude: link) {
+        case .success(let note):
+            var answer: [String: Any] = ["status": "installed", "skills": [candidate.name], "approved": approved]
+            if !note.isEmpty { answer["note"] = note }
+            resolve(request, answer)
+        case .failure(let failure):
+            fetched.discard()
+            resolve(request, ["status": "failed", "note": failure.message])
+        }
+    }
+
+    /// Removes the skill as Remove in its window does, worked out from the disk as it is now.
+    static func removeGranted(_ request: Request, name: String, approved: String) async {
+        let (steps, _, _) = await SkillsInstaller.removal(name)
+        let check = SkillsStore.removalCheck(name, shown: steps)
+        switch await SkillsStore.apply(steps, title: "Remove \(name)", precheck: check) {
+        case .success: resolve(request, ["status": "removed", "skill": name, "approved": approved])
+        case .failure(let failure): resolve(request, ["status": "failed", "note": failure.message])
+        }
     }
 }
