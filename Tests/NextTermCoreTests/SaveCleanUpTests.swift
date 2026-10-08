@@ -50,6 +50,19 @@ import Testing
         #expect(SaveCleanUp.applying(replacements, to: text) == "ab\ncd\nef\n")
     }
 
+    @Test func manyReplacementsBecomeOne() {
+        let text = (1...300).map { "line \($0)  " }.joined(separator: "\n") as NSString
+        let replacements = SaveCleanUp.replacements(in: text, trimTrailingWhitespace: true, insertFinalNewline: true)
+        #expect(replacements.count == 300)
+        let one = SaveCleanUp.collapsed(replacements, in: text)
+        #expect(one.count == 1 && one.first?.range.location == 6)
+        #expect(SaveCleanUp.applying(one, to: text) == SaveCleanUp.applying(replacements, to: text))
+        #expect(SaveCleanUp.applying(one, to: text).hasSuffix("line 300\n"))
+        // A few stay as they are.
+        let few = SaveCleanUp.replacements(in: "a \nb ", trimTrailingWhitespace: true, insertFinalNewline: false)
+        #expect(SaveCleanUp.collapsed(few, in: "a \nb ") == few)
+    }
+
     @Test func markdownAndPatchesKeepTheirSpaces() {
         for name in ["README.md", "notes.markdown", "page.MDX", "fix.diff", "0001-fix.patch"] { #expect(!SaveCleanUp.trims(fileNamed: name)) }
         for name in ["main.swift", "Makefile", ".env", "md"] { #expect(SaveCleanUp.trims(fileNamed: name)) }

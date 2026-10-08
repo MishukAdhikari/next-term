@@ -56,6 +56,15 @@ public enum SaveCleanUp {
 
     static func isBlank(_ unit: unichar) -> Bool { unit == 0x20 || unit == 0x09 }
 
+    /// Many replacements as one, from the first to the end of the last, so a long file with spaces on every line is
+    /// cleaned in a single edit rather than one per line. A few stay as they are.
+    public static func collapsed(_ replacements: [Replacement], in text: NSString, beyond limit: Int = 100) -> [Replacement] {
+        guard replacements.count > limit, let first = replacements.first, let last = replacements.last else { return replacements }
+        let span = NSRange(location: first.range.location, length: NSMaxRange(last.range) - first.range.location)
+        let shifted = replacements.map { Replacement(range: NSRange(location: $0.range.location - span.location, length: $0.range.length), text: $0.text) }
+        return [Replacement(range: span, text: applying(shifted, to: text.substring(with: span) as NSString))]
+    }
+
     /// The text with the replacements made (for tests, and for a document no editor shows).
     public static func applying(_ replacements: [Replacement], to text: NSString) -> String {
         let result = NSMutableString(string: text)

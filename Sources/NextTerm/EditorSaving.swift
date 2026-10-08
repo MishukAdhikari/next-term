@@ -60,10 +60,11 @@ extension CodeTextView {
     /// The clean-up's replacements as one undoable step, the caret or selection kept on the text it was on.
     func applyCleanUp(_ replacements: [SaveCleanUp.Replacement]) {
         let selection = selectedRange()
+        let edits = SaveCleanUp.collapsed(replacements, in: string as NSString)
         breakUndoCoalescing()
-        let ranges = replacements.map { NSValue(range: $0.range) }
-        guard shouldChangeText(inRanges: ranges, replacementStrings: replacements.map(\.text)) else { return }
-        for replacement in replacements.reversed() { replaceCharacters(in: replacement.range, with: replacement.text) }
+        let ranges = edits.map { NSValue(range: $0.range) }
+        guard shouldChangeText(inRanges: ranges, replacementStrings: edits.map(\.text)) else { return }
+        for edit in edits.reversed() { replaceCharacters(in: edit.range, with: edit.text) }
         didChangeText()
         breakUndoCoalescing()
         undoManager?.setActionName("Clean Up")
