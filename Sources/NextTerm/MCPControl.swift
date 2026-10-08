@@ -212,7 +212,12 @@ enum MCPControl {
     static func fail(_ text: String) -> MCPServer.CallResult { MCPServer.CallResult(text: text, isError: true) }
     static func ok(_ value: Any) -> MCPServer.CallResult { MCPServer.CallResult(text: MCPServer.json(value)) }
 
-    static func call(_ tool: String, _ arguments: [String: Any], caller pid: pid_t?, reply: @escaping Reply) {
+    /// Runs a tool. `approval` and `requester` are for the write tools that MCPWriteControl runs: who
+    /// approves their change, and who asks as the approval window names it. The local socket passes
+    /// neither, so a local agent's change always waits for Approve on the Mac; the remote door passes its
+    /// connection's policy and name (see MCPApproval).
+    static func call(_ tool: String, _ arguments: [String: Any], caller pid: pid_t?, approval: MCPApproval = .askOnMac,
+                     requester: String? = nil, reply: @escaping Reply) {
         let caller = pid.flatMap { ClaudeIDEServer.tab(for: $0, among: allTabs) }
         switch tool {
         case "list_tabs": reply(listTabs(project: arguments["project"] as? String, caller: caller))
@@ -237,6 +242,10 @@ enum MCPControl {
             RemoteMCP.call(tool, arguments, caller: caller, reply: reply)
         case "list_skills", "install_skill", "remove_skill":
             MainActor.assumeIsolated { SkillsMCP.call(tool, arguments, caller: caller, reply: reply) }
+        case _ where MCPServer.isControlTool(tool):
+            MainActor.assumeIsolated {
+                MCPWriteControl.call(tool, arguments, caller: caller, approval: approval, requester: requester, reply: reply)
+            }
         default: reply(fail("Unknown tool \(tool)"))
         }
     }
@@ -494,6 +503,7 @@ enum MCPControl {
             return .failure(MCPError("That remote tab is still connecting: ssh may be asking the user for a password or to confirm the host key. Wait, and try again once read_tab shows the host's prompt."))
         }
         if tab.exited || !tab.view.acceptsInput { return .failure(MCPError("That tab's shell has ended.")) }
+        if let why = MCPInputLine.refusal(tab) { return .failure(MCPError(why)) }
         return .success(tab)
     }
 
