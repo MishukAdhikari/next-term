@@ -13,7 +13,7 @@ Any tab can hold several terminals, side by side or one above the other, as many
 
 | Action | Keys |
 |---|---|
-| Split Right (**File** menu, or the terminal’s ⋯) | <kbd>⌘D</kbd> |
+| Split Right (**File** menu, or the terminal’s ⋯; in the editor <kbd>⌘D</kbd> duplicates the line) | <kbd>⌘D</kbd> |
 | Split Down | <kbd>⇧⌘D</kbd> |
 | Select the pane on the left, right, above or below | <kbd>⌥⌘←</kbd> <kbd>⌥⌘→</kbd> <kbd>⌥⌘↑</kbd> <kbd>⌥⌘↓</kbd> |
 | Select the next or previous pane | <kbd>⌥⌘]</kbd>, <kbd>⌥⌘[</kbd> |

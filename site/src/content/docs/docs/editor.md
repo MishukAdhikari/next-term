@@ -14,7 +14,7 @@ Next Term has a real code editor, not a viewer, and it sits right above the term
 
 - **Go to File** (<kbd>⌘P</kbd>): type part of a file’s name or path and pick it. See [below](#go-to-file).
 - **Double-click** a file in the project sidebar, or select it and press <kbd>⌘↓</kbd>. With **Open files with a single click** on (**Settings › Editor**), one click opens it in a [preview tab](#preview-tabs).
-- **<kbd>⌘</kbd>-click a path** in terminal output, such as `src/app.ts:42:7` from a compiler, linter or agent: the file opens at that line and column. A Python traceback’s `File "graph.py", line 42` opens at line 42 (at the frame you clicked, when the same file appears twice), and so do pytest’s and ruff’s `path.py:42:` lines. A `graph.py:graph` reference, as `langgraph.json` writes it, opens at the definition of `graph`.
+- **<kbd>⌘</kbd>-click a path** in terminal output, such as `src/app.ts:42:7` from a compiler, linter or agent: the file opens at that line and column (at the first line of a range such as `src/app.ts:42-48`). A Python traceback’s `File "graph.py", line 42` opens at line 42 (at the frame you clicked, when the same file appears twice), and so do pytest’s and ruff’s `path.py:42:` lines. A `graph.py:graph` reference, as `langgraph.json` writes it, opens at the definition of `graph`.
 - **Pick a result** in [Find in Files](/docs/search/).
 - **Run `nxtrm file:42`** in a tab or any terminal. See [The nxtrm command](/docs/command-line/).
 - **Finder:** use **Open With › Next Term**, or drop a file on Next Term’s Dock icon.
@@ -61,6 +61,11 @@ PHP files are coloured with the grammar that also understands the HTML around `<
 | Action | How |
 |---|---|
 | Comment or uncomment lines, in the file’s language | <kbd>⌘/</kbd> |
+| Duplicate the line, or the selection | <kbd>⌘D</kbd> |
+| Delete the line | <kbd>⇧⌘K</kbd> |
+| Move the line up, down | <kbd>⌃⌘↑</kbd>, <kbd>⌃⌘↓</kbd> |
+| Copy, cut the whole line | <kbd>⌘C</kbd>, <kbd>⌘X</kbd> with nothing selected |
+| Copy the path with the line, as `src/app.ts:42` | Right-click › **Copy Path with Line** |
 | Go to a line | <kbd>⌘L</kbd> |
 | Indent, outdent | <kbd>⌘]</kbd>, <kbd>⌘[</kbd>, or <kbd>⇥</kbd>, <kbd>⇧⇥</kbd> on selected lines |
 | Find (from the selected name), next, previous | <kbd>⌘F</kbd>, <kbd>⌘G</kbd>, <kbd>⇧⌘G</kbd> |
@@ -70,6 +75,12 @@ PHP files are coloured with the grammar that also understands the HTML around `<
 | Save, Save All | <kbd>⌘S</kbd>, <kbd>⌥⌘S</kbd> |
 
 - **Where a name is used, without an indexer:** double-click a function, method, class or variable name to select it, then press <kbd>⌘F</kbd> to mark every use in this file (<kbd>⌘G</kbd> steps through them), or <kbd>⇧⌘F</kbd> to list every use across the project, each a click away. Both start from the selection. This is a text search, not code intelligence: it finds the name wherever it is written, comments and strings included, and it has no Go to Definition or refactoring. That keeps the editor light, and nothing indexes your project in the background.
+- **Line commands** (**Edit › Line**) work on the caret’s line, or on every line the selection touches:
+  - **Duplicate Line** (<kbd>⌘D</kbd>) puts a copy below and moves the caret onto it, so pressing it again makes another. A selection within one line is duplicated right after itself instead.
+  - **Delete Line** (<kbd>⇧⌘K</kbd>) removes the lines with their line breaks. **Move Line Up** and **Move Line Down** (<kbd>⌃⌘↑</kbd>, <kbd>⌃⌘↓</kbd>) swap them with the line above or below, and the selection moves with them.
+  - **Copy Path with Line**, also in the editor’s right-click menu, copies the file’s path from the project folder with the caret’s line, `src/app.ts:42`, or the selected lines, `src/app.ts:42-48`. A <kbd>⌘</kbd>-click in the terminal opens that, and agents read it.
+  - Each is one step for <kbd>⌘Z</kbd>, and each key can be changed in **Settings › Keyboard Shortcuts**. <kbd>⌘D</kbd> duplicates only while the editor has the keyboard: with the keyboard in the terminal, <kbd>⌘D</kbd> still splits it (see [Keyboard shortcuts](/docs/keyboard-shortcuts/#change-any-menu-shortcut)).
+- **The whole line, with nothing selected:** <kbd>⌘C</kbd> copies the caret’s line with its line break, and <kbd>⌘X</kbd> cuts it. Pasted with nothing selected, such a line goes in whole above the caret’s line, wherever the caret is in it. Pasted over a selection, or in another app, it is ordinary text.
 - **Replace** (**Edit › Find › Replace…**, <kbd>⌥⌘F</kbd>) opens the find bar with a Replace field under the search field: replace the match you are on, or every match in the file. It works in the editor only; in the terminal, a notebook or a diff the menu item is off. To replace across the project, use [Replace in Files](/docs/search/#replace) (<kbd>⇧⌘R</kbd>).
 - **Auto-indent:** Return keeps the line’s indent. After an opening bracket it indents one more level, and between a pair of brackets it puts the closing one on its own line.
 - **Line numbers** run down the left, and the current line is highlighted.

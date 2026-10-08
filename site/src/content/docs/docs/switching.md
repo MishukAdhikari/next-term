@@ -14,7 +14,7 @@ On first launch, if Next Term finds VS Code, Cursor, Devin Desktop, a JetBrains 
 Choose an app and the preview lists what it would bring, each item a checkbox with where it came from:
 
 - **Shortcuts:** the matching set of keys (below).
-- **Your shortcuts:** the keys you changed yourself, from VS Code’s `keybindings.json` (and Cursor’s, Devin Desktop’s), your JetBrains keymap, or Ghostty’s `keybind` lines that have a Next Term command. A key another command already has, or a Control key without <kbd>⌘</kbd>, comes in unticked with the reason.
+- **Your shortcuts:** the keys you changed yourself, from VS Code’s `keybindings.json` (and Cursor’s, Devin Desktop’s), your JetBrains keymap, or Ghostty’s `keybind` lines that have a Next Term command. A key another command already has, or a Control key without <kbd>⌘</kbd>, comes in unticked with the reason. A key a terminal command has, given to one of the editor’s line commands (a JetBrains keymap’s <kbd>⇧⌘D</kbd> for Duplicate Line, say), comes in ticked and says which has it where: Duplicate Line while the editor has the keyboard, Split Down everywhere else.
 - **Settings:** font size, line height, soft wrap, Option as Meta, where the terminal sits and the sidebar’s side, from the values you set in that app.
 - **Fonts:** the editor font and the terminal font. A font comes over only when it is installed on this Mac and monospaced; from a list such as VS Code’s `editor.fontFamily`, the first one that is.
 - **Terminal colours:** the 16 ANSI colours, text, background, cursor and selection, shown as a row of swatches. A colour the other app doesn’t set keeps Next Term’s.
@@ -48,11 +48,15 @@ A built-in colour scheme or theme lives inside its app, so it can’t be read; t
 | Save | <kbd>⌘S</kbd> | <kbd>⌘S</kbd> | <kbd>⌥⌘S</kbd> |
 | Save All | <kbd>⌥⌘S</kbd> | <kbd>⌥⌘S</kbd> | <kbd>⌘S</kbd> |
 | Split Right | <kbd>⌘D</kbd> | <kbd>⌘&#92;</kbd> | <kbd>⌘&#92;</kbd> |
+| Duplicate Line (in the editor) | <kbd>⌘D</kbd> | no key | <kbd>⌘D</kbd> |
+| Delete Line (in the editor) | <kbd>⇧⌘K</kbd> | <kbd>⇧⌘K</kbd> | <kbd>⌘⌫</kbd> |
 | Replace (in the open file) | <kbd>⌥⌘F</kbd> | <kbd>⌥⌘F</kbd> | <kbd>⌘R</kbd> |
 | Replace in Files | <kbd>⇧⌘R</kbd> | <kbd>⇧⌘H</kbd> | <kbd>⇧⌘R</kbd> |
 | Indent / Outdent | <kbd>⌘]</kbd> / <kbd>⌘[</kbd> | <kbd>⌘]</kbd> / <kbd>⌘[</kbd> | no key (<kbd>⇥</kbd> and <kbd>⇧⇥</kbd> indent) |
 
-With either set, <kbd>⌘K</kbd> clears only while a terminal has the keyboard, because both editors use <kbd>⌘K</kbd> for other things in their editors.
+With either set, <kbd>⌘K</kbd> clears only while a terminal has the keyboard, because both editors use <kbd>⌘K</kbd> for other things in their editors. With VS Code’s, Duplicate Line has no key: in VS Code <kbd>⌘D</kbd> selects the next match, which Next Term doesn’t do, and VS Code’s <kbd>⇧⌥↓</kbd> for copying a line down would type a character here. With JetBrains’, <kbd>⌘⌫</kbd> deletes the line only in the editor; in the project sidebar it still moves a file to the Trash.
+
+Imports bring your own keys for the line commands too: JetBrains’ Duplicate Line or Selection, Delete Line, Move Line Up and Down, and VS Code’s Copy Line Down, Duplicate Selection, Delete Line, Move Line Up and Down.
 
 Two rules keep the terminal working the way your shell and agents expect: a set never takes a Control key without <kbd>⌘</kbd> (Claude Code and the shell use <kbd>⌃R</kbd>, <kbd>⌃G</kbd> and the rest), and never a key macOS keeps for itself.
 

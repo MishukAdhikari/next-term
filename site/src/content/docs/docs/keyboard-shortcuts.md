@@ -15,7 +15,8 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | New tab (in the project, or the current tab’s folder) | <kbd>⌘T</kbd> |
 | Open a project | <kbd>⌘O</kbd> |
 | Go to File: a file in the project by name | <kbd>⌘P</kbd> |
-| Split the tab right, or down | <kbd>⌘D</kbd>, <kbd>⇧⌘D</kbd> |
+| Split the tab right, or down | <kbd>⌘D</kbd> (outside the editor), <kbd>⇧⌘D</kbd> |
+| Duplicate the line in the editor | <kbd>⌘D</kbd> |
 | Move between panes | <kbd>⌥⌘←</kbd> <kbd>⌥⌘→</kbd> <kbd>⌥⌘↑</kbd> <kbd>⌥⌘↓</kbd> |
 | Send the selection to the agent in your tab | <kbd>⌥⌘K</kbd> |
 | Show a file’s changes side by side | <kbd>⌥⌘G</kbd> |
@@ -53,7 +54,7 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Close Project | — |
 | Save | <kbd>⌘S</kbd> |
 | Save All | <kbd>⌥⌘S</kbd> |
-| Split Right | <kbd>⌘D</kbd> |
+| Split Right (while the editor has the keyboard, <kbd>⌘D</kbd> is Duplicate Line) | <kbd>⌘D</kbd> |
 | Split Down | <kbd>⇧⌘D</kbd> |
 | Rename Tab… | <kbd>⌥⌘R</kbd> |
 | Use Option as Meta Key (off by default; for Emacs-style keys) | — |
@@ -65,7 +66,7 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Command | Keys |
 |---|---|
 | Undo, Redo | <kbd>⌘Z</kbd>, <kbd>⇧⌘Z</kbd> |
-| Cut, Copy, Paste | <kbd>⌘X</kbd>, <kbd>⌘C</kbd>, <kbd>⌘V</kbd> |
+| Cut, Copy, Paste (in the editor with nothing selected, Cut and Copy take the whole line) | <kbd>⌘X</kbd>, <kbd>⌘C</kbd>, <kbd>⌘V</kbd> |
 | Select All | <kbd>⌘A</kbd> |
 | Find › Find… | <kbd>⌘F</kbd> |
 | Find › Replace… (in the file you are editing) | <kbd>⌥⌘F</kbd> |
@@ -79,6 +80,10 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Comment Line | <kbd>⌘/</kbd> |
 | Indent | <kbd>⌘]</kbd> |
 | Outdent | <kbd>⌘[</kbd> |
+| Line › Duplicate Line (while the editor has the keyboard) | <kbd>⌘D</kbd> |
+| Line › Delete Line | <kbd>⇧⌘K</kbd> |
+| Line › Move Line Up, Move Line Down | <kbd>⌃⌘↑</kbd>, <kbd>⌃⌘↓</kbd> |
+| Line › Copy Path with Line (`src/app.ts:42`) | — |
 | Clear Buffer (the terminal’s screen and scrollback) | <kbd>⌘K</kbd> |
 
 ## View menu
@@ -158,5 +163,7 @@ Open **Next Term › Settings…** (<kbd>⌘,</kbd>) and choose **Keyboard Short
 1. Search by command name, menu or shortcut.
 2. Click a command’s shortcut and press the new keys. <kbd>⌫</kbd> removes the shortcut; <kbd>⎋</kbd> cancels.
 3. If the keys already belong to another command, Next Term says which and offers **Use It Here**; the other command is then left without a shortcut.
+
+**Edit › Line**’s commands work only while the editor has the keyboard, so one of them can share a key with a command for the terminal (Split Right, Split Down, Clear Buffer, Rename Tab, New Remote Tab and the pane commands): the editor’s command has it while the editor has the keyboard, the terminal’s everywhere else. That is how <kbd>⌘D</kbd> duplicates a line in the editor and splits the terminal elsewhere. Settings lists both on the key and does not call that a clash; point at either shortcut to see which part has it. While the menus are open over the editor, the shared key shows on the editor’s command.
 
 A shortcut needs <kbd>⌘</kbd> or <kbd>⌃</kbd> (or a function key), so it can never swallow ordinary typing. A changed command shows a **Default** button that puts its shortcut back, and **Restore All Defaults** resets everything. Changes apply at once, in every menu, including the ⋯ menus.
