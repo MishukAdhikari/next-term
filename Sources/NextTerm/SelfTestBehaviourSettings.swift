@@ -146,18 +146,20 @@ extension SelfTest {
         let plan = ImportPlan(preset: .nextTerm, settings: settings)
         let lastBefore = ImportCoordinator.shared.last
         ImportCoordinator.shared.apply(ImportChoice(usePreset: false, settings: settings, recentProjects: []), plan: plan, from: "iTerm2")
-        let terminal = c.tabs.first?.view.getTerminal()
-        check(Preferences.terminalScrollback == 3_000 && terminal?.options.scrollback == 3_000
-              && terminal?.options.cursorStyle == .steadyUnderline && Preferences.terminalStartFolder == .current
-              && Preferences.trimTrailingWhitespace && Preferences.hiddenFilePatterns == ["mine", "*.import-test"],
+        guard let terminal = c.tabs.first?.view.getTerminal() else { return check(false, "an import of terminal settings: a tab to check") }
+        let expectedPatterns = ["mine", "*.import-test"]
+        let terminalSet = terminal.options.scrollback == 3_000 && terminal.options.cursorStyle == .steadyUnderline
+        let savedSet = Preferences.terminalScrollback == 3_000 && Preferences.terminalStartFolder == .current
+        let editorSet = Preferences.trimTrailingWhitespace && Preferences.hiddenFilePatterns == expectedPatterns
+        check(terminalSet && savedSet && editorSet,
               "an import sets the cursor, scrollback, start folder, clean-up and hidden files (added to yours)",
-              "\(Preferences.terminalScrollback) \(String(describing: terminal?.options.cursorStyle)) \(Preferences.hiddenFilePatterns)")
+              "\(Preferences.terminalScrollback) \(terminal.options.cursorStyle) \(Preferences.hiddenFilePatterns)")
         ImportCoordinator.shared.undo()
-        check(!defaults(has: "terminalScrollback") && terminal?.options.scrollback == NextTermView.scrollbackLines
-              && terminal?.options.cursorStyle == .blinkBar && !defaults(has: "terminalStartFolder")
-              && !defaults(has: "trimTrailingWhitespace") && Preferences.hiddenFilePatterns == ["mine"],
-              "Undo Import puts each of them back, in the open terminals too",
-              "\(Preferences.terminalScrollback) \(String(describing: terminal?.options.cursorStyle)) \(Preferences.hiddenFilePatterns)")
+        let terminalBack = terminal.options.scrollback == NextTermView.scrollbackLines && terminal.options.cursorStyle == .blinkBar
+        let savedBack = !defaults(has: "terminalScrollback") && !defaults(has: "terminalStartFolder") && !defaults(has: "trimTrailingWhitespace")
+        let patternsBack = Preferences.hiddenFilePatterns == ["mine"]
+        check(terminalBack && savedBack && patternsBack, "Undo Import puts each of them back, in the open terminals too",
+              "\(Preferences.terminalScrollback) \(terminal.options.cursorStyle) \(Preferences.hiddenFilePatterns)")
         ImportCoordinator.shared.last = lastBefore
     }
 
@@ -177,7 +179,8 @@ extension SelfTest {
             check(needed <= page.bounds.height, "Settings › \(id) fits its window", "\(Int(needed)) > \(Int(page.bounds.height))")
         }
         let terminal = tabs.tabViewItems.first { $0.identifier as? String == "terminal" }?.view as? TerminalSettingsView
-        check(terminal?.behaviour.shape.numberOfItems == 3 && terminal?.behaviour.startFolder.numberOfItems ?? 0 >= 5,
-              "Settings › Terminal offers three cursors and where new tabs open")
+        let shapes = terminal?.behaviour.shape.numberOfItems ?? 0
+        let folders = terminal?.behaviour.startFolder.numberOfItems ?? 0
+        check(shapes == 3 && folders >= 5, "Settings › Terminal offers three cursors and where new tabs open", "\(shapes) \(folders)")
     }
 }
