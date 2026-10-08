@@ -194,6 +194,8 @@ extension SelfTest {
         check(CopilotIDEServer.shared.connected.contains { $0.id == session && $0.streaming }, "and the copilot's event stream is still open")
         check(!folders.contains(home) && !folders.contains("/"),
               "your home folder is never listed (a copilot started there in any terminal would come to Next Term)")
+        // Started shells close without a question about what runs in them.
+        _ = await wait(20) { atHome.status.integrated && elsewhere.status.integrated }
         c.requestClose(elsewhere)
         c.requestClose(atHome)
     }
