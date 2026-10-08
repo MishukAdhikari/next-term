@@ -66,7 +66,7 @@ Yes. **File › New Remote Tab…** (<kbd>⌥⌘T</kbd>) opens a tab on any serv
 
 ## Can I split a tab into panes?
 
-Yes. <kbd>⌘D</kbd> splits the tab to the right and <kbd>⇧⌘D</kbd> down, as often as you like; <kbd>⌥⌘</kbd> with the arrows moves between panes. The tab shows the mark of its most urgent pane. See [Split panes](/docs/layouts/#split-panes).
+Yes. <kbd>⌘D</kbd> splits the tab to the right (in the editor it duplicates the line) and <kbd>⇧⌘D</kbd> down, as often as you like; <kbd>⌥⌘</kbd> with the arrows moves between panes. The tab shows the mark of its most urgent pane. See [Split panes](/docs/layouts/#split-panes).
 
 ## Is Next Term a full IDE?
 

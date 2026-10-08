@@ -25,15 +25,19 @@ extension SelfTest {
             view.setSelectedRange(NSRange(location: doc.lines.starts[line] + column, length: length))
         }
 
-        /// An edit on the scratch file, the text it leaves, and ⌘Z back to the text before in one step.
-        func step(_ name: String, _ expected: String, selected: NSRange? = nil, _ edit: () -> Void) {
+        /// An edit on the scratch file, the text it leaves, and ⌘Z back to the text before in one step, with the
+        /// caret or selection from before (`selectionBack`: one of the editor's own edits, not AppKit's paste).
+        func step(_ name: String, _ expected: String, selected: NSRange? = nil, selectionBack: Bool = true, _ edit: () -> Void) {
             let before = doc.text
+            let selectionBefore = view.selectedRange()
             edit()
             let selection = view.selectedRange()
             check(doc.text == expected && (selected.map { $0 == selection } ?? true), "line edits: \(name)",
                   "\(doc.text.debugDescription), selected \(selection)")
             doc.undoManager.undo()
-            check(doc.text == before, "line edits: \(name), undone in one step", doc.text.debugDescription)
+            let restored = !selectionBack || view.selectedRange() == selectionBefore
+            check(doc.text == before && restored, "line edits: \(name), undone in one step" + (selectionBack ? ", the selection as it was" : ""),
+                  "\(doc.text.debugDescription), selected \(view.selectedRange())")
         }
         check(doc.text == text, "line edits: the scratch file is edited with plain newlines", doc.text.debugDescription)
         place(line: 1, column: 1)
@@ -55,6 +59,16 @@ extension SelfTest {
         place(line: 0, length: 8)
         step("Move Line Down moves the selected lines and keeps them selected", "three\none\ntwo\n",
              selected: NSRange(location: 6, length: 8)) { view.moveLineDown(nil) }
+        // ⇧⌘Z puts the edit back with the caret it gave, and ⌘Z again the caret from before.
+        place(line: 1, column: 1)
+        view.moveLineDown(nil)
+        doc.undoManager.undo()
+        doc.undoManager.redo()
+        check(doc.text == "one\nthree\ntwo\n" && view.selectedRange() == NSRange(location: 11, length: 0),
+              "line edits: ⇧⌘Z redoes Move Line Down, the caret on the moved line", "\(doc.text.debugDescription), selected \(view.selectedRange())")
+        doc.undoManager.undo()
+        check(doc.text == text && view.selectedRange() == NSRange(location: 5, length: 0), "and ⌘Z undoes it again, the caret back",
+              "\(doc.text.debugDescription), selected \(view.selectedRange())")
         place(line: 0)
         view.moveLineUp(nil)
         check(doc.text == text && !doc.isDirty, "line edits: at the top, Move Line Up leaves the file as it is")
@@ -65,7 +79,9 @@ extension SelfTest {
         await pause(0.1)
         view.duplicateLine(nil)
         doc.undoManager.undo()
-        check(doc.text == "one\ntwo\nxthree\n", "line edits: ⌘Z after typing and Duplicate Line undoes only the duplicate", doc.text.debugDescription)
+        check(doc.text == "one\ntwo\nxthree\n" && view.selectedRange() == NSRange(location: 9, length: 0),
+              "line edits: ⌘Z after typing and Duplicate Line undoes only the duplicate, the caret after the typing",
+              "\(doc.text.debugDescription), selected \(view.selectedRange())")
         doc.undoManager.undo()
         check(doc.text == text, "line edits: and the typing after it", doc.text.debugDescription)
 
@@ -96,7 +112,8 @@ extension SelfTest {
         step("whole-line paste: pasted with nothing selected, the line goes in above the caret's line, the caret staying in its text",
              "two\none\ntwo\nthree\n", selected: NSRange(location: 5, length: 0)) { view.paste(nil) }
         place(line: 0, column: 1, length: 1)
-        step("whole-line paste: over a selection, it replaces the selection as any paste does", "otwo\ne\ntwo\nthree\n") { view.paste(nil) }
+        step("whole-line paste: over a selection, it replaces the selection as any paste does", "otwo\ne\ntwo\nthree\n",
+             selectionBack: false) { view.paste(nil) }
         place(line: 2, column: 2)
         step("whole-line cut: ⌘X with nothing selected cuts the caret's line", "one\ntwo\n") { view.cut(nil) }
         check(board.string(forType: .string) == "three\n", "whole-line cut: the line is on the clipboard", board.string(forType: .string).debugDescription)
@@ -105,7 +122,16 @@ extension SelfTest {
         check(board.string(forType: .string) == "one" && board.string(forType: CodeTextView.wholeLineType) == nil,
               "a selection copies as before, and pastes where the caret is")
         place(line: 1)
-        step("a selection's copy pastes at the caret", "one\nonetwo\nthree\n") { view.paste(nil) }
+        step("a selection's copy pastes at the caret", "one\nonetwo\nthree\n", selectionBack: false) { view.paste(nil) }
+
+        // An empty file has no line to take: Copy and Cut are off, as with nothing selected anywhere.
+        view.selectAll(nil)
+        view.delete(nil)
+        let cutItem = NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "")
+        check(doc.text.isEmpty && !view.validateMenuItem(copyItem) && !view.validateMenuItem(cutItem),
+              "whole-line copy: in an empty file Copy and Cut are off", doc.text.debugDescription)
+        doc.undoManager.undo()
+        check(doc.text == text, "and ⌘Z brings the text back", doc.text.debugDescription)
 
         // Copy Path with Line: the path from the project, with the caret's line or the selected lines; also in the
         // editor's right-click menu.
@@ -121,11 +147,11 @@ extension SelfTest {
         let contextMenu = click.flatMap { view.menu(for: $0) }
         check(contextMenu?.items.contains { $0.title == "Copy Path with Line" } == true, "Copy Path with Line is in the editor's right-click menu")
 
-        await keyChecks(c, view: view, doc: doc, tab: tab)
+        await keyChecks(c, view: view, doc: doc, contextMenu: contextMenu ?? NSMenu())
     }
 
     /// ⌘D in the editor and in the terminal, the menus' keys open and closed, and Settings' view of the pair.
-    private static func keyChecks(_ c: TerminalWindowController, view: CodeTextView, doc: EditorDocument, tab: TerminalTab) async {
+    private static func keyChecks(_ c: TerminalWindowController, view: CodeTextView, doc: EditorDocument, contextMenu: NSMenu) async {
         guard let window = c.window else { return }
         let shortcuts = KeyboardShortcuts.shared
         let savedBindings = shortcuts.bindings
@@ -152,24 +178,69 @@ extension SelfTest {
         check(ShortcutRecorder(commandID: "duplicateLine:").toolTip == shared && ShortcutRecorder(commandID: "splitRight:").toolTip == shared,
               "each shortcut in Settings says where ⌘D does what", ShortcutRecorder(commandID: "duplicateLine:").toolTip ?? "no tooltip")
 
-        // The menu bar: Split Right holds ⌘D while the menus are closed; opened over the editor, Duplicate Line
-        // shows it; over the terminal, Split Right does. Unshared keys show either way.
+        // Settings records an arrow, an F key and ⌦ by their own keys (the keyboard's unmodified layer gives control
+        // characters for them: ↓ is U+001F, every F key U+0010), so they show and their clashes are found.
+        func recorded(_ characters: String, code: UInt16, _ flags: NSEvent.ModifierFlags) -> KeyChord? {
+            let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil,
+                                         characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)
+            return event.flatMap(KeyboardShortcuts.chord(from:))
+        }
+        func scalars(_ chord: KeyChord?) -> String {
+            guard let chord else { return "none" }
+            return chord.display + " " + chord.key.unicodeScalars.map { String(format: "U+%04X", $0.value) }.joined(separator: " ")
+        }
+        let arrowFlags: NSEvent.ModifierFlags = [.command, .control, .function, .numericPad]
+        let moveDown = recorded("\u{F701}", code: 125, arrowFlags)
+        check(moveDown == KeyChord(key: "\u{F701}", command: true, control: true) && moveDown?.display == "⌃⌘↓",
+              "a pressed ⌃⌘↓ is recorded as ⌃⌘↓", scalars(moveDown))
+        let moveUp = recorded("\u{F700}", code: 126, arrowFlags)
+        let upOwners = moveUp.map { shortcuts.bindings.owners(of: $0, defaults: shortcuts.defaults, except: "goToLine:") } ?? []
+        check(upOwners == ["moveLineUp:"], "and ⌃⌘↑ pressed for Go to Line clashes with Move Line Up", "\(scalars(moveUp)): \(upOwners)")
+        let f5 = recorded("\u{F708}", code: 96, .function)
+        let forwardDelete = recorded("\u{F728}", code: 117, [.command, .function])
+        check(f5?.display == "F5" && f5?.isUsable == true && forwardDelete?.display == "⌘⌦", "F5 and ⌘⌦ are recorded as themselves",
+              "\(scalars(f5)), \(scalars(forwardDelete))")
+
+        // From here on, real key events and the menu bar's own notifications: they need the app in front with this
+        // window key, so it is brought there, and not getting there fails rather than skipping them.
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        let isKey = await wait(3) { NSApp.isActive && NSApp.keyWindow === window }
+        check(isKey, "line keys: the window has the keyboard for real key events",
+              "active \(NSApp.isActive), key window \(NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "none")")
+        guard isKey else { return }
+        guard let terminal = c.activeTab else { return check(false, "⌘D in the terminal: a terminal tab") }
+
+        // The menu bar, opened and closed as AppKit says it is: Split Right holds ⌘D while the menus are closed;
+        // opened over the editor, Duplicate Line shows it; over the terminal, Split Right does. Unshared keys show
+        // either way. A context menu opening is not the menu bar and changes nothing.
         func key(_ id: String) -> String { item(id).flatMap(KeyboardShortcuts.chord(of:))?.display ?? "none" }
+        func menus(open: Bool, _ menu: NSMenu? = nil) { // the menu bar's own by default
+            let name = open ? NSMenu.didBeginTrackingNotification : NSMenu.didEndTrackingNotification
+            NotificationCenter.default.post(name: name, object: menu ?? NSApp.mainMenu)
+        }
         check(key("splitRight:") == "⌘D" && key("duplicateLine:") == "none" && key("deleteLine:") == "none",
               "with the menus closed, Split Right holds ⌘D and the editor's commands hold no key", "\(key("splitRight:")) \(key("duplicateLine:"))")
-        shortcuts.menuBarOpened(editorHasKeyboard: true)
+        window.makeFirstResponder(view)
+        menus(open: true)
         check(key("duplicateLine:") == "⌘D" && key("splitRight:") == "none" && key("deleteLine:") == "⇧⌘K" && key("moveLineUp:") == "⌃⌘↑",
-              "the menus opened over the editor show ⌘D on Duplicate Line", "\(key("duplicateLine:")) \(key("splitRight:")) \(key("moveLineUp:"))")
-        shortcuts.menuBarClosed()
-        shortcuts.menuBarOpened(editorHasKeyboard: false)
+              "the menu bar opened over the editor shows ⌘D on Duplicate Line", "\(key("duplicateLine:")) \(key("splitRight:")) \(key("moveLineUp:"))")
+        menus(open: false)
+        check(key("splitRight:") == "⌘D" && key("duplicateLine:") == "none", "closed, the keys are as they were",
+              "\(key("splitRight:")) \(key("duplicateLine:"))")
+        c.show(terminal)
+        window.makeFirstResponder(terminal.view)
+        menus(open: true)
         check(key("duplicateLine:") == "none" && key("splitRight:") == "⌘D" && key("moveLineDown:") == "⌃⌘↓",
-              "and over the terminal on Split Right", "\(key("duplicateLine:")) \(key("splitRight:"))")
-        shortcuts.menuBarClosed()
-        check(key("splitRight:") == "⌘D" && key("duplicateLine:") == "none", "closed again, as they were")
+              "and opened over the terminal, on Split Right", "\(key("duplicateLine:")) \(key("splitRight:")) \(key("moveLineDown:"))")
+        menus(open: false)
+        check(key("moveLineDown:") == "none" && key("splitRight:") == "⌘D", "closed again, as they were", "\(key("moveLineDown:")) \(key("splitRight:"))")
+        window.makeFirstResponder(view)
+        menus(open: true, contextMenu)
+        check(key("duplicateLine:") == "none" && key("splitRight:") == "⌘D" && key("deleteLine:") == "none",
+              "the editor's right-click menu opening leaves the menu bar's keys alone", "\(key("duplicateLine:")) \(key("splitRight:"))")
+        menus(open: false, contextMenu)
 
-        guard NSApp.keyWindow === window else {
-            return note("skipped ⌘D's key events: the window does not have the keyboard (app not frontmost?)")
-        }
         func send(_ characters: String, code: UInt16, _ flags: NSEvent.ModifierFlags) {
             guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                                                windowNumber: window.windowNumber, context: nil, characters: characters,
@@ -197,7 +268,6 @@ extension SelfTest {
         check(doc.text == text, "and each is undone", doc.text.debugDescription)
 
         // The terminal has the keyboard: ⌘D splits it, and the file is left alone.
-        guard let terminal = c.activeTab else { return check(false, "⌘D in the terminal: a terminal tab") }
         c.show(terminal)
         window.makeFirstResponder(terminal.view)
         check(NSApp.target(forAction: #selector(CodeTextView.duplicateLine(_:)), to: nil, from: nil) == nil,
@@ -207,6 +277,30 @@ extension SelfTest {
         check(c.activeGroup?.panes.count == panes + 1 && doc.text == text, "⌘D in the terminal splits it, and the file is left alone",
               "panes \(c.activeGroup?.panes.count ?? 0), text \(doc.text.debugDescription)")
         if let split, split !== terminal, c.activeGroup?.panes.count == panes + 1 { c.remove(split) }
+
+        // An editor command that is off passes its key on: in a read-only editor ⌘D splits the terminal.
+        view.isEditable = false
+        window.makeFirstResponder(view)
+        send("d", code: 2, .command)
+        let fromReadOnly = c.activeTab
+        check(c.activeGroup?.panes.count == panes + 1 && doc.text == text, "in a read-only editor ⌘D splits the terminal instead",
+              "panes \(c.activeGroup?.panes.count ?? 0), text \(doc.text.debugDescription)")
+        if let fromReadOnly, fromReadOnly !== terminal, c.activeGroup?.panes.count == panes + 1 { c.remove(fromReadOnly) }
+        view.isEditable = true
+
+        // In an empty file ⌘C and ⌘X are off, and the clipboard keeps what it has (lineEditChecks puts it back after).
+        window.makeFirstResponder(view)
+        view.selectAll(nil)
+        view.delete(nil)
+        let board = NSPasteboard.general
+        board.clearContents()
+        board.setString("kept", forType: .string)
+        send("c", code: 8, .command)
+        send("x", code: 7, .command)
+        check(doc.text.isEmpty && board.string(forType: .string) == "kept", "⌘C and ⌘X in an empty file leave the clipboard as it was",
+              "\(doc.text.debugDescription), clipboard \(board.string(forType: .string).debugDescription)")
+        doc.undoManager.undo()
+        check(doc.text == text, "and ⌘Z brings the file's text back", doc.text.debugDescription)
 
         // Another key for Duplicate Line: ⌘D splits from the editor too, and the new key duplicates.
         let other = KeyChord(key: "d", command: true, shift: true, control: true)

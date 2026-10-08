@@ -90,6 +90,10 @@ import Testing
         #expect(ImportShortcuts.unusable(KeyChord(key: "p", shift: true)) != nil)
         #expect(ImportShortcuts.unusable(KeyChord(key: "\u{F708}")) == nil) // F5 alone
         #expect(ImportShortcuts.unusable(KeyChord(key: "g", control: true)) == nil) // usable, but the shell's
+        // Option types a character with ⌥Z, not with an arrow (VS Code's ⇧⌥↓, Copy Line Down) or without Option.
+        #expect(ImportShortcuts.unusable(KeyChord(key: "z", option: true)) == "a menu shortcut needs ⌘ or ⌃ (Option alone types a character)")
+        #expect(ImportShortcuts.unusable(KeyChord(key: "\u{F701}", shift: true, option: true)) == "a menu shortcut needs ⌘ or ⌃")
+        #expect(ImportShortcuts.unusable(KeyChord(key: "p", shift: true)) == "a menu shortcut needs ⌘ or ⌃")
     }
 
     // MARK: the command tables

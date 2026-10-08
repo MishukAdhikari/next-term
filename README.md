@@ -97,10 +97,10 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
 - **Changes in the gutter.** A bar beside the line numbers marks the lines added (green) or changed (blue)
   since the last commit, and a red wedge where lines were deleted, as you type or an agent writes. Click a
   mark for the file's changes side by side.
-- **Split panes.** Split any tab right (⌘D) or down (⌘⇧D), as often as you like: an agent beside its
-  test run, two agents side by side. Move between panes with ⌥⌘ and the arrows, maximize one with
-  ⌘⇧↩, close it with ⌘W. The panes without the keyboard are shaded, and the tab's mark shows the pane
-  that most needs you.
+- **Split panes.** Split any tab right (⌘D, outside the editor) or down (⌘⇧D), as often as you like: an
+  agent beside its test run, two agents side by side. Move between panes with ⌥⌘ and the arrows, maximize
+  one with ⌘⇧↩, close it with ⌘W. The panes without the keyboard are shaded, and the tab's mark shows the
+  pane that most needs you.
 - **Changes side by side (⌥⌘G).** A file's diff in a tab: the old version beside the new, rows aligned, the
   changed words marked, syntax-coloured, scrolling together. All changes, unstaged or staged; step through
   them and stage, unstage or revert one hunk at a time (⌘Z undoes a revert). Each action first checks the
@@ -196,7 +196,7 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | Go to File (`name` or `name:line`) | ⌘P |
 | Resume an agent session (↩ resume or go to its tab, ⌘↩ fork) | ⌥⌘O |
 | Close tab (or the focused pane in a split tab) | ⌘W |
-| Split right / split down | ⌘D / ⌘⇧D |
+| Split right / split down (in the editor, ⌘D duplicates the line) | ⌘D / ⌘⇧D |
 | Move between panes | ⌥⌘← ⌥⌘→ ⌥⌘↑ ⌥⌘↓, or ⌥⌘] / ⌥⌘[ in turn |
 | Maximize the pane (and back) | ⌘⇧↩ |
 | Select tab 1–8 / last tab | ⌘1…⌘8 / ⌘9 |

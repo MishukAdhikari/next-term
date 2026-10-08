@@ -85,19 +85,22 @@ final class KeyboardShortcuts {
     /// Whether the editor's items show their keys now (the menu bar is open).
     private(set) var showsEditorKeys = false
 
-    /// The editor command `event` presses, if any: by the key as typed unshifted, or as the ⌘ layer of a
-    /// non-Latin layout gives it.
+    /// The editor command `event` presses, if any: by the key as the menus read it (the ⌘ layer, "K" as ⇧K),
+    /// then unshifted ("]" for ⇧⌘], which reads "}"). Both are the ⌘ layer's: on Dvorak – QWERTY ⌘ the key that
+    /// types "d" is ⌘H with ⌘ down, and stays Hide Next Term.
     func editorItem(for event: NSEvent) -> NSMenuItem? {
         guard !editorKeys.isEmpty, let chord = Self.chord(from: event) else { return nil }
-        if let item = editorKeys[chord] { return item }
-        guard let typed = event.charactersIgnoringModifiers?.lowercased(), typed.count == 1, typed != chord.key else { return nil }
-        return editorKeys[KeyChord(key: typed, command: chord.command, shift: chord.shift, option: chord.option, control: chord.control)]
+        if let typed = event.charactersIgnoringModifiers, typed.count == 1,
+           let item = editorKeys[KeyChord(key: typed, command: chord.command, shift: chord.shift, option: chord.option, control: chord.control)] {
+            return item
+        }
+        return editorKeys[chord]
     }
 
     /// The menu bar opened: the editor's items show their keys, and with the editor's keyboard a shared key is
     /// shown on the editor's command only, since that is what it does there.
-    func menuBarOpened(editorHasKeyboard: Bool? = nil) {
-        let inEditor = editorHasKeyboard ?? (NSApp.keyWindow?.firstResponder is CodeTextView)
+    func menuBarOpened() {
+        let inEditor = NSApp.keyWindow?.firstResponder is CodeTextView
         for (chord, item) in editorKeys {
             if let other = sharedKeys[chord] {
                 guard inEditor else { continue }
@@ -173,10 +176,16 @@ final class KeyboardShortcuts {
         item.keyEquivalentModifierMask = mask
     }
 
-    /// The shortcut a key press makes, with the key unshifted ("]" for ⇧⌘], "t" for ⇧⌘T).
+    /// The shortcut a key press makes, with the key unshifted ("]" for ⇧⌘], "t" for ⇧⌘T). With ⌘ down, the key
+    /// as the ⌘ layer has it, as the menus read it (on Dvorak – QWERTY ⌘ the key that types "d" is ⌘H).
     static func chord(from event: NSEvent) -> KeyChord? {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        var key = event.characters(byApplyingModifiers: []) ?? event.charactersIgnoringModifiers ?? ""
+        var key = event.characters(byApplyingModifiers: flags.intersection(.command)) ?? event.charactersIgnoringModifiers ?? ""
+        // That gives a control character for the arrows, Home, ⌦ and every F key (↓ is U+001F, F1 to F12 all U+0010).
+        if let typed = event.charactersIgnoringModifiers, typed.unicodeScalars.count == 1,
+           let scalar = typed.unicodeScalars.first, (0xF700...0xF8FF).contains(scalar.value) {
+            key = typed
+        }
         if key == "\u{7F}" { key = "\u{8}" } // the Delete key, as menus spell it
         if key == "\u{3}" { key = "\r" }      // Enter on the keypad
         guard key.count == 1 else { return nil }

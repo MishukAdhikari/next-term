@@ -28,7 +28,7 @@ public enum KeymapPreset: String, CaseIterable, Codable, Sendable {
             return [
                 "newWindow:": KeyChord(key: "n", command: true, shift: true),
                 "splitRight:": cmd("\\"),          // ⌘D is Add Selection to Next Find Match there
-                "duplicateLine:": none,            // so ⌘D does nothing unexpected; ⇧⌥↓ there types a character here
+                "duplicateLine:": none,            // so ⌘D does nothing unexpected; ⇧⌥↓ can't be a menu shortcut here (needs ⌘ or ⌃)
                 "replaceInFiles:": KeyChord(key: "h", command: true, shift: true),
             ]
         case .jetBrains:

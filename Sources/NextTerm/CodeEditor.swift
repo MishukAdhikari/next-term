@@ -263,12 +263,14 @@ final class CodeTextView: NSTextView {
     /// one shares with a terminal command (⌘D, Split Right) is the editor's only here: macOS lets one menu item
     /// hold a key, so the menus can't say which part it is for (KeyboardShortcuts keeps these items' keys off
     /// while the menus are closed).
+    /// A command that is off here (in a read-only editor, say) passes its key on: ⌘D then splits the terminal.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard window?.firstResponder === self, let item = KeyboardShortcuts.shared.editorItem(for: event), let action = item.action else {
+        guard window?.firstResponder === self, let item = KeyboardShortcuts.shared.editorItem(for: event), let action = item.action,
+              validateMenuItem(item) else {
             return super.performKeyEquivalent(with: event)
         }
         caretPlacedByUser = true
-        if validateMenuItem(item) { NSApp.sendAction(action, to: self, from: item) } else { NSSound.beep() }
+        NSApp.sendAction(action, to: self, from: item)
         return true
     }
 
@@ -278,16 +280,34 @@ final class CodeTextView: NSTextView {
         return LineIndex(string)
     }
 
-    /// One edit, undone in one step (named in Edit › Undo), then the selection it gives.
+    /// One edit, undone in one step (named in Edit › Undo), then the selection it gives. ⌘Z puts back the
+    /// caret or the selection from before it, and ⇧⌘Z the one after.
     private func apply(_ edit: LineEdits.Edit, named name: String) {
-        guard shouldChangeText(in: edit.range, replacementString: edit.text) else { return }
+        guard isEditable else { return } // as shouldChangeText would say, before anything goes into the undo step
         breakUndoCoalescing() // typing just before is undone on its own
+        let before = selectedRanges
+        restoresSelection(before, edit.selection, afterEdit: false)
+        guard shouldChangeText(in: edit.range, replacementString: edit.text) else { return }
         replaceCharacters(in: edit.range, with: edit.text)
         didChangeText()
         breakUndoCoalescing()
+        restoresSelection(before, edit.selection, afterEdit: true)
         undoManager?.setActionName(name)
         setSelectedRange(edit.selection)
         scrollRangeToVisible(edit.selection)
+    }
+
+    /// The text's own undo and redo select the text that changed. Registered just before the change, this runs
+    /// after that undo (an undo step runs backwards) and puts `before` back; registered just after, it runs after
+    /// the redo and puts `after` back. Each registers itself again for the next ⌘Z or ⇧⌘Z.
+    private func restoresSelection(_ before: [NSValue], _ after: NSRange, afterEdit: Bool) {
+        undoManager?.registerUndo(withTarget: self) { view in
+            if !afterEdit { view.selectedRanges = before }
+            view.undoManager?.registerUndo(withTarget: view) { view in
+                if afterEdit { view.setSelectedRange(after) }
+                view.restoresSelection(before, after, afterEdit: afterEdit)
+            }
+        }
     }
 
     /// Duplicate Line (⌘D while the editor has the keyboard): the line below itself, or a selection after itself.
@@ -324,8 +344,9 @@ final class CodeTextView: NSTextView {
     /// Marks a copy of a whole line, so pasting it with nothing selected puts it above the caret's line.
     static let wholeLineType = NSPasteboard.PasteboardType("me.mishuk.nextterm.whole-line")
 
-    /// Nothing selected (one caret): ⌘C and ⌘X take the caret's line.
-    private var copiesWholeLine: Bool { selectedRanges.count == 1 && selectedRange().length == 0 }
+    /// Nothing selected (one caret) in a file with text: ⌘C and ⌘X take the caret's line. In an empty file they
+    /// are off, as with nothing selected anywhere, and the clipboard keeps what it has.
+    private var copiesWholeLine: Bool { selectedRanges.count == 1 && selectedRange().length == 0 && (string as NSString).length > 0 }
 
     /// ⌘C with nothing selected copies the caret's line with its line break.
     override func copy(_ sender: Any?) {

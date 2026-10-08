@@ -98,7 +98,7 @@ Status reports from the shell carry a random secret for each tab that programs n
 | Select tab 1–8, or the last tab | <kbd>⌘1</kbd>–<kbd>⌘8</kbd>, <kbd>⌘9</kbd> (each tab shows its own) |
 | Next or previous tab | <kbd>⇧⌘]</kbd> and <kbd>⇧⌘[</kbd>, or <kbd>⌃⇥</kbd> and <kbd>⌃⇧⇥</kbd> |
 | Rename a tab | <kbd>⌥⌘R</kbd>, or double-click it |
-| Split a tab into panes | <kbd>⌘D</kbd> right, <kbd>⇧⌘D</kbd> down |
+| Split a tab into panes | <kbd>⌘D</kbd> right (outside the editor), <kbd>⇧⌘D</kbd> down |
 | Duplicate a tab (a new tab in its folder) | **File › Duplicate Tab** |
 | Reopen the tab you closed last | <kbd>⇧⌘T</kbd> (**File › Reopen Closed Tab**) |
 | Close the other tabs, or the tabs to the right | **File › Close Other Tabs**, **Close Tabs to the Right** |
