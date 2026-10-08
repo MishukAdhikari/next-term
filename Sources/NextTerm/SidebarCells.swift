@@ -26,7 +26,8 @@ final class SidebarHeaderView: NSView {
     let hideButton = HoverButton()
     var inset: CGFloat = 70 { didSet { needsLayout = true } }
     private var hideTip: ShortcutToolTip?
-    /// "⌘B" just before the hide button, as a tab shows "⌘1", while the row has room for it.
+    /// "⌘B" just before the hide button, as a tab shows "⌘1", while the row has room for it; without, while
+    /// the pointer is on the button, over the counts or Pull.
     private lazy var hideHint = KeyHint(#selector(TerminalWindowController.toggleProjectSidebar(_:)), for: hideButton)
     /// The hide button's key as it shows now, nil once it gave way (for the self-test).
     var shownHideKey: String? {
@@ -81,6 +82,12 @@ final class SidebarHeaderView: NSView {
     var titleIsTruncated: Bool {
         layoutSubtreeIfNeeded()
         return title.cell?.expansionFrame(withFrame: title.bounds, in: title) != .zero
+    }
+
+    /// Where the branch name is (for the self-test).
+    var titleFrame: NSRect {
+        layoutSubtreeIfNeeded()
+        return title.frame
     }
 
     /// Whether the counts are cut short (for the self-test).
