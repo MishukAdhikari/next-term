@@ -330,6 +330,7 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
     private func place() {
         guard let tab, let window = tab.view.window else { return panel.center() }
         window.addChildWindow(panel, ordered: .above)
+        if let content = panel.contentView { panel.setContentSize(content.fittingSize) }
         let caret = tab.view.firstRect(forCharacterRange: NSRange(location: 0, length: 0), actualRange: nil)
         let size = panel.frame.size
         let visible = (window.screen ?? NSScreen.main)?.visibleFrame ?? window.frame
