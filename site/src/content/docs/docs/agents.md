@@ -1,6 +1,6 @@
 ---
 title: Agents and the IDE link
-description: "Claude Code, Gemini CLI and Qwen Code connect to Next Term as their IDE: live selection, edits as diffs. Send to Agent (⌥⌘K) and MCP work with every agent."
+description: "Claude Code, Gemini CLI, Qwen Code, Copilot CLI and opencode connect to Next Term as their IDE: live selection, edits as diffs, and Send to Agent (⌥⌘K)."
 head:
   - tag: title
     content: Claude Code IDE integration and Send to Agent — Next Term
@@ -15,8 +15,10 @@ Agents in a terminal work blind: they cannot see what you are looking at, and th
 | Claude Code | From its screen | Yes | Yes | Yes, as an @-mention |
 | Gemini CLI | From its screen | Yes, with the open files | Yes | Yes |
 | Qwen Code | From output timing | Yes, with the open files | Yes | Yes |
+| GitHub Copilot CLI | From output timing | Yes | Yes | Yes, as an @-mention |
+| opencode | From output timing | The selection only | Yes | Yes, as an @-mention |
 | Codex, Command Code | From its screen | — | Yes | Yes |
-| Cursor Agent, opencode, Copilot CLI, Amp, Junie | From output timing | — | Yes | Yes |
+| Cursor Agent, Amp, Junie | From output timing | — | Yes | Yes |
 | Other agents | From output timing, for the ones it recognises by name | — | Add `nxtrm mcp` yourself | Yes |
 
 - **From its screen:** the spinner follows the agent’s own “esc to interrupt” hint, so it stops the moment the agent stops, and its permission questions turn the tab amber. The hints are checked against that agent’s own screen.
@@ -57,6 +59,23 @@ Gemini CLI and Qwen Code use their own IDE companion protocol, and Next Term spe
 - **Proposed edits** open as a diff to accept or reject, as with Claude. A new proposal for the same file replaces the old one.
 - **Nothing to set up.** Both CLIs connect to an editor only when their IDE mode is on. Next Term turns it on for you by setting `"ide": {"enabled": true}` in `~/.gemini/settings.json` and `~/.qwen/settings.json`. It changes only that setting and leaves the rest of the file byte for byte. It writes nothing if the agent is not installed, and never rewrites a settings file that has comments in it.
 
+## GitHub Copilot CLI
+
+Copilot CLI connects to an editor through the protocol VS Code’s Copilot extension uses, and Next Term speaks it. Start `copilot` in a Next Term tab and it connects by itself.
+
+- **What it sees:** the lines you select go with your next prompt, and Copilot shows which ones. With nothing selected, it knows which file you have open.
+- **<kbd>⌥⌘K</kbd> puts an @-mention straight into Copilot’s prompt**, such as `@app/User.php:10-20`.
+- **Proposed edits** open as a diff to accept or reject, as with Claude. Copilot asks in the terminal at the same time; answer in either place, and the other closes.
+- **Where it connects:** Copilot connects when it starts in a folder Next Term lists for it: an open project, or the folder a tab is in. A `copilot` started in another terminal in one of those folders finds Next Term too. If VS Code has the same folder open, Copilot may connect to VS Code instead; `/ide` in Copilot switches.
+- **Nothing to set up**, and nothing of Copilot’s is changed: Next Term only adds its own lock file to `~/.copilot/ide`, and only when `~/.copilot` exists (Copilot makes it the first time it runs). Copilot still asks its own question about trusting a folder; Next Term never answers it for you.
+
+## opencode
+
+opencode reads Claude Code’s lock files and connects to Next Term the same way. Started in another terminal inside one of your open projects, it presents the token from the lock file. From a Next Term tab it connects without the token, so Next Term checks who is calling instead: the connection is kept only when it comes from opencode running in one of Next Term’s own tabs.
+
+- **What it sees:** the lines you select, which go with your next prompt, and the @-mentions <kbd>⌥⌘K</kbd> sends.
+- **No proposals:** opencode does not ask an editor to show its edits, and without the token it could not.
+
 ## Send to Agent (⌥⌘K)
 
 Send to Agent hands your context to the agent in a tab, in that agent’s own syntax, and puts the cursor in its prompt so you can add the instruction.
@@ -77,7 +96,7 @@ Send to Agent hands your context to the agent in a tab, in that agent’s own sy
 | Gemini CLI, Qwen Code, Copilot CLI | `@app/User.php (lines 10-20)` | `@app/User.php (line 10)` | `app/ (folder)` |
 | Codex and every other agent | `app/User.php:10-20` | `app/User.php:10` | `app/ (folder)` |
 
-Several items go on one line for agents that use @-mentions; for the others they become a short “Context:” list. A path with spaces is quoted. When Claude is connected through the IDE link, files go in as real @-mentions instead of typed text. A reference with a note, such as “(unsaved changes in the editor)” or “(as staged)”, is still typed: a mention carries only the file and its lines.
+Several items go on one line for agents that use @-mentions; for the others they become a short “Context:” list. A path with spaces is quoted. When Claude, opencode or Copilot CLI is connected through the IDE link, files go in as real @-mentions instead of typed text, in the agent’s own form (`@app/User.php:10-20` for Copilot). A folder, or a reference with a note such as “(unsaved changes in the editor)” or “(as staged)”, is still typed: a mention carries only a file and its lines.
 
 **Unsaved changes:** if the file has edits you have not saved, the reference says “(unsaved changes in the editor)” and the selected code is pasted after it as a fenced code block, so the agent sees what you see.
 
@@ -85,12 +104,18 @@ Several items go on one line for agents that use @-mentions; for the others they
 
 ## Turning the link off
 
-**Settings › Editor › Agents: “Agents in a tab see the editor (Claude Code, Gemini CLI, Qwen Code)”** is on by default. Turn it off and Next Term stops its IDE servers: agents no longer see your selection or open files, and proposed edits are answered in the terminal only. Send to Agent keeps working, because it only types into the prompt.
+**Settings › Editor › Agents** has two switches, both on by default:
+
+- **“Agents in a tab see the editor (Claude Code, Gemini CLI, Qwen Code, opencode)”**
+- **“GitHub Copilot CLI in a tab sees the editor”**
+
+Turn one off and Next Term stops those IDE servers: the agents no longer see your selection or open files, and their proposed edits are answered in the terminal only. Send to Agent keeps working, because it types into the prompt instead.
 
 ## How the link stays private
 
-- **Local only.** The IDE servers listen on `127.0.0.1` and nowhere else.
-- **A fresh secret every launch.** Each run of Next Term creates a new 256-bit token; an agent must present it, and the check runs in constant time. The lock file that tells Claude Code where to connect is readable only by you (`0600` in a `0700` folder) and is removed when Next Term quits.
+- **Local only.** The servers for Claude Code, opencode, Gemini CLI and Qwen Code listen on `127.0.0.1` and nowhere else. Copilot CLI’s has no network port at all: it is a Unix socket in a new folder that only you can open.
+- **A fresh secret every launch.** Each run of Next Term creates new 256-bit secrets; an agent must present one, and the check runs in constant time. The lock files that tell Claude Code and Copilot CLI where to connect are readable only by you (`0600` in a `0700` folder) and are removed when Next Term quits.
+- **Without the token, only opencode in your tabs.** A connection without the token is kept only when the process making it is opencode running in a Next Term tab. It then only receives your selection and @-mentions: it cannot propose edits or call anything.
 - **Browsers are refused.** Requests that carry an `Origin` header, as requests from web pages do, are rejected. A website cannot reach the link, and would still need the token.
 - **Agents cannot write through it.** Nothing an agent sends over the link writes a file. Next Term reports the selection and shows proposals; the agent writes only after you accept, with its own permissions.
 - **Secrets are never shared.** Selections and open files from `.env` and `.env.*` (except `.env.example`), `*.pem`, `*.key`, `id_rsa`, `id_ed25519`, `.npmrc` and `.netrc` never leave the editor.
@@ -113,4 +138,4 @@ A remote tab (<kbd>⌥⌘T</kbd>) runs an agent on a server you reach with ssh, 
 
 <span class="nt-soon">Coming next</span> **Sessions from more agents:** the conversations Gemini CLI, opencode, Copilot CLI and Cursor keep, in the Welcome window beside Claude Code’s, Codex’s and Command Code’s.
 
-<span class="nt-soon">Coming later</span> An IDE link for GitHub Copilot CLI, and remote access to the MCP server for agents outside your Mac.
+<span class="nt-soon">Coming later</span> Remote access to the MCP server for agents outside your Mac.
