@@ -92,6 +92,14 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
     private var openFolders: Set<String> = []
     private var directory = ""
     private var snapshot: GitSnapshot?
+    /// The read started as the popup opened is not in yet: until it is, the popup says "Reading
+    /// branches…" rather than list what an earlier read found (missing branches made since, by you or an
+    /// agent).
+    private(set) var isReading = false
+    /// Counts the popup's openings: only the read the latest one started ends `isReading`.
+    private var openings = 0
+    /// The last read came back with nothing: not a repository any more, or git failed.
+    private var readFailed = false
     private static let readQueue = DispatchQueue(label: "nextterm.branches", qos: .userInitiated)
     static let rowHeight: CGFloat = 26
     static let width: CGFloat = 440
@@ -125,8 +133,15 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         if panel.parent == nil { parent.addChildWindow(panel, ordered: .above) }
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(field)
+        isReading = GitWriter.git != nil
+        openings += 1
+        let opening = openings
         rebuild()
-        reload()
+        reload { [weak self] in
+            guard let self, self.isReading, opening == self.openings else { return }
+            self.isReading = false
+            if self.panel.isVisible { self.rebuild() }
+        }
         // It draws first; if the last fetch is over five minutes old, a background fetch brings the counts up to date.
         BackgroundFetcher.shared.popupOpened(directory: directory)
     }
@@ -186,6 +201,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
                     self.openFolders.insert(BranchModel.isAgentBranch(current, worktree: nil) ? "local:agents" : "local:" + folder)
                 }
                 self.model = fresh
+                self.readFailed = fresh == nil
                 if self.panel.isVisible { self.rebuild() }
                 done?()
             }
@@ -219,8 +235,15 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         }
     }
 
+    /// While the first read is out, or when it found nothing, the one row that says so.
+    private var waitingNote: Item? {
+        if isReading || (model == nil && !readFailed) { return .note("Reading branches…") }
+        return model == nil ? .note("Git could not read the branches here.") : nil
+    }
+
     private func actionItems() -> [Item] {
-        guard let model else { return [.note("Reading branches…")] }
+        if let waitingNote { return [waitingNote] }
+        guard let model else { return [] }
         var rows: [Item] = []
         if let progress = model.inProgress {
             rows.append(.header(progress.title))
@@ -245,7 +268,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
 
     private func browseItems() -> [Item] {
         var rows = actionItems()
-        guard let model else { return rows }
+        guard waitingNote == nil, let model else { return rows }
         if model.current == nil, let sha = model.headSHA {
             rows.insert(.note("Detached at \(sha.prefix(7)): New Branch… keeps work made here"), at: 0)
         }
@@ -296,7 +319,8 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
     }
 
     private func searchItems(_ query: String) -> [Item] {
-        guard let model else { return [.note("Reading branches…")] }
+        if let waitingNote { return [waitingNote] }
+        guard let model else { return [] }
         var rows: [Item] = []
         // Actions: by title and the other words people use for them.
         let actions = actionItems().filter {
@@ -328,7 +352,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
     }
 
     private func updateFooter() {
-        guard let model else { footer.stringValue = ""; return }
+        guard !isReading, let model else { footer.stringValue = ""; return }
         let ahead = model.currentRef.map { r in r.upstream.map { "tracking \($0)" } ?? "not published" } ?? "detached"
         footer.stringValue = "\(model.current ?? "HEAD") · \(ahead) · \(model.locals.count) local, \(model.remotes.count) remote"
     }

@@ -1983,9 +1983,11 @@ enum SelfTest {
         // The popup: actions first, branches in folders, agents' branches in their own folder.
         c.showBranches(nil)
         let popup = c.branchPopup
-        // Read afresh: an earlier check may have opened it here, and it shows what it read then until the
-        // new read is in.
-        check(await wait(5) { popup.isVisible && popup.model?.current == start && popup.model?.local("claude/try") != nil },
+        // Until the read it starts is in, it says so, rather than list what an earlier check read here
+        // (without the branches made since). Under load that read can take seconds.
+        check(popup.isReading && popup.rowTitles == ["note Reading branches…"], "the branch popup says “Reading branches…” until its read is in",
+              popup.rowTitles.joined(separator: " | "))
+        check(await wait(20) { popup.isVisible && !popup.isReading && popup.model?.current == start && popup.model?.local("claude/try") != nil },
               "⌥⌘B opens the branch popup", popup.rowTitles.joined(separator: " | "))
         let rows = popup.rowTitles
         check(["Update Project", "Commit…", "Push…", "New Branch…", "Checkout Tag or Revision…"].allSatisfy(rows.contains),
@@ -2418,7 +2420,7 @@ enum SelfTest {
                 return false
             }
         }
-        check(await wait(5) { popup.model.map { canonicalPath($0.root) == canonicalPath(repo.path) } == true && row("feat", remote: false) != nil },
+        check(await wait(15) { popup.model.map { canonicalPath($0.root) == canonicalPath(repo.path) } == true && row("feat", remote: false) != nil },
               "the branch popup opens on the comparison's repository", popup.rowTitles.joined(separator: " | "))
         let localRow = row("feat", remote: false)
         let local: [NSMenuItem] = localRow.flatMap { popup.menu(forRow: $0) }?.items ?? []
