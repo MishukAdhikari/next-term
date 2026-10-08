@@ -239,6 +239,22 @@ extension SelfTest {
         check(ran && messages("impostor.jsonl").isEmpty, "any other client without the token gets nothing, even from a tab",
               "\(messages("impostor.jsonl").count) messages")
         c.requestClose(tab)
+
+        // Started in another terminal, opencode reads the lock and sends the token, still with no subprotocol
+        // and no ide_connected: it is in once it says it is initialized.
+        let elsewhere = ClaudeTestClient(port: port, token: ClaudeIDEServer.shared.token, subprotocol: false)
+        elsewhere.send(["jsonrpc": "2.0", "id": 1, "method": "initialize", "params": [
+            "protocolVersion": "2025-11-25", "capabilities": [String: Any](), "clientInfo": ["name": "opencode", "version": "0.0.0"]]])
+        _ = await wait(3) { elsewhere.received.contains { $0["id"] as? Int == 1 } }
+        elsewhere.send(["jsonrpc": "2.0", "method": "notifications/initialized"])
+        await pause(0.3)
+        // With no tab of its own, it follows the window in front.
+        c.window?.makeKeyAndOrderFront(nil)
+        c.window?.makeFirstResponder(editor.textView)
+        editor.textView.setSelectedRange(NSRange(location: 0, length: 3))
+        check(await wait(3) { elsewhere.last("selection_changed")?["filePath"] as? String == editor.document.path },
+              "opencode started elsewhere, with the token, sees the selection too")
+        elsewhere.close()
     }
 
     /// opencode's editor client, as the self-test's stand-in (`<copy named opencode> --cli
