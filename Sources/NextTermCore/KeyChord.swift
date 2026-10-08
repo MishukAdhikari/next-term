@@ -210,10 +210,27 @@ public struct KeyBindings: Equatable, Sendable {
         return "\(chord.display) is " + phrases.joined(separator: ", ")
     }
 
+    /// Whether `id`, a command outside the menus still on its default key `chord`, gives that key up: you gave it yourself
+    /// to another command it can't share it with (before it was this command's default, or by an import then). Settings
+    /// never lets two such commands have one key, and the one you chose keeps it. `isCommand`: whether an id is a command
+    /// still (a saved change can outlive its command).
+    public func givesWay(_ id: String, _ chord: KeyChord, isCommand: (String) -> Bool) -> Bool {
+        guard overrides[id] == nil, case .part = Self.scope(of: id) else { return false }
+        return overrides.contains { other, key in
+            key == chord && other != id && Self.isUsable(chord, for: other) && !Self.canShareKey(id, other) && isCommand(other)
+        }
+    }
+
+    /// The key `id` has, given every command's default (`givesWay`).
+    private func chord(for id: String, defaults: [String: KeyChord?]) -> KeyChord? {
+        guard let chord = chord(for: id, default: defaults[id] ?? nil) else { return nil }
+        return givesWay(id, chord, isCommand: { defaults.index(forKey: $0) != nil }) ? nil : chord
+    }
+
     /// The other commands that already use `chord` and can't share it with `id`, given every command's default.
     public func owners(of chord: KeyChord, defaults: [String: KeyChord?], except id: String) -> [String] {
         defaults.keys.sorted().filter { other in
-            other != id && !Self.canShareKey(id, other) && self.chord(for: other, default: defaults[other] ?? nil) == chord
+            other != id && !Self.canShareKey(id, other) && self.chord(for: other, defaults: defaults) == chord
         }
     }
 
@@ -230,7 +247,7 @@ public struct KeyBindings: Equatable, Sendable {
     /// Every other command that has `chord` too, each in another part (`canShareKey`).
     public func sharers(of chord: KeyChord, defaults: [String: KeyChord?], except id: String) -> [String] {
         defaults.keys.sorted().filter { other in
-            other != id && Self.canShareKey(id, other) && self.chord(for: other, default: defaults[other] ?? nil) == chord
+            other != id && Self.canShareKey(id, other) && self.chord(for: other, defaults: defaults) == chord
         }
     }
 

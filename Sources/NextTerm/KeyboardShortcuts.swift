@@ -195,12 +195,18 @@ final class KeyboardShortcuts {
                         option: flags.contains(.option), control: flags.contains(.control))
     }
 
-    /// A command's shortcut now (a saved one that can't be typed counts as the default, as in `apply`).
+    /// A command's shortcut now (a saved one that can't be typed counts as the default, as in `apply`). A key outside the
+    /// menus still at its default has none while you gave that key to a command it can't share it with
+    /// (KeyBindings.givesWay): the menus, the parts' own handlers and Settings all read it here.
     func chord(for id: String) -> KeyChord? {
+        let bindings = self.bindings
         let base = baseChord(for: id)
         guard let chord = bindings.chord(for: id, default: base) else { return nil }
-        return KeyBindings.isUsable(chord, for: id) ? chord : base
+        guard KeyBindings.isUsable(chord, for: id) else { return base }
+        return bindings.givesWay(id, chord, isCommand: isCommand) ? nil : chord
     }
+
+    private func isCommand(_ id: String) -> Bool { commands.contains { $0.id == id } }
 
     func title(of id: String) -> String {
         commands.first { $0.id == id }?.title ?? id
@@ -269,7 +275,7 @@ final class KeyboardShortcuts {
     }
 
     /// Every command's shortcut as it would be under `preset`, the user's own changes on top (a saved one
-    /// that can't be typed counts as the preset's, as in `apply`).
+    /// that can't be typed counts as the preset's, as in `apply`; a key outside the menus can give way, as in `chord(for:)`).
     func chords(under preset: KeymapPreset) -> [String: KeyChord?] {
         let bindings = self.bindings
         var chords: [String: KeyChord?] = [:]
@@ -277,6 +283,7 @@ final class KeyboardShortcuts {
             let base = preset.chord(for: command.id, default: command.defaultChord)
             var chord = bindings.chord(for: command.id, default: base)
             if let saved = chord, !KeyBindings.isUsable(saved, for: command.id) { chord = base }
+            if let kept = chord, bindings.givesWay(command.id, kept, isCommand: isCommand) { chord = nil }
             chords[command.id] = .some(chord)
         }
         return chords

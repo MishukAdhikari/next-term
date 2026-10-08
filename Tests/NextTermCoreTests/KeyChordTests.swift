@@ -112,6 +112,39 @@ import Testing
         #expect(KeymapPreset.jetBrains.chord(for: "sidebar.newFolder", default: chord("sidebar.newFolder"))?.display == "⇧⌘N")
     }
 
+    @Test func aDefaultOutsideTheMenusGivesWayToAKeyYouSet() {
+        let optionCommandC = KeyChord(key: "c", command: true, option: true)
+        let defaults: [String: KeyChord?] = ["sidebar.copyPath": optionCommandC, "copyFilePath:": nil, "renameTab:": nil, "diff.accept": nil,
+                                             "gitLists.open": nil, "goToLine:": nil]
+        func isCommand(_ id: String) -> Bool { defaults.index(forKey: id) != nil }
+        // File › Copy Path given ⌥⌘C before the sidebar's Copy Path had it: the sidebar's gives way, as no clash.
+        var bindings = KeyBindings()
+        bindings.set(optionCommandC, for: "copyFilePath:", default: nil)
+        #expect(bindings.givesWay("sidebar.copyPath", optionCommandC, isCommand: isCommand))
+        #expect(bindings.owners(of: optionCommandC, defaults: defaults, except: "goToLine:") == ["copyFilePath:"])
+        #expect(bindings.owners(of: optionCommandC, defaults: defaults, except: "copyFilePath:").isEmpty)
+        // Accept can't share a key with the sidebar's commands either; a terminal command and another part's can.
+        for (other, givesWay) in [("diff.accept", true), ("renameTab:", false), ("gitLists.open", false)] {
+            var theirs = KeyBindings()
+            theirs.set(optionCommandC, for: other, default: nil)
+            #expect(theirs.givesWay("sidebar.copyPath", optionCommandC, isCommand: isCommand) == givesWay, "\(other)")
+        }
+        // Not for a saved change that outlived its command, or one that can't be typed there.
+        var stale = KeyBindings()
+        stale.set(optionCommandC, for: "goneCommand:", default: nil)
+        #expect(!stale.givesWay("sidebar.copyPath", optionCommandC, isCommand: isCommand))
+        var plain = KeyBindings()
+        plain.set(KeyChord(key: "\r"), for: "copyFilePath:", default: nil)
+        #expect(!plain.givesWay("sidebar.rename", KeyChord(key: "\r"), isCommand: { _ in true }))
+        // A menu command never gives way.
+        #expect(!bindings.givesWay("copyFilePath:", optionCommandC, isCommand: isCommand))
+        // Given ⌥⌘C again in Settings (Use It Here), it is the sidebar's, and File › Copy Path is left without one.
+        bindings.set(nil, for: "copyFilePath:", default: nil)
+        bindings.set(optionCommandC, for: "sidebar.copyPath", default: optionCommandC)
+        #expect(!bindings.givesWay("sidebar.copyPath", optionCommandC, isCommand: isCommand))
+        #expect(bindings.owners(of: optionCommandC, defaults: defaults, except: "goToLine:") == ["sidebar.copyPath"])
+    }
+
     @Test func aKeyBelongsToOneCommandPerPart() {
         let returnKey = KeyChord(key: "\r"), commandReturn = KeyChord(key: "\r", command: true)
         let defaults: [String: KeyChord?] = ["sidebar.rename": returnKey, "gitLists.open": returnKey, "diff.accept": commandReturn,

@@ -61,6 +61,9 @@ extension SelfTest {
             for item in menu.items where !item.isSeparatorItem { keys[item.title] = KeyboardShortcuts.chord(of: item)?.display ?? "none" }
             return keys
         }
+        func barKey(_ id: String) -> String {
+            shortcuts.commands.first { $0.id == id }?.item.flatMap(KeyboardShortcuts.chord(of:))?.display ?? "none"
+        }
         let titles = ["Open", "Open Folder in New Tab", "Reveal in Finder", "New File", "New Folder", "Rename…", "Move to Trash", "Send to Agent",
                       "Insert Path in Terminal", "Copy Path", "Copy Relative Path", "Refresh"]
         let shown = keys(menu(forRow: fileRow()))
@@ -124,6 +127,19 @@ extension SelfTest {
               "\(byOldKey), \(byNewKey), \(dispatched)")
         shortcuts.resetAll()
 
+        // File › Copy Path given ⌥⌘C before it was the sidebar's Copy Path's default (a saved change, or an import then):
+        // the sidebar's gives way, in its menu, its handler and Settings, which never lets the two have one key.
+        let optionCommandCChord = KeyChord(key: "c", command: true, option: true)
+        shortcuts.set(optionCommandCChord, for: "copyFilePath:")
+        dispatched = []
+        optionCommandC()
+        let gaveWay = [shortcuts.chord(for: "sidebar.copyPath")?.display ?? "none", keys(menu(forRow: fileRow()))["Copy Path"] ?? "missing",
+                       barKey("copyFilePath:")] + shortcuts.bindings.owners(of: optionCommandCChord, defaults: shortcuts.defaults, except: "goToLine:")
+        check(gaveWay == ["none", "none", "⌥⌘C", "copyFilePath:"] && dispatched.isEmpty,
+              "sidebar menu keys: a key you gave a menu command before it was a sidebar command's default stays the menu command's",
+              "\(gaveWay), \(dispatched)")
+        shortcuts.resetAll()
+
         // ⌥⌘N: a new file beside the selected one (its rename ended at once, keeping the name).
         func untitled() -> [String] {
             ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).filter { $0.hasPrefix("untitled") }.sorted()
@@ -145,9 +161,6 @@ extension SelfTest {
         }
         outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         c.sidebar.fill(rowMenu, forRow: row)
-        func barKey(_ id: String) -> String {
-            shortcuts.commands.first { $0.id == id }?.item.flatMap(KeyboardShortcuts.chord(of:))?.display ?? "none"
-        }
         let held = keys(rowMenu)
         let bar = [barKey("sendToAgent:"), barKey("renameTab:"), held["Send to Agent"] ?? "missing", held["Reveal in Finder"] ?? "missing"]
         check(bar == ["⌥⌘K", "⌥⌘R", "⌥⌘K", "⌥⌘R"], "sidebar menu keys: the menu bar's Send to Agent and Rename Tab keep their keys beside the sidebar's open menu",
