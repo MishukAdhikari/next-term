@@ -1334,6 +1334,13 @@ enum SelfTest {
             check(remoteMenu.contains("Open in TablePlus…") && DatabaseHandOff.confirmation(for: remote).title.contains("analytics.example.com"),
                   "TablePlus asks first for a remote host, naming it")
         }
+        // Every item of a Databases row's menu, and of the group's, is a command showing its key.
+        let databaseMenus = sidebarMenuKeyAudit([(sidebar.databaseMenu(for: mysql), "MySQL"), (sidebar.databaseMenu(for: remote), "Postgres"),
+                                                 (sidebar.databaseMenu(for: sqlite), "SQLite"),
+                                                 (sidebarMenu(sidebar, row: sidebar.outline.row(forItem: group)), "Databases")])
+        let unseenItems = ["Open", "Copy Connection Name", "Reveal Source File", "Refresh Databases"].filter { !databaseMenus.titles.contains($0) }
+        check(databaseMenus.wrong.isEmpty && unseenItems.isEmpty, "each item of a Databases row's menu, and the group's, is a command showing its key",
+              (databaseMenus.wrong + unseenItems.map { "no \($0)" }).joined(separator: "; "))
         // Refresh's key on a database's row scans again: the group's Refresh Databases, as its own row can't be selected.
         if let window = c.window, let row = (0..<sidebar.outline.numberOfRows).first(where: { sidebar.outline.item(atRow: $0) is DatabaseItem }) {
             let shortcuts = KeyboardShortcuts.shared
@@ -1608,6 +1615,10 @@ enum SelfTest {
               "a deleted file and a deleted folder keep rows where they were")
         if let at = row("gone.txt"), let cell = outline.view(atColumn: 0, row: at, makeIfNecessary: true) as? FileCellView {
             check(cell.isDeletedRow && cell.statsText == "−3", "struck through, with the lines it had", cell.statsText)
+            // Its menu: each item a command showing its key.
+            let menu = sidebarMenuKeyAudit([(sidebarMenu(c.sidebar, row: at), "gone.txt")])
+            check(menu.wrong.isEmpty && menu.titles == ["Show What Was Deleted", "Copy Path", "Copy Relative Path"],
+                  "its menu's items are commands showing their keys", (menu.wrong + menu.titles).joined(separator: "; "))
         }
         if let diffRow = row("diff.txt"), let goneRow = row("gone.txt"), let mainRow = row("main.php") {
             check(diffRow < goneRow && goneRow < mainRow, "in name order among the files that are still there", "\(diffRow) \(goneRow) \(mainRow)")

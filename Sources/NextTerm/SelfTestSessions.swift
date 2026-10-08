@@ -154,6 +154,16 @@ extension SelfTest {
               "row \(row), badge \(cell?.badge.text ?? "none")")
         if let window = holder.window { await screenshot(window, suffix: "sidebar-sessions") }
 
+        // Every item of a session's menu, More…'s and the group's is a command showing its key; of the agents' Continue
+        // Latest, the first agent's only.
+        let rows = ([group] + group.children).map { sidebar.outline.row(forItem: $0) }
+        let menus = sidebarMenuKeyAudit(rows.map { (sidebarMenu(sidebar, row: $0), "row \($0)") })
+        let continues = Set(menus.titles.filter { $0.hasPrefix("Continue Latest") })
+        let unseen = ["Resume", "Go to Tab", "Fork", "Copy Resume Command", "Show All Sessions…", "Refresh Sessions"].filter { !menus.titles.contains($0) }
+        check(menus.wrong.isEmpty && unseen.isEmpty && continues.count >= 2 && !rows.contains(-1),
+              "each item of a session's menu, More…'s and the group's is a command showing its key",
+              (menus.wrong + unseen.map { "no \($0)" }).joined(separator: "; ") + " rows \(rows), \(continues.count) Continue Latest")
+
         let menu = sidebar.sessionsGroupMenu().items.map(\.title)
         check(menu.contains("Continue Latest Gemini CLI Session") && menu.contains("Continue Latest Claude Code Session")
               && menu.contains("Show All Sessions…"), "the group's ⋯ continues each agent's latest session here", menu.joined(separator: ", "))

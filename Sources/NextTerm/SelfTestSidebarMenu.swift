@@ -76,26 +76,17 @@ extension SelfTest {
         let renameTip = menu(forRow: fileRow()).items.first { $0.title == "Rename…" }?.toolTip ?? "none"
         check(renameTip == "Rename (↩)", "sidebar menu keys: Rename…'s ↩ is in its tooltip, not on the item", renameTip)
 
-        // Every row's menu (the project's, folders', files', deleted files', Databases', Agent Sessions'): each item is a
-        // command and shows its key now. Only the agents' Continue Latest after the first are none: one key does one.
-        var wrong: [String] = []
-        func audit(_ menu: NSMenu, _ row: String) {
-            for item in menu.items where !item.isSeparatorItem {
-                let key = KeyboardShortcuts.chord(of: item)
-                guard let id = item.identifier?.rawValue else {
-                    if !item.title.hasPrefix("Continue Latest") || key != nil { wrong.append("\(row): \(item.title) is no command") }
-                    continue
-                }
-                // A key without ⌘ or ⌃ is in the tooltip instead.
-                let chord = shortcuts.chord(for: id)
-                let shown = chord?.isUsable == false ? nil : chord
-                let named = chord?.isUsable != false || item.toolTip?.contains(chord?.display ?? "") == true
-                if key != shown || !named { wrong.append("\(row): \(item.title) shows \(key?.display ?? "none")") }
-            }
-        }
-        for row in 0..<outline.numberOfRows { audit(menu(forRow: row), "row \(row)") }
-        audit(c.sidebar.sessionsGroupMenu(), "Agent Sessions")
-        check(wrong.isEmpty, "sidebar menu keys: every item of every row's menu shows its command's key", wrong.joined(separator: "; "))
+        // Every row's menu here (the project's, folders', files'), the Agent Sessions group's and a session's (none is in the
+        // tree now): each item is a command showing its key (sidebarMenuKeyAudit). The Databases rows', deleted files' and
+        // the sessions' own are audited where the tree has them (databaseChecks, deletedFileChecks, sidebarSessionChecks).
+        let session = AgentSession(agent: .claude, id: "k1", cwd: proj.path, title: "Keys", named: false, createdAt: nil, updatedAt: Date(),
+                                   gitBranch: nil, model: nil, isRunning: false)
+        let audit = sidebarMenuKeyAudit((0..<outline.numberOfRows).map { (menu(forRow: $0), "row \($0)") }
+            + [(c.sidebar.sessionsGroupMenu(), "Agent Sessions"), (c.sidebar.sessionMenu(for: SessionItem(session, inTab: false)), "a session")])
+        let unseen = ["Open as Project", "Copy Path", "Refresh", "Show All Sessions…", "Refresh Sessions", "Resume", "Fork", "Copy Resume Command"]
+            .filter { !audit.titles.contains($0) }
+        check(audit.wrong.isEmpty && unseen.isEmpty, "sidebar menu keys: every item of every row's menu shows its command's key",
+              (audit.wrong + unseen.map { "no \($0)" }).joined(separator: "; "))
 
         // Keys as AppKit hands a key with ⌘ over (pressKey). The sidebar's handler is watched, to see the key went through it.
         func optionCommandC() { pressKey("c", code: 8, [.command, .option], in: window) }
@@ -210,6 +201,42 @@ extension SelfTest {
               "terminal (\(inTerminal)): \(terminalSaw); editor (\(editing)): \(fromEditor), \(untitled()), \(dispatched)")
         window.makeFirstResponder(terminal)
     }
+    /// What is wrong with sidebar menus' keys, and every item's title: each item is a command (its identifier) showing the
+    /// key that command has now, one without ⌘ or ⌃ named in its tooltip instead. Of the agents' Continue Latest, only the
+    /// first is a command: one key does one of them.
+    static func sidebarMenuKeyAudit(_ menus: [(menu: NSMenu, row: String)]) -> (wrong: [String], titles: [String]) {
+        let shortcuts = KeyboardShortcuts.shared
+        var wrong: [String] = [], titles: [String] = []
+        for (menu, row) in menus {
+            var continues = 0
+            for item in menu.items where !item.isSeparatorItem {
+                titles.append(item.title)
+                let key = KeyboardShortcuts.chord(of: item)
+                let id = item.identifier?.rawValue
+                if item.title.hasPrefix("Continue Latest") {
+                    continues += 1
+                    if (id == "sidebar.continueLatest") != (continues == 1) { wrong.append("\(row): \(item.title) is \(id ?? "no command")") }
+                }
+                guard let id else {
+                    if key != nil || !item.title.hasPrefix("Continue Latest") { wrong.append("\(row): \(item.title) is no command") }
+                    continue
+                }
+                let chord = shortcuts.chord(for: id)
+                let onItem = chord?.isUsable == false ? nil : chord
+                let named = chord?.isUsable != false || item.toolTip?.contains(chord?.display ?? "") == true
+                if key != onItem || !named { wrong.append("\(row): \(item.title) shows \(key?.display ?? "none")") }
+            }
+        }
+        return (wrong, titles)
+    }
+
+    /// The right-click menu of a row of the sidebar.
+    static func sidebarMenu(_ sidebar: ProjectSidebarView, row: Int) -> NSMenu {
+        let menu = NSMenu()
+        sidebar.fill(menu, forRow: row)
+        return menu
+    }
+
     /// A key as AppKit hands one with ⌘ over: to the window's views (the one with the keyboard first), then to the menu
     /// bar. `code` is the key's on a US layout (C is 8, L 37, N 45, R 15), which the menus read it by.
     static func pressKey(_ characters: String, code: UInt16, _ flags: NSEvent.ModifierFlags, in window: NSWindow) {
