@@ -105,7 +105,7 @@ zsh’s own <kbd>⇥</kbd>, and the widgets oh-my-zsh and fzf put on it (fzf’s
 
 ## Suggest a command
 
-Next Term has no AI of its own. If you want one, it can ask yours: **Settings › Terminal › Suggest a command** is **Off** until you choose who answers:
+Next Term has no AI of its own. If you want one, it can ask yours: **Settings › Terminal › Suggestions** is **Off** until you choose who answers:
 
 - **Claude Code**, when it is installed. Next Term runs it with no tools and no MCP, in an empty folder made for the request, without Next Term’s variables, and stops it after 60 seconds;
 - **Apple’s On-Device Model**, on macOS 26 and later with Apple Intelligence on. Nothing leaves your Mac. Settings says when the model isn’t ready, or the Mac can’t run it.

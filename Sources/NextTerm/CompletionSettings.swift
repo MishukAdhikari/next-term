@@ -197,9 +197,9 @@ extension CompletionPreferences {
     }
 }
 
-/// Settings › Terminal › Suggest a command: Off (the default), an agent of the user's that Next Term can run with no
-/// tools (CommandSuggestion.adapters, those found on the login shell's PATH), or Apple's on-device model on macOS 26.
-/// Next Term has no AI of its own; this only says whose to ask, and only when the user asks.
+/// Settings › Terminal › Suggestions (Suggest a Command): Off (the default), an agent of the user's that Next Term
+/// can run with no tools (CommandSuggestion.adapters, those found on the login shell's PATH), or Apple's on-device
+/// model on macOS 26. Next Term has no AI of its own; this only says whose to ask, and only when the user asks.
 final class CommandSuggestionSettingsView: NSStackView {
     private let choice = NSPopUpButton()
     private let note = NSTextField(wrappingLabelWithString: "")
@@ -209,7 +209,8 @@ final class CommandSuggestionSettingsView: NSStackView {
         orientation = .vertical
         alignment = .leading
         spacing = 6
-        let label = NSTextField(labelWithString: "Suggest a command:")
+        // "Suggest a command:" is wider than the 110 pt label column.
+        let label = NSTextField(labelWithString: "Suggestions:")
         label.alignment = .right
         label.widthAnchor.constraint(equalToConstant: 110).isActive = true
         label.lineBreakMode = .byTruncatingTail
