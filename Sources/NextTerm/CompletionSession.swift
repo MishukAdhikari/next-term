@@ -551,12 +551,16 @@ extension CompletionSession {
 
     /// A status report for this server tab (TerminalTab.applyRemote): what it says about the prompt, whether it
     /// gave the shell's folder (not where there is no /proc), and that folder to prefetch. A host whose hook is
-    /// allowed is checked for it now and then.
+    /// allowed is checked for it now and then, while Tab completion is on and the connection has room: the check is
+    /// a session of its own, and may bring the hook up to date.
     func remoteReport(folder: Bool) {
         reportsSinceReturn += 1
         serverFolderKnown = folder
-        if let tab, reportsSinceReturn >= 2 { RemoteCompletion.shared.prefetch(tab) }
-        if let host = tab?.remote?.host { RemoteCompletionConsent.verify(host) }
+        guard let tab else { return }
+        if reportsSinceReturn >= 2 { RemoteCompletion.shared.prefetch(tab) }
+        if let host = tab.remote?.host, CompletionPreferences.isOn, RemoteCompletion.shared.hasRoom(for: tab) {
+            RemoteCompletionConsent.verify(host)
+        }
     }
 
     /// How long a Tab's answer may take: 120 ms on this Mac; on a hooked server, a little less than its hook waits.
