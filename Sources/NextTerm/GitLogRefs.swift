@@ -268,8 +268,10 @@ final class GitRefCell: NSTableCellView {
     private var iconWidth: NSLayoutConstraint!
     /// The row's tooltip, shown by the tree for rows in view (see RowToolTips).
     private(set) var tipText = ""
-    /// For the self-test: the name as drawn, with its paragraph style.
+    /// For the self-test: the name as drawn, with its paragraph style, and where the name and detail are.
     var titleText: NSAttributedString { title.attributedStringValue }
+    var titleFrame: NSRect { title.frame }
+    var detailFrame: NSRect { detail.frame }
 
     init() {
         super.init(frame: .zero)

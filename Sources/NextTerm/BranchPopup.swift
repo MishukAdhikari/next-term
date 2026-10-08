@@ -924,6 +924,10 @@ final class BranchCell: NSTableCellView {
             addSubview(view)
         }
         leading = icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14)
+        // A worktree's detail is long (branch, stale lock, agents): against a long folder name it keeps 40%
+        // of the row (less if it needs less), and beyond that it is cut first (see show(_:chosen:)).
+        detailRoom = detail.widthAnchor.constraint(greaterThanOrEqualTo: widthAnchor, multiplier: 0.4)
+        detailRoom.priority = .init(251)
         NSLayoutConstraint.activate([
             leading,
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -940,6 +944,7 @@ final class BranchCell: NSTableCellView {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     private var leading: NSLayoutConstraint!
+    private var detailRoom: NSLayoutConstraint!
     private var shown: (BranchPopupController.Item, BranchModel?)?
     /// The row's tooltip, shown by the popup for rows in view (see RowToolTips).
     private(set) var tipText = ""
@@ -948,8 +953,10 @@ final class BranchCell: NSTableCellView {
         didSet { if let shown, backgroundStyle != oldValue { show(shown.0, model: shown.1) } }
     }
 
-    /// For the self-test: the name as drawn, with its paragraph style.
+    /// For the self-test: the name as drawn, with its paragraph style, and where the name and detail are.
     var titleText: NSAttributedString { title.attributedStringValue }
+    var titleFrame: NSRect { title.frame }
+    var detailFrame: NSRect { detail.frame }
 
     /// Attributed text keeps the label's truncation only with a paragraph style of its own (Theme.swift):
     /// names are cut in the middle, so both ends show; notes and headings at the end.
@@ -971,6 +978,8 @@ final class BranchCell: NSTableCellView {
         detail.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         detail.textColor = chosen ? Theme.text : Theme.textDim
         detail.stringValue = ""
+        detail.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+        detailRoom.isActive = false
         icon.isHidden = false
         leading.constant = 14
         tipText = ""
@@ -1059,6 +1068,9 @@ final class BranchCell: NSTableCellView {
         let w = row.worktree
         symbol(w.lockReason != nil ? "lock" : "folder", row.isStale ? Theme.attention : Theme.textDim)
         title.stringValue = row.folder
+        // The folder is the row's name: the detail gives way first, cut at its head so the marks stay.
+        detail.setContentCompressionResistancePriority(.init(249), for: .horizontal)
+        detailRoom.isActive = true
         let dim = chosen ? Theme.text : Theme.textDim
         let small = NSFont.systemFont(ofSize: 11)
         let text = NSMutableAttributedString(string: w.branch ?? "detached @" + String((w.head ?? "").prefix(7)),
