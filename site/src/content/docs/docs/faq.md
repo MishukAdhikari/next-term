@@ -20,7 +20,7 @@ Yes. Next Term is free, and its source code is on [GitHub](https://github.com/Mi
 
 ## Does it include its own AI, or need an API key?
 
-No. Next Term brings no model and no account. It runs the agent command-line tools you already have, signed in the way each of them normally is.
+No. Next Term brings no model and no account. It runs the agent command-line tools you already have, signed in the way each of them normally is. One feature can ask them, and only if you turn it on: [Suggest a command](/docs/tab-completion/#suggest-a-command) turns a sentence into one shell command with your own Claude Code, or Apple’s on-device model, and puts it on the line without running it.
 
 ## Which Macs and macOS versions are supported?
 

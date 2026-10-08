@@ -103,9 +103,29 @@ zsh’s own <kbd>⇥</kbd>, and the widgets oh-my-zsh and fzf put on it (fzf’s
 
 **Off** works at once in every tab. Turning it on again reaches the tabs you open from then on: a tab’s zsh loads Next Term’s hook as it starts.
 
+## Suggest a command
+
+Next Term has no AI of its own. If you want one, it can ask yours: **Settings › Terminal › Suggest a command** is **Off** until you choose who answers:
+
+- **Claude Code**, when it is installed. Next Term runs it with no tools and no MCP, in an empty folder made for the request, without Next Term’s variables, and stops it after 60 seconds;
+- **Apple’s On-Device Model**, on macOS 26 and later with Apple Intelligence on. Nothing leaves your Mac. Settings says when the model isn’t ready, or the Mac can’t run it.
+
+Codex, Copilot CLI and opencode aren’t offered: each must run with no tools and no MCP, and for them that couldn’t be made sure of.
+
+Then **File › Suggest a Command…** (<kbd>⌃⌘K</kbd>), at a shell prompt (not while a program or an agent runs), opens a box near the cursor. Say what the command should do (“find files over 100 MB here”) and press <kbd>↩︎</kbd>. Before anything is sent, the box says what goes with your words: the folder, the shell’s name and the last command, with secrets masked. **Include Recent Output…** shows the end of the tab’s output as it would be sent, secrets masked, and adds it to that one request only if you say so.
+
+The command comes back and goes on the line. Nothing runs until you press <kbd>↩︎</kbd> at the prompt. It waits in the box instead when:
+
+- you typed in the tab, or a command started, while it was asked: **Replace Line** puts it there (**Put on Line** in a tab where it can only be typed in);
+- it does something worth a second look (`sudo`, `rm -r`, `dd`, `mkfs`, a script piped from `curl`, `--force`), with a note saying what: **Put on Line** puts it there;
+- it holds invisible or direction-changing characters, shown spelled out;
+- it has more than one line, outside a zsh tab on your Mac with Tab completion’s hook: **Copy** takes it.
+
+In a zsh tab opened with Tab completion on, the command replaces the line as one edit, several lines too; on a server with the hook for zsh, one line does. Elsewhere one line is typed in at the cursor, as a paste. <kbd>⎋</kbd> closes the box and stops the request.
+
 ## What it never does
 
 - **It never runs anything.** A name goes on the line; you press <kbd>↩︎</kbd>.
 - **It never edits your files.** Your `.zshrc` loads exactly as before; Next Term’s hook loads after it, for that shell only, and leaves your <kbd>⇥</kbd> binding as it is. Turning zsh-autocomplete’s list off changes that shell, not a file. On a server, nothing is written but the hook you allow, in its own folder.
 - **A file name can’t turn into a command.** Names are quoted from an allowlist, and names with control or invisible characters go in as `$'…'`, so a folder called `x;touch PWNED;` goes in as one word.
-- **Nothing is kept.** The line you type and the names listed are never logged or saved.
+- **Nothing is kept.** The line you type, the names listed, and what Suggest a Command sends and gets back are never logged or saved.

@@ -53,6 +53,7 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Go to File… | <kbd>⌘P</kbd> |
 | Resume Agent Session… | <kbd>⌥⌘O</kbd> |
 | Open Served URL (the address a dev server in the tab printed) | — |
+| Suggest a Command… (on when you turn it on in Settings › Terminal: see [Suggest a command](/docs/tab-completion/#suggest-a-command)) | <kbd>⌃⌘K</kbd> |
 | Open Recent, Open Projects In | — |
 | Close Project | — |
 | Save | <kbd>⌘S</kbd> |
