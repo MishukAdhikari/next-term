@@ -6,8 +6,8 @@ import NextTermCore
 /// after "Relaunch Now" is told by the flag the quit before it leaves. And what a quit asks about reopening.
 extension SelfTest {
     /// First of all: the self-test launches as a normal launch does, with the Welcome window whatever is saved, and
-    /// then opens its window as New Terminal does, for every check after this one. The quit's dialogs are checked
-    /// here too, built and never run.
+    /// then opens its window as New Terminal does, for every check after this one. Settings › General is checked here
+    /// too, and the quit's dialogs, built and never run.
     static func launchChecks() async {
         let app = AppDelegate.shared!
         let welcome = await wait(5) { app.welcomeController?.window?.isVisible == true }
@@ -20,7 +20,54 @@ extension SelfTest {
         check(closed && app.controllers.count == 1 && !app.remoteRestorePending,
               "New Terminal closes the Welcome window, and the kept remote tabs' restore starts once its window is open",
               "Welcome closed \(closed), windows \(app.controllers.count), still waiting \(app.remoteRestorePending)")
+        generalSettingsChecks()
         quitDialogChecks()
+    }
+
+    /// Settings › General back to its defaults, whatever is saved (a run stopped halfway leaves its choices behind).
+    /// Call what it returns to put the saved ones back.
+    private static func defaultLaunchSettings(_ defaults: UserDefaults) -> () -> Void {
+        let keys = LaunchSettings.Key.all
+        let saved = keys.map { defaults.object(forKey: $0) }
+        keys.forEach(defaults.removeObject(forKey:))
+        return {
+            for (key, value) in zip(keys, saved) {
+                if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+            }
+        }
+    }
+
+    /// The General tab: its controls show the defaults, each one saves its choice as it changes, and a new tab shows
+    /// what was saved.
+    private static func generalSettingsChecks() {
+        let defaults = UserDefaults.standard
+        let restore = defaultLaunchSettings(defaults)
+        defer { restore() }
+        let view = GeneralSettingsView(frame: .zero)
+        let titles: [String] = view.opens.map(\.title)
+        let welcome = view.radio(.welcome).state == .on && view.radio(.lastProjects).state == .off
+        let asks = view.askToReopen.state == .on
+        check(titles == ["Show the Welcome window", "Reopen the projects that were open"] && welcome && asks,
+              "Settings › General: When Next Term opens shows the Welcome window, and a quit asks whether to reopen projects, until changed",
+              "\(titles), Welcome \(welcome), asks \(asks)")
+        let group = view.opensGroup
+        let role = group.accessibilityRole()
+        check(group.isAccessibilityElement() && role == .radioGroup && group.accessibilityLabel() == "When Next Term opens",
+              "VoiceOver reads the two choices as one radio group, When Next Term opens",
+              "\(role?.rawValue ?? "no role"), \(group.accessibilityLabel() ?? "no label")")
+
+        view.radio(.lastProjects).performClick(nil)
+        view.askToReopen.performClick(nil)
+        let saved = LaunchSettings(defaults: defaults)
+        let savedOpens = defaults.string(forKey: LaunchSettings.Key.opens)
+        let onlyOne = view.radio(.welcome).state == .off
+        check(savedOpens == "lastProjects" && !saved.askToReopenOnQuit && onlyOne,
+              "each General control saves its choice as it changes, and one radio button is on at a time",
+              "\(savedOpens ?? "nothing saved"), asks \(saved.askToReopenOnQuit), Welcome still on \(!onlyOne)")
+        let reopened = GeneralSettingsView(frame: .zero)
+        let shown = reopened.radio(.lastProjects).state == .on && reopened.radio(.welcome).state == .off
+        check(shown && reopened.askToReopen.state == .off, "and a new General tab shows it",
+              "Reopen on \(shown), asks \(reopened.askToReopen.state == .on)")
     }
 
     /// The quit's reopen question, with its dialogs built and never run (QuitReopenPrompt): the prompt alone, the
@@ -152,13 +199,10 @@ extension SelfTest {
     static func noWindowDockChecks() async {
         let app = AppDelegate.shared!
         let defaults = app.launchDefaults
-        let keys = LaunchSettings.Key.all
-        let saved = keys.map { defaults.object(forKey: $0) }
+        let restore = defaultLaunchSettings(defaults)
         let savedRecents = UserDefaults.standard.stringArray(forKey: "recentProjects") ?? []
         defer {
-            for (key, value) in zip(keys, saved) {
-                if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
-            }
+            restore()
             app.setRecentProjects(savedRecents)
         }
         for controller in app.controllers { controller.window?.close() }
