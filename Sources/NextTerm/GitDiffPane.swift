@@ -99,16 +99,13 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
     func show(path: String, base: GitRunner.DiffBase = .head) {
         askedFor = path
         openingBase = base
-        if scope != .uncommitted, context?.effective(scope) != .uncommitted {
-            scope = .uncommitted
-            reload(quietly: true)
-        } else if !hasRead {
-            reload()
-        }
+        let scopeChanges = scope != .uncommitted && context?.effective(scope) != .uncommitted
+        if scopeChanges { scope = .uncommitted }
         // Open on that file already: back to the base asked for (All Changes, unless ⌥⌘G said otherwise).
         if let pane = diffPane, pane.path == path, shownKey == "uncommitted:" + path { pane.base = base }
         select(path: path)
         list.select(scope: listScope)
+        if scopeChanges || !hasRead { reload(quietly: hasRead) }
     }
 
     /// All files, in the scope shown.
@@ -265,7 +262,8 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
         let all = effectiveScope == .all ? changes?.totals : nil
         let onBase = context.map { $0.effective(.all) == .uncommitted } ?? false
         rows.append(.all(onBase ? uncommitted : all))
-        if let uncommitted, !onBase { rows.append(.uncommitted(uncommitted)) }
+        // Uncommitted while there is any, and while it is the one shown.
+        if !onBase, uncommitted != nil || scope == .uncommitted { rows.append(.uncommitted(uncommitted)) }
         rows += commits.map { .commit($0) }
         if context?.head == nil, context != nil { rows.append(.note("No commits yet")) }
         list.show(scopes: rows, selected: listScope, count: order?.count)
@@ -439,7 +437,7 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
     }
 
     @objc private func baseClicked() {
-        baseMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: baseButton.bounds.maxY + 4), in: baseButton)
+        baseMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: baseButton.isFlipped ? baseButton.bounds.maxY + 4 : -4), in: baseButton)
     }
 
     /// Counts All changes from `base` (nil: the default), remembered for this repository.
@@ -521,7 +519,7 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
             guard let self else { return }
             let relevant = paths.filter { path in objects.map { !canonicalPath(path).hasPrefix($0) } ?? true }
             guard !relevant.isEmpty else { return }
-            self.touched.formUnion(relevant.map(canonicalPath))
+            self.touched.formUnion(relevant.map { canonicalPath($0.hasSuffix("/") && $0.count > 1 ? String($0.dropLast()) : $0) })
             self.monitor.refreshSoon()
         }
         var folders = [root]
@@ -537,10 +535,14 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
         let lines = snapshot.map { s in s.files.values.contains { $0 != .ignored } || s.wholeFolders.values.contains { $0 != .ignored } } ?? false
         let shown = lines ? snapshot?.totals : nil
         let key = snapshot.map(Self.key(of:))
-        let listed = Set((changes?.files ?? []).map { canonicalPath((root as NSString).appendingPathComponent($0.path)) })
+        // File events name folders: a listed file's folder changing may have changed its lines.
+        let top = canonicalPath(root)
+        let listed = (changes?.files ?? []).map { (top as NSString).appendingPathComponent($0.path) }
+        let folders = Set(listed.map { ($0 as NSString).deletingLastPathComponent })
         let gitDir = GitRunner.commonGitDir(root: root).map(canonicalPath)
         let inGit = touched.contains { path in gitDir.map { path.hasPrefix($0) } ?? false || path.contains("/.git/") || path.hasSuffix("/.git") }
-        let matters = key != snapshotKey || inGit || !touched.isDisjoint(with: listed)
+        let nearListed = !touched.isDisjoint(with: folders) || !touched.isDisjoint(with: Set(listed))
+        let matters = key != snapshotKey || inGit || nearListed
         touched = []
         snapshotKey = key
         if shown != uncommitted {
@@ -667,6 +669,17 @@ final class HeaderCountsLabel: NSTextField {
 
     override func resetCursorRects() {
         if onClick != nil { addCursorRect(bounds, cursor: .pointingHand) }
+    }
+
+    // The header lays the counts out by hand: the hand cursor moves with them.
+    override func setFrameOrigin(_ newOrigin: NSPoint) {
+        super.setFrameOrigin(newOrigin)
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        window?.invalidateCursorRects(for: self)
     }
 
     override func isAccessibilityElement() -> Bool { !stringValue.isEmpty }
