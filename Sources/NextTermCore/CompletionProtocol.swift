@@ -81,6 +81,13 @@ public enum CompletionProtocol {
             self.quieted = quieted
         }
 
+        /// The same as `other` but for zsh-autocomplete's state: what a config key changes mid-line.
+        public func sameLine(as other: Arm?) -> Bool {
+            guard var other else { return false }
+            other.quieted = quieted
+            return other == self
+        }
+
         /// A line is being edited in emacs or vi insert mode, and the private key is bound there.
         public var takesKey: Bool {
             bound && ["main", "emacs", "viins"].contains(keymap) && ["start", "cont"].contains(context)

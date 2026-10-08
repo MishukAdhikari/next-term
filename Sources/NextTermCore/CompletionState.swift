@@ -70,6 +70,11 @@ public struct CompletionState: Sendable {
         reset(to: mark.takesKey ? .armed : .disarmed)
     }
 
+    /// A mark for the same line that only says zsh-autocomplete's state changed: kept, with nothing reset.
+    public mutating func update(_ mark: CompletionProtocol.Arm) {
+        arm = mark
+    }
+
     /// A command started, the shell was replaced, or the tab can't be read any more.
     public mutating func disarm() {
         reset(to: .disarmed)

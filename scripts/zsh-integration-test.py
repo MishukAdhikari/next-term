@@ -704,6 +704,44 @@ compsys_checks("zsh's completion system")
 compsys_checks("zsh's completion system, hostile options", "setopt nounset ksh_arrays err_return\n")
 shutil.rmtree(many, ignore_errors=True)
 
+# 7b. The `config` key quiets and restores zsh-autocomplete's list as you type, in that shell only: a stand-in
+# with its redraw hook (the real plugin runs in the matrix below).
+quietdot = tempfile.mkdtemp()
+open(os.path.join(quietdot, ".zshrc"), "w").write(
+    "PS1='$ '\nautoload -Uz add-zle-hook-widget\n.autocomplete:async:complete() { : }\n"
+    "add-zle-hook-widget line-pre-redraw .autocomplete:async:complete\n")
+def tree_hash(folder):
+    """Every file under `folder` with its bytes, to show nothing was written."""
+    found = {}
+    for base, _, files in os.walk(folder):
+        for name in files:
+            path = os.path.join(base, name)
+            found[os.path.relpath(path, folder)] = open(path, "rb").read()
+    return found
+before = tree_hash(quietdot)
+sh = Shell("quieting zsh-autocomplete", quietdot)
+a = arms(sh)
+check(a and "autocomplete" in pdec(a[-1][7]) and a[-1][8] == "0", "[quiet] `arm` names zsh-autocomplete, its list on", str(a[-1:]))
+start = len(sh.buf)
+sh.send(frame("c", 0, ["q1"]), 0.5)
+a = arms(sh, start)
+check(a and a[-1][8] == "1", "[quiet] the `config` key q1 takes its list off, and `arm` says so", str(a))
+mark = len(sh.buf)
+sh.send(frame("c", 0, ["q1"]), 0.5)
+check(not arms(sh, mark), "[quiet] a config already in effect does nothing")
+sh.send(" zstyle -g h zle-line-pre-redraw widgets; print -r -- HOOKS=${(j:,:)h}\r", 0.6)
+check("autocomplete" not in (re.search(r"HOOKS=(\S*)", sh.screen(mark)) or [None, "autocomplete"])[1],
+      "[quiet] its redraw hook is gone from this shell", sh.screen(mark)[-120:])
+mark = len(sh.buf)
+sh.send(frame("c", 0, ["q0"]), 0.5)
+a = arms(sh, mark)
+check(a and a[-1][8] == "0", "[quiet] q0 puts it back", str(a))
+check("6973" not in sh.screen(start) and not sh.errors(), "[quiet] no junk and no errors")
+sh.close()
+after = tree_hash(quietdot)
+changed = [k for k in set(before) | set(after) if before.get(k) != after.get(k) and not k.startswith(".zsh_history")]
+check(not changed, "[quiet] no file in the user's ZDOTDIR changed (AE4)", str(changed))
+
 # 8. The user's own config, driven: whichever path it is on, Tab never leaves junk.
 sh = Shell("user config, driven", os.environ.get("ZDOTDIR", ""), cwd=tree)
 a = arms(sh)
@@ -781,8 +819,57 @@ if plugins:
             sh.send("ls ", 0.4)
             tab_key(sh, 41, 1)
             kinds = [k for _, k, _ in sh.marks(start)]
-            check(a[-1][3] == "0" or "done" in kinds, f"[plugin {name}] answers the private key or fails closed", str(kinds))
+            check(a[-1][3] == "0" or "done" in kinds or "comp" in kinds, f"[plugin {name}] answers the private key or fails closed", str(kinds))
             check("6973" not in sh.screen(start), f"[plugin {name}] no junk on the line")
+            sh.send(frame("k", 41, ["c"]), 0.3)
+            sh.send("\x03", 0.5)
+        if a and name == "zsh-autocomplete":
+            # Its list as you type, then quieted by the config key (only in this shell), then back.
+            def lists(keys):
+                mark = len(sh.buf)
+                sh.send(keys, 2)
+                shown = sh.screen(mark)
+                sh.send("\x03", 0.5)
+                return "Resources" in shown and "Tests" in shown
+            check(lists("ls "), "[plugin zsh-autocomplete] lists as you type", "")
+            mark = len(sh.buf)
+            sh.send(frame("c", 0, ["q1"]), 0.8)
+            q = arms(sh, mark)
+            check(q and q[-1][8] == "1", "[plugin zsh-autocomplete] the config key quiets it", str(q[-1:]))
+            check(not lists("ls "), "[plugin zsh-autocomplete] and its list no longer appears")
+            mark = len(sh.buf)
+            sh.send("cd ", 0.4)
+            tab_key(sh, 42, 2)
+            total, items, _, _ = comp_list(sh, mark, 42)
+            check(items and all(k == "d" for _, _, k in items), "[plugin zsh-autocomplete] chosen against, Next Term's list gets zsh's folders",
+                  str(items[:5]))
+            sh.send(frame("k", 42, ["c"]), 0.3)
+            sh.send("\x03", 0.5)
+            mark = len(sh.buf)
+            sh.send(frame("c", 0, ["q0"]), 0.8)
+            q = arms(sh, mark)
+            check(q and q[-1][8] == "0" and lists("ls "), "[plugin zsh-autocomplete] q0 brings its list back")
+        if a and name == "fzf-tab":
+            # Chosen against: the capture lists zsh's matches through fzf-tab's copy of the completion, and fzf
+            # never starts.
+            mark = len(sh.buf)
+            sh.send("cd ", 0.4)
+            tab_key(sh, 43, 2)
+            total, items, _, _ = comp_list(sh, mark, 43)
+            check(items and all(k == "d" for _, _, k in items), "[plugin fzf-tab] chosen against, the capture lists the folders", str(items[:5]))
+            check(subprocess.run(["pgrep", "-x", "fzf"], capture_output=True).returncode != 0, "[plugin fzf-tab] and fzf never starts")
+            sh.send(frame("k", 43, ["c"]), 0.3)
+            sh.send("\x03", 0.5)
+        if a and name in ("zsh-autosuggestions", "zsh-syntax-highlighting"):
+            # The take works with widgets they wrap.
+            mark = len(sh.buf)
+            sh.send("cd ", 0.4)
+            tab_key(sh, 44, 2)
+            total, items, _, _ = comp_list(sh, mark, 44)
+            index = next((i + 1 for i, (t, _, _) in enumerate(items) if t.startswith("Tests")), 0)
+            sh.send(frame("k", 44, ["m", "", str(index)]), 0.6)
+            check(drawn(sh, mark, "cd Tests/"), f"[plugin {name}] a take works beside it", repr(sh.line(mark)))
+            sh.send("\x03", 0.5)
         errors = sh.errors()
         check(not errors, f"[plugin {name}] no errors from the completion hook", str(errors[:2]))
         sh.close()

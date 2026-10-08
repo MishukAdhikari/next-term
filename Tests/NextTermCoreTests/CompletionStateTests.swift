@@ -140,4 +140,20 @@ import Testing
         s.line(.init(id: id, left: true))
         #expect(s.isArmed && !s.shown)
     }
+
+    /// A config key's `arm` (zsh-autocomplete quieted) is the same line: a Tab in flight stays in flight.
+    @Test func aQuietChangeKeepsTheLine() {
+        var s = CompletionState()
+        let autocomplete = CompletionProtocol.Arm(completionSystem: true, plugins: ["autocomplete"])
+        s.armed(autocomplete)
+        let id = s.startTab()!
+        var quieted = autocomplete
+        quieted.quieted = true
+        #expect(quieted.sameLine(as: autocomplete) && !quieted.sameLine(as: engine) && !quieted.sameLine(as: nil))
+        s.update(quieted)
+        #expect(s.pendingID == id && s.arm?.quieted == true)
+        // A shell replaced forgets what its hook said.
+        s.forget()
+        #expect(s.arm == nil && s.phase == .disarmed)
+    }
 }

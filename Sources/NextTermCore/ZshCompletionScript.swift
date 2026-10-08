@@ -36,7 +36,7 @@ zmodload -F zsh/files b:zf_rm 2>/dev/null
 builtin autoload -Uz add-zle-hook-widget
 
 typeset -g __nextterm_ckey=$'@NT_PREFIX@'
-typeset -gi __nextterm_cfd=-1 __nextterm_cquiet=0
+typeset -gi __nextterm_cfd=-1
 typeset -g __nextterm_copen= __nextterm_cpath= __nextterm_cbase= __nextterm_crbuf= __nextterm_cword=
 typeset -g __nextterm_ck= __nextterm_cid=
 typeset -g __nextterm_cisearch=
@@ -98,9 +98,38 @@ __nextterm_carm() {
   (( ${+functions[.autocomplete:async:complete]} )) && plugins+=' autocomplete'
   (( ${+widgets[fzf-tab-complete]} )) && plugins+=' fzf-tab'
   (( ${+widgets[fzf-completion]} )) && plugins+=' fzf'
+  # zsh-autocomplete's list as you type is off in this shell: its redraw hook is gone (__nextterm_cconfig).
+  local quiet=0
+  local -a hooks
+  if [[ $plugins == *autocomplete* ]]; then
+    zstyle -g hooks zle-line-pre-redraw widgets
+    [[ -z ${(M)hooks:#<->:.autocomplete:async:complete} ]] && quiet=1
+  fi
   __nextterm_cencall "$km" "${CONTEXT-}" "$widget" "${${widgets[$widget]-}:0:128}" "${plugins# }"
-  __nextterm_cmark arm @NT_VERSION@ "$reply[1]" "$reply[2]" $bound $compsys "$reply[3]" "$reply[4]" "$reply[5]" $__nextterm_cquiet
+  __nextterm_cmark arm @NT_VERSION@ "$reply[1]" "$reply[2]" $bound $compsys "$reply[3]" "$reply[4]" "$reply[5]" $quiet
   return 0
+}
+
+# The `config` key: zsh-autocomplete's list as you type off (q1) or back on (q0), in this shell only, by
+# taking its redraw hook out or putting it back. No file is touched. A config that is already in effect does
+# nothing; one that changed something says so with a new `arm`.
+__nextterm_cconfig() {
+  emulate -L zsh
+  (( ${+functions[.autocomplete:async:complete]} )) || return 0
+  local -a hooks
+  zstyle -g hooks zle-line-pre-redraw widgets
+  local on=0
+  [[ -n ${(M)hooks:#<->:.autocomplete:async:complete} ]] && on=1
+  case ${__nextterm_cf[1]-} in
+    (q1) (( on )) || return 0
+         add-zle-hook-widget -d line-pre-redraw .autocomplete:async:complete
+         # Its list on screen now goes too.
+         zle -R -c ;;
+    (q0) (( on )) && return 0
+         add-zle-hook-widget line-pre-redraw .autocomplete:async:complete ;;
+    (*) return 0 ;;
+  esac
+  __nextterm_carm
 }
 
 __nextterm_carmhook() { __nextterm_cisearch=; __nextterm_carm; return 0; }
@@ -144,6 +173,7 @@ __nextterm_ckeywidget() {
     (k) [[ $__nextterm_cid == $__nextterm_copen ]] && __nextterm_ctake ;;
     (n) # Next Term can't show zsh's list: zsh's own Tab.
         if [[ $__nextterm_cid == $__nextterm_copen ]]; then __nextterm_cclose; zle -U $'\t'; fi ;;
+    (c) __nextterm_cconfig ;;
   esac
   return 0
 }
@@ -168,6 +198,8 @@ __nextterm_cplain() {
   __nextterm_cwordnow
   [[ -n $__nextterm_cword || $LBUFFER == *[[:blank:]] ]] || return 0
   [[ $__nextterm_cword == *('$('|'`'|'<('|'>('|'=(')* ]] && return 0
+  # fzf's trigger (`vim **`) is fzf's.
+  [[ $__nextterm_cword == *'**' ]] && return 0
   return 1
 }
 
