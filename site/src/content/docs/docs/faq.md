@@ -102,4 +102,4 @@ Not today. Next Term is built with AppKit, which is macOS-only. Its core logic h
 
 ## What is coming next?
 
-Next: the conversations Gemini CLI, opencode, Copilot CLI and Cursor keep, in the Welcome window beside the agent sessions it lists today, and Zed’s own key changes in the import. After that: a server’s files in the editor and sidebar, then dev containers; remote access to the MCP server for agents outside your Mac (such as ChatGPT and Claude on the web); more of the diff view; an IDE link for Copilot CLI; session restore. None of these is released yet.
+Next: Zed’s own key changes in the import. After that: a server’s files in the editor and sidebar, then dev containers; remote access to the MCP server for agents outside your Mac (such as ChatGPT and Claude on the web); more of the diff view; an IDE link for Copilot CLI; session restore. None of these is released yet.

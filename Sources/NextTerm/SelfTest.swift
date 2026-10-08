@@ -682,6 +682,7 @@ enum SelfTest {
         await paneChecks(c)
 
         await sessionChecks(proj: proj)
+        await moreSessionChecks(proj: proj)
 
         await lastTabChecks()
         await dockReopenChecks(c)

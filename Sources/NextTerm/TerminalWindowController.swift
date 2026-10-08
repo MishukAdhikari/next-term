@@ -624,6 +624,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         updateTitle()
         AppDelegate.shared.updateBadge()
         updateProjectRoot()
+        noteAgentTabs()
     }
 
     /// Needs you, then working, failed, done, idle.
@@ -1209,7 +1210,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return panel
     }()
 
-    /// ⌥⌘O: the project's agent sessions (Claude Code, Codex, Command Code), to pick one up again.
+    /// ⌥⌘O: the project's agent sessions, to pick one up again.
     @objc func resumeSession(_ sender: Any?) {
         guard let window else { return }
         sessionsPanel.show(project: project ?? searchRoot, over: window)
@@ -1807,6 +1808,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         lastKey = Date()
         refreshVisibility()
         refresh()
+        sidebar.scheduleSessionsReload() // agents in other terminals may have kept new ones
         if let view = activeTab?.view, window?.firstResponder !== view, !(window?.firstResponder is NSTextView), !terminalRailed {
             window?.makeFirstResponder(view)
         }

@@ -76,6 +76,15 @@ import Testing
         #expect(s.state == .idle)
     }
 
+    @Test func runningSinceItsStart() {
+        var s = TabStatus()
+        #expect(s.runningSince == nil)
+        s.commandStarted("claude", at: 12)
+        #expect(s.runningSince == 12)
+        s.commandFinished(exitCode: 0, at: 40)
+        #expect(s.runningSince == nil)
+    }
+
     @Test func failureIsRed() {
         var s = TabStatus()
         s.commandStarted("false", at: 0)

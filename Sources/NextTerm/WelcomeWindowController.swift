@@ -14,6 +14,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     private let projectPath = NSTextField(labelWithString: "")
     private let openButton = NSButton(title: "Open Project", target: nil, action: nil)
     private let filter = NSSegmentedControl()
+    /// The filter when more agents have sessions here than the buttons fit.
+    private let agentMenu = NSPopUpButton(frame: .zero, pullsDown: false)
     private let sessionsTitle = NSTextField(labelWithString: "")
     private let empty = NSTextField(wrappingLabelWithString: "")
     private let resumeButton = NSButton(title: "Resume", target: nil, action: nil)
@@ -28,6 +30,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// Sessions already read, per project, so moving through the list is instant (refreshed in the background).
     private var cache: [String: [AgentSession]] = [:]
     private var agentFilter: AgentKind?
+    /// The tabs the shown project's sessions are open in.
+    private var sessionTabs = SessionTabs()
 
     init() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 580),
@@ -106,6 +110,11 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         filter.target = self
         filter.action = #selector(filterChanged)
         filter.setAccessibilityLabel("Show sessions of")
+        agentMenu.controlSize = .small
+        agentMenu.target = self
+        agentMenu.action = #selector(agentMenuChanged)
+        agentMenu.setAccessibilityLabel("Show sessions of")
+        agentMenu.isHidden = true
         configure(sessionsTable, rowHeight: 50, action: nil, double: #selector(resumeSelected))
         let sessionsScroll = Self.scroll(sessionsTable)
         empty.textColor = Theme.textDim
@@ -119,7 +128,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         forkButton.target = self
         forkButton.action = #selector(forkSelected)
         forkButton.toolTip = "Continue a copy, leaving this one as it is (safe while it is open in another terminal)"
-        for view in [projectName, projectPath, openButton, sessionsTitle, filter, sessionsScroll, empty, resumeButton, forkButton] as [NSView] {
+        for view in [projectName, projectPath, openButton, sessionsTitle, filter, agentMenu, sessionsScroll, empty, resumeButton, forkButton] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             detailPane.addSubview(view)
         }
@@ -173,6 +182,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             sessionsTitle.leadingAnchor.constraint(equalTo: projectName.leadingAnchor),
             filter.centerYAnchor.constraint(equalTo: sessionsTitle.centerYAnchor),
             filter.trailingAnchor.constraint(equalTo: detailPane.trailingAnchor, constant: -24),
+            agentMenu.centerYAnchor.constraint(equalTo: sessionsTitle.centerYAnchor),
+            agentMenu.trailingAnchor.constraint(equalTo: detailPane.trailingAnchor, constant: -24),
             sessionsScroll.topAnchor.constraint(equalTo: sessionsTitle.bottomAnchor, constant: 10),
             sessionsScroll.leadingAnchor.constraint(equalTo: detailPane.leadingAnchor, constant: 14),
             sessionsScroll.trailingAnchor.constraint(equalTo: detailPane.trailingAnchor, constant: -14),
@@ -295,12 +306,14 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         projectPath.stringValue = path
         projectPath.toolTip = project
         sessions = cache[project] ?? []
+        sessionTabs = SessionTabs()
         applyFilter(loading: cache[project] == nil)
-        SessionStore.load(project) { [weak self] listing in
+        SessionStore.load(project) { [weak self] listing, tabs in
             guard let self else { return }
             self.cache[project] = listing.sessions
             guard self.selectedProject == project else { return }
             self.sessions = listing.sessions
+            self.sessionTabs = tabs
             self.applyFilter(problems: listing.problems)
         }
     }
@@ -322,21 +335,50 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         applyFilter()
     }
 
+    @objc private func agentMenuChanged() {
+        agentFilter = agentMenu.indexOfSelectedItem <= 0 ? nil : presentAgents[safe: agentMenu.indexOfSelectedItem - 1]
+        applyFilter()
+    }
+
+    /// Up to three agents fit as buttons beside the heading; more, and they go in a menu.
+    static let filterButtons = 3
+
+    /// Shows the agents that have sessions here as filter buttons ("All 12", "Claude Code 9"…), or in a
+    /// menu when there are more than fit; nothing for one agent.
+    private func showAgentFilter(_ agents: [AgentKind]) {
+        let count = { (agent: AgentKind) in self.sessions.filter { $0.agent == agent }.count }
+        let buttons = agents.count > 1 && agents.count <= Self.filterButtons
+        filter.segmentCount = buttons ? agents.count + 1 : 0
+        if buttons {
+            filter.setLabel("All  \(sessions.count)", forSegment: 0)
+            for (i, agent) in agents.enumerated() {
+                filter.setLabel("\(agent.name)  \(count(agent))", forSegment: i + 1)
+            }
+            filter.selectedSegment = agentFilter.flatMap { agents.firstIndex(of: $0) }.map { $0 + 1 } ?? 0
+        }
+        filter.isHidden = !buttons
+        agentMenu.isHidden = agents.count <= Self.filterButtons
+        if !agentMenu.isHidden {
+            agentMenu.removeAllItems()
+            agentMenu.addItem(withTitle: "All agents  \(sessions.count)")
+            for agent in agents { agentMenu.addItem(withTitle: "\(agent.name)  \(count(agent))") }
+            agentMenu.selectItem(at: agentFilter.flatMap { agents.firstIndex(of: $0) }.map { $0 + 1 } ?? 0)
+        }
+    }
+
+    /// Every agent whose sessions are listed: "Claude Code, Codex, … or Copilot CLI".
+    static var agentNames: String {
+        let names = AgentKind.allCases.map(\.name)
+        return names.dropLast().joined(separator: ", ") + " or " + (names.last ?? "")
+    }
+
     /// The agents that have sessions here, in a fixed order.
     private var presentAgents: [AgentKind] { AgentKind.allCases.filter { agent in sessions.contains { $0.agent == agent } } }
 
     private func applyFilter(loading: Bool = false, problems: [AgentKind: String] = [:]) {
         let agents = presentAgents
         if let agentFilter, !agents.contains(agentFilter) { self.agentFilter = nil }
-        filter.segmentCount = agents.count > 1 ? agents.count + 1 : 0
-        if agents.count > 1 {
-            filter.setLabel("All  \(sessions.count)", forSegment: 0)
-            for (i, agent) in agents.enumerated() {
-                filter.setLabel("\(agent.name)  \(sessions.filter { $0.agent == agent }.count)", forSegment: i + 1)
-            }
-            filter.selectedSegment = agentFilter.flatMap { agents.firstIndex(of: $0) }.map { $0 + 1 } ?? 0
-        }
-        filter.isHidden = agents.count <= 1
+        showAgentFilter(agents)
         shownSessions = agentFilter.map { agent in sessions.filter { $0.agent == agent } } ?? sessions
         sessionsTable.reloadData()
         if !shownSessions.isEmpty { sessionsTable.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
@@ -344,27 +386,53 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         empty.isHidden = !none
         if none {
             var text = loading ? "Reading sessions…"
-                : "No agent sessions here yet. Conversations you have with Claude Code, Codex or Command Code in this folder appear here, ready to pick up again."
+                : "No agent sessions here yet. Conversations you have with \(Self.agentNames) in this folder appear here, ready to pick up again."
             if !loading, !problems.isEmpty {
                 text += "\n\nCould not read " + problems.keys.map(\.name).sorted().joined(separator: ", ") + " (its format may have changed)."
             }
             empty.stringValue = text
         }
-        resumeButton.isEnabled = !none
-        forkButton.isEnabled = !none
         resumeButton.keyEquivalent = none ? "" : "\r"
         openButton.keyEquivalent = none ? "\r" : ""
+        updateSessionButtons()
     }
 
     private var selectedSession: AgentSession? { shownSessions[safe: sessionsTable.selectedRow] }
 
+    /// Resume, or Go to Tab for a session open in a tab now; Fork only for an agent that can.
+    private func updateSessionButtons() {
+        let session = selectedSession
+        let inTab = session.map { sessionTabs.tab(of: $0) != nil } ?? false
+        resumeButton.title = inTab ? "Go to Tab" : "Resume"
+        resumeButton.toolTip = inTab ? "It is open in a tab now: show that tab rather than start it a second time"
+            : "Continue it in a new tab, in the folder it was started in"
+        resumeButton.isEnabled = session != nil
+        forkButton.isEnabled = session?.agent.canFork == true
+        if let session, !session.agent.canFork {
+            forkButton.toolTip = "\(session.agent.name) cannot fork a session from the command line"
+        } else {
+            forkButton.toolTip = "Continue a copy, leaving this one as it is (safe while it is open in another terminal)"
+        }
+    }
+
+    /// For the self-test.
+    var resumeTitle: String { resumeButton.title }
+    var canFork: Bool { forkButton.isEnabled }
+    var filterIsMenu: Bool { !agentMenu.isHidden }
+
+    /// Selects the shown session with this title (the self-test's click).
+    func selectSession(titled title: String) {
+        guard let row = shownSessions.firstIndex(where: { $0.title == title }) else { return }
+        sessionsTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+    }
+
     @objc func resumeSelected() {
         guard let session = selectedSession, let project = selectedProject else { return NSSound.beep() }
-        AppDelegate.shared.resume(session, fork: false, project: project)
+        AppDelegate.shared.resume(session, fork: false, project: project, tabs: sessionTabs)
     }
 
     @objc func forkSelected() {
-        guard let session = selectedSession, let project = selectedProject else { return NSSound.beep() }
+        guard let session = selectedSession, session.agent.canFork, let project = selectedProject else { return NSSound.beep() }
         AppDelegate.shared.resume(session, fork: true, project: project)
     }
 
@@ -379,7 +447,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         if tableView === sessionsTable {
             let cell = tableView.makeView(withIdentifier: SessionCell.identifier, owner: self) as? SessionCell ?? SessionCell()
-            cell.show(shownSessions[row], project: selectedProject)
+            cell.show(shownSessions[row], project: selectedProject, inTab: sessionTabs.tab(of: shownSessions[row]) != nil)
             return cell
         }
         let cell = tableView.makeView(withIdentifier: ProjectCell.identifier, owner: self) as? ProjectCell ?? ProjectCell()
@@ -390,6 +458,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         if (notification.object as? NSTableView) === projectsTable { showProject() }
+        if (notification.object as? NSTableView) === sessionsTable { updateSessionButtons() }
     }
 }
 

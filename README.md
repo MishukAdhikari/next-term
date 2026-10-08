@@ -52,10 +52,13 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   closed). The tools are marked honestly, so agents ask you before they type into a tab. Local only: a
   private socket, no network port.
 - **Pick up any agent's conversation.** The Welcome window lists your projects; choose one and every
-  conversation Claude Code, Codex and Command Code kept for it is there, newest first, with its title,
-  branch and model, including the ones started in its subfolders. Resume runs it again in a new tab, in
-  the folder it was started in; Fork continues a copy. In a project window, ⌥⌘O does the same. Only titles
-  and dates are read (never whole transcripts), secrets are scrubbed from titles, and nothing is written.
+  conversation Claude Code, Codex, Command Code, Gemini CLI, Qwen Code, opencode, Cursor Agent and Copilot
+  CLI kept for it is there, newest first, with its title, branch and model, including the ones started in
+  its subfolders. Resume runs it again in a new tab, in the folder it was started in; Fork continues a copy;
+  a session open in a tab offers Go to Tab instead. In a project window, ⌥⌘O does the same, and the
+  sidebar's Agent Sessions group shows the newest five, marks the running ones and continues an agent's
+  latest session. Only titles and dates are read (never whole transcripts), secrets are scrubbed from
+  titles, and nothing is written.
 - **Remote tabs on your servers.** File › New Remote Tab… (⌥⌘T) opens a tab on your VPS over your own ssh
   and `~/.ssh/config`. With tmux or herdr on the server, agents keep working while the Mac sleeps or is off,
   and the tab reattaches when it reconnects. Host keys are never accepted silently, nothing is installed on
@@ -190,7 +193,7 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | New remote tab (on one of your servers) | ⌥⌘T |
 | Open project / Close project | ⌘O / File menu |
 | Go to File (`name` or `name:line`) | ⌘P |
-| Resume an agent session (↩ resume, ⌘↩ fork) | ⌥⌘O |
+| Resume an agent session (↩ resume or go to its tab, ⌘↩ fork) | ⌥⌘O |
 | Close tab (or the focused pane in a split tab) | ⌘W |
 | Split right / split down | ⌘D / ⌘⇧D |
 | Move between panes | ⌥⌘← ⌥⌘→ ⌥⌘↑ ⌥⌘↓, or ⌥⌘] / ⌥⌘[ in turn |
@@ -297,8 +300,7 @@ scripts/                build, test and icon scripts
 
 ## Roadmap
 
-Next: sessions from more agents (Gemini CLI, opencode, Copilot CLI, Cursor). Then a server's files in
-the editor and sidebar next to its remote tabs, then Dev Containers. Later: more of the diff view, a
+Coming: a server's files in the editor and sidebar next to its remote tabs, then Dev Containers. Later: more of the diff view, a
 Copilot CLI IDE link and session restore. A Linux build would need a different UI layer (AppKit is
 macOS-only); the core logic would carry over.
 

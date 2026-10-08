@@ -17,13 +17,37 @@ A project is a folder that a window is about. Its files stay in the sidebar, new
 
 ### The Welcome window and agent sessions
 
-The **Welcome** window lists your projects on the left, with a search field, each project’s branch, and which ones are open. Choose one and the right side shows every conversation **Claude Code**, **Codex** and **Command Code** kept for it, newest first, including the ones started in its subfolders: the title (in bold when you named it), the agent, when, the branch and the model, and a mark when an agent has it open right now. Filter by agent at the top.
+The **Welcome** window lists your projects on the left, with a search field, each project’s branch, and which ones are open. Choose one and the right side shows every conversation an agent kept for it, newest first, including the ones started in its subfolders: **Claude Code**, **Codex**, **Command Code**, **Gemini CLI**, **Qwen Code**, **opencode**, **Cursor Agent** and **Copilot CLI**. Each row has the title (in bold when you named it), the agent, when, the branch and the model, and a mark when the session is open in a tab, or in an agent running elsewhere. Filter by agent at the top: with more than three agents in a folder, the filter is a menu.
 
-- **Resume** runs the agent’s own resume command (`claude --resume …`, `codex resume …`) in a new tab, in the folder the session was started in.
-- **Fork** continues a copy and leaves the original as it was: the safe choice while the session is open in another terminal.
-- In a project window, **File › Resume Agent Session…** (<kbd>⌥⌘O</kbd>) shows the same list as a panel: type to filter, <kbd>↩</kbd> resumes, <kbd>⌘↩</kbd> forks.
+- **Resume** runs the agent’s own resume command (`claude --resume …`, `codex resume …`, `gemini --resume …`) in a new tab, in the folder the session was started in. See [the command for each agent](/docs/agents/#pick-up-any-agents-conversation).
+- **Go to Tab** takes the place of Resume when the session is open in a tab now: it shows that tab rather than start the session a second time.
+- **Fork** continues a copy and leaves the original as it was: the safe choice while the session is open in another terminal. Gemini CLI, Cursor Agent and Copilot CLI cannot fork from the command line, so their sessions have no Fork.
+- In a project window, **File › Resume Agent Session…** (<kbd>⌥⌘O</kbd>) shows the same list as a panel: type to filter, <kbd>↩</kbd> resumes (or goes to the tab), <kbd>⌘↩</kbd> forks.
 
-Next Term reads only titles, dates, branches and models from each agent’s own files, never whole conversations, removes anything that looks like a secret from titles, and writes nothing. Claude Code deletes conversations after 30 days unless you change its `cleanupPeriodDays` setting.
+### Agent Sessions in the sidebar
+
+When the folder has sessions, **Agent Sessions** sits at the top of the project sidebar, under Databases: the newest five, from any agent, and **More…** for the whole list (<kbd>⌥⌘O</kbd>). A session open in a tab has a **running** badge.
+
+- **Double-click** a session to resume it in a new tab, or to go to the tab it is open in. Right-click (or ⋯) for **Resume** or **Go to Tab**, **Fork** and **Copy Resume Command**.
+- The group’s ⋯ has **Continue Latest** for each agent with a session in the folder: the agent’s own command for its latest session there, such as `claude --continue` or `codex resume --last`.
+- The list reads again when an agent starts or stops in a tab, and when the window comes to the front, which is when new titles show. While the sidebar is hidden it waits until the sidebar shows again. **Refresh Sessions** in the group’s menu reads it now.
+
+### What Next Term reads
+
+Each agent keeps its sessions in its own files, and Next Term reads them where the agent puts them:
+
+| Agent | Where |
+|---|---|
+| Claude Code | `~/.claude/projects` |
+| Codex | `~/.codex`, its `state_5.sqlite` database |
+| Command Code | `~/.commandcode/projects` |
+| Gemini CLI | `~/.gemini/tmp`, with `~/.gemini/projects.json` |
+| Qwen Code | `~/.qwen/projects` |
+| opencode | `~/.local/share/opencode/opencode.db` |
+| Cursor Agent | `~/.cursor/chats` |
+| Copilot CLI | `~/.copilot/session-state` |
+
+It reads only what the lists show (titles, dates, branches and models), from the first and last 64 KB of a long conversation or a row of a database, never a whole conversation. Gemini CLI sessions saved before its version 0.39, one JSON file each, are not listed for that reason. It removes anything that looks like a secret from titles, writes nothing, and sends nothing anywhere. Some sessions are left out: sub-agents’, `claude -p` and `codex exec` runs, archived ones, and ones where nothing was asked yet. Claude Code and Gemini CLI delete conversations after 30 days unless you change their `cleanupPeriodDays` and `general.sessionRetention` settings.
 
 ### Where a project opens
 
