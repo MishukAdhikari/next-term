@@ -693,7 +693,13 @@ enum SelfTest {
         c.select(c.tabs.count - 1)
         c.tabBar.layoutSubtreeIfNeeded()
         check(c.tabBar.visibleRange.contains(c.tabs.count - 1), "… at either end", "\(c.tabBar.visibleRange)")
+        // Closed once their shells have started: one still starting has children (a theme's `mkdir`) that closing
+        // would stop, and asks first, in a sheet that stays over the window for the checks after.
+        for tab in extra { _ = await wait(20) { tab.status.integrated } }
         for tab in extra { c.requestClose(tab) }
+        check(await wait(3) { extra.allSatisfy { tab in !c.tabs.contains { $0 === tab } } } && window.attachedSheet == nil,
+              "the extra tabs close at once, nothing running in them", window.attachedSheet.map { _ in "a sheet asks" } ?? "\(c.tabs.count) tabs")
+        if let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .alertFirstButtonReturn) } // not left for the checks after
         window.setFrame(savedFrame, display: true)
         c.tabBar.layoutSubtreeIfNeeded()
         check(!c.tabBar.isOverflowing, "and stops overflowing when they fit again")
