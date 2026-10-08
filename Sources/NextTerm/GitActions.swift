@@ -576,18 +576,26 @@ struct GitActions {
 
     // MARK: commit
 
+    /// For the self-test: the agent Write with Agent asks, in place of one found installed.
+    static var commitAgentForTest: (agent: CommitMessageAgent, path: String)?
+
     func commit() {
         guard let controller, let git = GitWriter.git, model != nil else { return }
         let root = self.root
+        // Write with Agent asks the agent working here, if the sheet knows it; else the first installed.
+        let working = agentsHere().map(\.status.program)
+        let forTest = Self.commitAgentForTest
         DispatchQueue.global(qos: .userInitiated).async {
             let staged = BranchModel.stagedFiles(at: root, git: git)
+            let agent = forTest ?? CommitMessageAgent.find(preferring: working, in: LoginShell.path)
             DispatchQueue.main.async {
                 let snapshot = controller.sidebar.git.snapshot
                 let changed = (snapshot?.files.filter { $0.value != .ignored }.map(\.key) ?? [])
                     + (snapshot?.wholeFolders.filter { $0.value == .untracked }.map { $0.key + "/" } ?? [])
                 let untracked = Set((snapshot?.files.filter { $0.value == .untracked }.map(\.key) ?? [])
                                     + (snapshot?.wholeFolders.filter { $0.value == .untracked }.map { $0.key + "/" } ?? []))
-                CommitSheet.present(over: controller, branch: model?.current, staged: staged, changed: changed.sorted(), untracked: untracked,
+                let writer = agent.map { CommitWriter(agent: $0.agent, path: $0.path, root: root, newFiles: staged.isEmpty ? untracked.sorted() : nil) }
+                CommitSheet.present(over: controller, branch: model?.current, staged: staged, changed: changed.sorted(), untracked: untracked, writer: writer,
                                     onAgent: { askAgent("Commit the current changes with a clear message (look at the diff first). Don't push.") }) { message, files, amend, andPush in
                     commit(message: message, files: files, amend: amend, andPush: andPush)
                 }
