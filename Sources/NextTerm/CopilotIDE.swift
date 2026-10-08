@@ -179,6 +179,7 @@ final class CopilotIDEServer: @unchecked Sendable { // mutable state lives on `q
         let body = CopilotIDE.lock(socketPath: socketPath, nonce: nonce, pid: getpid(), workspaces: workspaces, timestamp: launched)
         guard let data = try? JSONSerialization.data(withJSONObject: body, options: [.withoutEscapingSlashes, .prettyPrinted]) else { return }
         let target = lockFolder.appendingPathComponent(lockName)
+        if lock == target, Self.rewrite(target.path, with: data) { return }
         let temporary = lockFolder.appendingPathComponent(".\(lockName).\(getpid()).tmp") // must not end in .lock
         guard FileManager.default.createFile(atPath: temporary.path, contents: data, attributes: [.posixPermissions: 0o600]),
               rename(temporary.path, target.path) == 0 else {
@@ -186,6 +187,22 @@ final class CopilotIDEServer: @unchecked Sendable { // mutable state lives on `q
             return
         }
         lock = target
+    }
+
+    /// A connected `copilot` watches its lock (node's fs.watch) and drops the link when it sees a "rename":
+    /// the file replaced, or a write that neither grows it nor changes its attributes. So an existing lock is
+    /// rewritten in place, emptied first and then written from the start, which it sees as a "change" only.
+    /// A read in between finds it empty or short, and the CLI reads a lock again when it cannot parse it.
+    private static func rewrite(_ path: String, with data: Data) -> Bool {
+        guard let handle = FileHandle(forWritingAtPath: path) else { return false }
+        defer { try? handle.close() }
+        do {
+            try handle.truncate(atOffset: 0)
+            try handle.write(contentsOf: data)
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// Our own locks left by a Next Term that did not quit cleanly. Other editors' locks are never touched.
