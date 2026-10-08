@@ -727,7 +727,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat { 24 }
 
     func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
-        item is FileNode || item is DeletedEntry || item is DatabaseItem || item is SessionItem
+        item is FileNode || item is DeletedEntry || item is DatabaseItem || item is SessionItem || item is MoreSessionsItem
     }
 
     /// A click, sent on mouse-up (the first click of a double-click too). With "Open files with a single
@@ -769,6 +769,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         if let item = outline.item(atRow: outline.clickedRow) as? SessionItem {
             return delegate?.sidebar(self, session: item.session, perform: .resume) ?? ()
         }
+        if outline.item(atRow: outline.clickedRow) is MoreSessionsItem { return } // its click showed the list
         if outline.item(atRow: outline.clickedRow) is SessionsGroup {
             return outline.isItemExpanded(sessionsGroup) ? outline.collapseItem(sessionsGroup) : outline.expandItem(sessionsGroup)
         }
@@ -788,6 +789,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         for case let entry as DeletedEntry in items where !entry.isDirectory { openDeleted(entry) }
         for case let item as DatabaseItem in items { openDatabase(item.database) }
         for case let item as SessionItem in items { delegate?.sidebar(self, session: item.session, perform: .resume) }
+        if items.contains(where: { $0 is MoreSessionsItem }) { delegate?.sidebar(self, session: nil, perform: .showAll) }
     }
 
     /// A deleted file opens as what was removed; a deleted folder opens and closes.
