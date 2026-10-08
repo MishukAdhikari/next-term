@@ -10,9 +10,11 @@ import Security
 ///
 /// How it connects (Copilot CLI 1.0.x, the protocol of VS Code's own Copilot extension): a lock file
 /// `~/.copilot/ide/<uuid>.lock` names a Unix socket and the header to send; the CLI connects when it starts
-/// in one of the lock's folders (the open projects and every tab's folder, kept current), and speaks MCP
-/// over Streamable HTTP on that socket. Copilot has nothing like CLAUDE_CODE_SSE_PORT, so in a folder that
-/// VS Code also has open it may connect there instead (`/ide` in Copilot switches).
+/// in one of the lock's folders (the open projects and every tab's folder, kept current, but never your
+/// home folder or /), and speaks MCP over Streamable HTTP on that socket. Copilot has nothing like
+/// CLAUDE_CODE_SSE_PORT, so in a folder that VS Code also has open it may connect there instead (`/ide` in
+/// Copilot switches), and one started in another terminal may connect here: it then sees the window that
+/// has its folder open, and nothing when none does.
 ///
 /// Security: no network port. The socket is in a new folder each launch that only you can enter (0700),
 /// and every request must carry a fresh 256-bit nonce, compared in constant time; requests with `Origin`
@@ -458,9 +460,11 @@ final class CopilotIDEServer: @unchecked Sendable { // mutable state lives on `q
     }
 }
 
-/// Which tab each connected `copilot` runs in, and the folders last written to its lock (main thread).
+/// Which tab each connected `copilot` runs in, the folder of one started in another terminal, and the
+/// folders last written to its lock (main thread).
 enum CopilotLink {
     static var tabs: [CopilotIDEServer.SessionID: Weak<TerminalTab>] = [:]
+    static var folders: [CopilotIDEServer.SessionID: String] = [:]
     static var folderKey: [String] = []
 }
 
@@ -477,6 +481,7 @@ extension AppDelegate {
             } else {
                 CopilotIDEServer.shared.stop()
                 CopilotLink.tabs = [:]
+                CopilotLink.folders = [:]
             }
         }
     }
@@ -487,17 +492,21 @@ extension AppDelegate {
             guard let self else { return }
             if let pid, let tab = ClaudeIDEServer.tab(for: pid, among: self.controllers.flatMap(\.tabs)) {
                 CopilotLink.tabs[session] = Weak(tab)
+            } else if let pid, let folder = ProcessInspector.currentDirectory(of: pid) {
+                // Started in another terminal: the folder it runs in decides which window it sees.
+                CopilotLink.folders[session] = canonicalPath(folder)
             }
             // It starts with whatever the editor shows now.
-            let window = CopilotLink.tabs[session]?.value.flatMap { tab in self.controllers.first { $0.tabs.contains { $0 === tab } } }
-            (window ?? self.controllers.last)?.shareSelectionWithCopilot(only: [session])
+            self.copilotWindow(for: session)?.shareSelectionWithCopilot(only: [session])
         }
-        server.onClientGone = { session in CopilotLink.tabs.removeValue(forKey: session) }
+        server.onClientGone = { session in
+            CopilotLink.tabs.removeValue(forKey: session)
+            CopilotLink.folders.removeValue(forKey: session)
+        }
         // Copilot's proposed edits: shown as a diff in the window of the tab it runs in.
         server.onOpenDiff = { [weak self] session, path, proposed, tag in
             guard let self else { return }
-            let tab = CopilotLink.tabs[session]?.value
-            let controller = tab.flatMap { tab in self.controllers.first { $0.tabs.contains { $0 === tab } } }
+            let controller = self.copilotWindow(for: session)
                 ?? (NSApp.keyWindow?.windowController as? TerminalWindowController) ?? self.controllers.last
             guard let controller else { return CopilotIDEServer.shared.resolveDiff(tag, accepted: false) }
             let original = Self.textOnDisk(path)
@@ -524,12 +533,11 @@ extension AppDelegate {
         return text
     }
 
-    /// The folders `copilot` connects from, as it compares them with the folder it starts in: the projects,
-    /// the sidebar's roots and each tab's root (agentWorkspaces), and each tab's own folder.
+    /// The folders `copilot` connects from, as it compares them with the folder it starts in: every
+    /// window's (TerminalWindowController.copilotFolders).
     var copilotFolders: [String] {
-        let tabFolders = controllers.flatMap { $0.tabs.filter { $0.remote == nil }.map(\.directory) }
         var seen = Set<String>()
-        return (agentWorkspaces + tabFolders.map(canonicalPath)).filter { seen.insert($0).inserted }
+        return controllers.flatMap(\.copilotFolders).filter { seen.insert($0).inserted }
     }
 
     /// What copilotFolders depends on, cheap to compare at every tab change.
@@ -546,17 +554,23 @@ extension AppDelegate {
         CopilotIDEServer.shared.updateWorkspaces(copilotFolders)
     }
 
-    /// The `copilot` sessions whose tab is in `controller` (and, for the key window, ones whose tab is unknown).
+    /// The `copilot` sessions that see `controller` (copilotWindow).
     func copilotSessions(in controller: TerminalWindowController) -> Set<CopilotIDEServer.SessionID> {
         var result = Set<CopilotIDEServer.SessionID>()
-        for session in CopilotIDEServer.shared.connected where session.streaming {
-            if let tab = CopilotLink.tabs[session.id]?.value {
-                if controller.tabs.contains(where: { $0 === tab }) { result.insert(session.id) }
-            } else if NSApp.keyWindow === controller.window {
-                result.insert(session.id)
-            }
+        for session in CopilotIDEServer.shared.connected where session.streaming && copilotWindow(for: session.id) === controller {
+            result.insert(session.id)
         }
         return result
+    }
+
+    /// The window a `copilot` sees: the one with its tab. One started in another terminal sees a window that
+    /// has its folder open (the key window if several do), and no window at all when none does: it may have
+    /// found Next Term from a folder that is open nowhere here, and is then sent nothing.
+    func copilotWindow(for session: CopilotIDEServer.SessionID) -> TerminalWindowController? {
+        if let tab = CopilotLink.tabs[session]?.value { return controllers.first { $0.tabs.contains { $0 === tab } } }
+        guard let folder = CopilotLink.folders[session] else { return nil }
+        let holding = controllers.filter { $0.holdsForCopilot(folder) }
+        return holding.first { $0.window === NSApp.keyWindow } ?? holding.first
     }
 
     func copilotSession(for tab: TerminalTab) -> CopilotIDEServer.SessionID? {
@@ -565,6 +579,27 @@ extension AppDelegate {
 }
 
 extension TerminalWindowController {
+    /// The folders this window lists for `copilot` to connect from: the project, the sidebar's root, and each
+    /// local tab's folder and its root. Your home folder and / are left out: Copilot connects by itself to an
+    /// editor listing the folder it starts in, so every `copilot` started there in any terminal would come
+    /// to Next Term.
+    var copilotFolders: [String] {
+        var folders: [String] = []
+        if let project { folders.append(project) }
+        if let root = sidebar.root?.path { folders.append(root) }
+        for tab in tabs where tab.remote == nil {
+            folders.append(ProjectRoot.find(from: tab.directory))
+            folders.append(tab.directory)
+        }
+        let home = canonicalPath(FileManager.default.homeDirectoryForCurrentUser.path)
+        return folders.map(canonicalPath).filter { $0 != home && $0 != "/" }
+    }
+
+    /// `folder` is one of this window's Copilot folders, or inside one.
+    func holdsForCopilot(_ folder: String) -> Bool {
+        copilotFolders.contains { folder == $0 || folder.hasPrefix($0 + "/") }
+    }
+
     /// Tells the `copilot` sessions in this window's tabs what the editor shows: the selected lines, or the
     /// file the caret is in. A file that holds secrets, or none, is not sent: Copilot keeps the last one, and
     /// get_selection says it is no longer current.
