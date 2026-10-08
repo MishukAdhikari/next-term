@@ -136,23 +136,32 @@ extension SelfTest {
         check(made.count == 1 && dispatched == ["sidebar.newFile"], "sidebar menu keys: ⌥⌘N with the sidebar's keyboard makes a new file",
               "\(made), \(dispatched)")
 
-        // With the terminal's keyboard, then the editor's, neither key does anything, though the sidebar's own menu holds
-        // both as they show after a right-click, and the file stays selected there.
+        // The menu a right-click opens shows the menu bar's Send to Agent and Rename Tab keys while the bar's items keep
+        // them, and gives every key up as it closes: the bar's items take theirs again whenever the shortcuts change, and
+        // on macOS 26 an item doesn't take a key another item still holds.
         let row = fileRow()
-        guard row >= 0, let terminal = c.activeTab?.view else {
-            return check(false, "sidebar menu keys: the file and a terminal for the keys elsewhere")
+        guard row >= 0, let terminal = c.activeTab?.view, let rowMenu = outline.menu else {
+            return check(false, "sidebar menu keys: the file, its menu and a terminal for the keys elsewhere")
         }
         outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-        if let rowMenu = outline.menu { c.sidebar.fill(rowMenu, forRow: row) }
-        // The menu bar's items keep the keys the sidebar's menu shows too (on macOS 26 an item doesn't take a key another
-        // item of its menus still holds).
+        c.sidebar.fill(rowMenu, forRow: row)
         func barKey(_ id: String) -> String {
             shortcuts.commands.first { $0.id == id }?.item.flatMap(KeyboardShortcuts.chord(of:))?.display ?? "none"
         }
-        let held = outline.menu.map(keys) ?? [:]
+        let held = keys(rowMenu)
         let bar = [barKey("sendToAgent:"), barKey("renameTab:"), held["Send to Agent"] ?? "missing", held["Reveal in Finder"] ?? "missing"]
-        check(bar == ["⌥⌘K", "⌥⌘R", "⌥⌘K", "⌥⌘R"], "sidebar menu keys: the menu bar's Send to Agent and Rename Tab keep their keys beside the sidebar's menu",
+        check(bar == ["⌥⌘K", "⌥⌘R", "⌥⌘K", "⌥⌘R"], "sidebar menu keys: the menu bar's Send to Agent and Rename Tab keep their keys beside the sidebar's open menu",
               bar.joined(separator: " "))
+        c.sidebar.menuDidClose(rowMenu)
+        let left = rowMenu.items.compactMap(KeyboardShortcuts.chord(of:)).map(\.display)
+        shortcuts.resetAll() // the shortcuts change after the right-click
+        let retaken = [barKey("sendToAgent:"), barKey("renameTab:"), barKey("showChanges:")]
+        check(left.isEmpty && retaken == ["⌥⌘K", "⌥⌘R", "⌥⌘G"],
+              "sidebar menu keys: the closed menu holds no key, and the menu bar's items take theirs again when the shortcuts change",
+              "left \(left), bar \(retaken)")
+
+        // With the terminal's keyboard, then the editor's, neither key does anything, though the file stays selected in the
+        // sidebar.
         let before = untitled()
         dispatched = []
         window.makeFirstResponder(terminal)

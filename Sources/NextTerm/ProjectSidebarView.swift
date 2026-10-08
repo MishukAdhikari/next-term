@@ -873,6 +873,14 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     func menuNeedsUpdate(_ menu: NSMenu) { fill(menu, forRow: outline.clickedRow) }
 
+    /// The menu shows its keys only while it is open: the menu bar's Send to Agent, Rename Tab and Show Changes take
+    /// theirs again whenever the shortcuts change, and on macOS 26 an item doesn't take a key another item still holds.
+    /// No item's action reads its key.
+    func menuDidClose(_ menu: NSMenu) {
+        guard menu === outline.menu else { return }
+        for item in menu.items { KeyboardShortcuts.set(nil, on: item) }
+    }
+
     /// The right-click menu of `row` (of the selection, when `row` is part of it), each item showing the key its command
     /// has in Settings › Keyboard Shortcuts (KeyboardShortcuts.show). Built as it opens, so a key changed there shows
     /// the next time.
