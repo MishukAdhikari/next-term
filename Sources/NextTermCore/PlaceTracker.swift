@@ -123,6 +123,13 @@ public struct PlaceTracker {
     /// The held head of the checkout at `path`, or what was read when none has counted yet.
     public func head(of path: String) -> CheckoutHead? { heads[path]?.value ?? checkouts[path]?.head }
 
+    /// What the checkout at `path` is on as last read, unless git is in the middle of something there: a
+    /// chat's first turn takes it, so a switch made just before the turn (not counted yet) isn't one under it.
+    func headNow(of path: String) -> CheckoutHead? {
+        guard let checkout = checkouts[path], !checkout.busy else { return head(of: path) }
+        return checkout.head
+    }
+
     /// Takes one look. `classify` says what a held HEAD change in a checkout is (AgentLocation.change).
     public mutating func update(_ seen: PlaceSighting, at now: Date,
                                 classify: (Checkout, _ from: CheckoutHead, _ commit: String?) -> HeadChange) {
@@ -189,7 +196,7 @@ public struct PlaceTracker {
             state.lastWorking = now
             if !state.hadTurn, let path = state.location.value {
                 state.hadTurn = true
-                state.workingBranch = head(of: path)
+                state.workingBranch = headNow(of: path)
             }
         }
         agents[agent.key] = state

@@ -431,6 +431,20 @@ import Testing
         #expect(tracker.places["7"]?.checkout.path == "/Code/xCloud/.claude/worktrees/pr-7050")
     }
 
+    /// A chat whose first turn comes just after a switch, before it counted, works on the new branch.
+    @Test func aFirstTurnRightAfterASwitchIsOnTheNewBranch() {
+        var tracker = PlaceTracker()
+        run(&tracker, sighting(.branch("main"), [("7", root, false)]), from: 0, to: 1)
+        run(&tracker, sighting(.branch("fix/x"), [("7", root, false)], own: at(1.5)), from: 2, to: 2)
+        run(&tracker, sighting(.branch("fix/x"), [("7", root, true)]), from: 3, to: 8) // its turn, 1 s after the switch
+        #expect(tracker.places["7"]?.workingBranch == .branch("fix/x") && tracker.places["7"]?.switched == nil)
+        // A first turn during a rebase takes the branch held, not the detached HEAD.
+        var rebasing = PlaceTracker()
+        run(&rebasing, sighting(.branch("main"), [("8", root, false)]), from: 0, to: 1)
+        run(&rebasing, sighting(.detached("e5"), [("8", root, true)], busy: true, commit: "e5"), from: 2, to: 4)
+        #expect(rebasing.places["8"]?.workingBranch == .branch("main"))
+    }
+
     @Test func movingClearsTheMarkAndAgentsThatEndAreForgotten() {
         var tracker = PlaceTracker()
         run(&tracker, sighting(.branch("main"), [("7", root, true)]), from: 0, to: 1)
