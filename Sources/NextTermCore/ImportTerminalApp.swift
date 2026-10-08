@@ -29,7 +29,8 @@ public enum ImportTerminalApp {
     }()
 
     /// Every profile key read (checked by a test against `SecretGuard`).
-    static let profileKeys = ansiKeys + ["Font", "useOptionAsMetaKey", "TextColor", "BackgroundColor", "CursorColor", "SelectionColor"]
+    static let profileKeys = ansiKeys + ["Font", "useOptionAsMetaKey", "TextColor", "BackgroundColor", "CursorColor", "SelectionColor",
+                                         "CursorType", "CursorBlink", "ShouldLimitScrollback", "ScrollbackLines"]
 
     struct Profile: Equatable {
         var name = "Basic"
@@ -39,16 +40,24 @@ public enum ImportTerminalApp {
         var palette: TerminalPalette?
         /// It has a CommandString (a command it runs at start), which is named, never read.
         var runsCommand = false
+        /// "CursorType": 0 block, 1 underline, 2 vertical bar; "CursorBlink". Saved once changed.
+        var cursorType: Int?
+        var cursorBlink: Bool?
+        /// "Limit number of rows to": the lines kept when "ShouldLimitScrollback" is on (Terminal keeps all by default).
+        var scrollbackLimit: Int?
 
-        /// Basic as a new Mac has it: SF Mono 11 (or no font saved), no colours, Option types characters.
+        /// Basic as a new Mac has it: SF Mono 11 (or no font saved), no colours, Option types characters, a block
+        /// cursor that doesn't blink, and all the scrollback.
         var isBasicDefault: Bool {
             let defaultFont = font.map { $0.name == "SFMono-Regular" && $0.size == 11 } ?? true
-            return defaultFont && palette == nil && !optionAsMeta
+            let defaultCursor = (cursorType ?? 0) == 0 && cursorBlink != true
+            return defaultFont && palette == nil && !optionAsMeta && defaultCursor && scrollbackLimit == nil
         }
 
         static func == (a: Profile, b: Profile) -> Bool {
             a.name == b.name && a.font?.name == b.font?.name && a.font?.size == b.font?.size && a.optionAsMeta == b.optionAsMeta
-                && a.palette == b.palette && a.runsCommand == b.runsCommand
+                && a.palette == b.palette && a.runsCommand == b.runsCommand && a.cursorType == b.cursorType
+                && a.cursorBlink == b.cursorBlink && a.scrollbackLimit == b.scrollbackLimit
         }
     }
 
@@ -73,6 +82,12 @@ public enum ImportTerminalApp {
         profile.font = (values["Font"] as? Data).flatMap(font)
         profile.optionAsMeta = values["useOptionAsMetaKey"] as? Bool == true
         profile.runsCommand = values["CommandString"] != nil
+        profile.cursorType = (values["CursorType"] as? NSNumber)?.intValue
+        profile.cursorBlink = values["CursorBlink"] as? Bool
+        if (values["ShouldLimitScrollback"] as? NSNumber)?.boolValue == true, let lines = values["ScrollbackLines"] as? NSNumber,
+           lines.doubleValue.isFinite, lines.doubleValue >= 0, lines.doubleValue < 1e9 {
+            profile.scrollbackLimit = lines.intValue
+        }
         var palette = TerminalPalette(name: "Terminal, profile \(profile.name)")
         for (slot, key) in ansiKeys.enumerated() { palette.ansi[slot] = (values[key] as? Data).flatMap(colour)?.rgb }
         palette.foreground = (values["TextColor"] as? Data).flatMap(colour)?.rgb
@@ -164,6 +179,20 @@ public enum ImportTerminalApp {
         }
         if let palette = profile.palette, let row = ImportColours.row(palette, source: "profile \(profile.name) colours") {
             plan.settings.append(row)
+        }
+        let shapes: [Int: CursorShape] = [0: .block, 1: .underline, 2: .bar]
+        if let type = profile.cursorType {
+            if let shape = shapes[type] {
+                plan.settings.append(PlannedSetting(.terminalCursorShape(shape.rawValue), source: "Cursor \(shape.title)"))
+            } else {
+                plan.skipped.append(SkippedItem("Cursor", "value not recognised"))
+            }
+        }
+        if let blinks = profile.cursorBlink {
+            plan.settings.append(PlannedSetting(.terminalCursorBlink(blinks), source: "Blink cursor \(blinks ? "on" : "off")"))
+        }
+        if let lines = profile.scrollbackLimit {
+            plan.settings.append(ImportRows.scrollback(lines, source: "Limit number of rows to \(lines)", app: "Terminal"))
         }
         if profile.runsCommand { plan.skipped.append(SkippedItem("Run command", "never imported: runs commands")) }
         return plan

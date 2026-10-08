@@ -334,6 +334,52 @@ import Testing
                 == [SkippedItem("workbench.colorCustomizations", "value not recognised")])
     }
 
+    @Test func cleanUpHiddenFilesAndTheTerminal() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        try folder(home + "/Code")
+        func settings(_ json: String) throws -> ImportVSCode.SettingsResult {
+            let file = try #require(ImportVSCode.SettingsFile(json))
+            return ImportVSCode.settingsPlan(file, appName: "VS Code", usKeyboard: true, fonts: testFonts, home: home)
+        }
+        // Clean-up on save, as set.
+        let saving = try settings(#"{"files.trimTrailingWhitespace": false, "files.insertFinalNewline": true}"#)
+        #expect(saving.settings == [PlannedSetting(.trimTrailingWhitespace(false), source: "files.trimTrailingWhitespace false"),
+                                    PlannedSetting(.insertFinalNewline(true), source: "files.insertFinalNewline true")])
+        #expect(try settings(#"{"files.insertFinalNewline": "yes"}"#).skipped == [SkippedItem("files.insertFinalNewline", "value not recognised")])
+
+        // files.exclude: what it turns on, in .gitignore's way; turning off one the sidebar always hides is reported, and
+        // a pattern that hides a file only beside another isn't supported.
+        let hidden = try settings(##"""
+            {"files.exclude": {"**/node_modules": true, "build": true, "**/*.pyc": true, "out/**": true, "**/.git": false,
+                               "**/Thumbs.db": false, "**/*.js": {"when": "$(basename).ts"}}}
+            """##)
+        #expect(hidden.settings == [PlannedSetting(.hiddenFiles(["*.pyc", "node_modules", "/build", "/out/"]), source: "files.exclude")])
+        #expect(hidden.skipped == [SkippedItem("files.exclude **/*.js", "hiding a file only when another is beside it isn't supported"),
+                                   SkippedItem("files.exclude **/.git false", "the project sidebar always hides .git, .svn, .hg and .DS_Store")])
+
+        // The terminal: VS Code's line cursor is a bar; scrollback in lines; the folder new tabs start in.
+        let terminal = try settings(#"""
+            {"terminal.integrated.cursorStyle": "underline", "terminal.integrated.cursorBlinking": true,
+             "terminal.integrated.scrollback": 500, "terminal.integrated.cwd": "~/Code"}
+            """#)
+        #expect(terminal.settings == [
+            PlannedSetting(.terminalCursorShape("underline"), source: "terminal.integrated.cursorStyle underline"),
+            PlannedSetting(.terminalCursorBlink(true), source: "terminal.integrated.cursorBlinking true"),
+            PlannedSetting(.terminalScrollback(1000), source: "terminal.integrated.scrollback 500", note: "Next Term keeps at least 1,000 lines"),
+            PlannedSetting(.terminalStartFolder(canonicalPath(home + "/Code")), source: "terminal.integrated.cwd ~/Code", ticked: false,
+                           note: "in project windows too, where new tabs otherwise open in the project's folder"),
+        ])
+        #expect(try settings(#"{"terminal.integrated.cwd": "${workspaceFolder}/app"}"#).skipped
+                == [SkippedItem("terminal.integrated.cwd", "uses a variable; only a full path to a folder is read")])
+        #expect(try settings(#"{"terminal.integrated.cwd": "relative/path"}"#).skipped
+                == [SkippedItem("terminal.integrated.cwd", "only a full path to a folder is read")])
+        #expect(try settings(#"{"terminal.integrated.cwd": ""}"#).settings.isEmpty)
+        let odd = try settings(#"{"terminal.integrated.cursorStyle": "beam", "terminal.integrated.scrollback": "lots"}"#)
+        #expect(odd.settings.isEmpty && odd.skipped == [SkippedItem("terminal.integrated.cursorStyle", "value not recognised"),
+                                                        SkippedItem("terminal.integrated.scrollback", "value not recognised")])
+    }
+
     // MARK: what is left out
 
     @Test func skippedOnlyForKeysTheUserSet() throws {
@@ -365,18 +411,18 @@ import Testing
             PlannedSetting(.editorFontFamily("JetBrains Mono"), source: "editor.fontFamily JetBrains Mono, Menlo, monospace"),
             PlannedSetting(.terminalPalette(black), source: "terminal colours in workbench.colorCustomizations",
                            note: "1 of 20 colours; the others stay Next Term's"),
+            PlannedSetting(.trimTrailingWhitespace(true), source: "files.trimTrailingWhitespace true"),
+            PlannedSetting(.terminalCursorShape("bar"), source: "terminal.integrated.cursorStyle line"),
+            PlannedSetting(.terminalScrollback(50000), source: "terminal.integrated.scrollback 50000"),
         ])
+        // files.exclude hides only what the sidebar hides anyway, so it needs no row.
         #expect(result.skipped == [
             SkippedItem("Terminal font “MesloLGS NF”", "not installed on this Mac"),
             SkippedItem("workbench.colorTheme", "colour themes come later"),
             SkippedItem("editor.tabSize", "tab width and spaces come later"),
             SkippedItem("editor.insertSpaces", "tab width and spaces come later"),
-            SkippedItem("files.trimTrailingWhitespace", "clean-up on save comes later"),
-            SkippedItem("files.exclude", "hiding files by pattern comes later"),
-            SkippedItem("search.exclude", "hiding files by pattern comes later"),
-            SkippedItem("editor.cursorBlinking", "cursor style comes later"),
-            SkippedItem("terminal.integrated.cursorStyle", "cursor style comes later"),
-            SkippedItem("terminal.integrated.scrollback", "scrollback length comes later"),
+            SkippedItem("search.exclude", "Find in Files skips what git ignores; a file mask such as !dist/** leaves out more"),
+            SkippedItem("editor.cursorBlinking", "the editor keeps macOS's text caret; the cursor style here is the terminal's"),
             SkippedItem("[python]", "per-language settings come later"),
             SkippedItem("2 other settings", "Next Term has no matching setting"),
         ])

@@ -102,4 +102,4 @@ Not today. Next Term is built with AppKit, which is macOS-only. Its core logic h
 
 ## What is coming next?
 
-Next: Zed’s own key changes in the import. After that: a server’s files in the editor and sidebar, then dev containers; remote access to the MCP server for agents outside your Mac (such as ChatGPT and Claude on the web); more of the diff view; session restore. None of these is released yet.
+Next: a server’s files in the editor and sidebar, then dev containers; remote access to the MCP server for agents outside your Mac (such as ChatGPT and Claude on the web); more of the diff view; session restore. None of these is released yet.

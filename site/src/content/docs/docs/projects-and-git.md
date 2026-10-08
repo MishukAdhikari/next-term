@@ -10,7 +10,7 @@ A project is a folder that a window is about. Its files stay in the sidebar, new
 ## Projects
 
 - **Open a project:** **File › Open Project…** (<kbd>⌘O</kbd>) and choose a folder. Agents can open projects too, through [MCP](/docs/orchestration/). From another terminal, run `nxtrm .` (see [The nxtrm command](/docs/command-line/)). You can also drop a folder on Next Term’s Dock icon, or run `open -a "Next Term" ~/Code/app`.
-- **New tabs open in the project** by default. You can still `cd` anywhere.
+- **New tabs open in the project** by default (**Settings › Terminal › New tabs** changes it). You can still `cd` anywhere.
 - **Reopen at launch:** Next Term reopens the project windows that were open when you quit. On the very first launch it asks for a folder.
 - **Open Recent** (in the File menu) lists your recent projects, with **Clear Menu**. The Dock icon’s menu lists them too, with **New Window**.
 - **Close Project** (in the File menu) closes the window, asking first if something is still running in it. When the last project closes, or the last window goes with its last tab, the **Welcome** window appears. Open it any time from **Window › Welcome to Next Term**.
@@ -66,6 +66,7 @@ Toggle it with <kbd>⌘B</kbd> (**View › Hide Project Sidebar**). Put it on th
 - **It is live.** Files your agents create, change or delete show up on their own, and commits and checkouts refresh the git state.
 - **It stays fast on big projects.** Folders are read in the background, and a folder too big to list in full ends with “… 12,345 more items”.
 - **It remembers.** Switching between tabs in different projects keeps what you had expanded and where you had scrolled.
+- **It leaves out what you never open.** `.git`, `.svn`, `.hg` and `.DS_Store` never show. **Settings › Editor › Hide** leaves out more, by pattern, between commas, read as `.gitignore` reads them: `node_modules` or `*.log` in every folder, `/build` only at the top of the folder the sidebar shows, `out/` only folders, and `!keep.log` after `*.log` shows that one file again. Go to File (<kbd>⌘P</kbd>) and Find in Files don’t use these patterns: they list the files git does.
 - **Hover a row** for its full path, git state and line counts.
 
 ## Git at a glance

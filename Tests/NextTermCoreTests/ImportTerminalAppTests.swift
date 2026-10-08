@@ -88,6 +88,21 @@ import Testing
         #expect(layout.settings.first?.ticked == false)
     }
 
+    @Test func cursorAndScrollback() throws {
+        // Basic with only its cursor changed is worth offering.
+        let blinking = try #require(try plan(["Basic": ["CursorType": 2, "CursorBlink": true]], default: "Basic"))
+        #expect(blinking.settings == [PlannedSetting(.terminalCursorShape("bar"), source: "Cursor Bar"),
+                                      PlannedSetting(.terminalCursorBlink(true), source: "Blink cursor on")])
+        let underline = try #require(try plan(["Pro": ["CursorType": 1, "CursorBlink": false]], default: "Pro"))
+        #expect(underline.settings.map(\.setting) == [.terminalCursorShape("underline"), .terminalCursorBlink(false)])
+        #expect(try #require(try plan(["Pro": ["CursorType": 9]], default: "Pro")).skipped == [SkippedItem("Cursor", "value not recognised")])
+
+        // Scrollback only when the profile limits it (Terminal keeps all of it otherwise, as the default).
+        let limited = try #require(try plan(["Basic": ["ShouldLimitScrollback": 1, "ScrollbackLines": 20000.0]], default: "Basic"))
+        #expect(limited.settings == [PlannedSetting(.terminalScrollback(20000), source: "Limit number of rows to 20000")])
+        #expect(try plan(["Basic": ["ShouldLimitScrollback": 0, "ScrollbackLines": 20000.0]], default: "Basic") == nil)
+    }
+
     @Test func archivesAreReadWithoutDecodingObjects() throws {
         #expect(ImportTerminalApp.font(try font("Menlo-Bold", 12.5))! == ("Menlo-Bold", 12.5))
         #expect(ImportTerminalApp.colour(try colour(0, 0.5, 1))?.rgb == 0x0080FF)

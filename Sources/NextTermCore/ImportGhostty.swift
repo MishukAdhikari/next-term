@@ -44,6 +44,7 @@ public enum ImportGhostty {
         addFont(config, fonts: fonts, to: &plan)
         addOptionAsAlt(config, usKeyboard: usKeyboard, to: &plan)
         addColours(config, home: home, applications: apps, to: &plan)
+        addTerminal(config, home: home, to: &plan)
         addKeybinds(config, usKeyboard: usKeyboard, to: &plan)
         plan.skipped += skipped + report(config)
         return plan
@@ -154,10 +155,15 @@ public enum ImportGhostty {
         var palette: [Int: String] = [:]
         var colours: [String: String] = [:]
         var keybinds: [String] = []
+        /// The cursor, the scrollback and the folder new tabs start in: `cursor-style`, `cursor-style-blink`,
+        /// `scrollback-limit`, `working-directory` and whether new tabs follow the tab in front instead.
+        var terminal: [String: String] = [:]
         /// Other keys, in the order first seen.
         var others: [String] = []
 
         static let colourKeys = ["foreground", "background", "cursor-color", "selection-background"]
+        static let terminalKeys = ["cursor-style", "cursor-style-blink", "scrollback-limit", "working-directory",
+                                   "tab-inherit-working-directory", "window-inherit-working-directory"]
 
         init(_ entries: [Entry]) {
             for entry in entries { add(entry) }
@@ -177,6 +183,8 @@ public enum ImportGhostty {
             default:
                 if Self.colourKeys.contains(entry.key) {
                     colours[entry.key] = value
+                } else if Self.terminalKeys.contains(entry.key) {
+                    terminal[entry.key] = value
                 } else if !others.contains(entry.key) {
                     others.append(entry.key)
                 }
@@ -221,6 +229,65 @@ public enum ImportGhostty {
                                                 note: notes.isEmpty ? nil : notes.joined(separator: "; ")))
         default:
             plan.skipped.append(SkippedItem("macos-option-as-alt", "value not recognised"))
+        }
+    }
+
+    // MARK: cursor, scrollback and start folder
+
+    /// `cursor-style` (a hollow block comes over filled), `cursor-style-blink` (empty: Ghostty's default, so
+    /// nothing), and the start folder (`startFolder`). `scrollback-limit` counts bytes, not lines, so it is
+    /// reported, not converted.
+    static func addTerminal(_ config: Config, home: String, to plan: inout ImportPlan) {
+        if let style = config.terminal["cursor-style"] {
+            let shapes = ["block": CursorShape.block, "block_hollow": .block, "bar": .bar, "underline": .underline]
+            if let shape = shapes[style] {
+                let note = style == "block_hollow" ? "a hollow block isn't supported, so it is filled" : nil
+                plan.settings.append(PlannedSetting(.terminalCursorShape(shape.rawValue), source: "cursor-style \(style)", note: note))
+            } else {
+                plan.skipped.append(SkippedItem("cursor-style", "value not recognised"))
+            }
+        }
+        if let blink = config.terminal["cursor-style-blink"], !blink.isEmpty {
+            if blink == "true" || blink == "false" {
+                plan.settings.append(PlannedSetting(.terminalCursorBlink(blink == "true"), source: "cursor-style-blink \(blink)"))
+            } else {
+                plan.skipped.append(SkippedItem("cursor-style-blink", "value not recognised"))
+            }
+        }
+        if config.terminal["scrollback-limit"] != nil {
+            plan.skipped.append(SkippedItem("scrollback-limit", "Ghostty counts it in bytes and Next Term in lines, so it isn't converted"))
+        }
+        addStartFolder(config, home: home, to: &plan)
+    }
+
+    /// Where Ghostty opens a new tab. By default it follows the tab in front (`tab-inherit-working-directory`,
+    /// or before Ghostty 1.3 `window-inherit-working-directory`), and `working-directory` is only where the first
+    /// window starts: set true, the folder of the tab in front is offered. Set false, new tabs start in
+    /// `working-directory`: `home` or a folder is offered, and unset is the home folder, where Ghostty starts
+    /// when opened from the Dock or Finder. Its `inherit`, the folder Ghostty itself was started from, has no
+    /// equivalent here.
+    static func addStartFolder(_ config: Config, home: String, to plan: inout ImportPlan) {
+        let key = config.terminal["tab-inherit-working-directory"] == nil ? "window-inherit-working-directory" : "tab-inherit-working-directory"
+        let inherit = config.terminal[key].flatMap { $0.isEmpty ? nil : $0 }
+        let directory = config.terminal["working-directory"].flatMap { $0.isEmpty ? nil : $0 }
+        if let inherit, inherit != "true", inherit != "false" { plan.skipped.append(SkippedItem(key, "value not recognised")) }
+        guard inherit == "false" else {
+            if inherit == "true" { plan.settings.append(ImportRows.startFolder(.current, source: "\(key) true")) }
+            if directory != nil {
+                plan.skipped.append(SkippedItem("working-directory", "Ghostty starts only its first window there; new tabs open in the folder of the tab in front"))
+            }
+            return
+        }
+        switch directory {
+        case nil, "home"?:
+            let source = directory == nil ? "\(key) false (the home folder)" : "working-directory home"
+            plan.settings.append(ImportRows.startFolder(.home, source: source))
+        case "inherit"?:
+            plan.skipped.append(SkippedItem("working-directory inherit", "the folder Ghostty itself was started from, which Next Term has no setting for"))
+        case let path?:
+            let row = ImportRows.startFolder(path, key: "working-directory", home: home)
+            plan.settings += [row.setting].compactMap { $0 }
+            plan.skipped += row.skipped
         }
     }
 
@@ -396,6 +463,13 @@ public enum ImportGhostty {
             guard let (trigger, action) = binds[id] else { continue }
             if !isPlaced(trigger), case .chord(let chord) = key(withoutFlags(trigger), usKeyboard: usKeyboard),
                placed.contains(chord) { continue }
+            if isRefusedSequence(trigger) {
+                // Whatever its action: only its name is shown (never text it would send).
+                let name = actions[action] == nil ? String(action.prefix { $0 != ":" }) : action
+                let label = SecretGuard.looksSecret(trigger) || SecretGuard.looksSecret(name) ? "a keybind" : "keybind \(trigger) → \(name)"
+                plan.skipped.append(SkippedItem(label, refusedSequence))
+                continue
+            }
             guard let command = actions[action] else {
                 unmatched += 1
                 continue
@@ -438,6 +512,24 @@ public enum ImportGhostty {
         return text
     }
 
+    /// The flags a trigger starts with, lowercased, in its order.
+    static func leadingFlags(_ trigger: String) -> [String] {
+        var text = trigger.lowercased()
+        var found: [String] = []
+        while let flag = flags.first(where: { text.hasPrefix($0) }) {
+            found.append(flag)
+            text.removeFirst(flag.count)
+        }
+        return found
+    }
+
+    /// A two-step key with `global:` or `all:`: Ghostty refuses the line, so it binds nothing and replaces nothing.
+    static func isRefusedSequence(_ trigger: String) -> Bool {
+        withoutFlags(trigger).contains(">") && leadingFlags(trigger).contains { $0 == "global:" || $0 == "all:" }
+    }
+
+    static let refusedSequence = "Ghostty doesn't take a two-step key with global: or all:, so it ignores this line"
+
     /// A trigger's parts between "+" signs, split as Ghostty splits them: an empty part is the + key, and a "+"
     /// at the very end starts no part.
     static func triggerParts(_ text: String) -> [String] {
@@ -473,8 +565,10 @@ public enum ImportGhostty {
 
     /// A trigger as Ghostty tells them apart: without its flags, its modifiers in a set order, and its key by place
     /// or by character (`bracket_left` and `left_bracket` are one key, `[` another). A two-step key is read a step
-    /// at a time between ">" signs, as Ghostty reads it. Nil for one Ghostty turns down, an empty step among them.
+    /// at a time between ">" signs, as Ghostty reads it. Nil for one Ghostty turns down: an empty step among them,
+    /// or a two-step key with `global:` or `all:`.
     static func triggerID(_ trigger: String) -> String? {
+        if isRefusedSequence(trigger) { return nil }
         var steps: [String] = []
         for step in withoutFlags(trigger).split(separator: ">", omittingEmptySubsequences: false) {
             guard let parsed = parseTrigger(String(step)) else { return nil }
@@ -486,6 +580,7 @@ public enum ImportGhostty {
     /// A Ghostty trigger ("super+shift+d", "cmd+bracket_left") read the way VS Code's keys are. Key
     /// sequences and system-wide keys aren't supported.
     static func key(_ trigger: String, usKeyboard: Bool) -> ImportShortcuts.ParsedKey {
+        if isRefusedSequence(trigger) { return .notSupported(refusedSequence) }
         var text = trigger.lowercased()
         for prefix in ["unconsumed:", "performable:", "all:"] where text.hasPrefix(prefix) { text.removeFirst(prefix.count) }
         if text.hasPrefix("global:") { return .notSupported("system-wide keys aren't supported") }
@@ -497,11 +592,9 @@ public enum ImportGhostty {
     // MARK: the rest
 
     static let reasons: [String: String] = [
-        "scrollback-limit": "a scrollback setting comes later",
-        "cursor-style": "cursor style comes later", "cursor-style-blink": "cursor style comes later",
         "font-feature": "font features aren't supported", "font-thicken": "font rendering follows macOS",
         "background-opacity": "the terminal is opaque here", "background-blur": "the terminal is opaque here",
-        "window-theme": "Next Term is dark", "working-directory": "a start folder setting comes later",
+        "window-theme": "Next Term is dark",
         "shell-integration": "Next Term sets up its own shell integration", "custom-shader": "shaders aren't supported",
     ]
 

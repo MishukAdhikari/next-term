@@ -105,6 +105,8 @@ Status reports from the shell carry a random secret for each tab that programs n
 | Reorder | Drag a tab sideways |
 | Everything for one tab | Right-click it |
 
+**Settings › Terminal › New tabs** chooses where <kbd>⌘T</kbd> opens a tab instead: always in the current tab’s folder, in your home folder, or in a folder you choose. The same tab has the cursor (block, bar or underline, blinking or not) and how much scrollback each terminal keeps, 10,000 lines unless you choose. See [Settings](/docs/settings/#terminal).
+
 A tab running a local dev server (`langgraph dev`, `npm run dev`, `uvicorn` and the like) adds its port to its title, such as “app · :5173”, once the server prints its address. **File › Open Served URL** opens that address in your browser. It is only for commands you run, not agents, and not remote tabs, where `localhost` is the server’s own.
 
 With two or more tabs, each one shows the shortcut that selects it, where its × button appears (before the × on the selected tab, when there is room). A shortcut you change in Settings shows as changed.

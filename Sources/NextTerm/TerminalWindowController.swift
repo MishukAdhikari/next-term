@@ -1724,7 +1724,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     @objc func newTab(_ sender: Any?) {
-        addTab(directory: project ?? activeTab.flatMap { $0.remote == nil ? $0.currentDirectory() : nil })
+        addTab(directory: newTabDirectory())
     }
 
     /// ⌘W closes what has the keyboard: the file being edited, or the terminal tab.

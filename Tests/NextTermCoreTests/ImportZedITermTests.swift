@@ -10,6 +10,13 @@ import Testing
         return dir
     }
 
+    /// A home whose name is short: a folder in it is shown, and a long run of letters and dashes looks like a token.
+    func shortHome() throws -> String {
+        let dir = canonicalPath(FileManager.default.temporaryDirectory.path) + "/nt-zi-" + UUID().uuidString.prefix(8)
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
     func write(_ text: String, to path: String, date: Date? = nil) throws {
         try FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
         try text.write(toFile: path, atomically: true, encoding: .utf8)
@@ -149,23 +156,26 @@ import Testing
         defer { try? FileManager.default.removeItem(atPath: home) }
         let plan = ImportZed.plan(for: app, home: home, fonts: testFonts)
         #expect(plan.preset == .jetBrains)
-        #expect(plan.settings.isEmpty, "the one font isn't installed, and the other settings come later")
+        // The settings Next Term has too come over; the font isn't installed.
+        #expect(plan.settings == [
+            PlannedSetting(.fontSize(15), source: "buffer_font_size 15"),
+            PlannedSetting(.editorLineHeight(1.4), source: "buffer_line_height 1.7"),
+            PlannedSetting(.softWrap(true), source: "soft_wrap editor_width"),
+            PlannedSetting(.optionAsMeta(true), source: "terminal.option_as_meta true"),
+            PlannedSetting(.terminalPosition("right"), source: "terminal.dock right"),
+            PlannedSetting(.terminalCursorBlink(false), source: "terminal.blinking off"),
+            PlannedSetting(.sidebarSide("right"), source: "project_panel.dock right"),
+        ])
         #expect(plan.recentProjects.isEmpty)
 
         let expected: [String: String] = [
             "vim_mode": "Next Term has no Vim mode",
-            "buffer_font_size": "comes in a later version",
             "Editor font “Berkeley Mono”": "not installed on this Mac",
-            "buffer_line_height": "comes in a later version",
-            "soft_wrap": "comes in a later version",
+            "terminal.font_size 13": "Next Term uses one size for the editor and the terminal, so the buffer's 15 is used",
             "ui_font_size": "Next Term's window text follows macOS",
             "theme": "colour themes come later",
             "terminal.shell": "never imported: can hold secrets",
             "terminal.env": "never imported: can hold secrets",
-            "terminal.option_as_meta": "comes in a later version",
-            "terminal.dock": "comes in a later version",
-            "terminal.font_size": "comes in a later version",
-            "project_panel.dock": "comes in a later version",
             "context_servers": "never imported: can hold secrets",
             "language_models": "never imported: can hold secrets",
             "agent": "never imported: can hold secrets",
@@ -175,10 +185,78 @@ import Testing
         #expect(reasons(plan) == expected)
         #expect(plan.skipped.count == expected.count)
 
-        // Only names (and a font's name): no other value reaches the plan.
+        // Only names, a font's name and the values brought over: no other value reaches the plan.
         for value in ["ghp_", "sk-proj", "github_pat_", "hunter2", "/opt/bin/fish", "llm.internal", "Gruvbox",
-                      "claude-sonnet", "npx", "on_focus_change", "editor_width"] {
+                      "claude-sonnet", "npx", "on_focus_change"] {
             #expect(!shown(plan).contains(value), "\(value) leaked into the plan")
+        }
+    }
+
+    @Test func zedSettingsNextTermHasToo() throws {
+        func plan(_ settings: String, usKeyboard: Bool = true) throws -> ImportPlan {
+            let home = try shortHome()
+            defer { try? FileManager.default.removeItem(atPath: home) }
+            try write(settings, to: home + "/.config/zed/settings.json")
+            try FileManager.default.createDirectory(atPath: home + "/Code", withIntermediateDirectories: true)
+            let app = try #require(ImportZed.detect(home: home).first)
+            return ImportZed.plan(for: app, home: home, usKeyboard: usKeyboard, fonts: testFonts)
+        }
+        func settings(_ text: String) throws -> [ImportedSetting] { try plan(text).settings.map(\.setting) }
+
+        // Line height is a multiple of the font size in Zed and of the font's own line height here.
+        #expect(try settings(#"{"buffer_line_height": "comfortable"}"#) == [.editorLineHeight(1.35)])
+        #expect(try settings(#"{"buffer_line_height": "standard"}"#) == [.editorLineHeight(1.1)])
+        #expect(try reasons(plan(#"{"buffer_line_height": {"custom": 0.5}}"#))["buffer_line_height"] == "value not recognised")
+        // Soft wrap: off, at the edge, or at a column (which wraps at the edge here).
+        #expect(try settings(#"{"soft_wrap": "none"}"#) == [.softWrap(false)])
+        let column = try plan(#"{"soft_wrap": "preferred_line_length"}"#)
+        #expect(column.settings.map(\.setting) == [.softWrap(true)])
+        #expect(reasons(column)["soft_wrap preferred_line_length"] == "Next Term wraps at the window edge; a wrap column isn't supported")
+        // The terminal's size alone sets the one size.
+        let terminalSize = try plan(#"{"terminal": {"font_size": 40}}"#).settings
+        #expect(terminalSize == [PlannedSetting(.fontSize(32), source: "terminal.font_size 40",
+                                                note: "Next Term's sizes go from 8 to 32; sets the editor too: Next Term has one size for both")])
+        // Option as Meta waits for a tick off a U.S. layout.
+        #expect(try plan(#"{"terminal": {"option_as_meta": true}}"#, usKeyboard: false).settings.first?.ticked == false)
+
+        // Clean-up on save and the files the sidebar hides (Zed's defaults hide what it hides anyway).
+        let saving = try plan(#"""
+            {"remove_trailing_whitespace_on_save": false, "ensure_final_newline_on_save": true,
+             "file_scan_exclusions": ["**/.git", "**/node_modules", "target", "**/.DS_Store", "dist/**"]}
+            """#)
+        #expect(saving.settings == [
+            PlannedSetting(.trimTrailingWhitespace(false), source: "remove_trailing_whitespace_on_save false"),
+            PlannedSetting(.insertFinalNewline(true), source: "ensure_final_newline_on_save true"),
+            PlannedSetting(.hiddenFiles(["node_modules", "/target", "/dist/"]), source: "file_scan_exclusions"),
+        ])
+
+        // The terminal's cursor, scrollback and start folder.
+        let terminal = try plan(#"""
+            {"terminal": {"cursor_shape": "hollow", "blinking": "terminal_controlled", "max_scroll_history_lines": 250000,
+                          "working_directory": "always_home", "line_height": "standard"},
+             "cursor_shape": "bar"}
+            """#)
+        #expect(terminal.settings == [
+            PlannedSetting(.terminalCursorShape("block"), source: "terminal.cursor_shape hollow", note: "a hollow block isn't supported, so it is filled"),
+            PlannedSetting(.terminalCursorBlink(false), source: "terminal.blinking terminal_controlled", note: "a program can still ask for a blinking bar or underline"),
+            PlannedSetting(.terminalScrollback(100_000), source: "terminal.max_scroll_history_lines 250000", note: "Next Term keeps at most 100,000 lines"),
+            PlannedSetting(.terminalStartFolder("home"), source: "terminal.working_directory always_home", ticked: false,
+                           note: "in project windows too, where new tabs otherwise open in the project's folder"),
+        ])
+        #expect(reasons(terminal)["terminal.line_height"] == "the terminal's line height follows its font")
+        #expect(reasons(terminal)["cursor_shape"] == "the editor keeps macOS's text caret; the cursor style here is the terminal's")
+        #expect(try settings(#"{"terminal": {"working_directory": "current_project_directory"}}"#) == [.terminalStartFolder("project")])
+        let always = try plan(#"{"terminal": {"working_directory": {"always": {"directory": "~/Code"}}}}"#).settings
+        #expect(always.first?.setting.key == "terminalStartFolder" && always.first?.source.hasSuffix("/Code") == true)
+        let gone = try plan(#"{"terminal": {"working_directory": {"always": {"directory": "/Users/someone/private-folder"}}}}"#)
+        #expect(gone.settings.isEmpty && reasons(gone)["terminal.working_directory"] == "the folder isn't on this Mac")
+        #expect(!shown(gone).contains("private-folder"))
+
+        // Values that aren't Zed's are reported by name.
+        let odd = try plan(#"{"buffer_font_size": "big", "terminal": {"dock": "top", "blinking": 1}, "project_panel": {"dock": 2}}"#)
+        #expect(odd.settings.isEmpty)
+        for key in ["buffer_font_size", "terminal.dock", "terminal.blinking", "project_panel.dock"] {
+            #expect(reasons(odd)[key] == "value not recognised", "\(key)")
         }
     }
 
@@ -303,11 +381,13 @@ import Testing
             ]
             """, to: keymap)
         var plan = ImportZed.plan(for: app, home: home)
-        #expect(reasons(plan) == ["keymap.json (3 shortcuts)": "your own Zed shortcuts come in a later version"])
+        #expect(plan.shortcuts.map(\.command) == ["goToFile:"] && plan.shortcuts.first?.chord == KeyChord(key: "p", command: true))
+        #expect(reasons(plan) == ["cmd-shift-p → command_palette::Toggle": "no matching Next Term command",
+                                  "ctrl-g → terminal::SendText": "no matching Next Term command"])
         #expect(!shown(plan).contains("ghp_"))
 
         try write("[{ \"bindings\": ", to: keymap)
-        #expect(ImportZed.plan(for: app, home: home).skipped.isEmpty)
+        #expect(reasons(ImportZed.plan(for: app, home: home)) == ["keymap.json": "couldn't be read as JSON; your shortcuts were skipped"])
 
         // Recents are Phase 2b: the database is only noticed, never opened.
         try write("not a database", to: home + "/Library/Application Support/Zed/db/0-stable/db.sqlite")
@@ -581,8 +661,9 @@ import Testing
             #expect(!shown(plan).contains(secret), "\(secret) leaked into the plan")
         }
 
-        // The keys v1 reads are none of those the design forbids, and none SecretGuard flags.
-        let forbidden = ["Command", "Custom Command", "Triggers", "Keyboard Map", "Bound Hosts", "Working Directory"]
+        // The keys read are none of those the design forbids, and none SecretGuard flags. A folder (Working
+        // Directory) is kept only when Custom Directory says new tabs use it: here it says No.
+        let forbidden = ["Command", "Custom Command", "Triggers", "Keyboard Map", "Bound Hosts"]
         for key in ImportITerm2.profileKeys + ImportITerm2.colourKeys {
             #expect(!forbidden.contains(key))
             #expect(!SecretGuard.isSecretKey(key), "\(key)")
@@ -590,22 +671,58 @@ import Testing
         }
     }
 
-    @Test func iTermReportsWhatComesLater() throws {
-        func later(_ extra: [String: Any], colours: Bool = true) throws -> [SkippedItem] {
-            var values = profile(guid: "A", font: nil, extra: extra)
-            if !colours { values = values.filter { !$0.key.hasSuffix("Color") } }
-            return try iTermPlan(preferences([values], defaultGuid: "A")).skipped
+    @Test func iTermCursorScrollbackAndStartFolder() throws {
+        let home = try shortHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        try FileManager.default.createDirectory(atPath: home + "/Code", withIntermediateDirectories: true)
+        func plan(_ extra: [String: Any]) throws -> ImportPlan {
+            let values = profile(guid: "A", font: nil, extra: extra).filter { !$0.key.hasSuffix("Color") }
+            let root = preferences([values], defaultGuid: "A")
+            let data = try PropertyListSerialization.data(fromPropertyList: root, format: .binary, options: 0)
+            let path = home + plistPath
+            try FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+            try data.write(to: URL(fileURLWithPath: path))
+            let app = DetectedApp(kind: .iTerm2, name: "iTerm2", configPath: path, lastUsed: nil)
+            return ImportITerm2.plan(for: app, home: home, usKeyboard: true, fonts: testFonts)
         }
+        func settings(_ extra: [String: Any]) throws -> [ImportedSetting] { try plan(extra).settings.map(\.setting) }
         let keyMaps = SkippedItem("iTerm2 key mappings (2)", "terminal key mappings aren't brought over")
-        // iTerm2's defaults (home folder, 1,000 lines) aren't news, and colours come over.
-        #expect(try later([:]) == [keyMaps, paneNote])
-        #expect(try later([:], colours: false) == [keyMaps, paneNote])
+        // iTerm2's defaults for the folder (home) and the scrollback (1,000 lines) aren't news.
+        #expect(try plan([:]).settings.isEmpty)
+        #expect(try plan([:]).skipped == [keyMaps, paneNote])
 
-        #expect(try later(["Custom Directory": "Recycle"]).contains(SkippedItem("Custom Directory (Recycle)", "a start folder setting comes later")))
-        #expect(try later(["Custom Directory": "Advanced"]).contains(SkippedItem("Custom Directory (Advanced)", "a start folder setting comes later")))
-        #expect(try later(["Custom Directory": "/somewhere"]) == [keyMaps, paneNote])
-        #expect(try later(["Scrollback Lines": 5000]).contains(SkippedItem("Scrollback Lines 5000", "a scrollback setting comes later")))
-        #expect(try later(["Unlimited Scrollback": true]).contains(SkippedItem("Unlimited Scrollback", "a scrollback setting comes later")))
+        // The cursor comes over as iTerm2 has it, chosen or not: a box that doesn't blink is iTerm2's own.
+        #expect(try settings(["Cursor Type": 2, "Blinking Cursor": false]) == [.terminalCursorShape("block"), .terminalCursorBlink(false)])
+        #expect(try settings(["Cursor Type": 1]) == [.terminalCursorShape("bar")])
+        #expect(try settings(["Cursor Type": 0, "Blinking Cursor": true]) == [.terminalCursorShape("underline"), .terminalCursorBlink(true)])
+        #expect(try plan(["Cursor Type": 7]).skipped.contains(SkippedItem("Cursor Type", "value not recognised")))
+
+        // Scrollback: lines, or as much as Next Term keeps.
+        #expect(try plan(["Scrollback Lines": 5000]).settings == [PlannedSetting(.terminalScrollback(5000), source: "Scrollback Lines 5000")])
+        #expect(try plan(["Scrollback Lines": 200]).settings
+                == [PlannedSetting(.terminalScrollback(1000), source: "Scrollback Lines 200", note: "Next Term keeps at least 1,000 lines")])
+        #expect(try plan(["Unlimited Scrollback": true]).settings
+                == [PlannedSetting(.terminalScrollback(100_000), source: "Unlimited Scrollback", note: "iTerm2 keeps all of it; Next Term keeps at most 100,000 lines")])
+
+        // The start folder: Recycle is the tab in front's, and a folder of your own the one given, both offered
+        // unticked, since they would apply in project windows too; one that isn't on this Mac is named by its key only.
+        let recycle = try plan(["Custom Directory": "Recycle"]).settings
+        #expect(recycle.map(\.setting) == [.terminalStartFolder("current")] && recycle.first?.ticked == false)
+        #expect(recycle.first?.note == "in project windows too, where new tabs otherwise open in the project's folder")
+        let folder = try plan(["Custom Directory": "Yes", "Working Directory": home + "/Code"]).settings
+        #expect(folder.map(\.setting) == [.terminalStartFolder(canonicalPath(home + "/Code"))] && folder.first?.ticked == false)
+        #expect(folder.first?.note == "in project windows too, where new tabs otherwise open in the project's folder")
+        let homeFolder = try plan(["Custom Directory": "Yes", "Working Directory": home]).settings
+        #expect(homeFolder.map(\.setting) == [.terminalStartFolder("home")])
+        let gone = try plan(["Custom Directory": "Yes"])  // the fixture's folder isn't on this Mac
+        #expect(gone.settings.isEmpty && gone.skipped.contains(SkippedItem("Working Directory", "the folder isn't on this Mac")))
+        #expect(!"\(gone)".contains("private-folder"))
+        let advanced = try plan(["Custom Directory": "Advanced", "AWDS Tab Option": "Recycle"]).settings
+        #expect(advanced.map(\.setting) == [.terminalStartFolder("current")])
+        let advancedFolder = try plan(["Custom Directory": "Advanced", "AWDS Tab Option": "Yes", "AWDS Tab Directory": "~/Code"]).settings
+        #expect(advancedFolder.map(\.setting) == [.terminalStartFolder(canonicalPath(home + "/Code"))])
+        #expect(try plan(["Custom Directory": "Advanced"]).skipped.contains(SkippedItem("Custom Directory (Advanced)", "the folder for new tabs couldn't be read")))
+        #expect(try plan(["Custom Directory": "/somewhere"]).settings.isEmpty)
     }
 
     @Test func iTermOddFiles() throws {

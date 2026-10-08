@@ -226,6 +226,91 @@ import Testing
         let steps = try self.plan("keybind = ctrl+a>ctrl+n=new_tab\nkeybind = control+a>control+n=unbind")
         #expect(reasons(steps)["keybind ctrl+a>ctrl+n → new_tab"] == nil)
         #expect(reasons(steps)["1 keybind"] != nil)
+
+        // Ghostty refuses a two-step key with global: or all:, so such a line replaces nothing: the earlier line
+        // for the same steps still applies, and the refused one says why it does nothing.
+        let flagged = try self.plan("""
+            keybind = ctrl+a>ctrl+n=new_tab
+            keybind = global:ctrl+a>ctrl+n=unbind
+            keybind = all:control+a>control+n=new_window
+            keybind = unconsumed:all:ctrl+a>ctrl+n=unbind
+            """)
+        #expect(reasons(flagged)["keybind ctrl+a>ctrl+n → new_tab"] == ImportShortcuts.twoStep)
+        #expect(reasons(flagged)["keybind all:control+a>control+n → new_window"] == ImportGhostty.refusedSequence)
+        // A refused line whose action has no command says the same, rather than being counted as unmatched.
+        #expect(reasons(flagged)["keybind global:ctrl+a>ctrl+n → unbind"] == ImportGhostty.refusedSequence)
+        #expect(reasons(flagged)["keybind unconsumed:all:ctrl+a>ctrl+n → unbind"] == ImportGhostty.refusedSequence)
+        #expect(!flagged.skipped.contains { $0.item.hasSuffix(" keybind") || $0.item.hasSuffix(" keybinds") })
+        // Text it would send is never shown, only the action's name.
+        let typed = try self.plan("keybind = global:ctrl+a>ctrl+t=text:export TOKEN=abc")
+        #expect(reasons(typed)["keybind global:ctrl+a>ctrl+t → text"] == ImportGhostty.refusedSequence)
+        #expect(!"\(typed)".contains("TOKEN"))
+        #expect(ImportGhostty.triggerID("global:ctrl+a>ctrl+n") == nil && ImportGhostty.triggerID("unconsumed:all:a>b") == nil)
+        // One step with a flag is still the same key as without: a later line replaces it.
+        #expect(ImportGhostty.triggerID("all:ctrl+a") == ImportGhostty.triggerID("ctrl+a"))
+        let single = try self.plan("keybind = super+t=new_tab\nkeybind = all:super+t=unbind")
+        #expect(single.shortcuts.isEmpty)
+        // Without those flags a flagged two-step line is read as usual, and replaces the unflagged one.
+        let performable = try self.plan("keybind = ctrl+a>ctrl+n=new_tab\nkeybind = performable:ctrl+a>ctrl+n=unbind")
+        #expect(reasons(performable)["keybind ctrl+a>ctrl+n → new_tab"] == nil)
+    }
+
+    @Test func cursorScrollbackAndStartFolder() throws {
+        let plan = try self.plan("""
+            cursor-style = bar
+            cursor-style-blink = false
+            scrollback-limit = 20000000
+            working-directory = inherit
+            """)
+        #expect(plan.settings == [
+            PlannedSetting(.terminalCursorShape("bar"), source: "cursor-style bar"),
+            PlannedSetting(.terminalCursorBlink(false), source: "cursor-style-blink false"),
+        ])
+        #expect(reasons(plan)["scrollback-limit"] == "Ghostty counts it in bytes and Next Term in lines, so it isn't converted")
+
+        // A hollow block comes over filled; an empty blink is Ghostty's default, so nothing.
+        let other = try self.plan("cursor-style = block_hollow\ncursor-style-blink =")
+        #expect(other.settings.map(\.setting) == [.terminalCursorShape("block")])
+        #expect(other.settings.first?.note == "a hollow block isn't supported, so it is filled")
+        let odd = try self.plan("cursor-style = beam\ncursor-style-blink = sometimes\ntab-inherit-working-directory = false\nworking-directory = ../relative")
+        #expect(odd.settings.isEmpty)
+        #expect(reasons(odd)["cursor-style"] == "value not recognised" && reasons(odd)["cursor-style-blink"] == "value not recognised")
+        #expect(reasons(odd)["working-directory"] == "only a full path to a folder is read")
+    }
+
+    @Test func whereNewTabsStart() throws {
+        let note = "in project windows too, where new tabs otherwise open in the project's folder"
+        // Ghostty's new tabs follow the tab in front unless told not to, and working-directory is only where its
+        // first window starts: nothing to offer for it, whatever it says.
+        for directory in ["inherit", "home", "/"] {
+            let plan = try self.plan("working-directory = \(directory)")
+            #expect(plan.settings.isEmpty, "\(directory)")
+            #expect(reasons(plan)["working-directory"] == "Ghostty starts only its first window there; new tabs open in the folder of the tab in front")
+        }
+        // Following the tab in front, set: offered unticked, since here it applies in project windows too.
+        let follow = try self.plan("tab-inherit-working-directory = true\nwindow-inherit-working-directory = false")
+        #expect(follow.settings == [PlannedSetting(.terminalStartFolder("current"), source: "tab-inherit-working-directory true", ticked: false, note: note)])
+        // Before Ghostty 1.3, the window's key was the tabs' too.
+        let older = try self.plan("window-inherit-working-directory = true")
+        #expect(older.settings.map(\.source) == ["window-inherit-working-directory true"])
+
+        // Not following: new tabs start in working-directory. Home, or unset (where Ghostty starts from the Dock).
+        let home = try self.plan("tab-inherit-working-directory = false\nworking-directory = home")
+        #expect(home.settings == [PlannedSetting(.terminalStartFolder("home"), source: "working-directory home", ticked: false, note: note)])
+        let unset = try self.plan("window-inherit-working-directory = false")
+        #expect(unset.settings.map(\.setting) == [.terminalStartFolder("home")])
+        #expect(unset.settings.first?.source == "window-inherit-working-directory false (the home folder)")
+        // A folder on this Mac; `inherit` (the folder Ghostty was started from) has no setting here.
+        let folder = try self.plan("tab-inherit-working-directory = false\nworking-directory = /usr")
+        #expect(folder.settings == [PlannedSetting(.terminalStartFolder("/usr"), source: "working-directory /usr", ticked: false, note: note)])
+        let started = try self.plan("tab-inherit-working-directory = false\nworking-directory = inherit")
+        #expect(started.settings.isEmpty)
+        #expect(reasons(started)["working-directory inherit"] == "the folder Ghostty itself was started from, which Next Term has no setting for")
+        // The tab's key decides over the window's; a value Ghostty wouldn't take is Ghostty's default.
+        let both = try self.plan("tab-inherit-working-directory = false\nwindow-inherit-working-directory = true")
+        #expect(both.settings.map(\.setting) == [.terminalStartFolder("home")])
+        let odd = try self.plan("tab-inherit-working-directory = sometimes")
+        #expect(odd.settings.isEmpty && reasons(odd)["tab-inherit-working-directory"] == "value not recognised")
     }
 
     @Test func safety() throws {
@@ -234,6 +319,7 @@ import Testing
             initial-command = ssh prod-db.internal.example
             env = OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwx
             working-directory = /Users/someone/private-folder
+            tab-inherit-working-directory = false
             window-padding-x = 4
             config-file = ?extra.conf
             config-file = /etc/hosts
@@ -247,7 +333,7 @@ import Testing
         #expect(plan.settings.map(\.setting) == [.fontSize(16)])
         #expect(reasons(plan)["command"] == "never imported: runs commands or can hold secrets")
         #expect(reasons(plan)["env"] == "never imported: runs commands or can hold secrets")
-        #expect(reasons(plan)["working-directory"] == "a start folder setting comes later")
+        #expect(reasons(plan)["working-directory"] == "the folder isn't on this Mac")
         #expect(reasons(plan)["config-file"] == "only files in Ghostty's own folders are read")
         #expect(reasons(plan)["other settings: window-padding-x"] == "no matching Next Term setting yet")
 

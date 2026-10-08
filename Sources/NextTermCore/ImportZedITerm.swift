@@ -1,14 +1,14 @@
 import Foundation
 
-// Importers for Zed (its base keymap and fonts) and iTerm2 (font, size, the Option keys and colours).
-// Design: claudedocs/research_next-term-migration (Zed §2.4 and §3.3, iTerm2 §3.4, detection §5, safety §6).
-// Each reads one allowlisted file through a read handle, takes only the values it maps, and names what
-// else it saw in `skipped`. Values of keys that can hold secrets are never looked at: the plan names the
-// key only. Nothing is written and nothing is run.
+// Importers for Zed (its base keymap, settings and own keys) and iTerm2 (font, size, the Option keys, colours,
+// cursor, scrollback and start folder). Design: claudedocs/research_next-term-migration (Zed §2.4 and §3.3,
+// iTerm2 §3.4, detection §5, safety §6). Each reads allowlisted files through a read handle, takes only the
+// values it maps, and names what else it saw in `skipped`. Values of keys that can hold secrets are never
+// looked at: the plan names the key only. Nothing is written and nothing is run.
 
-/// Zed keeps its settings in `~/.config/zed/settings.json` on macOS (JSONC; `paths.rs`). The import reads
-/// `base_keymap` and the fonts, plus `vim_mode`/`helix_mode` so they can be reported. The other settings
-/// come in Phase 2b.
+/// Zed keeps its settings in `~/.config/zed/settings.json` and its own keys in `keymap.json` beside it, on
+/// macOS (JSONC; `paths.rs`). The import reads `base_keymap`, the settings Next Term has too
+/// (`settingsRows`), the keys (ImportZedKeys.swift), and `vim_mode`/`helix_mode` so they can be reported.
 public enum ImportZed {
     /// Zed's settings folder (the same for every release channel).
     public static func settingsFolder(home: String = NSHomeDirectory()) -> String {
@@ -25,8 +25,9 @@ public enum ImportZed {
         return [DetectedApp(kind: .zed, name: "Zed", configPath: folder, lastUsed: dates.max())]
     }
 
-    /// The preset from `base_keymap`, the editor's and terminal's fonts, and what Zed has that isn't brought
-    /// over. Recent projects stay empty. `fonts`: the fonts this Mac has (tests pass their own).
+    /// The preset from `base_keymap`, the editor's and terminal's fonts and the other settings Next Term has too,
+    /// your own keys from keymap.json, and what Zed has that isn't brought over. Recent projects stay empty.
+    /// `fonts`: the fonts this Mac has (tests pass their own).
     public static func plan(for app: DetectedApp, home: String = NSHomeDirectory(), usKeyboard: Bool = true,
                             fonts: FontCatalog = .system) -> ImportPlan {
         var plan = ImportPlan(preset: app.preset)
@@ -45,12 +46,14 @@ public enum ImportZed {
             let families = fontFamilies(members, in: text, fonts: fonts)
             plan.settings += families.settings
             plan.skipped += families.skipped
+            let rows = settingsRows(members, in: text, usKeyboard: usKeyboard, home: home)
+            plan.settings += rows.settings
+            plan.skipped += rows.skipped
             plan.skipped += report(members, in: text)
         }
-        if let count = keyBindingCount((folder as NSString).appendingPathComponent("keymap.json")), count > 0 {
-            plan.skipped.append(SkippedItem("keymap.json (\(count) shortcut\(count == 1 ? "" : "s"))",
-                                            "your own Zed shortcuts come in a later version"))
-        }
+        let keys = keymapPlan((folder as NSString).appendingPathComponent("keymap.json"), usKeyboard: usKeyboard)
+        plan.shortcuts = keys.shortcuts
+        plan.skipped += keys.skipped
         if !databaseFiles(home: home).isEmpty {
             plan.skipped.append(SkippedItem("recent projects", "Zed's recent projects come in a later version"))
         }
@@ -125,9 +128,187 @@ public enum ImportZed {
         return (settings, skipped)
     }
 
+    // MARK: settings
+
+    static let notRecognised = "value not recognised"
+
+    /// Top-level keys turned into settings: only their values are ever converted. Inside `terminal` and
+    /// `project_panel`, `report` names only the keys in `nestedReasons`.
+    static let mappedKeys: Set<String> = ["base_keymap", "buffer_font_family", "buffer_font_size", "buffer_line_height", "soft_wrap",
+                                          "remove_trailing_whitespace_on_save", "ensure_final_newline_on_save", "file_scan_exclusions"]
+
+    /// The settings Next Term has too: font size, line height, soft wrap, clean-up on save and hidden files for the
+    /// editor; Option as Meta, where it sits, its cursor, scrollback and start folder for the terminal; and the
+    /// project panel's side. The last value of a key wins, as in Zed.
+    static func settingsRows(_ members: [JSONC.Member], in text: String, usKeyboard: Bool, home: String) -> (settings: [PlannedSetting], skipped: [SkippedItem]) {
+        var settings: [PlannedSetting] = []
+        var skipped: [SkippedItem] = []
+        func value(_ key: String, in list: [JSONC.Member]) -> Any?? {
+            guard let member = list.last(where: { $0.key == key }) else { return nil }
+            return .some(member.value.object(in: text))
+        }
+        func nested(_ key: String) -> [JSONC.Member] {
+            guard let member = members.last(where: { $0.key == key }), case .object(let object) = member.value else { return [] }
+            return object.members
+        }
+        let terminal = nested("terminal")
+
+        // Font size: one for both here, the buffer's first.
+        let bufferSize = value("buffer_font_size", in: members).map(ImportVSCode.number)
+        let terminalSize = value("font_size", in: terminal).map(ImportVSCode.number)
+        if case .some(.none) = bufferSize { skipped.append(SkippedItem("buffer_font_size", notRecognised)) }
+        if case .some(.none) = terminalSize { skipped.append(SkippedItem("terminal.font_size", notRecognised)) }
+        if let size = bufferSize ?? nil, size > 0 {
+            settings.append(fontSizeRow(size, source: "buffer_font_size", note: nil))
+            if let other = terminalSize ?? nil, other.rounded() != size.rounded() {
+                skipped.append(SkippedItem("terminal.font_size \(ImportVSCode.format(other))",
+                                           "Next Term uses one size for the editor and the terminal, so the buffer's \(ImportVSCode.format(size)) is used"))
+            }
+        } else if let size = terminalSize ?? nil, size > 0 {
+            settings.append(fontSizeRow(size, source: "terminal.font_size", note: "sets the editor too: Next Term has one size for both"))
+        }
+
+        if let raw = value("buffer_line_height", in: members) {
+            if let factor = lineHeight(raw) {
+                settings.append(PlannedSetting(.lineHeight(clamping: factor / ImportVSCode.naturalLineHeightRatio),
+                                               source: "buffer_line_height \((raw as? String) ?? ImportVSCode.format(factor))"))
+            } else {
+                skipped.append(SkippedItem("buffer_line_height", notRecognised))
+            }
+        }
+        if let raw = value("soft_wrap", in: members) {
+            switch raw as? String {
+            case "none"?, "prefer_line"?:
+                settings.append(PlannedSetting(.softWrap(false), source: "soft_wrap \(raw as? String ?? "")"))
+            case "editor_width"?:
+                settings.append(PlannedSetting(.softWrap(true), source: "soft_wrap editor_width"))
+            case let mode? where mode == "preferred_line_length" || mode == "bounded":
+                settings.append(PlannedSetting(.softWrap(true), source: "soft_wrap \(mode)"))
+                skipped.append(SkippedItem("soft_wrap \(mode)", "Next Term wraps at the window edge; a wrap column isn't supported"))
+            default:
+                skipped.append(SkippedItem("soft_wrap", notRecognised))
+            }
+        }
+        for key in ["remove_trailing_whitespace_on_save", "ensure_final_newline_on_save"] {
+            guard let raw = value(key, in: members) else { continue }
+            guard let on = ImportVSCode.bool(raw) else {
+                skipped.append(SkippedItem(key, notRecognised))
+                continue
+            }
+            let setting = key.hasPrefix("remove") ? ImportedSetting.trimTrailingWhitespace(on) : .insertFinalNewline(on)
+            settings.append(PlannedSetting(setting, source: "\(key) \(on)"))
+        }
+        if let raw = value("file_scan_exclusions", in: members) {
+            if let globs = raw as? [Any] {
+                let strings = globs.compactMap { $0 as? String }
+                if let row = ImportRows.hiddenFiles(strings, source: "file_scan_exclusions") { settings.append(row) }
+            } else {
+                skipped.append(SkippedItem("file_scan_exclusions", notRecognised))
+            }
+        }
+
+        let terminalRows = terminalSettings({ value($0, in: terminal) }, usKeyboard: usKeyboard, home: home)
+        settings += terminalRows.settings
+        skipped += terminalRows.skipped
+        if let raw = value("dock", in: nested("project_panel")) {
+            if let side = raw as? String, side == "left" || side == "right" {
+                settings.append(PlannedSetting(.sidebarSide(side), source: "project_panel.dock \(side)"))
+            } else {
+                skipped.append(SkippedItem("project_panel.dock", notRecognised))
+            }
+        }
+        return (settings, skipped)
+    }
+
+    /// Inside `terminal`: Option as Meta, the dock, the cursor, the scrollback and the start folder.
+    static func terminalSettings(_ value: (String) -> Any??, usKeyboard: Bool, home: String) -> (settings: [PlannedSetting], skipped: [SkippedItem]) {
+        var settings: [PlannedSetting] = []
+        var skipped: [SkippedItem] = []
+        if let raw = value("option_as_meta") {
+            if let meta = ImportVSCode.bool(raw) {
+                settings.append(PlannedSetting(.optionAsMeta(meta), source: "terminal.option_as_meta \(meta)", ticked: !meta || usKeyboard,
+                                               note: !meta || usKeyboard ? nil : ImportVSCode.optionNote))
+            } else {
+                skipped.append(SkippedItem("terminal.option_as_meta", notRecognised))
+            }
+        }
+        if let raw = value("dock") {
+            if let dock = raw as? String, ["bottom", "left", "right"].contains(dock) {
+                settings.append(PlannedSetting(.terminalPosition(dock), source: "terminal.dock \(dock)"))
+            } else {
+                skipped.append(SkippedItem("terminal.dock", notRecognised))
+            }
+        }
+        if let raw = value("cursor_shape") {
+            let shapes = ["block": CursorShape.block, "hollow": .block, "bar": .bar, "underline": .underline]
+            if let name = raw as? String, let shape = shapes[name] {
+                let note = name == "hollow" ? "a hollow block isn't supported, so it is filled" : nil
+                settings.append(PlannedSetting(.terminalCursorShape(shape.rawValue), source: "terminal.cursor_shape \(name)", note: note))
+            } else {
+                skipped.append(SkippedItem("terminal.cursor_shape", notRecognised))
+            }
+        }
+        if let raw = value("blinking") {
+            switch raw as? String {
+            case "on"?: settings.append(PlannedSetting(.terminalCursorBlink(true), source: "terminal.blinking on"))
+            case "off"?: settings.append(PlannedSetting(.terminalCursorBlink(false), source: "terminal.blinking off"))
+            case "terminal_controlled"?:
+                settings.append(PlannedSetting(.terminalCursorBlink(false), source: "terminal.blinking terminal_controlled",
+                                               note: "a program can still ask for a blinking bar or underline"))
+            default: skipped.append(SkippedItem("terminal.blinking", notRecognised))
+            }
+        }
+        if let raw = value("max_scroll_history_lines") {
+            if let lines = ImportVSCode.number(raw), lines >= 0, lines < 1e9 {
+                settings.append(ImportRows.scrollback(Int(lines), source: "terminal.max_scroll_history_lines \(ImportVSCode.format(lines))", app: "Zed"))
+            } else {
+                skipped.append(SkippedItem("terminal.max_scroll_history_lines", notRecognised))
+            }
+        }
+        if let raw = value("working_directory") {
+            let folder = startFolder(raw, home: home)
+            settings += [folder.setting].compactMap { $0 }
+            skipped += folder.skipped
+        }
+        return (settings, skipped)
+    }
+
+    /// `terminal.working_directory`: the project's folder (Zed's default, and its first project's), the home
+    /// folder, or `{"always": {"directory": …}}`.
+    static func startFolder(_ raw: Any?, home: String) -> (setting: PlannedSetting?, skipped: [SkippedItem]) {
+        let key = "terminal.working_directory"
+        switch raw as? String {
+        case "current_project_directory"?, "first_project_directory"?:
+            return (ImportRows.startFolder(.project, source: "\(key) \(raw as? String ?? "")"), [])
+        case "always_home"?:
+            return (ImportRows.startFolder(.home, source: "\(key) always_home"), [])
+        default:
+            let always = (raw as? [String: Any])?["always"] as? [String: Any]
+            guard let path = always?["directory"] as? String else { return (nil, [SkippedItem(key, notRecognised)]) }
+            return ImportRows.startFolder(path, key: key, home: home)
+        }
+    }
+
+    /// `buffer_line_height` as a multiple of the font size: `comfortable` 1.618, `standard` 1.3, or `{"custom": n}`.
+    static func lineHeight(_ raw: Any?) -> Double? {
+        switch raw as? String {
+        case "comfortable"?: return 1.618
+        case "standard"?: return 1.3
+        default:
+            guard let custom = ImportVSCode.number((raw as? [String: Any])?["custom"]), custom >= 1, custom <= 10 else { return nil }
+            return custom
+        }
+    }
+
+    static func fontSizeRow(_ size: Double, source: String, note: String?) -> PlannedSetting {
+        var notes = [note].compactMap { $0 }
+        if size.rounded() < 8 || size.rounded() > 32 { notes.insert("Next Term's sizes go from 8 to 32", at: 0) }
+        return PlannedSetting(.fontSize(clamping: size), source: "\(source) \(ImportVSCode.format(size))",
+                              note: notes.isEmpty ? nil : notes.joined(separator: "; "))
+    }
+
     // MARK: reporting the rest
 
-    static let later = "comes in a later version"
     static let fallbacks = "font fallbacks aren't supported"
     static let colours = "colour themes come later"
     static let secrets = "never imported: can hold secrets"
@@ -138,25 +319,24 @@ public enum ImportZed {
 
     /// Top-level settings with a reason of their own (the rest are listed together).
     static let reasons: [String: String] = [
-        "buffer_font_size": later, "buffer_line_height": later, "soft_wrap": later,
         "buffer_font_fallbacks": fallbacks,
         "theme": colours, "theme_overrides": colours, "experimental.theme_overrides": colours,
         "ui_font_size": "Next Term's window text follows macOS", "ui_font_family": "Next Term's window text follows macOS",
+        "cursor_shape": ImportRows.editorCaret, "cursor_blink": ImportRows.editorCaret,
     ]
 
-    /// Inside `terminal` and `project_panel`, only these are named (§3.3's Phase 2b rows).
+    /// Inside `terminal` and `project_panel`, only these are named, besides the ones brought over.
     static let nestedReasons: [String: [String: String]] = [
-        "terminal": ["option_as_meta": later, "dock": later, "font_size": later, "line_height": later,
-                     "working_directory": later, "font_fallbacks": fallbacks],
-        "project_panel": ["dock": later],
+        "terminal": ["line_height": "the terminal's line height follows its font", "font_fallbacks": fallbacks],
+        "project_panel": [:],
     ]
 
-    /// One skipped row per setting v1 saw and doesn't bring over, in the file's order, with the
+    /// One skipped row per setting the import saw and doesn't bring over, in the file's order, with the
     /// unmapped ones gathered into a single row. Only key names leave this function.
     static func report(_ members: [JSONC.Member], in text: String) -> [SkippedItem] {
         var items: [SkippedItem] = []
         var others: [String] = []
-        for member in members where member.key != "base_keymap" && member.key != "buffer_font_family" {
+        for member in members where !mappedKeys.contains(member.key) {
             let key = member.key
             if isNeverRead(key) {
                 items.append(SkippedItem(key, secrets))
@@ -205,16 +385,6 @@ public enum ImportZed {
         return .members(root.members, text: text)
     }
 
-    /// How many shortcuts `keymap.json` binds (nil: no such file, or not valid). Only the keys of each
-    /// `bindings` object are counted; what they are bound to (text a terminal would receive, say) is never looked at.
-    static func keyBindingCount(_ path: String) -> Int? {
-        guard let text = ImportFile.text(path), let plain = JSONC.plain(text),
-              let sections = (try? JSONSerialization.jsonObject(with: Data(plain.utf8))) as? [Any] else { return nil }
-        return sections.reduce(0) { count, section in
-            count + (((section as? [String: Any])?["bindings"] as? [String: Any])?.count ?? 0)
-        }
-    }
-
     /// Zed's databases (`~/Library/Application Support/Zed/db/0-<channel>/db.sqlite`, `db.rs`) that exist.
     /// Listed for their dates and to say recents exist; v1 never opens them.
     static func databaseFiles(home: String) -> [String] {
@@ -228,7 +398,7 @@ public enum ImportZed {
 }
 
 /// iTerm2 keeps everything in one preferences plist (binary or XML). The default profile's font, its size,
-/// the Option keys and the colours come over; the start folder and scrollback wait for their settings (§3.5).
+/// the Option keys, the colours, the cursor, the scrollback and the folder new tabs start in come over (§3.5).
 public enum ImportITerm2 {
     public static func preferencesPath(home: String = NSHomeDirectory()) -> String {
         (home as NSString).appendingPathComponent("Library/Preferences/com.googlecode.iterm2.plist")
@@ -259,8 +429,9 @@ public enum ImportITerm2 {
             let font = fontSize(profile, skipped: &fontItems)
             let family = fontFamily(profile, fonts: fonts)
             let colours = profile.palette.flatMap { coloursRow($0, profile: profile) }
-            plan.settings = [font, family.setting, optionAsMeta(profile, usKeyboard: usKeyboard), colours].compactMap { $0 }
-            plan.skipped += fontItems + family.skipped + later(profile)
+            let terminal = terminalRows(profile, home: home)
+            plan.settings = [font, family.setting, optionAsMeta(profile, usKeyboard: usKeyboard), colours].compactMap { $0 } + terminal.settings
+            plan.skipped += fontItems + family.skipped + terminal.skipped
         } else {
             plan.skipped.append(SkippedItem("profiles", "iTerm2 has no saved profile yet, so no settings came over"))
         }
@@ -290,10 +461,17 @@ public enum ImportITerm2 {
         var darkVariants = false
         /// Some colours were given in Display P3 or a calibrated space, and are read as sRGB.
         var otherColourSpace = false
-        /// "Custom Directory": No, Yes, Recycle or Advanced (the folder itself isn't read in v1).
+        /// "Custom Directory": No, Yes, Recycle or Advanced, and the folder for Yes.
         var customDirectory: String?
+        var workingDirectory: String?
+        /// Advanced: the setting for new tabs ("AWDS Tab Option", No, Yes or Recycle) and its folder.
+        var tabDirectoryOption: String?
+        var tabDirectory: String?
         var scrollbackLines: Int?
         var unlimitedScrollback = false
+        /// "Cursor Type": 0 underline, 1 vertical bar, 2 box (`ITAddressBookMgr.h`); "Blinking Cursor".
+        var cursorType: Int?
+        var blinkingCursor: Bool?
     }
 
     struct Preferences: Equatable {
@@ -312,7 +490,8 @@ public enum ImportITerm2 {
 
     /// The profile keys the import reads (checked by a test against `SecretGuard` and the never-read list).
     static let profileKeys = ["Guid", "Normal Font", "Option Key Sends", "Right Option Key Sends", "Custom Directory",
-                              "Scrollback Lines", "Unlimited Scrollback", "Use Separate Colors for Light and Dark Mode"]
+                              "Working Directory", "AWDS Tab Option", "AWDS Tab Directory", "Scrollback Lines", "Unlimited Scrollback",
+                              "Cursor Type", "Blinking Cursor", "Use Separate Colors for Light and Dark Mode"]
     /// The colours read, by palette slot: the 16 ANSI colours, then text, background, cursor and selection.
     static let colourKeys = (0...15).map { "Ansi \($0) Color" } + ["Foreground Color", "Background Color", "Cursor Color", "Selection Color"]
 
@@ -335,8 +514,17 @@ public enum ImportITerm2 {
         readColours(values, into: &profile)
         let directory = values["Custom Directory"] as? String
         profile.customDirectory = ["No", "Yes", "Recycle", "Advanced"].contains(directory ?? "") ? directory : nil
+        // A folder is kept only when it is the one new tabs use.
+        if directory == "Yes" { profile.workingDirectory = values["Working Directory"] as? String }
+        if directory == "Advanced" {
+            let tabOption = values["AWDS Tab Option"] as? String
+            profile.tabDirectoryOption = ["No", "Yes", "Recycle"].contains(tabOption ?? "") ? tabOption : nil
+            if tabOption == "Yes" { profile.tabDirectory = values["AWDS Tab Directory"] as? String }
+        }
         profile.scrollbackLines = values["Scrollback Lines"] as? Int
         profile.unlimitedScrollback = values["Unlimited Scrollback"] as? Bool ?? false
+        profile.cursorType = values["Cursor Type"] as? Int
+        profile.blinkingCursor = values["Blinking Cursor"] as? Bool
         return profile
     }
 
@@ -426,19 +614,58 @@ public enum ImportITerm2 {
         return ImportColours.row(palette, source: source, note: notes.isEmpty ? nil : notes.joined(separator: "; "))
     }
 
-    /// What the profile sets that has no Next Term setting yet. iTerm2 writes its defaults into every
-    /// profile, so the start folder and scrollback are named only when they differ from them.
-    static func later(_ profile: Profile) -> [SkippedItem] {
-        var items: [SkippedItem] = []
-        if let directory = profile.customDirectory, directory != "No" {
-            items.append(SkippedItem("Custom Directory (\(directory))", "a start folder setting comes later"))
+    /// The cursor, the scrollback and the folder new tabs start in. iTerm2 writes its defaults into every profile,
+    /// so the scrollback and the folder come over only when they differ from them (a box that doesn't blink is
+    /// iTerm2's cursor whether or not you chose it, so it comes over as it is).
+    static func terminalRows(_ profile: Profile, home: String) -> (settings: [PlannedSetting], skipped: [SkippedItem]) {
+        var settings: [PlannedSetting] = []
+        var skipped: [SkippedItem] = []
+        let shapes: [Int: CursorShape] = [0: .underline, 1: .bar, 2: .block]
+        if let type = profile.cursorType {
+            if let shape = shapes[type] {
+                settings.append(PlannedSetting(.terminalCursorShape(shape.rawValue), source: "Cursor Type \(shape.title)"))
+            } else {
+                skipped.append(SkippedItem("Cursor Type", "value not recognised"))
+            }
+        }
+        if let blinks = profile.blinkingCursor {
+            settings.append(PlannedSetting(.terminalCursorBlink(blinks), source: "Blinking Cursor \(blinks)"))
         }
         if profile.unlimitedScrollback {
-            items.append(SkippedItem("Unlimited Scrollback", "a scrollback setting comes later"))
+            settings.append(ImportRows.scrollback(0, unlimited: true, source: "Unlimited Scrollback", app: "iTerm2"))
         } else if let lines = profile.scrollbackLines, lines != 1000 {
-            items.append(SkippedItem("Scrollback Lines \(lines)", "a scrollback setting comes later"))
+            settings.append(ImportRows.scrollback(lines, source: "Scrollback Lines \(lines)", app: "iTerm2"))
         }
-        return items
+        let folder = startFolder(profile, home: home)
+        settings += [folder.setting].compactMap { $0 }
+        skipped += folder.skipped
+        return (settings, skipped)
+    }
+
+    /// "Custom Directory": Yes is the folder given, Recycle the folder of the tab in front, Advanced what it says
+    /// for new tabs. No (the home folder) is iTerm2's default, so nothing.
+    static func startFolder(_ profile: Profile, home: String) -> (setting: PlannedSetting?, skipped: [SkippedItem]) {
+        switch profile.customDirectory {
+        case "Yes"?:
+            guard let path = profile.workingDirectory else { return (nil, [SkippedItem("Working Directory", "value not recognised")]) }
+            return ImportRows.startFolder(path, key: "Working Directory", home: home)
+        case "Recycle"?:
+            return (ImportRows.startFolder(.current, source: "Custom Directory Recycle (the previous session's folder)"), [])
+        case "Advanced"?:
+            switch profile.tabDirectoryOption {
+            case "Yes"?:
+                guard let path = profile.tabDirectory else { return (nil, [SkippedItem("AWDS Tab Directory", "value not recognised")]) }
+                return ImportRows.startFolder(path, key: "Working Directory for new tabs", home: home)
+            case "Recycle"?:
+                return (ImportRows.startFolder(.current, source: "Working Directory for new tabs: Recycle"), [])
+            case "No"?:
+                return (ImportRows.startFolder(.home, source: "Working Directory for new tabs: Home"), [])
+            default:
+                return (nil, [SkippedItem("Custom Directory (Advanced)", "the folder for new tabs couldn't be read")])
+            }
+        default:
+            return (nil, [])
+        }
     }
 
     static func formatted(_ size: Double) -> String {

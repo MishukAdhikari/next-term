@@ -118,6 +118,15 @@ Saving writes the file back the way it was stored:
 - **Atomic and private writes:** a save never leaves a half-written file behind, and never shows the new text to another account along the way (see [How files are written](/docs/security-and-privacy/#how-files-are-written)).
 - **Read-only files** are not saved over: the save says the file is read-only. Nor are files locked in the Finder: the save says the file is locked.
 
+## Clean-up on save
+
+Two choices under **Settings › Editor › On save**, both off by default, change the text as you save it:
+
+- **Trim trailing spaces** removes the spaces and tabs at the end of every line. Markdown files (`.md`, `.markdown`, `.mdx`) keep theirs, since two spaces end a line there, and so do patches (`.diff`, `.patch`), whose lines must match the files they apply to.
+- **End files with a newline** adds a line break after the last line when that line has something on it, so an empty file stays empty. It is the kind of line break the line before ends with: an old Mac file, whose lines end in CR alone, gets a CR.
+
+Both are done in the editor just before the file is written, as one step: <kbd>⌘Z</kbd> puts the text back as you had it, and the caret stays on the text it was on. A file keeps its line endings and encoding as above.
+
 ## Files your agents change
 
 Agents edit the files you have open. Next Term checks them about once a second:

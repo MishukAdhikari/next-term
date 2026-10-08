@@ -101,6 +101,13 @@ public enum ImportedSetting: Equatable, Sendable {
     case editorFontFamily(String)  // an installed monospaced family, by its own name
     case terminalFontFamily(String)
     case terminalPalette(TerminalPalette)
+    case terminalScrollback(Int)          // lines, Scrollback.range
+    case terminalStartFolder(String)      // StartFolder as stored: project, current, home or an existing folder
+    case terminalCursorShape(String)      // a CursorShape: block, bar, underline
+    case terminalCursorBlink(Bool)
+    case trimTrailingWhitespace(Bool)     // on save
+    case insertFinalNewline(Bool)         // on save
+    case hiddenFiles([String])            // FileHiding patterns, added to the user's own
 
     /// The UserDefaults key the app keeps it under.
     public var key: String {
@@ -114,8 +121,18 @@ public enum ImportedSetting: Equatable, Sendable {
         case .editorFontFamily: return "editorFontFamily"
         case .terminalFontFamily: return "terminalFontFamily"
         case .terminalPalette: return "terminalPalette"
+        case .terminalScrollback: return "terminalScrollback"
+        case .terminalStartFolder: return "terminalStartFolder"
+        case .terminalCursorShape: return "terminalCursorShape"
+        case .terminalCursorBlink: return "terminalCursorBlink"
+        case .trimTrailingWhitespace: return "trimTrailingWhitespace"
+        case .insertFinalNewline: return "insertFinalNewline"
+        case .hiddenFiles: return "hiddenFilePatterns"
         }
     }
+
+    /// The keys that hold a Bool (UserDefaults hands a number back for those too).
+    public static let boolKeys: Set<String> = ["softWrap", "optionAsMeta", "terminalCursorBlink", "trimTrailingWhitespace", "insertFinalNewline"]
 
     /// Every key applying it writes, for the snapshot Undo restores: custom colours are also kept for
     /// Settings to offer again.
@@ -128,6 +145,76 @@ public enum ImportedSetting: Equatable, Sendable {
 
     public static func lineHeight(clamping factor: Double) -> ImportedSetting {
         .editorLineHeight(min(2.0, max(1.0, (factor * 20).rounded() / 20)))
+    }
+
+    public static func scrollback(clamping lines: Int) -> ImportedSetting { .terminalScrollback(Scrollback.clamped(lines)) }
+}
+
+/// Rows for the settings several importers read the same way.
+enum ImportRows {
+    /// Scrollback in lines, with a note when Next Term's range changes it. `unlimited`: the other app keeps it all.
+    static func scrollback(_ lines: Int, unlimited: Bool = false, source: String, app: String) -> PlannedSetting {
+        let setting = ImportedSetting.scrollback(clamping: unlimited ? Scrollback.range.upperBound : lines)
+        let most = formatted(Scrollback.range.upperBound), least = formatted(Scrollback.range.lowerBound)
+        var note: String?
+        if unlimited {
+            note = "\(app) keeps all of it; Next Term keeps at most \(most) lines"
+        } else if lines > Scrollback.range.upperBound {
+            note = "Next Term keeps at most \(most) lines"
+        } else if lines < Scrollback.range.lowerBound {
+            note = "Next Term keeps at least \(least) lines"
+        }
+        return PlannedSetting(setting, source: source, note: note)
+    }
+
+    /// Where new tabs start. The other apps have no projects, so anything but the project's folder (the folder of
+    /// the tab in front, the home folder, a folder of your own) is offered unticked: ticked, it applies in a
+    /// project window as well.
+    static func startFolder(_ folder: StartFolder, source: String) -> PlannedSetting {
+        switch folder {
+        case .project:
+            return PlannedSetting(.terminalStartFolder(folder.stored), source: source)
+        case .current, .home, .folder:
+            return PlannedSetting(.terminalStartFolder(folder.stored), source: source, ticked: false,
+                                  note: "in project windows too, where new tabs otherwise open in the project's folder")
+        }
+    }
+
+    /// The start folder for a path the other app names: used when it is a folder on this Mac (`~/` is the home
+    /// folder), else reported by its key alone. Only a folder that is used is shown, and never one whose name
+    /// looks like a credential.
+    static func startFolder(_ raw: String, key: String, home: String) -> (setting: PlannedSetting?, skipped: [SkippedItem]) {
+        var path = raw.trimmingCharacters(in: .whitespaces)
+        if path == "~" { path = home } else if path.hasPrefix("~/") { path = home + path.dropFirst() }
+        guard !SecretGuard.pathLooksSecret(path) else { return (nil, [SkippedItem(key, "looked like a credential")]) }
+        guard path.hasPrefix("/") else { return (nil, [SkippedItem(key, "only a full path to a folder is read")]) }
+        let folder = canonicalPath(path)
+        guard ImportVSCode.isDirectory(folder) else { return (nil, [SkippedItem(key, "the folder isn't on this Mac")]) }
+        let homeFolder = canonicalPath(home)
+        let chosen = folder == homeFolder ? StartFolder.home : .folder(folder)
+        return (startFolder(chosen, source: "\(key) \(RecentProjects.abbreviate(folder, home: homeFolder))"), [])
+    }
+
+    /// The patterns from globs relative to the project's folder (VS Code's and Zed's), and the ones that need
+    /// nothing because the sidebar hides them anyway.
+    static func hiddenFiles(_ globs: [String], source: String) -> PlannedSetting? {
+        var patterns: [String] = []
+        for glob in globs where !SecretGuard.looksSecret(glob) {
+            if let pattern = FileHiding.pattern(fromProjectGlob: glob), !patterns.contains(pattern) { patterns.append(pattern) }
+        }
+        guard !patterns.isEmpty else { return nil }
+        return PlannedSetting(.hiddenFiles(patterns), source: source)
+    }
+
+    /// The editor's caret is macOS's text caret; only the terminal's cursor has a style here.
+    static let editorCaret = "the editor keeps macOS's text caret; the cursor style here is the terminal's"
+
+    /// "10,000".
+    static func formatted(_ lines: Int) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.locale = Locale(identifier: "en_US")
+        return formatter.string(from: NSNumber(value: lines)) ?? String(lines)
     }
 }
 

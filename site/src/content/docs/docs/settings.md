@@ -1,6 +1,6 @@
 ---
 title: Settings
-description: "Next Term’s Settings (⌘,): fonts, line height, soft wrap, background git fetch, terminal colours, agent links, MCP, notifications, shortcuts and imports."
+description: "Next Term’s Settings (⌘,): fonts, wrap, clean-up on save, hidden files, git fetch, terminal colours, cursor, scrollback, agents, notifications, imports."
 ---
 
 Open **Next Term › Settings…** (<kbd>⌘,</kbd>). Settings has five tabs: **Editor**, **Terminal**, **Notifications**, **Keyboard Shortcuts** and **Import**. Every change applies at once, to every window.
@@ -14,8 +14,11 @@ Open **Next Term › Settings…** (<kbd>⌘,</kbd>). Settings has five tabs: **
 | **Line height** | 1.35× | A multiple of the font’s own line height, from 1.0 to 2.0 in steps of 0.05. 1.35 reads well for code. |
 | **Wrap long lines at the edge** | On | Soft wrap, with a hanging indent. Also **View › Soft Wrap**. |
 | **Hide values in .env files** | Off | Draws the values in `.env`, `.env.*`, `*.env` and `.flaskenv` files as dots, for screen sharing; the file itself does not change. **View › Hide .env Values** does it for one file. See [Hiding .env values](/docs/editor/#hiding-env-values). |
+| **On save: Trim trailing spaces** | Off | Removes the spaces and tabs at the end of every line as you save. Markdown and patch files keep theirs. One step for <kbd>⌘Z</kbd>. See [Clean-up on save](/docs/editor/#clean-up-on-save). |
+| **On save: End files with a newline** | Off | Adds a line break after the last line as you save, when that line has something on it. |
 | **Sidebar: Open files with a single click** | Off | One click on a file in the project sidebar opens it in a preview tab, with its name in italics; the next file you click takes its place. Editing the file, double-clicking its tab or opening it any other way keeps it. The keyboard stays in the sidebar, and folders still open with their arrow or a double-click. Off, a click selects and a double-click opens, as in Finder. Also in the sidebar’s ⋯ menu. See [Preview tabs](/docs/editor/#preview-tabs). |
 | **Sidebar: Icons on configuration folders (.github, .claude, .idea…)** | Off | Gives configuration folders their brand icons. Off, they stay plain and quiet. |
+| **Sidebar: Hide** | Empty | Files and folders the project sidebar leaves out, by pattern, between commas, read as `.gitignore` reads them: `node_modules` or `*.log` in every folder, `/build` only at the top of the folder the sidebar shows, `out/` only folders, `!keep.log` shown again. Applied when you press Return or leave the field. See [The project sidebar](/docs/projects-and-git/#the-project-sidebar). |
 | **Git: Fetch in the background** | Every 10 minutes | How often Next Term fetches the remotes your branches track, so the sidebar can say **Pull 3** by itself: every 5, 10 or 30 minutes, **Only when opening the branch popup** (when the last fetch is over 5 minutes old), or **Off**. It never asks for a password and leaves `FETCH_HEAD` alone. See [Background fetch](/docs/projects-and-git/#background-fetch). |
 | **Agents: Agents in a tab see the editor (Claude Code, Gemini CLI, Qwen Code, opencode)** | On | The IDE link. Agents started in a new tab see your selected lines, and Gemini and Qwen your open files too (never from `.env` files). Their proposed edits open as diffs. Next Term keeps Gemini’s and Qwen’s IDE mode on while this is on. Off stops sharing. |
 | **GitHub Copilot CLI in a tab sees the editor** | On | Copilot CLI’s IDE link. A `copilot` started in a tab’s folder or an open project sees your selected lines (never from `.env` files), <kbd>⌥⌘K</kbd> puts an @-mention in its prompt, and its proposed edits open as diffs. Off stops the link and removes its lock file from `~/.copilot/ide`. |
@@ -29,6 +32,9 @@ More about the editor in [Code editor](/docs/editor/), and about the agent link 
 |---|---|---|
 | **Font** | Next Term default | The terminal’s font, from the monospaced fonts installed on this Mac. Its size is the editor’s. |
 | **Colours** | Next Term default | Your own terminal colours: the 16 ANSI colours, text, background, cursor and selection, shown as a row of swatches. An import brings them over; colours it doesn’t set keep Next Term’s. **Next Term default** goes back, and your colours stay in the menu to choose again. |
+| **Cursor** | Block, **Blink** on | **Block**, **Bar** or **Underline**, blinking or not, in every open terminal at once. A program can set its own cursor (vim’s bar while you type); when it puts the cursor back, or asks for a blinking block, which reads the same, yours returns. |
+| **Scrollback** | 10,000 lines | The lines each terminal keeps above the screen: 1,000, 5,000, 10,000, 25,000, 50,000 or 100,000, or the number an import brought. Open terminals change at once, and fewer lines drops the oldest. |
+| **New tabs** | In the project’s folder | Where <kbd>⌘T</kbd> opens a tab: **In the project’s folder** (in a window without a project, the current tab’s folder), **In the current tab’s folder**, **In your home folder**, or a folder you choose with **Choose Folder…**. A chosen folder that is gone falls back to the first. With no window open, <kbd>⌘T</kbd> opens a window in your home folder or the folder you chose. A split opens in the folder of the pane it splits from. |
 | **Links: Open LangGraph Studio links in Chrome, Edge, Brave or Arc when Safari is the default browser** | On | Safari won’t let Studio reach a server on your Mac, so a <kbd>⌘</kbd>-click on a Studio link for one opens it in the first of these that is installed. Every other link opens in your default browser. See [`langgraph dev` in a tab](/docs/langchain-and-langgraph/#langgraph-dev-in-a-tab). |
 
 ## Notifications

@@ -1,0 +1,104 @@
+import Foundation
+
+/// Settings › Editor › On save: trailing spaces and tabs trimmed from every line, and a newline at the end of the
+/// file. Both are off by default. Worked out on the text as the editor holds it (lines end in "\n"; a file with mixed
+/// or old Mac endings is held as it is, so a line can end in "\r\n" or "\r" too, and keeps it), as the replacements
+/// the editor makes in one undoable step before it writes the file.
+public enum SaveCleanUp {
+    public struct Replacement: Equatable, Sendable {
+        public var range: NSRange
+        public var text: String
+
+        public init(range: NSRange, text: String) {
+            self.range = range
+            self.text = text
+        }
+    }
+
+    /// Files whose trailing spaces mean something are never trimmed: two spaces end a line in Markdown, and a
+    /// patch's context lines must match the file they apply to.
+    public static let keepsTrailingWhitespace: Set<String> = ["md", "markdown", "mdx", "diff", "patch"]
+
+    public static func trims(fileNamed name: String) -> Bool {
+        !keepsTrailingWhitespace.contains((name as NSString).pathExtension.lowercased())
+    }
+
+    /// The replacements, in the order they appear and never overlapping (none: nothing to do). A final newline is
+    /// added only when the last line has something on it besides spaces, as in VS Code, so an empty file stays empty.
+    /// It is the line break the line before ends with, so an old Mac file gets "\r" and keeps its line endings.
+    public static func replacements(in text: NSString, trimTrailingWhitespace trim: Bool, insertFinalNewline newline: Bool) -> [Replacement] {
+        var result: [Replacement] = []
+        let length = text.length
+        var start = 0
+        var lastLineHasText = false
+        var lastBreak = NSRange(location: NSNotFound, length: 0)
+        while true {
+            let found = text.rangeOfCharacter(from: lineBreaks, options: .literal, range: NSRange(location: start, length: length - start))
+            let end = found.location == NSNotFound ? length : found.location
+            var first = end
+            while first > start, isBlank(text.character(at: first - 1)) { first -= 1 }
+            if trim, first < end { result.append(Replacement(range: NSRange(location: first, length: end - first), text: "")) }
+            if found.location == NSNotFound {
+                lastLineHasText = first > start
+                break
+            }
+            start = end + 1
+            if text.character(at: end) == 0x0D, start < length, text.character(at: start) == 0x0A { start += 1 }
+            lastBreak = NSRange(location: end, length: start - end)
+        }
+        guard newline, lastLineHasText else { return result }
+        let lineBreak = lastBreak.location == NSNotFound ? "\n" : text.substring(with: lastBreak)
+        // Trimmed spaces at the very end make room for the newline in the same replacement.
+        if let last = result.last, NSMaxRange(last.range) == length {
+            result[result.count - 1].text = lineBreak
+        } else {
+            result.append(Replacement(range: NSRange(location: length, length: 0), text: lineBreak))
+        }
+        return result
+    }
+
+    static let lineBreaks = CharacterSet(charactersIn: "\r\n")
+
+    static func isBlank(_ unit: unichar) -> Bool { unit == 0x20 || unit == 0x09 }
+
+    /// Many replacements as one, from the first to the end of the last, so a long file with spaces on every line is
+    /// cleaned in a single edit rather than one per line. A few stay as they are.
+    public static func collapsed(_ replacements: [Replacement], in text: NSString, beyond limit: Int = 100) -> [Replacement] {
+        guard replacements.count > limit, let first = replacements.first, let last = replacements.last else { return replacements }
+        let span = NSRange(location: first.range.location, length: NSMaxRange(last.range) - first.range.location)
+        return [Replacement(range: span, text: built(replacements, from: text, in: span))]
+    }
+
+    /// The text with the replacements made (for tests, and for a document no editor shows).
+    public static func applying(_ replacements: [Replacement], to text: NSString) -> String {
+        built(replacements, from: text, in: NSRange(location: 0, length: text.length))
+    }
+
+    /// The part of the text in `range` with the replacements in it made, in one pass from the start: replacing one
+    /// at a time would move the rest of a long file along for every line.
+    static func built(_ replacements: [Replacement], from text: NSString, in range: NSRange) -> String {
+        let result = NSMutableString(capacity: range.length)
+        var from = range.location
+        for replacement in replacements {
+            result.append(text.substring(with: NSRange(location: from, length: replacement.range.location - from)))
+            result.append(replacement.text)
+            from = NSMaxRange(replacement.range)
+        }
+        result.append(text.substring(with: NSRange(location: from, length: NSMaxRange(range) - from)))
+        return result as String
+    }
+
+    /// Where a place in the text before is after the replacements: moved back by the spaces trimmed before it, to
+    /// where trimmed spaces it was among began, and before the newline added at the end.
+    public static func location(_ location: Int, after replacements: [Replacement]) -> Int {
+        var shift = 0
+        for replacement in replacements where replacement.range.location < location {
+            if replacement.text.isEmpty && NSMaxRange(replacement.range) <= location {
+                shift -= replacement.range.length
+            } else {
+                return replacement.range.location + shift
+            }
+        }
+        return location + shift
+    }
+}

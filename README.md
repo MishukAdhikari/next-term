@@ -125,8 +125,9 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   command; click one and press new keys. The shortcuts below are the defaults.
 - **Bring your settings over.** Coming from VS Code, Cursor, Devin Desktop, a JetBrains IDE, Zed, iTerm2,
   Ghostty or Terminal? Next Term > Import Settings and Shortcuts… (also offered on first launch) brings
-  the matching shortcut set, the keys you changed yourself, font size, line height, wrap, fonts, terminal
-  colours and recent projects. Nothing changes unless you choose it: the preview shows every item as a
+  the matching shortcut set, the keys you changed yourself, font size, line height, wrap, clean-up on
+  save, hidden files, fonts, the terminal's colours, cursor, scrollback and start folder, and recent
+  projects. Nothing changes unless you choose it: the preview shows every item as a
   checkbox, and what it leaves out and why; Undo Import puts it all back. It only reads, on this Mac, and
   never opens files that can hold secrets. See
   [Switching to Next Term](https://nxtrm.mishuk.me/docs/switching/).
