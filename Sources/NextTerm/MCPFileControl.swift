@@ -4,7 +4,8 @@ import NextTermCore
 /// propose_edit, write_file, create_file, stage and commit. The checks and the writes are MCPFileTools' and
 /// MCPGitTools' (off the main thread); asking, the editor and Git Commands are here.
 extension MCPWriteControl {
-    /// git, for the approval window's summary of a file change (GitWriter has its own).
+    /// git, for the approval window's summary of a file change and the check that a file is no git hook
+    /// (GitWriter has its own).
     private static let diffGit = GitRunner.locateGit()
 
     // MARK: propose_edit
@@ -35,8 +36,9 @@ extension MCPWriteControl {
             return wait(proposal, reply: reply)
         }
         let projects = context.projects
+        let git = Self.diffGit
         DispatchQueue.global(qos: .userInitiated).async {
-            let prepared = MCPFileTools.prepareProposal(arguments, in: projects)
+            let prepared = MCPFileTools.prepareProposal(arguments, in: projects, git: git)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     switch prepared {
@@ -130,7 +132,8 @@ extension MCPWriteControl {
         let projects = context.projects
         let git = Self.diffGit
         DispatchQueue.global(qos: .userInitiated).async {
-            let prepared = creating ? MCPFileTools.prepareCreate(arguments, in: projects) : MCPFileTools.prepareWrite(arguments, in: projects)
+            let prepared = creating ? MCPFileTools.prepareCreate(arguments, in: projects, git: git)
+                                    : MCPFileTools.prepareWrite(arguments, in: projects, git: git)
             guard case .success(let change) = prepared else {
                 if case .failure(let error) = prepared { reply(MCPControl.fail(error.text)) }
                 return

@@ -61,15 +61,15 @@ extension MCPServer {
     /// takes an approval policy (MCPApproval) and asks the user on the Mac before it changes anything.
     public static let controlTools: [Tool] = [
         Tool(name: "propose_edit", title: "Propose a file edit",
-             description: "Shows a change to a file in an open project as a proposal in Next Term's side-by-side diff, for the user to Accept or Reject, as Claude Code's IDE edits are. It never writes the file: after an accept, write_file (or create_file for a new file) with the same path and content writes it without asking again, for 10 minutes and while the file is as it was. Give content (the whole new text), or old_text and new_text to replace the one place where old_text appears. Answers within about 50 seconds: accepted, rejected, or pending with a proposal_id: call again with only proposal_id to keep waiting. Closing the proposal rejects it. Files outside the open projects and files that usually hold secrets (.env files, keys and certificates, ssh keys, credentials files, .git) are refused.",
+             description: "Shows a change to a file in an open project as a proposal in Next Term's side-by-side diff, for the user to Accept or Reject, as Claude Code's IDE edits are. It never writes the file: after an accept, write_file (or create_file for a new file) with the same path and content writes it without asking again, for 10 minutes and while the file is as it was. Give content (the whole new text), or old_text and new_text to replace the one place where old_text appears. Answers within about 50 seconds: accepted, rejected, or pending with a proposal_id: call again with only proposal_id to keep waiting. Closing the proposal rejects it. Files outside the open projects, files that usually hold secrets (.env files, keys and certificates, ssh keys, credentials files, .git) and git hooks (the hooks folder, .husky, and pre-commit's or lefthook's settings) are refused.",
              inputSchema: #"{"type": "object", "properties": {\#(pathArgument), \#(projectArgument), "content": {"type": "string", "description": "The file's whole new text."}, "old_text": {"type": "string", "description": "Instead of content: text that appears exactly once in the file, to replace."}, "new_text": {"type": "string", "description": "With old_text: what replaces it."}, "proposal_id": {"type": "string", "description": "A pending proposal's id, to keep waiting for the user's decision."}}, "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: false, timeout: 60),
         Tool(name: "write_file", title: "Write a file in a project",
-             description: "Replaces the text of an existing file in an open project with content, keeping the file's encoding, line endings and permissions. The user is asked on the Mac first (Approve or Decline, seeing what changes and who asks); nothing is written if they decline or do not answer within about 50 seconds. A change the user accepted in propose_edit is written without asking again. Refused: files outside the open projects (symlinks are resolved first), files that usually hold secrets (.env files, keys and certificates, ssh keys, credentials files, .git), binary files, files over 5 MB, and a file open in the editor with unsaved edits. create_file makes a new file.",
+             description: "Replaces the text of an existing file in an open project with content, keeping the file's encoding, line endings and permissions. The user is asked on the Mac first (Approve or Decline, seeing what changes and who asks); nothing is written if they decline or do not answer within about 50 seconds. A change the user accepted in propose_edit is written without asking again. Refused: files outside the open projects (symlinks are resolved first), files that usually hold secrets (.env files, keys and certificates, ssh keys, credentials files, .git), git hooks (the hooks folder, .husky, and pre-commit's or lefthook's settings), binary files, files over 5 MB, and a file open in the editor with unsaved edits. create_file makes a new file.",
              inputSchema: #"{"type": "object", "properties": {\#(pathArgument), \#(projectArgument), "content": {"type": "string", "description": "The file's whole new text."}, \#(reasonArgument)}, "required": ["path", "content"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: true, timeout: 60),
         Tool(name: "create_file", title: "Create a file in a project",
-             description: "Creates a new text file (UTF-8) in an open project, and any folders missing on its path. The user is asked on the Mac first, as for write_file. Refused: a path that exists already (write_file changes a file), paths outside the open projects, files that usually hold secrets (.env files, keys and certificates, ssh keys, credentials files, .git), and content over 5 MB.",
+             description: "Creates a new text file (UTF-8) in an open project, and any folders missing on its path. The user is asked on the Mac first, as for write_file. Refused: a path that exists already (write_file changes a file), paths outside the open projects, files that usually hold secrets (.env files, keys and certificates, ssh keys, credentials files, .git), git hooks (as for write_file), and content over 5 MB.",
              inputSchema: #"{"type": "object", "properties": {\#(pathArgument), \#(projectArgument), "content": {"type": "string", "description": "The new file's text. Default: empty."}, \#(reasonArgument)}, "required": ["path"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
         Tool(name: "stage", title: "Stage files",
@@ -197,27 +197,91 @@ public enum MCPFileTools {
         }
     }
 
+    /// Whether a file in the repository's top folder holds the settings of a hook manager that runs what
+    /// they list on every commit: pre-commit's, or lefthook's (lefthook.yml, .lefthook-local.toml and so on).
+    static func isHookSettings(_ name: String) -> Bool {
+        let name = name.lowercased()
+        if name == ".pre-commit-config.yaml" || name == ".pre-commit-config.yml" { return true }
+        let stem = (name as NSString).deletingPathExtension
+        let ext = (name as NSString).pathExtension
+        let lefthook = ["lefthook", ".lefthook", "lefthook-local", ".lefthook-local"].contains(stem)
+        return lefthook && ["yml", "yaml", "json", "jsonc", "toml"].contains(ext)
+    }
+
+    /// Why writing `file` would let a commit run code, or nil: a file in the repository's hooks folder
+    /// (`core.hooksPath`, which husky points at `.husky/_`), in `.husky` (whose scripts husky's hooks run),
+    /// or the settings of pre-commit or lefthook, which list what their hooks run. commit runs the hooks,
+    /// so without this an agent's write and commit together could run anything. `.git/hooks` is refused
+    /// already, as part of `.git`. The file's repository is checked, and each one around it (a
+    /// submodule's outer repository, or one a nested clone sits in), since commit may run in any of them.
+    /// With no git there is no commit, and nothing to check; a git that does not answer refuses the write.
+    ///
+    /// This closes only the direct way. Hooks that run the project's own scripts or tests (lint-staged,
+    /// `npm test`) run whatever an agent wrote there, so an approved write is still code that may run.
+    public static func hookReason(_ file: ProjectFile, git: String?) throws -> String? {
+        guard let git else { return nil }
+        // Compared without case: the Mac's disks usually ignore it.
+        let path = file.path.lowercased()
+        // The nearest folder that exists: a new file's folders may not, yet.
+        var folder = (file.path as NSString).deletingLastPathComponent
+        while !MCPProjects.isFolder(folder), folder.count > 1 { folder = (folder as NSString).deletingLastPathComponent }
+        for _ in 0..<8 {
+            guard let (top, hooks) = try repositoryHooks(from: folder, git: git, name: file.relative) else { return nil }
+            if path.hasPrefix(hooks + "/") || path.hasPrefix(top + "/.husky/") { return "is a git hook, which commit would run" }
+            let inTop = (path as NSString).deletingLastPathComponent == top
+            if inTop, isHookSettings((path as NSString).lastPathComponent) {
+                return "lists what the repository's git hooks run, which commit would run"
+            }
+            let around = (top as NSString).deletingLastPathComponent
+            guard around != top, around.count > 1 else { return nil }
+            folder = around
+        }
+        return nil
+    }
+
+    /// The top folder and the hooks folder (real paths, in lower case) of the repository holding `folder`;
+    /// nil outside a repository.
+    static func repositoryHooks(from folder: String, git: String, name: String) throws -> (top: String, hooks: String)? {
+        let args = ["-C", folder, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-path", "hooks"]
+        // 128: not in a repository, so no commit runs hooks there.
+        guard let data = GitRunner.run(git, args, timeout: 10, acceptedStatus: [0, 128]) else {
+            throw MCPToolError("Not written: Next Term could not check \(name) against the repository's git hooks, because git did not answer. Try again.")
+        }
+        let lines = String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
+        guard lines.count >= 2 else { return nil }
+        return (MCPProjects.realPath(lines[0]).lowercased(), MCPProjects.realPath(lines[1]).lowercased())
+    }
+
+    /// A file the write tools may change: inside an open project, not a secrets file, not a git hook.
+    static func writable(_ arguments: [String: Any], mustExist: Bool, in projects: MCPProjects, git: String?) throws -> ProjectFile {
+        let file = try projects.file(arguments["path"], project: arguments["project"], mustExist: mustExist, writing: true).get()
+        if let reason = try hookReason(file, git: git) {
+            throw MCPProjects.refusal(arguments["path"] as? String ?? file.relative, reason, writing: true)
+        }
+        return file
+    }
+
     /// write_file: an existing text file and its new text.
-    public static func prepareWrite(_ arguments: [String: Any], in projects: MCPProjects) -> Result<MCPFileChange, MCPToolError> {
+    public static func prepareWrite(_ arguments: [String: Any], in projects: MCPProjects, git: String?) -> Result<MCPFileChange, MCPToolError> {
         MCPFileTools.catching {
             let content = try content(arguments, required: true)
-            let file = try projects.file(arguments["path"], project: arguments["project"], writing: true).get()
+            let file = try writable(arguments, mustExist: true, in: projects, git: git)
             let (text, format) = try read(file)
             return MCPFileChange(file: file, original: text, format: format, content: normalized(content, for: format))
         }
     }
 
     /// create_file: a path where nothing is yet.
-    public static func prepareCreate(_ arguments: [String: Any], in projects: MCPProjects) -> Result<MCPFileChange, MCPToolError> {
+    public static func prepareCreate(_ arguments: [String: Any], in projects: MCPProjects, git: String?) -> Result<MCPFileChange, MCPToolError> {
         MCPFileTools.catching {
             let content = try content(arguments, required: false)
-            let file = try newFile(arguments["path"], project: arguments["project"], in: projects)
+            let file = try newFile(arguments, in: projects, git: git)
             return MCPFileChange(file: file, original: nil, format: TextFormat(), content: content)
         }
     }
 
     /// propose_edit: an existing file or a new one, with content, or old_text replaced by new_text.
-    public static func prepareProposal(_ arguments: [String: Any], in projects: MCPProjects) -> Result<MCPFileChange, MCPToolError> {
+    public static func prepareProposal(_ arguments: [String: Any], in projects: MCPProjects, git: String?) -> Result<MCPFileChange, MCPToolError> {
         MCPFileTools.catching {
             let args = MCPArguments(arguments)
             let old = try args.string("old_text")
@@ -225,7 +289,7 @@ public enum MCPFileTools {
             let hasContent = arguments["content"] != nil && !(arguments["content"] is NSNull)
             if hasContent, old != nil || new != nil { throw MCPToolError("Give content, or old_text and new_text, not both.") }
             if !hasContent, old == nil || new == nil { throw MCPToolError("Give content (the whole new text), or old_text and new_text.") }
-            let file = try projects.file(arguments["path"], project: arguments["project"], mustExist: false, writing: true).get()
+            let file = try writable(arguments, mustExist: false, in: projects, git: git)
             guard MCPProjects.exists(file.path) else {
                 guard hasContent else { throw MCPToolError("No such file: \(file.relative); a new file's proposal takes content.") }
                 let content = try content(arguments, required: true)
@@ -253,9 +317,9 @@ public enum MCPFileTools {
     }
 
     /// A path where create_file may make a file: inside an open project, not a secrets file, and free.
-    static func newFile(_ raw: Any?, project: Any?, in projects: MCPProjects) throws -> ProjectFile {
-        if let text = raw as? String, text.hasSuffix("/") { throw MCPToolError("Give a file's path, not a folder's.") }
-        let file = try projects.file(raw, project: project, mustExist: false, writing: true).get()
+    static func newFile(_ arguments: [String: Any], in projects: MCPProjects, git: String?) throws -> ProjectFile {
+        if let text = arguments["path"] as? String, text.hasSuffix("/") { throw MCPToolError("Give a file's path, not a folder's.") }
+        let file = try writable(arguments, mustExist: false, in: projects, git: git)
         var info = stat()
         if lstat(file.path, &info) == 0 {
             throw MCPToolError("\(file.relative) exists already; write_file changes a file, create_file only makes new ones.")

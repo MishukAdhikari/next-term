@@ -118,7 +118,7 @@ import Testing
         func write(_ path: String, project: String? = "api") -> Result<MCPFileChange, MCPToolError> {
             var arguments: [String: Any] = ["path": path, "content": "x\n"]
             if let project { arguments["project"] = project }
-            return MCPFileTools.prepareWrite(arguments, in: p)
+            return MCPFileTools.prepareWrite(arguments, in: p, git: nil)
         }
         #expect(try write("src/app.txt").get().original?.hasPrefix("line 1\n") == true)
         // Secrets, by name and behind an innocent-looking link, with the reason and a write's wording.
@@ -135,16 +135,16 @@ import Testing
         #expect(write("blob.bin").failureText?.contains("binary") == true)
         #expect(write("missing.txt").failureText?.contains("No such file") == true)
         // content is required, and text.
-        #expect(MCPFileTools.prepareWrite(["path": "src/app.txt", "project": "api"], in: p).failureText?.contains("content") == true)
-        #expect(MCPFileTools.prepareWrite(["path": "src/app.txt", "project": "api", "content": 5], in: p).isFailure)
-        #expect(MCPFileTools.prepareWrite(["path": "src/app.txt", "project": "api", "content": "a\0b"], in: p).isFailure)
+        #expect(MCPFileTools.prepareWrite(["path": "src/app.txt", "project": "api"], in: p, git: nil).failureText?.contains("content") == true)
+        #expect(MCPFileTools.prepareWrite(["path": "src/app.txt", "project": "api", "content": 5], in: p, git: nil).isFailure)
+        #expect(MCPFileTools.prepareWrite(["path": "src/app.txt", "project": "api", "content": "a\0b"], in: p, git: nil).isFailure)
     }
 
     @Test func createMakesOnlyNewFiles() throws {
         let f = try ProjectFixture()
         let p = f.both
         func create(_ path: String) -> Result<MCPFileChange, MCPToolError> {
-            MCPFileTools.prepareCreate(["path": path, "project": "api", "content": "new\n"], in: p)
+            MCPFileTools.prepareCreate(["path": path, "project": "api", "content": "new\n"], in: p, git: nil)
         }
         #expect(create("src/app.txt").failureText?.contains("exists already") == true)
         #expect(create("notes.txt").failureText?.contains("Not written") == true) // a link to .env
@@ -170,20 +170,20 @@ import Testing
         let path = f.a + "/win.txt"
         try Data("one\r\ntwo\r\n".utf8).write(to: URL(fileURLWithPath: path))
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
-        let change = try MCPFileTools.prepareWrite(["path": "win.txt", "project": "api", "content": "one\nTWO\nthree\n"], in: f.both).get()
+        let change = try MCPFileTools.prepareWrite(["path": "win.txt", "project": "api", "content": "one\nTWO\nthree\n"], in: f.both, git: nil).get()
         #expect(change.original == "one\ntwo\n" && change.changesText)
         try MCPFileTools.write(change)
         #expect(try Data(contentsOf: URL(fileURLWithPath: path)) == Data("one\r\nTWO\r\nthree\r\n".utf8))
         let mode = try FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? Int
         #expect(mode == 0o755)
         // The same text again changes nothing.
-        let again = try MCPFileTools.prepareWrite(["path": "win.txt", "project": "api", "content": "one\r\nTWO\r\nthree\r\n"], in: f.both).get()
+        let again = try MCPFileTools.prepareWrite(["path": "win.txt", "project": "api", "content": "one\r\nTWO\r\nthree\r\n"], in: f.both, git: nil).get()
         #expect(!again.changesText)
     }
 
     @Test func aFileChangedSinceItWasReadIsNotWritten() throws {
         let f = try ProjectFixture()
-        let change = try MCPFileTools.prepareWrite(["path": "src/app.txt", "project": "api", "content": "mine\n"], in: f.both).get()
+        let change = try MCPFileTools.prepareWrite(["path": "src/app.txt", "project": "api", "content": "mine\n"], in: f.both, git: nil).get()
         try f.write("api/src/app.txt", "the user's edit\n")
         #expect(throws: MCPToolError.self) { try MCPFileTools.write(change) }
         #expect(try String(contentsOfFile: f.a + "/src/app.txt", encoding: .utf8) == "the user's edit\n")
@@ -193,7 +193,7 @@ import Testing
         let f = try ProjectFixture()
         let p = f.both
         func propose(_ arguments: [String: Any]) -> Result<MCPFileChange, MCPToolError> {
-            MCPFileTools.prepareProposal(arguments.merging(["project": "api"]) { $1 }, in: p)
+            MCPFileTools.prepareProposal(arguments.merging(["project": "api"]) { $1 }, in: p, git: nil)
         }
         let replaced = try propose(["path": "src/app.txt", "old_text": "line 3\n", "new_text": "line three\n"]).get()
         #expect(replaced.content.contains("line 2\nline three\nline 4") && replaced.original?.contains("line 3\n") == true)
@@ -211,17 +211,72 @@ import Testing
         #expect(propose(["path": "link-out.txt", "content": "x"]).isFailure)
     }
 
+    /// commit runs the repository's hooks, so a write there would let write and commit run anything.
+    @Test func gitHooksAreNeverWritten() throws {
+        guard let git = GitRunner.locateGit() else { return }
+        let f = try ProjectFixture()
+        let repo = f.base + "/hooked"
+        try f.write("hooked/src/app.txt", "a\n")
+        try f.write("hooked/.husky/pre-commit", "npm test\n")
+        try f.write("hooked/.husky/_/h", "sh\n")
+        try f.write("hooked/.pre-commit-config.yaml", "repos: []\n")
+        try f.write("hooked/docs/lefthook.yml", "about lefthook\n")
+        func sh(_ args: String...) throws {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: git)
+            p.arguments = ["-C", repo] + args
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            try p.run()
+            p.waitUntilExit()
+        }
+        try sh("init", "-q")
+        try sh("config", "core.hooksPath", ".husky/_") // as husky sets it
+        let p = MCPProjects(open: [repo], preferred: nil)
+        func write(_ path: String) -> String? { MCPFileTools.prepareWrite(["path": path, "content": "x\n"], in: p, git: git).failureText }
+        func create(_ path: String) -> String? { MCPFileTools.prepareCreate(["path": path, "content": "x\n"], in: p, git: git).failureText }
+        func propose(_ path: String) -> String? { MCPFileTools.prepareProposal(["path": path, "content": "x\n"], in: p, git: git).failureText }
+        for text in [write(".husky/pre-commit"), write(".husky/_/h"), create(".husky/commit-msg"), propose(".husky/pre-push"), create(".HUSKY/post-commit")] {
+            #expect(text?.hasPrefix("Not written:") == true && text?.contains("is a git hook, which commit would run") == true, "\(String(describing: text))")
+        }
+        for text in [propose(".pre-commit-config.yaml"), create("lefthook.yml"), create(".lefthook-local.toml")] {
+            #expect(text?.contains("lists what the repository's git hooks run") == true, "\(String(describing: text))")
+        }
+        // Elsewhere in the repository, and a lefthook.yml that is not the repository's own settings.
+        #expect(write("src/app.txt") == nil && create("src/new.txt") == nil && write("docs/lefthook.yml") == nil && create("lefthook-notes.md") == nil)
+        // A hooks folder of the repository's own choosing.
+        try sh("config", "core.hooksPath", "tools/hooks")
+        #expect(create("tools/hooks/pre-push")?.contains("git hook") == true)
+        // A clone inside the repository whose folder the outer repository's hooks are in: commit in the
+        // outer one runs them, whichever repository the file is in.
+        try f.write("hooked/vendor/hooks/README", "x\n")
+        let inner = Process()
+        inner.executableURL = URL(fileURLWithPath: git)
+        inner.arguments = ["-C", repo + "/vendor", "init", "-q"]
+        inner.standardOutput = FileHandle.nullDevice
+        try inner.run()
+        inner.waitUntilExit()
+        try sh("config", "core.hooksPath", "vendor/hooks")
+        #expect(create("vendor/hooks/pre-commit")?.contains("git hook") == true)
+        #expect(create("vendor/notes.md") == nil)
+        // Outside a repository no commit runs hooks; with no git there is no commit at all.
+        let plain = MCPProjects(open: [f.a], preferred: nil)
+        #expect(MCPFileTools.prepareCreate(["path": ".husky/pre-commit", "content": "x\n"], in: plain, git: git).isSuccess)
+        #expect(MCPFileTools.prepareCreate(["path": ".husky/pre-merge-commit", "content": "x\n"], in: p, git: nil).isSuccess)
+        #expect(MCPFileTools.isHookSettings(".pre-commit-config.yml") && MCPFileTools.isHookSettings("Lefthook.yaml") && !MCPFileTools.isHookSettings("lefthook.md"))
+    }
+
     @Test func theSummarySaysWhatChanges() throws {
         let f = try ProjectFixture()
         let change = try MCPFileTools.prepareWrite(["path": "src/app.txt", "project": "api",
                                                     "content": "line 1\nline 2\nCHANGED\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\n"],
-                                                   in: f.both).get()
+                                                   in: f.both, git: nil).get()
         if let git = GitRunner.locateGit() {
             let summary = MCPFileTools.summary(change, git: git)
             #expect(summary.hasPrefix("+1 −1 lines.") && summary.contains("− line 3") && summary.contains("+ CHANGED"), "\(summary)")
         }
         #expect(MCPFileTools.summary(change, git: nil).contains("10 lines"))
-        let new = try MCPFileTools.prepareCreate(["path": "n.txt", "project": "api", "content": "a\nb\n"], in: f.both).get()
+        let new = try MCPFileTools.prepareCreate(["path": "n.txt", "project": "api", "content": "a\nb\n"], in: f.both, git: nil).get()
         #expect(MCPFileTools.summary(new, git: nil).hasPrefix("2 lines, "))
     }
 }
