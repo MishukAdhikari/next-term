@@ -25,7 +25,7 @@ PyCharm is JetBrains’ Python IDE for Windows, macOS and Linux, “built for we
 | Agents from other vendors | ✓ Any agent that runs in a terminal; 20 recognised by name | ✓ ACP agents, without a JetBrains AI subscription; Claude Code, Codex and Junie from the terminal |
 | Several agents at once, with their status | ✓ Tabs and split panes, with status on every tab | Partly: Air, in early access, shows parallel sessions |
 | MCP | ✓ An MCP server for orchestration: start, prompt, wait for and read agents | ✓ An MCP server that gives agents the IDE’s tools |
-| Claude Code’s IDE link | ✓ Built in, also for Gemini CLI and Qwen Code | ✓ Anthropic’s plugin supports PyCharm |
+| Claude Code’s IDE link | ✓ Built in, also for Gemini CLI, Qwen Code, Copilot CLI and opencode | ✓ Anthropic’s plugin supports PyCharm |
 | Reviewing changes | ✓ Side-by-side diffs; stage, unstage or revert per hunk; the Git Log and blame | ✓ The IDE’s diff viewer; commit chosen chunks and lines |
 
 ## Choose PyCharm if…
@@ -38,7 +38,7 @@ PyCharm is JetBrains’ Python IDE for Windows, macOS and Linux, “built for we
 ## Choose Next Term if…
 
 - **You hand more of the work to agents.** Run Claude Code in one tab, Codex in another and `pytest` in a split pane, each with its status on its tab, and a notification that quotes any agent’s question.
-- **You want to read every change before it lands.** Claude Code’s, Gemini CLI’s and Qwen Code’s proposed edits open as diffs to accept or reject, and <kbd>⌥⌘G</kbd> shows any file’s changes side by side, with per-hunk stage, unstage and revert.
+- **You want to read every change before it lands.** Claude Code’s, Gemini CLI’s, Qwen Code’s and Copilot CLI’s proposed edits open as diffs to accept or reject, and <kbd>⌥⌘G</kbd> shows any file’s changes side by side, with per-hunk stage, unstage and revert.
 - **You build RAG or agent projects.** `{context}` placeholders and `{{ question }}` templates inside Python strings get their own colour, <kbd>⌘</kbd>-click opens a traceback’s line, or the definition behind a `graph.py:graph` reference as `langgraph.json` writes it, and a tab running `langgraph dev` shows its port.
 - **You want one agent to coordinate the others** across projects, through Next Term’s MCP server.
 - **You want a light window for agent work** that opens next to PyCharm and costs nothing.

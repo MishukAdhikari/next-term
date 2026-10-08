@@ -100,7 +100,7 @@ scripts/build-dmg.sh          # universal app, DMG and checksum in dist/
 ## Next steps
 
 - [Agent status in every tab](/docs/agent-status/): the marks, notifications and the Dock badge.
-- [Agents and the IDE link](/docs/agents/): what Claude Code, Gemini CLI and Qwen Code see, and Send to Agent.
+- [Agents and the IDE link](/docs/agents/): what Claude Code, Gemini CLI, Qwen Code, Copilot CLI and opencode see, and Send to Agent.
 - [Orchestrate agents (MCP)](/docs/orchestration/): let one agent start and steer the others.
 - [Projects and git](/docs/projects-and-git/): the sidebar, agent sessions, the branch popup and the Git Log.
 - [Keyboard shortcuts](/docs/keyboard-shortcuts/): the full list, and how to change any menu shortcut.

@@ -36,7 +36,7 @@ Ghostty is a free, MIT-licensed terminal emulator for macOS and Linux, developed
 ## Choose Next Term if…
 
 - **You run several AI agents at once** and need to see which one is working, which is done and which is waiting on you, on every tab, without configuring anything.
-- **You want your agents to see your editor.** Claude Code, Gemini CLI and Qwen Code connect to Next Term as their IDE: your selection goes with the next prompt, and proposed edits open as diffs to accept or reject.
+- **You want your agents to see your editor.** Claude Code, Gemini CLI, Qwen Code, Copilot CLI and opencode connect to Next Term as their IDE: your selection goes with the next prompt, and proposed edits open as diffs to accept or reject.
 - **You want the question in the notification.** When an agent asks for permission, Next Term’s notification quotes it and takes you to the tab.
 - **You want to review agents’ work next to them:** an editor, side-by-side diffs with per-hunk stage, unstage and revert, Find and Replace in Files, and a project sidebar with git status and line counts.
 - **You want one agent to orchestrate the others** over MCP, across projects.

@@ -54,7 +54,7 @@ Zed is an open-source code editor written in Rust, for macOS, Linux and Windows,
 
 ### Zed can already run Claude Code in a Terminal Thread. Why add Next Term?
 
-If Zed is the only app you want open, Terminal Threads cover a lot. Next Term adds status on each agent’s tab, with no settings to change, notifications that quote the agent’s question, Claude Code’s, Gemini CLI’s and Qwen Code’s IDE link (your selection, and proposed edits as diffs to accept or reject), and an MCP server through which one agent orchestrates the others.
+If Zed is the only app you want open, Terminal Threads cover a lot. Next Term adds status on each agent’s tab, with no settings to change, notifications that quote the agent’s question, the IDE link for Claude Code, Gemini CLI, Qwen Code, Copilot CLI and opencode (your selection, and proposed edits as diffs to accept or reject), and an MCP server through which one agent orchestrates the others.
 
 ### Is Zed free?
 
