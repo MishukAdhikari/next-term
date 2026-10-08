@@ -155,9 +155,11 @@ extension SelfTest {
             tab.view.send(txt: line)
             await pause(0.5)
         }
+        /// The last write was Next Term's own keys for `text` (as a paste where the shell takes one), not a ^I.
+        func typedByNextTerm(_ text: String) -> Bool { String(decoding: session.lastWrite, as: UTF8.self).contains(text) }
 
         // `cd /va`: the folder goes in, over the connection (AE7's first half). Here `/private` matches too (v, a in
-        // order), so the list may open with var first.
+        // order), so the list may open with var first. Either way Next Term types the rest, not the shell's own Tab.
         await type("cd /va")
         tabKey()
         check(session.lastTab.isListing, "Tab completion, servers: a real Tab lists the server's folder", "\(session.lastTab)")
@@ -165,8 +167,8 @@ extension SelfTest {
             check(popup.shownTexts.first == "var", "Tab completion, servers: `/va` lists var first", "\(popup.shownTexts)")
             pressKey(window, "\r", code: 36)
         }
-        check(await wait(3) { promptLine(tab).hasSuffix("cd /var/") } && !popup.isVisible, "AE7: `cd /va` + Tab gives `cd /var/` on a server",
-              promptLine(tab))
+        check(await wait(3) { promptLine(tab).hasSuffix("cd /var/") } && !popup.isVisible && typedByNextTerm("r/"),
+              "AE7: `cd /va` + Tab gives `cd /var/` on a server, from its listing", "\(promptLine(tab)) \(session.lastWrite)")
         await clear()
 
         // `ls ~/app/fo`: the list opens; typing narrows it from the screen; Return puts the name on the line.
@@ -212,8 +214,8 @@ extension SelfTest {
         server.flag("slow", true)
         await type("ls ~/app/li")
         tabKey()
-        check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/lib/") }, "Tab completion, servers: a listing that takes too long is the shell's own Tab",
-              promptLine(tab))
+        check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/lib/") } && session.lastWrite == [0x09],
+              "Tab completion, servers: a listing that takes too long is the shell's own Tab", "\(promptLine(tab)) \(session.lastWrite)")
         await clear()
         RemoteCompletion.shared.forget()
         await type("ls ~/app/li")
@@ -229,8 +231,8 @@ extension SelfTest {
         server.flag("drop", true)
         await type("ls ~/app/li")
         tabKey()
-        check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/lib/") }, "Tab completion, servers: a check that drops gives the shell's own Tab",
-              promptLine(tab))
+        check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/lib/") } && session.lastWrite == [0x09],
+              "Tab completion, servers: a check that drops gives the shell's own Tab", "\(promptLine(tab)) \(session.lastWrite)")
         server.flag("drop", false)
         await clear()
 
@@ -318,12 +320,13 @@ extension SelfTest {
         server.flag("refused", true)
         await type("ls ~/app/li")
         tabKey()
-        check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/lib/") }, "Tab completion, servers: a refused session gives the shell's own Tab",
-              promptLine(tab))
+        check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/lib/") } && session.lastWrite == [0x09],
+              "Tab completion, servers: a refused session gives the shell's own Tab", "\(promptLine(tab)) \(session.lastWrite)")
         await clear()
         await type("ls ~/app/li")
         tabKey()
-        check(session.lastTab == .plain, "and Tab stays the shell's own while the connection refuses", "\(session.lastTab)")
+        check(session.lastTab == .plain && session.lastWrite == [0x09], "and Tab stays the shell's own while the connection refuses",
+              "\(session.lastTab)")
         server.flag("refused", false)
         await clear()
     }
