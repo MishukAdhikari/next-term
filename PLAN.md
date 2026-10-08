@@ -58,7 +58,7 @@ Also next, in no fixed order:
 - **Git:** Delete on Remote, Checkout and Update, and Write with Agent in the branch popup; then
   worktrees and Clean Up; Compare with Current and Show Diff with Working Tree; background fetch; a
   match-case toggle in the Git Log.
-- **Diffs:** fold long unchanged runs, a Changed only filter, stage selected lines, edit the proposed
+- **Diffs:** a Changed only filter, stage selected lines, edit the proposed
   side before accepting, Send to Agent from a diff, and Ask agent… per hunk.
 - **Editor:** Replace in the open file from the menu; opening files with a single click (off by default);
   hiding `.env` values on screen; a prompt-text grammar for `prompts/*.txt`; `{var}` placeholders in YAML

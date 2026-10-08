@@ -97,10 +97,15 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   test run, two agents side by side. Move between panes with ⌥⌘ and the arrows, maximize one with
   ⌘⇧↩, close it with ⌘W. The panes without the keyboard are shaded, and the tab's mark shows the pane
   that most needs you.
-- **Changes side by side (⌥⌘G).** A file's diff in a tab: the old version beside the new, rows aligned, the
-  changed words marked, syntax-coloured, scrolling together. All changes, unstaged or staged; step through
-  them and stage, unstage or revert one hunk at a time (⌘Z undoes a revert). Each action first checks the
-  file is still what the diff showed, so a change an agent made meanwhile is never overwritten.
+- **Git Diff (⌃⌘G).** Everything a branch changed, the way a pull request shows it: the changed files as a
+  tree with their +/− on the left, the selected file's diff on the right, or every file's on one page with
+  long unchanged runs folded. Compare all the branch's changes since it left main, what isn't committed
+  yet, or one commit. A click on the sidebar header's +/− opens it too.
+- **Changes side by side or unified (⌥⌘G).** A file's diff in the Git Diff tab: the old version beside the
+  new, rows aligned, or one column top to bottom (View › Unified Diffs); the changed words marked,
+  syntax-coloured. All changes, unstaged or staged; step through them and stage, unstage or revert one
+  hunk at a time (⌘Z undoes a revert). Each action first checks the file is still what the diff showed,
+  so a change an agent made meanwhile is never overwritten.
 - **File operations.** Rename (Return), drag to move (Option to copy), New File / New Folder, Move to Trash,
   all undoable with ⌘Z. Drag a file onto a terminal to type its path.
 - **Go to File (⌘P).** Type a few letters of a file's name or path and the list follows every keystroke:
@@ -210,7 +215,8 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | Save / Save All | ⌘S / ⌥⌘S |
 | Close the file being edited | ⌘W (with the editor focused) |
 | Comment line / Go to line | ⌘/ / ⌘L |
-| Show changes (side by side) | ⌥⌘G |
+| Show a file's changes | ⌥⌘G |
+| Git Diff (the changed files and their diffs) | ⌃⌘G |
 | Branches (the branch popup) | ⌥⌘B |
 | Git Log (the commit graph) | ⌥⌘L |
 | Send to Agent | ⌥⌘K |
