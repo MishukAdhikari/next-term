@@ -10,6 +10,7 @@ final class PaneView: NSView {
     init(tab: TerminalTab) {
         self.tab = tab
         super.init(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        clipsToBounds = true // a terminal that keeps its size in a pane with none (see layout) shows nowhere
         veil.isHidden = true
         veil.translatesAutoresizingMaskIntoConstraints = false
         addSubview(veil)
@@ -40,6 +41,15 @@ final class PaneView: NSView {
 
     var dimmed = false {
         didSet { veil.isHidden = !dimmed }
+    }
+
+    /// A pane is placed at no width or no height first, while its split is built, and has no height while
+    /// the terminal is folded down to its tab bar. Its terminal keeps its size until the pane has one again:
+    /// squeezed to two columns on the way, it would rewrap its history to fit them and lose most of it (a
+    /// Split Down in a tab already split side by side did).
+    override func layout() {
+        guard bounds.width >= 1, bounds.height >= 1 else { return }
+        super.layout()
     }
 
     /// Clicks go through to the terminal; the veil only shades it.
