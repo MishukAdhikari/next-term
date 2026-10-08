@@ -199,63 +199,103 @@ public struct RunningAgent: Sendable, Equatable {
     /// What the caller finds the tab by again.
     public let key: String
     public let agent: AgentKind
-    /// The folder it was started in.
+    /// The folder it runs in.
     public let directory: String
     /// The command line as typed (with its expansion after it, when an alias was expanded).
     public let commandLine: String
     public let startedAt: Date
+    /// The agent's process, when it is known: Claude Code and Copilot CLI record which session a process
+    /// has open.
+    public let pid: Int32?
 
-    public init(key: String, agent: AgentKind, directory: String, commandLine: String, startedAt: Date) {
+    public init(key: String, agent: AgentKind, directory: String, commandLine: String, startedAt: Date, pid: Int32? = nil) {
         self.key = key
         self.agent = agent
         self.directory = directory
         self.commandLine = commandLine
         self.startedAt = startedAt
+        self.pid = pid
     }
 }
 
 extension AgentSessions {
-    /// The newest session `agent` has started in `folder` (exactly that folder) at or after `time`, or nil
-    /// when there is none: what a tab that started that agent at `time` without naming a session is in
-    /// now. Newest means started last; a session the agent went on to (`/clear` starts one) counts.
+    /// The newest session `agent` has started in `folder` (exactly that folder) at or after `time`, ids in
+    /// `excluding` left out, or nil when there is none: what a tab that started that agent at `time`
+    /// without naming a session is in now. Newest means started last; a session the agent went on to
+    /// (`/clear` starts one) counts.
+    ///
+    /// Time alone cannot tell two tabs that run one agent in one folder apart: both get the same answer.
+    /// Ask `sessionID(of:pid:)` first, and pass the ids other tabs already have as `excluding`, so no
+    /// session is taken up twice.
     ///
     /// Cheap: it reads only stores written to since `time` (files older than that are skipped unread), and
     /// of those only what a listing reads (the first and last 64 KiB of a transcript, an index row), never
     /// a whole transcript. Sessions a listing hides (sub-agents', `claude -p` runs, ones with no prompt
     /// yet) are not returned. Never throws: a store it cannot read gives nil.
-    public static func newest(agent: AgentKind, in folder: String, after time: Date,
+    public static func newest(agent: AgentKind, in folder: String, after time: Date, excluding ids: Set<String> = [],
                               home: String = NSHomeDirectory()) -> AgentSession? {
-        started(agent: agent, in: folder, after: time, home: home).first
+        let found = (try? agent.provider(home: home).sessions(in: canonicalPath(folder), subfolders: false, since: time)) ?? []
+        return found.filter { startTime($0) >= time && !ids.contains($0.id) }.max { startTime($0) < startTime($1) }
     }
 
-    /// Sessions of `agent` in `folder` started at or after `time`, newest first.
-    static func started(agent: AgentKind, in folder: String, after time: Date, home: String) -> [AgentSession] {
-        let found = (try? agent.provider(home: home).sessions(in: canonicalPath(folder), subfolders: false, since: time)) ?? []
-        return found.filter { startTime($0) >= time }.sorted { startTime($0) > startTime($1) }
+    /// The session a live agent process has open, from the agent's own record of it: Claude Code's
+    /// ~/.claude/sessions/<pid>.json (which it keeps up to date through `/clear` and `/resume`), and the
+    /// Copilot CLI session folder that holds `inuse.<pid>.lock`. nil for the other agents, and when there
+    /// is no record.
+    public static func sessionID(of agent: AgentKind, pid: Int32, home: String = NSHomeDirectory()) -> String? {
+        switch agent {
+        case .claude: return claudeSessionID(pid: pid, home: home)
+        case .copilot: return CopilotSessions.sessionID(pid: pid, home: home)
+        case .codex, .commandCode, .gemini, .qwen, .opencode, .cursor: return nil
+        }
+    }
+
+    /// The session the `claude` with process `pid` has open: the `sessionId` of its
+    /// ~/.claude/sessions/<pid>.json (the file `claudeRunning` reads).
+    static func claudeSessionID(pid: Int32, home: String) -> String? {
+        let path = (home as NSString).appendingPathComponent(".claude/sessions/\(pid).json")
+        guard let data = readHead(path, bytes: 16384),
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        return json["sessionId"] as? String
     }
 
     private static func startTime(_ session: AgentSession) -> Date { session.createdAt ?? session.updatedAt }
 
     /// Which sessions are open in which tab: session identity (`AgentSession.identity`) → the tab's key.
-    /// A resume command names its session (`claude --resume <id>`). An agent started without naming one is
-    /// in the newest session of that agent its folder has had since it started, or else (`claude
-    /// --continue`) the one it has written to most recently since then. Tabs that started later choose
-    /// first, so two agents in one folder get one session each.
+    /// The agent's record of what its process has open decides (`sessionID(of:pid:)`); else a resume
+    /// command names its session (`claude --resume <id>`); else the tab is guessed by time (`guess`).
     public static func openSessions(_ running: [RunningAgent], home: String = NSHomeDirectory()) -> [String: String] {
         var open: [String: String] = [:]
+        var unnamed: [RunningAgent] = []
         for tab in running {
-            guard let id = tab.agent.resumedID(in: tab.commandLine) else { continue }
-            open[tab.agent.rawValue + ":" + id] = tab.key
+            let recorded = tab.pid.flatMap { sessionID(of: tab.agent, pid: $0, home: home) }
+            if let id = recorded ?? tab.agent.resumedID(in: tab.commandLine) {
+                open[tab.agent.rawValue + ":" + id] = tab.key
+            } else {
+                unnamed.append(tab)
+            }
         }
-        let plain = running.filter { $0.agent.resumedID(in: $0.commandLine) == nil }.sorted { $0.startedAt > $1.startedAt }
-        for tab in plain {
-            let folder = canonicalPath(tab.directory)
-            let found = (try? tab.agent.provider(home: home).sessions(in: folder, subfolders: false, since: tab.startedAt)) ?? []
-            let started = found.filter { startTime($0) >= tab.startedAt }.sorted { startTime($0) > startTime($1) }
-            let resumed = found.filter { startTime($0) < tab.startedAt && $0.updatedAt >= tab.startedAt }.sorted { $0.updatedAt > $1.updatedAt }
-            if let session = (started + resumed).first(where: { open[$0.identity] == nil }) { open[session.identity] = tab.key }
+        for tab in unnamed {
+            if let session = guess(tab, among: running, taken: open, home: home) { open[session.identity] = tab.key }
         }
         return open
+    }
+
+    /// The session a tab whose agent named none is in: the newest its folder has had since the agent
+    /// started, or else (`claude --continue`) the one written to most recently since then. Time cannot tell
+    /// two tabs of one agent in one folder apart, so a session another of them could have started or
+    /// written to is left out, as is one an agent process elsewhere has open: better no tab than the
+    /// wrong one.
+    private static func guess(_ tab: RunningAgent, among running: [RunningAgent], taken: [String: String], home: String) -> AgentSession? {
+        let folder = canonicalPath(tab.directory)
+        let rivals = running.filter { $0.key != tab.key && $0.agent == tab.agent && canonicalPath($0.directory) == folder }
+        func onlyMine(_ date: Date) -> Bool { !rivals.contains { $0.startedAt <= date } }
+        let found = (try? tab.agent.provider(home: home).sessions(in: folder, subfolders: false, since: tab.startedAt)) ?? []
+        let free = found.filter { !$0.isRunning && AgentSessions.tab(of: $0, in: taken) == nil }
+        let started = free.filter { startTime($0) >= tab.startedAt && onlyMine(startTime($0)) }
+        if let session = started.max(by: { startTime($0) < startTime($1) }) { return session }
+        let resumed = free.filter { startTime($0) < tab.startedAt && $0.updatedAt >= tab.startedAt && onlyMine($0.updatedAt) }
+        return resumed.max { $0.updatedAt < $1.updatedAt }
     }
 
     /// The key of the tab `session` is open in, from `openSessions`: by its identity, or by an id prefix

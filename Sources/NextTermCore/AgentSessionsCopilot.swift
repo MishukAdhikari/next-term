@@ -59,6 +59,17 @@ struct CopilotSessions: AgentSessionProvider {
         }
     }
 
+    /// The session whose folder holds `inuse.<pid>.lock`: the one the `copilot` with that process has open.
+    static func sessionID(pid: Int32, home: String) -> String? {
+        let base = (home as NSString).appendingPathComponent(".copilot/session-state")
+        for (name, path) in AgentStoreFiles.written(in: base, since: nil) where AgentStoreFiles.isPlainName(name) {
+            guard FileManager.default.fileExists(atPath: path + "/inuse.\(pid).lock") else { continue }
+            let text = AgentSessions.readHead(path + "/workspace.yaml", bytes: 65536).map { String(decoding: $0, as: UTF8.self) }
+            return text.flatMap { flatYAML($0)["id"] } ?? name
+        }
+        return nil
+    }
+
     /// Top-level `key: value` pairs of a flat YAML file, unquoted; a long value folded onto indented lines
     /// is joined back with spaces. Nested blocks and lists are skipped.
     static func flatYAML(_ text: String) -> [String: String] {

@@ -320,6 +320,7 @@ import Testing
         try age(dir + "/stale.jsonl", days: 2)
 
         #expect(AgentSessions.newest(agent: .claude, in: project, after: start, home: home)?.id == "b")
+        #expect(AgentSessions.newest(agent: .claude, in: project, after: start, excluding: ["b"], home: home)?.id == "a") // another tab has b
         #expect(AgentSessions.newest(agent: .claude, in: project, after: start.addingTimeInterval(100), home: home) == nil)
         #expect(AgentSessions.newest(agent: .codex, in: project, after: start, home: home) == nil)
         #expect(AgentSessions.newest(agent: .claude, in: project + "/src", after: start, home: home)?.id == "c")
@@ -416,8 +417,14 @@ import Testing
             RunningAgent(key: "D", agent: .copilot, directory: project, commandLine: "copilot --resume=11111111", startedAt: second),
         ]
         let open = AgentSessions.openSessions(running, home: home)
-        // Each plain `claude` gets the session it started; a resume command names its own.
-        #expect(open["claude:two"] == "B" && open["claude:one"] == "A" && open["codex:t9"] == "C")
+        // A resume command names its own session. A plain `claude` gets the session it started, unless another
+        // `claude` here had started by then too: "two" could be either tab's, so it is neither's.
+        #expect(open["claude:one"] == "A" && open["claude:two"] == nil && open["codex:t9"] == "C")
+        // Claude Code's record of the session each process has open settles it.
+        try write(#"{"pid": 90002, "sessionId": "two"}"#, to: home + "/.claude/sessions/90002.json")
+        var recorded = running
+        recorded[1] = RunningAgent(key: "B", agent: .claude, directory: project, commandLine: "claude", startedAt: second, pid: 90002)
+        #expect(AgentSessions.openSessions(recorded, home: home)["claude:two"] == "B")
         let copilot = AgentSession(agent: .copilot, id: "11111111-2222", cwd: project, title: "t", named: false, createdAt: nil,
                                    updatedAt: Date(), gitBranch: nil, model: nil, isRunning: false)
         #expect(AgentSessions.tab(of: copilot, in: open) == "D")
@@ -425,6 +432,67 @@ import Testing
         let continued = AgentSessions.openSessions([RunningAgent(key: "E", agent: .claude, directory: project, commandLine: "claude --continue",
                                                                  startedAt: second.addingTimeInterval(8))], home: home)
         #expect(continued["claude:old"] == "E")
+    }
+
+    /// A Claude Code session in `project`, its first prompt at `created` (and, with `then`, written to again then).
+    func claudeSession(_ id: String, in home: String, project: String, created: Date, then later: Date? = nil) throws {
+        let iso = ISO8601DateFormatter()
+        var lines: [[String: Any]] = [["type": "user", "cwd": project, "timestamp": iso.string(from: created), "message": ["content": "task " + id]]]
+        if let later { lines.append(["type": "assistant", "cwd": project, "timestamp": iso.string(from: later), "message": ["model": "m"]]) }
+        try write(lines, to: home + "/.claude/projects/" + AgentSessions.claudeFolderName(project) + "/\(id).jsonl")
+    }
+
+    @Test func twoTabsOfOneAgentInOneFolderAreNeverMixedUp() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let project = "/Users/me/Code/app"
+        let start = Date().addingTimeInterval(-3600)
+        func at(_ seconds: TimeInterval) -> Date { start.addingTimeInterval(seconds) }
+        // Tab A runs `claude` at 0 and tab B at 60; A's first prompt at 90, B's at 120, A's after /clear at 180.
+        try claudeSession("a1", in: home, project: project, created: at(90))
+        try claudeSession("b1", in: home, project: project, created: at(120))
+        try claudeSession("a2", in: home, project: project, created: at(180))
+        let tabs = [RunningAgent(key: "A", agent: .claude, directory: project, commandLine: "claude", startedAt: at(0)),
+                    RunningAgent(key: "B", agent: .claude, directory: project, commandLine: "claude", startedAt: at(60))]
+        // By time alone none of them can be told apart: none is given to a tab, rather than one to the wrong tab.
+        #expect(AgentSessions.openSessions(tabs, home: home).isEmpty)
+        // B has no prompt yet, and A's first comes after B started: A's could be B's.
+        let early = try self.home()
+        defer { try? FileManager.default.removeItem(atPath: early) }
+        try claudeSession("a1", in: early, project: project, created: at(90))
+        #expect(AgentSessions.openSessions(tabs, home: early).isEmpty)
+        // Claude Code records the session each process has open (after /clear, the new one): each tab gets its own.
+        try write(#"{"pid": 90001, "sessionId": "a2"}"#, to: home + "/.claude/sessions/90001.json")
+        try write(#"{"pid": 90002, "sessionId": "b1"}"#, to: home + "/.claude/sessions/90002.json")
+        let known = [RunningAgent(key: "A", agent: .claude, directory: project, commandLine: "claude", startedAt: at(0), pid: 90001),
+                     RunningAgent(key: "B", agent: .claude, directory: project, commandLine: "claude", startedAt: at(60), pid: 90002)]
+        #expect(AgentSessions.openSessions(known, home: home) == ["claude:a2": "A", "claude:b1": "B"])
+        #expect(AgentSessions.sessionID(of: .claude, pid: 90001, home: home) == "a2")
+        #expect(AgentSessions.sessionID(of: .claude, pid: 90003, home: home) == nil && AgentSessions.sessionID(of: .codex, pid: 90001, home: home) == nil)
+    }
+
+    @Test func aSessionStartedOutsideIsNotTheTabs() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let project = "/Users/me/Code/app"
+        let start = Date().addingTimeInterval(-600)
+        // A plain `claude` in a tab with no prompt yet; a minute later a `claude` in another terminal starts one here.
+        try claudeSession("outside", in: home, project: project, created: start.addingTimeInterval(60))
+        try write(#"{"pid": \#(getpid()), "sessionId": "outside", "cwd": "\#(project)"}"#, to: home + "/.claude/sessions/\(getpid()).json")
+        let tab = RunningAgent(key: "TAB", agent: .claude, directory: project, commandLine: "claude", startedAt: start)
+        // A process outside Next Term has it open: not the tab's.
+        #expect(AgentSessions.openSessions([tab], home: home)["claude:outside"] == nil)
+        // With the tab's own record, the tab is in its own session, still empty.
+        try write(#"{"pid": 90001, "sessionId": "mine"}"#, to: home + "/.claude/sessions/90001.json")
+        let known = RunningAgent(key: "TAB", agent: .claude, directory: project, commandLine: "claude", startedAt: start, pid: 90001)
+        #expect(AgentSessions.openSessions([known], home: home) == ["claude:mine": "TAB"])
+        // Copilot CLI marks the session a process has open with `inuse.<pid>.lock` in its folder.
+        let copilot = home + "/.copilot/session-state/c-live"
+        try write("id: c-live\ncwd: \(project)\nname: Ship it\n", to: copilot + "/workspace.yaml")
+        try write("", to: copilot + "/inuse.90004.lock")
+        let pilot = RunningAgent(key: "CP", agent: .copilot, directory: project, commandLine: "copilot", startedAt: start, pid: 90004)
+        #expect(AgentSessions.openSessions([pilot], home: home) == ["copilot:c-live": "CP"])
+        #expect(AgentSessions.sessionID(of: .copilot, pid: 90005, home: home) == nil)
     }
 
     @Test func everyAgentHasItsCommands() {
