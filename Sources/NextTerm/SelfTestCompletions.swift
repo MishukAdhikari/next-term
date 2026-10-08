@@ -120,7 +120,12 @@ extension SelfTest {
         guard let window = c.window as? TerminalWindow else { return check(false, "Tab completion: a terminal window") }
         // The mode is read as a shell starts: a tab opened with it on loads the hook.
         CompletionPreferences.mode = .nextTerm
-        guard let tab = await completionTab(c, in: dir, zshrc: plainZshrc, name: "keys") else { return }
+        // ⌃T runs what fzf's ⌃T does, with no command mark: a program in a command substitution, then one run as it is,
+        // each reading a key from the terminal.
+        let picked = dir.appendingPathComponent("picked")
+        let picker = "ntpick() { local x; x=$(command head -c 1 </dev/tty); print -rn -- $(( #x )) >'\(picked.path)'; "
+            + "command head -c 1 </dev/tty >>'\(picked.path)' }\nzle -N ntpick\nbindkey '^T' ntpick\n"
+        guard let tab = await completionTab(c, in: dir, zshrc: plainZshrc + picker, name: "keys") else { return }
         defer { c.remove(tab) }
         let session = tab.completion
         func tabKey() { pressKey(window, "\t", code: 48) }
@@ -159,6 +164,25 @@ extension SelfTest {
         check(await wait(3) { (try? String(contentsOf: got, encoding: .utf8)) == "9" } && session.lastTab == before,
               "Tab completion: a program that runs gets Tab itself (AE5)", (try? String(contentsOf: got, encoding: .utf8)) ?? "nothing")
         _ = await wait(3) { session.state.isArmed }
+
+        // A program a key binding started gets Tab itself, though the tab is still Armed: in a command substitution it is
+        // in the shell's process group, and run as it is, in a group of its own.
+        tab.view.send(txt: "\u{14}")
+        func pickedText() -> String { (try? String(contentsOf: picked, encoding: .utf8)) ?? "" }
+        if await wait(3, { !tab.shellAlone }) {
+            tabKey()
+            check(session.state.isArmed && session.lastTab == .plain && session.lastWrite == [0x09],
+                  "Tab completion: a program a key binding runs in a command substitution (fzf's ⌃T) gets Tab itself", "\(session.lastTab)")
+            _ = await wait(3) { pickedText() == "9" }
+            if await wait(3, { !tab.shellAlone }) {
+                tabKey()
+                check(session.lastTab == .plain && session.lastWrite == [0x09], "and so does one it runs as it is", "\(session.lastTab)")
+            }
+            check(await wait(3) { pickedText() == "9\t" && tab.shellAlone }, "and each read exactly ^I", pickedText().debugDescription)
+        } else {
+            check(false, "Tab completion: ⌃T starts the stand-in for fzf's ⌃T")
+        }
+        await clearLine(tab)
 
         // Text an input method is composing keeps Tab.
         tab.view.setMarkedText("k", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
