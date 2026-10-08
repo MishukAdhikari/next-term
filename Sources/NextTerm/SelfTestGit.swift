@@ -72,10 +72,16 @@ extension SelfTest {
               "the branch popup reads the self-test's repository", popup.rowTitles.joined(separator: " | "))
         if !popup.isOpen("local:feat") { popup.toggleFolder("local:feat") }
         let longLabel = String(long.dropFirst("feat/".count))
+        if let index = row(longLabel) { popup.tableView.scrollRowToVisible(index) }
         popup.tableView.layoutSubtreeIfNeeded()
         if let index = row(longLabel), let cell = popup.tableView.view(atColumn: 0, row: index, makeIfNecessary: true) as? BranchCell {
+            cell.layoutSubtreeIfNeeded()
             let style = cell.titleText.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
             check(style?.lineBreakMode == .byTruncatingMiddle, "a long branch name in the popup is cut in the middle", "\(String(describing: style?.lineBreakMode))")
+            // Cut for real: narrower than its text, and ending before the detail.
+            let cut = cell.titleText.size().width > cell.titleFrame.width && cell.titleFrame.width > 40 && cell.titleFrame.maxX <= cell.detailFrame.minX
+            check(cut, "and the name is narrower than its text, ending before the row's detail",
+                  "text \(Int(cell.titleText.size().width)), name \(cell.titleFrame), detail \(cell.detailFrame)")
         } else {
             check(false, "a long branch name is listed in the popup", popup.rowTitles.joined(separator: " | "))
         }
@@ -86,10 +92,17 @@ extension SelfTest {
             log.show(ref: "refs/heads/" + long)
             let listed = await wait(10) { log.refs.rowTitles.contains { $0.trimmingCharacters(in: .whitespaces) == longLabel } }
             let index = log.refs.rowTitles.firstIndex { $0.trimmingCharacters(in: .whitespaces) == longLabel }
+            if let index { log.refs.outline.scrollRowToVisible(index) }
             log.refs.outline.layoutSubtreeIfNeeded()
             let cell = index.flatMap { log.refs.outline.view(atColumn: 0, row: $0, makeIfNecessary: true) as? GitRefCell }
+            cell?.layoutSubtreeIfNeeded()
             let style = cell?.titleText.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
             check(listed && style?.lineBreakMode == .byTruncatingMiddle, "and in the Git Log's branch tree", log.refs.rowTitles.joined(separator: " | "))
+            if let cell {
+                let cut = cell.titleText.size().width > cell.titleFrame.width && cell.titleFrame.width > 40 && cell.titleFrame.maxX <= cell.detailFrame.minX
+                check(cut, "where too it is narrower than its text, ending before the row's detail",
+                      "text \(Int(cell.titleText.size().width)), name \(cell.titleFrame), detail \(cell.detailFrame)")
+            }
             c.editorArea.close(log)
         }
 
@@ -228,7 +241,8 @@ extension SelfTest {
             let admin = canonicalPath(repo) + "/.git/worktrees/" + (path as NSString).lastPathComponent + "/locked"
             return (try? String(contentsOfFile: admin, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        sh(["worktree", "add", "-q", "-b", "wt/stale", stale])
+        // Named the way Claude Code names its worktrees' branches: a long one, beside the agents.
+        sh(["worktree", "add", "-q", "-b", "worktree-agent-a39109cc29b9d32bf", stale])
         sh(["worktree", "add", "-q", "-b", "wt/live", live])
         // A process that has ended, and this one (started when ps says).
         let ended = Process()
@@ -264,6 +278,15 @@ extension SelfTest {
         check(await wait(15) { !popup.isReading && staleRow().hasPrefix("worktree work-stale (stale lock) · Claude Code: ") },
               "a worktree row shows the agent working in it, and a lock whose process has ended as stale", popup.rowTitles.joined(separator: " | "))
         check(popup.rowTitles.contains("worktree work-live"), "a lock whose process still runs is not stale", popup.rowTitles.joined(separator: " | "))
+        if let index = popup.rowTitles.firstIndex(of: staleRow()) { popup.tableView.scrollRowToVisible(index) }
+        popup.tableView.layoutSubtreeIfNeeded()
+        if let index = popup.rowTitles.firstIndex(of: staleRow()),
+           let cell = popup.tableView.view(atColumn: 0, row: index, makeIfNecessary: true) as? BranchCell {
+            cell.layoutSubtreeIfNeeded()
+            let whole = cell.titleFrame.width >= cell.titleText.size().width && cell.titleFrame.maxX <= cell.detailFrame.minX
+            check(whole, "the worktree's folder name shows whole beside its long branch, stale lock and agent",
+                  "text \(Int(cell.titleText.size().width)), name \(cell.titleFrame), detail \(cell.detailFrame)")
+        }
         check(menuTitles("worktree work-live").contains("Unlock (off)"), "and can't be unlocked from the popup", menuTitles("worktree work-live").joined(separator: " | "))
         await screenshot(popup.panelWindow, suffix: "worktree-rows")
         let title = staleRow()
