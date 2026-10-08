@@ -44,8 +44,8 @@ import Testing
         }
         let answer = try #require(tools.first { $0["name"] as? String == "answer_agent" }?["inputSchema"] as? [String: Any])
         #expect(answer["required"] as? [String] == ["tab_id", "question_id"])
-        // Only the tools that reach a server over ssh go beyond this Mac; everything else stays local.
-        let remote: Set<String> = ["check_host", "new_remote_tab", "host_sessions", "host_changes"]
+        // Only the tools that reach a server over ssh, or GitHub for a skill, go beyond this Mac.
+        let remote: Set<String> = ["check_host", "new_remote_tab", "host_sessions", "host_changes", "install_skill"]
         #expect(tools.allSatisfy { (($0["annotations"] as? [String: Any])?["openWorldHint"] as? Bool) == remote.contains($0["name"] as? String ?? "") })
         // Saving hosts, opening remote tabs and running anything on a host: clients ask first.
         for name in ["add_host", "remove_host", "check_host", "new_remote_tab", "host_sessions", "host_changes"] {
@@ -55,6 +55,11 @@ import Testing
         // A saved host is never re-pointed by add_host (RemoteMCP refuses it): the description says so.
         let addHost = tools.first { $0["name"] as? String == "add_host" }?["description"] as? String ?? ""
         #expect(addHost.contains("only directory and keep change") && addHost.contains("remove_host") && !addHost.contains("is updated"))
+        // Skills: listing only reads; asking to install or remove changes what agents follow, so clients ask first.
+        #expect(hints("list_skills")["readOnlyHint"] as? Bool == true)
+        for name in ["install_skill", "remove_skill"] {
+            #expect(hints(name)["destructiveHint"] as? Bool == true && hints(name)["idempotentHint"] as? Bool == false, "\(name)")
+        }
         // Every schema is a JSON object schema (the raw strings parse).
         #expect(tools.allSatisfy { ($0["inputSchema"] as? [String: Any])?["type"] as? String == "object" })
         #expect(tools.allSatisfy { (($0["_meta"] as? [String: Any])?["anthropic/alwaysLoad"] as? Bool) == true })

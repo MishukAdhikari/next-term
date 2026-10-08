@@ -94,25 +94,35 @@ enum LoginShell {
         return found
     }()
 
-    /// What an interactive login shell (5 s at most) sets that a Finder-launched app lacks: PATH, and the
-    /// ssh agent socket (Secretive, 1Password, gpg-agent for a YubiKey are set up in .zshrc). One probe
-    /// per launch serves the agents' registration and remote tabs' ssh.
+    /// What an interactive login shell (5 s at most) sets that a Finder-launched app lacks: PATH, the
+    /// ssh agent socket (Secretive, 1Password, gpg-agent for a YubiKey are set up in .zshrc), and
+    /// XDG_STATE_HOME (where `npx skills` keeps its lock file when it is set). One probe per launch
+    /// serves the agents' registration, remote tabs' ssh and the Skills library.
     /// The command reads the environment with /usr/bin/env, so it is the same text in zsh, bash, fish and
     /// tcsh (fish and csh reject `${VAR:-}`, and fish's "$PATH" is a list joined by spaces).
-    private static let probed: (path: [String], sshAuthSock: String?) = {
+    private static let probed: (path: [String], sshAuthSock: String?, xdgStateHome: String?) = {
         defer { isProbed = true }
-        let marker = "__NEXTTERM_ENV__"
-        guard let output = capture(shell, ["-l", "-i", "-c", "/usr/bin/printf %s \(marker); /usr/bin/env; /usr/bin/printf %s \(marker)"], timeout: 5)
-        else { return ([], nil) }
+        // A marker no variable's value can contain: unpredictable, made fresh for this probe.
+        let marker = "__NT_" + UUID().uuidString.replacingOccurrences(of: "-", with: "") + "__"
+        // XDG_STATE_HOME is read on its own (printenv between markers): a newline inside another
+        // variable's value could otherwise fake a line of env's output.
+        let command = "/usr/bin/printf %s \(marker); /usr/bin/env; /usr/bin/printf %s \(marker); /usr/bin/printenv XDG_STATE_HOME; /usr/bin/printf %s \(marker)"
+        guard let output = capture(shell, ["-l", "-i", "-c", command], timeout: 5) else { return ([], nil, nil) }
         let parts = output.components(separatedBy: marker)
-        guard parts.count >= 3 else { return ([], nil) }
+        guard parts.count >= 3 else { return ([], nil, nil) }
         var path: [String] = []
         var socket: String?
         for line in parts[1].split(separator: "\n") {
             if line.hasPrefix("PATH=") { path = line.dropFirst(5).split(separator: ":").map(String.init) }
             if line.hasPrefix("SSH_AUTH_SOCK="), line.count > 14 { socket = String(line.dropFirst(14)) }
         }
-        return (path, socket)
+        var state: String?
+        if parts.count >= 4 {
+            let value = parts[2].hasSuffix("\n") ? String(parts[2].dropLast()) : parts[2]
+            // Only an absolute path counts (the XDG rules; a relative one is ignored).
+            if value.hasPrefix("/"), !value.contains("\n") { state = value }
+        }
+        return (path, socket, state)
     }()
 
     /// The probe has run (reading `path` or `sshAuthSock` will not wait for it).
@@ -129,6 +139,9 @@ enum LoginShell {
 
     /// PATH exactly as the login shell sets it, nothing added (empty: the probe failed).
     static var shellPath: [String] { probed.path }
+
+    /// XDG_STATE_HOME as the user's shell sets it, or nil.
+    static var xdgStateHome: String? { probed.xdgStateHome }
 
     /// PATH from an interactive login shell (5 s at most), plus the usual install folders.
     static let path: [String] = {

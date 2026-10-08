@@ -539,6 +539,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             if alert.runModal() != .alertFirstButtonReturn { return .terminateCancel }
         }
         isTerminating = true
+        // A skill change part-way finishes, and records its Undo, before Next Term quits.
+        SkillsStore.waitForChanges()
         return .terminateNow
     }
 
@@ -1130,6 +1132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         window.addItem(.separator())
         window.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         item(window, "Welcome to Next Term", #selector(showWelcome(_:)), "", target: self)
+        item(window, "Skills", #selector(showSkills(_:)), "", target: self)
         NSApp.windowsMenu = window
 
         return main
