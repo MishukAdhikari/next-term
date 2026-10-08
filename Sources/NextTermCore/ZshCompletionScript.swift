@@ -19,6 +19,9 @@ public enum ZshCompletionScript {
         ("@NT_VERSION@", #"1"#),
         ("@NT_WAIT@", #"0.15"#),
         ("@NT_MAX_LINE@", #"16384"#),
+        ("@NT_MAX_MATCHES@", #"2000"#),
+        ("@NT_CHUNK@", #"48000"#),
+        ("@NT_FRAME_WAIT@", #"0.5"#),
     ]
 
     static let template = #"""
@@ -38,6 +41,12 @@ typeset -g __nextterm_copen= __nextterm_cpath= __nextterm_cbase= __nextterm_crbu
 typeset -g __nextterm_ck= __nextterm_cid=
 typeset -g __nextterm_cisearch=
 typeset -ga __nextterm_cf __nextterm_cwords
+# zsh's own matches, kept for the open list: each as compadd quoted it, the options to add it again, its
+# IPREFIX, PREFIX, SUFFIX and ISUFFIX; and what the popup shows: the text, the description, the group, the kind.
+typeset -ga __nextterm_cmw __nextterm_cma __nextterm_cmp __nextterm_cmt __nextterm_cmd __nextterm_cmg __nextterm_cmk
+typeset -gA __nextterm_cmseen
+typeset -g __nextterm_cmstem=
+typeset -gi __nextterm_cmi=0
 
 # A scratch descriptor (close-on-exec, its file already removed) to read what `bindkey` prints without a
 # subshell.
@@ -113,10 +122,10 @@ __nextterm_cframe() {
   local kind id len payload= f v
   __nextterm_ck= __nextterm_cid=
   __nextterm_cf=()
-  read -t 0.5 -k 1 kind && read -t 0.5 -k 6 id && read -t 0.5 -k 6 len || return 1
+  read -t @NT_FRAME_WAIT@ -k 1 kind && read -t @NT_FRAME_WAIT@ -k 6 id && read -t @NT_FRAME_WAIT@ -k 6 len || return 1
   [[ $kind == [a-z] && $id == <-> && $len == <-> ]] || return 1
   (( len = 10#$len, len <= 65536 )) || return 1
-  if (( len )); then read -t 0.5 -k $len payload || return 1; fi
+  if (( len )); then read -t @NT_FRAME_WAIT@ -k $len payload || return 1; fi
   __nextterm_ck=$kind __nextterm_cid=$id
   for f in "${(@s:;:)payload}"; do
     builtin printf -v v %b "$f"
@@ -133,6 +142,8 @@ __nextterm_ckeywidget() {
   case $__nextterm_ck in
     (t) __nextterm_ctab $__nextterm_cid ;;
     (k) [[ $__nextterm_cid == $__nextterm_copen ]] && __nextterm_ctake ;;
+    (n) # Next Term can't show zsh's list: zsh's own Tab.
+        if [[ $__nextterm_cid == $__nextterm_copen ]]; then __nextterm_cclose; zle -U $'\t'; fi ;;
   esac
   return 0
 }
@@ -169,9 +180,7 @@ __nextterm_ctab() {
     __nextterm_cdone $id native
     zle -U $'\t'
   elif (( ${+functions[compdef]} && ${+functions[_main_complete]} )); then
-    # With zsh's completion system loaded, its own Tab answers for now.
-    __nextterm_cdone $id native
-    zle -U $'\t'
+    __nextterm_csystem $id
   else
     __nextterm_cengine $id
   fi
@@ -202,7 +211,7 @@ __nextterm_cengine() {
       return 0
     fi
     rest=
-    [[ $c == $'\e' ]] && read -t 0.5 -k $(( ${#__nextterm_ckey} - 1 )) rest
+    [[ $c == $'\e' ]] && read -t @NT_FRAME_WAIT@ -k $(( ${#__nextterm_ckey} - 1 )) rest
     if [[ $c$rest != $__nextterm_ckey ]]; then
       # Not an answer: the keys go back to the line, after zsh's own Tab.
       __nextterm_cdone $id native
@@ -222,6 +231,140 @@ __nextterm_cengine() {
     (*) zle -U $'\t' ;;
   esac
   return 0
+}
+
+# compadd while Next Term reads zsh's own matches (the technique of fzf-tab and zsh-capture-completion, both
+# MIT): each match is kept with what it takes to add it again, and none reaches zsh's own list.
+__nextterm_ccompadd() {
+  local -A apre hpre dscrs oad
+  local -a opts ign expl isfile hits dscr
+  zparseopts -E -a opts P:=apre p:=hpre d:=dscrs X+:=expl O:=oad A:=oad D:=oad f=isfile x:=ign \
+    i: S: s: I: r: R: W: F: M+: E: q e Q n U C J:=ign V:=ign a=ign l=ign k=ign o=ign 1=ign 2=ign
+  # compadd asked only to match (-O, -A, -D): it adds nothing, so it runs as it is.
+  if (( ${#oad} )); then
+    builtin compadd "$@"
+    return
+  fi
+  (( ${#dscrs} == 1 )) && dscr=( "${(@P)${(v)dscrs}}" )
+  builtin compadd -A hits -D dscr "$@"
+  local ret=$?
+  emulate -L zsh -o extendedglob
+  (( ${#hits} )) || return $ret
+  local i dir= suffix= kind word stem=$IPREFIX${hpre[-p]-}
+  for (( i = 1; i < ${#opts}; i++ )); do
+    [[ $opts[i] == -W ]] && dir=$opts[i+1]
+    [[ $opts[i] == -S ]] && suffix=$opts[i+1]
+  done
+  [[ -z $dir && -n $isfile ]] && dir=${(Q)${hpre[-p]-}}
+  [[ -n $dir && $dir != */ ]] && dir+=/
+  opts+=( "${(@kv)apre}" "${(@kv)hpre}" $isfile )
+  [[ -n $__nextterm_cmstem || ${#__nextterm_cmw} -gt 0 ]] || __nextterm_cmstem=$stem
+  for (( i = 1; i <= ${#hits}; i++ )); do
+    word=$hits[i]
+    (( ${+__nextterm_cmseen[$word]} )) && continue
+    __nextterm_cmseen[$word]=1
+    kind=
+    if [[ $word == */ || $suffix == / ]] || { [[ -n $isfile ]] && (( ${#__nextterm_cmw} < @NT_MAX_MATCHES@ )) && [[ -d $dir${(Q)word} ]]; }; then
+      kind=d
+    elif [[ -n $isfile ]]; then
+      kind=f
+    fi
+    __nextterm_cmw+=( "$word" )
+    __nextterm_cma+=( "${(pj:\1:)opts}" )
+    __nextterm_cmp+=( "$IPREFIX"$'\1'"$PREFIX"$'\1'"$SUFFIX"$'\1'"$ISUFFIX" )
+    __nextterm_cmt+=( "${(Q)word}" )
+    __nextterm_cmd+=( "${dscr[i]-}" )
+    __nextterm_cmg+=( "${expl[2]-}" )
+    __nextterm_cmk+=( "$kind" )
+  done
+  # zsh counts the call as a success, so the completers after it don't run, as with its own Tab.
+  builtin compadd -U -qS '' ''
+}
+
+# The completion widget that reads zsh's matches: the user's own completion (fzf-tab's copy of it when fzf-tab
+# is loaded, so fzf never starts), with compadd standing in, and nothing inserted or listed. It runs with the
+# user's options, as zsh's own Tab does.
+__nextterm_ccapture() {
+  local __nextterm_had=${+functions[compadd]} __nextterm_old=${functions[compadd]-}
+  functions[compadd]=${functions[__nextterm_ccompadd]}
+  {
+    # `|| true`: no match is no error, even under the user's err_return.
+    if (( ${+functions[_ftb__main_complete]} )); then _ftb__main_complete || true; else _main_complete || true; fi
+  } always {
+    if (( __nextterm_had )); then functions[compadd]=$__nextterm_old; else unfunction compadd; fi
+  }
+  compstate[insert]=
+  compstate[list]=
+  return 0
+}
+
+# The completion widget that adds match $__nextterm_cmi again, with the options zsh gave it, so zsh quotes and
+# inserts it as its own Tab would: the word typed so far is replaced, then a space unless it's a folder.
+__nextterm_ctakematch() {
+  emulate -L zsh
+  local i=$__nextterm_cmi
+  local -a parts args
+  parts=( "${(@ps:\1:)__nextterm_cmp[i]}" )
+  args=( "${(@ps:\1:)__nextterm_cma[i]}" )
+  [[ -z ${args[1]-} ]] && args=()
+  IPREFIX=${parts[1]-} PREFIX=${parts[2]-} SUFFIX=${parts[3]-} ISUFFIX=${parts[4]-}
+  builtin compadd "${args[@]}" -U -Q -- "$__nextterm_cmw[i]"
+  compstate[insert]=1
+  [[ $RBUFFER == ' '* ]] || compstate[insert]+=' '
+  compstate[list]=
+  return 0
+}
+
+# With zsh's completion system loaded: zsh's own matches. None: zsh's own Tab. One: it goes in. More: they go to
+# Next Term in `comp` marks, and the list opens.
+__nextterm_csystem() {
+  emulate -L zsh
+  local id=$1
+  __nextterm_cmw=() __nextterm_cma=() __nextterm_cmp=() __nextterm_cmt=() __nextterm_cmd=() __nextterm_cmg=() __nextterm_cmk=()
+  __nextterm_cmseen=() __nextterm_cmstem=
+  # Defined only now: a completion widget in a shell without zsh's completion system would leave its own Tab
+  # with nothing to complete.
+  (( ${+widgets[__nextterm_ccapturewidget]} )) || zle -C __nextterm_ccapturewidget complete-word __nextterm_ccapture
+  (( ${+widgets[__nextterm_ctakewidget]} )) || zle -C __nextterm_ctakewidget complete-word __nextterm_ctakematch
+  zle __nextterm_ccapturewidget
+  case ${#__nextterm_cmw} in
+    (0) __nextterm_cdone $id native
+        zle -U $'\t' ;;
+    (1) __nextterm_cmi=1
+        zle __nextterm_ctakewidget
+        __nextterm_cdone $id inserted ;;
+    (*) __nextterm_ccomp $id
+        __nextterm_copenlist $id z ;;
+  esac
+  return 0
+}
+
+# The matches as `comp` marks: the total, then the first @NT_MAX_MATCHES@ in chunks of under @NT_CHUNK@ bytes.
+__nextterm_ccomp() {
+  emulate -L zsh
+  local id=$1 n=${#__nextterm_cmw} i item chunk=
+  local -a texts dscrs groups chunks
+  (( n > @NT_MAX_MATCHES@ )) && n=@NT_MAX_MATCHES@
+  __nextterm_cencall "${(@)__nextterm_cmt[1,n]}"
+  texts=( "${reply[@]}" )
+  __nextterm_cencall "${(@)__nextterm_cmd[1,n]}"
+  dscrs=( "${reply[@]}" )
+  __nextterm_cencall "${(@)__nextterm_cmg[1,n]}"
+  groups=( "${reply[@]}" )
+  for (( i = 1; i <= n; i++ )); do
+    item="$texts[i],$dscrs[i],$groups[i],$__nextterm_cmk[i]"
+    if (( ${#chunk} + ${#item} >= @NT_CHUNK@ )) && [[ -n $chunk ]]; then
+      chunks+=( "$chunk" )
+      chunk=
+    fi
+    chunk+="${chunk:+ }$item"
+  done
+  chunks+=( "$chunk" )
+  __nextterm_cencall "$__nextterm_cmstem" "${(Q)__nextterm_cmstem}"
+  local stem=$reply[1] stemq=$reply[2]
+  for (( i = 1; i <= ${#chunks}; i++ )); do
+    __nextterm_cmark comp $id ${#__nextterm_cmw} $i ${#chunks} "$stem" "$stemq" "$chunks[i]"
+  done
 }
 
 # A list is open for `id`: its word is reported as the line changes, until the cursor leaves it.
@@ -276,6 +419,14 @@ __nextterm_ctake() {
   case $how in
     (w) # Next Term's own: the new word, quoted by Next Term.
       if (( same )); then LBUFFER=$__nextterm_cbase${__nextterm_cf[3]-}; else zle beep; fi ;;
+    (m) # zsh's own, by its place in the list: zsh adds it again and quotes it.
+      local index=${__nextterm_cf[3]-}
+      if (( same )) && [[ $__nextterm_cpath == z && $index == <1-> ]] && (( index <= ${#__nextterm_cmw} )); then
+        __nextterm_cmi=$index
+        zle __nextterm_ctakewidget
+      else
+        zle beep
+      fi ;;
   esac
   __nextterm_cclose
   return 0

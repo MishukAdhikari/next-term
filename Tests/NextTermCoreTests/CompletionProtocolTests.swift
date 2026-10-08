@@ -68,10 +68,14 @@ import Testing
         #expect(message("\(n);done;000007;inserted") == .done(id: 7, outcome: .inserted))
         #expect(message("\(n);line;000007;0;Sou;Sou") == .line(.init(id: 7, left: false, word: "Sou", unquoted: "Sou")))
         #expect(message("\(n);line;000007;1") == .line(.init(id: 7, left: true)))
-        let comp = message("\(n);comp;000008;3;1;1;Sources,,,d \(percent("My Fo'lder $x")),\(percent("a folder")),\(percent("local, dirs")),d main,,,")
+        let items = "Sources,,,d \(percent("My Fo'lder $x")),\(percent("a folder")),\(percent("local, dirs")),d main,\(percent("main  -- [HEAD]  init")),,"
+        let comp = message("\(n);comp;000008;3;1;1;\(percent("My\\ F/"));\(percent("My F/"));\(items)")
         guard case let .comp(chunk)? = comp else { Issue.record("no comp"); return }
         #expect(chunk.total == 3 && chunk.matches.map(\.text) == ["Sources", "My Fo'lder $x", "main"])
         #expect(chunk.matches[1].description == "a folder" && chunk.matches[1].group == "local, dirs" && chunk.matches[2].kind == .other)
+        #expect(chunk.stem == "My\\ F/" && chunk.stemUnquoted == "My F/")
+        // zsh's display string, without the match it starts with.
+        #expect(chunk.matches[2].description == "[HEAD]  init")
     }
 
     @Test func edgeCases() {
@@ -98,8 +102,9 @@ import Testing
         #expect(message("\(n);done;-1;native") == nil)
         #expect(message("\(n);done;000001;maybe") == nil)
         #expect(message("\(n);line;000001;0;x") == nil)
-        #expect(message("\(n);comp;000001;1;2;1;a,b,c,d") == nil)          // chunk 2 of 1
-        #expect(message("\(n);comp;000001;1;1;1;a,b") == nil)              // an item with two fields
+        #expect(message("\(n);comp;000001;1;2;1;;;a,b,c,d") == nil)        // chunk 2 of 1
+        #expect(message("\(n);comp;000001;1;1;1;;;a,b") == nil)            // an item with two fields
+        #expect(message("\(n);comp;000001;1;1;1;a,b,c,d") == nil)          // no stem
         #expect(message("\(n);tab;000001;/") == nil)
         let huge = String(repeating: "A", count: 70_000)
         #expect(parse("\(n);tab;000001;\(huge);;;;;;;;") == nil)          // over 64 KiB
@@ -173,6 +178,9 @@ import Testing
         #expect(values["@NT_VERSION@"] == String(CompletionProtocol.version))
         #expect(values["@NT_WAIT@"].flatMap(Double.init) == CompletionProtocol.shellWait)
         #expect(values["@NT_MAX_LINE@"] == String(CompletionProtocol.maxLineBytes))
+        #expect(values["@NT_MAX_MATCHES@"] == String(CompletionProtocol.maxMatches))
+        #expect(values["@NT_CHUNK@"] == String(CompletionProtocol.chunkBytes))
+        #expect(values["@NT_FRAME_WAIT@"].flatMap(Double.init) == CompletionProtocol.frameWait)
         #expect(CompletionProtocol.answerWithin < CompletionProtocol.shellWait)
         // Every placeholder has a use, and none is left once filled.
         #expect(values.keys.allSatisfy { ZshCompletionScript.template.contains($0) })

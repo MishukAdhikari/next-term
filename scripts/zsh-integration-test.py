@@ -6,7 +6,7 @@ Runs:
 - the user's own zsh config (whatever this machine has), with Tab completion on;
 - a hostile config (`setopt nounset ksh_arrays err_return`), with Tab completion on, which also drives
   Next Term's own engine path (no compinit there);
-- zsh's completion system (`compinit -u -D` in a temp ZDOTDIR);
+- zsh's completion system (`compinit -u -D` in a temp ZDOTDIR), with the user's options and hostile ones;
 - Tab completion off: no completion mark at all, the other marks as before;
 - once on zsh 5.8 (macOS 13's) when one is found (NT_ZSH58 or a few usual places), else skipped;
 - the prefix through tmux with `extended-keys` and `user-keys`, when tmux is installed, else skipped;
@@ -544,20 +544,165 @@ sh.send("true\r", 0.6)
 check(arms(sh, start), "a plugin that replaces zle-line-init in its precmd: `arm` comes back at the next prompt", str(arms(sh, start)))
 sh.close()
 
-# 7. zsh's completion system loaded: its own Tab answers the private key, for now.
-compdot = tempfile.mkdtemp()
-open(os.path.join(compdot, ".zshrc"), "w").write(
-    "PS1='$ '\nautoload -Uz compinit && compinit -u -D\nzstyle ':completion:*' menu select\nzmodload zsh/complist\n")
-sh = Shell("zsh's completion system", compdot, cwd=tree)
-a = arms(sh)
-check(a and a[-1][4] == "1", "[zsh's completion system] `arm` says zsh's completion system is loaded", str(a[-1:]))
-start = len(sh.buf)
-sh.send("cd Te", 0.3)
-tab_key(sh, 21, 0.3)
-check(["000021", "native"] in [f for _, k, f in sh.marks(start) if k == "done"] and drawn(sh, start, "cd Tests/"),
-      "[zsh's completion system] the private Tab key: done native, then zsh's own Tab", repr(sh.line(start)))
-check(not sh.errors(), "[zsh's completion system] no errors from the completion hook")
-sh.close()
+# 7. zsh's completion system loaded: zsh's own matches, read by the hook and listed by Next Term.
+def comp_list(shell, since, ident):
+    """The `comp` marks for an id, put together: (total, [(text, description, kind)], stem, sizes of the marks)."""
+    chunks, total, stem, sizes = {}, None, None, []
+    for raw in re.findall(r"\x1b\]6973;([^\x07]*)\x07", shell.buf[since:].decode("latin1")):
+        parts = raw.split(";")
+        if len(parts) >= 9 and parts[1] == "comp" and parts[2] == "%06d" % ident:
+            total, stem = int(parts[3]), (pdec(parts[6]), pdec(parts[7]))
+            chunks[int(parts[4])] = parts[8]
+            sizes.append(len(raw))
+    items = []
+    for number in sorted(chunks):
+        for item in chunks[number].split(" ") if chunks[number] else []:
+            text, dscr, group, kind = item.split(",")
+            items.append((pdec(text), pdec(dscr), kind))
+    return total, items, stem, sizes
+
+def compsys_checks(label, rc_extra=""):
+    compdot = tempfile.mkdtemp()
+    open(os.path.join(compdot, ".zshrc"), "w").write(
+        rc_extra + "PS1='$ '\nautoload -Uz compinit && compinit -u -D\nzstyle ':completion:*' menu select\nzmodload zsh/complist\n"
+        "_ntprint() { print -n 'junk from a completer' >/dev/tty; compadd alpha beta }\ncompdef _ntprint ntprint\n")
+    sh = Shell(label, compdot, cwd=tree)
+    a = arms(sh)
+    check(a and a[-1][4] == "1", f"[{label}] `arm` says zsh's completion system is loaded", str(a[-1:]))
+
+    # One match goes in directly, quoted and finished by zsh.
+    start = len(sh.buf)
+    sh.send("cd Te", 0.3)
+    tab_key(sh, 21, 0.5)
+    check(["000021", "inserted"] in [f for _, k, f in sh.marks(start) if k == "done"] and drawn(sh, start, "cd Tests/"),
+          f"[{label}] one match: zsh inserts it and reports done", repr(sh.line(start)))
+    sh.send("\x03", 0.4)
+
+    # No match: done native, then zsh's own Tab.
+    start = len(sh.buf)
+    sh.send("ls zzqq", 0.3)
+    tab_key(sh, 22, 0.5)
+    check(["000022", "native"] in [f for _, k, f in sh.marks(start) if k == "done"] and not comp_list(sh, start, 22)[1],
+          f"[{label}] no match: done native, and no list", str([k for _, k, _ in sh.marks(start)]))
+    sh.send("\x03", 0.4)
+
+    # `cd ` lists folders only; the list opens with one `line` mark; `take` by index inserts zsh's quoting.
+    start = len(sh.buf)
+    sh.send("cd ", 0.3)
+    tab_key(sh, 23, 0.6)
+    total, items, stem, _ = comp_list(sh, start, 23)
+    names = sorted(t.rstrip("/") for t, _, _ in items)
+    check(names == sorted(["Sources", "Resources", "Tests", "My Fo'lder $x", "café"]),
+          f"[{label}] `cd ` lists only the folders, from zsh", str(names))
+    check(total == len(items) and all(k == "d" for _, _, k in items), f"[{label}] with the total and each one a folder", str(items))
+    lines = [f for _, k, f in sh.marks(start) if k == "line"]
+    check(lines == [["000023", "0", "", ""]], f"[{label}] the list opens with one `line` mark", str(lines))
+    index = next((i + 1 for i, (t, _, _) in enumerate(items) if t.startswith("My Fo")), 0)
+    sh.send(frame("k", 23, ["m", "", str(index)]), 0.5)
+    check(drawn(sh, start, "cd My\\ Fo\\'lder\\ \\$x/"), f"[{label}] `take` by index: zsh quotes the name", repr(sh.line(start)))
+    sh.send("\x03", 0.4)
+
+    # Letters typed while the list is open, then the take: the word typed so far is replaced.
+    start = len(sh.buf)
+    sh.send("cd ", 0.3)
+    tab_key(sh, 24, 0.6)
+    total, items, _, _ = comp_list(sh, start, 24)
+    sh.send("Sou", 0.4)
+    lines = [f for _, k, f in sh.marks(start) if k == "line"]
+    check(lines[-1:] == [["000024", "0", "Sou", "Sou"]], f"[{label}] typing reports the word", str(lines))
+    index = next((i + 1 for i, (t, _, _) in enumerate(items) if t.startswith("Sources")), 0)
+    mark = len(sh.buf)
+    sh.send(frame("k", 23, ["m", "Sou", str(index)]), 0.4)
+    check("Sources" not in sh.screen(mark), f"[{label}] a stale id changes nothing", repr(sh.screen(mark)))
+    sh.send(frame("k", 24, ["m", "Sou", str(index)]), 0.5)
+    check(drawn(sh, start, "cd Sources/"), f"[{label}] the take replaces the word typed since", repr(sh.line(start)))
+    sh.send("\x03", 0.4)
+    start = len(sh.buf)
+    sh.send("cd ", 0.3)
+    tab_key(sh, 30, 0.6)
+    sh.send(frame("k", 30, ["m", "", "99"]), 0.4)
+    check(drawn(sh, start, "cd") and "Sources" not in sh.screen(start + 1), f"[{label}] a stale index changes nothing",
+          repr(sh.line(start)))
+    sh.send("\x03", 0.4)
+
+    # git checkout lists the branches of a temp repo (AE8), and take inserts one, a space after it.
+    repo = tempfile.mkdtemp()
+    git = ["git", "-C", repo, "-c", "user.email=t@example.com", "-c", "user.name=t"]
+    subprocess.run(["git", "init", "-q", "-b", "main", repo], check=True)
+    subprocess.run(git + ["commit", "-q", "--allow-empty", "-m", "first"], check=True)
+    subprocess.run(git + ["branch", "feature/x"], check=True)
+    sh.send(f"cd {repo}\r", 0.6)
+    start = len(sh.buf)
+    sh.send("git checkout ", 0.3)
+    tab_key(sh, 25, 3)
+    total, items, _, _ = comp_list(sh, start, 25)
+    texts = [t for t, _, _ in items]
+    check("main" in texts and "feature/x" in texts, f"[{label}] `git checkout ` lists the branches", str(texts[:12]))
+    check(any(d for _, d, _ in items), f"[{label}] with zsh's descriptions", str(items[:6]))
+    check(len(texts) == len(set(texts)), f"[{label}] each match once", str(texts))
+    sh.send(frame("k", 25, ["m", "", str(texts.index("main") + 1 if "main" in texts else 0)]), 0.5)
+    sh.send("X", 0.3)
+    check(drawn(sh, start, "git checkout main X"), f"[{label}] take gives `git checkout main `, a space after it", repr(sh.line(start)))
+    sh.send("\x03", 0.4)
+    sh.send(f"cd {tree}\r", 0.6)
+    shutil.rmtree(repo, ignore_errors=True)
+
+    # A completer that prints to the terminal doesn't break the marks.
+    start = len(sh.buf)
+    sh.send("ntprint ", 0.3)
+    tab_key(sh, 26, 0.6)
+    total, items, _, _ = comp_list(sh, start, 26)
+    check([t for t, _, _ in items] == ["alpha", "beta"], f"[{label}] a completer that prints: the marks still read", str(items))
+    sh.send(frame("k", 26, ["c"]), 0.3)
+    sh.send("\x03", 0.4)
+
+    # A nested folder: the stem is the folder part, and the names are what follows it.
+    start = len(sh.buf)
+    sh.send("ls Sources/", 0.3)
+    tab_key(sh, 27, 0.6)
+    total, items, stem, _ = comp_list(sh, start, 27)
+    check(stem == ("Sources/", "Sources/") and sorted(t.rstrip("/") for t, _, _ in items) == ["inner", "insect", "main.swift"],
+          f"[{label}] in a nested folder the stem is the folder", f"{stem} {items}")
+    sh.send(frame("k", 27, ["c"]), 0.3)
+    sh.send("\x03", 0.4)
+
+    # 3,000 matches: the total, then 2,000 in marks under 64 KiB.
+    start = len(sh.buf)
+    sh.send(f"ls {many}/", 0.3)
+    tab_key(sh, 28, 4)
+    total, items, _, sizes = comp_list(sh, start, 28)
+    check(total == 3000 and len(items) == 2000 and len(sizes) > 1 and max(sizes) < 65536 and items[0][0].startswith("a-file"),
+          f"[{label}] 3,000 matches: a total of 3,000, 2,000 sent in marks under 64 KiB", f"{total} {len(items)} {sizes}")
+    sh.send(frame("k", 28, ["c"]), 0.3)
+    sh.send("\x03", 0.4)
+
+    # The `n` key: Next Term can't show the list, so zsh's own Tab runs, and the line reports stop.
+    start = len(sh.buf)
+    sh.send("cd ", 0.3)
+    tab_key(sh, 29, 0.6)
+    sh.send(frame("n", 29), 0.8)
+    shown = sh.screen(start)
+    before = len(sh.marks(start))
+    check("Resources" in shown and "Tests" in shown, f"[{label}] the `n` key: zsh's own Tab lists", repr(shown[-200:]))
+    sh.send("\x03\x03", 0.4)
+    check(not [k for _, k, _ in sh.marks(start)[before:] if k == "line"], f"[{label}] and the line reports stop")
+
+    errors = sh.errors()
+    for l in errors:
+        print("  hook error:", l.strip()[:200])
+    check(not errors, f"[{label}] no errors from the completion hook")
+    check("6973" not in sh.screen(), f"[{label}] no junk on the line")
+    sh.close()
+
+os.makedirs(os.path.join(tree, "Sources", "inner"))
+os.makedirs(os.path.join(tree, "Sources", "insect"))
+open(os.path.join(tree, "Sources", "main.swift"), "w").close()
+many = tempfile.mkdtemp()
+for i in range(3000):
+    open(os.path.join(many, "a-file-with-a-name-long-enough-to-need-two-marks-%04d" % i), "w").close()
+compsys_checks("zsh's completion system")
+compsys_checks("zsh's completion system, hostile options", "setopt nounset ksh_arrays err_return\n")
+shutil.rmtree(many, ignore_errors=True)
 
 # 8. The user's own config, driven: whichever path it is on, Tab never leaves junk.
 sh = Shell("user config, driven", os.environ.get("ZDOTDIR", ""), cwd=tree)

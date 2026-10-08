@@ -8,7 +8,7 @@ import Foundation
 ///
 ///     arm ; version ; keymap ; context ; bound ; completion system ; ^I widget ; its definition ; plugins ; quieted
 ///     tab ; id ; folder ; LBUFFER ; RBUFFER ; PREBUFFER ; words ; word ; word unquoted ; head ; head resolved
-///     comp ; id ; total ; chunk ; chunks ; text,description,group,kind …
+///     comp ; id ; total ; chunk ; chunks ; stem ; stem unquoted ; text,description,group,kind …
 ///     done ; id ; native | inserted
 ///     line ; id ; left ; word ; word unquoted
 ///
@@ -34,6 +34,8 @@ public enum CompletionProtocol {
     /// Matches sent in `comp` marks (the total is sent too), and each mark's share of them in bytes.
     public static let maxMatches = 2000
     public static let chunkBytes = 48_000
+    /// How long the hook waits for anything it reads after the private key (seconds).
+    public static let frameWait = 0.5
     static let idWidth = 6
 
     public static let markKinds: Set<Substring> = ["arm", "tab", "comp", "done", "line"]
@@ -141,6 +143,17 @@ public enum CompletionProtocol {
             self.kind = kind
             self.index = index
         }
+
+        /// zsh's display string for a match ("main  -- the default branch") without the match itself: what
+        /// the popup shows beside it. Empty when it says nothing more.
+        static func description(_ display: String, of text: String) -> String {
+            var rest = Substring(display)
+            if rest.hasPrefix(text) { rest = rest.dropFirst(text.count) }
+            rest = rest.drop { $0 == " " }
+            if rest.hasPrefix("--") { rest = rest.dropFirst(2) }
+            let trimmed = rest.trimmingCharacters(in: .whitespaces)
+            return trimmed == text ? "" : trimmed
+        }
     }
 
     public struct CompChunk: Equatable, Sendable {
@@ -148,7 +161,20 @@ public enum CompletionProtocol {
         public var total: Int
         public var number: Int
         public var count: Int
+        /// The word before the matches, as typed and unquoted: `Sources/` for `ls Sources/in`, `$` for `$HO`.
+        public var stem: String
+        public var stemUnquoted: String
         public var matches: [Match]
+
+        public init(id: Int, total: Int, number: Int, count: Int, stem: String = "", stemUnquoted: String = "", matches: [Match]) {
+            self.id = id
+            self.total = total
+            self.number = number
+            self.count = count
+            self.stem = stem
+            self.stemUnquoted = stemUnquoted
+            self.matches = matches
+        }
     }
 
     public enum Outcome: String, Sendable {
@@ -217,19 +243,21 @@ public enum CompletionProtocol {
     }
 
     private static func parseComp(_ fields: [Substring]) -> Message? {
-        guard fields.count == 5, let id = number(fields[0]), let total = number(fields[1]), let chunk = number(fields[2]),
+        guard fields.count == 7, let id = number(fields[0]), let total = number(fields[1]), let chunk = number(fields[2]),
               let count = number(fields[3]), chunk >= 1, chunk <= count, count <= 1000 else { return nil }
         var matches: [Match] = []
-        if !fields[4].isEmpty {
-            for item in fields[4].split(separator: " ") {
+        if !fields[6].isEmpty {
+            for item in fields[6].split(separator: " ") {
                 let parts = item.split(separator: ",", omittingEmptySubsequences: false)
                 guard parts.count == 4 else { return nil }
                 let kind = MatchKind(rawValue: String(parts[3])) ?? .other
-                matches.append(Match(text: text(parts[0]).value, description: text(parts[1]).value, group: text(parts[2]).value,
-                                     kind: kind, index: 0))
+                let shown = text(parts[0]).value
+                let description = Match.description(text(parts[1]).value, of: shown)
+                matches.append(Match(text: shown, description: description, group: text(parts[2]).value, kind: kind, index: 0))
             }
         }
-        return .comp(CompChunk(id: id, total: total, number: chunk, count: count, matches: matches))
+        return .comp(CompChunk(id: id, total: total, number: chunk, count: count, stem: text(fields[4]).value,
+                               stemUnquoted: text(fields[5]).value, matches: matches))
     }
 
     private static func parseLine(_ fields: [Substring]) -> Message? {
