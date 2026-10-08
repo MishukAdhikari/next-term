@@ -150,7 +150,7 @@ In the Git Log: <kbd>↑</kbd> and <kbd>↓</kbd> move through the commits, <kbd
 
 Each of these belongs to one part of the window and works only there. **Settings › Keyboard Shortcuts** lists them after the menu commands, with the part each belongs to, and changes them as it changes a menu command’s; a tooltip that names one, such as **Accept**’s on a proposed edit, follows it. In the project sidebar and the Git lists, where nothing is typed, a key needs no <kbd>⌘</kbd> or <kbd>⌃</kbd>: <kbd>↩︎</kbd> will do on its own, and <kbd>↩︎</kbd>, <kbd>⌫</kbd> or <kbd>⌦</kbd> with <kbd>⇧</kbd> or <kbd>⌥</kbd>.
 
-The project sidebar’s are the items of its right-click menu, and the menu shows each one’s key the way the menu bar does, as you have set it. The key does what the item does, to the selected rows, while the sidebar has the keyboard; anywhere else it does what it did before. The menu’s **Send to Agent**, **Show Changes** (and **Show What Was Deleted**) and **Show All Sessions…** are the menu bar’s commands, <kbd>⌥⌘K</kbd>, <kbd>⌥⌘G</kbd> and <kbd>⌥⌘O</kbd>, which act on the sidebar’s selection while it has the keyboard.
+The project sidebar’s are the items of its right-click menu, and the menu shows each one’s key the way the menu bar does, as you have set it; a key without <kbd>⌘</kbd> or <kbd>⌃</kbd>, such as Rename’s <kbd>↩︎</kbd>, is in the item’s tooltip instead. The key does what the item does, to the selected rows, while the sidebar has the keyboard; anywhere else it does what it did before. If you gave one of these keys to a menu command yourself before it was a sidebar command’s default, it stays the menu command’s, and that sidebar command has no key until you give it one. The menu’s **Send to Agent**, **Show Changes** (and **Show What Was Deleted**) and **Show All Sessions…** are the menu bar’s commands, <kbd>⌥⌘K</kbd>, <kbd>⌥⌘G</kbd> and <kbd>⌥⌘O</kbd>, which act on the sidebar’s selection while it has the keyboard.
 
 | Part of the window | Command | Default |
 |---|---|---|
@@ -164,10 +164,10 @@ The project sidebar’s are the items of its right-click menu, and the menu show
 | Project Sidebar | Move to Trash | <kbd>⌘⌫</kbd> |
 | Project Sidebar | Insert Path in Terminal | — |
 | Project Sidebar | Copy Path, Copy Relative Path (a deleted file’s too) | <kbd>⌥⌘C</kbd>, <kbd>⌥⇧⌘C</kbd> |
-| Project Sidebar | Refresh: the files, or the Databases or Agent Sessions group on its row | — |
+| Project Sidebar | Refresh: the files, or the Databases or Agent Sessions group (from any of its rows) | — |
 | Project Sidebar | Open in TablePlus, Open in Vercel, Copy Connection Name, Reveal Source File (a Databases row) | — |
 | Project Sidebar | Fork Session, Copy Resume Command (an Agent Sessions row) | — |
-| Project Sidebar | Continue Latest Session: the first agent’s in the Agent Sessions group’s menu | — |
+| Project Sidebar | Continue Latest Session: the first agent’s in the Agent Sessions group’s menu (from any of its rows) | — |
 | Git Log, Git Diff and Compare lists | Open Commit or File: from a commit to its changed files, a file’s diff, or from the Git Diff tab’s file list to the diff | <kbd>↩︎</kbd> |
 | Proposed Edit | Accept an agent’s proposed edit | <kbd>⌘↩︎</kbd> |
 | Branch Popup | Fetch | <kbd>⌘R</kbd> |
