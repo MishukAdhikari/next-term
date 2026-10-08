@@ -8,7 +8,7 @@ import NextTermCore
 /// Return checks a branch out; → opens everything else that can be done with it.
 final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate, NSMenuDelegate {
     enum Action: CaseIterable {
-        case update, commit, push, newBranch, checkoutRevision, gitLog, fetch, gitCommands
+        case update, commit, push, newBranch, checkoutRevision, gitLog, gitDiff, fetch, gitCommands
         case continueOperation, skipStep, abortOperation, resolveWithAgent
 
         var title: String {
@@ -19,6 +19,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             case .newBranch: return "New Branch…"
             case .checkoutRevision: return "Checkout Tag or Revision…"
             case .gitLog: return "Git Log"
+            case .gitDiff: return "Git Diff"
             case .fetch: return "Fetch"
             case .gitCommands: return "Git Commands"
             case .continueOperation: return "Continue"
@@ -36,6 +37,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             case .newBranch: return "plus"
             case .checkoutRevision: return "tag"
             case .gitLog: return "point.3.connected.trianglepath.dotted"
+            case .gitDiff: return "plus.forwardslash.minus"
             case .fetch: return "arrow.triangle.2.circlepath"
             case .gitCommands: return "list.bullet.rectangle"
             case .continueOperation: return "play"
@@ -54,6 +56,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             case .newBranch: return "branch create new"
             case .checkoutRevision: return "switch checkout tag revision commit detach"
             case .gitLog: return "log history graph commits"
+            case .gitDiff: return "diff changes compare review"
             case .fetch: return "fetch refresh"
             case .gitCommands: return "commands ran log"
             default: return ""
@@ -240,6 +243,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         rows.append(.action(.newBranch, hint: model.current == nil ? "from here" : "", enabled: true))
         rows.append(.action(.checkoutRevision, hint: "", enabled: true))
         rows.append(.action(.gitLog, hint: "", enabled: true))
+        rows.append(.action(.gitDiff, hint: "", enabled: true))
         return rows
     }
 
@@ -447,6 +451,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         case .checkoutRevision: actions.askRevision()
         case .fetch: actions.fetch()
         case .gitLog: window?.openGitLog(root: model?.root ?? directory)
+        case .gitDiff: window?.openGitDiff(root: model?.root ?? directory)
         case .gitCommands: GitCommandsWindowController.shared.present()
         case .continueOperation: actions.inProgress(["--continue"])
         case .skipStep: actions.inProgress(["--skip"])
