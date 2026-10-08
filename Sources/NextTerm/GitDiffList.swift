@@ -183,6 +183,9 @@ final class GitDiffListView: NSView, NSOutlineViewDataSource, NSOutlineViewDeleg
         }
     }
 
+    /// For the self-test: the selected file row, as `rowTitles` words it.
+    var selectedTitle: String? { outline.selectedRow >= 0 ? rowTitles[safe: outline.selectedRow] : nil }
+
     /// For the self-test: the scope rows as words.
     var scopeTitles: [String] {
         scopeRows.map { row in
