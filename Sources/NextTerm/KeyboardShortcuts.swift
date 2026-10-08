@@ -403,6 +403,7 @@ final class KeyHint: NSTextField {
         let key = KeyboardShortcuts.shared.key(for: command)?.display ?? ""
         guard key != stringValue else { return }
         stringValue = key
+        if key.isEmpty { pointerOnIcon = false } // its exit would never come: a key given later starts clean
         button?.setAccessibilityHelp(key.isEmpty ? nil : key)
         superview?.needsLayout = true // its owner decides again whether there is room
         updateOverlay()
@@ -433,8 +434,9 @@ final class KeyHint: NSTextField {
 
     /// The pointer came onto the button's icon or left it (the button's tracking area, or the rail's own).
     func pointer(onIcon: Bool) {
-        guard onIcon != pointerOnIcon else { return }
-        pointerOnIcon = onIcon
+        let on = onIcon && !key.isEmpty // with no key nothing shows, and nothing would hear that the pointer went
+        guard on != pointerOnIcon else { return }
+        pointerOnIcon = on
         updateOverlay()
     }
 
@@ -457,14 +459,20 @@ final class KeyHint: NSTextField {
             overlay?.isHidden = true
             return
         }
-        let overlay = self.overlay ?? KeyHintOverlay(hint: self)
-        self.overlay = overlay
         var text = frame
         if let button, text.minX - KeyHintOverlay.padding < keepClear {
             text.origin.x = button.frame.midX + iconWidth / 2 + Self.gap
         }
+        let area = overlayBounds ?? superview.bounds
+        // Cut at the area's edge (a long key on the narrow rail), it would read as another key: none then.
+        guard text.minX >= area.minX, text.maxX <= area.maxX else {
+            overlay?.isHidden = true
+            return
+        }
+        let overlay = self.overlay ?? KeyHintOverlay(hint: self)
+        self.overlay = overlay
         if superview.subviews.last !== overlay { superview.addSubview(overlay, positioned: .above, relativeTo: nil) }
-        overlay.show(key, at: text, within: overlayBounds ?? superview.bounds)
+        overlay.show(key, at: text, within: area)
     }
 
     /// A label: a click goes to what is under it (the bar, which drags the window, or the button's margin).
