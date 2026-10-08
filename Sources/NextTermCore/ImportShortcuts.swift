@@ -128,7 +128,11 @@ public enum ImportShortcuts {
     /// Why a key can't be a menu shortcut at all (nil: it can).
     static func unusable(_ chord: KeyChord) -> String? {
         if chord.key == "\u{1B}" { return "⎋ stays with the terminal and its agents" }
-        return chord.isUsable ? nil : "a menu shortcut needs ⌘ or ⌃ (Option alone types a character)"
+        guard !chord.isUsable else { return nil }
+        // ⌥Z types "Ω"; ⇧⌥↓ types nothing (it moves the caret), so only the first gets the reason in brackets.
+        let scalar = chord.key.unicodeScalars.first?.value ?? 0
+        let typesCharacter = chord.option && scalar >= 0x20 && scalar != 0x7F && !(0xF700...0xF8FF).contains(scalar)
+        return "a menu shortcut needs ⌘ or ⌃" + (typesCharacter ? " (Option alone types a character)" : "")
     }
 
     /// A key the preview offers ticked: not the shell's and not macOS's.
