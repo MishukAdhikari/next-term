@@ -192,11 +192,13 @@ final class FontFamilyPopup: NSPopUpButton {
     }
 }
 
-/// Settings › Terminal: the terminal's font and colours. Applied as they change.
+/// Settings › Terminal: the terminal's font and colours, and where Studio links open. Applied as they change.
 final class TerminalSettingsView: NSView {
     private let font = FontFamilyPopup()
     private let colours = NSPopUpButton()
     private let swatches = PaletteSwatches()
+    /// LangGraph Studio's links in a Chromium browser (WebLinks).
+    let studioLinks = StudioLinksCheckbox.make()
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -215,7 +217,7 @@ final class TerminalSettingsView: NSView {
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 11)
         note.preferredMaxLayoutWidth = 420
-        let stack = NSStackView(views: [row("Font:", [font]), row("Colours:", [colours]), row("", [swatches]), note])
+        let stack = NSStackView(views: [row("Font:", [font]), row("Colours:", [colours]), row("", [swatches]), row("Links:", [studioLinks]), note])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 14

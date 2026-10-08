@@ -163,7 +163,7 @@ final class NextTermView: LocalProcessTerminalView {
     func open(_ target: LinkTarget) {
         switch target {
         case .web(let url):
-            NSWorkspace.shared.open(url)
+            WebLinks.open(url, from: window)
         case let .file(url, line, column):
             if let openFile { openFile(url, line, column) } else { SafeOpen.open(url, from: window) }
         }
