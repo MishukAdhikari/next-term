@@ -108,6 +108,8 @@ public struct BranchModel: Equatable, Sendable {
     /// Each remote's default branch, as its `<remote>/HEAD` names it ("origin": "main"). A clone records
     /// it for origin, and a fetch with git 2.48 or later for any remote; `git remote set-head` sets it.
     public var remoteHeads: [String: String] = [:]
+    /// The remotes as `git remote` lists them: a remote's name may hold a "/" ("my/fork").
+    public var configuredRemotes: [String] = []
     public var inProgress: GitInProgress?
 
     public init(root: String, gitDir: String, commonDir: String) {
@@ -130,6 +132,33 @@ public struct BranchModel: Equatable, Sendable {
     public func otherWorktree(of branch: BranchRef) -> String? {
         guard let path = branch.worktree, canonicalPath(path) != canonicalPath(root) else { return nil }
         return path
+    }
+
+    /// "origin/feat/x" as its remote and the branch there. The longest remote that fits wins ("my/fork"
+    /// before "my"); without the list of remotes, the part before the first "/". Nil when no remote fits.
+    public func remoteAndBranch(of name: String) -> (remote: String, branch: String)? {
+        guard !configuredRemotes.isEmpty else {
+            guard let slash = name.firstIndex(of: "/"), name.index(after: slash) < name.endIndex else { return nil }
+            return (String(name[..<slash]), String(name[name.index(after: slash)...]))
+        }
+        let fitting = configuredRemotes.filter { name.hasPrefix($0 + "/") && name.count > $0.count + 1 }
+        guard let remote = fitting.max(by: { $0.count < $1.count }) else { return nil }
+        return (remote, String(name.dropFirst(remote.count + 1)))
+    }
+
+    /// The remote branch a local one tracks, while it is there: nil without an upstream, when it was
+    /// deleted on the remote (gone), or when the upstream is another local branch.
+    public func upstream(of ref: BranchRef) -> (remote: String, branch: String)? {
+        guard !ref.isRemote, !ref.upstreamGone, let upstream = ref.upstream else { return nil }
+        return remoteAndBranch(of: upstream)
+    }
+
+    /// The worktree a folder is in: the longest worktree path that holds it, as worktrees nest
+    /// (`<repo>/.claude/worktrees/x` is inside `<repo>`).
+    public func worktree(containing folder: String) -> Worktree? {
+        let folder = canonicalPath(folder)
+        let holding = worktrees.filter { !$0.isBare }.map { ($0, canonicalPath($0.path)) }.filter { folder == $0.1 || folder.hasPrefix($0.1 + "/") }
+        return holding.max { $0.1.count < $1.1.count }?.0
     }
 
     // MARK: reading
@@ -156,6 +185,9 @@ public struct BranchModel: Equatable, Sendable {
         }
         if let list = GitRunner.run(git, base + ["worktree", "list", "--porcelain", "-z"], timeout: timeout) {
             model.worktrees = parseWorktrees(list)
+        }
+        if let remotes = GitRunner.run(git, base + ["remote"], timeout: timeout) {
+            model.configuredRemotes = String(decoding: remotes, as: UTF8.self).split(separator: "\n").map(String.init)
         }
         let originHead = GitRunner.run(git, base + ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], timeout: timeout, acceptedStatus: [0, 1])
             .map { String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) }
