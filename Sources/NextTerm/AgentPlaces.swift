@@ -16,8 +16,10 @@ final class AgentPlaces {
     private var folders: [String: (pid: Int32, folder: String, at: Date)] = [:]
     /// What each window shows, by the folder it shows: its repository and checkout.
     private var shown: [String: (repository: String, checkout: Checkout)] = [:]
-    /// When Next Term itself last ran git that can move HEAD, by checkout: the developer's switches.
+    /// When Next Term itself last ran git that can move HEAD, by checkout: the developer's switches. And the
+    /// branch each went to, when it named one.
     private var ownSwitches: [String: Date] = [:]
+    private var ownTargets: [String: String] = [:]
     /// git commands that can move HEAD, run lately in shell tabs.
     private var shellCommands: [PlaceSighting.ShellCommand] = []
     private var commandsSeen: [String: Int] = [:]
@@ -116,7 +118,9 @@ final class AgentPlaces {
     /// a switch there now is the developer's.
     func noteOwnGit(_ steps: [[String]], in root: String) {
         guard !root.isEmpty, steps.contains(where: AgentLocation.movesHead(arguments:)) else { return }
-        ownSwitches[canonicalPath(root)] = Date()
+        let path = canonicalPath(root)
+        ownSwitches[path] = Date()
+        ownTargets[path] = steps.compactMap(AgentLocation.switchTarget(arguments:)).last
     }
 
     private func place(of tab: TerminalTab) -> AgentPlace? {
@@ -172,9 +176,11 @@ final class AgentPlaces {
         guard !reading, let git = GitWriter.git else { return }
         reading = true
         ownSwitches = ownSwitches.filter { now.timeIntervalSince($0.value) < 60 }
+        ownTargets = ownTargets.filter { ownSwitches[$0.key] != nil }
         shellCommands.removeAll { now.timeIntervalSince($0.at) > 60 }
         var sighting = PlaceSighting()
         sighting.ownSwitches = ownSwitches
+        sighting.ownTargets = ownTargets
         sighting.shellCommands = shellCommands
         let home = SessionStore.home
         queue.async { [self] in
