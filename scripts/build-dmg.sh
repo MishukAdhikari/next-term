@@ -26,10 +26,17 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 BIN="$APP/Contents/MacOS/NextTerm"
 lipo -create .build/arm64-apple-macosx/release/NextTerm .build/x86_64-apple-macosx/release/NextTerm -output "$BIN"
-# Local symbols out, before signing: the exported ones, which the runtime and crash reports use, stay.
+# The symbols crash reports are read with, from the build's debug information, before strip takes them:
+# dist/NextTerm.dSYM, for both architectures (CI keeps it beside the DMG, never in it).
+rm -rf "$DIST/NextTerm.dSYM"
+dsymutil "$BIN" -o "$DIST/NextTerm.dSYM"
+# Local symbols out, before signing (the binary shrinks 41.5 -> 27.3 MB); crash reports are symbolicated from the dSYM.
 UNSTRIPPED=$(stat -f%z "$BIN")
 strip -x "$BIN"
 echo "    strip -x: $((UNSTRIPPED / 1024)) KB -> $(($(stat -f%z "$BIN") / 1024)) KB"
+# The dSYM is this binary's only while their UUIDs match (strip and the signature leave the UUID alone).
+[[ "$(dwarfdump --uuid "$BIN" | awk '{print $2}')" == "$(dwarfdump --uuid "$DIST/NextTerm.dSYM" | awk '{print $2}')" ]] \
+  || { echo "error: dist/NextTerm.dSYM is not the app binary's" >&2; exit 1; }
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # SwiftTerm's optional Metal shaders; it looks for them in Contents/Resources.
 cp -R .build/arm64-apple-macosx/release/SwiftTerm_SwiftTerm.bundle "$APP/Contents/Resources/"

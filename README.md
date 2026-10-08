@@ -265,7 +265,7 @@ Needs macOS 13+ and Swift 6 (the Xcode Command Line Tools are enough; full Xcode
 git clone https://github.com/MishukAdhikari/next-term.git
 cd next-term
 swift run NextTerm            # run a debug build
-scripts/build-dmg.sh          # universal app + DMG + checksum in dist/
+scripts/build-dmg.sh          # universal app + DMG + checksum in dist/, and NextTerm.dSYM for crash reports
 ```
 
 To sign and notarize for distribution:

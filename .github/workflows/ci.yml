@@ -45,6 +45,12 @@ jobs:
             dist/*.dmg
             dist/*.sha256
 
+      # The app's symbols, for crash reports (scripts/build-dmg.sh strips them from the app).
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: NextTerm-dSYM
+          path: dist/*.dSYM
+
   release:
     if: github.ref_type == 'tag'
     needs: build
