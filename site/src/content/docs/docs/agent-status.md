@@ -30,6 +30,26 @@ When an agent asks for permission (“Do you want to make this edit to `User.php
 
 Answer the question in the terminal as usual; the amber mark clears once the question goes away.
 
+## Where each agent works
+
+An agent can work in another checkout than the one its tab opened in: Claude Code’s `EnterWorktree`, or a `cd .claude/worktrees/pr-7050` in its shell, Codex’s `/cd`, a worktree Command Code makes. Next Term follows each local agent tab’s agent to the checkout it works in, the repository’s main one or a linked worktree, and reads that checkout’s branch from git.
+
+A tab gets one mark for it, a hollow branch glyph after its title (in the tab bar, and in a split tab’s pane headers), in two cases:
+
+- **Its agent works in another checkout than the window shows:** Claude Code in the worktree `pr-7050`, while the window shows `xCloud`.
+- **Its branch was switched under it.** Agents that share a checkout share its branch: when one of them switches it, or a shell tab or you do, the files change under every other agent there. Each one that has had a turn is marked. The agent that switched is not, when Next Term can tell which one it was (see below), and neither is one that has done nothing yet: it follows the checkout.
+
+The mark is never red and never blinks. Its tooltip, and what VoiceOver says for the tab, has the facts: the agent, its checkout and branch, and what the window shows; for a switch, the branch the chat was on, the one checked out now, when, and who switched it. The mark clears as soon as its reason ends: the agent is back in the checkout the window shows, or the branch is back. For a branch switched under the chat, the tab’s right-click menu offers **Keep Going**, which makes the branch now checked out the chat’s own and clears the mark, and **Go to That Tab** when another tab made the switch. When the tab with the keyboard is marked, the sidebar header says so after the branch, such as “this tab: fix/7027-sso” (see [The header](/docs/projects-and-git/#this-tab)).
+
+How Next Term tells:
+
+- **The agent’s own folder.** The folder of the agent’s own process, not of the tab’s shell, which stays where the agent was started. For moves the process doesn’t make, the folder the agent’s session record names last: Claude Code’s shell `cd`, Codex’s `/cd`, Copilot CLI’s workspace. Of a conversation, only its end is read: at most the last 1 MB at first, then what was added since, so a long tool result after a `cd` doesn’t lose it (see [What Next Term reads](/docs/projects-and-git/#what-next-term-reads)).
+- **The checkout that holds it** is the one with the longest path that contains the folder, in `git worktree list`: `xCloud/.claude/worktrees/pr-7050/app` is in the worktree `pr-7050`, although it is inside `xCloud`’s folder too. A `cd app/Http` in the main checkout is no move, and neither is a folder outside every checkout of the repository, such as a separate clone. The worktrees Claude Code makes for its subagents (`.claude/worktrees/agent-…`) don’t count.
+- **A change counts once it has held for 3 seconds,** and not while git is in the middle of a rebase, merge, cherry-pick, revert, `am` or bisect in that checkout: a rebase that detaches HEAD for a moment marks nothing. New commits made on a detached HEAD (a commit, cherry-pick, revert, `am`, or a merge onto it) are not a switch, and a branch renamed in place is followed under its new name.
+- **Who switched:** a switch you make from the branch popup to that branch is yours; a `git switch`, `git checkout`, `gh pr checkout` or the like run in a shell tab in that checkout in the 10 seconds before is that tab’s (a pull, merge or rebase keeps the branch, so it doesn’t count); otherwise, if exactly one agent there was working when the switch happened, it was that agent, and its own branch moves along. With two or more working, the tooltip says how many, and nobody’s branch moves.
+
+Next Term only looks: it switches no branch, and makes or removes no worktree. Remote tabs get no mark.
+
 ## Notifications and the Dock badge
 
 **Settings › Notifications** chooses which of these reach Notification Center (see [Settings](/docs/settings/#notifications)). By default:

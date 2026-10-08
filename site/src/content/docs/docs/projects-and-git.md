@@ -50,7 +50,7 @@ Each agent keeps its sessions in its own files, and Next Term reads them where t
 | Cursor Agent | `~/.cursor/chats` |
 | Copilot CLI | `~/.copilot/session-state` |
 
-It reads only what the lists show (titles, dates, branches and models), from the first and last 64 KB of a long conversation or a row of a database, never a whole conversation. Gemini CLI sessions saved before its version 0.39, one JSON file each, are not listed for that reason. It removes anything that looks like a secret from titles, writes nothing, and sends nothing anywhere. Some sessions are left out: sub-agents’, `claude -p` and `codex exec` runs, archived ones, and ones where nothing was asked yet. Claude Code and Gemini CLI delete conversations after 30 days unless you change their `cleanupPeriodDays` and `general.sessionRetention` settings.
+It reads only what the lists show (titles, dates, branches and models), from the first and last 64 KB of a long conversation or a row of a database, never a whole conversation. Gemini CLI sessions saved before its version 0.39, one JSON file each, are not listed for that reason. For [where each agent works](/docs/agent-status/#where-each-agent-works), it also reads, once a second for each agent running in a local tab, the folder that agent’s conversation names last: from the end of its Claude Code transcript (found through `~/.claude/sessions`), of the Codex rollout its process has open (found through the files that process has open), or from Copilot CLI’s `workspace.yaml`. That is at most the last 1 MB at first, then only what was added since; it keeps only the folder. It removes anything that looks like a secret from titles, writes nothing, and sends nothing anywhere. Some sessions are left out: sub-agents’, `claude -p` and `codex exec` runs, archived ones, and ones where nothing was asked yet. Claude Code and Gemini CLI delete conversations after 30 days unless you change their `cleanupPeriodDays` and `general.sessionRetention` settings.
 
 ### Where a project opens
 
@@ -94,6 +94,12 @@ When the upstream has commits your branch doesn’t, a blue button with git’s 
 
 The sidebar reads git with `--no-optional-locks`, so it never holds the index lock while your own git commands, or your agents’, are running. To see a file’s changes in full, press <kbd>⌥⌘G</kbd>, and for every changed file, <kbd>⌃⌘G</kbd>: see [Diffs and Git Diff](/docs/diffs/).
 
+### This tab
+
+The header always names the branch of the checkout the window shows. When the tab with the keyboard runs an agent that works in another checkout of the repository, such as a worktree under `.claude/worktrees/`, the header adds a dim label after the branch: “this tab: fix/7027-sso”. When the branch was switched under that tab’s chat, by you, a shell tab or another agent, it says “chat was on fix/7611-3ds”. Both come with the hollow branch glyph that marks the tab itself (see [Where each agent works](/docs/agent-status/#where-each-agent-works)).
+
+The window’s own branch keeps its room: the label’s branch is cut in the middle, never “this tab:” (the tooltip has it whole, with the facts), the line counts make way for it, in a narrow sidebar it is the glyph alone, and in a narrower one it goes. For a switch under the chat, click the label for **Keep Going**, which makes the branch now checked out the chat’s own and clears the mark, and **Go to That Tab** when another tab made the switch; the tab’s right-click menu has both too. Nothing here changes git.
+
 ### Background fetch
 
 Next Term fetches the repositories open in its windows by itself, so **Pull 3** appears when someone pushes, without a click.
@@ -114,7 +120,7 @@ Click the branch name at the top of the sidebar, or press <kbd>⌥⌘B</kbd> (**
 - **Actions** come first: **Update Project** (with how many commits are waiting, `↓3`), **Commit…** (with your uncommitted `+/−`), **Push…** (`↑2`, or **Publish** for a new branch), **New Branch…**, **Checkout Tag or Revision…**, **Git Log** and **Git Diff**. The ⟳ button (<kbd>⌘R</kbd>) fetches. Opening the popup fetches too when the last fetch is over 5 minutes old, and the counts update in place.
 - **Recent**: the last branches this folder was on, including switches made in a terminal or by an agent.
 - **Local**: the current branch first, then folders by prefix (`feat/`, `fix/`), and **Agent branches**, where branches agents make (`claude/…`, `codex/…`, `worktree-…`) stay out of your way. Each shows `↓` and `↑` against its upstream, `gone` when the upstream was deleted, and the worktree it is checked out in.
-- **Worktrees**, when there are any: each with its branch, a padlock when it is locked, and the agent tabs working in it with their status marks. Claude Code locks the worktrees it works in, and names its process in the lock; when that process has ended, the row says **stale lock**, and **Unlock** in its menu frees the worktree (with **Undo**). A lock whose process still runs can’t be unlocked from here; any other lock can, after a question.
+- **Worktrees**, when there are any: each with its branch, a padlock when it is locked, and the agent tabs working in it with their status marks. An agent is listed where it works, by its own folder (see [Where each agent works](/docs/agent-status/#where-each-agent-works)), not where its tab’s shell is: Claude Code that entered a worktree from a tab in the project folder is listed under that worktree. Claude Code locks the worktrees it works in, and names its process in the lock; when that process has ended, the row says **stale lock**, and **Unlock** in its menu frees the worktree (with **Undo**). A lock whose process still runs can’t be unlocked from here; any other lock can, after a question.
 - **Remote**, one folder for each remote.
 - **Tags**, as soon as you type: the tags whose names match.
 
@@ -124,7 +130,7 @@ Click the branch name at the top of the sidebar, or press <kbd>⌥⌘B</kbd> (**
 
 **Nothing is lost, and nothing happens behind an agent’s back:**
 
-- If an agent is working in the folder, Next Term asks before anything that changes its files.
+- If an agent is working in the folder, Next Term asks before anything that changes its files. An agent counts where it works, not where its tab’s shell is: one that moved into a worktree is not asked about for a checkout in the project folder, and one working in the project folder is, from whichever tab.
 - If your uncommitted changes would be overwritten, it offers **Stash, Switch and Reapply**. If they don’t fit on the other branch, they stay in that stash, named “Next Term: switching from … to …”.
 - **Delete** shows the commit the branch was at, with **Undo**. A branch with unmerged commits lists them first.
 - **Delete on Remote** asks first, naming the remote and the branch (and any branch of yours that tracks it) and the commit it is at. It deletes the branch for everyone who uses that remote, but only at that commit: if someone pushed to it after your last fetch, nothing is deleted, and it offers to fetch. The notice that follows has **Undo**, which pushes the branch back at the commit it was at. It is off for the same branches as force push, below.

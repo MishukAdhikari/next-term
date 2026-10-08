@@ -17,7 +17,10 @@ struct GitActions {
     private func run(_ title: String, _ steps: [[String]], activity: GitWriter.Activity? = nil, then: @escaping (GitWriter.Result) -> Void) {
         let popup = self.popup
         let controller = self.controller
+        let root = self.root
+        AgentPlaces.shared.noteOwnGit(steps, in: root) // a switch it makes is yours, not an agent's
         GitWriter.shared.run(title, in: root, repository: model?.commonDir ?? root, steps: steps, activity: activity) { result in
+            AgentPlaces.shared.noteOwnGit(steps, in: root)
             controller?.sidebar.git.refresh()
             popup.reload()
             then(result)
@@ -28,13 +31,14 @@ struct GitActions {
 
     // MARK: agents
 
-    /// Agents running in tabs in this worktree (not in a worktree nested inside it).
+    /// Agents running in tabs in this worktree (not in a worktree nested inside it), by the folder each agent
+    /// works in, not its shell's.
     func agentsHere() -> [TerminalTab] {
         let root = canonicalPath(self.root)
         let nested = (model?.worktrees ?? []).map { canonicalPath($0.path) }.filter { $0 != root && $0.hasPrefix(root + "/") }
         return AppDelegate.shared.controllers.flatMap(\.tabs).filter { tab in
             guard tab.remote == nil, tab.status.running, tab.status.kind == .agent else { return false }
-            let folder = canonicalPath(tab.liveDirectory)
+            let folder = canonicalPath(AgentPlaces.shared.agentFolder(of: tab))
             guard folder == root || folder.hasPrefix(root + "/") else { return false }
             return !nested.contains { folder == $0 || folder.hasPrefix($0 + "/") }
         }

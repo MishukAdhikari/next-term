@@ -22,6 +22,9 @@ struct TabBarItem: Equatable {
     var editableTitle: String? = nil
     /// Editor tabs: a preview, which the next file clicked in the sidebar takes over. Its title is in italics.
     var preview = false
+    /// Agent tabs: what the place mark after the title says (its agent works in another checkout than the
+    /// window shows, or its branch was switched under it); nil without one.
+    var place: String? = nil
 }
 
 protocol TabBarViewDelegate: AnyObject {
@@ -167,6 +170,9 @@ final class TabBarView: NSView {
     func shownRemoteLink(at index: Int) -> RemoteLink? { tabViews[safe: index]?.shownRemoteLink }
     func shownTitle(at index: Int) -> String? { tabViews[safe: index]?.shownTitle }
     func spokenLabel(at index: Int) -> String? { tabViews[safe: index]?.accessibilityLabel() }
+    /// Whether a tab shows its place mark, and its tooltip (for the self-test).
+    func showsPlaceMark(at index: Int) -> Bool { tabViews[safe: index]?.showsPlaceMark ?? false }
+    func toolTip(at index: Int) -> String? { tabViews[safe: index]?.toolTip }
     /// The font of a tab's title (for the self-test: a preview's is italic).
     func titleFont(at index: Int) -> NSFont? { tabViews[safe: index]?.titleFont }
     /// A tab's view, to click (for the self-test).
@@ -551,6 +557,8 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     /// A remote tab's server mark, between the status mark and the title.
     private let remoteMark = RemoteMarkView()
     private let label = NSTextField(labelWithString: "")
+    /// The place mark, right after the title.
+    private let placeMark = NSImageView()
     private let closeButton = NSButton()
     private var closeTip: ShortcutToolTip?
     /// "⌘1": how to get to this tab from the keyboard.
@@ -585,6 +593,10 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         addSubview(iconView)
         remoteMark.isHidden = true
         addSubview(remoteMark)
+        placeMark.image = PlaceGlyph.image()
+        placeMark.contentTintColor = Theme.textDim
+        placeMark.isHidden = true
+        addSubview(placeMark)
 
         closeButton.bezelStyle = .regularSquare
         closeButton.isBordered = false
@@ -622,7 +634,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         if label.lineBreakMode != newItem.truncation { label.lineBreakMode = newItem.truncation }
         let font = newItem.preview ? Self.previewFont : Self.font
         if label.font != font { label.font = font }
-        let tip = newItem.tooltip + (newItem.shortcut.map { "\n\($0) switches to this tab" } ?? "")
+        let tip = newItem.tooltip + (newItem.place.map { "\n" + $0 } ?? "") + (newItem.shortcut.map { "\n\($0) switches to this tab" } ?? "")
         if toolTip != tip { toolTip = tip }
         if hint.stringValue != newItem.shortcut ?? "" {
             hint.stringValue = newItem.shortcut ?? ""
@@ -637,11 +649,14 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         if (newItem.remote == nil) != (item?.remote == nil) { needsLayout = true } // the title moves over, or back
         remoteMark.link = newItem.remote?.link
         remoteMark.isHidden = newItem.remote == nil
+        // The title makes room for the place mark, or takes it back; the mark follows the title's end.
+        if (newItem.place == nil) != placeMark.isHidden || (newItem.place != nil && newItem.title != item?.title) { needsLayout = true }
+        placeMark.isHidden = newItem.place == nil
         item = newItem
         selected = isSelected
         // "web-1: app (connecting), Remote: web-1 (deploy@203.0.113.5), connecting": a state that is only
         // the connection's comes once, in the remote part.
-        let spoken = [newItem.title, newItem.accessibilityStatus, newItem.remote?.summary ?? ""]
+        let spoken = [newItem.title, newItem.accessibilityStatus, newItem.remote?.summary ?? "", newItem.place ?? ""]
         setAccessibilityLabel(spoken.filter { !$0.isEmpty }.joined(separator: ", "))
         setAccessibilityValue(isSelected)
         refresh()
@@ -691,8 +706,9 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
             let end = closeShown ? bounds.width - 27 : bounds.width - 14
             return hintWidth == 0 || end - hintRoom - 6 - titleStart < (closeShown ? 56 : 40) ? nil : end
         }
+        let placeRoom: CGFloat = placeMark.isHidden ? 0 : 15
         func titleWidth(hintEnd: CGFloat?) -> CGFloat {
-            max(0, min(bounds.width - 28, hintEnd.map { $0 - hintWidth - 6 } ?? .infinity) - labelX)
+            max(0, min(bounds.width - 28, hintEnd.map { $0 - hintWidth - 6 } ?? .infinity) - labelX - placeRoom)
         }
         // A remote tab's words are picked for the tab without its × (as most tabs are) and stay when the ×
         // shows, selected or under the pointer: its ⌘N gives way to them. Else the tab you are looking at
@@ -711,8 +727,14 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         }
         label.frame = NSRect(x: labelX, y: (h - labelHeight) / 2, width: titleWidth(hintEnd: shownHintEnd), height: labelHeight)
         if let words, label.stringValue != words { label.stringValue = words }
+        // The place mark right after the title's last letter.
+        let text = (label.stringValue as NSString).size(withAttributes: [.font: label.font as Any]).width + 4
+        placeMark.frame = NSRect(x: label.frame.minX + min(label.frame.width, ceil(text)) + 1, y: (h - 11) / 2, width: 11, height: 11)
         renameField?.frame = NSRect(x: labelX - 3, y: (h - 22) / 2, width: max(40, bounds.width - labelX - 26), height: 22)
     }
+
+    /// For the self-test: the place mark shows.
+    var showsPlaceMark: Bool { !placeMark.isHidden }
 
     /// A remote tab too narrow for "web-1: app (connecting)" says less rather than "web-1: a…g)": first
     /// "web-1: " goes (the mark says it is on a server, the tooltip which one), then the note (the dot on

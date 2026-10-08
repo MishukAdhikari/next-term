@@ -157,6 +157,7 @@ extension TerminalWindowController {
     func terminalTabMenu(at index: Int) -> NSMenu? {
         guard let group = groups[safe: index] else { return nil }
         let menu = NSMenu()
+        addPlaceChoices(to: menu, for: group) // Keep Going, for a branch switched under its chat
         menu.addCommand("Rename…", "renameTab:") { [weak self] in self?.rename(group) }
         menu.addItem(.separator())
         menu.addCommand("Split Right", "splitRight:") { [weak self] in self?.split(group, vertical: true) }
