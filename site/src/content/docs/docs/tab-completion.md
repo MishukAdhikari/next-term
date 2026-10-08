@@ -33,6 +33,8 @@ While the list is open, the terminal keeps the keyboard: letters and <kbd>⌫</k
 | <kbd>⎋</kbd> | Close the list. Nothing is sent to the shell. |
 | <kbd>→</kbd>, <kbd>⌃C</kbd>, <kbd>⌃J</kbd>, any <kbd>⌘</kbd> shortcut | Close the list, and the key does what it always does |
 
+A second <kbd>⇥</kbd> pressed before the list shows waits for it, then puts the first name on the line, as zsh’s own second <kbd>⇥</kbd> does. Under **Loading…** it does nothing.
+
 The list also closes when you click elsewhere, scroll, switch tab, pane or app, resize the window, or paste, and when output moves the cursor’s line.
 
 ## When Tab stays the shell’s own
