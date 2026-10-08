@@ -42,7 +42,8 @@ final class CompletionController {
         let session = tab.completion
         if session.isListOpen { return listKey(event, session) }
         guard CompletionPreferences.isOn, Self.isPlainTab(event) else { return false }
-        guard session.state.isArmed || session.state.holding else { return false }
+        // A server tab with no hook: its own readiness (CompletionSession.screenReady).
+        guard session.state.isArmed || session.state.holding || session.usesScreen else { return false }
         guard !view.hasMarkedText(), !view.getTerminal().isCurrentBufferAlternate else { return false }
         // Scrolled back: the line being completed is at the bottom.
         if view.canScroll, view.scrollPosition < 1 { view.scroll(toPosition: 1) }

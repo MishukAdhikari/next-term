@@ -1002,6 +1002,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         }
         status.jobsChanged(count: report.jobs, summary: report.jobSummary)
         if let folder = report.directory, folder.hasPrefix("/") { directory = folder }
+        completion.remoteReport(folder: report.directory != nil)
         // A title the remote prompt set is stale once a program runs, and the other way round.
         if (status.running, status.command) != (before.0, before.1) { programTitle = nil }
         if (status.running, status.command, directory, remoteConnected, fellBack) != before { delegate?.tabDidChange(self) }

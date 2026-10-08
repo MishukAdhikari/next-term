@@ -8,6 +8,10 @@ import NextTermCore
 /// Next Term's own engine answers a `tab` report within 120 ms: no candidate is "native" (zsh's own Tab), one is
 /// "insert", more is "open", and the list shows at the first `line` for that id. On zsh's path no answer is
 /// ever sent: zsh's matches come in `comp` marks, with a Loading row if they take over 150 ms.
+///
+/// A server tab whose shell has no hook takes a path of its own (RemoteCompletion): the word is read off the
+/// screen once the keys typed have echoed, its folder is listed over the connection, and what is chosen goes on
+/// the line as keys. Nothing private is ever sent to that shell.
 final class CompletionSession {
     private(set) weak var tab: TerminalTab?
     private(set) var state = CompletionState()
@@ -45,12 +49,26 @@ final class CompletionSession {
         case none
         case plain
         case privateKey(Int)
+        /// A server's folder listed for the word on its screen.
+        case listing(Int)
     }
     private(set) var lastTab = TabOutcome.none
     /// Writes to the shell so far: a question answered after one came lets its Tab go.
     private(set) var writes = 0
     /// Config keys sent since the shell last said where zsh-autocomplete stands (a few at most).
     private var configs = 0
+
+    /// A server tab with no hook: the word its Tab is for, read off the screen, and the Tab's deadline.
+    private var screenWord: ScreenWord?
+    private var screenDeadline: DispatchWorkItem?
+    /// Status reports from the server since the last Return: its prompt is trusted from the second (the first
+    /// may come from a check that started before Return).
+    private(set) var reportsSinceReturn = 0
+    /// The last report gave the server shell's folder: listings relative to it can be kept.
+    private(set) var serverFolderKnown = false
+    /// The last write to the shell and the last output from it: a key has echoed once output came after it.
+    private var lastInputAt: TimeInterval = 0
+    private var lastOutputAt: TimeInterval = 0
 
     init(tab: TerminalTab) {
         self.tab = tab
@@ -81,6 +99,12 @@ final class CompletionSession {
             return false
         }
         held.append(.bytes(data))
+        // Keys typed while a server's folder is listed: the shell's own Tab goes first, then they do, and the
+        // listing is dropped. A Tab is never sent late.
+        if state.path == .screen, let id = state.pendingID {
+            screenAnswer(id, .native)
+            return true
+        }
         // Return and the like end the Tab at once: zsh's own Tab, then the keys, in order.
         if InputScan.scan(data, inPaste: &heldPaste).disarms, let id = state.pendingID {
             if state.path == .engine { answer(id, .native) } else { state.disarm() }
@@ -96,7 +120,10 @@ final class CompletionSession {
         lastWrite = Array(data)
         #endif
         let open = isListOpen
-        state.input(InputScan.scan(data, inPaste: &inPaste))
+        let scan = InputScan.scan(data, inPaste: &inPaste)
+        lastInputAt = TerminalTab.now
+        if scan.disarms { reportsSinceReturn = 0 }
+        state.input(scan)
         if open, !isListOpen {
             listClosed()
             changed()
@@ -133,6 +160,7 @@ final class CompletionSession {
     /// A real Tab from the keyboard (CompletionController), in a tab that can take it. False: not Armed, so
     /// the key goes on as a plain ^I.
     func realTab() -> Bool {
+        if usesScreen { return screenTab() }
         if state.holding {
             held.append(.tab)
             return true
@@ -241,7 +269,7 @@ final class CompletionSession {
                 state.update(arm)
             } else {
                 // A new line or keymap: a list still open on the shell's side is over.
-                if let id = state.openID { write(CompletionProtocol.close(id: id)) }
+                if let id = state.openID, state.path != .screen { write(CompletionProtocol.close(id: id)) }
                 state.armed(arm)
                 listClosed()
             }
@@ -310,6 +338,7 @@ final class CompletionSession {
 
     /// Who answers this tab's Tab, for its tooltip.
     var engineLabel: String {
+        if CompletionPreferences.isOn, usesScreen { return "Tab completion: Next Term’s list of the server’s folders and files, over ssh" }
         guard CompletionPreferences.isOn, let arm = state.arm else { return "Tab completion: the shell’s own" }
         if let owner {
             switch CompletionPreferences.answer(for: owner) {
@@ -351,6 +380,10 @@ final class CompletionSession {
     /// Puts row `index` on the line, and closes the list.
     func accept(_ index: Int) {
         guard isListOpen, let list else { return }
+        if state.path == .screen {
+            guard let candidate = list.screenCandidate(index) else { return }
+            return screenAccept(candidate, text: list.rows[index].text, list, since: TerminalTab.now)
+        }
         guard let bytes = list.take(index) else {
             NSSound.beep()
             return closeList()
@@ -367,7 +400,7 @@ final class CompletionSession {
     /// reporting the line.
     func closeList() {
         guard let id = state.openID else { return }
-        write(CompletionProtocol.close(id: id))
+        if state.path != .screen { write(CompletionProtocol.close(id: id)) }
         state.closed()
         listClosed()
         changed()
@@ -391,6 +424,7 @@ final class CompletionSession {
         loadingTimer?.cancel()
         list = nil
         caretRow = nil
+        screenWord = nil
         assembler.reset()
     }
 
@@ -401,6 +435,8 @@ final class CompletionSession {
     /// Output reached the terminal: with the list shown, output that moves the caret's row without a line
     /// report (a background job printing) closes it.
     func output() {
+        lastOutputAt = TerminalTab.now
+        if state.path == .screen { return screenOutput() }
         guard isShown, let view else {
             lineInOutput = false
             return
@@ -420,6 +456,146 @@ final class CompletionSession {
     /// The terminal's size or font changed: the list's place is gone.
     func viewChanged() {
         closeList()
+    }
+}
+
+// MARK: a server's screen
+
+extension CompletionSession {
+    /// A server tab whose shell has no hook (no `arm` has come from it): Tab completion reads its screen.
+    var usesScreen: Bool { tab?.remote != nil && state.arm == nil }
+
+    /// The server's shell is at its prompt and can complete from the screen now: connected, two status reports
+    /// since the last Return, and room on its connection. Without these, a plain ^I at once.
+    var screenReady: Bool {
+        guard let tab, usesScreen, CompletionPreferences.isOn else { return false }
+        guard tab.remoteConnected, !tab.disconnected, !tab.exited, tab.remoteReady, !tab.status.running else { return false }
+        return reportsSinceReturn >= 2 && RemoteCompletion.shared.hasRoom(for: tab)
+    }
+
+    /// A status report for this server tab (TerminalTab.applyRemote): what it says about the prompt, whether it
+    /// gave the shell's folder (not where there is no /proc), and that folder to prefetch.
+    func remoteReport(folder: Bool) {
+        reportsSinceReturn += 1
+        serverFolderKnown = folder
+        if let tab, reportsSinceReturn >= 2 { RemoteCompletion.shared.prefetch(tab) }
+    }
+
+    /// A real Tab in a server tab with no hook. Keys typed until it is answered wait; one typed then sends the
+    /// shell's own Tab first. False: a plain ^I, at once.
+    fileprivate func screenTab() -> Bool {
+        if state.holding, state.path == .screen, let id = state.pendingID {
+            held.append(.tab)
+            screenAnswer(id, .native)
+            return true
+        }
+        guard screenReady, let id = state.startScreenTab() else {
+            lastTab = .plain
+            return false
+        }
+        lastTab = .listing(id)
+        heldPaste = inPaste
+        list = nil
+        let deadline = DispatchWorkItem { [weak self] in self?.screenAnswer(id, .native) }
+        screenDeadline?.cancel()
+        screenDeadline = deadline
+        DispatchQueue.main.asyncAfter(deadline: .now() + RemoteCompletion.deadline, execute: deadline)
+        screenSettled(id, since: TerminalTab.now)
+        return true
+    }
+
+    /// The keys typed have all echoed and the output has rested for a round trip: what is on screen is what the
+    /// shell has. Until then (250 ms at most) the word isn't read.
+    private func settled(_ tab: TerminalTab) -> Bool {
+        lastOutputAt >= lastInputAt && TerminalTab.now - lastOutputAt >= RemoteCompletion.shared.roundTrip(for: tab)
+    }
+
+    private func screenSettled(_ id: Int, since start: TimeInterval) {
+        guard state.pendingID == id, state.path == .screen, let tab else { return }
+        guard settled(tab) else {
+            guard TerminalTab.now - start < 0.25 else { return screenAnswer(id, .native) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.015) { [weak self] in self?.screenSettled(id, since: start) }
+            return
+        }
+        guard !tab.view.getTerminal().isCurrentBufferAlternate, let left = tab.lineLeftOfCursor(), let word = ScreenWord.read(left),
+              let request = RemoteCompletion.shared.request(for: word, in: tab) else { return screenAnswer(id, .native) }
+        screenWord = word
+        let listing = RemoteCompletion.shared.list(request, for: tab) { [weak self] result in self?.screenListed(id, result) }
+        if !listing { screenAnswer(id, .native) }
+    }
+
+    private func screenListed(_ id: Int, _ result: RemoteListing.Result?) {
+        guard state.pendingID == id, state.path == .screen, let word = screenWord else { return }
+        guard let result else { return screenAnswer(id, .native) }
+        let made = CompletionList(id: id, screen: word, listing: result.listing, disk: result.disk, shell: result.quoting)
+        switch made.screenVerdict {
+        case .native:
+            screenAnswer(id, .native)
+        case .insert:
+            screenAnswer(id, .insert, keys: made.screenCandidate(0).flatMap { made.screenInsertion($0, at: word) })
+        case .open:
+            list = made
+            screenAnswer(id, .open)
+        }
+    }
+
+    /// The answer to a Tab on a server's screen: the shell's own Tab (a plain ^I), a name put on the line as keys,
+    /// or the list. The keys typed meanwhile go out after it, in order.
+    private func screenAnswer(_ id: Int, _ verdict: CompletionState.Verdict, keys: (erase: Int, text: String)? = nil) {
+        guard state.pendingID == id, state.path == .screen else { return }
+        screenDeadline?.cancel()
+        var answer = verdict
+        if answer == .insert, keys == nil { answer = .native }
+        switch answer {
+        case .native: pass([0x09])
+        case .insert: if let keys { typeOnScreen(keys) }
+        case .open: break
+        }
+        state.answered(id, answer)
+        if answer != .open { listClosed() }
+        release()
+        changed()
+    }
+
+    /// Keys that put a name on a server's line: Backspaces for what goes, then the text, as a paste where the
+    /// shell takes one (so it goes in as it is).
+    private func typeOnScreen(_ keys: (erase: Int, text: String)) {
+        guard let view else { return }
+        var bytes = [UInt8](repeating: 0x7F, count: keys.erase)
+        let text = Array(keys.text.utf8)
+        if view.getTerminal().bracketedPasteMode {
+            bytes += Array("\u{1b}[200~".utf8) + text + Array("\u{1b}[201~".utf8)
+        } else {
+            bytes += text
+        }
+        pass(bytes)
+    }
+
+    /// Output in a server tab with its list shown: a key echoed, so the list narrows to the word on screen, or the
+    /// line changed around it, and it closes.
+    fileprivate func screenOutput() {
+        guard isShown, let list, let tab else { return }
+        guard let left = tab.lineLeftOfCursor(), let now = list.screenWord?.next(left), list.update(screen: now) else { return closeList() }
+        changed()
+    }
+
+    /// A row chosen on a server's list: once what was typed has echoed (300 ms at most), the keys that put it in
+    /// place of the name on screen.
+    fileprivate func screenAccept(_ candidate: PathCompletion.Candidate, text: String, _ list: CompletionList, since start: TimeInterval) {
+        guard state.openID == list.id, let tab else { return }
+        if !settled(tab), TerminalTab.now - start < 0.3 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.015) { [weak self] in self?.screenAccept(candidate, text: text, list, since: start) }
+            return
+        }
+        guard let left = tab.lineLeftOfCursor(), let now = list.screenWord?.next(left), let keys = list.screenInsertion(candidate, at: now) else {
+            NSSound.beep()
+            return closeList()
+        }
+        state.closed()
+        listClosed()
+        typeOnScreen(keys)
+        changed()
+        CompletionPopup.announce("Inserted \(text)")
     }
 }
 
