@@ -142,10 +142,12 @@ extension SelfTest {
         let group = sidebar.sessionsGroup
         sidebar.loadSessions()
         let titles = { group.items.map(\.session.title).joined(separator: " | ") }
+        let newest = "Plan the migration | Tidy the routes | Explain the cache | Speed up the build | Review the PR"
+        // What the group showed before is replaced once this read is in: the session written after the tab started too.
+        _ = await wait(10) { titles() == newest }
         check(await wait(10) { group.items.count == 5 && group.hasMore && group.items.first?.inTab == true },
               "the sidebar's Agent Sessions group shows the newest five and More…", titles())
-        check(titles() == "Plan the migration | Tidy the routes | Explain the cache | Speed up the build | Review the PR",
-              "newest first, from every agent", titles())
+        check(titles() == newest, "newest first, from every agent", titles())
         check(group.items.first { $0.session.id == openClaudeID }?.inTab == true, "a session resumed by id in a tab is running there")
         check(group.items.first { $0.session.id == "g2-session" }?.inTab == true, "so is the session a plain `gemini` began after it started")
         let row = sidebar.sessionRow("claude:" + openClaudeID) ?? -1
