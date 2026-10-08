@@ -828,8 +828,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// window holds just the two and nothing has run in that shell: no other tab, and nothing that runs,
     /// is ever closed this way.
     func closeFirstShell(of controller: TerminalWindowController, keeping tab: TerminalTab) {
-        guard controller.tabs.count == 2, let first = controller.tabs.first, first !== tab else { return }
-        guard first.remote == nil, first.userTitle == nil, first.status.commandsStarted == 0, !first.status.running else { return }
+        guard controller.tabs.count == 2, let first = controller.tabs.first, first !== tab, first.remote == nil else { return }
+        guard first.userTitle == nil, first.status.commandsStarted == 0, !first.leftStartFolder, !first.status.running else { return }
         controller.remove(first)
     }
 

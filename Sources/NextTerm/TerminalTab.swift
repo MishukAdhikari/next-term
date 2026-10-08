@@ -294,7 +294,12 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     var userTitle: String?
     /// Set by the running program via OSC 0/2. Cleared at each command boundary.
     private var programTitle: String?
-    private(set) var directory: String
+    private(set) var directory: String {
+        didSet { if !leftStartFolder, remote == nil, canonicalPath(directory) != canonicalPath(oldValue) { leftStartFolder = true } }
+    }
+    /// The shell has been in another folder than the one it started in. Without the zsh integration (bash,
+    /// fish) a `cd` is not a command anyone sees, so this is what says the tab was used.
+    private(set) var leftStartFolder = false
     private(set) var exited = false
     /// The shell ended by itself (`exit`, Ctrl-D), so the tab goes. A shell that failed or was killed has
     /// `exited` too, but its tab stays to show why.

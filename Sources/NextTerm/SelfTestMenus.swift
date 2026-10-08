@@ -27,6 +27,7 @@ extension SelfTest {
         await menuBarChecks(w)
         await terminalMenuChecks(w, tab: first, folder: folder)
         await tabMenuChecks(w, folder: folder)
+        await closedWithoutIntegrationChecks(w, folder: folder)
         await editorTabMenuChecks(w, folder: folder)
         await firstShellChecks(folder: folder)
         await tooltipRemapChecks(c)
@@ -261,6 +262,32 @@ extension SelfTest {
         w.select(0)
         _ = run("Close Tab", in: w.terminalTabMenu(at: 1) ?? NSMenu())
         check(await wait(3) { w.groups.count == 1 && !w.tabs.contains { $0 === extra } }, "menus: Close Tab closes the tab clicked")
+    }
+
+    /// Without the zsh integration (bash, fish) a `cd` runs unseen: a tab that moved to another folder is
+    /// kept for Reopen Closed Tab all the same, one that stayed where it opened is not.
+    private static func closedWithoutIntegrationChecks(_ w: TerminalWindowController, folder: URL) async {
+        func bashTab() async -> TerminalTab {
+            let tab = w.addTab(directory: folder.path)
+            _ = await wait(20) { tab.status.integrated }
+            tab.view.send(txt: "\u{15}exec /bin/bash --norc --noprofile\r")
+            _ = await wait(5) { !tab.status.integrated }
+            return tab
+        }
+        while ClosedTabs.takeLast() != nil {} // only what these checks close
+        let stayed = await bashTab()
+        await pause(1) // two polls at bash's prompt
+        w.remove(stayed)
+        check(ClosedTabs.isEmpty, "menus: a bash tab that nothing ran in and that stayed in its folder is not kept")
+        let moved = await bashTab()
+        let src = canonicalPath(folder.appendingPathComponent("src").path)
+        moved.view.send(txt: "cd src\r")
+        _ = await wait(5) { canonicalPath(moved.directory) == src }
+        w.remove(moved)
+        let kept = ClosedTabs.entries.last.map { canonicalPath($0.directory) }
+        check(ClosedTabs.entries.count == 1 && kept == src, "menus: a bash tab that moved to another folder is kept, in that folder",
+              "\(moved.status.integrated ? "integrated" : "polled"), \(kept ?? "nothing kept")")
+        while ClosedTabs.takeLast() != nil {}
     }
 
     // MARK: editor tabs

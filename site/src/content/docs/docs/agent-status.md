@@ -120,4 +120,4 @@ Each command except the link and path ones shows its shortcut and is in the menu
 
 ### Reopen a closed tab
 
-<kbd>⇧⌘T</kbd> (**Shell › Reopen Closed Tab**) brings back the terminal tab you closed last, in its folder and with the name you gave it, in the window it was in while that is open. Press it again for the one before. It comes back with a fresh shell: what ran in it ended when it closed. A tab that nothing ran in and that has no name of its own isn’t kept. A [remote tab](/docs/remote/) comes back on its server; one that tmux kept reattaches to its session, which closing the tab only detached from.
+<kbd>⇧⌘T</kbd> (**Shell › Reopen Closed Tab**) brings back the terminal tab you closed last, in its folder and with the name you gave it, in the window it was in while that is open. Press it again for the one before. It comes back with a fresh shell: what ran in it ended when it closed. A tab that nothing ran in, that stayed in the folder it opened in and that has no name of its own isn’t kept. A [remote tab](/docs/remote/) comes back on its server; one that tmux kept reattaches to its session, which closing the tab only detached from.
