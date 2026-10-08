@@ -122,6 +122,17 @@ extension SelfTest {
         check(open["claude:s-old"] == claudeTab.id.uuidString && open["claude:" + openClaudeID] == nil,
               "a Claude Code tab is in the session its process records, not the one its command named",
               open.map { $0.key + " → " + $0.value }.sorted().joined(separator: ", "))
+
+        // A hidden sidebar reads no sessions; shown again, it catches up once.
+        let group = holder.sidebar.sessionsGroup
+        holder.toggleProjectSidebar(nil)
+        let token = group.token
+        holder.sidebar.scheduleSessionsReload()
+        await pause(2)
+        check(!holder.isSidebarVisible && group.token == token && group.reloadWhenShown, "a hidden sidebar reads no agent sessions",
+              "visible \(holder.isSidebarVisible), reads \(group.token - token)")
+        holder.toggleProjectSidebar(nil)
+        check(await wait(3) { group.token > token && !group.reloadWhenShown }, "and reads them once it shows again")
     }
 
     /// The sidebar's Agent Sessions group: the newest five, More…, "running", Continue Latest, resume.

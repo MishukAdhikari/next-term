@@ -331,14 +331,27 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         }
     }
 
-    /// Reads them again soon: an agent started or stopped, or the window came to the front.
+    /// Reads them again soon: an agent started or stopped, or the window came to the front. While the
+    /// sidebar is hidden, once it shows again instead.
     func scheduleSessionsReload() {
-        guard root != nil, !sessionsGroup.reloadQueued else { return }
+        guard root != nil else { return }
+        if isHiddenOrHasHiddenAncestor {
+            sessionsGroup.reloadWhenShown = true
+            return
+        }
+        guard !sessionsGroup.reloadQueued else { return }
         sessionsGroup.reloadQueued = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             self?.sessionsGroup.reloadQueued = false
             self?.loadSessions()
         }
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        guard sessionsGroup.reloadWhenShown else { return }
+        sessionsGroup.reloadWhenShown = false
+        loadSessions()
     }
 
     func showSessions(_ sessions: [AgentSession], tabs: SessionTabs) {

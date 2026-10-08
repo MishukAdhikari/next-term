@@ -18,7 +18,9 @@ final class SessionsGroup {
     /// Bumped by every read, so one that finishes after a newer one started is dropped.
     var token = 0
     var reloadQueued = false
-    /// The agent tabs (and their states) seen last: a change reads the sessions again.
+    /// A read was wanted while the sidebar was hidden: it is done when the sidebar shows again.
+    var reloadWhenShown = false
+    /// The agent tabs (and when each agent started) seen last: a change reads the sessions again.
     var agentTabs = ""
     /// Projects whose group you closed: it stays closed for them.
     var collapsedRoots: Set<String> = []

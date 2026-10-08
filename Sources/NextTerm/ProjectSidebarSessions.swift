@@ -117,8 +117,9 @@ extension TerminalWindowController {
     }
 
     /// Called with every refresh: notes when each agent in a tab started (by the wall clock, while it is
-    /// fresh), and when an agent starts, stops or finishes a turn in any tab the sidebar reads its sessions
-    /// again (a new session, a new title, a "running" badge that comes or goes).
+    /// fresh), and when an agent starts or stops in any tab the sidebar reads its sessions again (a new
+    /// session, a "running" badge that comes or goes). New titles wait for the window to come to the front:
+    /// a read after every turn would read every agent's store each time.
     func noteAgentTabs() {
         guard let app = AppDelegate.shared else { return }
         var marks: [String] = []
@@ -126,7 +127,7 @@ extension TerminalWindowController {
         for tab in app.controllers.flatMap(\.tabs) where tab.status.running && tab.status.kind == .agent {
             if let since = tab.status.runningSince { _ = SessionStore.startDate(of: tab, since: since) }
             agents.insert(tab.id.uuidString)
-            marks.append(tab.id.uuidString + "\(tab.status.runningSince ?? 0)" + "\(tab.status.state)")
+            marks.append(tab.id.uuidString + "\(tab.status.runningSince ?? 0)")
         }
         SessionStore.agentStarts.forget(allBut: agents)
         let signature = marks.joined(separator: ",")
