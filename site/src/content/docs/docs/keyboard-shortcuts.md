@@ -111,7 +111,7 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Git Log (the commit history) | <kbd>⌥⌘L</kbd> |
 | Git Commands (what Next Term ran) | — |
 
-In the branch popup: <kbd>↩</kbd> checks out, <kbd>→</kbd> opens the branch’s menu, <kbd>⌘R</kbd> fetches, <kbd>⌘↩</kbd> makes a new branch from the selected one, <kbd>⌘⌫</kbd> deletes it, <kbd>⌘C</kbd> copies its name.
+In the branch popup: <kbd>↩</kbd> checks out, <kbd>⌥↩</kbd> checks out and updates a branch that is behind its upstream, <kbd>→</kbd> opens the branch’s menu, <kbd>⌘R</kbd> fetches, <kbd>⌘↩</kbd> makes a new branch from the selected branch or tag, <kbd>⌘⌫</kbd> deletes the branch (one on a remote after asking), <kbd>⌘C</kbd> copies its name (a worktree’s path).
 
 In the Git Log: <kbd>↑</kbd> and <kbd>↓</kbd> move through the commits, <kbd>⌘F</kbd> goes to the search field, <kbd>↩</kbd> moves to the selected commit’s changed files (and <kbd>↩</kbd> there opens a file’s diff), <kbd>⌘C</kbd> copies the commit’s hash.
 
