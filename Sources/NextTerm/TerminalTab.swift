@@ -911,6 +911,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         remoteReady = false
         loginPrompt = false
         status.shellReplaced()
+        completion.connectionLost()
         // What ran in a plain remote shell ended with the connection: mark it, as a failure would be.
         if stopped != nil { status.shellExited(code: 255) }
         // tmux or an agent left the terminal in their modes (alternate screen, mouse, keyboard protocol,

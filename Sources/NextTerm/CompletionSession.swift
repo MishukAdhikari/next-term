@@ -495,6 +495,15 @@ extension CompletionSession {
         return reportsSinceReturn >= 2 && RemoteCompletion.shared.hasRoom(for: tab)
     }
 
+    /// The tab's connection dropped. A plain tab's shell went with it, and a reconnected one may have no hook (one
+    /// removed on the server); a tmux pane's shell is reached again as it was. Either way what its hook said no
+    /// longer holds until it says so again, so no private key goes out before then, and its prompt is trusted again
+    /// only from new status reports.
+    func connectionLost() {
+        shellReplaced()
+        reportsSinceReturn = 0
+    }
+
     /// A status report for this server tab (TerminalTab.applyRemote): what it says about the prompt, whether it
     /// gave the shell's folder (not where there is no /proc), and that folder to prefetch. A host whose hook is
     /// allowed is checked for it now and then.
