@@ -678,6 +678,7 @@ enum SelfTest {
         check(c.tabs[0] === b && c.tabs[1] === a, "drag reorder moves the tab")
 
         await paneChecks(c)
+        await paneHeaderChecks(c)
 
         await sessionChecks(proj: proj)
 
