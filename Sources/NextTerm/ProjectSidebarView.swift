@@ -1070,7 +1070,23 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             DispatchQueue.main.async { [weak self] in self?.runHeld() }
         }
         guard !renameCancelled, newName != node.name else { return }
+        let byKey = NSApp.currentEvent?.type == .keyDown // Return, not a click on another row
         rename(node.url, to: newName)
+        // Named with Return, it stays selected, as in Finder: the folder's new listing makes it a new node,
+        // which the outline would otherwise drop from the selection.
+        if byKey, let parent = node.parent {
+            DispatchQueue.main.async { [weak self, weak parent] in
+                guard let self, let parent, !self.isRenaming else { return }
+                parent.reload()
+                self.syncHiddenRow(for: parent)
+                self.rowCache[ObjectIdentifier(parent)] = nil
+                self.outline.reloadItem(parent, reloadChildren: true)
+                if let named = parent.children?.first(where: { $0.name == newName }) {
+                    let row = self.outline.row(forItem: named)
+                    if row >= 0 { self.outline.selectRowIndexes([row], byExtendingSelection: false) }
+                }
+            }
+        }
     }
 
     // MARK: the rows hold still while a name is edited

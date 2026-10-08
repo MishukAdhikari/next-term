@@ -68,6 +68,8 @@ extension SelfTest {
                 check(await wait(3) { fm.fileExists(atPath: named.path) && !fm.fileExists(atPath: untitled.path) }, "new file: Return gives it the name typed",
                       (try? fm.contentsOfDirectory(atPath: tmp.path).sorted().joined(separator: ", ")) ?? "")
                 check(await wait(3) { newFileRow(sidebar, named) >= 0 && !editingAName(sidebar) }, "new file: and the tree lists it under that name")
+                check(await wait(3) { sidebar.outline.selectedRowIndexes == IndexSet(integer: newFileRow(sidebar, named)) },
+                      "new file: and it stays selected after Return, as in Finder")
             }
 
             // The folder's own row, open: New Folder goes inside it. Escape keeps "untitled folder", selected.
