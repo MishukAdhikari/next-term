@@ -7,7 +7,9 @@ import NextTermCore
 /// (AE10); its tab gets the place mark only once the move has held, the header says "this tab:
 /// fix/7027-sso", down to the glyph in a narrow sidebar, and list_tabs says it is elsewhere (AE3, AE9).
 /// A switch from the branch popup marks the other agent, which had a turn, with "you switched it", and Keep
-/// Going clears that (AE2a). Session records are read from a home of its own.
+/// Going clears that (AE2a). A Claude Code whose record says its shell cd'd into the worktree is there, though
+/// its process stays in the root; a cd within the main checkout marks nothing (AE11). Session records are
+/// made by hand, in a home of its own.
 extension SelfTest {
     static func placeChecks(_ c: TerminalWindowController) async {
         guard let app = AppDelegate.shared, let git = GitRunner.locateGit() else { return }
@@ -15,8 +17,8 @@ extension SelfTest {
         let base = canonicalPath(NSTemporaryDirectory()) + "/nt-places-\(getpid())"
         try? fm.removeItem(atPath: base)
         let repo = base + "/xCloud", nested = repo + "/.claude/worktrees/pr-7050", bin = base + "/bin"
-        let controlA = base + "/control-a", controlB = base + "/control-b"
-        for folder in [repo, bin, controlA, controlB, base + "/home"] { try? fm.createDirectory(atPath: folder, withIntermediateDirectories: true) }
+        let controlA = base + "/control-a", controlB = base + "/control-b", controlC = base + "/control-c"
+        for folder in [repo, bin, controlA, controlB, controlC, base + "/home"] { try? fm.createDirectory(atPath: folder, withIntermediateDirectories: true) }
         @discardableResult func sh(_ args: String...) -> String {
             let p = Process(), out = Pipe()
             p.executableURL = URL(fileURLWithPath: git)
@@ -179,6 +181,32 @@ extension SelfTest {
         layOut(width: frame.width)
         AgentPlaces.shared.keepGoing(five)
         check(await wait(5) { !marked(five) }, "places: Keep Going clears the mark", tip(five))
+
+        // Claude Code in tab "eleven", its process in the root; its transcript says where its shell went.
+        let eleven = holder.addTab(directory: repo)
+        opened.append(eleven)
+        await start(eleven, control: controlC, named: "eleven")
+        let pid = tcgetpgrp(eleven.view.process.childfd)
+        let id = "5e55a0de-0000-4000-8000-0000000000c3", home = base + "/home"
+        let project = home + "/.claude/projects/" + AgentSessions.claudeFolderName(repo)
+        try? fm.createDirectory(atPath: home + "/.claude/sessions", withIntermediateDirectories: true)
+        try? fm.createDirectory(atPath: project, withIntermediateDirectories: true)
+        try? #"{"pid": \#(pid), "sessionId": "\#(id)", "cwd": "\#(repo)"}"#.write(toFile: home + "/.claude/sessions/\(pid).json", atomically: true, encoding: .utf8)
+        let stamp = ISO8601DateFormatter()
+        stamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        func record(_ folders: [String]) {
+            let lines = folders.map { #"{"type":"assistant","cwd":"\#($0)","timestamp":"\#(stamp.string(from: Date()))"}"# + "\n" }
+            try? lines.joined().write(toFile: project + "/\(id).jsonl", atomically: true, encoding: .utf8)
+        }
+        record([repo + "/app/Http"])
+        let inApp = await wait(5) { AgentPlaces.shared.agentFolder(of: eleven) == repo + "/app/Http" }
+        await pause(4)
+        check(inApp && !marked(eleven), "places: a cd within the main checkout, as the agent's record says, is no move",
+              AgentPlaces.shared.agentFolder(of: eleven) + " " + tip(eleven))
+        record([repo + "/app/Http", nested + "/app"])
+        check(await wait(12) { marked(eleven) && tip(eleven).contains("works in worktree pr-7050") },
+              "places: a cd into the nested worktree, as the agent's record says, is a move there though its process stays in the root",
+              AgentPlaces.shared.agentFolder(of: eleven) + " " + tip(eleven))
 
         for tab in opened { tab.view.send(txt: "\u{03}") }
         _ = await wait(5) { opened.allSatisfy { !$0.status.running } }
