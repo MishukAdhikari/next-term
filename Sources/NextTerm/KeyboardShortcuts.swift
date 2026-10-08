@@ -334,7 +334,8 @@ final class ShortcutToolTip: NSObject {
 
 /// A menu command's key just before the icon button that does the same ("⌘B" before the sidebar icon), as a
 /// tab shows "⌘1" before its ×. It follows the key as Settings changes it and says nothing while the command
-/// has none; its owner shows it only while there is room. VoiceOver hears the key once, as the button's help.
+/// has none; its owner shows it only while there is room. One that gave way still shows while the pointer is
+/// on its button, over what is beside the icon. VoiceOver hears the key once, as the button's help.
 final class KeyHint: NSTextField {
     /// A tab's "⌘1", and these: small and dim, never cut short.
     static func style(_ label: NSTextField) {
@@ -356,7 +357,8 @@ final class KeyHint: NSTextField {
     private let command: Selector?
     private weak var button: NSButton?
 
-    /// The key `command`'s menu command has, before `button` (none: its owner places it).
+    /// The key `command`'s menu command has, before `button` (none: its owner places it, and says when the
+    /// pointer is on its icon).
     init(_ command: Selector, for button: NSButton?) {
         self.command = command
         self.button = button
@@ -386,6 +388,9 @@ final class KeyHint: NSTextField {
         drawsBackground = false
         Self.style(self)
         isHidden = true
+        // At once, as the pointer comes onto the button: no tooltip's wait.
+        button?.addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                               owner: self, userInfo: nil))
     }
 
     /// "⌘B", shown or not; empty while the command has no key.
@@ -400,6 +405,66 @@ final class KeyHint: NSTextField {
         stringValue = key
         button?.setAccessibilityHelp(key.isEmpty ? nil : key)
         superview?.needsLayout = true // its owner decides again whether there is room
+        updateOverlay()
+    }
+
+    // MARK: while the pointer is on the button
+
+    /// Its owner had no room for it, though it has a key and its button shows.
+    private var gaveWay = false
+    private var pointerOnIcon = false
+    private var overlay: KeyHintOverlay?
+    /// What is under the key where it shows over the row: the bar's colour (the rail's, while it is hovered).
+    var backdrop = Theme.bar { didSet { overlay?.needsDisplay = true } }
+    /// Where its overlay may start: the window's buttons sit before it (a tab bar's `leadingInset`). With no
+    /// room before the icon there, the key shows just after it instead.
+    var keepClear: CGFloat = 0
+    /// Where its overlay may go, in its owner's coordinates: anywhere in it unless the owner says (the rail
+    /// keeps the tab bars' line above the key clear).
+    var overlayBounds: NSRect?
+
+    /// The key shown over the row while the pointer is on the button, nil while it is not (for the self-test).
+    var hoverKey: String? { overlay?.isHidden == false ? overlay?.label.stringValue : nil }
+    /// Where it shows then, in its owner's coordinates (for the self-test).
+    var hoverFrame: NSRect { overlay?.isHidden == false ? overlay?.frame ?? .zero : .zero }
+
+    override func mouseEntered(with event: NSEvent) { pointer(onIcon: true) }
+    override func mouseExited(with event: NSEvent) { pointer(onIcon: false) }
+
+    /// The pointer came onto the button's icon or left it (the button's tracking area, or the rail's own).
+    func pointer(onIcon: Bool) {
+        guard onIcon != pointerOnIcon else { return }
+        pointerOnIcon = onIcon
+        updateOverlay()
+    }
+
+    // Gone with the pointer still on it (a click hid the sidebar): it must not come back by itself. Its
+    // owner hiding it says nothing; an ancestor hiding it, or its overlay, does.
+    override func viewDidHide() {
+        super.viewDidHide()
+        if !isHidden { pointer(onIcon: false) }
+    }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        pointer(onIcon: false)
+    }
+
+    /// While it gave way and the pointer is on the button: the key at its own place before the icon, over
+    /// whatever is there now, on `backdrop` with a little margin. It moves nothing and is gone when the
+    /// pointer leaves.
+    private func updateOverlay() {
+        guard gaveWay, pointerOnIcon, !key.isEmpty, let superview else {
+            overlay?.isHidden = true
+            return
+        }
+        let overlay = self.overlay ?? KeyHintOverlay(hint: self)
+        self.overlay = overlay
+        var text = frame
+        if let button, text.minX - KeyHintOverlay.padding < keepClear {
+            text.origin.x = button.frame.midX + iconWidth / 2 + Self.gap
+        }
+        if superview.subviews.last !== overlay { superview.addSubview(overlay, positioned: .above, relativeTo: nil) }
+        overlay.show(key, at: text, within: overlayBounds ?? superview.bounds)
     }
 
     /// A label: a click goes to what is under it (the bar, which drags the window, or the button's margin).
@@ -414,13 +479,23 @@ final class KeyHint: NSTextField {
         key.isEmpty ? 0 : max(0, Self.lead + keyWidth + Self.gap - (buttonWidth - iconWidth) / 2)
     }
 
-    /// Lays it out just before its button's icon, centred on it, or hides it.
+    /// Lays it out just before its button's icon, centred on it: shown while its owner has room for it
+    /// (`shown`), otherwise kept there for the pointer.
     func place(shown: Bool) {
-        isHidden = !shown || key.isEmpty || button?.isHidden != false
-        guard !isHidden, let button else { return }
+        guard let button, !button.isHidden else { return place(nil, shown: false) }
         let height = intrinsicContentSize.height
-        frame = NSRect(x: button.frame.midX - iconWidth / 2 - Self.gap - keyWidth, y: button.frame.midY - height / 2,
-                       width: keyWidth, height: height)
+        place(NSRect(x: button.frame.midX - iconWidth / 2 - Self.gap - keyWidth, y: button.frame.midY - height / 2,
+                     width: keyWidth, height: height), shown: shown)
+    }
+
+    /// Lays it out at `frame` (none: its button is hidden, and so is it). Shown while there is room for it
+    /// there; without, it gave way, and shows there only while the pointer is on its icon.
+    func place(_ frame: NSRect?, shown: Bool) {
+        if let frame { self.frame = frame }
+        isHidden = !shown || key.isEmpty || frame == nil
+        gaveWay = !shown && !key.isEmpty && frame != nil
+        if frame == nil { pointerOnIcon = false } // a hidden button gets no word that the pointer left
+        updateOverlay()
     }
 
     /// The same place, for a button laid out by constraints.
@@ -430,6 +505,50 @@ final class KeyHint: NSTextField {
         isHidden = key.isEmpty
         return [trailingAnchor.constraint(equalTo: button.centerXAnchor, constant: -iconWidth / 2 - Self.gap),
                 centerYAnchor.constraint(equalTo: button.centerYAnchor)]
+    }
+}
+
+/// A key that gave way, while the pointer is on its button: drawn over the row on its hint's backdrop, with
+/// a little margin so it reads over the counts or a tab. A click goes through it to what is under it, and
+/// VoiceOver hears nothing of it: the key is in the button's help.
+final class KeyHintOverlay: NSView {
+    static let padding: CGFloat = 4
+    let label = NSTextField(labelWithString: "")
+    private weak var hint: KeyHint?
+    /// As its hint's owner, where it goes: the key sits in it as in the owner.
+    private let ownerIsFlipped: Bool
+
+    init(hint: KeyHint) {
+        self.hint = hint
+        ownerIsFlipped = hint.superview?.isFlipped ?? false
+        super.init(frame: .zero)
+        KeyHint.style(label)
+        addSubview(label)
+        setAccessibilityElement(false)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override var isFlipped: Bool { ownerIsFlipped }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func viewDidHide() {
+        super.viewDidHide()
+        if !isHidden { hint?.pointer(onIcon: false) } // its owner went with the pointer on the button
+    }
+
+    /// `key` with its text at `text`, in its owner's coordinates, its margin kept inside `area`.
+    func show(_ key: String, at text: NSRect, within area: NSRect) {
+        let box = text.insetBy(dx: -Self.padding, dy: -Self.padding).intersection(area)
+        label.stringValue = key
+        frame = box
+        label.frame = text.offsetBy(dx: -box.minX, dy: -box.minY)
+        isHidden = false
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        (hint?.backdrop ?? Theme.bar).setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 4, yRadius: 4).fill()
     }
 }
 
