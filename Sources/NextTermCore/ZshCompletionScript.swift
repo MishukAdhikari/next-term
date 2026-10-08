@@ -40,6 +40,10 @@ typeset -gi __nextterm_cfd=-1
 typeset -g __nextterm_copen= __nextterm_cpath= __nextterm_cbase= __nextterm_crbuf= __nextterm_cword=
 typeset -g __nextterm_ck= __nextterm_cid=
 typeset -g __nextterm_cisearch=
+# The tab started with zsh-autocomplete's list as you type off (the integration's NEXTTERM_COMPLETION=q): see
+# __nextterm_cquietstart.
+typeset -g __nextterm_cstartq=
+[[ ${__nextterm_cstart-} == q ]] && __nextterm_cstartq=1
 typeset -ga __nextterm_cf __nextterm_cwords
 # zsh's own matches, kept for the open list: each as compadd quoted it, the options to add it again, its
 # IPREFIX, PREFIX, SUFFIX and ISUFFIX; and what the popup shows: the text, the description, the group, the kind.
@@ -116,29 +120,49 @@ __nextterm_carm() {
   return 0
 }
 
-# The `config` key: zsh-autocomplete's list as you type off (q1) or back on (q0), in this shell only, by
-# taking its redraw hook out or putting it back. No file is touched. A config that is already in effect does
-# nothing; one that changed something says so with a new `arm`.
-__nextterm_cconfig() {
+# zsh-autocomplete's list as you type off (q1) or back on (q0), in this shell only, by taking its redraw hook out
+# or putting it back. No file is touched. False when that changed nothing (it was so already, or isn't loaded).
+__nextterm_cquiet() {
   emulate -L zsh
-  (( ${+functions[.autocomplete:async:complete]} )) || return 0
+  (( ${+functions[.autocomplete:async:complete]} )) || return 1
   local -a hooks
   zstyle -g hooks zle-line-pre-redraw widgets
   local on=0
   [[ -n ${(M)hooks:#<->:.autocomplete:async:complete} ]] && on=1
-  case ${__nextterm_cf[1]-} in
-    (q1) (( on )) || return 0
-         add-zle-hook-widget -d line-pre-redraw .autocomplete:async:complete
-         # Its list on screen now goes too.
-         zle -R -c ;;
-    (q0) (( on )) && return 0
+  case $1 in
+    (q1) (( on )) || return 1
+         add-zle-hook-widget -d line-pre-redraw .autocomplete:async:complete ;;
+    (q0) (( on )) && return 1
          add-zle-hook-widget line-pre-redraw .autocomplete:async:complete ;;
-    (*) return 0 ;;
+    (*) return 1 ;;
   esac
+  return 0
+}
+
+# The same from a key (q1 or q0, in a widget): its list on screen goes too, and a new `arm` says where it stands.
+__nextterm_cquietkey() {
+  emulate -L zsh
+  __nextterm_cstartq=
+  __nextterm_cquiet "${1-}" || return 0
+  [[ $1 == q1 ]] && zle -R -c
   __nextterm_carm
 }
 
-__nextterm_carmhook() { __nextterm_cisearch=; __nextterm_carm; return 0; }
+# The `config` key: the user's choice changed (Settings, or the question at a first Tab).
+__nextterm_cconfig() { __nextterm_cquietkey "${__nextterm_cf[1]-}"; }
+
+# Off from the start where the tab started so, with no key: a key sent at the first prompt could reach a command typed
+# ahead of it. At each prompt until its redraw hook is there to take out (zsh-autocomplete adds it at its first
+# precmd, which may run after ours), and at the first line at the latest.
+__nextterm_cquietstart() {
+  emulate -L zsh
+  [[ -n $__nextterm_cstartq ]] || return 0
+  __nextterm_cquiet q1 && __nextterm_cstartq=
+  [[ ${1-} == line ]] && __nextterm_cstartq=
+  return 0
+}
+
+__nextterm_carmhook() { __nextterm_cisearch=; __nextterm_cquietstart line; __nextterm_carm; return 0; }
 
 # Incremental search takes keys of its own: Tab is plain there until it ends.
 __nextterm_cisearchhook() {
@@ -211,13 +235,17 @@ __nextterm_cplain() {
 }
 
 # A real Tab, sent as the private key with Next Term's id. On a server it says how long to wait for Next Term's
-# answer (w<ms>, from the connection's round trip, 150 to 600 ms).
+# answer (w<ms>, from the connection's round trip, 150 to 600 ms). Where zsh-autocomplete's list as you type isn't
+# as the user chose, it says that too (q1 or q0): a server's hook starts with it on.
 __nextterm_ctab() {
   emulate -L zsh -o extendedglob
-  local id=$1
-  if [[ ${__nextterm_cf[1]-} == w<150-600> ]]; then
-    typeset -gF __nextterm_cwait=$(( ${__nextterm_cf[1]#w} / 1000.0 ))
-  fi
+  local id=$1 f
+  for f in "${__nextterm_cf[@]}"; do
+    case $f in
+      (w<150-600>) typeset -gF __nextterm_cwait=$(( ${f#w} / 1000.0 )) ;;
+      (q[01]) __nextterm_cquietkey $f ;;
+    esac
+  done
   __nextterm_cclose
   if [[ $KEYMAP != (main|emacs|viins) || $CONTEXT != (start|cont) ]] || __nextterm_cplain; then
     __nextterm_cdone $id native
@@ -497,6 +525,7 @@ __nextterm_cprecmd() {
     [[ ${widgets[zle-$hook]-} == user:azhw:zle-$hook && -n ${(M)list:#<->:$fn} ]] && continue
     add-zle-hook-widget $hook $fn
   done
+  __nextterm_cquietstart
   return 0
 }
 

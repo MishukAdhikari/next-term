@@ -98,7 +98,7 @@ public enum ShellIntegration {
 typeset -g __nextterm_nonce="${NEXTTERM_NONCE-}"
 unset NEXTTERM_NONCE
 # Tab completion was on when this tab opened: its hook (completion.zsh, beside this file) loads at the first
-# prompt.
+# prompt. `q`: with zsh-autocomplete's list as you type off from the start.
 typeset -g __nextterm_completion="${NEXTTERM_COMPLETION-}" __nextterm_dir="${${(%):-%x}:h}"
 unset NEXTTERM_COMPLETION
 
@@ -157,6 +157,7 @@ if [[ -o interactive && -n "${__nextterm_nonce-}" && -z "${__nextterm_hooked-}" 
     builtin printf '\033]6973;%s;jobs;%s;%s\007' "$__nextterm_nonce" "${#js}" "$(__nextterm_b64 "${(pj:\n:)js}")"
     # Tab completion's hook, once, now that the user's config and plugins have loaded.
     if [[ -n $__nextterm_completion ]]; then
+      typeset -g __nextterm_cstart=$__nextterm_completion
       __nextterm_completion=
       [[ -r $__nextterm_dir/completion.zsh ]] && builtin source "$__nextterm_dir/completion.zsh"
     fi
