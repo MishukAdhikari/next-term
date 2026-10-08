@@ -217,7 +217,7 @@ extension ImportPlan {
         }
 
         // Two rows on one key: the first keeps it (an importer puts the one the other app obeys first), unless
-        // one acts in the editor and the other on the terminal (KeyBindings.canShareKey).
+        // they act in different parts of the window (KeyBindings.canShareKey).
         var claimed: [KeyChord: [String]] = [:]
         for i in rows.indices where rows[i].ticked {
             guard let chord = rows[i].chord else { continue }
@@ -263,14 +263,13 @@ extension ImportPlan {
                 changed = true
             }
         }
-        // A key a row shares with a command in the other part: which one has it where.
+        // A key a row shares with commands in other parts: which one has it where.
         for i in rows.indices where rows[i].ticked {
             let command = rows[i].command
-            guard let chord = rows[i].chord,
-                  let other = after.keys.sorted().first(where: { $0 != command && (after[$0] ?? nil) == chord }) else { continue }
-            let editor = KeyBindings.editorCommands.contains(command) ? command : other
-            let elsewhere = editor == command ? other : command
-            let shared = "\(chord.display) is \(name(editor)) while the editor has the keyboard, \(name(elsewhere)) everywhere else"
+            guard let chord = rows[i].chord else { continue }
+            let others = after.keys.sorted().filter { $0 != command && (after[$0] ?? nil) == chord }
+            guard !others.isEmpty else { continue }
+            let shared = KeyBindings.sharingNote(chord, [command] + others, title: name)
             if rows[i].note?.contains(shared) != true { rows[i].note = ImportShortcuts.join(shared, rows[i].note) }
         }
         plan.shortcuts = rows
