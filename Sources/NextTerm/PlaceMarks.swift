@@ -35,9 +35,27 @@ extension TerminalWindowController {
     /// A click on the header's label: for a branch switched under the focused tab's chat, Keep Going, and Go to
     /// That Tab when another tab made the switch.
     func showPlaceChoices() {
-        guard let tab = activeTab, let mark = AgentPlaces.shared.mark(for: tab, in: self), let switched = mark.switched else { return }
+        guard let tab = activeTab else { return }
         let menu = NSMenu()
         menu.autoenablesItems = false
+        guard addPlaceChoices(for: tab, to: menu) else { return }
+        sidebar.header.popUpTabPlaceMenu(menu)
+    }
+
+    /// A tab's right-click menu leads with the same choices when the branch was switched under the chat of one
+    /// of its panes (the one with the keyboard first), so they don't need the mouse on the header's label.
+    func addPlaceChoices(to menu: NSMenu, for group: PaneGroup) {
+        let panes = [group.focused] + group.panes.filter { $0 !== group.focused }
+        guard let tab = panes.first(where: { AgentPlaces.shared.mark(for: $0, in: self)?.switched != nil }),
+              addPlaceChoices(for: tab, to: menu) else { return }
+        menu.addItem(.separator())
+    }
+
+    /// Keep Going on the branch now checked out, and Go to That Tab when another tab made the switch; false
+    /// when `tab`'s branch was not switched under its chat.
+    @discardableResult
+    func addPlaceChoices(for tab: TerminalTab, to menu: NSMenu) -> Bool {
+        guard let switched = AgentPlaces.shared.mark(for: tab, in: self)?.switched else { return false }
         menu.addBlock("Keep Going on \(switched.to.name)") { AgentPlaces.shared.keepGoing(tab) }
         if let key = switched.by.tabKey, let app = AppDelegate.shared,
            let owner = app.controllers.first(where: { $0.tabs.contains { $0.id.uuidString == key } }),
@@ -47,7 +65,7 @@ extension TerminalWindowController {
                 owner.window?.makeKeyAndOrderFront(nil)
             }
         }
-        sidebar.header.popUpTabPlaceMenu(menu)
+        return true
     }
 }
 
