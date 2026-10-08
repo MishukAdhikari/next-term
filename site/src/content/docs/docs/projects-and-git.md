@@ -30,7 +30,7 @@ When the folder has sessions, **Agent Sessions** sits at the top of the project 
 
 - **Double-click** a session to resume it in a new tab, or to go to the tab it is open in. Right-click (or ⋯) for **Resume** or **Go to Tab**, **Fork** and **Copy Resume Command**.
 - The group’s ⋯ has **Continue Latest** for each agent with a session in the folder: the agent’s own command for its latest session there, such as `claude --continue` or `codex resume --last`.
-- The list reads again when an agent starts, stops or finishes a turn in a tab, and when the window comes to the front. **Refresh Sessions** in the group’s menu reads it now.
+- The list reads again when an agent starts or stops in a tab, and when the window comes to the front, which is when new titles show. While the sidebar is hidden it waits until the sidebar shows again. **Refresh Sessions** in the group’s menu reads it now.
 
 ### What Next Term reads
 
