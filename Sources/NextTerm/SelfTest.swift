@@ -685,6 +685,7 @@ enum SelfTest {
 
         await paneChecks(c)
         await menuChecks(c)
+        await paneHeaderChecks(c)
 
         await sessionChecks(proj: proj)
         await moreSessionChecks(proj: proj)

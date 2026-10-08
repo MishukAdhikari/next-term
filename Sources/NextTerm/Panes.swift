@@ -1,20 +1,35 @@
 import AppKit
 import NextTermCore
 
-/// A terminal in a split tab: the terminal with its margins, and a veil that dims it while another pane
-/// of the same tab has the keyboard.
+/// A terminal in a split tab: the terminal with its margins, a header above it while the tab shows more
+/// than one pane, and a veil that dims the terminal while another pane of the same tab has the keyboard.
 final class PaneView: NSView {
     let tab: TerminalTab
+    /// The pane's own small tab: its mark, its title and a × that closes this pane alone.
+    let header: PaneHeaderView
     private let veil = Veil()
+    /// The header's room, taken from the pane's height (none while it is hidden).
+    private var headerHeight: NSLayoutConstraint?
 
     init(tab: TerminalTab) {
         self.tab = tab
+        header = PaneHeaderView(tab: tab)
         super.init(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        clipsToBounds = true // a terminal that keeps its size in a pane with none (see layout) shows nowhere
+        header.isHidden = true
+        header.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(header)
         veil.isHidden = true
         veil.translatesAutoresizingMaskIntoConstraints = false
         addSubview(veil)
+        let height = header.heightAnchor.constraint(equalToConstant: 0)
+        headerHeight = height
         NSLayoutConstraint.activate([
-            veil.topAnchor.constraint(equalTo: topAnchor),
+            header.topAnchor.constraint(equalTo: topAnchor),
+            header.leadingAnchor.constraint(equalTo: leadingAnchor),
+            header.trailingAnchor.constraint(equalTo: trailingAnchor),
+            height,
+            veil.topAnchor.constraint(equalTo: header.bottomAnchor),
             veil.leadingAnchor.constraint(equalTo: leadingAnchor),
             veil.trailingAnchor.constraint(equalTo: trailingAnchor),
             veil.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -23,7 +38,7 @@ final class PaneView: NSView {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    /// Takes the terminal (from wherever it was) and keeps the veil above it.
+    /// Takes the terminal (from wherever it was) and keeps the veil above it, under the header.
     func adopt() {
         let view = tab.view
         guard view.superview !== self else { return }
@@ -31,7 +46,7 @@ final class PaneView: NSView {
         view.translatesAutoresizingMaskIntoConstraints = false
         addSubview(view, positioned: .below, relativeTo: veil)
         NSLayoutConstraint.activate([
-            view.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            view.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 4),
             view.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             view.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
             view.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
@@ -39,7 +54,61 @@ final class PaneView: NSView {
     }
 
     var dimmed = false {
-        didSet { veil.isHidden = !dimmed }
+        didSet {
+            veil.isHidden = !dimmed
+            header.focused = !dimmed
+        }
+    }
+
+    /// The panes of a split sit in split views; a lone pane, or one maximized, sits in the tab itself and
+    /// shows no header. Decided as the pane is placed, before the layout that sizes its terminal, so the
+    /// terminal is resized once, to its size with or without the header.
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        guard let superview else { return } // on its way to another split
+        showsHeader = superview is PaneSplitView
+    }
+
+    /// A pane is placed at no width or no height first, while its split is built, and has no height while
+    /// the terminal is folded down to its tab bar. Its terminal keeps its size until the pane has one again:
+    /// squeezed to two columns on the way, it would rewrap its history to fit them and lose most of it (a
+    /// Split Down in a tab already split side by side did). It keeps its size too while its split view is
+    /// still being placed (built at even shares, then its dividers put back): a split or a close resizes
+    /// the terminal once, to where it ends up, and not at all a terminal whose room stays the same. Each
+    /// resize is a redraw for the program in it.
+    override func layout() {
+        guard bounds.width >= 1, bounds.height >= 1, (superview as? PaneSplitView)?.applying != true else { return }
+        super.layout()
+    }
+
+    /// The terminal had the keyboard as the pane left the window (see viewDidMoveToWindow).
+    private var hadKeyboard = false
+
+    /// A split, a close or Make Panes Equal builds the split views again, which takes every pane out of the
+    /// window for a moment, and AppKit gives the keyboard to the window. The pane that had it takes it back
+    /// as it returns, if it is still the pane the keyboard belongs to (not one that was maximized before you
+    /// moved on to another pane).
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil { hadKeyboard = window?.firstResponder === tab.view }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return } // on its way out: keep what it had for its way back
+        defer { hadKeyboard = false }
+        guard hadKeyboard, window.firstResponder === window,
+              (window.windowController as? TerminalWindowController)?.activeTab === tab else { return }
+        window.makeFirstResponder(tab.view)
+    }
+
+    private(set) var showsHeader = false {
+        didSet {
+            guard showsHeader != oldValue else { return }
+            header.isHidden = !showsHeader
+            headerHeight?.constant = showsHeader ? PaneHeaderView.height : 0
+            if showsHeader { header.update() }
+        }
     }
 
     /// Clicks go through to the terminal; the veil only shades it.
@@ -55,11 +124,244 @@ final class PaneView: NSView {
     }
 }
 
+/// A pane's header in a split tab, like a small tab: the pane's status mark, its title as the tab bar
+/// would show it (a pane on a server with its server mark) and a × that closes this pane alone. The pane
+/// with the keyboard has the selected tab's look, the others the bar's. A click gives the pane the
+/// keyboard; a double-click renames it. It sits above the terminal, never in its rows.
+final class PaneHeaderView: NSView, NSTextFieldDelegate {
+    static let height: CGFloat = 30
+
+    let tab: TerminalTab
+    private let dot = StatusDotView()
+    private let remoteMark = RemoteMarkView()
+    private let label = NSTextField(labelWithString: "")
+    let closeButton = NSButton()
+    private var renameField: NSTextField?
+    private var hovering = false { didSet { if hovering != oldValue { refresh() } } }
+    /// The pane has the keyboard: the selected tab's look, and its × always shows.
+    var focused = false {
+        didSet {
+            guard focused != oldValue else { return }
+            refresh()
+            update() // VoiceOver hears it
+        }
+    }
+    /// The ×'s tooltip with ⌘W's key, on the pane with the keyboard, following the key when it changes.
+    private var closeTip: ShortcutToolTip?
+    /// What the title was fitted from, so a refresh touches only what changed.
+    private var title = ""
+    private var shorterTitles: [String] = []
+
+    private static let font = NSFont.systemFont(ofSize: 12)
+
+    init(tab: TerminalTab) {
+        self.tab = tab
+        super.init(frame: NSRect(x: 0, y: 0, width: 400, height: Self.height))
+        wantsLayer = true
+        label.font = Self.font
+        Typography.singleLine(label, truncation: .byTruncatingMiddle)
+        label.setAccessibilityElement(false) // the header says it
+        addSubview(label)
+        addSubview(dot)
+        remoteMark.isHidden = true
+        addSubview(remoteMark)
+        closeButton.bezelStyle = .regularSquare
+        closeButton.isBordered = false
+        closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close Pane")?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+        closeButton.contentTintColor = Theme.textDim
+        closeButton.target = self
+        closeButton.action = #selector(closeClicked)
+        closeButton.toolTip = "Close pane"
+        closeButton.isHidden = true
+        addSubview(closeButton)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityRoleDescription("pane")
+        refresh()
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override var isFlipped: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    private var controller: TerminalWindowController? { window?.windowController as? TerminalWindowController }
+
+    /// For the self-test: the title and mark as shown.
+    var shownTitle: String { label.stringValue }
+    var shownState: TabState { dot.state }
+    var shownRemoteLink: RemoteLink? { remoteMark.isHidden ? nil : remoteMark.link }
+    var isEditing: Bool { renameField != nil }
+
+    /// Takes the pane's title, mark and server mark. Called several times a second: touch only what changed
+    /// (setting a tooltip again resets it).
+    func update() {
+        if tab.title != title || tab.shorterTitles != shorterTitles {
+            title = tab.title
+            shorterTitles = tab.shorterTitles
+            label.stringValue = title
+            needsLayout = true // layout may shorten it
+        }
+        if label.lineBreakMode != tab.titleTruncation { label.lineBreakMode = tab.titleTruncation }
+        dot.state = tab.status.state
+        let remote = tab.remoteMark
+        if (remote == nil) != remoteMark.isHidden { needsLayout = true } // the title moves over, or back
+        remoteMark.link = remote?.link
+        remoteMark.isHidden = remote == nil
+        if toolTip != tab.tooltip { toolTip = tab.tooltip }
+        let parts = [title, tab.ownStateDescription ?? "", remote?.summary ?? "", focused ? "has the keyboard" : ""]
+        let spoken = parts.filter { !$0.isEmpty }.joined(separator: ", ")
+        if accessibilityLabel() != spoken { setAccessibilityLabel(spoken) }
+        let closeLabel = "Close pane \(title)"
+        if closeButton.accessibilityLabel() != closeLabel { closeButton.setAccessibilityLabel(closeLabel) }
+    }
+
+    private func refresh() {
+        layer?.backgroundColor = (focused ? Theme.background : hovering ? Theme.tabHover : Theme.bar).cgColor
+        label.textColor = focused || hovering ? Theme.text : Theme.textDim
+        remoteMark.tint = label.textColor ?? Theme.textDim
+        closeButton.isHidden = !(focused || hovering)
+        // ⌘W closes the pane with the keyboard, so only its × names the key.
+        if focused != (closeTip != nil) {
+            closeTip = focused ? ShortcutToolTip(closeButton, "Close pane", #selector(TerminalWindowController.closeTab(_:))) : nil
+            if !focused { closeButton.toolTip = "Close pane" }
+        }
+        needsDisplay = true
+    }
+
+    /// VoiceOver finds the × while it shows, and the rename field while there is one; the mark, the title
+    /// and the server are in the header's own label.
+    override func accessibilityChildren() -> [Any]? {
+        var children: [NSView] = closeButton.isHidden ? [] : [closeButton]
+        if let renameField { children.insert(renameField, at: 0) }
+        return children
+    }
+
+    override func layout() {
+        super.layout()
+        let h = bounds.height
+        // The mark lines up with the terminal's text below it.
+        dot.frame = NSRect(x: 8, y: (h - 10) / 2, width: 10, height: 10)
+        closeButton.frame = NSRect(x: bounds.width - 24, y: (h - 18) / 2, width: 18, height: 18)
+        remoteMark.frame = NSRect(x: 22, y: (h - 16) / 2, width: RemoteMarkView.size.width, height: RemoteMarkView.size.height)
+        let labelX: CGFloat = remoteMark.isHidden ? 25 : remoteMark.frame.maxX + 3
+        // The ×'s room is kept while it is hidden, so the title stays put as the pointer passes.
+        let width = max(0, bounds.width - 28 - labelX)
+        let labelHeight = label.intrinsicContentSize.height
+        label.frame = NSRect(x: labelX, y: (h - labelHeight) / 2, width: width, height: labelHeight)
+        let words = fits(title, within: width) ? title : shorterTitles.first { fits($0, within: width) } ?? shorterTitles.last ?? title
+        if label.stringValue != words { label.stringValue = words }
+        renameField?.frame = NSRect(x: labelX - 3, y: (h - 22) / 2, width: max(40, bounds.width - labelX - 26), height: 22)
+    }
+
+    private func fits(_ title: String, within width: CGFloat) -> Bool {
+        (title as NSString).size(withAttributes: [.font: Self.font]).width + 4 <= width
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard focused else { return }
+        Theme.accent.setFill()
+        NSRect(x: 0, y: bounds.height - 2, width: bounds.width, height: 2).fill()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+    /// Hidden under the pointer (its pane maximized, or the last but one closed): no exit comes.
+    override func viewDidHide() {
+        super.viewDidHide()
+        hovering = false
+    }
+
+    /// Taken out of the window under the pointer (another pane maximized, or the panes built again for a
+    /// split or a close): no exit comes either.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { hovering = false }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 { return beginRename() }
+        controller?.focusPane(tab)
+    }
+
+    // Middle-click closes, as on a tab.
+    override func otherMouseUp(with event: NSEvent) {
+        if event.buttonNumber == 2 { controller?.closePane(tab) }
+    }
+
+    @objc private func closeClicked() { controller?.closePane(tab) }
+
+    override func accessibilityPerformPress() -> Bool {
+        controller?.focusPane(tab)
+        return controller != nil
+    }
+
+    // MARK: rename, as a tab's
+
+    func beginRename() {
+        guard renameField == nil else { return }
+        let field = NSTextField(string: tab.editableTitle)
+        field.font = Self.font
+        field.focusRingType = .none
+        field.bezelStyle = .roundedBezel
+        field.delegate = self
+        field.placeholderString = "Pane name"
+        field.usesSingleLineMode = true // a pasted line break becomes a space
+        renameField = field
+        label.isHidden = true
+        addSubview(field)
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+        window?.makeFirstResponder(field)
+        field.currentEditor()?.selectAll(nil)
+    }
+
+    private var renameCancelled = false
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if selector == #selector(NSResponder.cancelOperation(_:)) {
+            renameCancelled = true
+            window?.makeFirstResponder(nil) // ends editing -> controlTextDidEndEditing
+            return true
+        }
+        return false
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard let field = renameField else { return }
+        renameField = nil
+        let text = field.stringValue.components(separatedBy: .newlines).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+        let controller = self.controller
+        field.removeFromSuperview()
+        label.isHidden = false
+        if renameCancelled {
+            renameCancelled = false
+        } else {
+            // An empty name goes back to the automatic title.
+            controller?.renamePane(tab, to: text.isEmpty ? nil : text)
+        }
+        controller?.paneRenameEnded(tab)
+    }
+}
+
 /// Between panes: a hairline that shows against the terminal background, easy to grab.
 final class PaneSplitView: NSSplitView, NSSplitViewDelegate {
     weak var split: PaneGroup.Split?
-    /// Set while the group lays itself out, so its own moves are not taken for the user's.
-    var applying = false
+    /// Set while the group lays itself out, so its own moves are not taken for the user's. Its panes size
+    /// their terminals once it is done (see PaneView.layout).
+    var applying = false {
+        didSet {
+            guard oldValue, !applying else { return }
+            for case let pane as PaneView in arrangedSubviews { pane.needsLayout = true }
+        }
+    }
 
     override var dividerColor: NSColor { WorkSplitView.line }
     override var dividerThickness: CGFloat { 1 }
@@ -69,16 +371,18 @@ final class PaneSplitView: NSSplitView, NSSplitViewDelegate {
         isVertical ? drawnRect.insetBy(dx: -3, dy: 0) : drawnRect.insetBy(dx: 0, dy: -3)
     }
 
-    /// No pane narrower than a usable terminal.
+    /// No pane narrower than a usable terminal, nor, one above another, shorter than its header and one.
+    var minimum: CGFloat { PaneGroup.minimum + (isVertical ? 0 : PaneHeaderView.height) }
+
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {
         let previous = arrangedSubviews[index].frame
-        return (isVertical ? previous.minX : previous.minY) + PaneGroup.minimum
+        return (isVertical ? previous.minX : previous.minY) + minimum
     }
 
     func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {
         guard index + 1 < arrangedSubviews.count else { return proposed }
         let next = arrangedSubviews[index + 1].frame
-        return (isVertical ? next.maxX : next.maxY) - PaneGroup.minimum
+        return (isVertical ? next.maxX : next.maxY) - minimum
     }
 
     func splitViewDidResizeSubviews(_ notification: Notification) {
@@ -323,5 +627,47 @@ final class PaneGroup {
     private func frame(of tab: TerminalTab) -> NSRect? {
         guard let pane = paneViews[tab.id], pane.superview != nil, pane.window != nil else { return nil }
         return pane.convert(pane.bounds, to: view)
+    }
+}
+
+// MARK: - pane headers
+
+extension PaneGroup {
+    /// Each pane's header follows its terminal: its title, its mark, its server mark.
+    func refreshHeaders() {
+        for tab in panes { paneViews[tab.id]?.header.update() }
+    }
+}
+
+extension TerminalWindowController {
+    /// With the tab bar: the headers of every split tab follow their panes.
+    func refreshPaneHeaders() {
+        for group in groups where group.isSplit { group.refreshHeaders() }
+    }
+
+    /// A header's ×: that pane alone, asking first as ⌘W on it does.
+    func closePane(_ tab: TerminalTab) { requestClose(tab) }
+
+    /// A click on a header gives its pane the keyboard, as a click in its terminal does.
+    func focusPane(_ tab: TerminalTab) {
+        guard group(of: tab) != nil else { return }
+        window?.makeFirstResponder(tab.view)
+    }
+
+    /// A header's rename names its pane, as the tab bar's names the pane with the keyboard; empty goes back
+    /// to the automatic title.
+    func renamePane(_ tab: TerminalTab, to title: String?) {
+        tab.userTitle = title
+        refresh()
+    }
+
+    /// The rename ended (Return or Esc): the keyboard goes back to the pane once the field editor has let go,
+    /// unless a click put it somewhere else.
+    func paneRenameEnded(_ tab: TerminalTab) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.window, self.group(of: tab) === self.activeGroup,
+                  window.firstResponder === window || window.firstResponder == nil else { return }
+            window.makeFirstResponder(tab.view)
+        }
     }
 }
