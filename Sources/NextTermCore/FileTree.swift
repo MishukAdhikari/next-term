@@ -63,12 +63,13 @@ public final class FileNode {
     public var path: String { url.path }
     public var isLoaded: Bool { children != nil }
 
-    /// A folder's entries as fresh nodes, folders first, in Finder order ("file2" before "file10").
-    /// Safe on any thread.
-    public static func readChildren(of url: URL) -> (nodes: [FileNode], hidden: Int) {
+    /// A folder's entries as fresh nodes, folders first, in Finder order ("file2" before "file10"), without the
+    /// ones `hiding` leaves out. Safe on any thread.
+    public static func readChildren(of url: URL, hiding: FileHiding? = nil) -> (nodes: [FileNode], hidden: Int) {
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: url.path) else { return ([], 0) }
         let nodes = names.filter { !hiddenNames.contains($0) }
             .map { FileNode(url: url.appendingPathComponent($0)) }
+            .filter { hiding?.hides($0.path, isDirectory: $0.isDirectory) != true }
             .sorted { a, b in
                 if a.isDirectory != b.isDirectory { return a.isDirectory }
                 return a.name.localizedStandardCompare(b.name) == .orderedAscending
@@ -100,9 +101,9 @@ public final class FileNode {
     }
 
     @discardableResult
-    public func reload() -> Bool {
+    public func reload(hiding: FileHiding? = nil) -> Bool {
         guard isDirectory else { return false }
-        return install(Self.readChildren(of: url))
+        return install(Self.readChildren(of: url, hiding: hiding))
     }
 
     /// Finds the loaded node for a path under this one.
