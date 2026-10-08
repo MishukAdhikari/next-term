@@ -22,6 +22,8 @@ public struct ChangeContext: Equatable, Sendable {
     public var head: String?
     /// The branch "All changes" counts from ("refs/remotes/origin/main"); nil when there is none.
     public var base: String?
+    /// The base when none is chosen: the upstream's default branch, else main or master.
+    public var defaultBase: String?
     /// The newest commit HEAD and the base share; nil without a base, on it, or when they share none.
     public var mergeBase: String?
     /// What is checked out is the base itself (main, on main or origin/main).
@@ -160,6 +162,7 @@ public enum Changes {
         let (refs, heads, upstreams) = ChangeBase.parseRefs(listing)
         let remotes = text(GitRunner.run(git, base + ["remote"], timeout: 10)).split(separator: "\n").map(String.init)
         let upstream = context.branch.flatMap { upstreams[$0] }
+        context.defaultBase = ChangeBase.pick(chosen: nil, upstream: upstream, refs: Set(refs), remoteHeads: heads)
         context.base = ChangeBase.pick(chosen: chosen, upstream: upstream, refs: Set(refs), remoteHeads: heads)
         context.isOnBase = ChangeBase.isOnBase(branch: context.branch, base: context.base, remotes: remotes)
         let local = refs.filter { $0.hasPrefix("refs/heads/") }, remote = refs.filter { $0.hasPrefix("refs/remotes/") }
