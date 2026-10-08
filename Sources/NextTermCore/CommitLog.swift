@@ -228,7 +228,8 @@ public struct CommitQuery: Equatable, Sendable {
     }
 
     /// The `git rev-list` options and revisions after `rev-list`: the ids the query lists, in order.
-    func arguments(includeHead: Bool) -> [String] {
+    /// Without `paths`, they end at "--" (the paths go on standard input, see CommitLog.order).
+    func arguments(includeHead: Bool, paths withPaths: Bool = true) -> [String] {
         var args = ["--topo-order"]
         let text = self.text.trimmingCharacters(in: .whitespaces), author = self.author.trimmingCharacters(in: .whitespaces)
         // --regexp-ignore-case covers the author as well: matching the text's case, the author is a
@@ -267,7 +268,7 @@ public struct CommitQuery: Equatable, Sendable {
         case let .ref(name):
             args += ["--end-of-options", name]
         }
-        return args + ["--"] + paths
+        return args + ["--"] + (withPaths ? paths : [])
     }
 }
 
@@ -397,7 +398,8 @@ public enum CommitLog {
     /// that found more (`score`): a name a git that did not compose names added (an old one on HFS+) is
     /// stored decomposed, and composed it matches nothing. A lone path that matched is as asked; beside
     /// other paths that match, or across a rename to an ASCII name, the decomposed one may still be
-    /// missing, so then both runs are made. The later `-c` wins.
+    /// missing, so then both runs are made. The later `-c` wins. For one file's diff, whose paths are
+    /// one name (two across a rename); the log's filter gives its paths both ways at once (`pathspecs`).
     private static func run(_ git: String, _ args: [String], paths: [String], in root: String, timeout: TimeInterval,
                             environment: [String: String] = [:], score: (Data) -> Int) -> Data? {
         guard let data = GitRunner.run(git, base(root) + args, timeout: timeout, environment: environment) else { return nil }
@@ -408,8 +410,19 @@ public enum CommitLog {
         return other
     }
 
-    /// How many commits `git rev-list` listed: a line each.
-    static func lineCount(_ data: Data) -> Int { data.reduce(0) { $1 == 10 ? $0 + 1 : $0 } }
+    /// The paths for `git rev-list --stdin`: each as given and, beyond ASCII, decomposed too, so a name
+    /// stored either way is matched in one walk, beside names stored the other way. Standard input is
+    /// read as it is, never composed (Process decomposes arguments, and git composes them again).
+    static func pathspecs(_ paths: [String]) -> Data {
+        var lines = ["--"]
+        for path in paths {
+            lines.append(path.precomposedStringWithCanonicalMapping)
+            let decomposed = path.decomposedStringWithCanonicalMapping
+            // Swift's == takes both spellings as one: compare the bytes.
+            if Array(decomposed.utf8) != Array(path.precomposedStringWithCanonicalMapping.utf8) { lines.append(decomposed) }
+        }
+        return Data((lines.joined(separator: "\n") + "\n").utf8)
+    }
 
     /// Every commit the query lists, in order, as ids; nil when git fails (not a repository, a bad
     /// revision). A query whose text is a hash prefix of a commit lists that commit alone. One walk of
@@ -418,8 +431,11 @@ public enum CommitLog {
         if let prefix = query.hashPrefix, let sha = resolve(prefix, in: root, git: git) { return CommitOrder(ids: [sha]) }
         // HEAD only when there is a commit: on an unborn branch, naming it is an error.
         let hasHead = query.scope != .all || resolve("HEAD", in: root, git: git) != nil
-        guard let data = run(git, ["rev-list"] + query.arguments(includeHead: hasHead), paths: query.paths, in: root, timeout: timeout,
-                             environment: query.environment, score: lineCount) else {
+        // Limited to paths, they go on standard input, both ways (`pathspecs`).
+        let args = query.paths.isEmpty ? ["rev-list"] + query.arguments(includeHead: hasHead)
+                                       : ["rev-list", "--stdin"] + query.arguments(includeHead: hasHead, paths: false)
+        let input = query.paths.isEmpty ? nil : pathspecs(query.paths)
+        guard let data = GitRunner.run(git, base(root) + args, timeout: timeout, environment: query.environment, input: input) else {
             // A repository without a single commit has nothing to list.
             return hasHead || query.scope != .all ? nil : CommitOrder(ids: [])
         }

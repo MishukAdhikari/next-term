@@ -365,6 +365,31 @@ import Testing
         }
     }
 
+    /// Two names beyond ASCII, one stored composed and one decomposed: one filter finds both, whatever
+    /// the setting.
+    @Test func composedAndDecomposedNamesTogether() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        repo.sh(["config", "core.precomposeUnicode", "true"])
+        try repo.write("café.txt", "a\n")
+        let cafe = repo.commit("Café", ["café.txt"])
+        repo.sh(["config", "core.precomposeUnicode", "false"])
+        try repo.write("école.txt", "b\n")
+        let ecole = repo.commit("École", ["école.txt"])
+        try repo.write("other.txt", "c\n")
+        repo.commit("Other", ["other.txt"])
+        let stored = repo.sh(["-c", "core.quotepath=off", "ls-tree", "--name-only", "HEAD"])
+        try #require(stored.contains("caf\u{E9}.txt") && stored.unicodeScalars.contains { $0.value == 0x301 }, "stored: \(stored)")
+        for setting in ["false", "true"] {
+            repo.sh(["config", "core.precomposeUnicode", setting])
+            let both = CommitLog.page(CommitQuery(paths: ["café.txt", "école.txt"]), in: repo.work, git: repo.git)?.map(\.sha)
+            #expect(both == [ecole, cafe], "\(setting)")
+        }
+        // Each path both ways on standard input, after the "--" that ends the arguments.
+        #expect(Array(CommitLog.pathspecs(["a.txt", "e\u{301}"])) == Array("--\na.txt\n\u{E9}\ne\u{301}\n".utf8))
+        #expect(CommitQuery(paths: ["a.txt"]).arguments(includeHead: true, paths: false).last == "--")
+    }
+
     /// In a partial clone, reading a commit's files downloads nothing: they are listed without counts.
     @Test func aPartialCloneIsNotFetchedFrom() throws {
         let repo = try #require(ScratchRepo())
