@@ -168,6 +168,13 @@ extension SelfTest {
         holder.sidebar(sidebar, session: nil, perform: .showAll)
         check(await wait(5) { holder.sessionsPanel.isVisible }, "More… opens the whole list")
         holder.sessionsPanel.close()
+
+        // Open in an agent outside Next Term: Fork is suggested only where the agent can fork.
+        let outside = SessionRowCellView()
+        outside.configure(SessionItem(AgentSession(agent: .copilot, id: "c9", cwd: holder.searchRoot, title: "Elsewhere", named: false,
+                                                   createdAt: nil, updatedAt: Date(), gitBranch: nil, model: nil, isRunning: true), inTab: false))
+        check(outside.tipText.contains("runs it twice") && !outside.tipText.contains("Fork"),
+              "a Copilot CLI session open outside Next Term does not suggest Fork, which it cannot do", outside.tipText)
     }
 
     /// One session per agent in its own format (two for Claude Code), newest to oldest: Claude Code 10 min

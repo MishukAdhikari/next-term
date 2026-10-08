@@ -110,8 +110,10 @@ final class SessionRowCellView: NSTableCellView {
         if let model = session.model { tip[1] += ", " + model }
         if item.inTab {
             tip.append("Open in a tab now: a double-click goes to it.")
-        } else if session.isRunning {
+        } else if session.isRunning, session.agent.canFork {
             tip.append("Open in \(session.agent.name) outside Next Term: Fork is the safe way to continue it here.")
+        } else if session.isRunning {
+            tip.append("Open in \(session.agent.name) outside Next Term: resuming it here as well runs it twice.")
         } else {
             tip.append("Double-click to continue it in a new tab: " + SessionStore.commandPrefix + session.resumeCommand())
         }
