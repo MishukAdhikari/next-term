@@ -147,11 +147,11 @@ extension SelfTest {
         let contextMenu = click.flatMap { view.menu(for: $0) }
         check(contextMenu?.items.contains { $0.title == "Copy Path with Line" } == true, "Copy Path with Line is in the editor's right-click menu")
 
-        await keyChecks(c, view: view, doc: doc, tab: tab)
+        await keyChecks(c, view: view, doc: doc, contextMenu: contextMenu ?? NSMenu())
     }
 
     /// ⌘D in the editor and in the terminal, the menus' keys open and closed, and Settings' view of the pair.
-    private static func keyChecks(_ c: TerminalWindowController, view: CodeTextView, doc: EditorDocument, tab: TerminalTab) async {
+    private static func keyChecks(_ c: TerminalWindowController, view: CodeTextView, doc: EditorDocument, contextMenu: NSMenu) async {
         guard let window = c.window else { return }
         let shortcuts = KeyboardShortcuts.shared
         let savedBindings = shortcuts.bindings
@@ -178,24 +178,69 @@ extension SelfTest {
         check(ShortcutRecorder(commandID: "duplicateLine:").toolTip == shared && ShortcutRecorder(commandID: "splitRight:").toolTip == shared,
               "each shortcut in Settings says where ⌘D does what", ShortcutRecorder(commandID: "duplicateLine:").toolTip ?? "no tooltip")
 
-        // The menu bar: Split Right holds ⌘D while the menus are closed; opened over the editor, Duplicate Line
-        // shows it; over the terminal, Split Right does. Unshared keys show either way.
+        // Settings records an arrow, an F key and ⌦ by their own keys (the keyboard's unmodified layer gives control
+        // characters for them: ↓ is U+001F, every F key U+0010), so they show and their clashes are found.
+        func recorded(_ characters: String, code: UInt16, _ flags: NSEvent.ModifierFlags) -> KeyChord? {
+            let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil,
+                                         characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)
+            return event.flatMap(KeyboardShortcuts.chord(from:))
+        }
+        func scalars(_ chord: KeyChord?) -> String {
+            guard let chord else { return "none" }
+            return chord.display + " " + chord.key.unicodeScalars.map { String(format: "U+%04X", $0.value) }.joined(separator: " ")
+        }
+        let arrowFlags: NSEvent.ModifierFlags = [.command, .control, .function, .numericPad]
+        let moveDown = recorded("\u{F701}", code: 125, arrowFlags)
+        check(moveDown == KeyChord(key: "\u{F701}", command: true, control: true) && moveDown?.display == "⌃⌘↓",
+              "a pressed ⌃⌘↓ is recorded as ⌃⌘↓", scalars(moveDown))
+        let moveUp = recorded("\u{F700}", code: 126, arrowFlags)
+        let upOwners = moveUp.map { shortcuts.bindings.owners(of: $0, defaults: shortcuts.defaults, except: "goToLine:") } ?? []
+        check(upOwners == ["moveLineUp:"], "and ⌃⌘↑ pressed for Go to Line clashes with Move Line Up", "\(scalars(moveUp)): \(upOwners)")
+        let f5 = recorded("\u{F708}", code: 96, .function)
+        let forwardDelete = recorded("\u{F728}", code: 117, [.command, .function])
+        check(f5?.display == "F5" && f5?.isUsable == true && forwardDelete?.display == "⌘⌦", "F5 and ⌘⌦ are recorded as themselves",
+              "\(scalars(f5)), \(scalars(forwardDelete))")
+
+        // From here on, real key events and the menu bar's own notifications: they need the app in front with this
+        // window key, so it is brought there, and not getting there fails rather than skipping them.
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        let isKey = await wait(3) { NSApp.isActive && NSApp.keyWindow === window }
+        check(isKey, "line keys: the window has the keyboard for real key events",
+              "active \(NSApp.isActive), key window \(NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "none")")
+        guard isKey else { return }
+        guard let terminal = c.activeTab else { return check(false, "⌘D in the terminal: a terminal tab") }
+
+        // The menu bar, opened and closed as AppKit says it is: Split Right holds ⌘D while the menus are closed;
+        // opened over the editor, Duplicate Line shows it; over the terminal, Split Right does. Unshared keys show
+        // either way. A context menu opening is not the menu bar and changes nothing.
         func key(_ id: String) -> String { item(id).flatMap(KeyboardShortcuts.chord(of:))?.display ?? "none" }
+        func menus(open: Bool, _ menu: NSMenu? = nil) { // the menu bar's own by default
+            let name = open ? NSMenu.didBeginTrackingNotification : NSMenu.didEndTrackingNotification
+            NotificationCenter.default.post(name: name, object: menu ?? NSApp.mainMenu)
+        }
         check(key("splitRight:") == "⌘D" && key("duplicateLine:") == "none" && key("deleteLine:") == "none",
               "with the menus closed, Split Right holds ⌘D and the editor's commands hold no key", "\(key("splitRight:")) \(key("duplicateLine:"))")
-        shortcuts.menuBarOpened(editorHasKeyboard: true)
+        window.makeFirstResponder(view)
+        menus(open: true)
         check(key("duplicateLine:") == "⌘D" && key("splitRight:") == "none" && key("deleteLine:") == "⇧⌘K" && key("moveLineUp:") == "⌃⌘↑",
-              "the menus opened over the editor show ⌘D on Duplicate Line", "\(key("duplicateLine:")) \(key("splitRight:")) \(key("moveLineUp:"))")
-        shortcuts.menuBarClosed()
-        shortcuts.menuBarOpened(editorHasKeyboard: false)
+              "the menu bar opened over the editor shows ⌘D on Duplicate Line", "\(key("duplicateLine:")) \(key("splitRight:")) \(key("moveLineUp:"))")
+        menus(open: false)
+        check(key("splitRight:") == "⌘D" && key("duplicateLine:") == "none", "closed, the keys are as they were",
+              "\(key("splitRight:")) \(key("duplicateLine:"))")
+        c.show(terminal)
+        window.makeFirstResponder(terminal.view)
+        menus(open: true)
         check(key("duplicateLine:") == "none" && key("splitRight:") == "⌘D" && key("moveLineDown:") == "⌃⌘↓",
-              "and over the terminal on Split Right", "\(key("duplicateLine:")) \(key("splitRight:"))")
-        shortcuts.menuBarClosed()
-        check(key("splitRight:") == "⌘D" && key("duplicateLine:") == "none", "closed again, as they were")
+              "and opened over the terminal, on Split Right", "\(key("duplicateLine:")) \(key("splitRight:")) \(key("moveLineDown:"))")
+        menus(open: false)
+        check(key("moveLineDown:") == "none" && key("splitRight:") == "⌘D", "closed again, as they were", "\(key("moveLineDown:")) \(key("splitRight:"))")
+        window.makeFirstResponder(view)
+        menus(open: true, contextMenu)
+        check(key("duplicateLine:") == "none" && key("splitRight:") == "⌘D" && key("deleteLine:") == "none",
+              "the editor's right-click menu opening leaves the menu bar's keys alone", "\(key("duplicateLine:")) \(key("splitRight:"))")
+        menus(open: false, contextMenu)
 
-        guard NSApp.keyWindow === window else {
-            return note("skipped ⌘D's key events: the window does not have the keyboard (app not frontmost?)")
-        }
         func send(_ characters: String, code: UInt16, _ flags: NSEvent.ModifierFlags) {
             guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                                                windowNumber: window.windowNumber, context: nil, characters: characters,
@@ -223,7 +268,6 @@ extension SelfTest {
         check(doc.text == text, "and each is undone", doc.text.debugDescription)
 
         // The terminal has the keyboard: ⌘D splits it, and the file is left alone.
-        guard let terminal = c.activeTab else { return check(false, "⌘D in the terminal: a terminal tab") }
         c.show(terminal)
         window.makeFirstResponder(terminal.view)
         check(NSApp.target(forAction: #selector(CodeTextView.duplicateLine(_:)), to: nil, from: nil) == nil,
@@ -233,6 +277,30 @@ extension SelfTest {
         check(c.activeGroup?.panes.count == panes + 1 && doc.text == text, "⌘D in the terminal splits it, and the file is left alone",
               "panes \(c.activeGroup?.panes.count ?? 0), text \(doc.text.debugDescription)")
         if let split, split !== terminal, c.activeGroup?.panes.count == panes + 1 { c.remove(split) }
+
+        // An editor command that is off passes its key on: in a read-only editor ⌘D splits the terminal.
+        view.isEditable = false
+        window.makeFirstResponder(view)
+        send("d", code: 2, .command)
+        let fromReadOnly = c.activeTab
+        check(c.activeGroup?.panes.count == panes + 1 && doc.text == text, "in a read-only editor ⌘D splits the terminal instead",
+              "panes \(c.activeGroup?.panes.count ?? 0), text \(doc.text.debugDescription)")
+        if let fromReadOnly, fromReadOnly !== terminal, c.activeGroup?.panes.count == panes + 1 { c.remove(fromReadOnly) }
+        view.isEditable = true
+
+        // In an empty file ⌘C and ⌘X are off, and the clipboard keeps what it has (lineEditChecks puts it back after).
+        window.makeFirstResponder(view)
+        view.selectAll(nil)
+        view.delete(nil)
+        let board = NSPasteboard.general
+        board.clearContents()
+        board.setString("kept", forType: .string)
+        send("c", code: 8, .command)
+        send("x", code: 7, .command)
+        check(doc.text.isEmpty && board.string(forType: .string) == "kept", "⌘C and ⌘X in an empty file leave the clipboard as it was",
+              "\(doc.text.debugDescription), clipboard \(board.string(forType: .string).debugDescription)")
+        doc.undoManager.undo()
+        check(doc.text == text, "and ⌘Z brings the file's text back", doc.text.debugDescription)
 
         // Another key for Duplicate Line: ⌘D splits from the editor too, and the new key duplicates.
         let other = KeyChord(key: "d", command: true, shift: true, control: true)

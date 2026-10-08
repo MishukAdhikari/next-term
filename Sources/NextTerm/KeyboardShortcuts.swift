@@ -99,8 +99,8 @@ final class KeyboardShortcuts {
 
     /// The menu bar opened: the editor's items show their keys, and with the editor's keyboard a shared key is
     /// shown on the editor's command only, since that is what it does there.
-    func menuBarOpened(editorHasKeyboard: Bool? = nil) {
-        let inEditor = editorHasKeyboard ?? (NSApp.keyWindow?.firstResponder is CodeTextView)
+    func menuBarOpened() {
+        let inEditor = NSApp.keyWindow?.firstResponder is CodeTextView
         for (chord, item) in editorKeys {
             if let other = sharedKeys[chord] {
                 guard inEditor else { continue }
