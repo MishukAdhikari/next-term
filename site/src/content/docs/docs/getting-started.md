@@ -57,7 +57,7 @@ The first time it starts, Next Term asks which folder to work in. That folder op
 
 If you cancel, you get a plain terminal in your home folder. You can open a project at any time with **Shell › Open Project…** (<kbd>⌘O</kbd>). More in [Projects and git](/docs/projects-and-git/).
 
-When no window is open, say after **Close Project**, the **Welcome** window shows your projects, each with its agents’ sessions, and the servers you saved. Start from its buttons: **Open…** a folder, a **New Terminal**, or **Connect to Server…** for a [remote tab](/docs/remote/). A click on a saved server opens a window with a tab on it.
+When the last project closes, the **Welcome** window appears: your projects, each with its agents’ sessions, and the servers you saved. Start from its buttons: **Open…** a folder, a **New Terminal**, or **Connect to Server…** for a [remote tab](/docs/remote/). A click on a saved server opens a window with a tab on it.
 
 If Next Term finds an editor or terminal it can read settings from, such as VS Code, Cursor, a JetBrains IDE, Zed, iTerm2, Ghostty or Terminal, it asks **Coming from another app?** Choose one to see exactly what it would bring over (your shortcuts, fonts, terminal colours and recent projects), or keep Next Term’s own. You can do it later from **Next Term › Import Settings and Shortcuts…**. See [Switching to Next Term](/docs/switching/).
 
