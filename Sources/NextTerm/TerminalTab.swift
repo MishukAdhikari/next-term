@@ -60,10 +60,18 @@ final class NextTermView: LocalProcessTerminalView {
         if beepAllowed { super.bell(source: source) }
     }
 
+    /// A program putting the cursor back (DECSCUSR 0 or 1, which arrive as a blinking block) gets the one chosen
+    /// in Settings › Terminal.
+    override func cursorStyleChanged(source: Terminal, newStyle: CursorStyle) {
+        let chosen = Preferences.terminalCursorStyle
+        if newStyle == .blinkBlock && chosen != .blinkBlock { return source.setCursorStyle(chosen) }
+        super.cursorStyleChanged(source: source, newStyle: newStyle)
+    }
+
     // MARK: drop files (from Finder or the project tree) to type their paths, like Terminal.app
 
     override init(frame: CGRect) {
-        super.init(frame: frame, font: nil, options: TerminalOptions(scrollback: Self.scrollbackLines))
+        super.init(frame: frame, font: nil, options: Self.startingOptions)
         registerForDraggedTypes([.fileURL])
     }
 
