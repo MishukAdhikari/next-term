@@ -58,9 +58,11 @@ import Testing
         try write([header("g3-0000-uuid"), user("/model")], to: chats + "/session-2026-10-03T09-00-g3-0000.jsonl") // only a command
         try write([header("g4-0000-uuid", kind: "subagent"), user("look around")], to: chats + "/session-2026-10-03T10-00-g4-0000.jsonl")
         try write([header("sub-of-g1"), user("inner")], to: chats + "/g1-0000-uuid/sub-of-g1.jsonl") // a sub-agent's folder
-        // A subfolder that has a short name of its own, and a session from before JSONL (one whole JSON file).
-        try write(#"{"sessionId": "g5-legacy", "projectHash": "h", "startTime": "2026-09-20T10:00:00.000Z", "lastUpdated": "2026-09-20T11:00:00.000Z", "messages": [{"id": "1", "timestamp": "2026-09-20T10:00:00.000Z", "type": "user", "content": "Fix the build"}, {"id": "2", "timestamp": "2026-09-20T10:01:00.000Z", "type": "gemini", "content": "ok", "model": "gemini-2.5-pro"}]}"#,
-                  to: root + "/tmp/web/chats/session-2026-09-20T10-00-g5-lega.json")
+        // A subfolder that has a short name of its own; a session from before JSONL (one whole JSON file) is not read.
+        try write([header("g5-web"), user("Fix the build"), ["id": "2", "timestamp": "2026-10-01T10:02:00.000Z", "type": "gemini", "model": "gemini-2.5-pro"]],
+                  to: root + "/tmp/web/chats/session-2026-10-01T10-00-g5-web.jsonl")
+        try write(#"{"sessionId": "g7-legacy", "projectHash": "h", "startTime": "2026-09-20T10:00:00.000Z", "messages": [{"type": "user", "content": "old"}]}"#,
+                  to: root + "/tmp/web/chats/session-2026-09-20T10-00-g7-lega.json")
         try write("/Users/me/Code/app/web", to: root + "/tmp/web/.project_root")
         // A folder Gemini has not run in since it named folders: the SHA-256 of its path.
         let old = "/Users/me/Code/old"
@@ -73,8 +75,8 @@ import Testing
         #expect(first.createdAt == AgentSessions.parseDate("2026-10-01T10:00:00.000Z"))
         #expect(found.first { $0.id == "g2-0000-uuid" }?.title == "Write the release notes")
         let wide = try GeminiSessions(home: home).sessions(in: project, subfolders: true, since: nil)
-        #expect(Set(wide.map(\.id)) == ["g1-0000-uuid", "g2-0000-uuid", "g5-legacy"])
-        #expect(wide.first { $0.id == "g5-legacy" }.map { $0.title == "Fix the build" && $0.cwd == project + "/web" && $0.model == "gemini-2.5-pro" } == true)
+        #expect(Set(wide.map(\.id)) == ["g1-0000-uuid", "g2-0000-uuid", "g5-web"])
+        #expect(wide.first { $0.id == "g5-web" }.map { $0.title == "Fix the build" && $0.cwd == project + "/web" && $0.model == "gemini-2.5-pro" } == true)
         #expect(try GeminiSessions(home: home).sessions(in: old, subfolders: false, since: nil).map(\.title) == ["Old layout"])
         #expect(first.resumeCommand() == "gemini --resume g1-0000-uuid" && first.resumeCommand(fork: true) == "gemini --resume g1-0000-uuid")
         #expect(!AgentKind.gemini.canFork && AgentKind.gemini.continueCommand == "gemini --resume latest")
