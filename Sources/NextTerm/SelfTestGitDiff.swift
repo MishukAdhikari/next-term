@@ -290,13 +290,13 @@ extension SelfTest {
         check(command?.path == "Git" && command?.defaultChord == KeyChord(key: "g", command: true, control: true),
               "Git › Git Diff is in the menu bar, ⌃⌘G by default", "\(command?.path ?? "missing") \(command?.defaultChord?.display ?? "no key")")
         // The menu item's action through the responder chain, as a click on it or ⌃⌘G sends it: that needs the
-        // window to have the keyboard.
+        // window to have the keyboard, so it is brought to the front. Only when another app keeps the front is the
+        // action sent to the window straight, said in a note.
+        var isKey = false
         if let window = c.window {
-            NSApp.activate(ignoringOtherApps: true)
-            window.makeKeyAndOrderFront(nil)
+            isKey = await bringToFront(window)
+            if !isKey { note("Git Diff from the menu: sent to the window straight, \(notFrontmost(window))") }
         }
-        let isKey = await wait(3) { NSApp.isActive && NSApp.keyWindow === c.window }
-        check(isKey, "Git Diff from the menu: the window has the keyboard", "active \(NSApp.isActive)")
         if let item = command?.item, let action = item.action, isKey {
             check(c.validateMenuItem(item), "Git › Git Diff is on in a project window")
             NSApp.sendAction(action, to: item.target, from: item)
