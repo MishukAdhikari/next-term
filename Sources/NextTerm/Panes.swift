@@ -140,6 +140,8 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate {
     private var hovering = false { didSet { if hovering != oldValue { refresh() } } }
     /// The pane has the keyboard: the selected tab's look, and its × always shows.
     var focused = false { didSet { if focused != oldValue { refresh() } } }
+    /// The ×'s tooltip with ⌘W's key, on the pane with the keyboard, following the key when it changes.
+    private var closeTip: ShortcutToolTip?
     /// What the title was fitted from, so a refresh touches only what changed.
     private var title = ""
     private var shorterTitles: [String] = []
@@ -164,6 +166,7 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate {
         closeButton.contentTintColor = Theme.textDim
         closeButton.target = self
         closeButton.action = #selector(closeClicked)
+        closeButton.toolTip = "Close pane"
         closeButton.isHidden = true
         addSubview(closeButton)
         setAccessibilityElement(true)
@@ -213,8 +216,10 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate {
         remoteMark.tint = label.textColor ?? Theme.textDim
         closeButton.isHidden = !(focused || hovering)
         // ⌘W closes the pane with the keyboard, so only its × names the key.
-        let tip = focused ? KeyboardShortcuts.shared.hint("Close pane", #selector(TerminalWindowController.closeTab(_:))) : "Close pane"
-        if closeButton.toolTip != tip { closeButton.toolTip = tip }
+        if focused != (closeTip != nil) {
+            closeTip = focused ? ShortcutToolTip(closeButton, "Close pane", #selector(TerminalWindowController.closeTab(_:))) : nil
+            if !focused { closeButton.toolTip = "Close pane" }
+        }
         needsDisplay = true
     }
 

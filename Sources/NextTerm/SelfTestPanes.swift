@@ -108,6 +108,17 @@ extension SelfTest {
         check(group.focused === base && window.firstResponder === base.view && header(base).focused && !header(third).focused,
               "clicking a header gives its pane the keyboard")
 
+        // Only the × of the pane with the keyboard names ⌘W's key, and it follows a change in Settings.
+        let shortcuts = KeyboardShortcuts.shared
+        let closeTab = #selector(TerminalWindowController.closeTab(_:))
+        check(header(base).closeButton.toolTip == shortcuts.hint("Close pane", closeTab) && header(third).closeButton.toolTip == "Close pane",
+              "the × of the pane with the keyboard names ⌘W's key", header(base).closeButton.toolTip ?? "none")
+        let savedBindings = UserDefaults.standard.data(forKey: "keyBindings")
+        shortcuts.set(KeyChord(key: "w", command: true, control: true), for: "closeTab:")
+        check(header(base).closeButton.toolTip == "Close pane (⌃⌘W)", "and follows it when it changes", header(base).closeButton.toolTip ?? "none")
+        UserDefaults.standard.set(savedBindings, forKey: "keyBindings")
+        shortcuts.apply()
+
         // A double-click renames the pane, as the tab bar's rename does.
         if let down = mouse(.leftMouseDown, on: header(third), clicks: 2) { header(third).mouseDown(with: down) }
         let field = header(third).subviews.compactMap { $0 as? NSTextField }.first { $0.isEditable }
