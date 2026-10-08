@@ -237,7 +237,10 @@ extension SelfTest {
         let app = AppDelegate.shared!
         guard let window = c.window else { return }
         let windows = app.controllers.compactMap(\.window)
-        window.makeKeyAndOrderFront(nil)
+        // The one used last is the one last key: only an app in front has a key window.
+        guard await bringToFront(window) else {
+            return note("a Dock click with every window minimized: skipped, \(notFrontmost(window)), so no window can be the one used last")
+        }
         for other in windows where other !== window { other.miniaturize(nil) }
         window.miniaturize(nil) // last, so it is the one used last
         guard await wait(8, { windows.allSatisfy(\.isMiniaturized) }) else {

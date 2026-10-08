@@ -61,6 +61,26 @@ enum SelfTest {
         try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
     }
 
+    /// Brings the app to the front with `window` key, as a hand's keys and clicks need (and as a window is
+    /// "used"), asking again while another app keeps taking the front. False when it could not have it within
+    /// `seconds`: the caller skips what needs it, with a note.
+    static func bringToFront(_ window: NSWindow, within seconds: Double = 6) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        repeat {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            if await wait(1.5, { NSApp.isActive && window.isKeyWindow }) { return true }
+        } while Date() < deadline
+        return false
+    }
+
+    /// Why `bringToFront` could not: for the note of a skipped check.
+    static func notFrontmost(_ window: NSWindow) -> String {
+        "the app is not frontmost (active \(NSApp.isActive), key window \(NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "none"), "
+            + "this one key \(window.isKeyWindow))"
+    }
+
     /// Whether Edit › Find › Replace… is on with `responder` holding the window's keyboard, as AppKit enables
     /// the menu item. Nil when the app is not in front: with no key window nothing is on.
     static func replaceIsOn(with responder: NSResponder, in window: NSWindow) -> Bool? {

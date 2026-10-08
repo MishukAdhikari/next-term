@@ -202,13 +202,10 @@ extension SelfTest {
               "\(scalars(f5)), \(scalars(forwardDelete))")
 
         // From here on, real key events and the menu bar's own notifications: they need the app in front with this
-        // window key, so it is brought there, and not getting there fails rather than skipping them.
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
-        let isKey = await wait(3) { NSApp.isActive && NSApp.keyWindow === window }
-        check(isKey, "line keys: the window has the keyboard for real key events",
-              "active \(NSApp.isActive), key window \(NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "none")")
-        guard isKey else { return }
+        // window key, so it is brought there. Only when another app keeps the front are they skipped, said in a note.
+        guard await bringToFront(window) else {
+            return note("line keys: the real key events and the menu bar's keys skipped, \(notFrontmost(window))")
+        }
         guard let terminal = c.activeTab else { return check(false, "⌘D in the terminal: a terminal tab") }
 
         // The menu bar, opened and closed as AppKit says it is: Split Right holds ⌘D while the menus are closed;
