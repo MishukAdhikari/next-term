@@ -354,6 +354,8 @@ final class AllFilesView: NSView {
         if abs(page.frame.width - scroll.contentSize.width) > 0.5 { relayout(keeping: topEntry()) }
     }
 
+    @objc private func pageScrolled() { layoutVisible() }
+
     private func makeBlock(_ entry: Entry) -> AllFilesBlock {
         let block = AllFilesBlock(frame: NSRect(x: 0, y: entry.top, width: page.bounds.width, height: entry.height))
         block.header.show(entry.file, root: root, collapsed: entry.collapsed)
@@ -427,9 +429,7 @@ final class AllFilesView: NSView {
         scroll.drawsBackground = true
         scroll.backgroundColor = Theme.background
         scroll.contentView.postsBoundsChangedNotifications = true
-        NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main) { [weak self] _ in
-            self?.layoutVisible()
-        }
+        NotificationCenter.default.addObserver(self, selector: #selector(pageScrolled), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
         message.textColor = Theme.textDim
         message.alignment = .center
         message.isHidden = true

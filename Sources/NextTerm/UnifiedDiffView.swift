@@ -103,12 +103,13 @@ final class UnifiedColumn: NSScrollView {
         hasVerticalRuler = true
         rulersVisible = true
         contentView.postsBoundsChangedNotifications = true
-        NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: contentView, queue: .main) { [weak self] _ in
-            self?.onScroll?()
-        }
+        // By selector: removed with the column (the All files page makes one each time a file comes into view).
+        NotificationCenter.default.addObserver(self, selector: #selector(clipScrolled), name: NSView.boundsDidChangeNotification, object: contentView)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    @objc private func clipScrolled() { onScroll?() }
 
     /// All the rows' height, with the margin above and below: the height the page gives it.
     var contentHeight: CGFloat { textView.textContainerInset.height * 2 + CGFloat(rows.count) * rowHeight }

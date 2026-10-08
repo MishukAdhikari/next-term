@@ -275,9 +275,8 @@ final class GitDiffListView: NSView, NSOutlineViewDataSource, NSOutlineViewDeleg
         scopesScroll.drawsBackground = true
         scopesScroll.backgroundColor = Theme.background
         scopesScroll.contentView.postsBoundsChangedNotifications = true
-        NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scopesScroll.contentView, queue: .main) { [weak self] _ in
-            self?.checkCommitsEnd()
-        }
+        NotificationCenter.default.addObserver(self, selector: #selector(checkCommitsEnd), name: NSView.boundsDidChangeNotification,
+                                               object: scopesScroll.contentView)
 
         commitsTitle.font = .systemFont(ofSize: 11.5, weight: .semibold)
         commitsTitle.textColor = Theme.textDim
@@ -348,7 +347,7 @@ final class GitDiffListView: NSView, NSOutlineViewDataSource, NSOutlineViewDeleg
         }
     }
 
-    private func checkCommitsEnd() {
+    @objc private func checkCommitsEnd() {
         let visible = scopesTable.rows(in: scopesScroll.contentView.bounds)
         if NSMaxRange(visible) >= scopeRows.count - 5 { onNeedMoreCommits?() }
     }
