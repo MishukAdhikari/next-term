@@ -221,7 +221,7 @@ final class TerminalSettingsView: NSView {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 14
-        stack.insertArrangedSubview(row("Links:", [studioLinks]), at: stack.arrangedSubviews.count - 1)
+        stack.insertArrangedSubview(row("Links:", [studioLinks]), at: stack.arrangedSubviews.firstIndex(of: note) ?? 0)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
