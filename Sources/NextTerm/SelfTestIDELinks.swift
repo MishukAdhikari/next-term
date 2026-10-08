@@ -51,10 +51,14 @@ extension SelfTest {
             client.close()
         }
 
-        // The CLI: the handshake, its body chunked as node sends it, with its pid; then the event stream.
+        // The CLI: the handshake, its body chunked as node sends it, with its pid; then the event stream. Its pid
+        // is not the tab's shell (the CLI is node, under its loader, under the shell): the agent tab's own
+        // program stands in for it, so the tab is found by walking up from a process below the shell.
+        let cliPid = IDEPeer.Processes.system.children(agentTab.view.process.shellPid).first ?? 0
+        check(cliPid > 0, "the agent tab runs a program for copilot's stand-in to be")
         let cli = CopilotTestClient(socket: socket)
         defer { cli.close() }
-        cli.send(CopilotTestClient.request(body: initialize, authorization: authorization, pid: agentTab.view.process.shellPid))
+        cli.send(CopilotTestClient.request(body: initialize, authorization: authorization, pid: cliPid))
         _ = await wait(3) { cli.responses.count == 1 }
         let session = cli.responses.first?.headers["mcp-session-id"] ?? ""
         let version = (cli.json(0)?["result"] as? [String: Any])?["protocolVersion"] as? String
@@ -72,6 +76,7 @@ extension SelfTest {
         stream.send(CopilotTestClient.request("GET", authorization: authorization, session: session))
         check(await wait(3) { stream.text.contains("Content-Type: text/event-stream") }, "its event stream opens")
         check(await wait(3) { AppDelegate.shared.copilotSession(for: agentTab) == session }, "the connected copilot is matched to the tab it runs in")
+        await copilotLockRewriteChecks(c, lockPath: lockPath, session: session, lockJSON: lockJSON)
 
         // The editor's selection follows Copilot: lines 2–3 of main.php, 0-based, as Claude gets them.
         c.openFile(proj.appendingPathComponent("src/main.php"))
@@ -104,6 +109,7 @@ extension SelfTest {
         }
 
         await copilotProposalChecks(c, proj: proj, socket: socket, authorization: authorization, session: session, cli: cli)
+        await copilotElsewhereChecks(c, proj: proj, socket: socket, authorization: authorization, initialize: initialize)
 
         // A .env file is never shared: no selection goes out, and get_selection says the last one is not current.
         let env = proj.appendingPathComponent(".env")
@@ -122,10 +128,22 @@ extension SelfTest {
         }
         try? FileManager.default.removeItem(at: env)
 
-        // The CLI leaves: its session ends and the tab forgets it.
-        cli.send(CopilotTestClient.request("DELETE", authorization: authorization, session: session))
+        // The CLI quits: its event stream closes, its session ends and the tab forgets it.
+        stream.close()
         check(await wait(3) { !server.connected.contains { $0.id == session } && AppDelegate.shared.copilotSession(for: agentTab) == nil },
-              "when copilot leaves, its session ends")
+              "when copilot quits (its event stream closes), its session ends")
+        // Or it ends its session itself (DELETE, as /ide does when it disconnects).
+        let count = cli.responses.count
+        cli.send(CopilotTestClient.request(body: initialize, authorization: authorization, pid: cliPid))
+        _ = await wait(3) { cli.responses.count > count }
+        let again = cli.responses.count > count ? cli.responses[count].headers["mcp-session-id"] ?? "" : ""
+        let againStream = CopilotTestClient(socket: socket)
+        defer { againStream.close() }
+        againStream.send(CopilotTestClient.request("GET", authorization: authorization, session: again))
+        _ = await wait(3) { AppDelegate.shared.copilotSession(for: agentTab) == again }
+        cli.send(CopilotTestClient.request("DELETE", authorization: authorization, session: again))
+        let deleted = await wait(3) { !server.connected.contains { $0.id == again } && AppDelegate.shared.copilotSession(for: agentTab) == nil }
+        check(!again.isEmpty && deleted, "when copilot ends its session (DELETE), the session ends too")
 
         // Settings › Editor › Agents: its own switch stops the link and takes the lock away, and brings both back.
         let app = AppDelegate.shared!
@@ -134,6 +152,96 @@ extension SelfTest {
               "turning Copilot's switch off stops its link and removes the lock and the socket")
         app.shareWithCopilot = true
         check(server.isRunning && lockJSON()?["socketPath"] as? String != socket, "turning it on starts it again, on a new socket")
+    }
+
+    /// Copilot watches its lock once connected and drops the link when the file is replaced. A tab in a new
+    /// folder (and one in your home folder, which is never listed) rewrites the lock in place: the same file,
+    /// still private, and the link stays.
+    private static func copilotLockRewriteChecks(_ c: TerminalWindowController, lockPath: String, session: String,
+                                                 lockJSON: () -> [String: Any]?) async {
+        func inode() -> ino_t? {
+            var info = stat()
+            return stat(lockPath, &info) == 0 ? info.st_ino : nil
+        }
+        let before = inode()
+        // The way Copilot watches it (node's fs.watch is kqueue on a Mac): deleted or renamed over.
+        let watched = open(lockPath, O_EVTONLY)
+        let events = kqueue()
+        defer { close(events); close(watched) }
+        var watch = kevent(ident: UInt(max(watched, 0)), filter: Int16(EVFILT_VNODE), flags: UInt16(EV_ADD | EV_CLEAR),
+                           fflags: UInt32(NOTE_DELETE | NOTE_RENAME), data: 0, udata: nil)
+        let watching = watched >= 0 && kevent(events, &watch, 1, nil, 0, nil) == 0
+
+        let dir = URL(fileURLWithPath: canonicalPath(NSTemporaryDirectory())).appendingPathComponent("nt-copilot-cd-\(getpid())")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let home = canonicalPath(FileManager.default.homeDirectoryForCurrentUser.path)
+        let atHome = c.addTab(directory: home, select: false)
+        let elsewhere = c.addTab(directory: dir.path, select: false)
+        var folders: [String] = []
+        let listed = await wait(20) {
+            folders = lockJSON()?["workspaceFolders"] as? [String] ?? folders // a read mid-rewrite finds no JSON
+            return folders.contains(dir.path)
+        }
+        var event = kevent()
+        var now = timespec()
+        let replaced = kevent(events, nil, 0, &event, 1, &now) > 0
+        let mode = (try? FileManager.default.attributesOfItem(atPath: lockPath))?[.posixPermissions] as? Int
+        check(listed && watching && before != nil && inode() == before && !replaced && mode == 0o600,
+              "a tab in a new folder rewrites Copilot's lock in place (a connected copilot keeps its link)",
+              "listed \(listed), watching \(watching), inode \(String(describing: before)) → \(String(describing: inode())), replaced \(replaced)")
+        check(CopilotIDEServer.shared.connected.contains { $0.id == session && $0.streaming }, "and the copilot's event stream is still open")
+        check(!folders.contains(home) && !folders.contains("/"),
+              "your home folder is never listed (a copilot started there in any terminal would come to Next Term)")
+        c.requestClose(elsewhere)
+        c.requestClose(atHome)
+    }
+
+    /// A `copilot` started in another terminal (here: processes outside every tab, as its pid) connects from
+    /// one of the lock's folders, or any folder through `/ide`. It sees the window that has its folder open,
+    /// and nothing when no window has it.
+    private static func copilotElsewhereChecks(_ c: TerminalWindowController, proj: URL, socket: String,
+                                               authorization: String, initialize: String) async {
+        let away = URL(fileURLWithPath: canonicalPath(NSTemporaryDirectory())).appendingPathComponent("nt-copilot-away-\(getpid())")
+        try? FileManager.default.createDirectory(at: away, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: away) }
+        func sleeper(in folder: URL) -> Process? {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sleep")
+            process.arguments = ["30"]
+            process.currentDirectoryURL = folder
+            return (try? process.run()) == nil ? nil : process
+        }
+        guard let inside = sleeper(in: proj.appendingPathComponent("src")), let outside = sleeper(in: away) else {
+            return check(false, "stand-ins for a copilot started in another terminal")
+        }
+        defer { inside.terminate(); outside.terminate() }
+        /// Connects as the CLI does, with this pid, and opens its event stream.
+        func connect(_ pid: pid_t) async -> (cli: CopilotTestClient, stream: CopilotTestClient) {
+            let cli = CopilotTestClient(socket: socket)
+            cli.send(CopilotTestClient.request(body: initialize, authorization: authorization, pid: pid))
+            _ = await wait(3) { cli.responses.count == 1 }
+            let session = cli.responses.first?.headers["mcp-session-id"] ?? ""
+            let stream = CopilotTestClient(socket: socket)
+            stream.send(CopilotTestClient.request("GET", authorization: authorization, session: session))
+            _ = await wait(3) { stream.text.contains("text/event-stream") }
+            return (cli, stream)
+        }
+        let near = await connect(inside.processIdentifier)
+        let far = await connect(outside.processIdentifier)
+        defer {
+            for end in [near.cli, near.stream, far.cli, far.stream] { end.close() }
+        }
+        c.openFile(proj.appendingPathComponent("src/main.php"))
+        guard let editor = c.editorArea.activeEditor else { return check(false, "an editor is open for copilot to see") }
+        c.window?.makeKeyAndOrderFront(nil)
+        c.window?.makeFirstResponder(editor.textView)
+        editor.textView.setSelectedRange(NSRange(location: 0, length: 4))
+        check(await wait(3) { near.stream.last("selection_changed")?["filePath"] as? String == editor.document.path },
+              "a copilot started in another terminal inside the project sees that window's selection")
+        await pause(0.3)
+        check(!far.stream.events.contains { $0["method"] as? String == "selection_changed" },
+              "one started in a folder no window has open is sent nothing", "\(far.stream.events.count) events")
     }
 
     /// Copilot's proposed edits: a diff to accept or reject, answered when you decide; Next Term never writes.
@@ -195,7 +303,8 @@ extension SelfTest {
     // MARK: opencode, without the token
 
     /// opencode reads Claude's lock files but connects without the token from a Next Term tab. Its stand-in
-    /// is this app's own binary under opencode's name, run in a tab; the same binary under another name is refused.
+    /// is this app's own binary under the name npm gives opencode (opencode.exe), run in a tab; the same
+    /// binary under another name is refused.
     static func opencodeLinkChecks(_ c: TerminalWindowController, proj: URL) async {
         guard let port = ClaudeIDEServer.shared.port, let executable = Bundle.main.executablePath else {
             return check(false, "the Claude Code link is listening for opencode")
@@ -203,7 +312,8 @@ extension SelfTest {
         let dir = URL(fileURLWithPath: canonicalPath(NSTemporaryDirectory())).appendingPathComponent("nt-opencode-\(getpid())")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        for name in ["opencode", "impostor"] {
+        // opencode as npm and bun install it: the binary linked as opencode-ai/bin/opencode.exe.
+        for name in ["opencode.exe", "impostor"] {
             let target = dir.appendingPathComponent(name).path
             // A clone shares the binary's blocks: no disk used.
             if clonefile(executable, target, 0) != 0 { try? FileManager.default.copyItem(atPath: executable, toPath: target) }
@@ -221,7 +331,7 @@ extension SelfTest {
             return text.split(separator: "\n").compactMap { (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any] }
         }
 
-        tab.view.send(txt: "\u{15}./opencode --cli --self-test-ide-client \(port) opencode.jsonl\r")
+        tab.view.send(txt: "\u{15}./opencode.exe --cli --self-test-ide-client \(port) opencode.jsonl\r")
         let seen = await wait(15) { messages("opencode.jsonl").contains { $0["method"] as? String == "selection_changed" } }
         let selection = messages("opencode.jsonl").last { $0["method"] as? String == "selection_changed" }?["params"] as? [String: Any]
         check(seen && selection?["filePath"] as? String == editor.document.path,
@@ -257,7 +367,7 @@ extension SelfTest {
         elsewhere.close()
     }
 
-    /// opencode's editor client, as the self-test's stand-in (`<copy named opencode> --cli
+    /// opencode's editor client, as the self-test's stand-in (`<copy named opencode.exe> --cli
     /// --self-test-ide-client <port> <file>`, run in a tab): connects the way opencode does from a Next Term
     /// tab (no token, no subprotocol), asks for a tool it must not get, and writes every message it gets to
     /// <file>, one per line, for 6 seconds.
