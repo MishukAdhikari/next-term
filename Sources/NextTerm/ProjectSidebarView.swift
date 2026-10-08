@@ -246,6 +246,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     func setRoot(_ path: String) {
         let canonical = canonicalPath(path)
         guard canonical != root?.path else { return }
+        // A name being edited is done, as a click elsewhere would end it, while its row is still there.
+        if isRenaming { window?.makeFirstResponder(outline) }
+        runHeld()
         saveCurrentTree()
         rowCache.removeAll()
         if let saved = savedTrees[canonical] {
@@ -286,7 +289,10 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             let scan = Databases.scan(root: path)
             DispatchQueue.main.async { [weak self] in
                 guard let self, token == self.databaseScanToken, self.root?.path == path else { return }
-                self.showDatabases(scan)
+                self.whenNotRenaming("databases") { [weak self] in
+                    guard let self, self.root?.path == path else { return }
+                    self.showDatabases(scan)
+                }
             }
         }
     }
@@ -347,7 +353,10 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         let token = sessionsGroup.token
         SessionStore.load(path) { [weak self] listing, tabs in
             guard let self, token == self.sessionsGroup.token, self.root?.path == path else { return }
-            self.showSessions(listing.sessions, tabs: tabs)
+            self.whenNotRenaming("sessions") { [weak self] in
+                guard let self, token == self.sessionsGroup.token, self.root?.path == path else { return }
+                self.showSessions(listing.sessions, tabs: tabs)
+            }
         }
     }
 
@@ -446,7 +455,11 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         let target = canonicalPath(path)
         guard let root, target.hasPrefix(root.path + "/") else { return }
         let names = target.dropFirst(root.path.count + 1).split(separator: "/").map(String.init)
-        revealStep(root, names[...])
+        // Selecting another row would take the selection from a name being edited.
+        whenNotRenaming("reveal") { [weak self] in
+            guard let self, self.root === root else { return }
+            self.revealStep(root, names[...])
+        }
     }
 
     private func revealStep(_ node: FileNode, _ rest: ArraySlice<String>) {
@@ -481,16 +494,18 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         DispatchQueue.global(qos: .userInitiated).async {
             let listing = FileNode.readChildren(of: url, hiding: hiding)
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.loading.remove(id)
-                let waiting = self.waitingForLoad.removeValue(forKey: id) ?? []
-                node.install(listing)
-                self.syncHiddenRow(for: node)
-                self.rowCache[id] = nil
-                guard self.isShowing(node) else { return }
-                self.outline.reloadItem(node, reloadChildren: true)
-                completion?()
-                waiting.forEach { $0() }
+                self?.whenNotRenaming("load \(id)") { [weak self] in
+                    guard let self else { return }
+                    self.loading.remove(id)
+                    let waiting = self.waitingForLoad.removeValue(forKey: id) ?? []
+                    node.install(listing)
+                    self.syncHiddenRow(for: node)
+                    self.rowCache[id] = nil
+                    guard self.isShowing(node) else { return }
+                    self.outline.reloadItem(node, reloadChildren: true)
+                    completion?()
+                    waiting.forEach { $0() }
+                }
             }
         }
     }
@@ -502,10 +517,13 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         DispatchQueue.global(qos: .utility).async {
             let listing = FileNode.readChildren(of: url, hiding: hiding)
             DispatchQueue.main.async { [weak self] in
-                guard let self, node.install(listing) else { return }
-                self.syncHiddenRow(for: node)
-                self.rowCache[ObjectIdentifier(node)] = nil
-                if self.isShowing(node) { self.outline.reloadItem(node, reloadChildren: true) }
+                // The newest listing of each folder waits for a name being edited, keeping its row there.
+                self?.whenNotRenaming("refresh \(ObjectIdentifier(node))") { [weak self] in
+                    guard let self, node.install(listing) else { return }
+                    self.syncHiddenRow(for: node)
+                    self.rowCache[ObjectIdentifier(node)] = nil
+                    if self.isShowing(node) { self.outline.reloadItem(node, reloadChildren: true) }
+                }
             }
         }
     }
@@ -577,6 +595,11 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         } else {
             gitDirWatcher = nil
         }
+        whenNotRenaming("git") { [weak self] in self?.showGitState(snapshot) }
+    }
+
+    /// The rows' colours and counts, and the deleted files in their folders.
+    private func showGitState(_ snapshot: GitSnapshot?) {
         let deleted = snapshot?.deletedPaths ?? []
         if deleted != lastDeleted {
             reloadFolders(around: deleted.symmetricDifference(lastDeleted), gitRoot: snapshot.map { canonicalPath($0.root) })
@@ -1049,6 +1072,8 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     private func create(folder isFolder: Bool) {
         guard let parent = targetFolder else { return }
+        // A name being edited is done first, as a click elsewhere would end it, while its row is still there.
+        if isRenaming { window?.makeFirstResponder(outline) }
         let name = FileOps.availableName(isFolder ? "untitled folder" : "untitled", in: parent.url)
         let url = parent.url.appendingPathComponent(name)
         do {
@@ -1061,12 +1086,15 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             return report(error)
         }
         registerUndo("New \(isFolder ? "Folder" : "File")") { [weak self] in self?.trash([url], confirm: false) }
-        // Show it, select it, and start renaming it.
+        // Show it, select it, and start renaming it. The folder's rows are built again from the listing just
+        // read: those kept from before lack the new item, and without its row there is nothing to rename.
         parent.reload(hiding: fileHiding)
         syncHiddenRow(for: parent)
+        rowCache[ObjectIdentifier(parent)] = nil
         outline.reloadItem(parent, reloadChildren: true)
         outline.expandItem(parent)
-        if let node = parent.children?.first(where: { $0.url == url }) { beginRename(node) }
+        // By name: a folder's URL read back from the disk ends in "/", the one it was made with does not.
+        if let node = parent.children?.first(where: { $0.name == name }) { beginRename(node) }
     }
 
     @objc private func renameFromMenu() {
@@ -1106,9 +1134,64 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         defer {
             renameCancelled = false
             outline.reloadItem(node)
+            // What waited for the name: after this, not inside the field giving up the keyboard.
+            DispatchQueue.main.async { [weak self] in self?.runHeld() }
         }
         guard !renameCancelled, newName != node.name else { return }
+        let byKey = NSApp.currentEvent?.type == .keyDown // Return, not a click on another row
         rename(node.url, to: newName)
+        // Named with Return, it stays selected, as in Finder: the folder's new listing makes it a new node,
+        // which the outline would otherwise drop from the selection.
+        if byKey, let parent = node.parent {
+            DispatchQueue.main.async { [weak self, weak parent] in
+                guard let self, let parent, !self.isRenaming else { return }
+                parent.reload(hiding: self.fileHiding)
+                self.syncHiddenRow(for: parent)
+                self.rowCache[ObjectIdentifier(parent)] = nil
+                self.outline.reloadItem(parent, reloadChildren: true)
+                if let named = parent.children?.first(where: { $0.name == newName }) {
+                    let row = self.outline.row(forItem: named)
+                    if row >= 0 { self.outline.selectRowIndexes([row], byExtendingSelection: false) }
+                }
+            }
+        }
+    }
+
+    // MARK: the rows hold still while a name is edited
+
+    /// Whether a file or folder's name is being edited in the tree: its field has the keyboard.
+    private var isRenaming: Bool {
+        guard let editor = window?.firstResponder as? NSTextView, editor.isFieldEditor,
+              let field = editor.delegate as? NSTextField, let cell = field.superview as? FileCellView else { return false }
+        return cell.isRenaming && cell.isDescendant(of: outline)
+    }
+
+    /// Updates of the rows that wait for a name being edited, the newest of each kind.
+    private var held: [(key: String, work: () -> Void)] = []
+
+    /// Runs `work` now, or once the name being edited is done (Return, Escape, a click elsewhere). Reloading
+    /// the rows takes the field away, which ends the rename with what was typed so far (and with its row
+    /// gone, AppKit throws), and they reload all the time: the new file's own git status, a folder's new
+    /// listing, the Databases scan, the agent sessions. So the tree holds still while you type, as Finder's
+    /// does, and catches up after.
+    private func whenNotRenaming(_ key: String, _ work: @escaping () -> Void) {
+        guard isRenaming else {
+            runHeld() // left by a rename that ended without saying so
+            return work()
+        }
+        held.removeAll { $0.key == key }
+        held.append((key, work))
+    }
+
+    private func runHeld() {
+        guard !held.isEmpty, !isRenaming else { return }
+        let work = held
+        held.removeAll()
+        // Rows rebuilt lose their selection: the item just named (or kept as "untitled") stays selected.
+        let selected = outline.selectedRowIndexes.compactMap { outline.item(atRow: $0) as AnyObject? }
+        work.forEach { $0.work() }
+        let rows = IndexSet(selected.map { outline.row(forItem: $0) }.filter { $0 >= 0 })
+        if outline.selectedRowIndexes.isEmpty, !rows.isEmpty { outline.selectRowIndexes(rows, byExtendingSelection: false) }
     }
 
     func rename(_ url: URL, to newName: String) {
