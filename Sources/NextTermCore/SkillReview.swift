@@ -143,8 +143,9 @@ public struct SkillReview: Sendable {
                 flags.append(Flag(level: .warning, file: relative, text: "Not valid UTF-8: shown with replacement characters."))
             }
             flags += textFlags(text, file: relative, readByAgents: readByAgentsExtensions.contains(ext))
-            // A program's addresses from its printable runs: decoded whole, its code signature's read as junk.
-            for url in findURLs(program ? printableRuns(data) : text) { urls.insert(url) }
+            // A program's addresses from its text runs: decoded whole, its code signature reads as junk, and
+            // printable ASCII alone would cut an address at its first non-ASCII letter (a look-alike host).
+            for url in findURLs(program ? textRuns(data, minimum: 4) : text) { urls.insert(url) }
         }
         if total > 20_000_000 { flags.append(Flag(level: .warning, file: "", text: "The skill is large (\(total / 1_000_000) MB).")) }
         if !executables.isEmpty {
@@ -304,19 +305,19 @@ public struct SkillReview: Sendable {
     /// A program's text runs: at least `minimum` scalars with no control character (C0 but tab and line
     /// breaks, DEL, C1) and no replacement character: what an agent reads, or zsh runs, after a header.
     /// Line breaks don't end a run, so text cut into short lines is still checked. Tag letters and the
-    /// variation selectors supplement (invisible text a program's own bytes don't form) are kept whatever
-    /// the run's length.
+    /// variation selectors supplement from runs too short to keep are kept once a program holds at least
+    /// four of them: machine code forms one now and then (F3 A0 80 86 in an ARM program), hidden words more.
     static func textRuns(_ data: Data, minimum: Int = 16) -> String {
         var out = String.UnicodeScalarView()
         var run: [Unicode.Scalar] = []
         var carriers = 0
+        var stray = String.UnicodeScalarView()
         func close() {
             if run.count >= minimum {
                 out.append(contentsOf: run)
                 out.append("\n")
             } else if carriers > 0 {
-                out.append(contentsOf: run.filter { (0xE0000...0xE01EF).contains($0.value) })
-                out.append("\n")
+                stray.append(contentsOf: run.filter { (0xE0000...0xE01EF).contains($0.value) })
             }
             run.removeAll(keepingCapacity: true)
             carriers = 0
@@ -332,6 +333,10 @@ public struct SkillReview: Sendable {
             close()
         }
         close()
+        if stray.count >= 4 {
+            out.append(contentsOf: stray)
+            out.append("\n")
+        }
         return String(out)
     }
 

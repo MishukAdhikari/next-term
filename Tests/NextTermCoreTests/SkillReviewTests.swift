@@ -294,9 +294,23 @@ import Testing
         var named = Self.machO()
         named.append(Data("http://a.example/x".utf8))
         named.append(contentsOf: [0x1D, 0x06])
+        // An address with a non-ASCII letter stays whole; one tag letter that machine code happens to form
+        // is not hidden text, while tag letters one per control byte are.
+        var idn = Self.machO()
+        idn.append(Data("\ncurl https://exämple.com/x\n".utf8))
+        var code = Data(crafted)
+        code.append(contentsOf: [0x10, 0xF3, 0xA0, 0x80, 0x86, 0x10])
+        var spaced = Data(crafted)
+        for letter in "Ignore".unicodeScalars {
+            spaced.append(Data(String(Unicode.Scalar(0xE0000 + letter.value)!).utf8))
+            spaced.append(0x01)
+        }
         let skill = Data("---\nname: demo\ndescription: D.\n---\nBody.\n".utf8)
-        let files: [String: Data] = ["SKILL.md": skill, "bin/crafted": data, "bin/tool": Self.machO(),
+        var files: [String: Data] = ["SKILL.md": skill, "bin/crafted": data, "bin/tool": Self.machO(),
                                      "bin/chunked": chunked, "bin/zeroed": zeroed, "scripts/x.sh": named]
+        files["scripts/idn.sh"] = idn
+        files["bin/code"] = code
+        files["bin/spaced"] = spaced
         let review = SkillReview.review(folder: try folder(files), folderName: "demo")
         #expect(review.files.first { $0.path == "bin/crafted" }?.binary == true)
         #expect(review.flags.contains { $0.file == "bin/crafted" && $0.text.contains("hidden characters") })
@@ -306,6 +320,9 @@ import Testing
         #expect(review.urls.contains("http://a.example/x"))
         #expect(!review.urls.contains { $0.hasPrefix("http://a.example/x") && $0 != "http://a.example/x" })
         #expect(!review.flags.contains { $0.file == "bin/tool" && $0.text.contains("hidden characters") })
+        #expect(review.urls.contains("https://exämple.com/x") && !review.urls.contains("https://ex"))
+        #expect(!review.flags.contains { $0.file == "bin/code" && $0.text.contains("hidden characters") })
+        #expect(review.flags.contains { $0.file == "bin/spaced" && $0.text.contains("hidden characters") })
         #expect(SkillReview.dottingControls("a\u{0}b\nc\u{1B}") == "a·b\nc·")
     }
 
