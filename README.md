@@ -121,7 +121,7 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   checkbox, and what it leaves out and why; Undo Import puts it all back. It only reads, on this Mac, and
   never opens files that can hold secrets. See
   [Switching to Next Term](https://nxtrm.mishuk.me/docs/switching/).
-- **Updates in one click.** Next Term checks GitHub Releases once a day (or Check for Updates). A new
+- **Updates in one click.** Next Term checks GitHub Releases once a day, at 11:00 or later in your time zone (or Check for Updates). A new
   version opens a window with what's new (Install, Remind Me Later or Skip This Version), and a blue
   Update button at the top right brings it back. It downloads, is checked against its checksum signed
   with the Next Term release key, and replaces the app when you relaunch.

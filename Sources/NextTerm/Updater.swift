@@ -2,7 +2,7 @@ import AppKit
 import CryptoKit
 import NextTermCore
 
-/// Updates from GitHub Releases: checks once a day (and on demand). A new version opens the
+/// Updates from GitHub Releases: checks once a day at 11:00 or later, in the Mac's time zone (and on demand). A new version opens the
 /// update window with its release notes (Skip This Version, Remind Me Later, Install and Relaunch), and
 /// a blue Update button stays at the top right of each window until it is installed or skipped. One
 /// click downloads the new DMG, checks it as the installer (site/src/install.sh) does (the release's
@@ -19,11 +19,12 @@ final class Updater {
     nonisolated static let feed = URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!
     /// Redirects to the newest release's page; used when the API is rate-limited.
     nonisolated static let latestPage = URL(string: "https://github.com/\(repository)/releases/latest")!
-    static let interval: TimeInterval = 24 * 60 * 60
     /// Remind Me Later: how long before the automatic check opens the window for that version again.
     static let snooze: TimeInterval = 24 * 60 * 60
 
     private var timer: Timer?
+    /// Wake, time-zone, clock and day-change observers: each moves the next 11:00.
+    private var observers: [NSObjectProtocol] = []
     private var checking = false
     private var progress: UpdateProgressWindow?
     /// A new app staged next to this one, swapped in when Next Term quits.
@@ -63,7 +64,10 @@ final class Updater {
 
     var automaticChecks: Bool {
         get { UserDefaults.standard.object(forKey: "checkForUpdates") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "checkForUpdates") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "checkForUpdates")
+            if !observers.isEmpty { checkIfDue() } // turned on after 11:00: today's check runs now
+        }
     }
 
     /// For testing the whole flow against a local feed (`-updateFeedURL file:///…/feed.json`). The release's
@@ -81,23 +85,60 @@ final class Updater {
         return testing ? nil : URL(string: "https://api.github.com/repos/\(Self.repository)/releases?per_page=10")
     }
 
-    /// Starts the daily check (a development build, with no version, never checks).
+    /// Starts the daily check: at 11:00 or the first moment after it, in the Mac's time zone, in the
+    /// background (UpdateSchedule). A development build, with no version, never checks.
     func start() {
-        guard current != nil, timer == nil else { return }
-        let timer = Timer(timeInterval: 60 * 60, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.checkIfDue() }
+        guard current != nil, observers.isEmpty else { return }
+        // Waking from sleep, a new time zone, the clock being set or a new day all move the next 11:00.
+        let workspace = NSWorkspace.shared.notificationCenter
+        observers.append(workspace.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkIfDue() }
+        })
+        let changes: [Notification.Name] = [.NSSystemTimeZoneDidChange, .NSSystemClockDidChange, .NSCalendarDayChanged]
+        for name in changes {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.checkIfDue() }
+            })
         }
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
         // A little after launch, so it never slows the first window.
         DispatchQueue.main.asyncAfter(deadline: .now() + (testing ? 1 : 20)) { [weak self] in self?.checkIfDue() }
     }
 
+    /// Checks if today's check is due (it then sets the next time itself, once it ends), else sets the timer
+    /// for the next time it could be.
     private func checkIfDue() {
-        guard automaticChecks else { return }
-        let last = UserDefaults.standard.double(forKey: "lastUpdateCheck")
-        guard testing || Date().timeIntervalSince1970 - last > Self.interval else { return }
-        check(userInitiated: false)
+        guard automaticChecks else { return stopTimer() }
+        let success = date(forKey: "lastUpdateCheck"), failure = date(forKey: "lastUpdateFailure")
+        if testing || UpdateSchedule.isDue(now: Date(), lastSuccess: success, lastFailure: failure, calendar: .current) {
+            stopTimer()
+            return check(userInitiated: false)
+        }
+        scheduleNext()
+    }
+
+    /// One timer, for the next 11:00 (or an hour after a failed check). It doesn't run while the Mac sleeps:
+    /// waking looks again.
+    private func scheduleNext() {
+        stopTimer()
+        guard automaticChecks, current != nil, !checking else { return }
+        let success = date(forKey: "lastUpdateCheck"), failure = date(forKey: "lastUpdateFailure")
+        let next = UpdateSchedule.next(after: Date(), lastSuccess: success, lastFailure: failure, calendar: .current)
+        let timer = Timer(fire: max(next, Date().addingTimeInterval(1)), interval: 0, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.checkIfDue() }
+        }
+        timer.tolerance = 60
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    private func stopTimer() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func date(forKey key: String) -> Date? {
+        let seconds = UserDefaults.standard.double(forKey: key)
+        return seconds > 0 ? Date(timeIntervalSince1970: seconds) : nil
     }
 
     /// "Check for Updates…": says so either way. The daily check speaks only when there is something new.
@@ -118,8 +159,10 @@ final class Updater {
             let finish = { (release: ReleaseInfo?, failed: Bool) in
                 DispatchQueue.main.async {
                     self.checking = false
-                    UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "lastUpdateCheck")
+                    // A failed check doesn't count as today's: the schedule tries again an hour later.
+                    UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: failed ? "lastUpdateFailure" : "lastUpdateCheck")
                     self.handle(release, current: current, userInitiated: userInitiated, failed: failed)
+                    if !self.observers.isEmpty { self.scheduleNext() }
                 }
             }
             guard status == 403 || status == 429, !allowFiles else { return finish(release, release == nil && status != 404) }
