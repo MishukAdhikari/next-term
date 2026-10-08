@@ -255,6 +255,7 @@ final class CommitSheet: NSObject, NSTextViewDelegate {
     var canWriteWithAgent: Bool { !writeButton.isHidden && writeButton.isEnabled }
     var isWriting: Bool { writing != nil }
     func pressWriteWithAgent() { writeWithAgent() }
+    func pressCancel() { cancel() }
 }
 
 /// Write with Agent: the agent that writes the message, and what it is given to read.

@@ -288,19 +288,22 @@ extension SelfTest {
         }
     }
 
-    /// Write with Agent, with a stand-in for Claude Code: it reads the staged changes, its answer fills the
-    /// message (fences gone), the hint names it, nothing is committed until you commit.
+    /// Write with Agent, with a stand-in for Claude Code: it reads the staged changes (a .env named, not
+    /// sent) in a folder of its own, its answer fills the message (fences gone), the hint names it, nothing
+    /// is committed until you commit; with Amend on, it reads the last commit's changes and message too.
     private static func writeWithAgentChecks(_ c: TerminalWindowController, git: String, repo: String, base: URL) async {
         let bin = base.appendingPathComponent("writer")
         try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
-        let seen = base.appendingPathComponent("seen.txt").path
-        try? "#!/bin/sh\ncat > '\(seen)'\nprintf '```\\nFix the greeting\\n\\nSays hello properly.\\n```\\n'\n"
+        let seen = base.appendingPathComponent("seen.txt").path, ranIn = base.appendingPathComponent("ran-in.txt").path
+        try? "#!/bin/sh\ncat > '\(seen)'\npwd -P > '\(ranIn)'\nprintf '```\\nFix the greeting\\n\\nSays hello properly.\\n```\\n'\n"
             .write(to: bin.appendingPathComponent("claude"), atomically: true, encoding: .utf8)
         chmod(bin.appendingPathComponent("claude").path, 0o755)
         GitActions.commitAgentForTest = (.claude, bin.appendingPathComponent("claude").path)
         defer { GitActions.commitAgentForTest = nil }
         try? "hello\n".write(toFile: repo + "/a.txt", atomically: true, encoding: .utf8)
-        gitOutput(git, repo, ["add", "a.txt"])
+        let key = "sk-ant-api03-" + String(repeating: "Zq9x", count: 10)
+        try? "API_KEY=\(key)\n".write(toFile: repo + "/.env", atomically: true, encoding: .utf8)
+        gitOutput(git, repo, ["add", "a.txt", ".env"])
         let head = gitOutput(git, repo, ["rev-parse", "HEAD"])
         var opened = false
         c.withGit(at: repo) { actions in
@@ -317,11 +320,34 @@ extension SelfTest {
         check(sheet.hintText.hasPrefix("Written by Claude Code"), "and says which agent wrote it", sheet.hintText)
         let input = (try? String(contentsOfFile: seen, encoding: .utf8)) ?? ""
         check(input.contains("The changes:") && input.contains("+hello"), "the agent read the staged changes", String(input.suffix(200)))
+        check(input.contains("Left out: .env") && !input.contains(key), "a .env is named to the agent, never sent", String(input.suffix(300)))
+        let folder = ((try? String(contentsOfFile: ranIn, encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        check(!folder.isEmpty && !folder.hasPrefix(canonicalPath(repo)) && !folder.hasPrefix(canonicalPath(base.path)),
+              "the agent runs in a folder of its own, not the repository", folder)
         check(CommitSheet.current === sheet && gitOutput(git, repo, ["rev-parse", "HEAD"]) == head, "and nothing is committed: the sheet waits for you")
         sheet.type("Fix the greeting\n\nSays hello, as an agent wrote and you edited.")
         sheet.pressCommit()
         check(await wait(10) { gitOutput(git, repo, ["log", "-1", "--format=%s"]) == "Fix the greeting" }, "you commit it, edited",
               gitOutput(git, repo, ["log", "-1", "--format=%B"]))
         GitToast.dismiss()
+
+        // Amend with nothing new: the agent reads the last commit's changes and its message, which it replaces.
+        try? FileManager.default.removeItem(atPath: seen)
+        var reopened = false
+        c.withGit(at: repo) { actions in
+            actions.commit()
+            reopened = true
+        }
+        guard await wait(15, { reopened && CommitSheet.current != nil }), let amending = CommitSheet.current else {
+            return check(false, "the commit sheet opens again to amend")
+        }
+        amending.setAmend(true)
+        check(amending.canWriteWithAgent, "with Amend on and nothing new, Write with Agent is offered")
+        amending.pressWriteWithAgent()
+        _ = await wait(15) { !amending.isWriting && !amending.messageText.isEmpty }
+        let again = (try? String(contentsOfFile: seen, encoding: .utf8)) ?? ""
+        check(again.contains("+hello") && again.contains("replace the last commit") && again.contains("Says hello, as an agent wrote and you edited."),
+              "amending, the agent reads the last commit's changes and its message", String(again.suffix(400)))
+        amending.pressCancel()
     }
 }
