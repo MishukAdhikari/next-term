@@ -98,7 +98,7 @@ Status reports from the shell carry a random secret for each tab that programs n
 | Select tab 1–8, or the last tab | <kbd>⌘1</kbd>–<kbd>⌘8</kbd>, <kbd>⌘9</kbd> (each tab shows its own) |
 | Next or previous tab | <kbd>⇧⌘]</kbd> and <kbd>⇧⌘[</kbd>, or <kbd>⌃⇥</kbd> and <kbd>⌃⇧⇥</kbd> |
 | Rename a tab | <kbd>⌥⌘R</kbd>, or double-click it |
-| Split a tab into panes | <kbd>⌘D</kbd> right, <kbd>⇧⌘D</kbd> down |
+| Split a tab into panes | <kbd>⌘D</kbd> right (outside the editor), <kbd>⇧⌘D</kbd> down |
 | Reorder | Drag a tab sideways |
 
 A tab running a local dev server (`langgraph dev`, `npm run dev`, `uvicorn` and the like) adds its port to its title, such as “app · :5173”, once the server prints its address. **File › Open Served URL** opens that address in your browser. It is only for commands you run, not agents, and not remote tabs, where `localhost` is the server’s own.

@@ -68,7 +68,7 @@ Next Term also adds the `nxtrm` command for your other terminals, in a folder on
 1. Press <kbd>⌘T</kbd> for a new tab. In a project window it opens in the project folder.
 2. Start an agent, for example `claude`.
 3. Press <kbd>⌘T</kbd> again and start another, for example `codex`.
-4. Or keep them in one tab: <kbd>⌘D</kbd> splits it, and each pane runs its own agent.
+4. Or keep them in one tab: with the keyboard in the terminal, <kbd>⌘D</kbd> splits it, and each pane runs its own agent.
 5. Give each a task and switch away. Each tab shows a spinner while its agent works, a green check when it is done, and an amber “!” when it is asking you something. If you are elsewhere, a notification tells you which agent needs a decision or has finished; click it to land on that tab.
 
 Read [Agent status in every tab](/docs/agent-status/) for what each mark means.
