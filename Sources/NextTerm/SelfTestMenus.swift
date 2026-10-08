@@ -203,10 +203,14 @@ extension SelfTest {
         _ = await wait(20) { copy.status.integrated }
         check(canonicalPath(copy.currentDirectory()) == canonicalPath(folder.path) && w.activeIndex == 1,
               "menus: Duplicate Tab opens a tab beside it, in its folder", copy.currentDirectory())
-        // Rename acts on the tab clicked, not the one in front.
+        // Rename acts on the tab clicked, not the one in front: the name typed is the clicked tab's.
         _ = run("Rename…", in: w.terminalTabMenu(at: 0) ?? NSMenu())
-        check(w.tabBar.isEditing && w.activeIndex == 1, "menus: Rename… edits the name of the tab clicked")
+        let field = window.firstResponder as? NSTextView
+        let inClicked = field?.isDescendant(of: w.tabBar.tabView(at: 0) ?? NSView()) == true
+        field?.insertText("Renamed here", replacementRange: field?.selectedRange() ?? NSRange(location: 0, length: 0))
         window.makeFirstResponder(nil)
+        check(inClicked && w.activeIndex == 1 && first.userTitle == "Renamed here" && copy.userTitle == nil,
+              "menus: Rename… edits the name of the tab clicked", "\(first.userTitle ?? "no name"), \(copy.userTitle ?? "no name")")
         first.userTitle = nil
         // Split from a tab not in front: that tab comes forward, split.
         w.select(0)
@@ -244,7 +248,8 @@ extension SelfTest {
 
         // Close Tabs to the Right, from the first tab; Close Tab, from one not in front.
         _ = run("Close Tabs to the Right", in: w.terminalTabMenu(at: 0) ?? NSMenu())
-        check(await wait(3) { w.groups.count == 1 }, "menus: Close Tabs to the Right closes the tabs after the one clicked")
+        check(await wait(3) { w.groups.count == 1 && w.tabs.first === last && !w.tabs.contains { $0 === again } },
+              "menus: Close Tabs to the Right closes the tabs after the one clicked")
         let extra = w.addTab(directory: folder.path)
         _ = await wait(20) { extra.status.integrated } // a shell still starting up may have children to warn about
         w.select(0)
