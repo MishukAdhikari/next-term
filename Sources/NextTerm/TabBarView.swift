@@ -115,7 +115,8 @@ final class TabBarView: NSView {
     private var collapseWidth: CGFloat { collapseButton.isHidden ? 0 : Self.collapseButtonWidth + room(collapseHint) }
 
     /// The buttons' keys, as the tabs show theirs: "⌘B" before the sidebar icon, "⌘T" before the +, "⌘J"
-    /// before the arrow. They give way before the tabs would narrow (`fitKeyHints`).
+    /// before the arrow. They give way before the tabs would narrow (`fitKeyHints`), and then show over the
+    /// bar only while the pointer is on their button.
     private lazy var sidebarHint = KeyHint(#selector(TerminalWindowController.toggleProjectSidebar(_:)), for: sidebarButton)
     private lazy var newTabHint = KeyHint(#selector(TerminalWindowController.newTab(_:)), for: newTabButton)
     private lazy var collapseHint = KeyHint(#selector(TerminalWindowController.toggleTerminalCollapsed(_:)), for: collapseButton)
@@ -355,6 +356,7 @@ final class TabBarView: NSView {
             updateButton.frame = NSRect(x: bounds.width - more - 4 - collapseWidth - revealWidth - 4 - width, y: 0,
                                         width: width, height: bounds.height - 1)
         }
+        sidebarHint.keepClear = leadingInset // over the traffic lights' strip, its key would go under them
         for hint in [sidebarHint, newTabHint, collapseHint, revealHint] { hint.place(shown: hintRooms[hint] != nil) }
         updateOverflowButton()
     }
