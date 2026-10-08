@@ -28,6 +28,7 @@ extension SelfTest {
         await completionZshChecks(c, dir: dir)
         await completionSettingChecks(c, dir: dir)
         await completionOwnerChecks(c, dir: dir)
+        await completionQuietChecks(c, dir: dir)
         await completionServerChecks(c, dir: dir)
         await completionServerHookChecks(c, dir: dir)
         await commandSuggestionChecks(c, dir: dir)
@@ -693,6 +694,35 @@ extension SelfTest {
         await clearLine(tab)
         check(files() == before, "AE4: no file in the shell's config folder changed")
         CompletionPreferences.choose(nil, for: owner)
+    }
+
+    /// Where Next Term's list answers Tab in zsh-autocomplete's place, a new tab has its list as you type off from the
+    /// first prompt (a stand-in with its redraw hook), with no key sent: a command typed ahead of that prompt reads
+    /// nothing of Next Term's.
+    private static func completionQuietChecks(_ c: TerminalWindowController, dir: URL) async {
+        CompletionPreferences.mode = .nextTerm
+        let zdotdir = dir.appendingPathComponent(".zdot-quiet")
+        try? FileManager.default.createDirectory(at: zdotdir, withIntermediateDirectories: true)
+        let zshrc = plainZshrc + "autoload -Uz add-zle-hook-widget\n.autocomplete:async:complete() { : }\n"
+            + "add-zle-hook-widget line-pre-redraw .autocomplete:async:complete\n"
+        try? zshrc.write(to: zdotdir.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
+        let read = dir.appendingPathComponent("typed-ahead")
+        TerminalTab.testUserZDOTDIR = zdotdir.path
+        let tab = c.addTab(directory: dir.path)
+        TerminalTab.testUserZDOTDIR = nil
+        defer { c.remove(tab) }
+        // Typed before the shell has drawn a prompt: it runs at the first one.
+        tab.view.send(txt: "cat > '\(read.path)'\r")
+        let ran = await wait(20) { tab.status.running }
+        await pause(0.5)
+        tab.view.send(txt: "\u{4}")
+        _ = await wait(5) { !tab.status.running && tab.completion.state.isArmed }
+        let got = (try? Data(contentsOf: read)).map { String(decoding: $0, as: UTF8.self) } ?? "nothing"
+        check(ran && got.isEmpty, "Tab completion: a command typed ahead of a new tab's first prompt reads nothing of Next Term's",
+              got.debugDescription)
+        let arm = tab.completion.state.arm
+        check(arm?.plugins.contains("autocomplete") == true && arm?.quieted == true,
+              "and zsh-autocomplete's list as you type is off from that prompt", String(describing: arm))
     }
     #endif
 }
