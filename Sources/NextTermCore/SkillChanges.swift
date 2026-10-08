@@ -117,10 +117,17 @@ public struct SkillChanges: Sendable {
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(kept) else { return }
         try? FileManager.default.createDirectory(atPath: (undoFile as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
-        try? data.write(to: URL(fileURLWithPath: undoFile), options: .atomic)
+        try? SafeWrite.replace(undoFile, with: data)
     }
 
     // MARK: checks before doing anything
+
+    /// Writes a lock file or the records over the bytes `read` from it (nil: there was none), through `SafeWrite`: a
+    /// save in between (the `skills` command's own) is kept, and this step fails instead. New files are 0644, as the
+    /// `skills` command makes them.
+    static func write(_ data: Data, to path: String, over read: Data?) throws {
+        try SafeWrite.replace(path, with: data, expecting: read.map { .contents($0) } ?? .noFile, newFileMode: 0o644)
+    }
 
     static func exists(_ path: String) -> Bool {
         var info = stat()
@@ -385,6 +392,7 @@ public struct SkillChanges: Sendable {
                     }
                 case .lockEntry(let path, let name, let entry):
                     let real = Self.resolvedFile(path)
+                    let read = Self.exists(real) ? manager.contents(atPath: real) : nil
                     let text = Self.exists(real) ? try String(contentsOfFile: real, encoding: .utf8) : nil
                     let before = SkillLock.rawItem(text, name: name)
                     let updated: String
@@ -396,18 +404,19 @@ public struct SkillChanges: Sendable {
                     guard after != before else { continue } // already as wanted: nothing to write or undo
                     try manager.createDirectory(atPath: (real as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
                     let newFile: Bool? = text == nil ? true : nil
-                    try updated.write(toFile: real, atomically: true, encoding: .utf8)
+                    try Self.write(Data(updated.utf8), to: real, over: read)
                     change.entries.append(.init(kind: .editedLock, path: real, other: name, previous: before, left: after, newFile: newFile))
                     journal()
                 case .recordEntry(let path, let name, let record):
-                    var records = SkillRecord.decodeList(manager.contents(atPath: path))
+                    let read = manager.contents(atPath: path)
+                    var records = SkillRecord.decodeList(read)
                     let before = records.first { $0.name == name }?.raw()
                     guard record?.raw() != before else { continue } // already as wanted
                     records.removeAll { $0.name == name }
                     if let record { records.append(record) }
                     try manager.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
                     let newFile: Bool? = Self.exists(path) ? nil : true
-                    try SkillRecord.encodeList(records).write(to: URL(fileURLWithPath: path), options: .atomic)
+                    try Self.write(SkillRecord.encodeList(records), to: path, over: read)
                     change.entries.append(.init(kind: .editedRecord, path: path, other: name, previous: before, left: record?.raw(), newFile: newFile))
                     journal()
                 }
@@ -593,6 +602,7 @@ public struct SkillChanges: Sendable {
                     try manager.createDirectory(atPath: (entry.path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
                     try manager.createSymbolicLink(atPath: entry.path, withDestinationPath: target)
                 case .editedLock:
+                    let read = Self.exists(entry.path) ? manager.contents(atPath: entry.path) : nil
                     let text = Self.exists(entry.path) ? try String(contentsOfFile: entry.path, encoding: .utf8) : nil
                     guard case .success(let restored) = SkillLock.replacingRawItem(text, name: entry.other ?? "", raw: entry.previous) else {
                         throw Failure(message: "unreadable")
@@ -600,16 +610,17 @@ public struct SkillChanges: Sendable {
                     if entry.newFile == true, SkillLock.holdsNothing(restored) {
                         try manager.removeItem(atPath: entry.path) // made by this change, and empty again
                     } else {
-                        try restored.write(toFile: entry.path, atomically: true, encoding: .utf8)
+                        try Self.write(Data(restored.utf8), to: entry.path, over: read)
                     }
                 case .editedRecord:
-                    var records = SkillRecord.decodeList(manager.contents(atPath: entry.path))
+                    let read = manager.contents(atPath: entry.path)
+                    var records = SkillRecord.decodeList(read)
                     records.removeAll { $0.name == entry.other }
                     if let previous = entry.previous.flatMap(SkillRecord.fromRaw) { records.append(previous) }
                     if entry.newFile == true, records.isEmpty {
                         try manager.removeItem(atPath: entry.path) // made by this change, and empty again
                     } else {
-                        try SkillRecord.encodeList(records).write(to: URL(fileURLWithPath: entry.path), options: .atomic)
+                        try Self.write(SkillRecord.encodeList(records), to: entry.path, over: read)
                     }
                 }
                 progress?(entries[..<index].filter { !$0.isLost })

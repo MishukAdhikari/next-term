@@ -353,7 +353,7 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
         }
         if !originals.isEmpty, let undo = window?.undoManager ?? NSApp.keyWindow?.undoManager {
             undo.registerUndo(withTarget: self) { target in
-                for (url, data) in originals { try? data.write(to: url, options: .atomic) }
+                for (url, data) in originals { try? TextFile.write(data, to: url) }
                 target.scheduleSearch(after: 0)
             }
             undo.setActionName("Replace in Files")

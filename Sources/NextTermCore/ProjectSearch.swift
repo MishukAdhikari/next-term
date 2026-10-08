@@ -203,7 +203,8 @@ public enum ProjectSearch {
 
     /// Replaces the selected matches in one file. The file is read again and searched again first:
     /// a match is replaced only if it is still on the same line with the same text, so edits made since
-    /// the search (by you or an agent) are never overwritten. Keeps the file's permissions.
+    /// the search (by you or an agent) are never overwritten. Written through `SafeWrite`: it keeps the file's
+    /// permissions, and a save made after that read is not overwritten either (`SafeWrite.Failure.changed`).
     public static func replace(_ selected: [SearchMatch], in root: String, with replacement: String,
                                query: SearchQuery) throws -> ReplaceResult {
         guard let first = selected.first else { return ReplaceResult() }
@@ -240,9 +241,8 @@ public enum ProjectSearch {
         }
         result.skipped = wanted.subtracting(matchedKeys).count
         guard result.replaced > 0 else { return result }
-        let permissions = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.posixPermissions]
-        try Data(output.utf8).write(to: url, options: .atomic)
-        if let permissions { try? FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path) }
+        // Only over the bytes just read: a save since (an agent's) is kept, and this file is left alone.
+        try TextFile.write(Data(output.utf8), to: url, expecting: .contents(original))
         result.original = original
         return result
     }

@@ -92,13 +92,12 @@ public enum TextFile {
         }
     }
 
-    /// Writes atomically to the file a path points at (through symlinks, so a link stays a link) and
-    /// keeps its permissions, so a script stays executable.
-    public static func write(_ data: Data, to url: URL) throws {
-        let target = URL(fileURLWithPath: canonicalPath(url.path))
-        let permissions = (try? FileManager.default.attributesOfItem(atPath: target.path))?[.posixPermissions]
-        try data.write(to: target, options: .atomic)
-        if let permissions { try? FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: target.path) }
+    /// Writes atomically to the file a path points at (through symlinks, so a link stays a link), through
+    /// `SafeWrite`: it keeps its permissions (a script stays executable, an owner-only file owner-only) and
+    /// extended attributes, and is never readable by others along the way. A read-only file is refused. A new
+    /// file is 0644, as files you make usually are. `expecting`: what the file must still hold (`SafeWrite`).
+    public static func write(_ data: Data, to url: URL, expecting expected: SafeWrite.Expectation = .anything) throws {
+        try SafeWrite.replace(url.path, with: data, expecting: expected, newFileMode: 0o644)
     }
 }
 
