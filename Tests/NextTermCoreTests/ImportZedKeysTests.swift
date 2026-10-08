@@ -140,13 +140,23 @@ import Testing
         let free = try shortcuts(#"[{ "bindings": { "cmd-e": "file_finder::Toggle", "cmd-space": "file_finder::Toggle" } }]"#)
         #expect(free.shortcuts.first?.chord == KeyChord(key: "e", command: true))
 
-        // One key, two commands in the same place: the later binding replaces the earlier one.
+        // One key, two commands at the same level: the later binding replaces the earlier one.
         let clash = try shortcuts("""
             [{ "bindings": { "cmd-e": "go_to_line::Toggle" } },
-             { "context": "Workspace", "bindings": { "cmd-e": "file_finder::Toggle" } }]
+             { "bindings": { "cmd-e": "file_finder::Toggle" } }]
             """)
         #expect(clash.shortcuts.map(\.command) == ["goToFile:"])
         #expect(reasons(clash.skipped)["cmd-e → go_to_line::Toggle"] == "replaced further down by file_finder::Toggle")
+        // A binding with no context matches lowest in Zed's tree, so it comes before one for the workspace
+        // wherever that one is in the file.
+        let deeper = try shortcuts("""
+            [{ "bindings": { "cmd-e": "go_to_line::Toggle" } },
+             { "context": "Workspace", "bindings": { "cmd-e": "file_finder::Toggle" } }]
+            """)
+        #expect(deeper.shortcuts.map(\.command) == ["goToLine:"])
+        #expect(reasons(deeper.skipped)["cmd-e → file_finder::Toggle"] == "Zed obeys cmd-e → go_to_line::Toggle on this key instead")
+        let pane = try shortcuts(#"[{ "context": "Pane", "bindings": { "cmd-e": "go_to_line::Toggle" } }, { "context": "Workspace", "bindings": { "cmd-e": "file_finder::Toggle" } }]"#)
+        #expect(pane.shortcuts.map(\.command) == ["goToLine:"])
     }
 
     @Test func aKeyReplacedOrTurnedOffFurtherDown() throws {
@@ -170,37 +180,37 @@ import Testing
     }
 
     @Test func aKeyForTheEditorAndOneForTheWindow() throws {
-        // Zed obeys the editor's binding in the editor and the window's everywhere else, in either order: Next Term
-        // shares the key the same way, so both come in ticked.
+        // Zed obeys the editor's binding in the editor and the window's everywhere else: Next Term shares the key
+        // the same way, so both come in ticked and the row says which has it where.
         let window = #"{ "bindings": { "cmd-shift-l": "pane::SplitRight" } }"#
+        let workspace = #"{ "context": "Workspace", "bindings": { "cmd-shift-l": "pane::SplitRight" } }"#
         let editor = #"{ "context": "Editor", "bindings": { "cmd-shift-l": "editor::DuplicateLineDown" } }"#
-        for keymap in ["[\(window), \(editor)]", "[\(editor), \(window)]"] {
+        for keymap in ["[\(window), \(editor)]", "[\(workspace), \(editor)]", "[\(editor), \(workspace)]"] {
             let result = try shortcuts(keymap)
             #expect(result.shortcuts.count == 2 && result.shortcuts.allSatisfy(\.ticked), "\(keymap)")
             let settled = ImportPlan(preset: .nextTerm, shortcuts: result.shortcuts).settlingShortcuts(current: ImportShortcutsTests.current())
             #expect(settled.shortcuts.count == 2 && settled.shortcuts.allSatisfy(\.ticked), "\(keymap)")
             #expect(settled.shortcuts.first?.note == "⇧⌘L is Duplicate Line while the editor has the keyboard, Split Right everywhere else")
         }
-        // Both for the whole window: the one further down replaces the other, as in Zed.
-        let both = try shortcuts(#"[{ "bindings": { "cmd-shift-l": "editor::DuplicateLineDown" } }, \#(window)]"#)
-        #expect(both.shortcuts.map(\.command) == ["splitRight:"])
-        // A terminal-only binding shares with the editor's command wherever that one is bound.
-        let terminal = try shortcuts(#"[{ "context": "Terminal", "bindings": { "cmd-shift-l": "pane::SplitRight" } }, { "bindings": { "cmd-shift-l": "editor::DuplicateLineDown" } }]"#)
+        // A binding with no context matches as low as the editor's, so the one further down wins in the editor:
+        // here Split Right, everywhere, as in Zed.
+        let after = try shortcuts("[\(editor), \(window)]")
+        #expect(after.shortcuts.map(\.command) == ["splitRight:"])
+        #expect(reasons(after.skipped)["cmd-shift-l → editor::DuplicateLineDown"] == "replaced further down by pane::SplitRight")
+        // A terminal-only binding shares with the editor's command when Zed obeys each in its part.
+        let terminal = try shortcuts(#"[{ "bindings": { "cmd-shift-l": "editor::DuplicateLineDown" } }, { "context": "Terminal", "bindings": { "cmd-shift-l": "pane::SplitRight" } }]"#)
         #expect(terminal.shortcuts.count == 2 && terminal.shortcuts.allSatisfy(\.ticked))
 
-        // Two commands that can't share a key: the editor's binding wins over the window's, wherever it is in the
-        // file, since Zed obeys it in the editor.
+        // Two commands that can't share a key: the one Zed obeys in more places keeps it.
         let soft = #"{ "context": "Editor", "bindings": { "cmd-e": "editor::ToggleSoftWrap" } }"#
-        let finder = #"{ "bindings": { "cmd-e": "file_finder::Toggle" } }"#
+        let finder = #"{ "context": "Workspace", "bindings": { "cmd-e": "file_finder::Toggle" } }"#
         for keymap in ["[\(soft), \(finder)]", "[\(finder), \(soft)]"] {
             let rows = Dictionary(try shortcuts(keymap).shortcuts.map { ($0.command, $0) }, uniquingKeysWith: { first, _ in first })
-            #expect(rows["toggleSoftWrap:"]?.ticked == true, "\(keymap)")
-            #expect(rows["goToFile:"]?.ticked == false, "\(keymap)")
-            #expect(rows["goToFile:"]?.note == "a binding for the editor gives ⌘E to Soft Wrap", "\(keymap)")
+            #expect(rows["goToFile:"]?.ticked == true, "\(keymap)")
+            #expect(rows["toggleSoftWrap:"]?.ticked == false, "\(keymap)")
+            #expect(rows["toggleSoftWrap:"]?.note
+                    == "Zed gives ⌘E to this only in the editor, to Go to File… elsewhere; one key can't be both here; kept to the editor in Zed")
         }
-        // Two for the editor: the one further down wins.
-        let twice = try shortcuts(#"[{ "context": "Editor", "bindings": { "cmd-e": "editor::ToggleSoftWrap" } }, { "context": "Editor", "bindings": { "cmd-e": "file_finder::Toggle" } }]"#)
-        #expect(twice.shortcuts.map(\.command) == ["goToFile:"])
     }
 
     @Test func everyActionLandsOnACommandAnImportMaySet() {
