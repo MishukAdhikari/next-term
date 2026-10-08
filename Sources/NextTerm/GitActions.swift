@@ -590,11 +590,12 @@ struct GitActions {
             let agent = forTest ?? CommitMessageAgent.find(preferring: working, in: LoginShell.path)
             DispatchQueue.main.async {
                 let snapshot = controller.sidebar.git.snapshot
-                let changed = (snapshot?.files.filter { $0.value != .ignored }.map(\.key) ?? [])
-                    + (snapshot?.wholeFolders.filter { $0.value == .untracked }.map { $0.key + "/" } ?? [])
-                let untracked = Set((snapshot?.files.filter { $0.value == .untracked }.map(\.key) ?? [])
-                                    + (snapshot?.wholeFolders.filter { $0.value == .untracked }.map { $0.key + "/" } ?? []))
-                let writer = agent.map { CommitWriter(agent: $0.agent, path: $0.path, root: root, newFiles: staged.isEmpty ? untracked.sorted() : nil) }
+                let files: [String: GitChange] = snapshot?.files ?? [:]
+                let newFolders: [String] = (snapshot?.wholeFolders ?? [:]).filter { $0.value == .untracked }.map { $0.key + "/" }
+                let changed: [String] = files.filter { $0.value != .ignored }.map(\.key) + newFolders
+                let untracked = Set<String>(files.filter { $0.value == .untracked }.map(\.key) + newFolders)
+                let newFiles: [String]? = staged.isEmpty ? untracked.sorted() : nil
+                let writer = agent.map { CommitWriter(agent: $0.agent, path: $0.path, root: root, newFiles: newFiles) }
                 CommitSheet.present(over: controller, branch: model?.current, staged: staged, changed: changed.sorted(), untracked: untracked, writer: writer,
                                     onAgent: { askAgent("Commit the current changes with a clear message (look at the diff first). Don't push.") }) { message, files, amend, andPush in
                     commit(message: message, files: files, amend: amend, andPush: andPush)
@@ -627,8 +628,12 @@ struct GitActions {
                 }
                 return failed("Could not commit", result, retry: nil)
             }
-            let sha = result.output.range(of: #"\[[^\]]* ([0-9a-f]{7,})\]"#, options: .regularExpression)
-                .map { String(result.output[$0]).components(separatedBy: " ").last?.dropLast() ?? "" }.map(String.init) ?? ""
+            // "[main abc1234] Subject": the short id before the bracket closes.
+            var sha = ""
+            if let bracket = result.output.range(of: #"\[[^\]]* ([0-9a-f]{7,})\]"#, options: .regularExpression) {
+                let last: String = String(result.output[bracket]).components(separatedBy: " ").last ?? ""
+                sha = String(last.dropLast())
+            }
             if andPush { return push() }
             let notice = "Committed\(sha.isEmpty ? "" : " " + sha)"
             guard let git = GitWriter.git else { return toast(notice) }
