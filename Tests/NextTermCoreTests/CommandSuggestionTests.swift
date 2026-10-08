@@ -35,6 +35,12 @@ import Testing
         withOutput.output = "error: auth failed\nAPI_KEY=sk-live-0123456789abcdefghij\n"
         let sent = CommandSuggestion.prompt(withOutput)
         #expect(sent.contains("Recent output:") && sent.contains("error: auth failed") && !sent.contains("sk-live-0123456789abcdefghij"))
+        // A value given to a name like a secret's, anywhere on the line, quoted or not, in the command and the output.
+        let inline = CommandSuggestion.redactedCommand(#"echo --password=S3cretPass API_KEY=sk-live-0123456789abcdefghij && export GH_TOKEN="two words" ls"#)
+        #expect(inline == #"echo --password=••• API_KEY=••• && export GH_TOKEN=••• ls"#)
+        let echoed = CommandSuggestion.redactedOutput("$ DB_PASSWORD=hunter22 ./run\nstarted, tokenizer=bert ok\n")
+        #expect(!echoed.contains("hunter22") && echoed.contains("$ DB_PASSWORD=••• ./run") && echoed.contains("started,"))
+        #expect(CommandSuggestion.redactedCommand("ls -la ~/src | grep app") == "ls -la ~/src | grep app")
         // Only the end of long output.
         withOutput.output = String(repeating: "x", count: 20_000) + "END"
         #expect(CommandSuggestion.prompt(withOutput).count < 9_000 && CommandSuggestion.prompt(withOutput).contains("END"))

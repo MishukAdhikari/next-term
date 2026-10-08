@@ -36,7 +36,7 @@ public enum CommandSuggestion {
     /// The agents left out, and why: each must run with no tools and no MCP, and that wasn't true or couldn't be
     /// checked. (Checked 2026-10-08.)
     public static let leftOut: [(name: String, why: String)] = [
-        ("Codex", "codex exec keeps its shell and apply_patch tools; its read-only sandbox limits them but doesn't remove them (0.154.0)"),
+        ("Codex", "codex exec has no way to turn all of its tools off, only to sandbox them; a read-only sandbox limits them but doesn't remove them (0.154.0)"),
         ("Copilot CLI", "its flags for running with no tools and no MCP couldn't be checked here"),
         ("opencode", "its flags for running with no tools and no MCP couldn't be checked here"),
     ]
@@ -68,20 +68,29 @@ public enum CommandSuggestion {
     /// Output sent at most, from its end.
     public static let maxOutput = 8000
 
-    /// The last command as sent: secrets masked (MCPRedaction, and a password typed after `-p`).
-    public static func redactedCommand(_ command: String) -> String {
-        let masked = MCPRedaction.redact(command).text
-        return passwordOption.stringByReplacingMatches(in: masked, range: NSRange(masked.startIndex..., in: masked),
-                                                       withTemplate: "$1" + MCPRedaction.mask)
+    /// The last command as sent: secrets masked.
+    public static func redactedCommand(_ command: String) -> String { masked(command) }
+
+    /// Recent output as sent: its end, secrets masked (command lines typed at a prompt are in it too).
+    public static func redactedOutput(_ output: String) -> String { masked(String(output.suffix(maxOutput))) }
+
+    /// MCPRedaction's secrets, and two more a command line holds anywhere on it: a password typed after `-p` or
+    /// `--password=`, and the value given to a name like a secret's (`API_KEY=…`, `export TOKEN="…"`).
+    static func masked(_ text: String) -> String {
+        var result = MCPRedaction.redact(text).text
+        for pattern in [passwordOption, secretAssignment] {
+            result = pattern.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "$1" + MCPRedaction.mask)
+        }
+        return result
     }
 
     /// `mysql -pSecret`, `--password=Secret`: the value.
     static let passwordOption = try! NSRegularExpression(pattern: #"((?:^|\s)(?:-p|--password=))(?!\s)[^\s•]+"#)
 
-    /// Recent output as sent: its end, secrets masked.
-    public static func redactedOutput(_ output: String) -> String {
-        MCPRedaction.redact(String(output.suffix(maxOutput))).text
-    }
+    /// `API_KEY=sk-…`, `export GH_TOKEN="…"`: the value, quoted or not.
+    static let secretAssignment = try! NSRegularExpression(
+        pattern: #"((?:^|[\s;&|(])(?:export\s+)?"# + MCPRedaction.secretName + #"=)(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|)•]+)"#,
+        options: [.caseInsensitive, .anchorsMatchLines])
 
     /// What the agent is asked: the sentence, the folder, the shell, the last command and how it ended (redacted),
     /// and recent output only when the user confirmed it (redacted too).
@@ -135,7 +144,8 @@ public enum CommandSuggestion {
         }
     }
 
-    /// Answers longer than these are not one command.
+    /// Answers longer than these are not one command (the command in UTF-8 bytes: escaped for the shell's hook,
+    /// it stays well inside one private key's 64 KiB).
     public static let maxAnswerBytes = 65_536
     public static let maxCommand = 4096
 
@@ -165,7 +175,7 @@ public enum CommandSuggestion {
         var text = answer.replacingOccurrences(of: "\r\n", with: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         text = unfenced(text)
         guard !text.isEmpty else { return .failure(.empty) }
-        guard text.count <= maxCommand else { return .failure(.tooLong) }
+        guard text.utf8.count <= maxCommand else { return .failure(.tooLong) }
         if text.unicodeScalars.contains(where: { $0 != "\n" && ShellQuote.isControl($0) }) { return .failure(.controlCharacters) }
         let hidden = text.unicodeScalars.contains(where: WordQuote.isHidden)
         let shown = text.split(separator: "\n", omittingEmptySubsequences: false).map { CompletionRanking.visible(String($0)) }.joined(separator: "\n")
