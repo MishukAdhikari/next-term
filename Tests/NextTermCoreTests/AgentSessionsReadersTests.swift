@@ -360,8 +360,10 @@ import Testing
     }
 
     @Test func resumedIDsFromCommandLines() {
-        #expect(AgentKind.claude.resumedID(in: "claude --resume 0a1b") == "0a1b")
-        #expect(AgentKind.claude.resumedID(in: "cd ~/app && claude -r 'abc-def'") == "abc-def")
+        let uuid = "0a1b2c3d-0000-4000-8000-000000000001"
+        #expect(AgentKind.claude.resumedID(in: "claude --resume \(uuid)") == uuid)
+        #expect(AgentKind.claude.resumedID(in: "cd ~/app && claude -r '\(uuid)'") == uuid)
+        #expect(AgentKind.claude.resumedID(in: "claude --resume 0a1b") == nil) // not an id Claude Code makes: a search
         #expect(AgentKind.claude.resumedID(in: "claude --resume abc --fork-session") == nil) // a fork has an id of its own
         #expect(AgentKind.claude.resumedID(in: "claude --continue") == nil)
         #expect(AgentKind.claude.resumedID(in: "claude") == nil)
@@ -378,6 +380,18 @@ import Testing
         #expect(AgentKind.copilot.resumedID(in: "copilot --resume=1111") == "1111")
         #expect(AgentKind.claude.resumedID(in: "codex resume t1") == nil) // another agent's command
         #expect(AgentKind(program: "commandcode") == .commandCode && AgentKind(program: "cursor-agent") == .cursor && AgentKind(program: "vim") == nil)
+    }
+
+    @Test func aQuotedNameIsNotAnID() {
+        // A name with a space, quoted for the shell, is one word and names no session by id.
+        #expect(AgentKind.claude.resumedID(in: #"claude --resume "my feature""#) == nil)
+        #expect(AgentKind.copilot.resumedID(in: #"copilot --resume="name with spaces""#) == nil)
+        #expect(AgentKind.codex.resumedID(in: #"codex resume "my thread" -C /x"#) == nil)
+        // Quotes and escapes as the shell takes them.
+        #expect(AgentKind.words(#"a "b c" 'd e' f\ g "" h"#) == ["a", "b c", "d e", "f g", "", "h"])
+        #expect(AgentKind.codex.resumedID(in: #"codex resume -C "/Users/me/My App" t1"#) == "t1")
+        #expect(AgentKind.commandCode.resumedID(in: #"cmd --session "/h/My Folder/c2.jsonl""#) == "c2")
+        #expect(AgentKind.claude.resumedID(in: #"claude --resume """#) == nil)
     }
 
     @Test func openSessionsInTabs() throws {
@@ -421,7 +435,8 @@ import Testing
         for agent in AgentKind.allCases {
             #expect(session(agent, "id 1").resumeCommand().contains("'id 1'"), "\(agent)") // quoted for the shell
             // A tab running the command is seen to have that session open.
-            #expect(agent.resumedID(in: session(agent, "0a1b-2c3d").resumeCommand()) == "0a1b-2c3d", "\(agent)")
+            let id = "0a1b2c3d-0000-4000-8000-00000000000c"
+            #expect(agent.resumedID(in: session(agent, id).resumeCommand()) == id, "\(agent)")
             #expect(agent.resumedID(in: agent.continueCommand) == nil && !agent.shortName.isEmpty, "\(agent)")
         }
     }

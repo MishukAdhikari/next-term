@@ -8,6 +8,9 @@ import SQLite3
 /// tab (Go to Tab, "running"), whether it was resumed by id or started plainly; Continue Latest; More….
 /// Every store is made here by hand, and the commands are echoed, not run.
 extension SelfTest {
+    /// The Claude Code session a tab resumes by id (Claude Code's ids are UUIDs, and only one names a session).
+    static let openClaudeID = "5e55a0de-0000-4000-8000-0000000000a1"
+
     static func moreSessionChecks(proj: URL) async {
         guard let app = AppDelegate.shared else { return }
         let fm = FileManager.default
@@ -39,7 +42,7 @@ extension SelfTest {
         let claudeTab = holder.addTab(directory: project)
         opened.append(claudeTab)
         _ = await wait(20) { claudeTab.status.integrated }
-        claudeTab.view.send(txt: bin + "/claude --resume s-open\r")
+        claudeTab.view.send(txt: bin + "/claude --resume \(openClaudeID)\r")
         check(await wait(10) { claudeTab.status.running && claudeTab.status.kind == .agent }, "sessions: a tab runs `claude --resume <id>` (a stand-in)",
               claudeTab.status.command)
         let geminiTab = holder.addTab(directory: project)
@@ -97,9 +100,9 @@ extension SelfTest {
               "the sidebar's Agent Sessions group shows the newest five and More…", titles())
         check(titles() == "Plan the migration | Tidy the routes | Explain the cache | Speed up the build | Review the PR",
               "newest first, from every agent", titles())
-        check(group.items.first { $0.session.id == "s-open" }?.inTab == true, "a session resumed by id in a tab is running there")
+        check(group.items.first { $0.session.id == openClaudeID }?.inTab == true, "a session resumed by id in a tab is running there")
         check(group.items.first { $0.session.id == "g2-session" }?.inTab == true, "so is the session a plain `gemini` began after it started")
-        let row = sidebar.sessionRow("claude:s-open") ?? -1
+        let row = sidebar.sessionRow("claude:" + openClaudeID) ?? -1
         let cell = row >= 0 ? sidebar.outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? SessionRowCellView : nil
         check(cell?.badge.text == "running" && sidebar.outline.row(forItem: group.more) >= 0, "its row has a “running” badge, and More… is listed",
               "row \(row), badge \(cell?.badge.text ?? "none")")
@@ -123,7 +126,7 @@ extension SelfTest {
         opened += holder.tabs.filter { !before.contains($0.id) }
 
         before = Set(holder.tabs.map(\.id))
-        if let item = group.items.first(where: { $0.session.id == "s-open" }) {
+        if let item = group.items.first(where: { $0.session.id == openClaudeID }) {
             holder.sidebar(sidebar, session: item.session, perform: .resume)
         }
         check(await wait(5) { holder.activeTab === claudeTab } && Set(holder.tabs.map(\.id)) == before, "and on one open in a tab, goes to that tab")
@@ -141,7 +144,7 @@ extension SelfTest {
         func ago(_ minutes: Double) -> Date { Date().addingTimeInterval(-minutes * 60) }
         func stamp(_ minutes: Double) -> String { iso.string(from: ago(minutes)) }
         let claude = home + "/.claude/projects/" + AgentSessions.claudeFolderName(project)
-        writeLines([["type": "user", "cwd": project, "timestamp": stamp(10), "message": ["content": "Tidy the routes"]]], to: claude + "/s-open.jsonl")
+        writeLines([["type": "user", "cwd": project, "timestamp": stamp(10), "message": ["content": "Tidy the routes"]]], to: claude + "/\(openClaudeID).jsonl")
         writeLines([["type": "user", "cwd": project, "timestamp": stamp(60 * 24 * 5), "message": ["content": "Bump the version"]]], to: claude + "/s-old.jsonl")
 
         let registry = (try? JSONSerialization.data(withJSONObject: ["projects": [project: "proj"]])) ?? Data()
@@ -176,7 +179,7 @@ extension SelfTest {
         write("{\"createdAtMs\": \(created), \"updatedAtMs\": \(created), \"hasConversation\": true, \"title\": \"Fix the flaky test\"}",
               to: home + "/.cursor/chats/\(md5)/chat-1/meta.json")
         // Last written when they say they were: the readers go by a file's date too.
-        let dates: [(String, Double)] = [(claude + "/s-open.jsonl", 10), (claude + "/s-old.jsonl", 60 * 24 * 5),
+        let dates: [(String, Double)] = [(claude + "/\(openClaudeID).jsonl", 10), (claude + "/s-old.jsonl", 60 * 24 * 5),
                                          (home + "/.copilot/session-state/c1/workspace.yaml", 180)]
         for (path, minutes) in dates {
             try? FileManager.default.setAttributes([.modificationDate: ago(minutes)], ofItemAtPath: path)

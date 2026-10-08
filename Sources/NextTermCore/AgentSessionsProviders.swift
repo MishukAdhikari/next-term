@@ -106,22 +106,29 @@ extension AgentKind {
     }
 
     /// The session a command line resumes by id (`claude --resume <id>`, `codex resume <id>`,
-    /// `opencode -s <id>`), or nil: a new session, the latest one, a picker, or a fork (which gets an id
-    /// of its own).
+    /// `opencode -s <id>`), or nil: a new session, the latest one, a picker, a fork (which gets an id of
+    /// its own), or a name or search term (`claude --resume "my feature"`).
     public func resumedID(in commandLine: String) -> String? {
         for segment in CommandClassifier.segments(commandLine) {
-            let parsed = CommandClassifier.parse(segment)
-            guard AgentKind(program: parsed.name) == self else { continue }
-            let args = parsed.args.map(Self.unquoted)
-            let id = self == .codex ? Self.codexResumed(args) : resumedID(args)
-            guard let id, !id.isEmpty else { return nil }
+            let words = Self.words(segment)
+            // The program is the first word that is not an option, an assignment or a wrapper (`npx`).
+            guard let at = words.firstIndex(where: { !CommandClassifier.parse($0).name.isEmpty }),
+                  AgentKind(program: CommandClassifier.parse(words[at]).name) == self else { continue }
+            let args = Array(words[(at + 1)...])
+            guard var id = self == .codex ? Self.codexResumed(args) : resumedID(args) else { return nil }
             // Gemini CLI takes "latest" and a number (its list's order) too: neither names one session.
             if self == .gemini, id == "latest" || Int(id) != nil { return nil }
             // `command-code --session <path to the transcript>`.
-            if id.hasSuffix(".jsonl") { return String((id as NSString).lastPathComponent.dropLast(6)) }
-            return id
+            if id.hasSuffix(".jsonl") { id = String((id as NSString).lastPathComponent.dropLast(6)) }
+            return isID(id) ? id : nil
         }
         return nil
+    }
+
+    /// Shaped like a session id: no spaces, and for Claude Code (whose ids are all UUIDs) a UUID.
+    private func isID(_ value: String) -> Bool {
+        guard !value.isEmpty, !value.contains(where: \.isWhitespace) else { return false }
+        return self != .claude || UUID(uuidString: value) != nil
     }
 
     private func resumedID(_ args: [String]) -> String? {
@@ -153,9 +160,37 @@ extension AgentKind {
         return nil
     }
 
-    private static func unquoted(_ word: String) -> String {
-        guard word.count >= 2, let first = word.first, first == "'" || first == "\"", word.last == first else { return word }
-        return String(word.dropFirst().dropLast())
+    /// The words of a simple command as the shell splits them: a quoted part keeps its spaces and loses its
+    /// quotes, and outside single quotes a backslash keeps the next character as it is.
+    static func words(_ command: String) -> [String] {
+        var words: [String] = []
+        var word = ""
+        var inWord = false
+        var quote: Character?
+        var escaped = false
+        for ch in command {
+            if escaped {
+                word.append(ch)
+                escaped = false
+            } else if ch == "\\" && quote != "'" {
+                escaped = true
+                inWord = true
+            } else if let open = quote {
+                if ch == open { quote = nil } else { word.append(ch) }
+            } else if ch == "'" || ch == "\"" {
+                quote = ch
+                inWord = true
+            } else if ch == " " || ch == "\t" {
+                if inWord { words.append(word) }
+                word = ""
+                inWord = false
+            } else {
+                word.append(ch)
+                inWord = true
+            }
+        }
+        if inWord { words.append(word) }
+        return words
     }
 }
 
