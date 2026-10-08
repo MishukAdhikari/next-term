@@ -147,9 +147,10 @@ public struct BranchModel: Equatable, Sendable {
     }
 
     /// The remote branch a local one tracks, while it is there: nil without an upstream, when it was
-    /// deleted on the remote (gone), or when the upstream is another local branch.
+    /// deleted on the remote (gone), or when the upstream is another local branch ("feat/x" tracking a
+    /// local "feat/x" is not remote "feat"'s "x", so the remotes must have been read).
     public func upstream(of ref: BranchRef) -> (remote: String, branch: String)? {
-        guard !ref.isRemote, !ref.upstreamGone, let upstream = ref.upstream else { return nil }
+        guard !ref.isRemote, !ref.upstreamGone, let upstream = ref.upstream, !configuredRemotes.isEmpty else { return nil }
         return remoteAndBranch(of: upstream)
     }
 

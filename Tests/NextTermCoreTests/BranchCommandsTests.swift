@@ -18,6 +18,7 @@ import Testing
         func split(_ name: String) -> String? { m.remoteAndBranch(of: name).map { $0.remote + " " + $0.branch } }
         func upstream(_ ref: BranchRef) -> String? { m.upstream(of: ref).map { $0.remote + " " + $0.branch } }
         #expect(split("origin/feat/x") == "origin feat/x") // no list read: the first "/"
+        #expect(upstream(BranchRef(name: "y", isRemote: false, sha: "a", upstream: "feat/x")) == nil) // nor is a local "feat/x" taken for one
         m.configuredRemotes = ["origin", "my", "my/fork"]
         #expect(split("my/fork/trunk") == "my/fork trunk" && split("my/trunk") == "my trunk" && split("origin/feat/x") == "origin feat/x")
         #expect(split("nowhere/x") == nil && split("origin/") == nil)
