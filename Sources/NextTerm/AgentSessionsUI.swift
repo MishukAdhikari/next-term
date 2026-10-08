@@ -52,6 +52,11 @@ enum SessionStore {
         case .claude: return NSColor(hex: 0xD97757)
         case .codex: return NSColor(hex: 0x6EA4F7)
         case .commandCode: return NSColor(hex: 0xB48EF0)
+        case .gemini: return NSColor(hex: 0x4CC2A8)
+        case .qwen: return NSColor(hex: 0xE07AB8)
+        case .opencode: return NSColor(hex: 0xE2C35C)
+        case .cursor: return NSColor(hex: 0xA3AAB8)
+        case .copilot: return NSColor(hex: 0x5FC8E8)
         }
     }
 }

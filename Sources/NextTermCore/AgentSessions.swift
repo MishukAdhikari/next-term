@@ -2,19 +2,25 @@ import Foundation
 import SQLite3
 
 /// The conversations AI agents have kept for a project, so one can be picked up again in a click. Each
-/// agent stores its own (Claude Code, Codex, Command Code), in its own format: these readers take only
+/// agent stores its own (Claude Code, Codex, Command Code, Gemini CLI, Qwen Code, opencode, Cursor Agent,
+/// Copilot CLI), in its own format: these readers take only
 /// what the list needs (id, folder, title, times, branch, model) from the start and end of each file or
 /// from the agent's index, never a whole transcript, and never write anything. Titles are scrubbed of
 /// anything that looks like a secret before they are shown. One agent's store failing to read (its
 /// format changed) only leaves that agent out. Formats: claudedocs/research_next-term-agent-sessions.
 public enum AgentKind: String, CaseIterable, Sendable, Codable {
-    case claude, codex, commandCode
+    case claude, codex, commandCode, gemini, qwen, opencode, cursor, copilot
 
     public var name: String {
         switch self {
         case .claude: return "Claude Code"
         case .codex: return "Codex"
         case .commandCode: return "Command Code"
+        case .gemini: return "Gemini CLI"
+        case .qwen: return "Qwen Code"
+        case .opencode: return "opencode"
+        case .cursor: return "Cursor Agent"
+        case .copilot: return "Copilot CLI"
         }
     }
 }
@@ -32,7 +38,7 @@ public struct AgentSession: Sendable, Hashable, Identifiable {
     public let updatedAt: Date
     public let gitBranch: String?
     public let model: String?
-    /// An agent process has it open right now (Claude Code).
+    /// An agent process has it open right now (Claude Code, Copilot CLI).
     public let isRunning: Bool
 
     public var identity: String { agent.rawValue + ":" + id }
@@ -53,13 +59,9 @@ public struct AgentSession: Sendable, Hashable, Identifiable {
 
     /// The command line that picks it up again, typed into a shell in `cwd`. `fork`: a copy that leaves the
     /// original as it was (the safe choice while it is open elsewhere).
+    /// Agents that cannot fork (`agent.canFork`) resume it.
     public func resumeCommand(fork: Bool = false) -> String {
-        let quoted = ShellQuote.quote(id)
-        switch agent {
-        case .claude: return "claude --resume \(quoted)" + (fork ? " --fork-session" : "")
-        case .codex: return (fork ? "codex fork " : "codex resume ") + quoted + " -C " + ShellQuote.quote(cwd)
-        case .commandCode: return "command-code --resume \(quoted)" + (fork ? " --fork-session" : "")
-        }
+        agent.resumeCommand(id: id, cwd: cwd, fork: fork)
     }
 }
 
@@ -77,12 +79,7 @@ public enum AgentSessions {
         var listing = Listing(sessions: [], problems: [:])
         for agent in AgentKind.allCases {
             do {
-                let found: [AgentSession]
-                switch agent {
-                case .claude: found = try claude(folder, home: home, subfolders: subfolders)
-                case .codex: found = try codex(folder, home: home, subfolders: subfolders)
-                case .commandCode: found = try commandCode(folder, home: home, subfolders: subfolders)
-                }
+                let found = try agent.provider(home: home).sessions(in: folder, subfolders: subfolders, since: nil)
                 listing.sessions += found.sorted { $0.updatedAt > $1.updatedAt }.prefix(limit)
             } catch {
                 listing.problems[agent] = "\(error)"
