@@ -84,6 +84,48 @@ import Testing
         }
     }
 
+    /// With git: a worktree nested in the main checkout and a sibling one share its common git folder; a
+    /// separate clone has its own. Each checkout's branch, and a merge in progress in one of them only.
+    @Test func checkoutsOfOneRepositoryShareItsCommonFolder() throws {
+        guard let git = GitRunner.locateGit() else { return }
+        let base = canonicalPath(FileManager.default.temporaryDirectory.path) + "/nt-checkouts-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: base) }
+        let main = base + "/xCloud", nested = main + "/.claude/worktrees/pr-7050", sibling = base + "/xCloud-7027-dev", clone = base + "/copy"
+        try FileManager.default.createDirectory(atPath: main, withIntermediateDirectories: true)
+        func sh(_ args: String..., in dir: String = main) {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: git)
+            p.arguments = ["-C", dir, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"] + args
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            try? p.run()
+            p.waitUntilExit()
+        }
+        sh("init", "-q")
+        sh("commit", "-q", "--allow-empty", "-m", "One")
+        sh("worktree", "add", "-q", "-b", "fix/7027-sso", nested)
+        sh("worktree", "add", "-q", "--detach", sibling)
+        sh("clone", "-q", main, clone, in: base)
+        let repository = AgentLocation.repository(of: nested + "/.", git: git)
+        #expect(repository?.commonDir == main + "/.git" && repository?.root == nested)
+        #expect(AgentLocation.repository(of: sibling, git: git)?.commonDir == main + "/.git")
+        #expect(AgentLocation.repository(of: clone, git: git)?.commonDir == clone + "/.git") // another repository
+        let checkouts = AgentLocation.checkouts(in: nested, git: git) ?? []
+        func checkout(_ path: String) -> Checkout? { checkouts.first { $0.path == path } }
+        #expect(checkouts.count == 3 && checkouts.first?.path == main) // the main checkout first, then git's order
+        #expect(checkout(main)?.isMain == true && checkout(main)?.head == .branch("main"))
+        #expect(checkout(nested)?.isMain == false && checkout(nested)?.head == .branch("fix/7027-sso"))
+        if case .detached = checkout(sibling)?.head {} else { Issue.record("the sibling is detached: \(String(describing: checkout(sibling)?.head))") }
+        // A folder in the nested worktree is in it, not in the main checkout around it; the clone is in none.
+        #expect(AgentLocation.checkout(containing: nested + "/app", in: checkouts)?.path == nested)
+        #expect(AgentLocation.checkout(containing: clone, in: checkouts) == nil)
+        // A merge in the sibling is the sibling's own.
+        let admin = AgentLocation.gitDir(ofCheckout: sibling) ?? ""
+        try "x\n".write(toFile: admin + "/MERGE_HEAD", atomically: true, encoding: .utf8)
+        let busy = AgentLocation.checkouts(in: main, git: git) ?? []
+        #expect(busy.filter(\.busy).map(\.path) == [sibling])
+    }
+
     @Test func theNewerOfTheProcessFolderAndTheRecord() {
         let start = Date(timeIntervalSince1970: 1000)
         let moved = Date(timeIntervalSince1970: 1100)
