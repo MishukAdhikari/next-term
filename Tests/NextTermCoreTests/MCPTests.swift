@@ -20,6 +20,17 @@ import Testing
         #expect((newer?["result"] as? [String: Any])?["protocolVersion"] as? String == MCPServer.supportedVersions[0])
     }
 
+    /// A 2026-07-28 client first asks `server/discover` (Claude Code 2.1.295 does); "method not found" sends it
+    /// back to the 2025 handshake at once.
+    @Test func discoverIsNotFoundSoTheClientShakesHandsThe2025Way() {
+        let meta: [String: Any] = ["io.modelcontextprotocol/protocolVersion": "2026-07-28"]
+        let probe = answer(["jsonrpc": "2.0", "id": "server-discover-probe-1", "method": "server/discover", "params": ["_meta": meta]])
+        #expect((probe?["error"] as? [String: Any])?["code"] as? Int == -32601)
+        #expect(probe?["id"] as? String == "server-discover-probe-1")
+        let reply = answer(["jsonrpc": "2.0", "id": 0, "method": "initialize", "params": ["protocolVersion": "2025-11-25"]])
+        #expect((reply?["result"] as? [String: Any])?["protocolVersion"] as? String == "2025-11-25")
+    }
+
     @Test func toolsAreListedWithHonestAnnotations() throws {
         let reply = answer(["jsonrpc": "2.0", "id": "a", "method": "tools/list"])
         let tools = try #require((reply?["result"] as? [String: Any])?["tools"] as? [[String: Any]])
