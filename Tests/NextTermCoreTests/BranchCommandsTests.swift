@@ -4,7 +4,8 @@ import Testing
 
 @Suite struct BranchCommandsTests {
     @Test func commandsAsTyped() {
-        #expect(BranchCommand.deleteOnRemote(remote: "origin", branch: "feat/x") == ["push", "--porcelain", "origin", "--delete", "refs/heads/feat/x"])
+        #expect(BranchCommand.deleteOnRemote(remote: "origin", branch: "feat/x", sha: "abc")
+            == ["push", "--porcelain", "--force-with-lease=refs/heads/feat/x:abc", "origin", "--delete", "refs/heads/feat/x"])
         #expect(BranchCommand.restoreOnRemote(remote: "origin", branch: "feat/x", sha: "abc") == ["push", "--porcelain", "origin", "abc:refs/heads/feat/x"])
         #expect(BranchCommand.fetchInto(local: "feat/x", remote: "my/fork", upstream: "x") == ["fetch", "my/fork", "refs/heads/x:refs/heads/feat/x"])
         #expect(BranchCommand.checkoutAndUpdate("main") == [["switch", "main"], ["merge", "--ff-only", "--autostash", "@{upstream}"]])
@@ -128,9 +129,21 @@ import Testing
         if case .heldByWorktree? = GitOutput.classify(held.text) {} else { Issue.record("not held: \(held.text)") }
         work.sh(["switch", "-q", "main"])
 
-        // Delete on Remote, then its Undo.
-        let tip = origin.sh(["rev-parse", "feat/x"])
-        #expect(work.status(BranchCommand.deleteOnRemote(remote: "origin", branch: "feat/x")) == 0)
+        // Delete on Remote after someone pushed since your last fetch: refused as stale, nothing deleted.
+        work.sh(["fetch", "-q", "origin"])
+        let shown = work.sh(["rev-parse", "origin/feat/x"])
+        try theirs.write("b.txt", "theirs, after your fetch\n")
+        let pushedSince = theirs.commit("Theirs, after your fetch")
+        theirs.sh(["push", "-q", "origin", "feat/x"])
+        let stale = work.output(BranchCommand.deleteOnRemote(remote: "origin", branch: "feat/x", sha: shown))
+        #expect(stale.status != 0 && GitOutput.classify(stale.text) == .leaseFailed, "\(stale.text)")
+        #expect(origin.sh(["rev-parse", "feat/x"]) == pushedSince)
+
+        // Delete on Remote of what you saw, then its Undo.
+        work.sh(["fetch", "-q", "origin"])
+        let tip = work.sh(["rev-parse", "origin/feat/x"])
+        #expect(tip == pushedSince)
+        #expect(work.status(BranchCommand.deleteOnRemote(remote: "origin", branch: "feat/x", sha: tip)) == 0)
         #expect(origin.status(["rev-parse", "--verify", "--quiet", "refs/heads/feat/x"]) != 0)
         #expect(work.status(["rev-parse", "--verify", "--quiet", "refs/remotes/origin/feat/x"]) != 0) // the remote-tracking branch goes too
         #expect(work.status(BranchCommand.restoreOnRemote(remote: "origin", branch: "feat/x", sha: tip)) == 0)

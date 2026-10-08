@@ -330,8 +330,9 @@ struct GitActions {
     }
 
     /// Delete on Remote: asks first, naming the remote and the branch, and never for a shared branch (the
-    /// remote's default branch, main, master, release/*), as Force Push. Undo puts it back at its commit,
-    /// which is still here.
+    /// remote's default branch, main, master, release/*), as Force Push. It deletes only the commit it
+    /// showed: if someone pushed since your last fetch, nothing is deleted. Undo puts it back at that
+    /// commit, which is still here.
     func deleteOnRemote(_ ref: BranchRef) {
         guard ref.isRemote, let parts = model?.remoteAndBranch(of: ref.name) else { return NSSound.beep() }
         let remote = parts.remote, branch = parts.branch
@@ -339,7 +340,7 @@ struct GitActions {
             return GitPrompt.ask("Deleting \(branch) on \(remote) is off", info: "\(branch) is shared: delete branches of your own, not \(remote)’s default branch, main, master or release/*.",
                                  buttons: ["OK"], over: window) { _ in }
         }
-        var info = "This deletes the branch \(branch) on \(remote) for everyone who uses \(remote). It is at \(ref.shortSHA); Undo puts it back there for a while after."
+        var info = "This deletes the branch \(branch) on \(remote) for everyone who uses \(remote). It is at \(ref.shortSHA) as last fetched; if someone has pushed to it since, nothing is deleted. Undo puts it back there for a while after."
         let trackers = (model?.locals ?? []).filter { $0.upstream == ref.name }.map(\.name)
         if !trackers.isEmpty { info += "\n\nHere, \(trackers.map { "“\($0)”" }.joined(separator: ", ")) tracks it and stays as it is." }
         if model?.remoteHeads[remote] == nil {
@@ -347,8 +348,9 @@ struct GitActions {
         }
         GitPrompt.ask("Delete \(branch) on \(remote)?", info: info, buttons: ["Delete on \(remote)", "Cancel"], destructive: 0, style: .warning, over: window) { choice in
             guard choice == 0 else { return }
-            let args = BranchCommand.deleteOnRemote(remote: remote, branch: branch)
+            let args = BranchCommand.deleteOnRemote(remote: remote, branch: branch, sha: ref.sha)
             run("Delete \(ref.name)", [args], activity: .pushing) { result in
+                if result.failure == .leaseFailed { return deleteOnRemoteChanged(branch, on: remote) }
                 guard result.ok else { return failed("Could not delete \(branch) on \(remote)", result, retry: args) }
                 GitToast.show("Deleted \(ref.name) (was \(ref.shortSHA))", in: window, button: "Undo") {
                     run("Restore \(ref.name)", [BranchCommand.restoreOnRemote(remote: remote, branch: branch, sha: ref.sha)], activity: .pushing) { restored in
@@ -357,6 +359,13 @@ struct GitActions {
                 }
             }
         }
+    }
+
+    /// Delete on Remote's lease failed: the branch there isn't the commit you were shown.
+    private func deleteOnRemoteChanged(_ branch: String, on remote: String) {
+        GitPrompt.ask("\(branch) on \(remote) changed since you looked",
+                      info: "Someone pushed to it after your last fetch, so nothing was deleted. Fetch, look at the new commits, and try again.",
+                      buttons: ["Fetch", "OK"], over: window) { choice in if choice == 0 { fetch() } }
     }
 
     func updateProject() {

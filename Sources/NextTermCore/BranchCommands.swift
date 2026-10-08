@@ -5,9 +5,11 @@ import Foundation
 // (8.3 worktree row, 8.6, 8.8).
 
 public enum BranchCommand {
-    /// Delete on Remote: the branch by its full name, so a tag of the same name is never the one deleted.
-    public static func deleteOnRemote(remote: String, branch: String) -> [String] {
-        ["push", "--porcelain", remote, "--delete", "refs/heads/" + branch]
+    /// Delete on Remote: the branch by its full name, so a tag of the same name is never the one deleted,
+    /// leased on the commit you were shown (`sha`): if someone pushed to it since your last fetch, git
+    /// deletes nothing ("[rejected] (stale info)"), as force push only replaces what you saw.
+    public static func deleteOnRemote(remote: String, branch: String, sha: String) -> [String] {
+        ["push", "--porcelain", "--force-with-lease=refs/heads/" + branch + ":" + sha, remote, "--delete", "refs/heads/" + branch]
     }
 
     /// Its Undo, while the commit is still here: the branch made again on the remote at that commit.

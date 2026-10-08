@@ -108,7 +108,22 @@ extension SelfTest {
         run(repo, "switch", "-q", "main")
         GitToast.dismiss()
 
-        // Delete on Remote: off for the remote's default branch; asks first, names both; Undo puts it back.
+        /// Someone pushed to the branch after the last fetch here: nothing is deleted, and Fetch brings the push in.
+        func deleteOnRemoteAfterAPush(_ actions: GitActions, _ seen: BranchRef) async {
+            let pushedSince = theirsPush("feat/remote-x", "theirs on remote-x")
+            actions.deleteOnRemote(seen)
+            _ = await wait(5) { sheetText().contains("Delete feat/remote-x on origin?") }
+            _ = await press("Delete on origin")
+            check(await wait(10) { sheetText().contains("feat/remote-x on origin changed since you looked") },
+                  "Delete on Remote deletes only the commit it showed: after a push since the last fetch, it asks you to fetch", sheetText())
+            check(run(remote, "rev-parse", "feat/remote-x") == pushedSince, "and the commit pushed since stays on the remote")
+            _ = await press("Fetch")
+            check(await wait(10) { run(repo, "rev-parse", "origin/feat/remote-x") == pushedSince }, "Fetch brings that commit in")
+            GitToast.dismiss()
+        }
+
+        // Delete on Remote: off for the remote's default branch; asks first, names both; deletes only the
+        // commit it showed; Undo puts it back.
         c.showBranches(at: repo, query: "")
         _ = await wait(15) { !popup.isReading }
         if !popup.isOpen("remote:origin") { popup.toggleFolder("remote:origin") }
@@ -117,10 +132,15 @@ extension SelfTest {
               menuTitles("remote main").joined(separator: " | "))
         popup.close()
         if let actions = await actions(), let model = c.branchPopup.model,
-           let gone = model.remotes.first(where: { $0.name == "origin/feat/remote-x" }), let main = model.remotes.first(where: { $0.name == "origin/main" }) {
+           let seen = model.remotes.first(where: { $0.name == "origin/feat/remote-x" }), let main = model.remotes.first(where: { $0.name == "origin/main" }) {
             actions.deleteOnRemote(main)
             check(await wait(5) { sheetText().contains("Deleting main on origin is off") }, "deleting the remote's default branch is refused", sheetText())
             _ = await press("OK")
+            await deleteOnRemoteAfterAPush(actions, seen)
+        } else {
+            check(false, "the remote's branches are read")
+        }
+        if let actions = await actions(), let gone = c.branchPopup.model?.remotes.first(where: { $0.name == "origin/feat/remote-x" }) {
             actions.deleteOnRemote(gone)
             let asked = await wait(5) { sheetText().contains("Delete feat/remote-x on origin?") && sheetText().contains("feat/remote-x on origin for everyone") }
             check(asked, "Delete on Remote asks first, naming the remote and the branch", sheetText())
