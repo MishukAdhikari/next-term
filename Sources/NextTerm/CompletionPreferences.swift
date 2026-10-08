@@ -113,3 +113,28 @@ extension CompletionPreferences {
         mode != .off && answer(for: .autocomplete) == .nextTerm
     }
 }
+
+/// Suggest a Command (Settings › Terminal): off by default; on, it asks an agent of the user's own (by its adapter's
+/// id) or Apple's on-device model, and only when the user submits a sentence. Next Term has no AI of its own: this
+/// only says whose to ask.
+extension CompletionPreferences {
+    static let suggestionKey = "commandSuggestion"
+    static let onDevice = "on-device"
+
+    /// nil: off. An unknown stored value is off too.
+    static var suggestion: String? {
+        get {
+            guard let value = UserDefaults.standard.string(forKey: suggestionKey) else { return nil }
+            return value == onDevice || CommandSuggestion.adapter(value) != nil ? value : nil
+        }
+        set {
+            if let newValue { UserDefaults.standard.set(newValue, forKey: suggestionKey) } else { UserDefaults.standard.removeObject(forKey: suggestionKey) }
+            NotificationCenter.default.post(name: changed, object: nil)
+        }
+    }
+
+    /// Who answers, for a person: "Claude Code", "Apple’s on-device model".
+    static func suggestionName(_ choice: String) -> String {
+        choice == onDevice ? "Apple’s on-device model" : CommandSuggestion.adapter(choice)?.name ?? choice
+    }
+}

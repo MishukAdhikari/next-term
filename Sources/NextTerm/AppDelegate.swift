@@ -1084,6 +1084,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         goToFileAlias.identifier = KeyboardShortcuts.goToFileAlias
         item(shell, "Resume Agent Session…", #selector(TerminalWindowController.resumeSession(_:)), "o", [.command, .option])
         item(shell, "Open Served URL", #selector(TerminalWindowController.openServedURL(_:)), "")
+        item(shell, "Suggest a Command…", #selector(CommandSuggestionController.suggestCommand(_:)), "k", [.command, .control],
+             target: CommandSuggestionController.shared)
         let recentMenu = NSMenu(title: "Open Recent")
         recentMenu.delegate = self
         shell.addItem(withTitle: "Open Recent", action: nil, keyEquivalent: "").submenu = recentMenu

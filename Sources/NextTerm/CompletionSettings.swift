@@ -44,6 +44,7 @@ final class CompletionSettingsView: NSStackView {
         indented.edgeInsets = NSEdgeInsets(top: 0, left: 120, bottom: 0, right: 0)
         addArrangedSubview(line)
         addArrangedSubview(indented)
+        addArrangedSubview(CommandSuggestionSettingsView())
         NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: CompletionPreferences.changed, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: RemoteCompletionConsent.changed, object: nil)
         refresh()
@@ -125,3 +126,91 @@ extension CompletionPreferences {
         NotificationCenter.default.post(name: changed, object: nil)
     }
 }
+
+/// Settings › Terminal › Suggest a command: Off (the default), an agent of the user's that Next Term can run with no
+/// tools (CommandSuggestion.adapters, those found on the login shell's PATH), or Apple's on-device model on macOS 26.
+/// Next Term has no AI of its own; this only says whose to ask, and only when the user asks.
+final class CommandSuggestionSettingsView: NSStackView {
+    private let choice = NSPopUpButton()
+    private let note = NSTextField(wrappingLabelWithString: "")
+
+    init() {
+        super.init(frame: .zero)
+        orientation = .vertical
+        alignment = .leading
+        spacing = 6
+        let label = NSTextField(labelWithString: "Suggest a command:")
+        label.alignment = .right
+        label.widthAnchor.constraint(equalToConstant: 110).isActive = true
+        label.lineBreakMode = .byTruncatingTail
+        choice.target = self
+        choice.action = #selector(chosen)
+        choice.setAccessibilityLabel("Suggest a command")
+        let line = NSStackView(views: [label, choice])
+        line.spacing = 10
+        note.textColor = .secondaryLabelColor
+        note.font = .systemFont(ofSize: 11)
+        note.preferredMaxLayoutWidth = 330
+        let indented = NSStackView(views: [note])
+        indented.edgeInsets = NSEdgeInsets(top: 0, left: 120, bottom: 0, right: 0)
+        addArrangedSubview(line)
+        addArrangedSubview(indented)
+        NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: CompletionPreferences.changed, object: nil)
+        refresh()
+        // The agents are looked for on the login shell's PATH, read once per launch off the main thread.
+        if !LoginShell.isProbed {
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                _ = LoginShell.programs
+                DispatchQueue.main.async { self?.refresh() }
+            }
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// The choices: Off, the agents found (all of them until the login shell's PATH is read), the on-device model.
+    static var offered: [(id: String?, title: String)] {
+        var items: [(id: String?, title: String)] = [(nil, "Off")]
+        for adapter in CommandSuggestion.adapters where !LoginShell.isProbed || LoginShell.programs[adapter.program] != nil
+            || CompletionPreferences.suggestion == adapter.id {
+            items.append((adapter.id, adapter.name))
+        }
+        if OnDeviceSuggestion.isOffered || CompletionPreferences.suggestion == CompletionPreferences.onDevice {
+            items.append((CompletionPreferences.onDevice, "Apple’s On-Device Model"))
+        }
+        return items
+    }
+
+    @objc func refresh() {
+        choice.removeAllItems()
+        let current = CompletionPreferences.suggestion
+        for item in Self.offered {
+            choice.addItem(withTitle: item.title)
+            choice.lastItem?.representedObject = item.id
+            if item.id == current { choice.select(choice.lastItem) }
+        }
+        note.stringValue = Self.note(current)
+    }
+
+    static func note(_ current: String?) -> String {
+        guard let current else {
+            return "Off: nothing is ever sent. On, File › Suggest a Command… turns a sentence into one command, put on the line and never run."
+        }
+        if current == CompletionPreferences.onDevice {
+            let model = "Apple’s on-device model answers File › Suggest a Command…; nothing leaves this Mac. The command goes on the line and never runs."
+            return OnDeviceSuggestion.unavailable.map { "\($0) " + model } ?? model
+        }
+        let name = CompletionPreferences.suggestionName(current)
+        return "File › Suggest a Command… asks \(name) only when you submit: your words, the folder, the shell and the last command (secrets masked), and recent output only if you include it. It runs with no tools and no MCP, in an empty folder. The command goes on the line and never runs."
+    }
+
+    @objc private func chosen() {
+        CompletionPreferences.suggestion = choice.selectedItem?.representedObject as? String
+        note.stringValue = Self.note(CompletionPreferences.suggestion)
+    }
+
+    /// For the self-test.
+    var titles: [String] { choice.itemTitles }
+    var noteText: String { note.stringValue }
+}
+
