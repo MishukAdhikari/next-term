@@ -426,7 +426,8 @@ struct GitActions {
             popup.reload {
                 let fresh = popup.model?.local(ref.name) ?? ref
                 if result.ok { return toast(fresh.sha == ref.sha ? "\(ref.name) is up to date with \(tracked)" : "Updated \(ref.name) from \(tracked)") }
-                guard result.failure == .pushRejected else { return failed("Could not update “\(ref.name)”", result, retry: args) }
+                let notForward = result.failure == .pushRejected && result.output.contains("non-fast-forward")
+                guard notForward else { return failed("Could not update “\(ref.name)”", result, retry: args) }
                 // Refused as not forward: nothing new there (only yours to push), or both changed.
                 if fresh.behind == 0 {
                     return toast("\(ref.name) has nothing new from \(tracked)" + (fresh.ahead > 0 ? "; \(fresh.ahead) of its commits aren’t pushed" : ""))
