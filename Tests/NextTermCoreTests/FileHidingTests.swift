@@ -57,6 +57,13 @@ import Testing
     @Test func theSettingsText() {
         #expect(FileHiding.patterns(from: " node_modules, *.log\n/build ,, *.log ") == ["node_modules", "*.log", "/build"])
         #expect(FileHiding.text(of: ["a", "/b"]) == "a, /b")
+        // A comma inside braces stays in its pattern, so an imported one reads back the same after an edit.
+        let imported = ["*.{js,map}", "dist", "{a,b{c,d}}.txt"]
+        #expect(FileHiding.patterns(from: FileHiding.text(of: imported)) == imported)
+        #expect(FileHiding.patterns(from: "*.{pyc,pyo}, node_modules") == ["*.{pyc,pyo}", "node_modules"])
+        // A brace that never closes is itself, and a comma after it still ends the pattern.
+        #expect(FileHiding.patterns(from: "a{b, c}d, e") == ["a{b, c}d", "e"])
+        #expect(FileHiding.patterns(from: "a{b, c\nd}") == ["a{b", "c", "d}"])
     }
 
     @Test func globsFromOtherApps() {

@@ -24,12 +24,44 @@ public struct FileHiding: Sendable {
 
     public var isEmpty: Bool { patterns.isEmpty }
 
-    /// A setting's text as patterns: one per line or between commas, blanks dropped, each once.
+    /// A setting's text as patterns: one per line or between commas, blanks dropped, each once. A comma between
+    /// braces that close ("*.{js,map}") is part of its pattern.
     public static func patterns(from text: String) -> [String] {
+        var pieces: [String] = []
+        for line in text.split(whereSeparator: \.isNewline) {
+            let characters = Array(line)
+            let paired = pairedBraces(characters)
+            var depth = 0
+            var current = ""
+            for (index, character) in characters.enumerated() {
+                if character == ",", depth == 0 {
+                    pieces.append(current)
+                    current = ""
+                    continue
+                }
+                if paired.contains(index) { depth += character == "{" ? 1 : -1 }
+                current.append(character)
+            }
+            pieces.append(current)
+        }
         var seen = Set<String>()
-        return text.split(whereSeparator: { $0 == "," || $0.isNewline })
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty && seen.insert($0).inserted }
+        return pieces.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    /// Where the braces that close are, "{" and "}" both (an unclosed "{" is itself, so a comma after it still
+    /// ends a pattern).
+    static func pairedBraces(_ characters: [Character]) -> Set<Int> {
+        var open: [Int] = []
+        var paired = Set<Int>()
+        for (index, character) in characters.enumerated() {
+            if character == "{" {
+                open.append(index)
+            } else if character == "}", let start = open.popLast() {
+                paired.insert(start)
+                paired.insert(index)
+            }
+        }
+        return paired
     }
 
     /// The patterns as the setting shows them.
