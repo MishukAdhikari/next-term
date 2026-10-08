@@ -120,17 +120,15 @@ extension SelfTest {
     }
 
     private static func hiddenFileChecks(_ c: TerminalWindowController, app: AppDelegate) async {
-        guard let root = c.sidebar.root else { return check(false, "hidden files: the sidebar shows a folder") }
-        let hidden = root.url.appendingPathComponent("scratch.hide-me")
-        try? Data().write(to: hidden)
-        defer { try? FileManager.default.removeItem(at: hidden) }
-        func shown() -> Bool { root.children?.contains { $0.name == "scratch.hide-me" } == true }
-        c.sidebar.reloadAll()
-        check(await wait(5) { shown() }, "a file shows in the sidebar before it is hidden")
-        app.setHiddenFilePatterns(FileHiding.patterns(from: "*.hide-me, /no-such-folder"))
-        check(await wait(5) { !shown() }, "Settings › Editor › Hide leaves it out of the sidebar")
+        // A file the sidebar shows at the top of its folder (nothing is written into the project).
+        guard let root = c.sidebar.root, let name = root.children?.first(where: { !$0.isDirectory })?.name else {
+            return check(false, "hidden files: the sidebar shows a file to hide")
+        }
+        func shown() -> Bool { root.children?.contains { $0.name == name } == true }
+        app.setHiddenFilePatterns(FileHiding.patterns(from: "/\(name), /no-such-folder"))
+        check(await wait(5) { !shown() }, "Settings › Editor › Hide leaves a file out of the sidebar", name)
         app.setHiddenFilePatterns([])
-        check(await wait(5) { shown() }, "and it shows again when the pattern goes")
+        check(await wait(5) { shown() }, "and it shows again when the pattern goes", name)
     }
 
     /// An import of the new settings, then Undo Import: every value as it was, the open terminals too.
