@@ -297,8 +297,11 @@ final class AgentPlaces {
     /// folder is in one of its checkouts.
     private func startRepository(_ probe: Probe, folder: String, known: [String: [Checkout]], git: String, at now: Date) -> String? {
         if let start = startRepositories[probe.key], start.startedAt == probe.startedAt { return start.repository }
-        let found = known.first { AgentLocation.checkout(containing: folder, in: $0.value) != nil }?.key
-            ?? repository(of: folder, git: git, at: now)?.commonDir
+        // The repository whose checkout holding the folder is the deepest (a clone kept inside another's folder).
+        let holding = known.compactMap { repository, checkouts in
+            AgentLocation.checkout(containing: folder, in: checkouts).map { (repository: repository, depth: $0.path.count) }
+        }
+        let found = holding.max { $0.depth < $1.depth }?.repository ?? repository(of: folder, git: git, at: now)?.commonDir
         startRepositories[probe.key] = (probe.startedAt, found)
         return found
     }
