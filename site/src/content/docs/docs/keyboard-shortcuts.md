@@ -155,6 +155,10 @@ These are fixed.
 | Terminal | Copy, Paste, Clear, Find, Split, Send Selection to Agent; open or reveal a link or path | Right-click |
 | Terminal | Open a path such as `src/app.ts:42:7`, or a link | <kbd>⌘</kbd>-click |
 | Terminal | Suspend the running program | <kbd>⌃Z</kbd> |
+| Terminal | [Tab completion](/docs/tab-completion/): list what completes the word, at a zsh prompt | <kbd>⇥</kbd> |
+| Tab completion list | Choose a row | <kbd>↓</kbd> <kbd>↑</kbd>, <kbd>⌃N</kbd> <kbd>⌃P</kbd>, <kbd>⇧⇥</kbd> |
+| Tab completion list | Put the chosen name on the line | <kbd>↩︎</kbd> or <kbd>⇥</kbd> |
+| Tab completion list | Close it, sending the shell nothing | <kbd>⎋</kbd> |
 | Editor | Indent or outdent the selected lines | <kbd>⇥</kbd>, <kbd>⇧⇥</kbd> |
 | Sidebar | Rename | <kbd>↩︎</kbd> |
 | Sidebar | Open | <kbd>⌘↓</kbd>, or double-click (one click, with **Open files with a single click** on) |

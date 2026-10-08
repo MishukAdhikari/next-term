@@ -29,6 +29,7 @@ More about the editor in [Code editor](/docs/editor/), and about the agent link 
 |---|---|---|
 | **Font** | Next Term default | The terminal’s font, from the monospaced fonts installed on this Mac. Its size is the editor’s. |
 | **Colours** | Next Term default | Your own terminal colours: the 16 ANSI colours, text, background, cursor and selection, shown as a row of swatches. An import brings them over; colours it doesn’t set keep Next Term’s. **Next Term default** goes back, and your colours stay in the menu to choose again. |
+| **Tab completion** | Auto | <kbd>⇥</kbd> at a zsh prompt opens Next Term’s list: zsh’s own completions, or folders and files. **Off** leaves <kbd>⇥</kbd> to the shell, at once in every tab; turning it on again reaches the tabs you open from then on. See [Tab completion](/docs/tab-completion/). |
 
 ## Notifications
 
