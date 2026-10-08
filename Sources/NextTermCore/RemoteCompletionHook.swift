@@ -15,7 +15,7 @@ public enum RemoteCompletionHook {
     public static let version = 1
     /// The folder on the server, as one sh word.
     static let folder = "\"$HOME/.cache/next-term/completion\""
-    /// How long a Tab waits for Next Term's answer until the first `w` config says the round trip.
+    /// How long a Tab waits for Next Term's answer when its key doesn't say (Next Term's Tab keys to a server do).
     static let firstWait = "0.6"
 
     /// `.zshenv` for the hooked zsh, in the hook's `zsh/` folder.

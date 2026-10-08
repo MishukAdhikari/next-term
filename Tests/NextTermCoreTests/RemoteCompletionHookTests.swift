@@ -113,10 +113,11 @@ import Testing
         let hook = RemoteCompletionHook.zshenv
         #expect(!hook.contains("@NT_") && hook.contains("__nextterm_cwait=0.6"))
         for mark in ["cmd", "end", "cwd", "jobs"] { #expect(!hook.contains(";\(mark);"), "\(mark)") }
-        // The wait key: 150 to 600 ms.
-        let wait = CompletionProtocol.wait(seconds: 0.05)
-        #expect(String(decoding: wait, as: UTF8.self).hasSuffix("000004w150"))
-        #expect(String(decoding: CompletionProtocol.wait(seconds: 2), as: UTF8.self).hasSuffix("w600"))
+        // The wait rides on a server's Tab key, 150 to 600 ms; a Tab on this Mac carries none.
+        let wait = CompletionProtocol.tabKey(id: 7, wait: 0.05)
+        #expect(String(decoding: wait, as: UTF8.self).hasSuffix("t000007000004w150"))
+        #expect(String(decoding: CompletionProtocol.tabKey(id: 8, wait: 2), as: UTF8.self).hasSuffix("w600"))
+        #expect(CompletionProtocol.tabKey(id: 9) == CompletionProtocol.frame(.tab, id: 9))
         #expect(ZshCompletionScript.script.contains("w<150-600>") && ZshCompletionScript.script.contains("Ptmux;"))
         #expect(RemoteCompletionHook.parse("noise\n\(RemoteShell.marker)\nshell\tbash\n") == .otherShell("bash"))
         #expect(RemoteCompletionHook.parse("no marker") == nil)

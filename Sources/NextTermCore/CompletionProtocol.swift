@@ -320,7 +320,7 @@ public enum CompletionProtocol {
     // MARK: app to shell
 
     public enum Key: UInt8, Sendable {
-        /// A real Tab.
+        /// A real Tab. On a server, with how long its hook waits for an answer (w<ms>, 150 to 600).
         case tab = 0x74 // t
         /// The answer to `tab`: native, open, or insert with the new word (Next Term's own engine only).
         case answer = 0x61 // a
@@ -328,8 +328,7 @@ public enum CompletionProtocol {
         case take = 0x6B // k
         /// zsh's own list can't be shown: zsh runs its own Tab.
         case native = 0x6E // n
-        /// A plugin choice changed: zsh-autocomplete's list off (q1) or on (q0) in this shell. On a server: how long
-        /// a Tab waits for an answer (w<ms>, 150 to 600).
+        /// A plugin choice changed: zsh-autocomplete's list off (q1) or on (q0) in this shell.
         case config = 0x63 // c
     }
 
@@ -384,10 +383,13 @@ public enum CompletionProtocol {
     public static func close(id: Int) -> [UInt8] { frame(.take, id: id, fields: ["c"]) }
     /// Suggest a Command's answer: the whole line, replaced (one line or several). It never runs.
     public static func takeLine(_ line: String) -> [UInt8] { frame(.take, id: 0, fields: ["l", line]) }
-    /// A server's round trip: how long its hook waits for an answer to a `tab` report (150 to 600 ms).
-    public static func wait(seconds: Double) -> [UInt8] {
-        let milliseconds = min(600, max(150, Int((seconds * 1000).rounded())))
-        return frame(.config, id: 0, fields: ["w\(milliseconds)"])
+    /// A real Tab, under `id`. `wait` (a server's): how long its hook waits for the answer to its `tab` report,
+    /// 150 to 600 ms. It rides on the Tab, never as a key of its own sent at each prompt: a program started by a
+    /// Return typed ahead of that key would read it.
+    public static func tabKey(id: Int, wait: Double? = nil) -> [UInt8] {
+        guard let wait else { return frame(.tab, id: id) }
+        let milliseconds = min(600, max(150, Int((wait * 1000).rounded())))
+        return frame(.tab, id: id, fields: ["w\(milliseconds)"])
     }
 }
 

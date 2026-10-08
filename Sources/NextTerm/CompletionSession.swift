@@ -173,7 +173,7 @@ final class CompletionSession {
         heldPaste = inPaste
         list = nil
         assembler.reset()
-        write(CompletionProtocol.frame(.tab, id: id))
+        write(CompletionProtocol.tabKey(id: id, wait: serverWait))
         let hold = DispatchWorkItem { [weak self] in self?.holdExpired(id) }
         holdTimer?.cancel()
         holdTimer = hold
@@ -274,7 +274,6 @@ final class CompletionSession {
                 if let id = state.openID, state.path != .screen { write(CompletionProtocol.close(id: id)) }
                 state.armed(arm)
                 listClosed()
-                syncWait()
             }
             syncQuiet()
         case .tab(let report):
@@ -506,22 +505,17 @@ extension CompletionSession {
         if let host = tab?.remote?.host { RemoteCompletionConsent.verify(host) }
     }
 
-    /// How long a Tab's answer may take: 120 ms on this Mac; on a hooked server, a little less than its hook waits
-    /// (the `w` config: two round trips and some, 150 to 600 ms).
+    /// How long a Tab's answer may take: 120 ms on this Mac; on a hooked server, a little less than its hook waits.
     fileprivate var answerWithin: TimeInterval {
         guard let wait = serverWait else { return CompletionProtocol.answerWithin }
         return wait - 0.05
     }
 
-    private var serverWait: TimeInterval? {
+    /// How long a hooked server's hook waits for the answer to a Tab, said in the Tab's own key: two listings'
+    /// time on its connection and some, 150 to 600 ms. nil on this Mac.
+    fileprivate var serverWait: TimeInterval? {
         guard let tab, tab.remote != nil else { return nil }
         return min(0.6, max(0.15, 2 * RemoteCompletion.shared.roundTrip(for: tab) + 0.12))
-    }
-
-    /// A hooked server's shell at a new line: how long its Tab waits for an answer, from the connection's round trip.
-    fileprivate func syncWait() {
-        guard let wait = serverWait, state.isArmed else { return }
-        write(CompletionProtocol.wait(seconds: wait))
     }
 
     /// A hooked server's `tab` report: its folder listed on the server, over the tab's connection (one listing at a

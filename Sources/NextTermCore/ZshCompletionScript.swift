@@ -116,16 +116,11 @@ __nextterm_carm() {
   return 0
 }
 
-# The `config` key: on a server, how long Tab waits for an answer (w<ms>); zsh-autocomplete's list as you type
-# off (q1) or back on (q0), in this shell only, by taking its redraw hook out or putting it back. No file is
-# touched. A config that is already in effect does nothing; one that changed something says so with a new `arm`.
+# The `config` key: zsh-autocomplete's list as you type off (q1) or back on (q0), in this shell only, by
+# taking its redraw hook out or putting it back. No file is touched. A config that is already in effect does
+# nothing; one that changed something says so with a new `arm`.
 __nextterm_cconfig() {
   emulate -L zsh
-  # w<ms>: how long a Tab waits for Next Term's answer, from a server's round trip (150 to 600 ms).
-  if [[ ${__nextterm_cf[1]-} == w<150-600> ]]; then
-    typeset -gF __nextterm_cwait=$(( ${__nextterm_cf[1]#w} / 1000.0 ))
-    return 0
-  fi
   (( ${+functions[.autocomplete:async:complete]} )) || return 0
   local -a hooks
   zstyle -g hooks zle-line-pre-redraw widgets
@@ -215,10 +210,14 @@ __nextterm_cplain() {
   return 1
 }
 
-# A real Tab, sent as the private key with Next Term's id.
+# A real Tab, sent as the private key with Next Term's id. On a server it says how long to wait for Next Term's
+# answer (w<ms>, from the connection's round trip, 150 to 600 ms).
 __nextterm_ctab() {
   emulate -L zsh -o extendedglob
   local id=$1
+  if [[ ${__nextterm_cf[1]-} == w<150-600> ]]; then
+    typeset -gF __nextterm_cwait=$(( ${__nextterm_cf[1]#w} / 1000.0 ))
+  fi
   __nextterm_cclose
   if [[ $KEYMAP != (main|emacs|viins) || $CONTEXT != (start|cont) ]] || __nextterm_cplain; then
     __nextterm_cdone $id native
