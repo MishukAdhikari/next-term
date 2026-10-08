@@ -88,6 +88,27 @@ import Testing
         #expect(try verdict(["cd", "Rsrc"]) == .open)             // one fuzzy match: shown, not put in
     }
 
+    /// R3 counts every match, those with the letters only in order too (R6, AE1): one name that starts with the word
+    /// goes in only when nothing else matches.
+    @Test func aNameBesideOneWithTheLettersInOrderIsListed() throws {
+        func verdict(_ words: [String], _ names: [String], exact: Bool = true) throws -> CompletionVerdict {
+            let word = words.last ?? ""
+            let report = CompletionProtocol.TabReport(id: 1, directory: "/work", lbuffer: "", words: words, word: word, unquoted: word)
+            let context = try #require(CompletionContext.analyze(report))
+            let listing = PathCompletion.Listing(folder: "/work", entries: names.map { .init($0, .folder) })
+            let prepared = PathCompletion.Prepared(listing, foldersOnly: context.kind == .folders, hidden: false)
+            var result = prepared.candidates(context.typed, canEnter: { _ in true })
+            result.exact = exact
+            return CompletionVerdict.of(result, context: context)
+        }
+        #expect(try verdict(["cd", "So"], ["Sources", "Resources"]) == .open)   // AE1: Sources, then Resources
+        #expect(try verdict(["cd", "Te"], ["Tests", "Themes"]) == .open)        // Themes has T…e
+        #expect(try verdict(["cd", "Pu"], ["Public", "Pictures"]) == .open)     // Pictures has P…u
+        #expect(try verdict(["cd", "Te"], ["Tests", "Sources"]) == .insert("Tests/"))
+        // A folder too big to read whole may hold another.
+        #expect(try verdict(["cd", "Te"], ["Tests", "Sources"], exact: false) == .open)
+    }
+
     @Test func zshRowsAllForTheListedWordThenNarrowed() throws {
         let matches = ["main", "feature/x", "HEAD", "6304be0"].enumerated().map { index, text in
             CompletionProtocol.Match(text: text, description: text == "6304be0" ? "[HEAD] first" : "", kind: .other, index: index + 1)

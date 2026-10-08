@@ -179,4 +179,16 @@ import Testing
         // A private key is never what a server's row sends.
         #expect(several.take(0) == nil)
     }
+
+    @Test func aServersNameBesideOneWithTheLettersInOrderIsListed() throws {
+        // `cd /va` on a Mac: var, and private (v…a) after it, as on this Mac (AE1); var alone goes in.
+        let disk = PathCompletion.Disk(follow: { _ in .missing }, canEnter: { _ in true })
+        let va = try #require(ScreenWord.read("$ cd /va"))
+        let root = PathCompletion.Listing(folder: "/", entries: [.init("var", .folder), .init("private", .folder), .init("Volumes", .folder)])
+        let both = CompletionList(id: 1, screen: va, listing: root, disk: disk, shell: .bash)
+        #expect(both.rows.map(\.text) == ["var", "private"] && both.screenVerdict == .open)
+        let alone = PathCompletion.Listing(folder: "/", entries: [.init("var", .folder), .init("Volumes", .folder)])
+        let one = CompletionList(id: 2, screen: va, listing: alone, disk: disk, shell: .bash)
+        #expect(one.screenVerdict == .insert && one.screenInsertion(0, at: va).map { "\($0.erase) \($0.text)" } == "0 r/")
+    }
 }

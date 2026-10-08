@@ -130,8 +130,9 @@ public final class CompletionList: @unchecked Sendable {
     /// The answer to a Tab on a server's screen: no candidate is the shell's own Tab, one that starts with the
     /// name typed goes in at once (screenInsertion of row 0), anything else opens the list.
     public var screenVerdict: CompletionState.Verdict {
-        guard case let .screen(screen) = source, let first = screen.candidates.first else { return .native }
-        if total == 1, first.prefix, screenInsertion(0, at: screen.word) != nil { return .insert }
+        guard case let .screen(screen) = source, !screen.candidates.isEmpty else { return .native }
+        let shown = PathCompletion.Result(candidates: screen.candidates, total: total, exact: exact)
+        if shown.single != nil, screenInsertion(0, at: screen.word) != nil { return .insert }
         return .open
     }
 
@@ -220,18 +221,16 @@ public final class CompletionList: @unchecked Sendable {
 }
 
 /// Next Term's own engine's answer to a `tab` report: no candidate is zsh's own Tab, one that starts with the
-/// name typed goes in at once, anything else opens the list.
+/// name typed goes in at once (PathCompletion.Result.single), anything else opens the list.
 public enum CompletionVerdict: Equatable, Sendable {
     case native
     case insert(String)
     case open
 
     public static func of(_ result: PathCompletion.Result, context: CompletionContext) -> CompletionVerdict {
-        guard let first = result.candidates.first else { return .native }
-        if result.total == 1, first.prefix {
-            guard let word = context.replacement(name: first.name, folder: first.isFolder) else { return .native }
-            return .insert(word)
-        }
-        return .open
+        guard !result.candidates.isEmpty else { return .native }
+        guard let only = result.single else { return .open }
+        guard let word = context.replacement(name: only.name, folder: only.isFolder) else { return .native }
+        return .insert(word)
     }
 }

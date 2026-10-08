@@ -18,7 +18,7 @@ Your shell keeps its own line editor: your zsh config, theme and key bindings wo
   Everything else (a command name, an option, `git checkout `) gets zsh’s own <kbd>⇥</kbd>.
 - **Hidden files and folders** only when the name you typed starts with a dot.
 
-Names that start with what you typed come first, in any case and either Unicode form, shortest first; then names that have your letters in order anywhere. One match goes straight onto the line with no list. No match gets zsh’s own <kbd>⇥</kbd>.
+Names that start with what you typed come first, in any case and either Unicode form, shortest first; then names that have your letters in order anywhere. When only one name matches, and it starts with what you typed, it goes straight onto the line with no list. No match gets zsh’s own <kbd>⇥</kbd>.
 
 A long list shows its best 2,000 and says so (“2,000 of 10,000. Type to narrow.”). A folder that can’t be read within a tenth of a second (a sleeping network volume) gets zsh’s own <kbd>⇥</kbd> instead. A slow zsh completion shows **Loading…** until zsh is done.
 

@@ -90,6 +90,15 @@ public enum PathCompletion {
             self.total = total
             self.exact = exact
         }
+
+        /// The one candidate, when exactly one matches and it starts with what was typed: what Tab puts on the line
+        /// with no list. A name with the letters only in order is a match too, so `cd So` beside Resources/ lists
+        /// both (AE1), and a lone one of those is listed, not put in. nil when the folder wasn't read whole, as
+        /// another may be in what wasn't.
+        public var single: Candidate? {
+            guard exact, total == 1, candidates.count == 1, let only = candidates.first, only.prefix else { return nil }
+            return only
+        }
     }
 
     /// Lists `entry` by entry, calling `found` for each until it returns false. False: the folder can't be read.
