@@ -348,6 +348,67 @@ import Testing
                                      reflog: renamed, oldBranchExists: false) == .renamed(from: "fix/a", to: "fix/b"))
         #expect(AgentLocation.change(from: .branch("fix/a"), commit: "ddd4", to: .branch("fix/b"), commit: "ddd4",
                                      reflog: [], oldBranchExists: true) == .switched)
+
+        // A cherry-pick, revert or am makes a commit on the detached HEAD as a commit does; so does a merge whose
+        // first parent is the HEAD before it, as git says.
+        let picked = AgentLocation.parseReflog("""
+        aaa1 bbb2 T <t@t> 2 +0000\tcheckout: moving from main to bbb2
+        bbb2 ccc3 T <t@t> 3 +0000\tcherry-pick: Fix it
+        ccc3 ddd4 T <t@t> 4 +0000\trevert: Revert "Fix it"
+        ddd4 eee5 T <t@t> 5 +0000\tam: Three
+        eee5 fff6 T <t@t> 6 +0000\tmerge side: Merge made by the 'ort' strategy.
+        """)
+        #expect(AgentLocation.change(from: .detached("bbb2"), commit: "bbb2", to: .detached("ccc3"), commit: "ccc3",
+                                     reflog: picked, oldBranchExists: true) == .none)
+        #expect(AgentLocation.onlyCommits(from: "bbb2", to: "eee5", in: picked))
+        #expect(!AgentLocation.onlyCommits(from: "eee5", to: "fff6", in: picked)) // not known to be on it
+        #expect(AgentLocation.onlyCommits(from: "bbb2", to: "fff6", in: picked) { commit, parent in commit == "fff6" && parent == "eee5" })
+        #expect(!AgentLocation.onlyCommits(from: "aaa1", to: "ccc3", in: picked) { _, _ in true }) // a checkout is never one
+    }
+
+    /// With git: a cherry-pick, revert, am and merge on a detached HEAD are no switch; a fast-forward over two
+    /// commits is.
+    @Test func gitsOwnCommitsOnADetachedHeadAreNoSwitch() throws {
+        guard let git = GitRunner.locateGit() else { return }
+        let repo = canonicalPath(FileManager.default.temporaryDirectory.path) + "/nt-detached-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: repo) }
+        try FileManager.default.createDirectory(atPath: repo, withIntermediateDirectories: true)
+        @discardableResult func sh(_ args: String...) -> String {
+            let p = Process(), out = Pipe()
+            p.executableURL = URL(fileURLWithPath: git)
+            p.arguments = ["-C", repo, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"] + args
+            p.standardOutput = out
+            p.standardError = FileHandle.nullDevice
+            try? p.run()
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        func commit(_ name: String) {
+            try? name.write(toFile: repo + "/" + name, atomically: true, encoding: .utf8)
+            sh("add", name)
+            sh("commit", "-qm", name)
+        }
+        sh("init", "-q")
+        commit("one")
+        sh("switch", "-qc", "side")
+        commit("two")
+        commit("three")
+        let patch = sh("format-patch", "-1", "HEAD", "-o", repo + "/.git/patches")
+        sh("switch", "-q", "--detach", "main")
+        let start = sh("rev-parse", "HEAD")
+        sh("cherry-pick", "side~1")
+        sh("revert", "--no-edit", "HEAD")
+        sh("am", "-q", patch)
+        sh("merge", "-q", "--no-edit", "--no-ff", "side")
+        let merged = sh("rev-parse", "HEAD")
+        func change(from old: String, to new: String) -> HeadChange {
+            AgentLocation.change(in: Checkout(path: repo, head: .detached(new), commit: new), from: .detached(old), commit: old, git: git)
+        }
+        #expect(merged != start && change(from: start, to: merged) == .none)
+        sh("switch", "-q", "--detach", "main")
+        sh("merge", "-q", "--ff-only", "side")
+        #expect(change(from: start, to: sh("rev-parse", "HEAD")) == .switched) // two commits on: another commit
     }
 
     @Test func nextTermsOwnStepsThatMoveHead() {

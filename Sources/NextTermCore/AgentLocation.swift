@@ -423,26 +423,37 @@ public enum AgentLocation {
         }
     }
 
-    /// HEAD went from `old` to `new` by commits alone ("commit: …", "commit (amend): …"), as the reflog's
-    /// last entries say.
-    static func onlyCommits(from old: String, to new: String, in entries: [ReflogEntry]) -> Bool {
+    /// HEAD went from `old` to `new` by commits made on it alone, as the reflog's last entries say: "commit:
+    /// …", "commit (amend): …", "cherry-pick: …", "revert: …", "am: …", or a merge (or pull) whose new
+    /// commit's first parent is the one before, as `isOnTop` says.
+    static func onlyCommits(from old: String, to new: String, in entries: [ReflogEntry],
+                            isOnTop: (_ commit: String, _ parent: String) -> Bool = { _, _ in false }) -> Bool {
         var at = new
         for entry in entries.reversed() where entry.new == at {
-            guard entry.message.hasPrefix("commit") else { return false }
+            guard madeCommit(entry, isOnTop: isOnTop) else { return false }
             at = entry.old
             if at == old { return true }
         }
         return false
     }
 
+    /// One reflog step made a commit on the HEAD before it.
+    static func madeCommit(_ entry: ReflogEntry, isOnTop: (_ commit: String, _ parent: String) -> Bool) -> Bool {
+        let message = entry.message
+        if ["commit", "cherry-pick:", "revert:", "am:"].contains(where: { message.hasPrefix($0) }) { return true }
+        let merge = message.hasPrefix("merge ") || message.hasPrefix("pull")
+        return merge && isOnTop(entry.new, entry.old)
+    }
+
     /// What a held HEAD change in a checkout is (R3a): commits made on a detached HEAD are no switch; a
     /// branch renamed in place (the old name gone, HEAD at the same commit) is a rename; anything else is
     /// a switch.
     static func change(from old: CheckoutHead, commit oldCommit: String?, to new: CheckoutHead, commit newCommit: String?,
-                       reflog: [ReflogEntry], oldBranchExists: Bool) -> HeadChange {
+                       reflog: [ReflogEntry], oldBranchExists: Bool,
+                       isOnTop: (_ commit: String, _ parent: String) -> Bool = { _, _ in false }) -> HeadChange {
         switch (old, new) {
         case let (.detached(a), .detached(b)):
-            return a == b || onlyCommits(from: a, to: b, in: reflog) ? .none : .switched
+            return a == b || onlyCommits(from: a, to: b, in: reflog, isOnTop: isOnTop) ? .none : .switched
         case let (.branch(a), .branch(b)):
             if a == b { return .none }
             let renamed = reflog.last?.message == "Branch: renamed refs/heads/\(a) to refs/heads/\(b)"
@@ -466,7 +477,13 @@ public enum AgentLocation {
             let found = GitRunner.run(git, ["-C", checkout.path, "rev-parse", "--verify", "--quiet", "refs/heads/" + name], timeout: 10, acceptedStatus: [0, 1])
             exists = found.map { !$0.isEmpty } ?? true
         }
-        return change(from: old, commit: oldCommit, to: checkout.head, commit: checkout.commit, reflog: reflog, oldBranchExists: exists)
+        // A merge's new commit is on the HEAD before it when that is its first parent.
+        let isOnTop = { (commit: String, parent: String) -> Bool in
+            let found = GitRunner.run(git, ["-C", checkout.path, "rev-parse", "--verify", "--quiet", commit + "^1"], timeout: 10, acceptedStatus: [0, 1])
+            return found.map { String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) } == parent
+        }
+        return change(from: old, commit: oldCommit, to: checkout.head, commit: checkout.commit, reflog: reflog, oldBranchExists: exists,
+                      isOnTop: isOnTop)
     }
 }
 
