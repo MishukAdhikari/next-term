@@ -50,9 +50,9 @@ Through 0.9.0, by release.
 
 Also next, in no fixed order:
 
-- **Agents:** an IDE link for Copilot CLI, and opencode's accepted through a peer-process check; tab
-  status hints for Junie, opencode, Copilot CLI, Amp and Cursor; Claude Desktop and the ChatGPT desktop
-  app on the local MCP server.
+- **Agents:** tab status hints for Junie, opencode, Copilot CLI, Amp and Cursor; Claude Desktop and the
+  ChatGPT desktop app on the local MCP server. (Done for 0.10: the IDE link for Copilot CLI, and opencode's
+  through a peer-process check.)
 - **MCP:** tools that propose edits, change settings, commit and control panes, once there is a consent
   model.
 - **Git:** Delete on Remote, Checkout and Update, and Write with Agent in the branch popup; then

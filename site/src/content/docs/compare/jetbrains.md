@@ -23,7 +23,7 @@ JetBrains IDEs (IntelliJ IDEA, WebStorm, GoLand, PhpStorm, PyCharm, Rider, RubyM
 | Agents from other vendors | ✓ Any agent that runs in a terminal; 20 recognised by name | ✓ Claude Agent, Codex and Copilot in AI Chat; ACP agents; Claude Code, Codex and Junie from the terminal |
 | Several agents at once, with their status | ✓ Tabs and split panes, with status on every tab | Partly: Air, in early access, shows parallel sessions across projects |
 | MCP | ✓ An MCP server for orchestration: start, prompt, wait for and read agents | ✓ An MCP server that gives agents the IDE’s tools, and an MCP client in AI Assistant |
-| Claude Code’s IDE link | ✓ Built in, also for Gemini CLI and Qwen Code | ✓ Anthropic’s plugin: diffs in the IDE’s viewer, selection, diagnostics |
+| Claude Code’s IDE link | ✓ Built in, also for Gemini CLI, Qwen Code, Copilot CLI and opencode | ✓ Anthropic’s plugin: diffs in the IDE’s viewer, selection, diagnostics |
 | Reviewing changes | ✓ Side-by-side diffs; stage, unstage or revert per hunk; the Git Log and blame | ✓ The IDE’s diff viewer; commit chosen chunks and lines |
 | Remote development | Partly: terminal tabs on your servers over ssh, kept running in tmux or herdr; the editor opens your Mac’s files | ✓ SSH, dev containers, WSL, JetBrains Gateway |
 | Real-time collaboration | — | Partly: Code With Me is being retired; its service ends in the first quarter of 2027 |

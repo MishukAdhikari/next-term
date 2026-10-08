@@ -12,7 +12,7 @@ Next Term is a native macOS terminal and code editor for running AI coding agent
 
 ## Which AI coding agents does it work with?
 
-Any agent that runs in a terminal. Next Term recognises Claude Code, Codex, Gemini CLI, Qwen Code, Command Code, Junie, opencode, Aider, Amp, Cursor Agent, Goose, Crush, GitHub Copilot CLI, Droid, Kiro, Amazon Q, Kimi, Plandex, Cline and Auggie by name and shows their status on the tab. Claude Code, Gemini CLI and Qwen Code also connect to Next Term as their IDE. Every agent gets Send to Agent (<kbd>⌥⌘K</kbd>). See [Agents and the IDE link](/docs/agents/).
+Any agent that runs in a terminal. Next Term recognises Claude Code, Codex, Gemini CLI, Qwen Code, Command Code, Junie, opencode, Aider, Amp, Cursor Agent, Goose, Crush, GitHub Copilot CLI, Droid, Kiro, Amazon Q, Kimi, Plandex, Cline and Auggie by name and shows their status on the tab. Claude Code, Gemini CLI, Qwen Code, GitHub Copilot CLI and opencode also connect to Next Term as their IDE. Every agent gets Send to Agent (<kbd>⌥⌘K</kbd>). See [Agents and the IDE link](/docs/agents/).
 
 ## Is Next Term free and open source?
 
@@ -102,4 +102,4 @@ Not today. Next Term is built with AppKit, which is macOS-only. Its core logic h
 
 ## What is coming next?
 
-Next: Zed’s own key changes in the import. After that: a server’s files in the editor and sidebar, then dev containers; remote access to the MCP server for agents outside your Mac (such as ChatGPT and Claude on the web); more of the diff view; an IDE link for Copilot CLI; session restore. None of these is released yet.
+Next: Zed’s own key changes in the import. After that: a server’s files in the editor and sidebar, then dev containers; remote access to the MCP server for agents outside your Mac (such as ChatGPT and Claude on the web); more of the diff view; session restore. None of these is released yet.

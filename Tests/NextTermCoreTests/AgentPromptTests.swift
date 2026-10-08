@@ -16,6 +16,19 @@ import Testing
         #expect(AgentDialect.forProgram("claude") == .atHash && AgentDialect.forProgram("codex") == .plain && AgentDialect.forProgram("whatever") == .plain)
     }
 
+    /// Copilot CLI's own form, the one it types for an editor's add_selection: `@path:10-20`, `@path:10`.
+    @Test func copilotReferences() {
+        #expect(AgentDialect.forProgram("copilot") == .atColon)
+        #expect(AgentPrompt.reference(ContextItem(path: "app/User.php", lines: 10...20), dialect: .atColon) == "@app/User.php:10-20")
+        #expect(AgentPrompt.reference(ContextItem(path: "app/User.php", lines: 10...10), dialect: .atColon) == "@app/User.php:10")
+        #expect(AgentPrompt.reference(ContextItem(path: "app/User.php"), dialect: .atColon) == "@app/User.php")
+        #expect(AgentPrompt.reference(ContextItem(path: "app", isFolder: true), dialect: .atColon) == "app/ (folder)")
+        // Its @-mentions end at a space: a path with spaces is quoted, without the @, with the lines in prose.
+        #expect(AgentPrompt.reference(ContextItem(path: "my dir/a.ts", lines: 1...2), dialect: .atColon) == "\"my dir/a.ts\" (lines 1-2)")
+        let segs = AgentPrompt.segments(instruction: "Why?", items: [ContextItem(path: "a.go", lines: 3...9, note: "as staged")], dialect: .atColon)
+        #expect(segs == ["Why? @a.go:3-9 (as staged) "])
+    }
+
     @Test func claudeSegmentsMatchTheSpec() {
         let segs = AgentPrompt.segments(instruction: "Refactor this to use async/await",
                                         items: [ContextItem(path: "src/auth/login.ts", lines: 42...58)], dialect: .atHash)

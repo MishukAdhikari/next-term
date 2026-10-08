@@ -70,7 +70,7 @@ Run `langgraph dev` (or `npm run dev`, `uvicorn`, `langgraph up`) in a tab. Once
 - **Agent session titles** in the Welcome window show ••• in place of a LangSmith key (`lsv2_pt_…`, `lsv2_sk_…`), and of OpenAI, Anthropic, Hugging Face, Groq, Tavily, Replicate, xAI and Pinecone keys.
 - **Imports** never bring over a value that looks like a key.
 - **The MCP tools** never read environment files (`.env`, `.env.local`, `prod.env`; `.env.example` is read), and mask keys in the file text, search results and diffs they hand an agent.
-- **The IDE link** never sends a selection from a `.env` file to Claude Code, Gemini CLI or Qwen Code.
+- **The IDE link** never sends a selection from a `.env` file to Claude Code, Gemini CLI, Qwen Code, Copilot CLI or opencode.
 
 What Next Term does not do: it does not hide keys a program prints in the terminal, and an agent can still read `.env` with its own tools. See [Security and privacy](/docs/security-and-privacy/).
 

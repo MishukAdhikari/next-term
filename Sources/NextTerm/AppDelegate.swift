@@ -119,6 +119,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             (window ?? self.controllers.last)?.shareSelectionWithClaude(only: [client])
         }
         server.onClientGone = { [weak self] client in self?.claudeTabs.removeValue(forKey: client) }
+        // opencode connects without the token: only from a process in one of these shells (IDEPeer).
+        server.tabShells = { [weak self] in
+            guard let self else { return [] }
+            let tabs = self.controllers.flatMap(\.tabs).filter { $0.remote == nil }
+            return tabs.map { $0.view.process.shellPid }
+        }
         // Claude's proposed edits: shown as a diff in the window of the tab it runs in.
         server.onOpenDiff = { [weak self] client, path, proposed, tabName in
             guard let self else { return }
@@ -210,6 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func projectsChanged() {
         ClaudeIDEServer.shared.updateWorkspaces(controllers.compactMap(\.project))
         GeminiIDEServer.shared.updateWorkspaces(agentWorkspaces)
+        updateCopilotFolders()
     }
 
     /// Brand icons on configuration folders (.github, .claude, .idea); off: they stay plain and quiet.
@@ -311,6 +318,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         DispatchQueue.main.async { RemoteConnection.restoreTabs() }
         // Claude Code's IDE link, before the first tab so every tab can use it.
         if shareWithClaude { startClaudeLink() }
+        if shareWithCopilot { startCopilotLink() } // Copilot CLI's, in CopilotIDE.swift
         // The MCP socket too: tabs are told where it is. Off, the Claude app may still have the entry: it was
         // open when the setting was turned off, and closed after Next Term.
         if agentControl { startAgentControl() } else { MCPRegistration.update(on: false, claudeAppOnly: true) }
@@ -555,6 +563,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         MCPControlServer.shared.stop()
         ClaudeIDEServer.shared.stop() // removes the lock file
         GeminiIDEServer.shared.stop()
+        CopilotIDEServer.shared.stop()
         MainActor.assumeIsolated { Updater.shared.installStagedUpdateOnQuit() }
         if !SelfTest.isRequested { sessionProjects = controllers.compactMap(\.project) }
         RemoteConnection.saveTabs(controllers)

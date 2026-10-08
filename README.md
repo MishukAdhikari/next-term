@@ -34,12 +34,13 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   them to the agent in your tab: Next Term types the reference in that agent's own syntax (`@app/User.php#L10-20`
   for Claude, `app/User.php:10-20` for Codex and others) and hands you the prompt to add your instruction. It
   never presses Enter for you.
-- **Agents see your editor.** Claude Code, Gemini CLI and Qwen Code in a Next Term tab connect to Next Term
-  as their IDE, the way they connect to VS Code: the lines you select go with your next prompt ("⧉ 10 lines
-  selected"), and ⌥⌘K puts `@file#L10-20` into Claude's prompt. When Claude wants to edit a file, its change
-  opens as a diff to Accept (⌘↩) or Reject, as in VS Code; answering in the terminal works too. Nothing to set up: Next Term turns Gemini's
-  and Qwen's IDE mode on for you. Local only, with a fresh secret per launch; `.env` files are never shared;
-  Settings turns it off.
+- **Agents see your editor.** Claude Code, Gemini CLI, Qwen Code, GitHub Copilot CLI and opencode in a Next
+  Term tab connect to Next Term as their IDE, the way they connect to VS Code: the lines you select go with
+  your next prompt ("⧉ 10 lines selected"), and ⌥⌘K puts `@file#L10-20` into Claude's prompt (`@file:10-20`
+  into Copilot's). When Claude, Gemini, Qwen or Copilot wants to edit a file, its change opens as a diff to
+  Accept (⌘↩) or Reject, as in VS Code; answering in the terminal works too. Nothing to set up: Next Term turns
+  Gemini's and Qwen's IDE mode on for you. Local only, with a fresh secret per launch; `.env` files are never
+  shared; Settings turns it off.
 - **Orchestrate agents across projects (MCP).** Next Term is an MCP server for any agent: Claude Code and
   the Claude desktop app, Codex and the ChatGPT desktop app, Gemini CLI, Qwen Code, Cursor, opencode,
   Copilot CLI, Amp, Junie and Command Code. One agent can run the others. It sees every project and tab
@@ -300,9 +301,9 @@ scripts/                build, test and icon scripts
 
 ## Roadmap
 
-Coming: a server's files in the editor and sidebar next to its remote tabs, then Dev Containers. Later: more of the diff view, a
-Copilot CLI IDE link and session restore. A Linux build would need a different UI layer (AppKit is
-macOS-only); the core logic would carry over.
+Coming: a server's files in the editor and sidebar next to its remote tabs, then Dev Containers. Later: more
+of the diff view and session restore. A Linux build would need a different UI layer (AppKit is macOS-only);
+the core logic would carry over.
 
 ## Credits
 

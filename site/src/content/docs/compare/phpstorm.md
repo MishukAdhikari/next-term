@@ -25,7 +25,7 @@ PhpStorm is JetBrains’ IDE for PHP, on Windows, macOS and Linux. It understand
 | Agents from other vendors | ✓ Any agent that runs in a terminal; 20 recognised by name | ✓ Claude Agent and Codex in AI Chat; Copilot, Cursor and others through ACP |
 | Several agents at once, with their status | ✓ Tabs and split panes, with status on every tab | Partly: Air, in early access, shows parallel sessions |
 | MCP | ✓ An MCP server for orchestration: start, prompt, wait for and read agents | ✓ An MCP server that gives agents the IDE’s tools |
-| Claude Code’s IDE link | ✓ Built in, also for Gemini CLI and Qwen Code | ✓ Anthropic’s plugin supports PhpStorm |
+| Claude Code’s IDE link | ✓ Built in, also for Gemini CLI, Qwen Code, Copilot CLI and opencode | ✓ Anthropic’s plugin supports PhpStorm |
 | Reviewing changes | ✓ Side-by-side diffs; stage, unstage or revert per hunk; the Git Log and blame | ✓ The IDE’s diff viewer; commit chosen chunks and lines |
 | Remote development | Partly: terminal tabs on your servers over ssh, kept running in tmux or herdr; the editor opens your Mac’s files | ✓ SSH, dev containers, JetBrains Gateway |
 

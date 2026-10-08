@@ -11,6 +11,9 @@ enum SelfTest {
     nonisolated static var isRequested: Bool { CommandLine.arguments.contains("--self-test") }
     /// The self-test's own MCP socket, so it never answers for (or takes over from) the Next Term you use.
     nonisolated static let mcpSocketPath = (NSTemporaryDirectory() as NSString).appendingPathComponent("nextterm-mcp-\(getpid()).sock")
+    /// Where the self-test's Copilot CLI lock goes, so it never writes in your own ~/.copilot.
+    nonisolated static let copilotLockFolder = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("nextterm-copilot-ide-\(getpid())", isDirectory: true)
 
     private static var lines: [String] = []
     private static var failures = 0
@@ -4294,6 +4297,8 @@ enum SelfTest {
         }
 
         await geminiLinkChecks(c)
+        await copilotLinkChecks(c, proj: proj, agentTab: agentTab)
+        await opencodeLinkChecks(c, proj: proj)
         await mcpChecks(c, proj: proj)
         await remoteChecks(c)
         if ProcessInfo.processInfo.environment["NEXTTERM_REAL_CLAUDE"] == "1" { await realClaudeCheck(c, proj: proj) }
@@ -4708,6 +4713,8 @@ enum SelfTest {
 
     private static func finish() {
         ClaudeIDEServer.shared.stop() // remove the test run's lock file
+        CopilotIDEServer.shared.stop()
+        try? FileManager.default.removeItem(at: copilotLockFolder)
         record(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
         try? reportHandle?.close()
         let report = lines.joined(separator: "\n") + "\n"
@@ -4717,16 +4724,17 @@ enum SelfTest {
 }
 
 /// A stand-in for the `claude` CLI's IDE client, for the self-test: connects the way it does (WebSocket,
-/// subprotocol mcp, the token header) and records what Next Term sends.
+/// subprotocol mcp, the token header) and records what Next Term sends. Without the subprotocol and the
+/// token, it connects the way opencode does from a tab.
 final class ClaudeTestClient: @unchecked Sendable {
     private let connection: NWConnection
     private let queue = DispatchQueue(label: "selftest.claude-client")
     private var messages: [[String: Any]] = []
     private(set) var closed = false
 
-    init(port: UInt16, token: String?, origin: String? = nil) {
+    init(port: UInt16, token: String?, origin: String? = nil, subprotocol: Bool = true) {
         let options = NWProtocolWebSocket.Options()
-        options.setSubprotocols(["mcp"])
+        if subprotocol { options.setSubprotocols(["mcp"]) }
         var headers: [(name: String, value: String)] = []
         if let token { headers.append((name: "X-Claude-Code-Ide-Authorization", value: token)) }
         if let origin { headers.append((name: "Origin", value: origin)) }

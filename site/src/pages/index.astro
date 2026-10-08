@@ -66,7 +66,7 @@ const head = [
 			'Status for every terminal tab: working, done, or waiting on your decision',
 			'Notifications when an agent needs a decision',
 			'Claude Code IDE integration: live selection, @-mentions, proposed edits as diffs',
-			'Gemini CLI and Qwen Code IDE integration',
+			'Gemini CLI, Qwen Code, GitHub Copilot CLI and opencode IDE integration',
 			'Send to Agent (⌥⌘K) in each agent’s own syntax',
 			'MCP server for orchestration: one agent starts, prompts, waits for and reads the others across projects',
 			'Agent sessions per project: resume the conversations of Claude Code, Codex, Gemini CLI, opencode, Cursor Agent, Copilot CLI, Qwen Code and Command Code in a tab (or fork them, where the agent can)',
@@ -89,18 +89,16 @@ const head = [
 	}),
 ];
 
-const agentsLinked = ['Claude Code', 'Gemini CLI', 'Qwen Code'];
+const agentsLinked = ['Claude Code', 'Gemini CLI', 'Qwen Code', 'GitHub Copilot CLI', 'opencode'];
 const agentsOthers = [
 	'Codex',
 	'Command Code',
 	'Junie',
-	'opencode',
 	'Aider',
 	'Amp',
 	'Cursor Agent',
 	'Goose',
 	'Crush',
-	'GitHub Copilot CLI',
 	'Droid',
 	'Kiro',
 	'Amazon Q',
@@ -287,7 +285,7 @@ const faq = [
 						<h3>Edits you approve</h3>
 						<p>
 							Claude’s proposed changes open as a side-by-side diff. Accept with <kbd>⌘↩︎</kbd>, or Reject.
-							Gemini CLI and Qwen Code work the same way.
+							Gemini CLI, Qwen Code and GitHub Copilot CLI work the same way.
 						</p>
 					</li>
 					<li>
@@ -620,14 +618,14 @@ const faq = [
 			<div class="agents">
 				<div>
 					<h3>Connected as their IDE</h3>
-					<p class="hint">Status, live selection, proposed edits as diffs, MCP tools, Send to Agent</p>
+					<p class="hint">Status, live selection, proposed edits as diffs (not opencode’s), MCP tools, Send to Agent</p>
 					<ul class="chips">
 						{agentsLinked.map((name) => <li class="chip chip--strong">{name}</li>)}
 					</ul>
 				</div>
 				<div>
 					<h3>Recognised by name</h3>
-					<p class="hint">Status on the tab, decisions as notifications, Send to Agent; MCP tools set up for Codex, Cursor Agent, opencode, Copilot CLI, Amp, Junie and Command Code</p>
+					<p class="hint">Status on the tab, decisions as notifications, Send to Agent; MCP tools set up for Codex, Cursor Agent, Amp, Junie and Command Code</p>
 					<ul class="chips">
 						{agentsOthers.map((name) => <li class="chip">{name}</li>)}
 					</ul>

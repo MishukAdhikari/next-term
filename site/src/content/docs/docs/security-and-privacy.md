@@ -17,16 +17,27 @@ A terminal sees everything you type, and an agent link exposes your editor to pr
 
 ## The agent links
 
-Claude Code, Gemini CLI and Qwen Code connect to Next Term as their IDE. That link is built to be safe by default:
+Claude Code, opencode, Gemini CLI, Qwen Code and GitHub Copilot CLI connect to Next Term as their IDE. What each link shares, and with whom:
 
-- **Local only:** the servers listen on `127.0.0.1`, never on the network.
-- **A fresh token per launch:** a new 256-bit secret every time Next Term starts, compared in constant time. The lock file that tells Claude Code where to connect is readable only by you (`0600` in a `0700` folder) and is removed on quit. Lock files left by other editors are never touched.
+| Link | Who can connect | What it is sent | What it can ask for |
+|---|---|---|---|
+| Claude Code | A program with the token from Next Term’s lock file in `~/.claude/ide` | The selected lines, or which file is open; <kbd>⌥⌘K</kbd>’s @-mentions | To show a proposed edit |
+| opencode | From a Next Term tab: opencode itself, with no token. Elsewhere: with the token, as Claude Code | The selected lines; <kbd>⌥⌘K</kbd>’s @-mentions | Nothing from a tab |
+| Gemini CLI, Qwen Code | A program with the token from the tab’s environment or Next Term’s discovery file | Up to 10 open files, the caret and the selection | To show a proposed edit |
+| Copilot CLI | A program with the nonce from Next Term’s lock file in `~/.copilot/ide`. A `copilot` started in another terminal in a folder Next Term has open connects by itself | The selected lines, or which file is open, in the window of its tab (started elsewhere: the window that has its folder open, or nothing); <kbd>⌥⌘K</kbd>’s @-mentions | To show a proposed edit; the last selection it was sent |
+
+The lock and discovery files are readable only by you, so the secrets keep out other users of this Mac and web pages. They do not keep out programs you run yourself, which can read your files anyway.
+
+- **Local only:** the servers for Claude Code, opencode, Gemini CLI and Qwen Code listen on `127.0.0.1`, never on the network. Copilot CLI’s has no network port: it is a Unix socket in a folder that only you can open, new at every launch.
+- **A fresh secret per launch:** new 256-bit secrets every time Next Term starts, compared in constant time. The lock files that tell Claude Code and Copilot CLI where to connect are readable only by you (`0600` in a `0700` folder) and are removed on quit. Lock files left by other editors are never touched.
+- **opencode, checked instead of trusted:** opencode connects from a Next Term tab without the token. Next Term finds the process behind the connection by its ports and keeps the connection only if that process is opencode running in one of its own tabs. Any other connection without the token is closed before a message is read.
 - **Browsers refused:** any request with an `Origin` header, as web pages send, is rejected.
 - **Read-only for agents:** nothing an agent sends writes a file. Proposed edits are shown to you; the agent writes after you accept.
 - **Secrets stay out:** selections and open files from `.env`, `.env.*` (except `.env.example`), `*.env`, `.flaskenv`, `*.pem`, `*.key`, `id_rsa`, `id_ed25519`, `.npmrc` and `.netrc` are never shared.
-- **Off switch:** **Settings › Editor › Agents** turns the link off entirely.
+- **Copilot’s own trust question stays:** Next Term’s lock file does not call any folder trusted, so Copilot CLI still asks before it works in a folder for the first time.
+- **Off switches:** **Settings › Editor › Agents** has one for Claude Code, opencode, Gemini CLI and Qwen Code, and one for Copilot CLI.
 
-Next Term turns on Gemini CLI’s and Qwen Code’s IDE mode by changing exactly one setting in their settings files, and never rewrites a file with comments. See [Gemini CLI and Qwen Code](/docs/agents/#gemini-cli-and-qwen-code).
+Next Term turns on Gemini CLI’s and Qwen Code’s IDE mode by changing exactly one setting in their settings files, and never rewrites a file with comments. It changes nothing of Copilot CLI’s: it only adds its own lock file. See [Agents and the IDE link](/docs/agents/#gemini-cli-and-qwen-code).
 
 ## The MCP server
 

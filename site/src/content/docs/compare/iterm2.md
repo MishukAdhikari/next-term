@@ -39,7 +39,7 @@ iTerm2 is a free, open-source (GPL v2) terminal for macOS with a long list of fe
 
 - **You run several different agents.** Next Term recognises 20 agents and shows working, done or waiting on their tab, with nothing added to their settings: Claude Code, Codex, Command Code and Gemini CLI from their own screen, the others from output timing.
 - **You want to read and fix what the agents change, in the same window:** an editor with 112 grammars, side-by-side diffs with per-hunk stage, unstage and revert, Find and Replace in Files, and a sidebar with `+12 −3` line counts.
-- **You want your agents to see your editor.** Claude Code, Gemini CLI and Qwen Code connect to Next Term as their IDE, so your selection goes with the next prompt and proposed edits open as diffs to accept or reject.
+- **You want your agents to see your editor.** Claude Code, Gemini CLI, Qwen Code, Copilot CLI and opencode connect to Next Term as their IDE, so your selection goes with the next prompt and proposed edits open as diffs to accept or reject.
 - **You want your own agent to orchestrate the others.** Next Term’s MCP server is used by the agents you already have, under their own subscriptions, with no extra API key.
 
 ## Use both
