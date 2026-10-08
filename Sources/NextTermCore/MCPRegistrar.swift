@@ -179,7 +179,7 @@ public enum MCPRegistrar {
         }
     }
 
-    /// Atomic and private throughout (see `replace`), through symlinks, keeping the file's permissions and a UTF-8 byte
+    /// Atomic and private throughout (`SafeWrite`), through symlinks, keeping the file's permissions and a UTF-8 byte
     /// order mark. A read-only file is left alone, and so is one that changed since it was read (its agent saving it:
     /// this edit would undo that). `beforeRename`: called with the temporary file once it is ready (for tests).
     static func write(_ planned: Plan, to path: String, beforeRename: (_ temporary: String) -> Void = { _ in }) -> Status {
@@ -204,64 +204,29 @@ public enum MCPRegistrar {
 
     enum Replacement { case done, changed, failed }
 
-    /// Puts `data` in the file `path` points at (through symlinks, so a link stays a link), atomically. It is written to
-    /// a temporary file beside it that only its owner can read from the start (an agent's file can hold its servers'
-    /// tokens, and its folder can be open to other accounts), made with O_EXCL and O_NOFOLLOW so nothing already there
-    /// is used; flushed to disk, given the file's permissions (0600 for a new file), and renamed over the file. Just
-    /// before the rename the file is read again: when it no longer has the bytes `original` (nil: no file), its agent
-    /// saved it meanwhile, and the edit, made from the older bytes, is dropped. (A save between that read and the rename
-    /// is still undone: the agents offer no lock.) A new file is put in place only if there is still none: by an
-    /// exclusive rename (`exclusiveRename`, replaced in tests), or on a volume without one (exFAT), by a rename once
-    /// there is still nothing there.
+    /// Puts `data` in the file `path` points at, through `SafeWrite` (a temporary file only its owner can read, since an
+    /// agent's file can hold its servers' tokens and its folder can be open to other accounts; the file's permissions,
+    /// 0600 for a new file). When the file no longer has the bytes `original` (nil: no file), its agent saved it
+    /// meanwhile, and the edit, made from the older bytes, is dropped. (A save between that check and the rename is
+    /// still undone: the agents offer no lock.) `exclusiveRename`: replaced in tests (exFAT has none).
     static func replace(_ path: String, with data: Data, original: Data?, beforeRename: (_ temporary: String) -> Void,
                         exclusiveRename: (_ from: String, _ to: String) -> Int32 = { renamex_np($0, $1, UInt32(RENAME_EXCL)) }) -> Replacement {
-        let target = canonicalPath(path)
-        var info = stat()
-        let permissions: mode_t = stat(target, &info) == 0 ? info.st_mode & 0o7777 : 0o600
-        let folder = (target as NSString).deletingLastPathComponent
-        let temporary = folder + "/." + (target as NSString).lastPathComponent + ".nextterm-" + UUID().uuidString
-        let descriptor = open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
-        guard descriptor >= 0 else { return .failed }
-        let written = data.withUnsafeBytes { buffer -> Bool in
-            var offset = 0
-            while offset < buffer.count, let start = buffer.baseAddress {
-                let count = Darwin.write(descriptor, start + offset, buffer.count - offset)
-                if count < 0, errno == EINTR { continue }
-                guard count > 0 else { return false }
-                offset += count
+        withoutActuallyEscaping(beforeRename) { beforeRename in
+            withoutActuallyEscaping(exclusiveRename) { exclusiveRename in
+                var system = SafeWrite.System()
+                system.beforeRename = beforeRename
+                system.exclusiveRename = exclusiveRename
+                do {
+                    try SafeWrite.replace(path, with: data, expecting: original.map { .contents($0) } ?? .noFile, newFileMode: 0o600,
+                                          system: system)
+                    return .done
+                } catch SafeWrite.Failure.changed {
+                    return .changed
+                } catch {
+                    return .failed
+                }
             }
-            return true
         }
-        let ready = written && fchmod(descriptor, permissions) == 0 && fsync(descriptor) == 0
-        guard close(descriptor) == 0, ready else {
-            unlink(temporary)
-            return .failed
-        }
-        beforeRename(temporary)
-        guard FileManager.default.contents(atPath: path) == original else {
-            unlink(temporary)
-            return .changed
-        }
-        // A new file: only if there is still none.
-        var renamed: Int32
-        var failure: Int32 = 0
-        if original == nil {
-            renamed = exclusiveRename(temporary, target)
-            failure = errno
-            if renamed != 0, failure == ENOTSUP || failure == EINVAL {
-                let absent = lstat(target, &info) != 0 && errno == ENOENT
-                renamed = absent ? rename(temporary, target) : -1
-                failure = absent ? errno : EEXIST
-            }
-        } else {
-            renamed = rename(temporary, target)
-            failure = errno
-        }
-        guard renamed == 0 else {
-            unlink(temporary)
-            return original == nil && failure == EEXIST ? .changed : .failed
-        }
-        return .done
     }
 
     // MARK: The Claude app
