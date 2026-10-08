@@ -24,19 +24,20 @@ extension KeyboardShortcuts {
     }
 }
 
-/// A button's key equivalent on a command's key as set in Settings, and a tooltip that names it ("Accept (⌘↩): …"),
-/// both following a change. Kept by the button's owner for as long as the button.
-final class ButtonShortcut: NSObject {
-    private weak var button: NSButton?
-    private let id: String
+/// A view's tooltip that names the key of a command outside the menus ("Fetch from all remotes (⌘R)", "Accept (⌘↩):
+/// Claude then writes the file"), and follows it. Kept by the view's owner for as long as the view. Only the
+/// tooltip: the part answers the key itself (a button's own key equivalent would want "Y" for ⇧⌘Y).
+final class PartToolTip: NSObject {
+    private weak var view: NSView?
     private let words: String
+    private let id: String
     private let rest: String
 
     /// The tooltip: `words`, the key in brackets, then `rest`.
-    init(_ button: NSButton, _ id: String, tip words: String, _ rest: String = "") {
-        self.button = button
-        self.id = id
+    init(_ view: NSView, _ words: String, command id: String, then rest: String = "") {
+        self.view = view
         self.words = words
+        self.id = id
         self.rest = rest
         super.init()
         update()
@@ -44,38 +45,6 @@ final class ButtonShortcut: NSObject {
     }
 
     @objc private func update() {
-        guard let button else { return }
-        let chord = KeyboardShortcuts.shared.chord(for: id)
-        // A button compares the character the key types: ⌫ is DEL there, where menus spell it BS.
-        let key = chord?.key ?? ""
-        button.keyEquivalent = key == "\u{8}" ? "\u{7F}" : key
-        var mask: NSEvent.ModifierFlags = []
-        if chord?.command == true { mask.insert(.command) }
-        if chord?.shift == true { mask.insert(.shift) }
-        if chord?.option == true { mask.insert(.option) }
-        if chord?.control == true { mask.insert(.control) }
-        button.keyEquivalentModifierMask = mask
-        button.toolTip = KeyboardShortcuts.shared.hint(words, command: id) + rest
-    }
-}
-
-/// A view's tooltip that names the key of a command outside the menus ("Fetch from all remotes (⌘R)"), and follows
-/// it. Kept by the view's owner for as long as the view.
-final class PartToolTip: NSObject {
-    private weak var view: NSView?
-    private let words: String
-    private let id: String
-
-    init(_ view: NSView, _ words: String, command id: String) {
-        self.view = view
-        self.words = words
-        self.id = id
-        super.init()
-        update()
-        NotificationCenter.default.addObserver(self, selector: #selector(update), name: KeyboardShortcuts.changed, object: nil)
-    }
-
-    @objc private func update() {
-        view?.toolTip = KeyboardShortcuts.shared.hint(words, command: id)
+        view?.toolTip = KeyboardShortcuts.shared.hint(words, command: id) + rest
     }
 }

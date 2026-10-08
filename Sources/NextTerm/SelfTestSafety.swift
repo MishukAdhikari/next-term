@@ -6,7 +6,7 @@ import NextTermCore
 /// LangGraph Studio links open.
 extension SelfTest {
     static func safetyChecks(_ c: TerminalWindowController, proj: URL) async {
-        partKeyChecks(c)
+        partKeyChecks(c, proj: proj)
         await privateSaveChecks(c, proj: proj)
         studioLinkChecks()
     }
@@ -17,7 +17,7 @@ extension SelfTest {
                          characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)
     }
 
-    private static func partKeyChecks(_ c: TerminalWindowController) {
+    private static func partKeyChecks(_ c: TerminalWindowController, proj: URL) {
         let shortcuts = KeyboardShortcuts.shared
         let savedBindings = shortcuts.bindings
         defer {
@@ -68,16 +68,28 @@ extension SelfTest {
               "the sidebar's Move to Trash moves to the key set in Settings", "\(byDefault) then \(trashed)")
         shortcuts.reset("sidebar.trash")
 
-        // A proposed edit's Accept button holds the key, and its tooltip names it, as it changes.
-        let accept = NSButton(title: "Accept", target: nil, action: nil)
-        let follower = ButtonShortcut(accept, "diff.accept", tip: "Accept", ": the agent then writes the file")
-        let before = (accept.keyEquivalent, accept.keyEquivalentModifierMask, accept.toolTip ?? "")
-        shortcuts.set(KeyChord(key: "\r", command: true, option: true), for: "diff.accept")
-        check(before.0 == "\r" && before.1 == .command && before.2 == "Accept (⌘↩): the agent then writes the file"
-              && accept.keyEquivalentModifierMask == [.command, .option] && accept.toolTip == "Accept (⌥⌘↩): the agent then writes the file",
-              "Accept on a proposed edit follows its key", "\(before.2) → \(accept.toolTip ?? "none")")
+        // A proposed edit's Accept answers the key set in Settings from anywhere in the window, one with ⇧ too (a button's
+        // own key equivalent would want "Y"), and no longer the old one; its tooltip names the key. The sidebar's keys
+        // can't be Accept's: with the sidebar on the right, the proposal comes first and would take them.
+        let path = canonicalPath(proj.appendingPathComponent("accept-key.txt").path)
+        var decisions: [Bool] = []
+        let proposal = DiffPane.Proposal(original: "a\n", proposed: "b\n", author: "Self-test", tag: "accept-key", client: nil)
+        let pane = c.editorArea.openProposal(for: path, proposal: proposal) { accepted, _ in decisions.append(accepted) }
+        let tipBefore = pane.acceptToolTip ?? "none"
+        shortcuts.set(KeyChord(key: "y", command: true, shift: true), for: "diff.accept")
+        let tipAfter = pane.acceptToolTip ?? "none"
+        let commandShiftY = press("Y", code: 16, [.command, .shift])
+        let byOldKey = commandReturn.map { c.window?.performKeyEquivalent(with: $0) == true } ?? false
+        let stillOpen = !pane.isDecided
+        let byNewKey = commandShiftY.map { c.window?.performKeyEquivalent(with: $0) == true } ?? false
+        check(tipBefore == "Accept (⌘↩): Self-test then writes the file" && tipAfter == "Accept (⇧⌘Y): Self-test then writes the file"
+              && !byOldKey && stillOpen && byNewKey && decisions == [true],
+              "Accept on a proposed edit answers the key set in Settings, ⇧⌘Y too, and its tooltip names it",
+              "\(tipBefore) → \(tipAfter); old key \(byOldKey), new key \(byNewKey), decided \(decisions)")
+        if !pane.isDecided { c.editorArea.close(pane) }
         shortcuts.reset("diff.accept")
-        _ = follower
+        check(shortcuts.bindings.owners(of: KeyChord(key: "\r", command: true), defaults: shortcuts.defaults, except: "sidebar.open").contains("diff.accept"),
+              "Accept's key is a clash for the sidebar's Open")
     }
 
     /// A save from the editor keeps an owner-only file owner-only and its extended attributes, and leaves no

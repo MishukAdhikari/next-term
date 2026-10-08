@@ -28,8 +28,8 @@ final class DiffPane: NSView {
     private let message = NSTextField(wrappingLabelWithString: "")
     private let accept = NSButton(title: "Accept", target: nil, action: nil)
     private let reject = NSButton(title: "Reject", target: nil, action: nil)
-    /// Accept's key: ⌘↩, or what Settings › Keyboard Shortcuts gives it.
-    private var acceptKey: ButtonShortcut?
+    /// Accept's tooltip, naming its key: ⌘↩, or what Settings › Keyboard Shortcuts gives it (`performKeyEquivalent`).
+    private var acceptKey: PartToolTip?
 
     /// An agent's proposed edit (Claude Code's openDiff): your file against its version, to accept or
     /// reject. Next Term never writes the file; the agent does, once you accept.
@@ -168,6 +168,18 @@ final class DiffPane: NSView {
     var isDecided: Bool { decided }
 
     @objc private func acceptClicked() { decide(true); closeSelf() }
+
+    /// Accept's key (⌘↩, or what Settings gives it), wherever the keyboard is in the window while the proposal shows:
+    /// read as the other parts read theirs, so a key with ⇧ works too. A pane in a tab behind is hidden, and never asked.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard proposal != nil, !decided, accept.isEnabled,
+              KeyboardShortcuts.shared.partCommand(for: event, in: .diff) == "diff.accept" else { return super.performKeyEquivalent(with: event) }
+        accept.performClick(nil)
+        return true
+    }
+
+    /// For the self-test: Accept's tooltip.
+    var acceptToolTip: String? { accept.toolTip }
     @objc private func rejectClicked() { decide(false); closeSelf() }
 
     private func closeSelf() {
@@ -277,7 +289,8 @@ final class DiffPane: NSView {
                 button.target = self
                 button.action = action
             }
-            acceptKey = ButtonShortcut(accept, "diff.accept", tip: "Accept", ": \(proposal.author) then writes the file")
+            acceptKey = PartToolTip(accept, "Accept", command: "diff.accept", then: ": \(proposal.author) then writes the file")
+            accept.bezelColor = .controlAccentColor // what ⌘↩ as its own key equivalent made it, as the window's default button
             reject.toolTip = "Reject: the file stays as it is"
             header.setViews([pathLabel, counts, NSView(), previous, position, next, reject, accept], in: .leading)
         } else if let commit {
