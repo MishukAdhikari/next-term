@@ -409,6 +409,8 @@ final class CompletionSession {
         let row = terminal.getTopVisibleRow() + terminal.getCursorLocation().y
         if lineInOutput || caretRow == nil {
             caretRow = row
+            // The line is drawn now: the list moves to where its word is.
+            changed()
         } else if row != caretRow {
             closeList()
         }

@@ -172,13 +172,23 @@ final class CompletionController {
         return nil
     }
 
-    /// The screen rectangle of the word's first cell: the caret's, moved back by the word's width in cells.
+    /// The screen rectangle of the word's first cell: the cursor's cell (read from the terminal, which is
+    /// ahead of the caret view while output is drawn), moved back by the word's width in cells. The cell's
+    /// size is the caret's.
     private func anchor(_ tab: TerminalTab, word: String) -> NSRect {
-        let caret = tab.view.firstRect(forCharacterRange: NSRange(location: 0, length: 0), actualRange: nil)
-        let cell = ("W" as NSString).size(withAttributes: [.font: tab.view.font]).width
+        let view = tab.view
+        let terminal = view.getTerminal()
+        let caret = view.firstRect(forCharacterRange: NSRange(location: 0, length: 0), actualRange: nil)
+        let cellWidth = caret.width > 0 ? caret.width : ("W" as NSString).size(withAttributes: [.font: view.font]).width
+        let cellHeight = caret.height > 0 ? caret.height : view.frame.height / CGFloat(max(terminal.rows, 1))
         var cells = 0
         for scalar in word.unicodeScalars { cells += max(0, Int(wcwidth(wchar_t(bitPattern: scalar.value)))) }
-        return NSRect(x: caret.minX - CGFloat(cells) * cell, y: caret.minY, width: cell, height: caret.height)
+        let cursor = terminal.getCursorLocation()
+        let column = max(0, cursor.x - cells)
+        let local = NSPoint(x: cellWidth * CGFloat(column), y: view.frame.height - cellHeight * CGFloat(cursor.y + 1))
+        guard let window = view.window else { return caret }
+        let origin = window.convertPoint(toScreen: view.convert(local, to: nil))
+        return NSRect(x: origin.x, y: origin.y, width: cellWidth, height: cellHeight)
     }
 
     private func hide() {
