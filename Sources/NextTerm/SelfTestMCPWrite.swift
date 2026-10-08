@@ -61,10 +61,12 @@ extension SelfTest {
         put(".gitignore", ".no-hooks/\n")
         git("add", "-A")
         git("commit", "-qm", "start")
-        if !app.controllers.contains(where: { $0.project.map { proj.path == $0 || proj.path.hasPrefix($0 + "/") } ?? false }) {
-            _ = app.openFolder(proj.path, newWindow: false)
+        // The window the tools pick for a file in the project: the one whose project holds it, the innermost.
+        func holders() -> [TerminalWindowController] {
+            app.controllers.filter { $0.project.map { proj.path == $0 || proj.path.hasPrefix($0 + "/") } ?? false }
         }
-        guard let pc = app.controllers.first(where: { $0.project.map { proj.path == $0 || proj.path.hasPrefix($0 + "/") } ?? false }) else {
+        if holders().isEmpty { _ = app.openFolder(proj.path, newWindow: false) }
+        guard let pc = holders().max(by: { ($0.project?.count ?? 0) < ($1.project?.count ?? 0) }) else {
             return check(false, "MCP writes: the self-test's project is open")
         }
         let notes = root.appendingPathComponent("notes.txt").path
