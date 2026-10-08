@@ -21,13 +21,13 @@ import Testing
     }
 
     @Test func aNewSkillGoesInTheSharedFolderWithALinkForClaude() {
-        let plan = SkillInstall.plan(name: "skill-creator", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), linkForClaude: true, sameSource: false)
+        let plan = SkillInstall.plan(name: "skill-creator", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), claude: .link, package: nil, sameSource: false)
         #expect(plan.existing == .none)
         #expect(plan.steps == [.copy(from: staged, to: ready), .move(from: ready, to: home + "/.agents/skills/skill-creator"),
                                .link(at: home + "/.claude/skills/skill-creator", to: home + "/.agents/skills/skill-creator")])
         #expect(plan.agents == [.claudeCode, .codex, .commandCode])
 
-        let noLink = SkillInstall.plan(name: "skill-creator", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), linkForClaude: false, sameSource: false)
+        let noLink = SkillInstall.plan(name: "skill-creator", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), claude: .skip, package: nil, sameSource: false)
         #expect(noLink.steps.count == 2 && noLink.agents == [.codex, .commandCode])
     }
 
@@ -35,7 +35,7 @@ import Testing
     @Test func anExistingNameIsAConflictThatReplaceClears() throws {
         try skill(".commandcode/skills", "skill-creator", body: "hand-made")
         try skill(".claude/skills", "skill-creator", body: "another")
-        let plan = SkillInstall.plan(name: "skill-creator", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), linkForClaude: true, sameSource: false)
+        let plan = SkillInstall.plan(name: "skill-creator", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), claude: .link, package: nil, sameSource: false)
         #expect(plan.existing == .conflict && plan.replaced.count == 2)
         // The new copy is made first; only then do the others go, and it takes their place.
         #expect(plan.steps.first == .copy(from: staged, to: ready))
@@ -47,12 +47,12 @@ import Testing
     @Test func theSameSourceIsAnUpdateAndKeepsTheLink() throws {
         try skill(".agents/skills", "skill-creator", body: "v1")
         try FileManager.default.createSymbolicLink(atPath: home + "/.claude/skills/skill-creator", withDestinationPath: "../../.agents/skills/skill-creator")
-        let plan = SkillInstall.plan(name: "skill-creator", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), linkForClaude: true, sameSource: true)
+        let plan = SkillInstall.plan(name: "skill-creator", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), claude: .link, package: nil, sameSource: true)
         #expect(plan.existing == .update && plan.keptLink != nil)
         #expect(plan.steps == [.copy(from: staged, to: ready), .trash(home + "/.agents/skills/skill-creator"),
                                .move(from: ready, to: home + "/.agents/skills/skill-creator")])
         // From another source, the same files are a conflict.
-        #expect(SkillInstall.plan(name: "skill-creator", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), linkForClaude: true, sameSource: false).existing == .conflict)
+        #expect(SkillInstall.plan(name: "skill-creator", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), claude: .link, package: nil, sameSource: false).existing == .conflict)
     }
 
     @Test func foldersNextTermDoesNotOwnAreNamedNotTouched() throws {
@@ -60,14 +60,14 @@ import Testing
         try skill(".codex/skills/.system", "skill-creator")
         let project = home + "/code/app"
         try skill("code/app/.claude/skills", "skill-creator")
-        let plan = SkillInstall.plan(name: "skill-creator", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), linkForClaude: true,
+        let plan = SkillInstall.plan(name: "skill-creator", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), claude: .link, package: nil,
                                      sameSource: false, projects: [project])
         #expect(plan.existing == .none && plan.untouched.count == 3)
         #expect(!plan.steps.contains { if case .trash = $0 { return true }; return false })
     }
 
     @Test func aNameThatHidesAClaudeCommandIsNamed() {
-        let plan = SkillInstall.plan(name: "usage", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), linkForClaude: true, sameSource: false)
+        let plan = SkillInstall.plan(name: "usage", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), claude: .link, package: nil, sameSource: false)
         #expect(plan.untouched.contains { $0.contains("/usage") })
     }
 
@@ -75,7 +75,7 @@ import Testing
     @Test func aStrayFileAtTheTargetIsAConflict() throws {
         try FileManager.default.createDirectory(atPath: home + "/.agents/skills", withIntermediateDirectories: true)
         try "stray".write(toFile: home + "/.agents/skills/skill-creator", atomically: true, encoding: .utf8)
-        let plan = SkillInstall.plan(name: "skill-creator", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), linkForClaude: false, sameSource: false)
+        let plan = SkillInstall.plan(name: "skill-creator", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), claude: .skip, package: nil, sameSource: false)
         #expect(plan.existing == .conflict && plan.steps.dropFirst().first == .trash(home + "/.agents/skills/skill-creator"))
     }
 
@@ -84,7 +84,7 @@ import Testing
         try skill(".agents/skills", "skill-creator", body: "v1")
         try FileManager.default.createDirectory(atPath: home + "/.commandcode/skills", withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(atPath: home + "/.commandcode/skills/skill-creator", withDestinationPath: "../../.agents/skills/skill-creator")
-        let plan = SkillInstall.plan(name: "skill-creator", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), linkForClaude: false, sameSource: true)
+        let plan = SkillInstall.plan(name: "skill-creator", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), claude: .skip, package: nil, sameSource: true)
         #expect(plan.existing == .update && plan.keptOtherLinks.count == 1)
         #expect(!plan.steps.contains(.trash(home + "/.commandcode/skills/skill-creator")))
         // Removing it takes that link too, so nothing is left pointing at nothing.
@@ -97,5 +97,267 @@ import Testing
         try skill(".codex/skills", "skill-creator", body: "hand-made")
         let steps = SkillInstall.removal(name: "skill-creator", inventory: SkillInventory.scan(home: home))
         #expect(steps == [.trash(home + "/.claude/skills/skill-creator"), .trash(home + "/.agents/skills/skill-creator")])
+    }
+}
+
+/// Claude Code's link to a skill folder that is also a Claude Code plugin: what the review offers first,
+/// what each choice does on disk, and the plugins its name meets. Nothing here writes Claude Code's files.
+@Suite struct SkillClaudeLinkTests {
+    let home: String
+    let staged: String
+    let ready: String
+    let link: String
+    init() throws {
+        home = FileManager.default.temporaryDirectory.appendingPathComponent("nt-claude-link-\(UUID().uuidString)").path
+        staged = home + "/staging/writing-helper"
+        ready = home + "/ready/writing-helper"
+        link = home + "/.claude/skills/writing-helper"
+        try FileManager.default.createDirectory(atPath: staged, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: home + "/.claude/skills", withIntermediateDirectories: true)
+    }
+
+    static let server = #"{"mcpServers": {"docs": {"command": "node", "args": ["server.js"]}}}"#
+    static let hooks = #"{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "./start.sh"}]}]}}"#
+
+    func write(_ path: String, _ text: String) throws {
+        let full = (home as NSString).appendingPathComponent(path)
+        try FileManager.default.createDirectory(atPath: (full as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        try text.write(toFile: full, atomically: true, encoding: .utf8)
+    }
+
+    /// A skill folder in `folder` (under the home), a Claude Code plugin named `plugin` unless nil.
+    func skill(_ folder: String, plugin: String?, manifest: String = "", body: String = "Body", _ files: [String: String] = [:]) throws {
+        let name = (folder as NSString).lastPathComponent
+        try write(folder + "/SKILL.md", "---\nname: \(name)\ndescription: The \(name) skill.\n---\n\(body)\n")
+        if let plugin { try write(folder + "/.claude-plugin/plugin.json", "{\"name\": \"\(plugin)\"" + (manifest.isEmpty ? "" : ", " + manifest) + "}") }
+        for (path, text) in files { try write(folder + "/" + path, text) }
+    }
+
+    /// The download, read as the review reads it.
+    func stage(plugin: String? = "writing-helper", manifest: String = "", body: String = "Body", _ files: [String: String] = [:]) throws -> SkillPackage? {
+        try skill("staging/writing-helper", plugin: plugin, manifest: manifest, body: body, files)
+        return SkillPackage.read(folder: staged, folderName: "writing-helper")
+    }
+
+    /// Installed before in the shared folder, and linked for Claude Code unless `linked` is false.
+    @discardableResult
+    func install(plugin: String? = "writing-helper", linked: Bool = true, _ files: [String: String] = [:]) throws -> SkillPackage? {
+        try skill(".agents/skills/writing-helper", plugin: plugin, body: "v1", files)
+        if linked { try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: "../../.agents/skills/writing-helper") }
+        return SkillPackage.read(folder: home + "/.agents/skills/writing-helper", folderName: "writing-helper")
+    }
+
+    func plan(_ claude: SkillInstall.ClaudeLink, _ package: SkillPackage?, facts: SkillClaudeSettings.Snapshot = .init(),
+              ticked: [String: String] = [:]) -> SkillInstallPlan {
+        SkillInstall.plan(name: "writing-helper", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), claude: claude,
+                          package: package, facts: facts, ticked: ticked, sameSource: true)
+    }
+
+    func defaultLink(_ package: SkillPackage?, installed: SkillPackage? = nil, facts: SkillClaudeSettings.Snapshot = .init(),
+                     ticked: [String: String] = [:]) -> SkillInstall.ClaudeLink {
+        let shown = plan(.skip, package, facts: facts, ticked: ticked)
+        return SkillInstall.defaultClaudeLink(shown, package: package, installed: installed, facts: facts)
+    }
+
+    func makesLink(_ plan: SkillInstallPlan) -> Bool { plan.steps.contains { if case .link = $0 { return true }; return false } }
+
+    // MARK: the default (the High-Level Technical Design's table)
+
+    /// AE1: a plugin with a server and hooks is left out of Claude Code by default.
+    @Test func aPluginThatRunsSomethingIsLeftOut() throws {
+        let package = try stage([".mcp.json": Self.server, "hooks/hooks.json": Self.hooks])
+        #expect(defaultLink(package) == .skip)
+        let left = plan(.skip, package)
+        #expect(!makesLink(left) && !left.agents.contains(.claudeCode) && left.agents == [.codex, .commandCode])
+        let added = plan(.link, package)
+        #expect(makesLink(added) && added.agents.contains(.claudeCode))
+    }
+
+    /// AE5: a manifest with only allowlisted keys and no parts is linked, as the checkbox always was; a
+    /// plain skill too. `defaultEnabled: false` alone does not make a plugin that runs something safe.
+    @Test func aPluginThatRunsNothingIsLinked() throws {
+        #expect(defaultLink(try stage(manifest: #""skills": ["./"]"#)) == .link)
+        #expect(defaultLink(try stage(plugin: nil)) == .link)
+        let offByManifest = try stage(manifest: #""defaultEnabled": false"#, [".mcp.json": Self.server])
+        #expect(offByManifest?.claude?.defaultEnabled == false && defaultLink(offByManifest) == .skip)
+    }
+
+    /// Row 1: the user turned the plugin off in /plugin. Claude Code loads nothing from it until it is
+    /// turned on there, so it is linked, with or without a link already, clash or not; nothing is written.
+    @Test func theUsersKeyFalseLinksIt() throws {
+        let package = try stage([".mcp.json": Self.server])
+        let off = SkillClaudeSettings.Snapshot(values: ["writing-helper@skills-dir": false], synced: [.init(name: "writing-helper", displayName: nil)])
+        #expect(defaultLink(package, facts: off) == .link)
+        let on = SkillClaudeSettings.Snapshot(values: ["writing-helper@skills-dir": true])
+        #expect(defaultLink(package, facts: on) == .skip)
+        let installed = try install()
+        #expect(defaultLink(package, installed: installed, facts: off) == .link)
+    }
+
+    /// Row 2 and AE6: an update keeps its link while it declares the same parts; a new server takes it away.
+    @Test func anUpdateKeepsItsLinkUntilItsPartsChange() throws {
+        let installed = try install([".mcp.json": Self.server, "hooks/hooks.json": Self.hooks])
+        let same = try stage(manifest: #""version": "2.0.0", "description": "Newer.""#, body: "New text",
+                             [".mcp.json": Self.server, "hooks/hooks.json": Self.hooks])
+        #expect(defaultLink(same, installed: installed) == .link)
+        let kept = plan(.link, same)
+        #expect(kept.keptLink != nil && !makesLink(kept) && !kept.steps.contains(.trash(link)) && kept.agents.contains(.claudeCode))
+
+        let more = try stage([".mcp.json": Self.server, "hooks/hooks.json": Self.hooks, ".lsp.json": #"{"go": {"command": "gopls"}}"#])
+        #expect(defaultLink(more, installed: installed) == .skip)
+        // Left out, the link goes before the new copy moves into place; Undo puts it back.
+        let left = plan(.skip, more)
+        let trash = try #require(left.steps.firstIndex(of: .trash(link)))
+        let move = try #require(left.steps.firstIndex(of: .move(from: ready, to: home + "/.agents/skills/writing-helper")))
+        #expect(trash < move && !left.agents.contains(.claudeCode) && !makesLink(left))
+    }
+
+    /// A changed hook command, a new key outside the allowlist or a new program in bin/ are new parts.
+    @Test(arguments: [
+        ["hooks/hooks.json": #"{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "./other.sh"}]}]}}"#],
+        [".claude-plugin/plugin.json": #"{"name": "writing-helper", "userConfig": {"token": {"type": "string"}}}"#],
+        ["bin/tidy": "#!/bin/sh\n"],
+    ])
+    func newPartsAreNotTheSame(_ files: [String: String]) throws {
+        let installed = try install(["hooks/hooks.json": Self.hooks])
+        let package = try stage(["hooks/hooks.json": Self.hooks].merging(files) { $1 })
+        #expect(defaultLink(package, installed: installed) == .skip)
+    }
+
+    /// With no link today, the same parts don't make a link: a plugin that runs something stays out.
+    @Test func samePartsWithoutALinkStayOut() throws {
+        let installed = try install(linked: false, [".mcp.json": Self.server])
+        #expect(defaultLink(try stage([".mcp.json": Self.server]), installed: installed) == .skip)
+    }
+
+    /// Anything unread counts as running (KTD13), and an installed copy that can't be read is never the same.
+    @Test func unreadFilesLeaveItOut() throws {
+        let installed = try install([".mcp.json": Self.server])
+        let broken = try stage([".mcp.json": "{\"mcpServers\": "])
+        #expect(broken?.claude?.unread.isEmpty == false && defaultLink(broken, installed: installed) == .skip)
+        try write(".agents/skills/writing-helper/.mcp.json", "{")
+        let unreadable = SkillPackage.read(folder: home + "/.agents/skills/writing-helper", folderName: "writing-helper")
+        #expect(defaultLink(try stage([".mcp.json": Self.server]), installed: unreadable) == .skip)
+    }
+
+    @Test func severalPluginFoldersTakeTheSafestDefault() {
+        #expect(SkillInstall.ClaudeLink.safest([.link, .skip, .link]) == .skip)
+        #expect(SkillInstall.ClaudeLink.safest([.link, .link]) == .link)
+        #expect(SkillInstall.ClaudeLink.safest([]) == .link)
+    }
+
+    // MARK: what each choice does
+
+    /// A plain skill left out keeps the link it has, as an unticked box always did.
+    @Test func aPlainSkillLeftOutKeepsItsLink() throws {
+        try install(plugin: nil)
+        let plan = plan(.skip, try stage(plugin: nil))
+        #expect(plan.keptLink != nil && !plan.steps.contains(.trash(link)) && plan.agents.contains(.claudeCode))
+    }
+
+    /// Only a link looks for something in the way in Claude Code's folder.
+    @Test func onlyALinkLooksInClaudesFolder() throws {
+        try write(".claude/skills/writing-helper", "A stray file.")
+        let package = try stage([".mcp.json": Self.server])
+        let linked = plan(.link, package)
+        #expect(linked.existing == .conflict && linked.steps.contains(.trash(link)))
+        let left = plan(.skip, package)
+        #expect(left.existing == .none && !left.steps.contains(.trash(link)))
+    }
+
+    /// No choice writes anything but the skill folders: never Claude Code's settings.
+    @Test func noPlanWritesOutsideTheSkillFolders() throws {
+        try install([".mcp.json": Self.server])
+        try write(".claude/settings.json", #"{"enabledPlugins": {"writing-helper@skills-dir": false}}"#)
+        let facts = SkillClaudeSettings.snapshot(home: home, keys: ["writing-helper@skills-dir"])
+        let places = [staged, ready, home + "/.agents/skills/", home + "/.claude/skills/"]
+        for package in [try stage([".mcp.json": Self.server]), try stage(plugin: nil)] {
+            for choice in [SkillInstall.ClaudeLink.link, .skip] {
+                for step in plan(choice, package, facts: facts).steps {
+                    let paths: [String]
+                    switch step {
+                    case .trash(let path): paths = [path]
+                    case .copy(_, let to): paths = [to]
+                    case .link(let at, _): paths = [at]
+                    case .move(_, let to): paths = [to]
+                    case .lockEntry(let path, _, _), .recordEntry(let path, _, _): paths = [path]
+                    }
+                    #expect(paths.allSatisfy { path in places.contains { path.hasPrefix($0) } }, "\(step)")
+                }
+            }
+        }
+    }
+
+    // MARK: clashes
+
+    /// AE4: a plugin synced from claude.ai of the same name, compared as Claude Code compares names.
+    @Test func aSyncedPluginOfTheSameNameIsAWarningAndLeavesItOut() throws {
+        let package = try stage(manifest: #""skills": ["./"]"#)
+        for synced in ["writing-helper", "Writing-Helper"] {
+            let facts = SkillClaudeSettings.Snapshot(synced: [.init(name: synced, displayName: nil)])
+            let plan = plan(.skip, package, facts: facts)
+            #expect(plan.clashes.map(\.kind) == [.synced] && plan.clashes.allSatisfy(\.warning))
+            let text = "You have a plugin named “\(synced)” from claude.ai. Added, this folder replaces it in Claude Code sessions, "
+                + "and Claude Code reports yours as not loaded."
+            #expect(plan.untouched.contains(text))
+            #expect(defaultLink(package, facts: facts) == .skip, "even though it runs nothing")
+        }
+    }
+
+    /// AE4: a look-alike of a name or a display name.
+    @Test func aLookalikeIsAWarningAndLeavesItOut() throws {
+        let package = try stage(manifest: #""skills": ["./"]"#)
+        let underscore = SkillClaudeSettings.Snapshot(synced: [.init(name: "writing_helper", displayName: nil)])
+        let plan = plan(.skip, package, facts: underscore)
+        #expect(plan.clashes.map(\.kind) == [.lookalike] && plan.clashes.first?.warning == true)
+        #expect(plan.untouched.contains("Its plugin name looks like your plugin “writing_helper” from claude.ai."))
+        #expect(defaultLink(package, facts: underscore) == .skip)
+        let display = SkillClaudeSettings.Snapshot(synced: [.init(name: "wh", displayName: "Writing Helper")])
+        #expect(self.plan(.skip, package, facts: display).clashes.map(\.kind) == [.lookalike])
+        let installed = SkillClaudeSettings.Snapshot(installed: [.init(name: "writing.helper", marketplace: "m", scopes: ["user"], enabled: true)])
+        #expect(self.plan(.skip, package, facts: installed).untouched.contains("Its plugin name looks like your plugin “writing.helper” from “m”."))
+        let unrelated = SkillClaudeSettings.Snapshot(synced: [.init(name: "reading-helper", displayName: "Reader")])
+        #expect(self.plan(.skip, package, facts: unrelated).clashes.isEmpty && defaultLink(package, facts: unrelated) == .link)
+    }
+
+    /// H7: installed for the user, on or off, Claude Code keeps that one; installed for a project, only there.
+    @Test func installedPluginsGiveTheirNote() throws {
+        let package = try stage([".mcp.json": Self.server])
+        let user = "You have a plugin named “writing-helper” installed from “some-market”. Claude Code keeps that one, even turned off, "
+            + "and won't load this folder as a plugin."
+        for enabled in [true, false] {
+            let facts = SkillClaudeSettings.Snapshot(installed: [.init(name: "writing-helper", marketplace: "some-market", scopes: ["user"], enabled: enabled)])
+            let plan = plan(.skip, package, facts: facts)
+            #expect(plan.clashes.map(\.kind) == [.installed] && plan.untouched.contains(user) && !plan.clashes[0].warning)
+        }
+        let project = SkillClaudeSettings.Snapshot(installed: [.init(name: "writing-helper", marketplace: "some-market", scopes: ["project", "local"], enabled: nil)])
+        let text = "You have a plugin named “writing-helper” from “some-market”, installed for a project. In that project Claude Code keeps it; "
+            + "elsewhere it loads this folder as a plugin."
+        #expect(plan(.skip, package, facts: project).untouched.contains(text))
+        #expect(plan(.skip, package, facts: project).clashes.map(\.kind) == [.installedForProject])
+        #expect(defaultLink(try stage(manifest: #""skills": ["./"]"#), facts: project) == .skip)
+    }
+
+    /// Another folder Claude Code reads, or another ticked skill, with the same plugin name. The skill's
+    /// own link does not count.
+    @Test func anotherFolderOrTickedSkillWithThePluginName() throws {
+        let package = try stage(manifest: #""skills": ["./"]"#)
+        try install()
+        #expect(plan(.skip, package).clashes.isEmpty && defaultLink(package) == .link)
+        try skill(".claude/skills/other-helper", plugin: "Writing-Helper")
+        let plan = plan(.skip, package)
+        let text = "~/.claude/skills/other-helper is also a Claude Code plugin named “Writing-Helper”. Claude Code loads only one of them, "
+            + "and “writing-helper@skills-dir”: false turns off both."
+        #expect(plan.clashes.map(\.kind) == [.skillsDir] && plan.untouched.contains(text))
+        #expect(defaultLink(package) == .skip)
+        let ticked = self.plan(.skip, package, ticked: ["writing-helper": "writing-helper", "notes": "writing-helper"])
+        #expect(ticked.untouched.contains { $0.hasPrefix("“notes”, also ticked here, is also a Claude Code plugin named “writing-helper”.") })
+        #expect(ticked.clashes.count == 2)
+    }
+
+    /// A plain skill has no plugin, so no clash, whatever the user has.
+    @Test func aPlainSkillHasNoClash() throws {
+        let facts = SkillClaudeSettings.Snapshot(synced: [.init(name: "writing-helper", displayName: nil)])
+        #expect(plan(.link, try stage(plugin: nil), facts: facts).clashes.isEmpty)
     }
 }

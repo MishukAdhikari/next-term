@@ -25,7 +25,10 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
     private(set) var details = NSTextField(wrappingLabelWithString: "")
     private let fileChoice = NSPopUpButton()
     private(set) var textView: NSTextView!
-    private let claudeLink = NSButton(checkboxWithTitle: "Link it for Claude Code (in ~/.claude/skills)", target: nil, action: nil)
+    /// Claude Code's link for plain skills (readable by the self-test).
+    let claudeLink = NSButton(checkboxWithTitle: "Link it for Claude Code (in ~/.claude/skills)", target: nil, action: nil)
+    /// Claude Code is on this Mac, with a skills folder of its own: links can be made.
+    private var claudeAvailable = false
     private(set) var installButton = NSButton(title: "Install", target: nil, action: nil)
     private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
 
@@ -136,7 +139,8 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
         claudeLink.target = self
         claudeLink.action = #selector(linkChanged)
         let claudeHere = FileManager.default.fileExists(atPath: (SkillsStore.home as NSString).appendingPathComponent(".claude"))
-        claudeLink.isHidden = fetched.inventory.root(.claude) == nil || !claudeHere
+        claudeAvailable = fetched.inventory.root(.claude) != nil && claudeHere
+        claudeLink.isHidden = !claudeAvailable
         if !claudeHere { claudeLink.state = .off }
         installButton.target = self
         installButton.action = #selector(install)
@@ -188,7 +192,9 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
-        if list.selectedRow >= 0 { show(list.selectedRow) }
+        guard list.selectedRow >= 0 else { return }
+        show(list.selectedRow)
+        updateInstallButton()
     }
 
     @objc private func tickChanged(_ sender: NSButton) {
@@ -202,12 +208,24 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
         updateInstallButton()
     }
 
-    private var linkForClaude: Bool { !claudeLink.isHidden && claudeLink.state == .on }
+    private var chosen: [SkillsInstaller.Candidate] { ticked.sorted().map { fetched.candidates[$0] } }
+
+    /// Claude Code's link for one skill: the checkbox for a plain skill. A folder that is also a Claude
+    /// Code plugin gets the review's default (SkillsInstaller.defaultClaudeLink), so one that runs
+    /// something is left out.
+    private func claudeChoice(_ candidate: SkillsInstaller.Candidate) -> SkillInstall.ClaudeLink {
+        guard claudeAvailable else { return .skip }
+        if candidate.review.package?.claude != nil { return SkillsInstaller.defaultClaudeLink(candidate, fetched: fetched, together: chosen) }
+        return claudeLink.state == .on ? .link : .skip
+    }
 
     private func updateInstallButton() {
-        let chosen = ticked.sorted().map { fetched.candidates[$0] }
+        let chosen = chosen
         installButton.isEnabled = !chosen.isEmpty && chosen.allSatisfy(\.installable)
-        let plans = chosen.map { SkillsInstaller.plan($0, fetched: fetched, linkForClaude: linkForClaude) }
+        // The checkbox sets plain skills only: shown when one is ticked, or selected with none ticked.
+        let shown = chosen.isEmpty && fetched.candidates.indices.contains(selected) ? [fetched.candidates[selected]] : chosen
+        claudeLink.isHidden = !claudeAvailable || !shown.contains { $0.review.package?.claude == nil }
+        let plans = chosen.map { SkillsInstaller.plan($0, fetched: fetched, claude: claudeChoice($0), together: chosen) }
         if chosen.count > 1 { installButton.title = "Install \(chosen.count) Skills" }
         else if plans.first?.existing == .update { installButton.title = "Update" }
         else if plans.first?.existing == .conflict { installButton.title = "Replace and Install" }
@@ -225,7 +243,7 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
         var lines: [String] = []
         if let description = review.frontMatter?.description { lines.append(SkillReview.revealHidden(description)) }
         lines.append("")
-        let plan = SkillsInstaller.plan(candidate, fetched: fetched, linkForClaude: linkForClaude)
+        let plan = SkillsInstaller.plan(candidate, fetched: fetched, claude: claudeChoice(candidate), together: chosen)
         if let refusal = candidate.refusal { lines.append("⛔ Can't be installed: \(refusal)") }
         for flag in review.flags where flag.level == .refuse { lines.append("⛔ Can't be installed: \(flag.text)\(flag.file.isEmpty ? "" : " (\(flag.file))")") }
         let names = plan.agents.map(\.title)
@@ -328,12 +346,14 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
     }
 
     @objc private func install() {
-        let chosen = ticked.sorted().map { fetched.candidates[$0] }
+        let chosen = chosen
         guard !chosen.isEmpty, chosen.allSatisfy(\.installable) else { return }
         installButton.isEnabled = false
         cancelButton.isEnabled = false
+        var choices: [String: SkillInstall.ClaudeLink] = [:]
+        for candidate in chosen { choices[candidate.name] = claudeChoice(candidate) }
         Task {
-            let result = await SkillsInstaller.install(chosen, fetched: fetched, linkForClaude: linkForClaude)
+            let result = await SkillsInstaller.install(chosen, fetched: fetched, claude: choices)
             cancelButton.isEnabled = true
             switch result {
             case .success(let note):
@@ -353,9 +373,10 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
                     }
                     return
                 }
-                // The skill folders changed since the review: redraw it from the disk as it is now.
-                if failure.message.hasPrefix("Your skill folders changed") {
-                    fetched = fetched.with(inventory: await SkillsStore.scan())
+                // The skill folders or Claude Code's plugins changed since the review: redraw it from the
+                // disk as it is now.
+                if failure.message.hasPrefix("Your skill folders changed") || failure.message.hasPrefix("Your Claude Code plugins changed") {
+                    fetched = fetched.with(inventory: await SkillsStore.scan(), claude: await SkillsInstaller.claudeFacts(fetched.candidates))
                     show(selected)
                 }
                 // The download is kept after a failure, so Install can be tried again once the cause is fixed.

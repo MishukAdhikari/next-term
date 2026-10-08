@@ -509,7 +509,7 @@ final class SkillsUnifySheet: NSObject {
         choiceChanged()
         alert.beginSheetModal(for: window) { [self] response in
             guard response == .alertFirstButtonReturn, let winner, row.cannotWin(winner) == nil else { return done(nil) }
-            done(SkillUnify.plan(row, winner: winner, in: inventory))
+            done(SkillUnify.plan(row, winner: winner, in: inventory, claude: .link))
         }
     }
 
@@ -523,7 +523,7 @@ final class SkillsUnifySheet: NSObject {
         }
         unifyButton?.isEnabled = true
         // The staging copy is a detail: show "copy the winner to the shared folder" once.
-        let steps = SkillUnify.plan(row, winner: winner, in: inventory)
+        let steps = SkillUnify.plan(row, winner: winner, in: inventory, claude: .link)
         var placed: [String: String] = [:]
         for step in steps { if case .move(let from, let to) = step { placed[from] = to } }
         var lines = steps.compactMap { step -> String? in
@@ -536,7 +536,7 @@ final class SkillsUnifySheet: NSObject {
         if row.copies.contains(where: { $0.hasGit && $0.realPath != winner.realPath }) {
             lines.append("A copy that goes to the Trash is a git clone: its history goes with it (Undo puts it back)")
         }
-        for agent in SkillUnify.switchesLost(row, in: inventory) {
+        for agent in SkillUnify.switchesLost(row, winner: winner, in: inventory, claude: .link) {
             lines.append("\(agent.title) switches this skill off under its old name or place: after Unify it loads it again, until you switch it off there")
         }
         let gained = SkillUnify.gained(row, in: inventory)

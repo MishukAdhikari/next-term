@@ -1,4 +1,5 @@
 import CoreFoundation
+import CryptoKit
 import Foundation
 
 // What else a skill folder is: a plugin or extension that an agent loads as a package, and, for Claude
@@ -159,8 +160,20 @@ public struct SkillPackage: Equatable, Sendable {
         /// Servers, hooks, monitors, LSP servers, bin/ programs, a plugin settings.json or keys Next Term
         /// does not check, or something unread: parts that run by themselves, or may.
         public let startsPrograms: Bool
+        /// A digest of what it declares that starts by itself (PackageReader.partsFingerprint); nil when
+        /// something could not be read or leads outside the folder.
+        public let partsFingerprint: String?
 
         public var partCount: Int { partCounts.values.reduce(0, +) }
+
+        /// It declares the same parts as `other`, the installed copy, so an update keeps its link by default:
+        /// the same manifest keys outside the allowlist, the same files of servers, hooks, monitors, LSP
+        /// servers and plugin settings, byte for byte, and the same names in bin/. A copy that could not be
+        /// read in full is never the same.
+        public func sameParts(as other: ClaudePlugin?) -> Bool {
+            guard let mine = partsFingerprint, let theirs = other?.partsFingerprint else { return false }
+            return mine == theirs
+        }
 
         /// The manifest has a name without spaces. Claude Code 2.1.280 loads the folder as a plugin only
         /// then, and otherwise only the plain skill (hand check H2). The default still goes by
@@ -1146,8 +1159,29 @@ extension PackageReader {
             programs: Array(found.programs.prefix(SkillPackage.cap)), programCount: found.programs.count,
             commonCommands: found.programs.filter(SkillPackage.commonCommands.contains),
             unknownKeys: found.unknownKeys, brings: shownBrought, bringCount: brought.count, links: found.uniqueLinks,
-            outside: found.outside, unread: unread, runsNothing: runsNothing, startsPrograms: startsPrograms)
+            outside: found.outside, unread: unread, runsNothing: runsNothing, startsPrograms: startsPrograms,
+            partsFingerprint: partsFingerprint(manifest, file: file, found: found))
         let flags = SkillPackage.claudeFlags(plugin, allServers: found.servers, allBrings: allBrought, programsFolder: spelling("bin"))
         return (plugin, flags)
+    }
+
+    /// What a plugin declares that starts by itself, as one digest: the manifest's keys outside the
+    /// allowlist, the bytes of every file that declares a server, hook, monitor, LSP server or plugin
+    /// settings, and the names in bin/. Nil when something could not be read or leads outside: then no two
+    /// copies count as the same. A file that declares none of these (a hooks.json with no hooks) does not count.
+    func partsFingerprint(_ manifest: [String: Any], file: String, found: Found) -> String? {
+        guard found.unread.isEmpty, found.outside.isEmpty else { return nil }
+        let declared = manifest.filter { !Self.allowlist.contains($0.key) }
+        guard let keys = try? JSONSerialization.data(withJSONObject: declared, options: [.sortedKeys]) else { return nil }
+        var hasher = SHA256()
+        hasher.update(data: keys)
+        let declaring = Set(found.servers.map(\.file) + found.parts.map(\.file)).subtracting([file])
+        for path in declaring.sorted() {
+            guard case .success(let data)? = contents(path) else { return nil }
+            hasher.update(data: Data("\u{0}file\u{0}\(path)\u{0}".utf8))
+            hasher.update(data: Data(SHA256.hash(data: data)))
+        }
+        hasher.update(data: Data(("\u{0}bin\u{0}" + found.programs.joined(separator: "\u{0}")).utf8))
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }

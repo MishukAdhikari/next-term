@@ -3,8 +3,8 @@ import Foundation
 /// A JSON text read as written: where each value and member sits (UTF-8 byte offsets into the text),
 /// each object's keys decoded, and why a text is not plain JSON. The skills review uses it to trust an
 /// agent's JSON file only when every reader takes it the same way (Claude Code keeps the last of two
-/// equal keys, Foundation may not), and to change one member of another app's settings while every
-/// other byte stays as it was. Strict JSON (RFC 8259) only: no comments, no trailing commas.
+/// equal keys, Foundation may not), and to read Claude Code's settings as Claude Code reads them. It
+/// never writes. Strict JSON (RFC 8259) only: no comments, no trailing commas.
 public enum SkillJSONText {
     public enum Problem: String, Error, Equatable, Sendable {
         /// Nothing but spaces.

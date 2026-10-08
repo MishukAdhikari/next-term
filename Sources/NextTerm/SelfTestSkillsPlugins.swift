@@ -5,7 +5,10 @@ import NextTermCore
 /// network, on the self-test's own home folder. Nothing here starts Claude Code, Codex or any of the
 /// plugin's parts: they are only read.
 extension SelfTest {
-    static func pluginReviewChecks(home: String) async {
+    /// A download of `example-org/plugin` at one commit, built without the network: a skill folder that is
+    /// also a Claude Code plugin with a server and hooks, and asks for MCP servers in Codex and Amp. The
+    /// home facts (Claude Code's plugins) are read from the self-test's home, as a fetch reads them.
+    static func pluginDownload(home: String) -> SkillsInstaller.Fetched {
         let manager = FileManager.default
         let scratch = SkillsInstaller.downloads.appendingPathComponent(UUID().uuidString)
         let top = scratch.appendingPathComponent("files/plugin-0123456").path
@@ -33,9 +36,15 @@ extension SelfTest {
         let source = SkillSource(owner: "example-org", repo: "plugin", path: "skills/demo-plugin")
         let resolved = SkillsGitHub.Resolved(source: source, commit: String(repeating: "0123456789", count: 4), date: nil, skills: [found], truncated: false)
         let candidates = SkillsInstaller.check([found], top: top, repo: "plugin")
-        let fetched = SkillsInstaller.Fetched(resolved: resolved, info: nil, scratch: scratch, candidates: candidates,
-                                              lockPath: SkillLock.path(home: home, environment: [:]), inventory: SkillsStore.inventory(),
-                                              editedSinceInstall: [], projects: [])
+        let claude = SkillClaudeSettings.snapshot(home: home, keys: [SkillClaudeSettings.key("demo-plugin")])
+        return SkillsInstaller.Fetched(resolved: resolved, info: nil, scratch: scratch, candidates: candidates,
+                                       lockPath: SkillLock.path(home: home, environment: [:]), inventory: SkillsStore.inventory(),
+                                       editedSinceInstall: [], projects: [], claude: claude)
+    }
+
+    static func pluginReviewChecks(home: String) async {
+        let fetched = pluginDownload(home: home)
+        let candidates = fetched.candidates
         defer { fetched.discard() }
 
         let sheet = SkillsReviewSheet(fetched: fetched) { _ in }
@@ -67,6 +76,7 @@ extension SelfTest {
         check(read && agents == ["Claude Code", "Codex", "Amp"],
               "skills plugins: the review reads the servers Claude Code, Codex and Amp would use", "\(claude) \(codex) \(amp) \(agents)")
         serverWarningChecks(details)
+        await pluginChoiceChecks(home: home)
     }
 
     /// Worth a look names each file that adds MCP servers or fetches server code outside the commit, and
@@ -88,5 +98,106 @@ extension SelfTest {
         let listed = [".mcp.json", "SKILL.md", ".claude-plugin/plugin.json", "agents/openai.yaml"]
         check(!listed.contains { warned(settings, $0) },
               "skills plugins: the files the review lists as declaring servers get no second warning for them", details)
+    }
+}
+
+extension SelfTest {
+    /// Claude Code's link for a plugin folder: left out by default, added on request, and never a write to
+    /// Claude Code's settings, in the self-test's home or the real one. The user's key set to false (as
+    /// /plugin sets it) shows as "off". Only digests and modes of the real settings file are compared;
+    /// nothing from it is printed or kept.
+    static func pluginChoiceChecks(home: String) async {
+        let manager = FileManager.default
+        let settings = (home as NSString).appendingPathComponent(".claude/settings.json")
+        let plugins = (home as NSString).appendingPathComponent(".claude/plugins")
+        let shared = (home as NSString).appendingPathComponent(".agents/skills/demo-plugin")
+        let link = (home as NSString).appendingPathComponent(".claude/skills/demo-plugin")
+        defer {
+            try? manager.removeItem(atPath: settings)
+            try? manager.removeItem(atPath: plugins)
+        }
+        func state(_ path: String) -> String? {
+            var info = stat()
+            guard stat(path, &info) == 0 else { return nil }
+            return (SkillHash.fileDigest(path) ?? "unreadable") + " " + String(UInt32(info.st_mode & 0o777), radix: 8)
+        }
+        func exists(_ path: String) -> Bool {
+            var info = stat()
+            return lstat(path, &info) == 0
+        }
+        func writeSettings(_ text: String) {
+            manager.createFile(atPath: settings, contents: Data(text.utf8))
+            chmod(settings, 0o600)
+        }
+        let realSettings = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/settings.json")
+        let realBefore = state(realSettings)
+        writeSettings("{\n  \"model\": \"self-test\"\n}\n")
+        let before = state(settings)
+
+        // The default: a plugin folder that runs something is left out, and the checkbox (for plain
+        // skills) is not offered for it.
+        let first = pluginDownload(home: home)
+        defer { first.discard() }
+        guard let candidate = first.candidates.first else { return check(false, "skills plugins: the plugin download is reviewed") }
+        let sheet = SkillsReviewSheet(fetched: first) { _ in }
+        let details = sheet.details.stringValue
+        check(SkillsInstaller.defaultClaudeLink(candidate, fetched: first) == .skip && sheet.claudeLink.isHidden
+              && details.contains("Loaded by Codex, Command Code."),
+              "skills plugins: a plugin folder that runs something is left out of Claude Code by default", details)
+        if case .failure(let failure) = await SkillsInstaller.install([candidate], fetched: first) {
+            check(false, "skills plugins: Install with the default applies", failure.message)
+        }
+        let manifest = (shared as NSString).appendingPathComponent(".claude-plugin/plugin.json")
+        check(manager.fileExists(atPath: manifest) && !exists(link) && state(settings) == before,
+              "skills plugins: Install leaves it out: no link, its .claude-plugin kept, and Claude Code's settings untouched")
+        if case .failure(let failure) = await SkillsStore.undo() { check(false, "skills plugins: Undo of the install applies", failure.message) }
+
+        // Added as a plugin, on request: the link, and still no settings write.
+        let second = pluginDownload(home: home)
+        defer { second.discard() }
+        if case .failure(let failure) = await SkillsInstaller.install(second.candidates, fetched: second, claude: ["demo-plugin": .link]) {
+            check(false, "skills plugins: Install as a plugin applies", failure.message)
+        }
+        check(exists(link) && manager.fileExists(atPath: manifest) && state(settings) == before && before?.hasSuffix(" 600") == true,
+              "skills plugins: Add it as a plugin links it, and leaves Claude Code's settings byte for byte, mode 0600", state(settings) ?? "none")
+
+        // The user turns it off in /plugin, which sets its key to false: Settings › Skills and list_skills
+        // say "off", and the review offers the link, since Claude Code then loads nothing from it.
+        writeSettings("{\n  \"enabledPlugins\": {\n    \"demo-plugin@skills-dir\": false\n  },\n  \"model\": \"self-test\"\n}\n")
+        let keyed = state(settings)
+        let row = SkillsStore.inventory().rows.first { $0.name == "demo-plugin" }
+        let cell = row.map { SkillsSettingsView.cellText($0, agent: .claudeCode).0 } ?? "none"
+        let listed = await SkillsMCP.listSkills()
+        let items = listed["skills"] as? [[String: Any]] ?? []
+        let agents = items.first { $0["name"] as? String == "demo-plugin" }?["agents"] as? [String: String]
+        check(cell == "off" && agents?["claude-code"] == "off",
+              "skills plugins: a plugin the user turned off in /plugin shows Claude Code as off", "\(cell) \(String(describing: agents))")
+        let third = pluginDownload(home: home)
+        if let again = third.candidates.first {
+            check(SkillsInstaller.defaultClaudeLink(again, fetched: third) == .link,
+                  "skills plugins: with its key false, the review offers the link (Claude Code loads nothing from it)")
+        }
+        third.discard()
+
+        // Undo takes the link and the skill away, and leaves the settings as the user left them.
+        if case .failure(let failure) = await SkillsStore.undo() { check(false, "skills plugins: Undo of the plugin install applies", failure.message) }
+        check(!exists(link) && !exists(shared) && state(settings) == keyed,
+              "skills plugins: Undo removes the link and the skill, and Claude Code's settings stay byte for byte")
+
+        // A plugin synced from claude.ai with the same name: the review warns, and leaves it out.
+        let synced = (plugins as NSString).appendingPathComponent("synced/user/demo-plugin/.claude-plugin")
+        try? manager.createDirectory(atPath: synced, withIntermediateDirectories: true)
+        manager.createFile(atPath: synced + "/plugin.json", contents: Data(#"{"name": "demo-plugin"}"#.utf8))
+        writeSettings("{\n  \"model\": \"self-test\"\n}\n")
+        let fourth = pluginDownload(home: home)
+        defer { fourth.discard() }
+        let clashSheet = SkillsReviewSheet(fetched: fourth) { _ in }
+        let clashText = "You have a plugin named “demo-plugin” from claude.ai. Added, this folder replaces it in Claude Code sessions"
+        let shown = clashSheet.details.stringValue
+        let fallsBack = fourth.candidates.first.map { SkillsInstaller.defaultClaudeLink($0, fetched: fourth) } == .skip
+        check(shown.contains(clashText) && fallsBack,
+              "skills plugins: a plugin synced from claude.ai with the same name is named, and the folder is left out", shown)
+
+        check(state(realSettings) == realBefore, "skills plugins: the real ~/.claude/settings.json keeps its bytes and mode")
     }
 }

@@ -160,7 +160,7 @@ import Testing
         let sync = try row("release-notes")
         let winner = try #require(sync.copies.first { $0.root.kind == .claude })
         let staging = home + "/Library/Application Support/Next Term/skill-staging/release-notes-1"
-        let steps = SkillUnify.plan(sync, winner: winner, in: SkillInventory.scan(home: home), staging: staging)
+        let steps = SkillUnify.plan(sync, winner: winner, in: SkillInventory.scan(home: home), claude: .link, staging: staging)
         let shared = home + "/.agents/skills/release-notes"
         // The winner is copied aside (never into an agent folder, where a leftover would load as a
         // skill), then moved into place, before anything is thrown away.
@@ -178,7 +178,7 @@ import Testing
         try link(".commandcode/skills", "tidy-prose", to: "../../.agents/skills/tidy-prose")
         let tidyProse = try row("tidy-prose")
         let winner = try #require(tidyProse.copies.first { $0.root.kind == .shared })
-        let steps = SkillUnify.plan(tidyProse, winner: winner, in: SkillInventory.scan(home: home))
+        let steps = SkillUnify.plan(tidyProse, winner: winner, in: SkillInventory.scan(home: home), claude: .link)
         #expect(steps == [.trash(home + "/.commandcode/skills/tidy-prose")]) // the redundant link only
         // Claude Code did not have it: Unify does not hand it a new skill.
         #expect(SkillUnify.gained(tidyProse, in: SkillInventory.scan(home: home)).isEmpty)
@@ -196,7 +196,7 @@ import Testing
         let plans = try row("plan-review")
         #expect(plans.copies.count == 2 && plans.load(for: .claudeCode).used?.root.kind == .shared)
         let winner = try #require(plans.copies.first { $0.root.kind == .shared })
-        #expect(SkillUnify.plan(plans, winner: winner, in: inventory) == [.trash(home + "/.commandcode/skills/plan-review")])
+        #expect(SkillUnify.plan(plans, winner: winner, in: inventory, claude: .link) == [.trash(home + "/.commandcode/skills/plan-review")])
     }
 
     /// A skill linked from the developer's own repository stays there: the shared entry links to it, and
@@ -210,7 +210,7 @@ import Testing
         let inventory = SkillInventory.scan(home: home)
         let mine = try row("my-skill")
         let winner = try #require(mine.copies.first { $0.root.kind == .claude })
-        let steps = SkillUnify.plan(mine, winner: winner, in: inventory)
+        let steps = SkillUnify.plan(mine, winner: winner, in: inventory, claude: .link)
         let shared = home + "/.agents/skills/my-skill"
         #expect(steps.first == .link(at: shared, to: winner.realPath))
         #expect(!steps.contains { if case .copy = $0 { return true }; return false })
@@ -245,10 +245,11 @@ import Testing
         try #"{"skillOverrides": {"My Style Guide": "off"}}"#.write(toFile: home + "/.claude/settings.json", atomically: true, encoding: .utf8)
         let inventory = SkillInventory.scan(home: home)
         let styleGuide = try row("style-guide")
+        let winner = try #require(styleGuide.copies.first { $0.root.kind == .commandCode })
         #expect(styleGuide.off == [.claudeCode])
-        #expect(SkillUnify.switchesLost(styleGuide, in: inventory) == [.claudeCode])
+        #expect(SkillUnify.switchesLost(styleGuide, winner: winner, in: inventory, claude: .link) == [.claudeCode])
         try #"{"skillOverrides": {"style-guide": "off"}}"#.write(toFile: home + "/.claude/settings.json", atomically: true, encoding: .utf8)
-        #expect(SkillUnify.switchesLost(try row("style-guide"), in: SkillInventory.scan(home: home)).isEmpty)
+        #expect(SkillUnify.switchesLost(try row("style-guide"), winner: winner, in: SkillInventory.scan(home: home), claude: .link).isEmpty)
     }
 
     @Test func triggersFollowPluginsAndUserInvocable() throws {
@@ -339,5 +340,116 @@ import Testing
         #expect(SkillEdits.differs(folder, from: tree) == true)
         // A tree with a link can't be compared (npx copies what links point to): no verdict.
         #expect(SkillEdits.differs(folder, from: ["l": .init(sha: "s", link: true)]) == nil)
+    }
+}
+
+/// Claude Code's plugin key as Claude Code's own off switch (KTD15), and Claude Code's link in Unify.
+@Suite struct SkillPluginSwitchTests {
+    let home: String
+    init() throws {
+        home = FileManager.default.temporaryDirectory.appendingPathComponent("nt-plugin-switch-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: home + "/.claude/skills", withIntermediateDirectories: true)
+    }
+
+    func skill(_ root: String, _ name: String, plugin: String? = nil, body: String = "Body") throws {
+        let folder = (home as NSString).appendingPathComponent("\(root)/\(name)")
+        try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        try "---\nname: \(name)\ndescription: The \(name) skill.\n---\n\(body)\n".write(toFile: folder + "/SKILL.md", atomically: true, encoding: .utf8)
+        guard let plugin else { return }
+        try FileManager.default.createDirectory(atPath: folder + "/.claude-plugin", withIntermediateDirectories: true)
+        try plugin.write(toFile: folder + "/.claude-plugin/plugin.json", atomically: true, encoding: .utf8)
+    }
+
+    func link(_ name: String, to target: String) throws {
+        try FileManager.default.createSymbolicLink(atPath: home + "/.claude/skills/" + name, withDestinationPath: "../../.agents/skills/" + target)
+    }
+
+    func settings(_ text: String) throws {
+        try text.write(toFile: home + "/.claude/settings.json", atomically: true, encoding: .utf8)
+    }
+
+    func row(_ name: String) throws -> SkillRow {
+        try #require(SkillInventory.scan(home: home).rows.first { $0.name == name })
+    }
+
+    /// AE13: the user turned the plugin off in /plugin. Claude Code then loads nothing from the folder.
+    @Test func aPluginKeySetToFalseSwitchesClaudeCodeOff() throws {
+        try skill(".agents/skills", "writing-helper", plugin: #"{"name": "writing-helper"}"#)
+        try link("writing-helper", to: "writing-helper")
+        try skill(".claude/skills", "plain-helper")
+        try settings(#"{"enabledPlugins": {"writing-helper@skills-dir": false, "plain-helper@skills-dir": false}}"#)
+        let writing = try row("writing-helper")
+        #expect(writing.load(for: .claudeCode).switchedOff && writing.offKeys[.claudeCode] == ["writing-helper@skills-dir"])
+        #expect(!writing.load(for: .codex).switchedOff && !writing.load(for: .commandCode).switchedOff)
+        // A plain folder of that name is no plugin: the key does nothing to it.
+        #expect(try !row("plain-helper").load(for: .claudeCode).switchedOff)
+        // Keys compare exactly, and true is on.
+        try settings(#"{"enabledPlugins": {"Writing-helper@skills-dir": false}}"#)
+        #expect(try !row("writing-helper").load(for: .claudeCode).switchedOff)
+        try settings(#"{"enabledPlugins": {"writing-helper@skills-dir": true}}"#)
+        #expect(try !row("writing-helper").load(for: .claudeCode).switchedOff)
+    }
+
+    /// The key follows the manifest's name (H2), and, for a manifest without a usable one, the link's name.
+    @Test func theKeyFollowsTheManifestsNameElseTheLinksName() throws {
+        try skill(".agents/skills", "probe", plugin: #"{"name": "probe-named"}"#)
+        try link("probe", to: "probe")
+        try settings(#"{"enabledPlugins": {"probe@skills-dir": false}}"#)
+        #expect(try !row("probe").load(for: .claudeCode).switchedOff)
+        try settings(#"{"enabledPlugins": {"probe-named@skills-dir": false}}"#)
+        #expect(try row("probe").load(for: .claudeCode).switchedOff)
+        try skill(".agents/skills", "nameless", plugin: "{}")
+        try link("renamed", to: "nameless")
+        try settings(#"{"enabledPlugins": {"renamed@skills-dir": false}}"#)
+        #expect(try row("renamed").load(for: .claudeCode).switchedOff)
+        #expect(try !row("nameless").load(for: .codex).switchedOff)
+    }
+
+    /// Unify keeps the winner's plugin key: Claude Code stays off when the winner is that plugin, and
+    /// comes back on when a plain copy wins. Left out of Claude Code, nothing comes back on.
+    @Test func unifyKeepsTheWinnersPluginKey() throws {
+        try skill(".agents/skills", "writing-helper", plugin: #"{"name": "writing-helper"}"#)
+        try link("writing-helper", to: "writing-helper")
+        try skill(".commandcode/skills", "writing-helper", body: "a plain copy")
+        try settings(#"{"enabledPlugins": {"writing-helper@skills-dir": false}}"#)
+        let inventory = SkillInventory.scan(home: home)
+        let writing = try row("writing-helper")
+        let shared = try #require(writing.copies.first { $0.root.kind == .shared })
+        let plain = try #require(writing.copies.first { $0.root.kind == .commandCode })
+        #expect(SkillUnify.switchesLost(writing, winner: shared, in: inventory, claude: .link).isEmpty)
+        #expect(SkillUnify.switchesLost(writing, winner: plain, in: inventory, claude: .link) == [.claudeCode])
+        #expect(SkillUnify.switchesLost(writing, winner: plain, in: inventory, claude: .skip).isEmpty)
+    }
+
+    /// Unify's Claude Code choice: `.link` links the shared copy as before; `.skip` moves Claude Code's
+    /// copy or link to the Trash and makes no new link.
+    @Test func unifyFollowsTheClaudeCodeChoice() throws {
+        try skill(".claude/skills", "release-notes", body: "claude version")
+        try skill(".codex/skills", "release-notes", body: "codex version")
+        let inventory = SkillInventory.scan(home: home)
+        let notes = try row("release-notes")
+        let winner = try #require(notes.copies.first { $0.root.kind == .claude })
+        let claude = home + "/.claude/skills/release-notes"
+        let linked = SkillUnify.plan(notes, winner: winner, in: inventory, claude: .link)
+        #expect(linked.contains(.trash(claude)) && linked.contains(.link(at: claude, to: home + "/.agents/skills/release-notes")))
+        let left = SkillUnify.plan(notes, winner: winner, in: inventory, claude: .skip)
+        #expect(left.first { if case .copy = $0 { return true }; return false } != nil)
+        #expect(left.contains(.trash(claude)) && !left.contains { if case .link = $0 { return true }; return false })
+        // Copied aside before Claude Code's copy goes.
+        let copy = try #require(left.firstIndex { if case .copy = $0 { return true }; return false })
+        #expect(copy < (left.firstIndex(of: .trash(claude)) ?? -1))
+    }
+
+    /// Already linked to the shared winner: `.link` changes nothing for Claude Code; `.skip` removes the link.
+    @Test func unifyCanTakeAnExistingLinkAway() throws {
+        try skill(".agents/skills", "tidy-prose", plugin: #"{"name": "tidy-prose"}"#)
+        try link("tidy-prose", to: "tidy-prose")
+        try skill(".commandcode/skills", "tidy-prose", body: "old")
+        let inventory = SkillInventory.scan(home: home)
+        let tidy = try row("tidy-prose")
+        let winner = try #require(tidy.copies.first { $0.root.kind == .shared })
+        #expect(SkillUnify.plan(tidy, winner: winner, in: inventory, claude: .link) == [.trash(home + "/.commandcode/skills/tidy-prose")])
+        #expect(SkillUnify.plan(tidy, winner: winner, in: inventory, claude: .skip)
+                == [.trash(home + "/.claude/skills/tidy-prose"), .trash(home + "/.commandcode/skills/tidy-prose")])
     }
 }

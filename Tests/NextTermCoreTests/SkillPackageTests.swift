@@ -375,3 +375,52 @@ import Testing
         #expect(SkillReview.oneLine("short") == "short")
     }
 }
+
+/// What an update compares with the installed copy to keep Claude Code's link: the parts that start by
+/// themselves, not the skill's text, the version or the other allowlisted keys.
+@Suite struct SkillPackagePartsTests {
+    static let server = #"{"mcpServers": {"docs": {"command": "node", "args": ["server.js"]}}}"#
+    static let hooks = #"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "./stop.sh"}]}]}}"#
+
+    func plugin(_ fixture: SkillFixture) throws -> SkillPackage.ClaudePlugin { try #require(fixture.package?.claude) }
+
+    func installed() throws -> SkillFixture {
+        try SkillFixture().claudeManifest("demo", #""version": "1.0.0""#).write(".mcp.json", Self.server)
+            .write("hooks/hooks.json", Self.hooks).write("bin/tidy", "#!/bin/sh\n", executable: true)
+    }
+
+    @Test func theTextAndTheAllowlistedKeysDontCount() throws {
+        let old = try installed()
+        let new = try SkillFixture(skill: "---\nname: demo\ndescription: Newer.\n---\nNew text.\n")
+            .claudeManifest("demo", #""version": "2.0.0", "description": "Newer.", "keywords": ["x"]"#)
+            .write(".mcp.json", Self.server).write("hooks/hooks.json", Self.hooks).write("bin/tidy", "#!/bin/sh\necho newer\n", executable: true)
+        #expect(try plugin(new).sameParts(as: plugin(old)))
+        // bin/ is compared by its names, as the review lists them.
+        try new.write("bin/lint", "#!/bin/sh\n", executable: true)
+        #expect(try !plugin(new).sameParts(as: plugin(old)))
+    }
+
+    @Test(arguments: [
+        (".mcp.json", #"{"mcpServers": {"docs": {"command": "node", "args": ["other.js"]}}}"#),
+        (".mcp.json", #"{"mcpServers":{"docs":{"command":"node","args":["server.js"]}}}"#),
+        ("hooks/hooks.json", #"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "./stop.sh", "timeout": 5}]}]}}"#),
+        (".claude-plugin/plugin.json", #"{"name": "demo", "channels": []}"#),
+        ("settings.json", #"{"agent": "reviewer"}"#),
+    ])
+    func anyChangeToWhatStartsIsNotTheSame(_ path: String, _ text: String) throws {
+        let old = try installed()
+        let new = try installed().write(path, text)
+        #expect(try !plugin(new).sameParts(as: plugin(old)), "\(path)")
+    }
+
+    /// Something unread, outside the folder, or no installed copy: never the same.
+    @Test func whatCantBeReadIsNeverTheSame() throws {
+        let old = try installed()
+        #expect(try !plugin(old).sameParts(as: nil))
+        let unread = try installed().write("hooks/hooks.json", "{")
+        #expect(try plugin(unread).partsFingerprint == nil && !plugin(unread).sameParts(as: plugin(unread)))
+        let outside = try installed().claudeManifest("demo", #""mcpServers": "../shared/mcp.json""#)
+        #expect(try plugin(outside).partsFingerprint == nil)
+        #expect(try plugin(installed()).sameParts(as: plugin(old)))
+    }
+}
