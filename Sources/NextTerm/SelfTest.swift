@@ -2883,6 +2883,20 @@ enum SelfTest {
         c.toggleTerminalCollapsed(nil)
         check(!c.terminalCollapsed && abs((pane?.frame.height ?? 0) - before) < 2, "and again brings it back to its size",
               "\(before) → \(pane?.frame.height ?? -1)")
+        // A double-click on the bar's empty part does what the arrow does: fold, then back.
+        func doubleClickBar() {
+            let bar = c.tabBar
+            let point = bar.convert(NSPoint(x: bar.bounds.maxX - 140, y: bar.bounds.midY), to: nil)
+            let event = NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                           windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 2, pressure: 1)
+            if let event { bar.mouseDown(with: event) }
+        }
+        let zoomedBefore = window.isZoomed
+        doubleClickBar()
+        check(c.terminalCollapsed && window.isZoomed == zoomedBefore, "a double-click on the empty part of the terminal's tab bar folds it, as the arrow does")
+        doubleClickBar()
+        check(!c.terminalCollapsed && abs((pane?.frame.height ?? 0) - before) < 2, "and a second one brings it back",
+              "\(before) → \(pane?.frame.height ?? -1)")
 
         // Put the file back as committed.
         editor.textView.insertText("a\nb\nc\n", replacementRange: NSRange(location: 0, length: (editor.textView.string as NSString).length))

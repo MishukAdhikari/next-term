@@ -366,6 +366,9 @@ final class TabBarView: NSView {
     // MARK: mouse on the empty part of the bar drags the window
 
     override func mouseDown(with event: NSEvent) {
+        // A double-click on the empty part of the terminal's bar does what its arrow does (fold the terminal
+        // away, or bring it back), in place of the title bar's zoom.
+        if event.clickCount == 2, let onToggleCollapse { return onToggleCollapse() }
         guard dragsWindow else { return }
         Self.titleBarMouseDown(event, in: window)
     }
