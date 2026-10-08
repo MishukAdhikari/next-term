@@ -86,6 +86,11 @@ extension SelfTest {
         check(titles(plain) == ["Copy", "Paste", "Select All", "Clear", "Find…", "Split Right", "Split Down"],
               "menus: the terminal's menu", titles(plain).joined(separator: ", "))
         check(plain.items.first { $0.title == "Copy" }?.isEnabled == false, "menus: Copy is off with nothing selected")
+        NSPasteboard.general.clearContents()
+        let empty = w.terminalMenu(for: tab, link: nil).items.first { $0.title == "Paste" }
+        NSPasteboard.general.setString("paste me", forType: .string)
+        let full = w.terminalMenu(for: tab, link: nil).items.first { $0.title == "Paste" }
+        check(empty?.isEnabled == false && full?.isEnabled == true, "menus: Paste is on only with text on the clipboard")
         commandsMatchTheMenuBar(plain, "the terminal")
 
         // Two lines of output, the second selected: Copy copies it.

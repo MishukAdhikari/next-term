@@ -74,7 +74,8 @@ extension TerminalWindowController {
             menu.addItem(.separator())
         }
         let selected = view.selectionActive
-        let pasteable = view.acceptsInput && NSPasteboard.general.string(forType: .string) != nil
+        // Whether there is text to paste, without reading it: macOS may ask you first when an app reads the clipboard.
+        let pasteable = view.acceptsInput && NSPasteboard.general.availableType(from: [.string]) != nil
         menu.addCommand("Copy", "copy:", enabled: selected) { view.copy(view) }
         menu.addCommand("Paste", "paste:", enabled: pasteable) { view.paste(view) }
         menu.addCommand("Select All", "selectAll:") { view.selectAll(nil) }
