@@ -802,16 +802,25 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     }
 }
 
-/// The commit table: ↩ opens the selected commit's details.
+/// The commit table (and the Git lists like it: a commit's files, Compare): ↩ opens the selected row, or the key
+/// Settings gives Open Commit or File.
 final class GitLogTableView: NSTableView {
     var onReturn: (() -> Void)?
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 36 || event.keyCode == 76, event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty, selectedRow >= 0 {
-            onReturn?()
-            return
-        }
-        super.keyDown(with: event)
+        guard opens(event) else { return super.keyDown(with: event) }
+        onReturn?()
+    }
+
+    /// A key with ⌘ comes here before the menus (KeyBindings.canShareKey).
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard window?.firstResponder === self, opens(event) else { return super.performKeyEquivalent(with: event) }
+        onReturn?()
+        return true
+    }
+
+    private func opens(_ event: NSEvent) -> Bool {
+        selectedRow >= 0 && KeyboardShortcuts.shared.partCommand(for: event, in: .gitLists) == "gitLists.open"
     }
 }
 

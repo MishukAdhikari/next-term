@@ -33,7 +33,7 @@ enum DatabaseAction { case open, tablePlus, terminal, vercel }
 enum SessionAction: Equatable { case resume, fork, continueLatest(AgentKind), showAll }
 
 /// Outline view with the keys a file tree needs: Return renames (as in Finder), ⌘⌫ moves to the Trash,
-/// ⌘↓ opens. It notes how each click began, for "Open files with a single click".
+/// ⌘↓ opens (by default: Settings can change them). It notes how each click began, for "Open files with a single click".
 final class SidebarOutlineView: NSOutlineView {
     var onRename: (() -> Void)?
     var onTrash: (() -> Void)?
@@ -63,13 +63,26 @@ final class SidebarOutlineView: NSOutlineView {
     }
 
     override func keyDown(with event: NSEvent) {
-        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        switch (event.keyCode, flags) {
-        case (36, []), (76, []): onRename?()          // Return, Enter
-        case (51, [.command]): onTrash?()             // ⌘⌫
-        case (125, [.command]): onOpen?()             // ⌘↓
-        default: super.keyDown(with: event)
+        if perform(event) { return }
+        super.keyDown(with: event)
+    }
+
+    /// A key with ⌘ comes here before the menus, so a terminal command on the same key gives way while the tree has
+    /// the keyboard (KeyBindings.canShareKey).
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if window?.firstResponder === self, perform(event) { return true }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    /// Rename, Move to Trash and Open on their keys: ↩ (or Enter), ⌘⌫ and ⌘↓, or what Settings › Keyboard Shortcuts says.
+    private func perform(_ event: NSEvent) -> Bool {
+        switch KeyboardShortcuts.shared.partCommand(for: event, in: .sidebar) {
+        case "sidebar.rename": onRename?()
+        case "sidebar.trash": onTrash?()
+        case "sidebar.open": onOpen?()
+        default: return false
         }
+        return true
     }
 }
 

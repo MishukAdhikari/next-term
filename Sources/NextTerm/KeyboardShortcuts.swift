@@ -1,8 +1,9 @@
 import AppKit
 import NextTermCore
 
-/// Every menu command's shortcut can be changed (Settings, Keyboard Shortcuts). The menus as built are
-/// the defaults; the user's changes are saved as overrides and laid over them.
+/// Every menu command's shortcut can be changed (Settings, Keyboard Shortcuts), and so can the keys outside the
+/// menus (PartKeys.swift). The menus as built are the defaults; the user's changes are saved as overrides and laid
+/// over them.
 final class KeyboardShortcuts {
     static let shared = KeyboardShortcuts()
 
@@ -62,6 +63,7 @@ final class KeyboardShortcuts {
         commands = []
         aliases = [:]
         walk(menu, path: [])
+        commands += Self.partCommands
         apply()
         guard trackingObservers.isEmpty else { return }
         for (name, open) in [(NSMenu.didBeginTrackingNotification, true), (NSMenu.didEndTrackingNotification, false)] {
@@ -193,8 +195,11 @@ final class KeyboardShortcuts {
                         option: flags.contains(.option), control: flags.contains(.control))
     }
 
+    /// A command's shortcut now (a saved one that can't be typed counts as the default, as in `apply`).
     func chord(for id: String) -> KeyChord? {
-        bindings.chord(for: id, default: baseChord(for: id))
+        let base = baseChord(for: id)
+        guard let chord = bindings.chord(for: id, default: base) else { return nil }
+        return KeyBindings.isUsable(chord, for: id) ? chord : base
     }
 
     func title(of id: String) -> String {
@@ -226,7 +231,7 @@ final class KeyboardShortcuts {
             guard let item = command.item else { continue }
             let base = preset.chord(for: command.id, default: command.defaultChord)
             var chord = bindings.chord(for: command.id, default: base)
-            if let saved = chord, !saved.isUsable { chord = base }
+            if let saved = chord, !KeyBindings.isUsable(saved, for: command.id) { chord = base }
             chords.append((item, chord))
         }
         // Every key comes off before any goes on: AppKit leaves a menu item without its key when another
@@ -271,7 +276,7 @@ final class KeyboardShortcuts {
         for command in commands where chords[command.id] == nil {
             let base = preset.chord(for: command.id, default: command.defaultChord)
             var chord = bindings.chord(for: command.id, default: base)
-            if let saved = chord, !saved.isUsable { chord = base }
+            if let saved = chord, !KeyBindings.isUsable(saved, for: command.id) { chord = base }
             chords[command.id] = .some(chord)
         }
         return chords
@@ -311,12 +316,12 @@ final class KeyboardShortcuts {
     func isCustomised(_ id: String) -> Bool { bindings.overrides[id] != nil }
 
     /// "⌘D is Duplicate Line while the editor has the keyboard, Split Right everywhere else", when the command's
-    /// key is shared that way (Settings says so on both).
+    /// key is shared between parts of the window (Settings says so on each).
     func sharing(_ id: String) -> String? {
-        guard let chord = chord(for: id), let other = bindings.sharer(of: chord, defaults: defaults, except: id) else { return nil }
-        let editor = KeyBindings.editorCommands.contains(id) ? id : other
-        let elsewhere = editor == id ? other : id
-        return "\(chord.display) is \(title(of: editor)) while the editor has the keyboard, \(title(of: elsewhere)) everywhere else"
+        guard let chord = chord(for: id) else { return nil }
+        let others = bindings.sharers(of: chord, defaults: defaults, except: id)
+        guard !others.isEmpty else { return nil }
+        return KeyBindings.sharingNote(chord, [id] + others, title: title(of:))
     }
 }
 
@@ -783,8 +788,8 @@ final class ShortcutRecorder: NSButton {
             commit(nil)
             return
         }
-        guard let chord = KeyboardShortcuts.chord(from: event), chord.isUsable else {
-            NSSound.beep() // needs ⌘ or ⌃ (or a function key), so typing is never swallowed
+        guard let chord = KeyboardShortcuts.chord(from: event), KeyBindings.isUsable(chord, for: commandID) else {
+            NSSound.beep() // needs ⌘ or ⌃ (or a function key), so typing is never swallowed; ↩ will do in the sidebar
             return
         }
         commit(chord)
@@ -793,8 +798,8 @@ final class ShortcutRecorder: NSButton {
     private func commit(_ chord: KeyChord?) {
         stopRecording()
         let shortcuts = KeyboardShortcuts.shared
-        // A key the editor's command and a terminal command share is no clash (KeyBindings.canShareKey); a
-        // command for both parts on ⌘D clashes with both.
+        // A key two parts of the window share is no clash (KeyBindings.canShareKey): the editor's command and a
+        // terminal command on ⌘D. A command for everywhere on ⌘D clashes with both.
         let owners = chord.map { shortcuts.bindings.owners(of: $0, defaults: shortcuts.defaults, except: commandID) } ?? []
         if let chord, !owners.isEmpty {
             let names = owners.map { "“\(shortcuts.title(of: $0))”" }.joined(separator: " and ")

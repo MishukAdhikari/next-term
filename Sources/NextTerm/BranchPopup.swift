@@ -118,6 +118,8 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
     private let footer = NSTextField(labelWithString: "")
     /// The rows' tooltips, through one area over the rows in view (set up in build()).
     private(set) var rowToolTips: RowToolTips?
+    /// "Fetch from all remotes (⌘R)", following the key Settings gives it.
+    private var fetchToolTip: PartToolTip?
     private(set) var model: BranchModel?
     private(set) var items: [Item] = []
     private var openFolders: Set<String> = []
@@ -501,20 +503,19 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         table.scrollRowToVisible(row)
     }
 
-    /// ⌘R fetch, ⌘C copy the name, ⌘⌫ delete, ⌘↩ new branch from the selected one.
+    /// ⌘R fetch, ⌘C copy the name, ⌘⌫ delete, ⌘↩ new branch from the selected one, or the keys Settings gives them.
     fileprivate func keyEquivalent(_ event: NSEvent) -> Bool {
-        guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command else { return false }
         let item = items[safe: table.selectedRow]
-        switch event.charactersIgnoringModifiers {
-        case "r": perform(.fetch)
-        case "c":
+        switch KeyboardShortcuts.shared.partCommand(for: event, in: .branchPopup) {
+        case "branchPopup.fetch": perform(.fetch)
+        case "branchPopup.copyName":
             switch item {
             case let .branch(ref, _, _, _)?: copy(ref.name)
             case let .tag(name, _)?: copy(name)
             case let .worktree(row)?: copy(row.worktree.path)
             default: return false
             }
-        case "\r":
+        case "branchPopup.newBranch":
             switch item {
             case let .branch(ref, _, _, _)?:
                 close()
@@ -524,7 +525,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
                 GitActions(self).newBranch(fromTag: name)
             default: return false
             }
-        case "\u{7F}":
+        case "branchPopup.delete":
             // A local branch goes at once (with Undo); one on a remote only after asking.
             guard case let .branch(ref, _, _, _)? = item, !ref.isHead else { return false }
             close()
@@ -776,7 +777,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         fetch.isBordered = false
         fetch.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: "Fetch")
         fetch.contentTintColor = Theme.textDim
-        fetch.toolTip = "Fetch from all remotes (⌘R)"
+        fetchToolTip = PartToolTip(fetch, "Fetch from all remotes", command: "branchPopup.fetch")
         fetch.target = self
         fetch.action = #selector(fetchClicked)
         // "⌘R" before it, as a tab shows "⌘1": the popup's own key, so it never changes. VoiceOver hears the

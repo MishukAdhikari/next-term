@@ -28,6 +28,8 @@ final class DiffPane: NSView {
     private let message = NSTextField(wrappingLabelWithString: "")
     private let accept = NSButton(title: "Accept", target: nil, action: nil)
     private let reject = NSButton(title: "Reject", target: nil, action: nil)
+    /// Accept's key: ⌘↩, or what Settings › Keyboard Shortcuts gives it.
+    private var acceptKey: ButtonShortcut?
 
     /// An agent's proposed edit (Claude Code's openDiff): your file against its version, to accept or
     /// reject. Next Term never writes the file; the agent does, once you accept.
@@ -275,9 +277,7 @@ final class DiffPane: NSView {
                 button.target = self
                 button.action = action
             }
-            accept.keyEquivalent = "\r"
-            accept.keyEquivalentModifierMask = .command // ⌘↩ accepts
-            accept.toolTip = "Accept (⌘↩): \(proposal.author) then writes the file"
+            acceptKey = ButtonShortcut(accept, "diff.accept", tip: "Accept", ": \(proposal.author) then writes the file")
             reject.toolTip = "Reject: the file stays as it is"
             header.setViews([pathLabel, counts, NSView(), previous, position, next, reject, accept], in: .leading)
         } else if let commit {
