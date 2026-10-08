@@ -97,7 +97,8 @@ extension SelfTest {
                                            opened: inout [TerminalTab]) async {
         let agent = SessionStore.runningAgents().first { $0.key == claudeTab.id.uuidString }
         let pid = agent?.pid ?? 0
-        check(pid > 0 && pid != claudeTab.view.process.shellPid && agent.map { canonicalPath($0.directory) == project } == true,
+        let ownFolder = canonicalPath(agent?.directory ?? "") == project
+        check(pid > 0 && pid != claudeTab.view.process.shellPid && ownFolder,
               "sessions: a tab's agent is known by its own process and folder", "pid \(pid), \(agent?.directory ?? "none")")
         let age = agent.map { Date().timeIntervalSince($0.startedAt) } ?? -1
         check(age >= 0 && age < 120, "and by when it started, on the wall clock", "\(age) s ago")
