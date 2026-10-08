@@ -116,6 +116,76 @@ final class CompletionSettingsView: NSStackView {
     }
 }
 
+/// Settings › Terminal's Tab completion and Suggest a command rows, in a scroll view of their own: they sit at the
+/// bottom of the tab, and at the Settings window's smaller sizes they scroll instead of being cut off.
+final class CompletionSettingsPane: NSView {
+    let rows = CompletionSettingsView()
+    let scroll = NSScrollView()
+    private var room: NSLayoutConstraint?
+
+    private final class Document: NSView {
+        override var isFlipped: Bool { true }
+    }
+
+    init() {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+        let document = Document()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        rows.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(rows)
+        scroll.documentView = document
+        addSubview(scroll)
+        // As tall as the rows, unless the tab has less room left (below); as wide as they are, unless the window
+        // is narrower.
+        let whole = scroll.heightAnchor.constraint(equalTo: document.heightAnchor)
+        whole.priority = .defaultHigh
+        let scroller = NSScroller.preferredScrollerStyle == .legacy ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0
+        let wide = scroll.widthAnchor.constraint(equalToConstant: Self.width + scroller)
+        wide.priority = .defaultHigh
+        NSLayoutConstraint.activate([
+            rows.topAnchor.constraint(equalTo: document.topAnchor),
+            rows.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+            rows.trailingAnchor.constraint(equalTo: document.trailingAnchor),
+            rows.bottomAnchor.constraint(equalTo: document.bottomAnchor),
+            document.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+            document.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+            scroll.topAnchor.constraint(equalTo: topAnchor),
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+            whole,
+            wide,
+        ])
+    }
+
+    /// The rows' width: the notes, indented 120 pt, wrap at 330 pt.
+    static let width: CGFloat = 450
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// The room left: down to the bottom of Settings › Terminal (its stack has no bottom of its own).
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard room == nil, window != nil else { return }
+        var ancestor = superview
+        while let view = ancestor, !(view is TerminalSettingsView) { ancestor = view.superview }
+        guard let tab = ancestor else { return }
+        room = bottomAnchor.constraint(lessThanOrEqualTo: tab.bottomAnchor, constant: -16)
+        room?.isActive = true
+    }
+
+    /// For the self-test: the rows reach past what shows, so they scroll.
+    var scrolls: Bool { (scroll.documentView?.frame.height ?? 0) > scroll.contentView.bounds.height + 1 }
+}
+
 extension CompletionPreferences {
     /// Sets the mode for every window: lists open now close, zsh-autocomplete follows, and the tabs' tooltips
     /// say who answers Tab.

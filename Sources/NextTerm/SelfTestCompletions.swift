@@ -505,28 +505,31 @@ extension SelfTest {
         tab.view.send(txt: "exec /bin/zsh -f\r")
         check(await wait(3) { tab.tooltip.contains("Tab completion: the shell’s own") }, "Tab completion: after `exec zsh` the tooltip says the shell's own")
 
-        // The row in Settings › Terminal, whole at the default size and as narrow as the window goes.
+        // The rows in Settings › Terminal (Tab completion, and Suggest a command under it): whole at the default
+        // size; as the window shrinks they keep inside the tab and scroll there.
         let settings = SettingsWindowController()
         settings.showTab("terminal")
         guard let settingsWindow = settings.window, let tabs = settingsWindow.contentView as? NSTabView,
               let view = tabs.selectedTabViewItem?.view else { return check(false, "Tab completion: Settings › Terminal opens") }
-        func find(_ root: NSView) -> CompletionSettingsView? {
-            if let row = root as? CompletionSettingsView { return row }
-            for sub in root.subviews { if let row = find(sub) { return row } }
+        func find(_ root: NSView) -> CompletionSettingsPane? {
+            if let pane = root as? CompletionSettingsPane { return pane }
+            for sub in root.subviews { if let pane = find(sub) { return pane } }
             return nil
         }
-        guard let row = find(view) else { return check(false, "Tab completion: the row is in Settings › Terminal") }
-        for size in [NSSize(width: 620, height: 560), NSSize(width: 480, height: 400)] {
+        guard let pane = find(view) else { return check(false, "Tab completion: the rows are in Settings › Terminal") }
+        for size in [NSSize(width: 620, height: 560), NSSize(width: 480, height: 400), NSSize(width: 480, height: 320)] {
             settingsWindow.setContentSize(size)
             settingsWindow.layoutIfNeeded()
-            let frame = row.convert(row.bounds, to: view)
-            check(view.bounds.contains(frame), "Tab completion: the row shows whole in Settings › Terminal at \(Int(size.width)) pt",
+            let frame = pane.convert(pane.bounds, to: view)
+            let at = "at \(Int(size.width)) × \(Int(size.height))"
+            check(view.bounds.contains(frame) && frame.height > 40, "Tab completion: the rows keep inside Settings › Terminal \(at)",
                   "\(frame) in \(view.bounds)")
+            if size.height == 560 {
+                check(!pane.scrolls, "Tab completion: at Settings' default size the rows show whole, with no scrolling")
+            } else {
+                note("Tab completion: \(at) the rows \(pane.scrolls ? "scroll" : "show whole")")
+            }
         }
-        settingsWindow.setContentSize(NSSize(width: 480, height: 320))
-        settingsWindow.layoutIfNeeded()
-        let smallest = row.convert(row.bounds, to: view)
-        note("Tab completion: at Settings' smallest size the row is \(view.bounds.contains(smallest) ? "whole" : "cut") (\(smallest) in \(view.bounds))")
         settings.close()
     }
 
