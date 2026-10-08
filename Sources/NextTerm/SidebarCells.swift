@@ -26,10 +26,18 @@ final class SidebarHeaderView: NSView {
     let hideButton = HoverButton()
     var inset: CGFloat = 70 { didSet { needsLayout = true } }
     private var hideTip: ShortcutToolTip?
+    /// "⌘B" just before the hide button, as a tab shows "⌘1", while the row has room for it.
+    private lazy var hideHint = KeyHint(#selector(TerminalWindowController.toggleProjectSidebar(_:)), for: hideButton)
+    /// The hide button's key as it shows now, nil once it gave way (for the self-test).
+    var shownHideKey: String? {
+        layoutSubtreeIfNeeded()
+        return hideHint.shownKey
+    }
     var onRight = false {
         didSet {
             hideButton.image = NSImage(systemSymbolName: onRight ? "sidebar.right" : "sidebar.left", accessibilityDescription: "Hide Project Sidebar")?
                 .withSymbolConfiguration(.init(pointSize: 13, weight: .regular))
+            needsLayout = true // its key sits just before the icon
         }
     }
 
@@ -59,7 +67,7 @@ final class SidebarHeaderView: NSView {
         syncButton.target = self
         syncButton.action = #selector(syncClicked)
         syncButton.isHidden = true
-        [branchIcon, title, chevron, summary, syncButton, hideButton, moreButton].forEach(addSubview)
+        [branchIcon, title, chevron, summary, syncButton, hideHint, hideButton, moreButton].forEach(addSubview)
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
         setAccessibilityLabel("Project")
@@ -273,14 +281,14 @@ final class SidebarHeaderView: NSView {
         let chevronWidth: CGFloat = chevron.isHidden ? 0 : 12
         // The cell's own size, not the text's: it needs a few points of margin, or even "dev" truncates to "…".
         let nameNeeded = ceil(title.cell?.cellSize.width ?? title.intrinsicContentSize.width + 4) + 1
-        var right = bounds.width - 60
+        // The text cell needs about 4 pt of its own margin beyond the text, or it truncates.
+        let summaryText = summary.attributedStringValue.length > 0 ? ceil(summary.intrinsicContentSize.width) + 6 : 0
+        var right = placeHideHint(nameNeeded: nameNeeded + chevronWidth, summaryText: summaryText)
         let spareWithoutGlyph = right - (inset + 4) - nameNeeded - chevronWidth - 6 - 4
         let glyphGoes = !syncButton.isHidden && syncButton.width(compact: false) > spareWithoutGlyph - 18
         branchIcon.isHidden = snapshot == nil || glyphGoes
         let nameStart = inset + 4 + (branchIcon.isHidden ? 0 : 18)
         let nameKept = nameStart + min(nameNeeded, 64) + chevronWidth + 6
-        // The text cell needs about 4 pt of its own margin beyond the text, or it truncates.
-        let summaryText = summary.attributedStringValue.length > 0 ? ceil(summary.intrinsicContentSize.width) + 6 : 0
         if !syncButton.isHidden {
             let spare = right - nameStart - nameNeeded - chevronWidth - 6 - 4
             syncButton.compact = syncButton.width(compact: false) > spare
@@ -303,6 +311,16 @@ final class SidebarHeaderView: NSView {
         title.frame = NSRect(x: x, y: titleY, width: min(room, nameNeeded), height: titleHeight)
         chevron.frame = NSRect(x: title.frame.maxX + 2, y: (h - 10) / 2, width: 10, height: 10)
         window?.invalidateCursorRects(for: self)
+    }
+
+    /// "⌘B" before the hide button goes first when room is short: it shows only while the branch glyph and
+    /// name, the line counts and the sync button's word all fit beside it. Returns where the row's text ends.
+    private func placeHideHint(nameNeeded: CGFloat, summaryText: CGFloat) -> CGFloat {
+        let glyph: CGFloat = snapshot == nil ? 0 : 18
+        let sync = syncButton.isHidden ? 0 : syncButton.width(compact: false) + 4
+        let room = hideHint.room(buttonWidth: hideButton.frame.width)
+        hideHint.place(shown: inset + 4 + glyph + nameNeeded + 6 + summaryText + sync + room <= hideButton.frame.minX)
+        return hideButton.frame.minX - (hideHint.isHidden ? 4 : room)
     }
 
     override func draw(_ dirtyRect: NSRect) {
