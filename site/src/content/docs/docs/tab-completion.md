@@ -46,7 +46,19 @@ The list opens only at a zsh prompt Next Term’s hook is ready at. <kbd>⇥</kb
 - in bash and fish tabs, and in remote tabs;
 - when an agent sends keys to a tab over [MCP](/docs/orchestration/): its <kbd>⇥</kbd> is always the shell’s own.
 
-A tab’s tooltip says who answers its <kbd>⇥</kbd>: Next Term’s list with zsh’s completions, Next Term’s list of folders and files, or the shell’s own.
+A tab’s tooltip says who answers its <kbd>⇥</kbd>: Next Term’s list with zsh’s completions, Next Term’s list of folders and files, a plugin you kept, or the shell’s own.
+
+## Plugins that already own Tab
+
+Some zsh plugins answer <kbd>⇥</kbd> themselves: fzf-tab opens fzf, and zsh-autocomplete lists as you type. Where one of them, or any other widget of your own, is bound to <kbd>⇥</kbd>, the first <kbd>⇥</kbd> asks whether to use Next Term’s list or keep the plugin:
+
+- **Use Next Term’s List**: Next Term’s list answers <kbd>⇥</kbd>, with zsh’s completions. With zsh-autocomplete, its list as you type turns off too, in Next Term’s tabs only and for as long as each shell runs; your files stay as they are, and other terminals keep it.
+- **Keep fzf-tab** (or whichever it is): <kbd>⇥</kbd> stays the plugin’s.
+- **Not Now**, or <kbd>⎋</kbd>: the plugin keeps <kbd>⇥</kbd> until Next Term starts again, and Next Term asks again then. The second time, the plugin keeps it for good.
+
+No button answers <kbd>↩︎</kbd>, so a habitual <kbd>↩︎</kbd> chooses nothing. Next Term remembers the choice on this Mac. **Settings › Terminal** lists each one with **Ask Again**.
+
+zsh’s own <kbd>⇥</kbd>, and the widgets oh-my-zsh and fzf put on it (fzf’s `**` keeps working), are not plugins here: there is nothing to ask.
 
 ## Turn it off
 
@@ -54,15 +66,15 @@ A tab’s tooltip says who answers its <kbd>⇥</kbd>: Next Term’s list with z
 
 | Choice | What <kbd>⇥</kbd> does |
 |---|---|
-| **Auto** (the default) | Opens Next Term’s list at a zsh prompt. |
-| **Next Term** | Opens Next Term’s list at a zsh prompt. |
-| **Off** | The shell’s own, as in any terminal. |
+| **Auto** (the default) | Opens Next Term’s list at a zsh prompt. Where a plugin owns <kbd>⇥</kbd>, asks once. |
+| **Next Term** | Opens Next Term’s list at every zsh prompt, plugins or not, with no question. |
+| **Off** | The shell’s own, as in any terminal. zsh-autocomplete lists as you type again. |
 
 **Off** works at once in every tab. Turning it on again reaches the tabs you open from then on: a tab’s zsh loads Next Term’s hook as it starts.
 
 ## What it never does
 
 - **It never runs anything.** A name goes on the line; you press <kbd>↩︎</kbd>.
-- **It never edits your files.** Your `.zshrc` loads exactly as before; Next Term’s hook loads after it, for that shell only, and leaves your <kbd>⇥</kbd> binding as it is.
+- **It never edits your files.** Your `.zshrc` loads exactly as before; Next Term’s hook loads after it, for that shell only, and leaves your <kbd>⇥</kbd> binding as it is. Turning zsh-autocomplete’s list off changes that shell, not a file.
 - **A file name can’t turn into a command.** Names are quoted from an allowlist, and names with control or invisible characters go in as `$'…'`, so a folder called `x;touch PWNED;` goes in as one word.
 - **Nothing is kept.** The line you type and the names listed are never logged or saved.
