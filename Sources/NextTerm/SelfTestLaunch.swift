@@ -10,7 +10,7 @@ extension SelfTest {
     /// too, and the quit's dialogs, built and never run.
     static func launchChecks() async {
         let app = AppDelegate.shared!
-        let welcome = await wait(5) { app.welcomeController?.window?.isVisible == true }
+        let welcome: Bool = await wait(5) { () -> Bool in app.welcomeController?.window?.isVisible == true }
         check(welcome && app.controllers.isEmpty, "a launch that names nothing shows the Welcome window, and no terminal window",
               "Welcome \(welcome), terminal windows \(app.controllers.count)")
         check(app.remoteRestorePending, "kept remote tabs wait for the first terminal window, rather than opening one under the Welcome window")
@@ -238,5 +238,22 @@ extension SelfTest {
         check(opened && app.welcomeController?.window?.isVisible != true && !reopenHandled,
               "with Reopen the projects that were open, a Dock click with every window closed opens the most recent project",
               "windows \(app.controllers.map { $0.project ?? "none" }), AppKit's reopen \(reopenHandled)")
+
+        // `nxtrm` with every window closed: its request and the reopen that brings Next Term to the front come in
+        // either order. Reopen first, the window is still the request's: a bare `nxtrm` gets its home terminal, and the
+        // most recent project does not open beside it.
+        for controller in app.controllers { controller.window?.close() }
+        guard await wait(5, { app.controllers.isEmpty && app.welcomeController?.window?.isVisible != true }) else {
+            return note("the windows did not close, so nxtrm with none open was not checked")
+        }
+        let raceHandled = app.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
+        app.handle(OpenCommand(items: []))
+        let home = await wait(5) { app.controllers.count == 1 }
+        await pause(1) // past the moment the reopen waits for a request
+        let projects: [String] = app.controllers.map { $0.project ?? "none" }
+        let welcomeShown = app.welcomeController?.window?.isVisible == true
+        check(home && projects == ["none"] && !welcomeShown && !raceHandled,
+              "nxtrm with every window closed opens what it asked for, and the Dock reopen it comes with adds nothing",
+              "windows \(projects), Welcome \(welcomeShown), AppKit's reopen \(raceHandled)")
     }
 }

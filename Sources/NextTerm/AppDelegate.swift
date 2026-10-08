@@ -416,7 +416,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private func restoreRemoteTabs() {
         remoteRestorePending = false
-        DispatchQueue.main.async { RemoteConnection.restoreTabs() }
+        // A turn later: the window may have closed by then, and the Welcome window come back, so the tabs wait for the
+        // next one rather than open a window of their own. Closed while the restore reads the login shell, in the first
+        // seconds after launch, they still open one, until the update that keeps sessions holds them.
+        DispatchQueue.main.async { [self] in
+            if controllers.isEmpty { remoteRestorePending = true } else { RemoteConnection.restoreTabs() }
+        }
     }
 
     // MARK: nxtrm
@@ -551,8 +556,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return false
         }
         // No windows open: what Settings › General says, the Welcome window or the most recent project. AppKit's own
-        // reopen adds nothing.
-        openAtLaunch(kind: .dockReopen)
+        // reopen adds nothing. A moment later, as `nxtrm` with no window open sends its request and this reopen in
+        // either order: when the request has opened its window, or the Welcome window is up, nothing more.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [self] in
+            guard controllers.isEmpty, welcome?.window?.isVisible != true else { return }
+            openAtLaunch(kind: .dockReopen)
+        }
         return false
     }
 
