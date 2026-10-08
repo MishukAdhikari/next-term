@@ -1334,6 +1334,19 @@ enum SelfTest {
             check(remoteMenu.contains("Open in TablePlus…") && DatabaseHandOff.confirmation(for: remote).title.contains("analytics.example.com"),
                   "TablePlus asks first for a remote host, naming it")
         }
+        // Refresh's key on a database's row scans again: the group's Refresh Databases, as its own row can't be selected.
+        if let window = c.window, let row = (0..<sidebar.outline.numberOfRows).first(where: { sidebar.outline.item(atRow: $0) is DatabaseItem }) {
+            let shortcuts = KeyboardShortcuts.shared
+            let savedBindings = shortcuts.bindings
+            shortcuts.set(KeyChord(key: "r", command: true, option: true, control: true), for: "sidebar.refresh")
+            sidebar.outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            window.makeFirstResponder(sidebar.outline)
+            let scans = sidebar.databaseScanToken
+            pressKey("r", code: 15, [.command, .option, .control], in: window)
+            check(sidebar.databaseScanToken > scans, "Refresh's key on a database's row refreshes the Databases group")
+            shortcuts.bindings = savedBindings
+            shortcuts.apply()
+        }
         let command = DatabaseClientCommand.commandLine(for: mysql, program: "mysql", secretFile: "/tmp/handoff.cnf")
         check(!command.contains(secret) && command.contains("--defaults-extra-file="), "the mysql hand-off names a file, never the password", command)
         if let written = try? HandOffFile.write("[client]\npassword=\"x\"\n", suffix: ".cnf") {

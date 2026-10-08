@@ -163,6 +163,31 @@ extension SelfTest {
               "Continue Latest runs the agent's own `qwen --continue` in a new tab")
         opened += holder.tabs.filter { !before.contains($0.id) }
 
+        // Refresh's and Continue Latest Session's keys on a session's row do the group's items, as its own row can't be
+        // selected: Continue Latest's is the first agent's.
+        let sessionRow = group.items.first.map { sidebar.outline.row(forItem: $0) } ?? -1
+        if let window = holder.window, let root = sidebar.root, sessionRow >= 0 {
+            let shortcuts = KeyboardShortcuts.shared
+            let savedBindings = shortcuts.bindings
+            shortcuts.set(KeyChord(key: "r", command: true, option: true, control: true), for: "sidebar.refresh")
+            shortcuts.set(KeyChord(key: "l", command: true, option: true, control: true), for: "sidebar.continueLatest")
+            sidebar.outline.selectRowIndexes(IndexSet(integer: sessionRow), byExtendingSelection: false)
+            window.makeFirstResponder(sidebar.outline)
+            let reads = group.token
+            pressKey("r", code: 15, [.command, .option, .control], in: window)
+            check(group.token > reads, "Refresh's key on a session's row reads the Agent Sessions again")
+            let latest = group.agents(in: root.path).first?.continueCommand ?? "no agent"
+            before = Set(holder.tabs.map(\.id))
+            pressKey("l", code: 37, [.command, .option, .control], in: window)
+            check(await wait(10) { holder.tabs.contains { !before.contains($0.id) && $0.screenTail(10).contains(latest) } },
+                  "and Continue Latest Session's runs the first agent's `\(latest)` in a new tab")
+            opened += holder.tabs.filter { !before.contains($0.id) }
+            shortcuts.bindings = savedBindings
+            shortcuts.apply()
+        } else {
+            check(false, "a session's row for its keys")
+        }
+
         before = Set(holder.tabs.map(\.id))
         if let item = group.items.first(where: { $0.session.agent == .opencode }) {
             holder.sidebar(sidebar, session: item.session, perform: .resume)

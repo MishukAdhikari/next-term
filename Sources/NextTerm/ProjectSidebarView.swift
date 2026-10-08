@@ -128,7 +128,8 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     let databasesGroup = DatabasesGroup()
     private(set) var databaseScan = DatabaseScan()
     private var databaseItems: [String: DatabaseItem] = [:]
-    private var databaseScanToken = 0
+    /// Bumped by every scan, so one that finishes after a newer one started is dropped.
+    private(set) var databaseScanToken = 0
     private var databaseScanQueued = false
     /// Projects whose Databases group you closed: it stays closed for them.
     private var collapsedDatabaseRoots: Set<String> = []
@@ -947,16 +948,25 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     /// A sidebar command's key, pressed while the tree has the keyboard: the item for it in the menu a right-click on
-    /// the selection shows, so the key does what that item says, to the same rows. A command that menu doesn't offer
-    /// (Open as Project on a file) does nothing. Rename, Move to Trash and Open have handlers of their own.
+    /// the selection shows, so the key does what that item says, to the same rows. A Databases or Agent Sessions row
+    /// offers its group's items too (Refresh, Continue Latest): the group's own row can't be selected. A command neither
+    /// menu offers (Open as Project on a file) does nothing. Rename, Move to Trash and Open have handlers of their own.
     func perform(command id: String) {
-        let row = outline.selectedRowIndexes.first ?? -1
-        let menu = NSMenu()
-        fill(menu, forRow: row)
-        guard let item = menu.items.first(where: { $0.identifier?.rawValue == id }), let action = item.action else { return }
-        menuRow = row
-        defer { menuRow = nil }
-        NSApp.sendAction(action, to: item.target, from: item)
+        guard let first = outline.selectedRowIndexes.first else { return }
+        var rows = [first]
+        let selected = outline.item(atRow: first)
+        if selected is DatabaseItem || selected is SessionItem, let group = outline.parent(forItem: selected) {
+            rows.append(outline.row(forItem: group))
+        }
+        for row in rows {
+            let menu = NSMenu()
+            fill(menu, forRow: row)
+            guard let item = menu.items.first(where: { $0.identifier?.rawValue == id }), let action = item.action else { continue }
+            menuRow = row
+            defer { menuRow = nil }
+            NSApp.sendAction(action, to: item.target, from: item)
+            return
+        }
     }
 
     @objc private func showDeletedFromMenu(_ sender: NSMenuItem) {

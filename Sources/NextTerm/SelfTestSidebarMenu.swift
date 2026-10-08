@@ -87,21 +87,13 @@ extension SelfTest {
         audit(c.sidebar.sessionsGroupMenu(), "Agent Sessions")
         check(wrong.isEmpty, "sidebar menu keys: every item of every row's menu shows its command's key", wrong.joined(separator: "; "))
 
-        // Keys as AppKit hands a key with ⌘ over: to the window's views, then to the menu bar. The sidebar's handler is
-        // watched, to see the key went through it.
-        func press(_ characters: String, code: UInt16, _ flags: NSEvent.ModifierFlags) -> NSEvent? {
-            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
-                             windowNumber: window.windowNumber, context: nil, characters: characters, charactersIgnoringModifiers: characters,
-                             isARepeat: false, keyCode: code)
-        }
-        func send(_ event: NSEvent?) {
-            guard let event, !window.performKeyEquivalent(with: event) else { return }
-            _ = NSApp.mainMenu?.performKeyEquivalent(with: event)
-        }
+        // Keys as AppKit hands a key with ⌘ over (pressKey). The sidebar's handler is watched, to see the key went through it.
+        func optionCommandC() { pressKey("c", code: 8, [.command, .option], in: window) }
+        func optionCommandN() { pressKey("n", code: 45, [.command, .option], in: window) }
         let pasteboard = NSPasteboard.general
-        func copied(after event: NSEvent?) -> String {
+        func copied(after press: () -> Void) -> String {
             pasteboard.clearContents()
-            send(event)
+            press()
             return pasteboard.string(forType: .string) ?? "nothing"
         }
         let savedOnCommand = outline.onCommand
@@ -111,7 +103,6 @@ extension SelfTest {
             dispatched.append(id)
             savedOnCommand?(id)
         }
-        let optionCommandC = press("c", code: 8, [.command, .option])
 
         window.makeFirstResponder(outline)
         let byDefault = copied(after: optionCommandC)
@@ -128,7 +119,7 @@ extension SelfTest {
               moved.joined(separator: " "))
         dispatched = []
         let byOldKey = copied(after: optionCommandC)
-        let byNewKey = copied(after: press("c", code: 8, [.command, .option, .control]))
+        let byNewKey = copied { pressKey("c", code: 8, [.command, .option, .control], in: window) }
         check(byOldKey == "nothing" && byNewKey == path && dispatched == ["sidebar.copyPath"], "and the sidebar answers the new key, not the old one",
               "\(byOldKey), \(byNewKey), \(dispatched)")
         shortcuts.resetAll()
@@ -137,9 +128,8 @@ extension SelfTest {
         func untitled() -> [String] {
             ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).filter { $0.hasPrefix("untitled") }.sorted()
         }
-        let optionCommandN = press("n", code: 45, [.command, .option])
         dispatched = []
-        send(optionCommandN)
+        optionCommandN()
         let made = untitled()
         await pause(0.3)
         window.makeFirstResponder(outline)
@@ -168,7 +158,7 @@ extension SelfTest {
         window.makeFirstResponder(terminal)
         let inTerminal = window.firstResponder === terminal
         let fromTerminal = copied(after: optionCommandC)
-        send(optionCommandN)
+        optionCommandN()
         let terminalSaw = "\(fromTerminal), \(untitled()), \(dispatched)"
         let terminalQuiet = inTerminal && fromTerminal == "nothing" && untitled() == before && dispatched.isEmpty
         c.openFile(file)
@@ -176,11 +166,20 @@ extension SelfTest {
         if let view = editor?.textView { window.makeFirstResponder(view) }
         let editing = editor != nil && window.firstResponder === editor?.textView
         let fromEditor = copied(after: optionCommandC)
-        send(optionCommandN)
+        optionCommandN()
         let editorQuiet = editing && fromEditor == "nothing" && untitled() == before && dispatched.isEmpty
         if let editor { c.editorArea.close(editor) }
         check(terminalQuiet && editorQuiet, "sidebar menu keys: ⌥⌘C and ⌥⌘N do nothing with the terminal's or the editor's keyboard",
               "terminal (\(inTerminal)): \(terminalSaw); editor (\(editing)): \(fromEditor), \(untitled()), \(dispatched)")
         window.makeFirstResponder(terminal)
+    }
+    /// A key as AppKit hands one with ⌘ over: to the window's views (the one with the keyboard first), then to the menu
+    /// bar. `code` is the key's on a US layout (C is 8, L 37, N 45, R 15), which the menus read it by.
+    static func pressKey(_ characters: String, code: UInt16, _ flags: NSEvent.ModifierFlags, in window: NSWindow) {
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                                     windowNumber: window.windowNumber, context: nil, characters: characters,
+                                     charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)
+        guard let event, !window.performKeyEquivalent(with: event) else { return }
+        _ = NSApp.mainMenu?.performKeyEquivalent(with: event)
     }
 }
