@@ -321,9 +321,10 @@ final class SidebarHeaderView: NSView {
             right = syncButton.frame.minX - 4
         }
         // The focused tab's label after the name: whole beside the whole name, else cut in the middle, else the
-        // glyph alone. The line counts give way to it; the name keeps its own.
+        // glyph alone. The line counts give way to both: the name stays whole while the label shows.
         let placeWidth = tabPlaceWidth(spare: right - nameStart - nameNeeded - chevronWidth - 6)
-        var summaryWidth = min(summaryText, max(0, right - nameKept - placeWidth))
+        let kept = placeWidth > 0 ? nameStart + nameNeeded + chevronWidth + 6 + placeWidth : nameKept
+        var summaryWidth = min(summaryText, max(0, right - kept))
         if summaryWidth < summaryText, summaryWidth < 28 { summaryWidth = 0 } // cut to an ellipsis, it says nothing
         if !syncButton.isHidden && syncButton.isShortened { summaryWidth = 0 } // the counts went before the word did
         summary.isHidden = summaryWidth == 0
