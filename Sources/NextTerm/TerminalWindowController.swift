@@ -100,9 +100,12 @@ class HairlineSplitView: NSSplitView {
             addSubview(line)
             lines.append(line)
         }
+        // On whole pixels: a divider can sit on a half point, which a 1x screen would draw as a blurred 2-pixel line.
+        let snap: AlignmentOptions = [.alignMinXNearest, .alignMinYNearest, .alignWidthNearest, .alignHeightNearest]
         for (index, line) in lines.enumerated() {
             let shows = index < rects.count
-            if shows, line.frame != rects[index] { line.frame = rects[index] }
+            let rect = shows ? backingAlignedRect(rects[index], options: snap) : .zero
+            if shows, line.frame != rect { line.frame = rect }
             if line.isHidden == shows { line.isHidden = !shows }
             line.color = lineColor
         }
