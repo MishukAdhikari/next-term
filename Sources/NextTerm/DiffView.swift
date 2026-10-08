@@ -696,7 +696,10 @@ final class DiffPane: NSView {
     @objc private func stageHunk() { perform(.stage) }
     @objc private func unstageHunk() { perform(.unstage) }
 
-    @objc func revertHunk() {
+    @objc private func revertHunk() { confirmRevert(hunk: currentHunk, of: file) }
+
+    /// Asks, then reverts change `index` of `shown`: the diff it was chosen in, whatever is read meanwhile.
+    func confirmRevert(hunk index: Int, of shown: FileDiff?) {
         guard let window else { return }
         // Unsaved edits to this file in the editor would be overwritten by the reload: ask to save first.
         if let open = (window.windowController as? TerminalWindowController)?.editorArea.documents.first(where: { $0.path == canonicalPath(absolutePath) }),
@@ -714,15 +717,19 @@ final class DiffPane: NSView {
         alert.addButton(withTitle: "Revert")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in
-            if response == .alertFirstButtonReturn { self?.perform(.revert) }
+            if response == .alertFirstButtonReturn { self?.perform(.revert, hunk: index, of: shown) }
         }
     }
 
-    /// Runs a hunk operation; tells the user if the file changed meanwhile or git is busy.
-    func perform(_ action: HunkOps.Action) {
-        if unified.isOn { unified.pickForAction(self) }
-        guard let file, let git = Self.git, hunkRows.indices.contains(currentHunk), file.hunks.indices.contains(currentHunk) else { return NSSound.beep() }
-        let hunk = file.hunks[currentHunk]
+    /// Runs a hunk operation on the current change, the one "2 of 3" names.
+    func perform(_ action: HunkOps.Action) { perform(action, hunk: currentHunk, of: file) }
+
+    /// Runs a hunk operation on change `index` of `shown`, the diff it was chosen in (HunkOps first checks
+    /// the file and the index are still what that diff was made from); tells the user if the file changed
+    /// meanwhile or git is busy.
+    func perform(_ action: HunkOps.Action, hunk index: Int, of shown: FileDiff?) {
+        guard let file = shown, let git = Self.git, file.hunks.indices.contains(index) else { return NSSound.beep() }
+        let hunk = file.hunks[index]
         let before = action == .revert ? try? Data(contentsOf: URL(fileURLWithPath: absolutePath)) : nil
         let outcome = HunkOps.perform(action, hunk: hunk, in: file, root: root, git: git)
         switch outcome {

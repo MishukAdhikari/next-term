@@ -452,12 +452,20 @@ extension NSImage {
 
 /// A diff tab's Unified view: the Side by Side | Unified switch in its header, the column, and the whole
 /// file (read when a fold needs it) that opens the folds. The diff tab keeps doing everything else; in
-/// Unified its hunk buttons and Send to Agent act on the selected lines, or the row clicked.
-final class UnifiedDiffPart: NSObject {
+/// Unified, selecting lines or clicking a row makes its change the current one, which the hunk buttons act
+/// on, and Send to Agent sends the selected lines.
+final class UnifiedDiffPart: NSObject, NSTextViewDelegate {
     let control = NSSegmentedControl(labels: ["Side by Side", "Unified"], trackingMode: .selectOne, target: nil, action: nil)
     let column = UnifiedColumn()
     private weak var pane: DiffPane?
     private(set) var rows: [UnifiedRow] = []
+    /// The diff the rows were made from: a right-click's hunk action acts on it.
+    private var shownFile: FileDiff?
+    /// The rows are an older diff's, shown until the whole file of the new one is read: their changes
+    /// aren't the diff's own, so selecting them picks none.
+    private var stale = false
+    /// The rows are being laid out: the selection that moves with them picks nothing.
+    private var rendering = false
     /// The file's unchanged lines by old line number, from the diff with the whole file as context.
     private var fill: [Int: DiffLine]?
     /// The diff `fill` was read for: it fills only that one's folds.
@@ -500,7 +508,17 @@ final class UnifiedDiffPart: NSObject {
         }
         column.onScroll = { [weak self] in self?.scrolled() }
         column.menuForRow = { [weak self] row in self?.menu(for: row) }
+        column.textView.delegate = self
         NotificationCenter.default.addObserver(self, selector: #selector(layoutChanged), name: DiffLayout.changed, object: nil)
+    }
+
+    /// Selecting lines makes the change they start in the current one: what the buttons act on is always
+    /// the change "2 of 3" names and the gutter marks.
+    func textViewDidChangeSelection(_ notification: Notification) {
+        guard !rendering, !stale, let pane else { return }
+        let range = column.textView.selectedRange()
+        let under = range.length > 0 ? column.selectedRows() : [column.row(atOffset: range.location)]
+        if let hunk = under.lazy.compactMap({ self.rows[safe: $0]?.hunk }).first { pane.pick(hunk: hunk) }
     }
 
     @objc private func switched() { DiffLayout.current = control.selectedSegment == 1 ? .unified : .sideBySide }
@@ -519,7 +537,7 @@ final class UnifiedDiffPart: NSObject {
         let folds = UnifiedRows.rows(for: file).contains { $0.kind == .fold }
         if !folds || !UnifiedRows.fill(of: fillSource, fits: file) { fill = nil }
         if !folds || fill != nil { return render(pane) }
-        if rows.isEmpty { render(pane) }
+        if rows.isEmpty { render(pane) } else { stale = true }
         readWholeFile(pane)
     }
 
@@ -539,8 +557,12 @@ final class UnifiedDiffPart: NSObject {
 
     /// Lays the rows out again (a fold opened, the font changed, the diff read again).
     func render(_ pane: DiffPane) {
+        shownFile = pane.file
+        stale = false
         rows = pane.file.map { UnifiedRows.rows(for: $0, expanded: expanded, fill: fill) } ?? []
+        rendering = true
         column.show(rows, language: language(pane))
+        rendering = false
         column.currentHunk = pane.currentHunk
     }
 
@@ -570,17 +592,14 @@ final class UnifiedDiffPart: NSObject {
         pane.pick(hunk: hunk)
     }
 
-    /// Before a hunk button acts: the change the selected lines are in, if any are selected.
-    func pickForAction(_ pane: DiffPane) {
-        if let hunk = column.selectedRows().lazy.compactMap({ self.rows[safe: $0]?.hunk }).first { pane.pick(hunk: hunk) }
-    }
-
-    /// A right-click on a row: the hunk actions for its change, Send to Agent, Copy.
+    /// A right-click on a row: the hunk actions for its change (that one, whatever else is selected), Send
+    /// to Agent, Copy.
     private func menu(for row: Int) -> NSMenu? {
         guard let pane else { return nil }
         if !column.selectedRows().contains(row) { column.select(row: row) }
         let menu = NSMenu()
         if let hunk = rows[safe: row]?.hunk {
+            let shown = shownFile
             for action in pane.hunkActions {
                 let title: String
                 switch action {
@@ -588,10 +607,10 @@ final class UnifiedDiffPart: NSObject {
                 case .unstage: title = "Unstage Hunk"
                 case .revert: title = "Revert Hunk…"
                 }
-                menu.addBlock(title) { [weak pane] in
+                menu.addBlock(title) { [weak self, weak pane] in
                     guard let pane else { return }
-                    pane.pick(hunk: hunk)
-                    if action == .revert { pane.revertHunk() } else { pane.perform(action) }
+                    if self?.stale == false { pane.pick(hunk: hunk) }
+                    if action == .revert { pane.confirmRevert(hunk: hunk, of: shown) } else { pane.perform(action, hunk: hunk, of: shown) }
                 }
             }
         }

@@ -47,7 +47,7 @@ The switch at the top of every diff, **Side by Side | Unified**, chooses how it 
 - **Side by Side:** the old version on the left, the new on the right, rows aligned.
 - **Unified:** one column, top to bottom. Removed lines are on red with `−` and their number in the old file, the lines that replace them on green with `+` and their number in the new one, with the unchanged lines between. Long unchanged runs are folded into rows like “26 unmodified lines”, and a click shows them.
 
-In Unified, the hunk buttons act on the change of the lines you select, or of the row you last clicked. Right-click a row for **Stage Hunk**, **Unstage Hunk** or **Revert Hunk…** on its change, **Send to Agent** and **Copy**.
+In Unified, the hunk buttons act on the current change, the one “2 of 3” names and the gutter marks: selecting lines or clicking a row makes their change the current one, and so do the arrows and scrolling. Right-click a row for **Stage Hunk**, **Unstage Hunk** or **Revert Hunk…** on that row’s change, whatever else is selected, **Send to Agent** and **Copy**.
 
 ## Read it
 

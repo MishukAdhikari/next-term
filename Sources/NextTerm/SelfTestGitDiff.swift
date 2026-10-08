@@ -112,6 +112,39 @@ extension SelfTest {
         } else {
             check(false, "Unified shows the second change to stage")
         }
+        // Lines of both changes selected, a right-click on a row of the second: its Stage Hunk stages that one.
+        func stagedAfter(_ act: () -> Void) async -> [String] {
+            diff.base = .unstaged
+            _ = await wait(5) { diff.hunkCount == 2 && rows().contains { $0.line?.text == "line two" } && rows().contains { $0.line?.text == "line thirty-five" } }
+            act()
+            diff.base = .staged
+            _ = await wait(5) { diff.hunkCount == 1 }
+            let staged = rows().filter { $0.kind == .added }.compactMap { $0.line?.text }
+            diff.perform(.unstage)
+            _ = await wait(5) { diff.hunkCount == 0 }
+            return staged
+        }
+        let rightClicked = await stagedAfter {
+            guard let first = rows().firstIndex(where: { $0.line?.text == "line two" }),
+                  let second = rows().firstIndex(where: { $0.line?.text == "line thirty-five" }), column.starts.indices.contains(second + 1) else { return }
+            column.textView.setSelectedRange(NSRange(location: column.starts[first], length: column.starts[second + 1] - column.starts[first]))
+            let menu = rightClick(column, second)
+            if let menu, let item = menu.items.firstIndex(where: { $0.title == "Stage Hunk" }) { menu.performActionForItem(at: item) }
+        }
+        check(rightClicked == ["line thirty-five"], "with lines of both changes selected, Stage Hunk on a row of the second stages the second",
+              rightClicked.joined(separator: ", "))
+        // Lines of the first change still selected, the arrow to the second: the button acts on the second, as “2 of 2” says.
+        var said = ""
+        let stepped = await stagedAfter {
+            guard let first = rows().firstIndex(where: { $0.line?.text == "line two" }) else { return }
+            column.select(row: first)
+            NSApp.sendAction(Selector(("nextHunk")), to: diff, from: nil)
+            said = "current \(diff.currentHunk + 1)"
+            NSApp.sendAction(Selector(("stageHunk")), to: diff, from: nil)
+        }
+        check(stepped == ["line thirty-five"] && said == "current 2", "the hunk buttons act on the change the arrows went to, not the lines still selected",
+              "\(said), staged: " + stepped.joined(separator: ", "))
+        column.textView.setSelectedRange(NSRange(location: 0, length: 0))
         diff.base = .head
         // Remembered, for every diff, and in the View menu.
         let menuItem = KeyboardShortcuts.shared.commands.first { $0.id == "toggleUnifiedDiffs:" }?.item
@@ -263,6 +296,17 @@ extension SelfTest {
                                              timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
                                              eventNumber: 0, clickCount: 1, pressure: 1) else { return }
         text.mouseDown(with: event)
+    }
+
+    /// The menu a right-click on `row` of a unified column opens.
+    private static func rightClick(_ column: UnifiedColumn, _ row: Int) -> NSMenu? {
+        let text = column.textView
+        let point = NSPoint(x: 30, y: text.textContainerInset.height + (CGFloat(row) + 0.5) * column.rowHeight)
+        guard let window = text.window,
+              let event = NSEvent.mouseEvent(with: .rightMouseDown, location: text.convert(point, to: nil), modifierFlags: [],
+                                             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                                             eventNumber: 0, clickCount: 1, pressure: 1) else { return nil }
+        return text.menu(for: event)
     }
 
     private static func mouseEvent(_ view: NSView) -> NSEvent? {
