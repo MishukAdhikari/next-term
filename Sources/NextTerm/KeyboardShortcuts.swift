@@ -509,7 +509,8 @@ final class EditorSettingsView: NSView {
     private let envValues = NSButton(checkboxWithTitle: "Hide values in .env files", target: nil, action: nil)
     private let singleClick = NSButton(checkboxWithTitle: "Open files with a single click", target: nil, action: nil)
     private let dotIcons = NSButton(checkboxWithTitle: "Icons on configuration folders (.github, .claude, .idea…)", target: nil, action: nil)
-    private let claude = NSButton(checkboxWithTitle: "Agents in a tab see the editor (Claude Code, Gemini CLI, Qwen Code)", target: nil, action: nil)
+    private let claude = NSButton(checkboxWithTitle: "Agents in a tab see the editor (Claude Code, Gemini CLI, Qwen Code, opencode)", target: nil, action: nil)
+    private let copilot = NSButton(checkboxWithTitle: "GitHub Copilot CLI in a tab sees the editor", target: nil, action: nil)
     private let control = NSButton(checkboxWithTitle: "Let agents control Next Term (MCP: projects, tabs, prompts, the editor)", target: nil, action: nil)
     private let controlStatus = NSTextField(wrappingLabelWithString: "")
     private let fontSize = NSStepper()
@@ -546,6 +547,9 @@ final class EditorSettingsView: NSView {
         dotIcons.action = #selector(dotIconsChanged)
         claude.target = self
         claude.action = #selector(claudeChanged)
+        copilot.target = self
+        copilot.action = #selector(copilotChanged)
+        copilot.toolTip = "Copilot CLI connects when it starts in a tab’s folder or an open project. Its proposed edits open as diffs to accept or reject."
         control.target = self
         control.action = #selector(controlChanged)
         controlStatus.textColor = .secondaryLabelColor
@@ -566,7 +570,7 @@ final class EditorSettingsView: NSView {
             stack.spacing = 10
             return stack
         }
-        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own line height; 1.35 reads well for code. The font size is shared with the terminal (⌘+ and ⌘-); the terminal’s font is in the Terminal tab. Claude Code, Gemini CLI and Qwen Code started in a new tab connect to Next Term as their IDE: the open files and the selected lines go with each prompt (never from .env files). They connect by themselves (Next Term turns Gemini's and Qwen's IDE mode on); turn this off to stop sharing. ⌥⌘K adds an @-mention to Claude's prompt.")
+        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own line height; 1.35 reads well for code. The font size is shared with the terminal (⌘+ and ⌘-); the terminal’s font is in the Terminal tab. Claude Code, Gemini CLI, Qwen Code, opencode and Copilot CLI started in a new tab connect to Next Term as their IDE: the selected lines go with each prompt (and for Gemini and Qwen, the open files), never from .env files. They connect by themselves (Next Term turns Gemini's and Qwen's IDE mode on); turn these off to stop sharing. ⌥⌘K adds an @-mention to the prompt of Claude, opencode and Copilot.")
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 11)
         note.preferredMaxLayoutWidth = 420
@@ -581,6 +585,7 @@ final class EditorSettingsView: NSView {
             row("", [dotIcons]),
             row("Git:", [NSTextField(labelWithString: "Fetch in the background:"), backgroundFetch]),
             row("Agents:", [claude]),
+            row("", [copilot]),
             row("", [control]),
             row("", [controlStatus]),
             note,
@@ -619,6 +624,7 @@ final class EditorSettingsView: NSView {
         singleClick.state = app.sidebarSingleClickOpens ? .on : .off
         dotIcons.state = app.iconsOnDotFolders ? .on : .off
         claude.state = app.shareWithClaude ? .on : .off
+        copilot.state = app.shareWithCopilot ? .on : .off
         control.state = app.agentControl ? .on : .off
         controlStatus.stringValue = !app.agentControl ? "Off: no agent can reach Next Term, and it is removed from the agents it was added to."
             : CommandLineTool.script == nil ? "Only the installed app adds itself to your agents."
@@ -651,6 +657,11 @@ final class EditorSettingsView: NSView {
 
     @objc private func claudeChanged() {
         AppDelegate.shared.shareWithClaude = claude.state == .on
+        refresh()
+    }
+
+    @objc private func copilotChanged() {
+        AppDelegate.shared.shareWithCopilot = copilot.state == .on
         refresh()
     }
 
