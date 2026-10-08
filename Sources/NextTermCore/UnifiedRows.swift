@@ -158,6 +158,14 @@ public enum UnifiedRows {
         return lines
     }
 
+    /// Whether the whole file read along with `source` fills `file`'s folds: the same old file and the same
+    /// hunks make the same new file. Anything else (a hunk reverted, an agent's edit undone, another base)
+    /// may have changed lines between the hunks, which no hunk shows.
+    public static func fill(of source: FileDiff?, fits file: FileDiff) -> Bool {
+        guard let source, let blob = source.oldBlob else { return false }
+        return blob == file.oldBlob && source.hunks == file.hunks
+    }
+
     /// A file git doesn't track yet, as a diff that adds every line; one with no lines for an empty file,
     /// and a binary one when the first 8000 bytes hold a NUL. A line that isn't UTF-8 reads as Latin-1, as
     /// in git's diffs.

@@ -13,7 +13,7 @@ final class AllFilesView: NSView {
         /// Nil until read: a large file (left out of the page's read), or one being read.
         var diff: FileDiff?
         var rows: [UnifiedRow] = []
-        /// The file's unchanged lines, once a fold asked for them.
+        /// The file's unchanged lines, once a fold asked for them; for `diff` only (dropped when it changes).
         var fill: [Int: DiffLine]?
         var expanded: Set<Int> = []
         var collapsed = false
@@ -81,11 +81,18 @@ final class AllFilesView: NSView {
             let fresh = diffs[file.path]
             entry.file = file
             if let fresh, isNew || fresh != entry.diff {
-                if let fill = entry.fill, !UnifiedDiffPart.isConsistent(fill, with: fresh) { entry.fill = nil }
+                // The lines between the hunks may have changed too, which no hunk shows: the folds opened stay
+                // open with the whole file read again, the rows shown staying until it is.
+                let reopen = entry.fill != nil && !entry.expanded.isEmpty && !entry.rows.isEmpty && reader != nil
                 entry.diff = fresh
+                entry.fill = nil
                 entry.failed = false
-                entry.rows = UnifiedRows.rows(for: fresh, expanded: entry.expanded, fill: entry.fill)
-                drop(entry)
+                if reopen {
+                    readFill(entry)
+                } else {
+                    entry.rows = UnifiedRows.rows(for: fresh, expanded: entry.expanded)
+                    drop(entry)
+                }
             } else if fresh == nil, !isNew, entry.forced, !entry.reading {
                 rereads.append(entry) // shown anyway, and not in the page's read: read again by itself
             } else if fresh == nil, isNew || !entry.forced {
@@ -208,12 +215,18 @@ final class AllFilesView: NSView {
     /// A fold was clicked: its lines show, now if they are known, else once the whole file is read.
     private func open(_ fold: UnifiedFold, in entry: Entry) {
         entry.expanded.insert(fold.oldStart)
-        guard entry.fill == nil, let reader else { return rebuildRows(entry) }
-        let file = entry.file
+        if entry.fill == nil, reader != nil { readFill(entry) } else { rebuildRows(entry) }
+    }
+
+    /// Reads the file whole, for the diff it shows now: what fills its folds. Dropped if the diff changes
+    /// meanwhile (the read for the new one fills them).
+    private func readFill(_ entry: Entry) {
+        guard let reader else { return }
+        let file = entry.file, source = entry.diff
         Self.queue.async { [weak self] in
             let whole = reader(file, UnifiedRows.wholeFile)
             DispatchQueue.main.async {
-                guard let self, self.entries.contains(where: { $0 === entry }) else { return }
+                guard let self, self.entries.contains(where: { $0 === entry }), entry.diff == source else { return }
                 entry.fill = whole.map(UnifiedRows.fill(from:))
                 self.rebuildRows(entry)
             }

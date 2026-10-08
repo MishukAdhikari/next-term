@@ -438,6 +438,44 @@ import Testing
         #expect(Changes.diffs(.all, context: context, set: all, in: root.path, git: git)?["tab\there.txt"]?.hunks.first?.lines.last?.text == "two")
     }
 
+    /// The whole file read for one diff fills only that diff's folds: once a hunk is reverted, the line put
+    /// back lies between the new diff's hunks, where no hunk shows it, and the fold over it has one more line.
+    @Test func aWholeFileFillsOnlyTheDiffItWasReadFor() throws {
+        guard let git = GitRunner.locateGit() else { return }
+        let root = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path)).appendingPathComponent("nt-changes-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = (1...60).map { "line \($0)" }
+        try write(root, "f.txt", original.joined(separator: "\n") + "\n")
+        _ = run(git, root, "init", "-q")
+        _ = run(git, root, "add", "-A")
+        _ = run(git, root, "commit", "-qm", "Base")
+        var edited = original
+        edited[9] = "line TEN"
+        edited[29] = "line THIRTY"
+        edited[54] = "line FIFTY-FIVE"
+        try write(root, "f.txt", edited.joined(separator: "\n") + "\n")
+        func read(_ lines: Int = UnifiedRows.context) throws -> FileDiff {
+            try #require(GitRunner.diff(of: "f.txt", in: root.path, git: git, context: lines))
+        }
+        let before = try read(), again = try read()
+        let fill = UnifiedRows.fill(from: try read(UnifiedRows.wholeFile))
+        #expect(before.hunks.count == 3 && UnifiedRows.fill(of: before, fits: again))
+
+        // Line 30 put back, as Revert Hunk does: two hunks, the run between them one line longer.
+        try write(root, "f.txt", edited.enumerated().map { $0.offset == 29 ? original[29] : $0.element }.joined(separator: "\n") + "\n")
+        let after = try read()
+        #expect(after.hunks.count == 2 && !UnifiedRows.fill(of: before, fits: after))
+        let opened = Set(UnifiedRows.rows(for: after).compactMap { $0.fold?.oldStart })
+        // The old fill lacks line 30: its fold could never open.
+        #expect(UnifiedRows.rows(for: after, expanded: opened, fill: fill).contains { $0.kind == .fold })
+        let wholeAfter = try read(UnifiedRows.wholeFile)
+        let fresh = UnifiedRows.rows(for: after, expanded: opened, fill: UnifiedRows.fill(from: wholeAfter))
+        #expect(!fresh.contains { $0.kind == .fold })
+        #expect(fresh.compactMap { $0.kind == .removed ? nil : $0.number } == Array(1...60))
+        #expect(!UnifiedRows.fill(of: nil, fits: after))
+    }
+
     /// Past the limit, only the files listed are kept as untracked: nothing else is looked up.
     @Test func untrackedPastTheLimitAreTheListedOnes() throws {
         guard let git = GitRunner.locateGit() else { return }

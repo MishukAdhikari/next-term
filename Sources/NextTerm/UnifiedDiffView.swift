@@ -460,6 +460,8 @@ final class UnifiedDiffPart: NSObject {
     private(set) var rows: [UnifiedRow] = []
     /// The file's unchanged lines by old line number, from the diff with the whole file as context.
     private var fill: [Int: DiffLine]?
+    /// The diff `fill` was read for: it fills only that one's folds.
+    private var fillSource: FileDiff?
     /// Folds opened, by their first old line: they stay open when the diff is read again.
     private(set) var expanded: Set<Int> = []
     /// Bumped with each new diff, so a whole-file read for an older one is dropped.
@@ -515,34 +517,21 @@ final class UnifiedDiffPart: NSObject {
             return render(pane)
         }
         let folds = UnifiedRows.rows(for: file).contains { $0.kind == .fold }
-        if !folds { fill = nil }
-        if !folds || fill.map({ Self.isConsistent($0, with: file) }) == true { return render(pane) }
-        if rows.isEmpty {
-            fill = nil
-            render(pane)
-        }
+        if !folds || !UnifiedRows.fill(of: fillSource, fits: file) { fill = nil }
+        if !folds || fill != nil { return render(pane) }
+        if rows.isEmpty { render(pane) }
         readWholeFile(pane)
     }
 
-    /// Whether the whole file read before still matches: every unchanged line of the new diff is in it,
-    /// at the same place.
-    static func isConsistent(_ fill: [Int: DiffLine], with file: FileDiff) -> Bool {
-        for hunk in file.hunks {
-            for line in hunk.lines where line.kind == .context {
-                guard let number = line.oldNumber, let known = fill[number], known.text == line.text, known.newNumber == line.newNumber else { return false }
-            }
-        }
-        return true
-    }
-
     private func readWholeFile(_ pane: DiffPane) {
-        let token = generation
+        let token = generation, source = pane.file
         let read = pane.wholeFileReader()
         DispatchQueue.global(qos: .userInitiated).async { [weak self, weak pane] in
             let whole = read()
             DispatchQueue.main.async {
                 guard let self, let pane, token == self.generation else { return }
                 self.fill = whole.map(UnifiedRows.fill(from:))
+                self.fillSource = source
                 self.render(pane)
             }
         }
