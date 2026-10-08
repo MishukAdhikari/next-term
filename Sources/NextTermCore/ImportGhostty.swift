@@ -463,6 +463,13 @@ public enum ImportGhostty {
             guard let (trigger, action) = binds[id] else { continue }
             if !isPlaced(trigger), case .chord(let chord) = key(withoutFlags(trigger), usKeyboard: usKeyboard),
                placed.contains(chord) { continue }
+            if isRefusedSequence(trigger) {
+                // Whatever its action: only its name is shown (never text it would send).
+                let name = actions[action] == nil ? String(action.prefix { $0 != ":" }) : action
+                let label = SecretGuard.looksSecret(trigger) || SecretGuard.looksSecret(name) ? "a keybind" : "keybind \(trigger) → \(name)"
+                plan.skipped.append(SkippedItem(label, refusedSequence))
+                continue
+            }
             guard let command = actions[action] else {
                 unmatched += 1
                 continue

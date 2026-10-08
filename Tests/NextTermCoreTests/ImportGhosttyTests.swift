@@ -237,6 +237,14 @@ import Testing
             """)
         #expect(reasons(flagged)["keybind ctrl+a>ctrl+n → new_tab"] == ImportShortcuts.twoStep)
         #expect(reasons(flagged)["keybind all:control+a>control+n → new_window"] == ImportGhostty.refusedSequence)
+        // A refused line whose action has no command says the same, rather than being counted as unmatched.
+        #expect(reasons(flagged)["keybind global:ctrl+a>ctrl+n → unbind"] == ImportGhostty.refusedSequence)
+        #expect(reasons(flagged)["keybind unconsumed:all:ctrl+a>ctrl+n → unbind"] == ImportGhostty.refusedSequence)
+        #expect(!flagged.skipped.contains { $0.item.hasSuffix(" keybind") || $0.item.hasSuffix(" keybinds") })
+        // Text it would send is never shown, only the action's name.
+        let typed = try self.plan("keybind = global:ctrl+a>ctrl+t=text:export TOKEN=abc")
+        #expect(reasons(typed)["keybind global:ctrl+a>ctrl+t → text"] == ImportGhostty.refusedSequence)
+        #expect(!"\(typed)".contains("TOKEN"))
         #expect(ImportGhostty.triggerID("global:ctrl+a>ctrl+n") == nil && ImportGhostty.triggerID("unconsumed:all:a>b") == nil)
         // One step with a flag is still the same key as without: a later line replaces it.
         #expect(ImportGhostty.triggerID("all:ctrl+a") == ImportGhostty.triggerID("ctrl+a"))
