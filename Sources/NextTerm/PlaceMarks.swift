@@ -29,7 +29,7 @@ extension TerminalWindowController {
         if header.onTabPlaceClick == nil { header.onTabPlaceClick = { [weak self] in self?.showPlaceChoices() } }
         guard let tab = activeTab, let mark = AgentPlaces.shared.mark(for: tab, in: self) else { return header.showTabPlace(nil) }
         let facts = mark.facts(agent: AgentName.of(program: tab.status.program), when: { SessionStore.when($0) })
-        header.showTabPlace(TabPlace(label: mark.label, facts: facts, hasChoices: mark.switched != nil))
+        header.showTabPlace(TabPlace(prefix: mark.labelPrefix, branch: mark.labelBranch, facts: facts, hasChoices: mark.switched != nil))
     }
 
     /// A click on the header's label: for a branch switched under the focused tab's chat, Keep Going, and Go to
@@ -83,35 +83,56 @@ enum PlaceGlyph {
 
 /// What the sidebar header says about the focused tab's place.
 struct TabPlace: Equatable {
-    /// "this tab: fix/7027-sso", "chat was on fix/7611-3ds".
-    let label: String
+    /// "this tab:", "chat was on": never cut.
+    let prefix: String
+    /// "fix/7027-sso": cut in the middle when room is short.
+    let branch: String
     /// The whole story, for the tooltip and VoiceOver.
     let facts: String
     /// A click offers Keep Going (a branch switched under the chat).
     let hasChoices: Bool
+
+    /// "this tab: fix/7027-sso".
+    var label: String { prefix + " " + branch }
 }
 
-/// The sidebar header's label after the branch: the glyph and "this tab: fix/7027-sso", cut in the middle,
-/// down to the glyph alone when the header is narrow. The full text is in its tooltip.
+/// The sidebar header's label after the branch: the glyph and "this tab: fix/7027-sso", the branch cut in the
+/// middle (never "this tab:"), down to the glyph alone when the header is narrow, and to nothing when even
+/// that would cut the window's own branch. The full text is in its tooltip.
 final class TabPlaceView: NSView {
     private let glyph = NSImageView()
+    private let prefix = NSTextField(labelWithString: "")
     private let label = NSTextField(labelWithString: "")
     private(set) var place: TabPlace?
     var onClick: (() -> Void)?
-    /// The glyph alone: no room for the words.
-    var compact = false { didSet { if compact != oldValue { label.isHidden = compact; needsLayout = true } } }
+
+    /// What it shows: the words, the glyph alone, or nothing.
+    enum Room { case words, glyph, none }
+    var room = Room.words {
+        didSet {
+            guard room != oldValue else { return }
+            prefix.isHidden = room != .words
+            label.isHidden = room != .words
+            glyph.isHidden = room == .none
+            setAccessibilityElement(room != .none)
+            needsLayout = true
+        }
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         glyph.image = PlaceGlyph.image(size: 13)
         glyph.contentTintColor = Theme.textDim
         glyph.imageScaling = .scaleNone
-        label.font = .systemFont(ofSize: 11.5)
-        label.textColor = Theme.textDim
+        for field in [prefix, label] {
+            field.font = .systemFont(ofSize: 11.5)
+            field.textColor = Theme.textDim
+            field.setAccessibilityElement(false)
+        }
+        Typography.singleLine(prefix, truncation: .byClipping)
         Typography.singleLine(label, truncation: .byTruncatingMiddle)
-        label.setAccessibilityElement(false)
         glyph.setAccessibilityElement(false)
-        [glyph, label].forEach(addSubview)
+        [glyph, prefix, label].forEach(addSubview)
         setAccessibilityElement(true)
     }
 
@@ -123,7 +144,8 @@ final class TabPlaceView: NSView {
     func show(_ place: TabPlace) {
         guard place != self.place else { return }
         self.place = place
-        label.stringValue = place.label
+        prefix.stringValue = place.prefix
+        label.stringValue = place.branch
         toolTip = place.facts + (place.hasChoices ? "\nClick for Keep Going." : "")
         setAccessibilityRole(place.hasChoices ? .button : .staticText)
         setAccessibilityLabel(place.facts)
@@ -131,13 +153,26 @@ final class TabPlaceView: NSView {
     }
 
     /// The glyph, a gap and the words in full.
-    var fullWidth: CGFloat { 14 + 3 + ceil(label.cell?.cellSize.width ?? label.intrinsicContentSize.width) + 1 }
+    var fullWidth: CGFloat { 14 + 3 + prefixWidth + Self.width(of: label) + 1 }
+    /// The least room for the words: "this tab:" whole and the branch cut to about "fix/…sso".
+    var readableWidth: CGFloat { 14 + 3 + prefixWidth + Self.branchLeast }
     static let glyphWidth: CGFloat = 14
-    /// The words as shown ("" with the glyph alone), for the self-test.
-    var shownText: String { label.isHidden ? "" : label.stringValue }
+    static let branchLeast: CGFloat = 40
+    private var prefixWidth: CGFloat { Self.width(of: prefix) }
+    /// A label's cell, which needs a few points of margin beyond its text.
+    private static func width(of field: NSTextField) -> CGFloat { ceil(field.cell?.cellSize.width ?? field.intrinsicContentSize.width) }
+
+    /// The words as shown ("" with the glyph alone or nothing), for the self-test.
+    var shownText: String { room == .words ? prefix.stringValue + " " + label.stringValue : "" }
+    var showsGlyph: Bool { room != .none }
+    /// The branch is cut (the words before it never are).
     var isTruncated: Bool {
         layoutSubtreeIfNeeded()
-        return !label.isHidden && label.cell?.expansionFrame(withFrame: label.bounds, in: label) != .zero
+        return room == .words && label.cell?.expansionFrame(withFrame: label.bounds, in: label) != .zero
+    }
+    var prefixIsWhole: Bool {
+        layoutSubtreeIfNeeded()
+        return room != .words || prefix.frame.width >= prefixWidth
     }
 
     override func layout() {
@@ -145,7 +180,9 @@ final class TabPlaceView: NSView {
         let h = bounds.height
         glyph.frame = NSRect(x: 0, y: (h - 14) / 2, width: 14, height: 14)
         let labelHeight = label.intrinsicContentSize.height
-        label.frame = NSRect(x: 17, y: (h - labelHeight) / 2, width: max(0, bounds.width - 17), height: labelHeight)
+        let width = min(prefixWidth, max(0, bounds.width - 17))
+        prefix.frame = NSRect(x: 17, y: (h - labelHeight) / 2, width: width, height: labelHeight)
+        label.frame = NSRect(x: prefix.frame.maxX, y: (h - labelHeight) / 2, width: max(0, bounds.width - prefix.frame.maxX), height: labelHeight)
     }
 
     override func mouseDown(with event: NSEvent) {

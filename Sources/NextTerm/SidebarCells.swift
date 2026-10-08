@@ -323,7 +323,7 @@ final class SidebarHeaderView: NSView {
         // The focused tab's label after the name: whole beside the whole name, else cut in the middle, else the
         // glyph alone. The line counts give way to both: the name stays whole while the label shows.
         let placeWidth = tabPlaceWidth(spare: right - nameStart - nameNeeded - chevronWidth - 6)
-        let kept = placeWidth > 0 ? nameStart + nameNeeded + chevronWidth + 6 + placeWidth : nameKept
+        let kept = tabPlace.isHidden ? nameKept : nameStart + nameNeeded + chevronWidth + 6 + placeWidth
         var summaryWidth = min(summaryText, max(0, right - kept))
         if summaryWidth < summaryText, summaryWidth < 28 { summaryWidth = 0 } // cut to an ellipsis, it says nothing
         if !syncButton.isHidden && syncButton.isShortened { summaryWidth = 0 } // the counts went before the word did
@@ -354,14 +354,24 @@ final class SidebarHeaderView: NSView {
         window?.invalidateCursorRects(for: tabPlace)
     }
 
-    /// The room the place label takes, with its gap: `spare` is what is left beside the whole name.
+    /// The room the place label takes, with its gap: `spare` is what is left beside the whole name. Its words
+    /// while "this tab:" fits whole with some of the branch, else the glyph alone, else nothing: the window's
+    /// own branch keeps its room (the tab's own mark, and the header's VoiceOver label, still say it).
     private func tabPlaceWidth(spare: CGFloat) -> CGFloat {
+        tabPlaceSpare = spare
         guard !tabPlace.isHidden else { return 0 }
         let full = 6 + tabPlace.fullWidth
-        let readable: CGFloat = 6 + 17 + 56 // "this tab: f…sso" at least
-        tabPlace.compact = spare < min(full, readable)
-        return tabPlace.compact ? 6 + TabPlaceView.glyphWidth : min(full, spare)
+        if spare >= min(full, 6 + tabPlace.readableWidth) {
+            tabPlace.room = .words
+            return min(full, spare)
+        }
+        let glyph = 6 + TabPlaceView.glyphWidth
+        tabPlace.room = spare >= glyph ? .glyph : .none
+        return tabPlace.room == .glyph ? glyph : 0
     }
+
+    /// The room beside the whole branch name at the last layout, for the self-test.
+    private(set) var tabPlaceSpare: CGFloat = 0
 
     /// The choices for the focused tab's place, under its label.
     func popUpTabPlaceMenu(_ menu: NSMenu) {

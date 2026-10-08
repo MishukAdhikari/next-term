@@ -32,10 +32,11 @@ public struct PlaceMark: Equatable, Sendable {
 
     /// The sidebar header's label when the tab is focused: "this tab: fix/7027-sso", or "chat was on
     /// fix/7611-3ds" after a switch under it.
-    public var label: String {
-        if elsewhere { return "this tab: " + place.checkout.head.name }
-        return "chat was on " + (switched?.from.name ?? "")
-    }
+    public var label: String { labelPrefix + " " + labelBranch }
+    /// The label's words before the branch, which are never cut: "this tab:", "chat was on".
+    public var labelPrefix: String { elsewhere ? "this tab:" : "chat was on" }
+    /// The branch it names, cut in the middle when room is short.
+    public var labelBranch: String { elsewhere ? place.checkout.head.name : switched?.from.name ?? "" }
 
     /// The facts, for the tooltip and VoiceOver: the agent, its checkout and branch, what the window shows,
     /// and for a switch, the branch the chat was on, the one now checked out, when and who made it.

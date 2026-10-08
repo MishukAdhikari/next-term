@@ -13,6 +13,7 @@ import Testing
         let place = AgentPlace(repository: Self.repo, checkout: nested, workingBranch: .branch("fix/7027-sso"), switched: nil)
         let mark = PlaceMark.of(place, shownRepository: Self.repo, shown: main)
         #expect(mark?.elsewhere == true && mark?.label == "this tab: fix/7027-sso")
+        #expect(mark?.labelPrefix == "this tab:" && mark?.labelBranch == "fix/7027-sso")
         #expect(mark?.facts(agent: "Claude Code", when: when)
                 == "Claude Code works in worktree pr-7050, on fix/7027-sso. This window shows xCloud, on fix/7611-3ds.")
         #expect(PlaceMark.sync(place, shownRepository: Self.repo, shown: main) == "elsewhere")
@@ -35,6 +36,7 @@ import Testing
             return PlaceMark.of(place, shownRepository: Self.repo, shown: now)
         }
         #expect(mark(.you)?.elsewhere == false && mark(.you)?.label == "chat was on fix/7611-3ds")
+        #expect(mark(.you)?.labelPrefix == "chat was on" && mark(.you)?.labelBranch == "fix/7611-3ds")
         #expect(mark(.you)?.facts(agent: "Claude Code", when: when) == "The chat was on fix/7611-3ds; xCloud is now on fix/7050-pr: you switched it 2 min ago.")
         #expect(mark(.agent(key: "k", title: "7"))?.facts(agent: "Codex", when: when).hasSuffix("the agent in the tab “7” switched it 2 min ago.") == true)
         #expect(mark(.tab(key: "k", title: "zsh"))?.facts(agent: "Codex", when: when).hasSuffix("the tab “zsh” switched it 2 min ago.") == true)
