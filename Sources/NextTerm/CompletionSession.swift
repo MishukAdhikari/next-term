@@ -468,6 +468,10 @@ extension CompletionSession {
     /// A server tab whose shell has no hook (no `arm` has come from it): Tab completion reads its screen.
     var usesScreen: Bool { tab?.remote != nil && state.arm == nil }
 
+    /// A server tab kept in Next Term's tmux: tmux draws it on the alternate screen, its pane's cursor where the
+    /// shell's is.
+    var inTmux: Bool { tab?.remote?.keep == .tmux && tab?.fellBack == false }
+
     /// The server's shell is at its prompt and can complete from the screen now: connected, two status reports
     /// since the last Return, and room on its connection. Without these, a plain ^I at once.
     var screenReady: Bool {
@@ -558,7 +562,7 @@ extension CompletionSession {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.015) { [weak self] in self?.screenSettled(id, since: start) }
             return
         }
-        guard !tab.view.getTerminal().isCurrentBufferAlternate, let left = tab.lineLeftOfCursor(), let word = ScreenWord.read(left),
+        guard !tab.view.getTerminal().isCurrentBufferAlternate || inTmux, let left = tab.lineLeftOfCursor(), let word = ScreenWord.read(left),
               let request = RemoteCompletion.shared.request(for: word, in: tab) else { return screenAnswer(id, .native) }
         screenWord = word
         let listing = RemoteCompletion.shared.list(request, for: tab) { [weak self] result in self?.screenListed(id, result) }

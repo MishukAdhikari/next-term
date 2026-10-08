@@ -34,8 +34,11 @@ public enum RemoteListing {
         ]
         switch live {
         case .tmux(let session):
+            let target = RemoteShell.quote("=" + RemoteShell.safeName(session) + ":")
             lines += [RemoteShell.findTmux,
-                      "[ -n \"$T\" ] && L=$(\"$T\" -L nextterm display-message -p -t \(RemoteShell.quote("=" + RemoteShell.safeName(session) + ":")) '#{pane_current_path}' 2>/dev/null)"]
+                      "[ -n \"$T\" ] && L=$(\"$T\" -L nextterm display-message -p -t \(target) '#{pane_current_path}' 2>/dev/null)",
+                      // A pane in copy mode shows tmux's history, not the shell's line: nothing to complete there.
+                      "[ -n \"$T\" ] && [ \"$(\"$T\" -L nextterm display-message -p -t \(target) '#{pane_in_mode}' 2>/dev/null)\" = 1 ] && { echo 'In copy mode.' >&2; exit 5; }"]
         case .pid(let tabKey):
             let id = RemoteShell.safeName(tabKey)
             lines += ["set -- $(cat \"$C/tabs/\(id)\" 2>/dev/null); [ -n \"$1\" ] || { A=/tmp/nt-$(id -u)-tabs; [ -O \"$A\" ] && set -- $(cat \"$A/\(id)\" 2>/dev/null); }",

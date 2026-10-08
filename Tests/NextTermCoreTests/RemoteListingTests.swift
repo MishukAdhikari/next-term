@@ -84,6 +84,17 @@ import Testing
         #expect(RemoteListing.parse(try run(RemoteListing.script(.typed("~/nothing/"), live: .none), home: home.path)) == nil)
     }
 
+    @Test func aTmuxPaneIsReadByItsSessionAndNotInCopyMode() throws {
+        let script = RemoteListing.script(.typed("src/"), live: .tmux(session: "nt-app;x"))
+        // Next Term's own tmux server, the session by its safe name, and nothing listed from a pane in copy mode.
+        #expect(script.contains("-L nextterm display-message -p -t '=nt-appx:' '#{pane_current_path}'"))
+        #expect(script.contains("'#{pane_in_mode}'") && script.contains("exit 5"))
+        // Without tmux on the host, the shell's folder isn't known: a relative word gets no list.
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        #expect(RemoteListing.parse(try run(script, home: home.path)) == nil)
+    }
+
     @Test func aBigFolderIsCappedAndSaysSo() throws {
         let home = try temporaryHome()
         defer { try? FileManager.default.removeItem(at: home) }

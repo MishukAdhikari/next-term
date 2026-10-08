@@ -44,7 +44,9 @@ final class CompletionController {
         guard CompletionPreferences.isOn, Self.isPlainTab(event) else { return false }
         // A server tab with no hook: its own readiness (CompletionSession.screenReady).
         guard session.state.isArmed || session.state.holding || session.usesScreen else { return false }
-        guard !view.hasMarkedText(), !view.getTerminal().isCurrentBufferAlternate else { return false }
+        // A server tab kept in tmux is always on the alternate screen (tmux's); what runs in its pane, the status
+        // checks and the hook say.
+        guard !view.hasMarkedText(), !view.getTerminal().isCurrentBufferAlternate || session.inTmux else { return false }
         // Scrolled back: the line being completed is at the bottom.
         if view.canScroll, view.scrollPosition < 1 { view.scroll(toPosition: 1) }
         // Where a plugin owns Tab, the user's choice decides; the first time, they are asked.

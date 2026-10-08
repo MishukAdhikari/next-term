@@ -28,7 +28,8 @@ final class RemoteCompletion {
     private var prefetched: [ObjectIdentifier: String] = [:]
 
     /// What a word on a server's screen asks to list, and its key in the cache: nil for a folder relative to a
-    /// shell whose folder the status checks don't report (no /proc there), which is listed afresh each time.
+    /// shell whose folder the status checks don't report (no /proc there), and for a tab in tmux, whose listing
+    /// first makes sure the pane isn't in tmux's copy mode: those are listed afresh each time.
     struct Request {
         let folder: RemoteListing.Folder
         let key: String?
@@ -41,6 +42,7 @@ final class RemoteCompletion {
     /// A folder as typed: absolute, from the server's home (`~/`), or relative to the shell's own folder.
     func request(typed: String, in tab: TerminalTab) -> Request? {
         guard let remote = tab.remote else { return nil }
+        if case .tmux = Self.live(tab) { return Request(folder: .typed(typed), key: nil) }
         let place: String
         if typed.hasPrefix("/") {
             place = (typed as NSString).standardizingPath

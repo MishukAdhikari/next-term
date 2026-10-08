@@ -51,6 +51,12 @@ extension SelfTest {
         var bin: URL { base.appendingPathComponent("bin") }
         var project: URL { home.appendingPathComponent("app") }
 
+        /// tmux on this Mac (NEXTTERM_TEST_TMUX, or where Homebrew puts it), for the tmux checks.
+        var tmux: String? {
+            ([ProcessInfo.processInfo.environment["NEXTTERM_TEST_TMUX"]].compactMap { $0 } + ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"])
+                .first { FileManager.default.isExecutableFile(atPath: $0) }
+        }
+
         func flag(_ name: String, _ on: Bool) {
             let path = base.appendingPathComponent(name).path
             if on { FileManager.default.createFile(atPath: path, contents: nil) } else { unlink(path) }
@@ -71,6 +77,9 @@ extension SelfTest {
             try? fm.createDirectory(at: server.project.appendingPathComponent(folder), withIntermediateDirectories: true)
         }
         try? fm.createDirectory(at: server.bin, withIntermediateDirectories: true)
+        // tmux, if there is one, on the fake server's PATH, with a socket folder of its own (TMUX_TMPDIR).
+        try? fm.createDirectory(at: server.base.appendingPathComponent("tmux"), withIntermediateDirectories: true)
+        if let tmux = server.tmux { try? fm.createSymbolicLink(atPath: server.bin.appendingPathComponent("tmux").path, withDestinationPath: tmux) }
         for file in ["food.txt", "My file.txt"] { fm.createFile(atPath: server.project.appendingPathComponent(file).path, contents: nil) }
         let script = """
             #!/bin/bash
@@ -91,7 +100,7 @@ extension SelfTest {
             if [ -z "$tty" ] && [ -e "$B/refused" ]; then echo 'mux_client_request_session: session request failed: Session open refused by peer' >&2; exit 255; fi
             if [ -z "$tty" ] && [ -e "$B/drop" ]; then exit 255; fi
             if [ -z "$tty" ] && [ -e "$B/slow" ]; then sleep 2; fi
-            export HOME=\(RemoteShell.quote(server.home.path)) SHELL=/bin/zsh PATH=\(RemoteShell.quote(server.bin.path)):/usr/bin:/bin:/usr/sbin:/sbin
+            export HOME=\(RemoteShell.quote(server.home.path)) SHELL=/bin/zsh PATH=\(RemoteShell.quote(server.bin.path)):/usr/bin:/bin:/usr/sbin:/sbin TMUX_TMPDIR="$B/tmux"
             unset ZDOTDIR NEXTTERM_USER_ZDOTDIR
             cd "$HOME"
             exec /bin/zsh -f -c "$cmd"
@@ -271,6 +280,36 @@ extension SelfTest {
 
         check(server.files() == before, "Tab completion, servers: nothing was written under the server's home",
               "\(Set(server.files()).symmetricDifference(before).sorted().prefix(6))")
+
+        // In tmux, when there is one: the pane's folder read as the listing runs, on tmux's alternate screen.
+        if server.tmux != nil {
+            let kept = RemoteHost(name: "complete-tmux", destination: "nt@complete-tmux.invalid", directory: server.project.path, keep: .tmux)
+            RemoteHosts.save(kept)
+            let keptMaster = CompletionStandInMaster(path: RemoteConnection.controlPath(kept))
+            keptMaster.start()
+            let inTmux = c.addRemoteTab(RemoteTab(host: kept))
+            if await wait(20, { inTmux.remoteConnected && inTmux.remoteReady }), await wait(8, { inTmux.completion.screenReady }), await focus(c, inTmux) {
+                inTmux.view.send(txt: "ls fo")
+                await pause(0.6)
+                pressKey(window, "\t", code: 48)
+                check(await wait(4) { popup.isVisible && popup.shownTexts == ["foo", "food.txt"] },
+                      "Tab completion, servers: in tmux, `ls fo` lists the pane's folder", "\(popup.shownTexts)")
+                pressKey(window, "\u{1b}", code: 53)
+                inTmux.view.send(txt: "\u{15}")
+            } else {
+                check(false, "Tab completion, servers: a tmux tab on the stand-in server is ready", "\(inTmux.completion.reportsSinceReturn)")
+            }
+            c.remove(inTmux)
+            let kill = Process()
+            kill.executableURL = server.bin.appendingPathComponent("tmux")
+            kill.arguments = ["-L", "nextterm", "kill-server"]
+            kill.environment = ["TMUX_TMPDIR": server.base.appendingPathComponent("tmux").path, "PATH": "/usr/bin:/bin"]
+            try? kill.run()
+            kill.waitUntilExit()
+            keptMaster.stop()
+        } else {
+            note("Tab completion, servers: the tmux check is skipped (no tmux here; NEXTTERM_TEST_TMUX names one)")
+        }
 
         // A connection that refuses sessions (sshd's MaxSessions): the shell's own Tab. Last: checks pause 30 s.
         _ = await focus(c, tab)
