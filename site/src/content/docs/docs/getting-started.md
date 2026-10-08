@@ -57,6 +57,8 @@ The first time it starts, Next Term asks which folder to work in. That folder op
 
 If you cancel, you get a plain terminal in your home folder. You can open a project at any time with **Shell › Open Project…** (<kbd>⌘O</kbd>). More in [Projects and git](/docs/projects-and-git/).
 
+When no window is open, say after **Close Project**, the **Welcome** window shows your projects, each with its agents’ sessions, and the servers you saved. Start from its buttons: **Open…** a folder, a **New Terminal**, or **Connect to Server…** for a [remote tab](/docs/remote/). A click on a saved server opens a window with a tab on it.
+
 If Next Term finds an editor or terminal it can read settings from, such as VS Code, Cursor, a JetBrains IDE, Zed, iTerm2, Ghostty or Terminal, it asks **Coming from another app?** Choose one to see exactly what it would bring over (your shortcuts, fonts, terminal colours and recent projects), or keep Next Term’s own. You can do it later from **Next Term › Import Settings and Shortcuts…**. See [Switching to Next Term](/docs/switching/).
 
 macOS also asks whether Next Term may send notifications. Allow them: that is how an agent waiting on your decision, or done with its work, reaches you while you are in another tab or app.
@@ -73,7 +75,7 @@ Next Term also adds the `nxtrm` command for your other terminals, in a folder on
 
 Read [Agent status in every tab](/docs/agent-status/) for what each mark means.
 
-To run an agent on one of your servers instead, press <kbd>⌥⌘T</kbd> (**Shell › New Remote Tab…**) and give it the ssh destination. With **tmux** or **herdr**, the agent keeps working while your Mac sleeps. See [Remote tabs on your servers](/docs/remote/).
+To run an agent on one of your servers instead, press <kbd>⌥⌘T</kbd> (**Shell › New Remote Tab…**, or **Connect to Server…** on the Welcome window) and give it the ssh destination. With **tmux** or **herdr**, the agent keeps working while your Mac sleeps. See [Remote tabs on your servers](/docs/remote/).
 
 ## Open files next to your agents
 

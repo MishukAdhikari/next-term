@@ -18,6 +18,10 @@ A remote tab is a terminal tab on one of your servers. Start Claude Code or Code
 
 **Connect** saves the host and opens the tab. **Remove Host** forgets a saved host; sessions kept on the server keep running there.
 
+### From the Welcome window
+
+With no project open, the **Welcome** window lists the servers you saved under your projects, the one you connected to last first. Click one for a window with a tab on it, in its folder. **Connect to Server…** (or <kbd>⌥⌘T</kbd>) opens the sheet above over the Welcome window: **Connect** opens a window for the tab, **Cancel** leaves everything as it was.
+
 The tab is named after the host and folder, such as “web-1: app”. While it connects, the title says so: **(connecting)**, **(log in)** when ssh is asking you for something in that tab, **(waiting)** when another tab is logging in to the same server, and **(disconnected)**.
 
 ## Which tabs are remote
@@ -82,7 +86,7 @@ Links in a remote tab’s output open web pages only: a path there names a file 
 
 Closing a **tmux** tab only detaches from its session. If something runs in it, Next Term says what keeps running and where (“claude keeps running on web-1, in tmux session nt-app-1a2b3c”) and offers:
 
-- **Close Tab:** the session keeps running. Reattach to it later from **New Remote Tab…**, under **Session**.
+- **Close Tab:** the session keeps running. Reattach to it later from **New Remote Tab…**, under **Session**, or with **Shell › Reopen Closed Tab** (<kbd>⇧⌘T</kbd>) right away.
 - **End Session:** stops the session and everything in it. The tab closes only once the session has ended.
 
 Closing a window or a split tab names the sessions that keep running too. Closing an **Off** tab warns about what would stop, including jobs suspended or running in the background on the server.

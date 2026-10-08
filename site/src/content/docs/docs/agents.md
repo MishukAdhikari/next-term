@@ -66,6 +66,7 @@ Send to Agent hands your context to the agent in a tab, in that agent’s own sy
 - **Lines in the editor:** select them and press <kbd>⌥⌘K</kbd> (**Edit › Send to Agent**). With nothing selected, the whole file is sent.
 - **Lines in a diff:** select them on the new side of a [side-by-side diff](/docs/diffs/#send-lines-to-your-agent) and press <kbd>⌥⌘K</kbd>. With nothing selected, the file is sent.
 - **Files and folders in the sidebar:** select them and press <kbd>⌥⌘K</kbd>, or right-click and choose **Send to Agent** (“Send 3 Items to Agent” for several).
+- **Text in a terminal:** select it (an error, a test’s output) and press <kbd>⌥⌘K</kbd>, or right-click and choose **Send Selection to Agent**. It goes into the agent’s prompt as a fenced block, so the agent reads it as output, not as your instruction; an agent that takes no pastes gets it on one line. Up to 200 lines (16 KB).
 
 **Which agent receives it:** the agent in the front tab if one is running there; otherwise the agent tab you used most recently. An agent in a [remote tab](/docs/remote/) never gets it, because what it types are paths on your Mac. If no agent on your Mac is running in the window, Next Term says so, and says when the only one runs on a server.
 

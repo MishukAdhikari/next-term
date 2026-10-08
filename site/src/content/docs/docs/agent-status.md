@@ -99,10 +99,25 @@ Status reports from the shell carry a random secret for each tab that programs n
 | Next or previous tab | <kbd>⇧⌘]</kbd> and <kbd>⇧⌘[</kbd>, or <kbd>⌃⇥</kbd> and <kbd>⌃⇧⇥</kbd> |
 | Rename a tab | <kbd>⌥⌘R</kbd>, or double-click it |
 | Split a tab into panes | <kbd>⌘D</kbd> right, <kbd>⇧⌘D</kbd> down |
+| Duplicate a tab (a new tab in its folder) | **Shell › Duplicate Tab** |
+| Reopen the tab you closed last | <kbd>⇧⌘T</kbd> (**Shell › Reopen Closed Tab**) |
+| Close the other tabs, or the tabs to the right | **Shell › Close Other Tabs**, **Close Tabs to the Right** |
 | Reorder | Drag a tab sideways |
+| Everything for one tab | Right-click it |
 
 A tab running a local dev server (`langgraph dev`, `npm run dev`, `uvicorn` and the like) adds its port to its title, such as “app · :5173”, once the server prints its address. **Shell › Open Served URL** opens that address in your browser. It is only for commands you run, not agents, and not remote tabs, where `localhost` is the server’s own.
 
 With two or more tabs, each one shows the shortcut that selects it, where its × button appears (before the × on the selected tab, when there is room). A shortcut you change in Settings shows as changed.
 
 A split tab shows the mark of its most urgent pane; see [Split panes](/docs/layouts/#split-panes). Tabs that do not fit go behind the **»** button, which shows how many are hidden and the most urgent mark among them. A program can set its own tab title; a name you give a tab wins over it.
+
+### Right-click menus
+
+- **A tab:** **Rename…**, **Split Right**, **Split Down**, **Duplicate Tab**, **Close Tab**, **Close Other Tabs** and **Close Tabs to the Right**. They act on the tab you clicked, in front or not. Closing several tabs asks once if that would stop anything, and names it, as closing one tab does.
+- **The terminal:** **Copy**, **Paste**, **Select All**, **Clear**, **Find…**, **Split Right** and **Split Down**, plus **Send Selection to Agent** when text is selected and an agent runs in the window (see [Send to Agent](/docs/agents/#send-to-agent-k)). On a link or a path, the ones <kbd>⌘</kbd>-click opens, the menu starts with **Open Link** and **Copy Link**, or **Open** (the file, in the editor at its line) and **Reveal in Finder**. The pane you click takes the keyboard first, as a click would.
+
+Each command shows its shortcut, and each is in the menu bar too, so you can give it one in [Settings › Keyboard Shortcuts](/docs/keyboard-shortcuts/#change-any-menu-shortcut).
+
+### Reopen a closed tab
+
+<kbd>⇧⌘T</kbd> (**Shell › Reopen Closed Tab**) brings back the terminal tab you closed last, in the window it was in, in its folder and with the name you gave it. Press it again for the one before. It comes back with a fresh shell: what ran in it ended when it closed. A tab that nothing ran in and that has no name of its own isn’t kept. A [remote tab](/docs/remote/) comes back on its server; one that tmux kept reattaches to its session, which closing the tab only detached from.

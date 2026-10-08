@@ -13,6 +13,7 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Action | Keys |
 |---|---|
 | New tab (in the project, or the current tab’s folder) | <kbd>⌘T</kbd> |
+| Reopen the tab you closed last | <kbd>⇧⌘T</kbd> |
 | Open a project | <kbd>⌘O</kbd> |
 | Go to File: a file in the project by name | <kbd>⌘P</kbd> |
 | Split the tab right, or down | <kbd>⌘D</kbd>, <kbd>⇧⌘D</kbd> |
@@ -45,6 +46,8 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | New Tab | <kbd>⌘T</kbd> |
 | New Window | <kbd>⌘N</kbd> |
 | New Remote Tab… (a tab on one of your servers) | <kbd>⌥⌘T</kbd> |
+| Duplicate Tab (a new tab in the folder of the one in front) | — |
+| Reopen Closed Tab (in its folder, with its name, in a fresh shell) | <kbd>⇧⌘T</kbd> |
 | Open Project… | <kbd>⌘O</kbd> |
 | Go to File… | <kbd>⌘P</kbd> |
 | Resume Agent Session… | <kbd>⌥⌘O</kbd> |
@@ -53,11 +56,13 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Close Project | — |
 | Save | <kbd>⌘S</kbd> |
 | Save All | <kbd>⌥⌘S</kbd> |
+| Reveal in Finder, Copy Path, Copy Relative Path (the file in front in the editor) | — |
 | Split Right | <kbd>⌘D</kbd> |
 | Split Down | <kbd>⇧⌘D</kbd> |
 | Rename Tab… | <kbd>⌥⌘R</kbd> |
 | Use Option as Meta Key (off by default; for Emacs-style keys) | — |
 | Close Tab (Close Pane in a split tab; the file being edited when the editor has the keyboard) | <kbd>⌘W</kbd> |
+| Close Other Tabs, Close Tabs to the Right (the editor’s tabs when it has the keyboard) | — |
 | Close Window | <kbd>⇧⌘W</kbd> |
 
 ## Edit menu
@@ -74,7 +79,7 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Find › Use Selection for Find | <kbd>⌘E</kbd> |
 | Find › Find in Files… | <kbd>⇧⌘F</kbd> |
 | Find › Replace in Files… | <kbd>⇧⌘R</kbd> |
-| Send to Agent | <kbd>⌥⌘K</kbd> |
+| Send to Agent (the editor’s selection, the sidebar’s files, or the text selected in the terminal) | <kbd>⌥⌘K</kbd> |
 | Go to Line… | <kbd>⌘L</kbd> |
 | Comment Line | <kbd>⌘/</kbd> |
 | Indent | <kbd>⌘]</kbd> |
@@ -141,6 +146,8 @@ These are fixed.
 | Tabs | Rename a terminal tab | Double-click the tab |
 | Tabs | Keep a preview tab | Double-click the tab |
 | Tabs | Close | Middle-click the tab |
+| Tabs | Rename, split, duplicate, close it or the others | Right-click the tab |
+| Terminal | Copy, Paste, Clear, Find, Split, Send Selection to Agent; open or reveal a link or path | Right-click |
 | Terminal | Open a path such as `src/app.ts:42:7`, or a link | <kbd>⌘</kbd>-click |
 | Terminal | Suspend the running program | <kbd>⌃Z</kbd> |
 | Editor | Indent or outdent the selected lines | <kbd>⇥</kbd>, <kbd>⇧⇥</kbd> |
@@ -159,4 +166,4 @@ Open **Next Term › Settings…** (<kbd>⌘,</kbd>) and choose **Keyboard Short
 2. Click a command’s shortcut and press the new keys. <kbd>⌫</kbd> removes the shortcut; <kbd>⎋</kbd> cancels.
 3. If the keys already belong to another command, Next Term says which and offers **Use It Here**; the other command is then left without a shortcut.
 
-A shortcut needs <kbd>⌘</kbd> or <kbd>⌃</kbd> (or a function key), so it can never swallow ordinary typing. A changed command shows a **Default** button that puts its shortcut back, and **Restore All Defaults** resets everything. Changes apply at once, in every menu, including the ⋯ menus.
+A shortcut needs <kbd>⌘</kbd> or <kbd>⌃</kbd> (or a function key), so it can never swallow ordinary typing. A changed command shows a **Default** button that puts its shortcut back, and **Restore All Defaults** resets everything. Changes apply at once, in every menu, including the ⋯ menus and the right-click menus, and in the tooltips that name a key, such as the **+** button’s “New tab (⌘T)”. A command left without a shortcut shows none.
