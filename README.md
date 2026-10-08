@@ -56,7 +56,7 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   branch and model, including the ones started in its subfolders. Resume runs it again in a new tab, in
   the folder it was started in; Fork continues a copy. In a project window, ⌥⌘O does the same. Only titles
   and dates are read (never whole transcripts), secrets are scrubbed from titles, and nothing is written.
-- **Remote tabs on your servers.** Shell › New Remote Tab… (⌥⌘T) opens a tab on your VPS over your own ssh
+- **Remote tabs on your servers.** File › New Remote Tab… (⌥⌘T) opens a tab on your VPS over your own ssh
   and `~/.ssh/config`. With tmux or herdr on the server, agents keep working while the Mac sleeps or is off,
   and the tab reattaches when it reconnects. Host keys are never accepted silently, nothing is installed on
   the server, and no password is stored. Agents get seven MCP tools to open tabs there and read the changes.
@@ -188,7 +188,7 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | New tab (in the project, or the current tab's folder) | ⌘T |
 | New window | ⌘N |
 | New remote tab (on one of your servers) | ⌥⌘T |
-| Open project / Close project | ⌘O / Shell menu |
+| Open project / Close project | ⌘O / File menu |
 | Go to File (`name` or `name:line`) | ⌘P |
 | Resume an agent session (↩ resume, ⌘↩ fork) | ⌥⌘O |
 | Close tab (or the focused pane in a split tab) | ⌘W |
@@ -206,7 +206,7 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | Find in Files / Replace in Files | ⌘⇧F / ⌘⇧R |
 | Clear | ⌘K |
 | Font size | ⌘+ / ⌘- / ⌘0 |
-| Option as Meta (for Emacs-style keys) | Shell menu, off by default |
+| Option as Meta (for Emacs-style keys) | File menu, off by default |
 | Save / Save All | ⌘S / ⌥⌘S |
 | Close the file being edited | ⌘W (with the editor focused) |
 | Comment line / Go to line | ⌘/ / ⌘L |

@@ -50,7 +50,7 @@ Smaller files open in the editor, with colours. See [Large data files](/docs/edi
 
 ## `langgraph dev` in a tab
 
-Run `langgraph dev` (or `npm run dev`, `uvicorn`, `langgraph up`) in a tab. Once it prints its address, the tab’s title shows the port, such as “langgraph · :2024”, and **Shell › Open Served URL** opens `http://127.0.0.1:2024` in your browser.
+Run `langgraph dev` (or `npm run dev`, `uvicorn`, `langgraph up`) in a tab. Once it prints its address, the tab’s title shows the port, such as “langgraph · :2024”, and **File › Open Served URL** opens `http://127.0.0.1:2024` in your browser.
 
 - **No spinner while it serves.** The spinner is for agents. A server that stops with an error while you are in another tab gets a red cross.
 - **Links in its output open with <kbd>⌘</kbd>-click:** the API, the API docs and the Studio UI. The Studio link, with the server’s address nested inside it (`https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024`), is found as one link, and so are LangSmith run links, Weights & Biases Weave links and MLflow run links.

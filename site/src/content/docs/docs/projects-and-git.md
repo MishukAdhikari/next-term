@@ -9,11 +9,11 @@ A project is a folder that a window is about. Its files stay in the sidebar, new
 
 ## Projects
 
-- **Open a project:** **Shell › Open Project…** (<kbd>⌘O</kbd>) and choose a folder. Agents can open projects too, through [MCP](/docs/orchestration/). From another terminal, run `nxtrm .` (see [The nxtrm command](/docs/command-line/)). You can also drop a folder on Next Term’s Dock icon, or run `open -a "Next Term" ~/Code/app`.
+- **Open a project:** **File › Open Project…** (<kbd>⌘O</kbd>) and choose a folder. Agents can open projects too, through [MCP](/docs/orchestration/). From another terminal, run `nxtrm .` (see [The nxtrm command](/docs/command-line/)). You can also drop a folder on Next Term’s Dock icon, or run `open -a "Next Term" ~/Code/app`.
 - **New tabs open in the project** by default. You can still `cd` anywhere.
 - **Reopen at launch:** Next Term reopens the project windows that were open when you quit. On the very first launch it asks for a folder.
-- **Open Recent** (in the Shell menu) lists your recent projects, with **Clear Menu**. The Dock icon’s menu lists them too, with **New Window**.
-- **Close Project** (in the Shell menu) closes the window, asking first if something is still running in it. When the last project closes, or the last window goes with its last tab, the **Welcome** window appears. Open it any time from **Window › Welcome to Next Term**.
+- **Open Recent** (in the File menu) lists your recent projects, with **Clear Menu**. The Dock icon’s menu lists them too, with **New Window**.
+- **Close Project** (in the File menu) closes the window, asking first if something is still running in it. When the last project closes, or the last window goes with its last tab, the **Welcome** window appears. Open it any time from **Window › Welcome to Next Term**.
 
 ### The Welcome window and agent sessions
 
@@ -21,13 +21,13 @@ The **Welcome** window lists your projects on the left, with a search field, eac
 
 - **Resume** runs the agent’s own resume command (`claude --resume …`, `codex resume …`) in a new tab, in the folder the session was started in.
 - **Fork** continues a copy and leaves the original as it was: the safe choice while the session is open in another terminal.
-- In a project window, **Shell › Resume Agent Session…** (<kbd>⌥⌘O</kbd>) shows the same list as a panel: type to filter, <kbd>↩</kbd> resumes, <kbd>⌘↩</kbd> forks.
+- In a project window, **File › Resume Agent Session…** (<kbd>⌥⌘O</kbd>) shows the same list as a panel: type to filter, <kbd>↩</kbd> resumes, <kbd>⌘↩</kbd> forks.
 
 Next Term reads only titles, dates, branches and models from each agent’s own files, never whole conversations, removes anything that looks like a secret from titles, and writes nothing. Claude Code deletes conversations after 30 days unless you change its `cleanupPeriodDays` setting.
 
 ### Where a project opens
 
-A window nobody has used yet simply becomes the project’s window. Otherwise Next Term asks whether to open the project in a **New Window** or in **This Window** (in place of its tabs), with **Remember my choice**. Change the choice later in **Shell › Open Projects In**: **Ask Each Time**, **This Window** or **New Window**. Replacing tabs that are still running something asks first and names what would stop.
+A window nobody has used yet simply becomes the project’s window. Otherwise Next Term asks whether to open the project in a **New Window** or in **This Window** (in place of its tabs), with **Remember my choice**. Change the choice later in **File › Open Projects In**: **Ask Each Time**, **This Window** or **New Window**. Replacing tabs that are still running something asks first and names what would stop.
 
 A window without a project is a plain terminal window. Its sidebar follows the active tab: the tab’s git work tree, or its folder outside one. A [remote tab](/docs/remote/)’s folder is on its server, so the sidebar stays on your Mac’s files, and a line under its header says “Files on this Mac”.
 

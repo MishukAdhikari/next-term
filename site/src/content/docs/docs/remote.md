@@ -7,7 +7,7 @@ A remote tab is a terminal tab on one of your servers. Start Claude Code or Code
 
 ## Open a remote tab
 
-**Shell › New Remote Tab…** (<kbd>⌥⌘T</kbd>) asks where to connect:
+**File › New Remote Tab…** (<kbd>⌥⌘T</kbd>) asks where to connect:
 
 - **Host:** a server you saved before, or **New Host…**.
 - **Name:** what the tab and Next Term call it, such as `web-1`.

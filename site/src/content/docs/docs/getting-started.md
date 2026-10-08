@@ -55,7 +55,7 @@ shasum -a 256 -c NextTerm.dmg.sha256
 
 The first time it starts, Next Term asks which folder to work in. That folder opens as a **project**: the sidebar shows its files, and new tabs start in it. Next time, Next Term reopens it by itself (it reopens every project window that was open when you quit).
 
-If you cancel, you get a plain terminal in your home folder. You can open a project at any time with **Shell › Open Project…** (<kbd>⌘O</kbd>). More in [Projects and git](/docs/projects-and-git/).
+If you cancel, you get a plain terminal in your home folder. You can open a project at any time with **File › Open Project…** (<kbd>⌘O</kbd>). More in [Projects and git](/docs/projects-and-git/).
 
 If Next Term finds an editor or terminal it can read settings from, such as VS Code, Cursor, a JetBrains IDE, Zed, iTerm2, Ghostty or Terminal, it asks **Coming from another app?** Choose one to see exactly what it would bring over (your shortcuts, fonts, terminal colours and recent projects), or keep Next Term’s own. You can do it later from **Next Term › Import Settings and Shortcuts…**. See [Switching to Next Term](/docs/switching/).
 
@@ -73,7 +73,7 @@ Next Term also adds the `nxtrm` command for your other terminals, in a folder on
 
 Read [Agent status in every tab](/docs/agent-status/) for what each mark means.
 
-To run an agent on one of your servers instead, press <kbd>⌥⌘T</kbd> (**Shell › New Remote Tab…**) and give it the ssh destination. With **tmux** or **herdr**, the agent keeps working while your Mac sleeps. See [Remote tabs on your servers](/docs/remote/).
+To run an agent on one of your servers instead, press <kbd>⌥⌘T</kbd> (**File › New Remote Tab…**) and give it the ssh destination. With **tmux** or **herdr**, the agent keeps working while your Mac sleeps. See [Remote tabs on your servers](/docs/remote/).
 
 ## Open files next to your agents
 

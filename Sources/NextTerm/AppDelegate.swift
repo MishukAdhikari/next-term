@@ -1002,7 +1002,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         app.addItem(.separator())
         app.addItem(withTitle: "Quit Next Term", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
-        let shell = submenu(main, "Shell")
+        let shell = submenu(main, "File") // tabs, projects and windows, where Mac apps keep them
         item(shell, "New Tab", #selector(TerminalWindowController.newTab(_:)), "t")
         item(shell, "New Window", #selector(newWindow(_:)), "n", target: self)
         item(shell, "New Remote Tab…", #selector(TerminalWindowController.newRemoteTab(_:)), "t", [.command, .option])

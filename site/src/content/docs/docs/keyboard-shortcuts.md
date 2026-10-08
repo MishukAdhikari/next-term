@@ -38,7 +38,7 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Hide Others | <kbd>⌥⌘H</kbd> |
 | Quit Next Term | <kbd>⌘Q</kbd> |
 
-## Shell menu
+## File menu
 
 | Command | Keys |
 |---|---|

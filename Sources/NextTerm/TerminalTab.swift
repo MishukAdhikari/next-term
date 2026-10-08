@@ -260,7 +260,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
         Theme.apply(to: view, fontSize: fontSize)
         view.processDelegate = self
-        // Off by default: on most non-US layouts Option types # @ | [ ] { } ~ \. Toggle in the Shell menu.
+        // Off by default: on most non-US layouts Option types # @ | [ ] { } ~ \. Toggle in the File menu.
         view.optionAsMetaKey = Preferences.optionAsMeta
 
         view.onOutput = { [weak self] in self?.status.output(at: Self.now) }
@@ -473,7 +473,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     // MARK: serving
 
     /// The local address a running server printed (`npm run dev`, `langgraph dev`, `uvicorn`): shown as
-    /// " · :5173" after the title, opened by Shell › Open Served URL, given to agents in list_tabs.
+    /// " · :5173" after the title, opened by File › Open Served URL, given to agents in list_tabs.
     private(set) var servedURL: URL?
     /// The first row of the running command's output; set when the shell integration reports the start.
     private var pendingServingStart: Int?
@@ -565,7 +565,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     var keptNote: String? {
         guard let remote, isKept, remote.keep == .tmux, remoteConnected, !disconnected, status.running else { return nil }
         let program = status.program.isEmpty ? "What runs in it" : "“\(status.program)”"
-        return "\(program) keeps running on \(remote.host.name), in tmux session \(remote.session). Reopen it from Shell › New Remote Tab… (Sessions on this host)."
+        return "\(program) keeps running on \(remote.host.name), in tmux session \(remote.session). Reopen it from File › New Remote Tab… (Sessions on this host)."
     }
 
     /// Where a remote tab's connection stands (nil: a tab on this Mac).

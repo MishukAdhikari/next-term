@@ -54,7 +54,7 @@ Every menu command, with its shortcut and where it lives in the menus. Search by
 
 ## Preferences in the menus
 
-Some choices live where you use them. The View and Shell menus, and the ⋯ buttons, show a checkmark next to the choice in effect:
+Some choices live where you use them. The File and View menus, and the ⋯ buttons, show a checkmark next to the choice in effect:
 
 | Preference | Where | Default |
 |---|---|---|
@@ -63,8 +63,8 @@ Some choices live where you use them. The View and Shell menus, and the ⋯ butt
 | Line height presets | **View › Line Height** | 1.35 |
 | Open files with a single click | The project sidebar’s ⋯ button, or **Settings › Editor** | Off |
 | Soft wrap | **View › Soft Wrap** | On |
-| Where projects open | **Shell › Open Projects In**: Ask Each Time, This Window, New Window | Ask Each Time |
-| Option as Meta (for Emacs-style keys in the terminal) | **Shell › Use Option as Meta Key** | Off |
+| Where projects open | **File › Open Projects In**: Ask Each Time, This Window, New Window | Ask Each Time |
+| Option as Meta (for Emacs-style keys in the terminal) | **File › Use Option as Meta Key** | Off |
 | Daily update check | **Next Term › Check for Updates Automatically** | On |
 
 Next Term remembers the window layout, the split between editor and terminal, the sidebar’s width, and the project windows that were open when you quit.

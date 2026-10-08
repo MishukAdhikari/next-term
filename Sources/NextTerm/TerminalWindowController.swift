@@ -531,7 +531,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             return "“\(tab.status.program)” on \(remote.host.name) (tmux session \(remote.session))"
         }
         guard !kept.isEmpty else { return "" }
-        return "Still running after closing, on the host: " + kept.joined(separator: "; ") + ". Reopen from Shell › New Remote Tab…"
+        return "Still running after closing, on the host: " + kept.joined(separator: "; ") + ". Reopen from File › New Remote Tab…"
     }
 
     /// "“vim notes.md” (suspended); “npm run dev” (running); and more in 2 other tabs." The same ending

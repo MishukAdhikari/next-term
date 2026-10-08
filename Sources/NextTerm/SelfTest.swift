@@ -3336,7 +3336,7 @@ enum SelfTest {
         guard let window = c.window else { return }
         let items = (NSApp.mainMenu?.items ?? []).flatMap { $0.submenu?.items ?? [] }
         let menu = items.first { $0.action == #selector(TerminalWindowController.goToFile(_:)) }
-        check(menu?.keyEquivalent == "p" && menu?.keyEquivalentModifierMask == .command, "Shell ▸ Go to File is ⌘P")
+        check(menu?.keyEquivalent == "p" && menu?.keyEquivalentModifierMask == .command, "File ▸ Go to File is ⌘P")
         for (path, text) in [("src/Http/Controllers/UserController.php", "<?php\n"), ("src/Models/User.php", "<?php\n"),
                              ("docs/user-guide.md", "# Users\n"), ("src/main.php", "<?php\necho 1;\necho 2;\necho 3;\n")] {
             let url = proj.appendingPathComponent(path)
@@ -3440,7 +3440,7 @@ enum SelfTest {
         let down = all.first { $0.action == #selector(TerminalWindowController.splitDown(_:)) }
         check(right?.keyEquivalent == "d" && right?.keyEquivalentModifierMask == .command
               && down?.keyEquivalent == "d" && down?.keyEquivalentModifierMask == [.command, .shift],
-              "Shell ▸ Split Right is ⌘D and Split Down ⌘⇧D")
+              "File ▸ Split Right is ⌘D and Split Down ⌘⇧D")
         if NSApp.keyWindow === window {
             NSApp.sendAction(#selector(TerminalWindowController.splitRight(_:)), to: nil, from: nil)
         } else {
