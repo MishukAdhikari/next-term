@@ -801,6 +801,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Settings).
     private var lastUsedController: TerminalWindowController? { controllers.max { $0.lastKey < $1.lastKey } }
 
+    /// ⌥⌘T with no terminal window in front, and the Welcome window's Connect to Server…. From the Welcome
+    /// window (in front, or the only one open) the sheet comes over it: Connect opens a window for the tab,
+    /// Cancel leaves things as they were. Otherwise it comes over the terminal window used last (Settings in
+    /// front), or with no window at all, over a new one.
+    @objc func newRemoteTab(_ sender: Any?) {
+        if let window = welcome?.window, window.isVisible, window.isKeyWindow || controllers.isEmpty {
+            return RemoteTabSheet.show(over: window) { [weak self] remote in self?.openWindow(remote: remote) }
+        }
+        if let last = lastUsedController {
+            last.window?.makeKeyAndOrderFront(nil)
+            return last.newRemoteTab(sender)
+        }
+        openWindow(directory: nil).newRemoteTab(sender)
+    }
+
+    /// A window for a tab on a server: the shell a new window starts with makes way for it.
+    @discardableResult
+    func openWindow(remote: RemoteTab) -> TerminalWindowController {
+        let controller = openWindow(directory: nil)
+        let tab = controller.addRemoteTab(remote)
+        for other in controller.tabs where other !== tab { controller.remove(other) }
+        return controller
+    }
+
+    /// A saved host on the Welcome window: a window with a tab on it, in its folder.
+    func connect(to host: RemoteHost) {
+        UserDefaults.standard.set(host.id, forKey: "lastRemoteHost") // the sheet offers it first next time
+        openWindow(remote: RemoteTab(host: host))
+    }
+
     /// ⇧⌘T with no terminal window in front: in the terminal window used last, else in a new window that
     /// holds the tab alone.
     @objc func reopenClosedTab(_ sender: Any?) {

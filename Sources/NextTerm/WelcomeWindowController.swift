@@ -1,13 +1,21 @@
 import AppKit
 import NextTermCore
 
-/// The way in: your projects on the left (search, open, a new terminal); on the right the chosen
-/// project with every agent's saved sessions for it, newest first, each one a click from running again in
-/// a tab in the right folder.
+/// The way in: your projects on the left (search, open, a new terminal), and your servers under them; on
+/// the right the chosen project with every agent's saved sessions for it, newest first, each one a click
+/// from running again in a tab in the right folder.
 final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate,
                                      NSSearchFieldDelegate {
     private let search = NSSearchField()
     private var openTip: ShortcutToolTip?
+    /// The saved hosts, each a click from a tab on it, and Connect to Server… for another.
+    private let serversLabel = NSTextField(labelWithString: "")
+    private let serverList = NSStackView()
+    private let connectButton = NSButton(title: "Connect to Server…", target: nil, action: nil)
+    private var connectTip: ShortcutToolTip?
+    private var servers: [RemoteHost] = []
+    /// More are in the sheet behind Connect to Server…: the projects keep the room.
+    static let serverLimit = 3
     private let projectsTable = NSTableView()
     private let sessionsTable = NSTableView()
     private let projectName = NSTextField(labelWithString: "")
@@ -50,6 +58,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     override func showWindow(_ sender: Any?) {
         reloadProjects()
+        reloadServers()
         super.showWindow(sender)
         window?.makeFirstResponder(projectsTable)
     }
@@ -85,7 +94,15 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         openTip = ShortcutToolTip(open, "Open a folder as a project", #selector(AppDelegate.openProjectPanel(_:)))
         let terminal = NSButton(title: "New Terminal", target: self, action: #selector(newTerminal))
         terminal.bezelStyle = .rounded
-        for view in [icon, name, versionLabel, search, projectsLabel, projectsScroll, open, terminal] as [NSView] {
+        serversLabel.attributedStringValue = Self.headingText("Servers")
+        serverList.orientation = .vertical
+        serverList.alignment = .leading
+        serverList.spacing = 0
+        connectButton.bezelStyle = .rounded
+        connectButton.target = NSApp.delegate
+        connectButton.action = #selector(AppDelegate.newRemoteTab(_:))
+        connectTip = ShortcutToolTip(connectButton, "Open a tab on one of your servers, over ssh", #selector(AppDelegate.newRemoteTab(_:)))
+        for view in [icon, name, versionLabel, search, projectsLabel, projectsScroll, serversLabel, serverList, connectButton, open, terminal] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             left.addSubview(view)
         }
@@ -150,7 +167,14 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             projectsScroll.topAnchor.constraint(equalTo: projectsLabel.bottomAnchor, constant: 6),
             projectsScroll.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 6),
             projectsScroll.trailingAnchor.constraint(equalTo: left.trailingAnchor, constant: -6),
-            projectsScroll.bottomAnchor.constraint(equalTo: open.topAnchor, constant: -12),
+            projectsScroll.bottomAnchor.constraint(equalTo: serversLabel.topAnchor, constant: -14),
+            serversLabel.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 20),
+            serverList.topAnchor.constraint(equalTo: serversLabel.bottomAnchor, constant: 4),
+            serverList.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 6),
+            serverList.trailingAnchor.constraint(equalTo: left.trailingAnchor, constant: -6),
+            connectButton.topAnchor.constraint(equalTo: serverList.bottomAnchor, constant: 6),
+            connectButton.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 16),
+            open.topAnchor.constraint(equalTo: connectButton.bottomAnchor, constant: 8),
             open.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 16),
             open.bottomAnchor.constraint(equalTo: left.bottomAnchor, constant: -16),
             terminal.leadingAnchor.constraint(equalTo: open.trailingAnchor, constant: 8),
@@ -314,6 +338,38 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         AppDelegate.shared.newWindow(nil)
     }
 
+    // MARK: servers
+
+    /// For the self-test.
+    var shownServers: [String] { servers.map(\.name) }
+    var connectServerButton: NSButton { connectButton }
+    func serverEntry(at index: Int) -> NSButton? { serverList.arrangedSubviews[safe: index] as? NSButton }
+
+    /// The saved hosts, the one connected to last first. With none, only Connect to Server… shows.
+    private func reloadServers() {
+        let last = UserDefaults.standard.string(forKey: "lastRemoteHost")
+        let hosts = RemoteHosts.all
+        servers = Array((hosts.filter { $0.id == last } + hosts.filter { $0.id != last }).prefix(Self.serverLimit))
+        serverList.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for (index, host) in servers.enumerated() {
+            let entry = ServerEntryButton(host: host)
+            entry.tag = index
+            entry.target = self
+            entry.action = #selector(serverClicked(_:))
+            serverList.addArrangedSubview(entry)
+            entry.widthAnchor.constraint(equalTo: serverList.widthAnchor).isActive = true
+        }
+        serversLabel.isHidden = servers.isEmpty
+    }
+
+    @objc private func serverClicked(_ sender: NSButton) {
+        guard let host = servers[safe: sender.tag] else { return }
+        AppDelegate.shared.connect(to: host)
+    }
+
+    /// The sheet behind Connect to Server… can save or remove hosts.
+    func windowDidEndSheet(_ notification: Notification) { reloadServers() }
+
     // MARK: sessions
 
     @objc private func filterChanged() {
@@ -391,6 +447,75 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     func tableViewSelectionDidChange(_ notification: Notification) {
         if (notification.object as? NSTableView) === projectsTable { showProject() }
     }
+}
+
+/// A saved host on the Welcome window: a server, its name and where it points, lined up with the projects
+/// above. A click opens a tab on it.
+final class ServerEntryButton: NSButton {
+    private var hovering = false { didSet { needsDisplay = true } }
+
+    init(host: RemoteHost) {
+        super.init(frame: .zero)
+        title = ""
+        isBordered = false
+        bezelStyle = .regularSquare
+        let icon = NSImageView(image: NSImage(systemSymbolName: "server.rack", accessibilityDescription: nil) ?? NSImage())
+        icon.symbolConfiguration = .init(pointSize: 12, weight: .regular)
+        icon.contentTintColor = Theme.textDim
+        let name = NSTextField(labelWithString: host.name)
+        name.font = .systemFont(ofSize: 13, weight: .medium)
+        name.textColor = Theme.text
+        Typography.singleLine(name, truncation: .byTruncatingMiddle)
+        let destination = NSTextField(labelWithString: host.destination)
+        destination.font = .systemFont(ofSize: 11)
+        destination.textColor = Theme.textDim
+        Typography.singleLine(destination, truncation: .byTruncatingMiddle)
+        destination.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        for view in [icon, name, destination] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            view.setAccessibilityElement(false) // the button says it all
+            addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 28),
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            name.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
+            name.centerYAnchor.constraint(equalTo: centerYAnchor),
+            destination.leadingAnchor.constraint(equalTo: name.trailingAnchor, constant: 8),
+            destination.firstBaselineAnchor.constraint(equalTo: name.firstBaselineAnchor),
+            destination.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -14),
+        ])
+        toolTip = "Open a tab on \(host.name) (\(host.destination)), in \(host.directory)"
+        setAccessibilityLabel("\(host.name), \(host.destination)")
+        setAccessibilityHelp("Opens a tab on this server")
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// The labels inside take no clicks: anywhere on the row is the button.
+    override func hitTest(_ point: NSPoint) -> NSView? { !isHidden && frame.contains(point) ? self : nil }
+
+    private var rowShape: NSBezierPath { NSBezierPath(roundedRect: bounds.insetBy(dx: 6, dy: 1), xRadius: 5, yRadius: 5) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard hovering || isHighlighted else { return }
+        Theme.tabHover.setFill()
+        rowShape.fill()
+    }
+
+    // With the keyboard (Full Keyboard Access), the ring goes round the row.
+    override func drawFocusRingMask() { rowShape.fill() }
+    override var focusRingMaskBounds: NSRect { bounds }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
 }
 
 /// A project in the Welcome list: its name, its folder (home as ~), and its branch.
