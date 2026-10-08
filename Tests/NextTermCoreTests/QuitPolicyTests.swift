@@ -192,7 +192,7 @@ import Testing
         welcomeQuietly.askToReopenOnQuit = false
         #expect(QuitPolicy.settings(after: .reopen(dontAskAgain: true), from: welcome) == reopenQuietly)
         #expect(QuitPolicy.settings(after: .dontReopen(dontAskAgain: true), from: reopen) == welcomeQuietly)
-        // The alerts' checkbox sets only "When Next Term opens".
+        // The alerts' checkbox sets only "At launch".
         #expect(QuitPolicy.settings(after: .checkbox(checked: true), from: welcome) == reopen)
         #expect(QuitPolicy.settings(after: .checkbox(checked: false), from: reopen) == welcome)
         #expect(QuitPolicy.settings(after: .checkbox(checked: false), from: welcome) == welcome)

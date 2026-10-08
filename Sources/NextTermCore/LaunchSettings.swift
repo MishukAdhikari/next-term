@@ -3,7 +3,7 @@ import Foundation
 // Settings › General: what a launch that names no folder or file shows, and whether a quit with project
 // windows open asks about reopening them. A launch that names one always opens it directly.
 
-/// "When Next Term opens:".
+/// "At launch:".
 public enum LaunchOpens: String, CaseIterable, Sendable {
     case welcome, lastProjects
 
@@ -21,7 +21,7 @@ public enum LaunchOpens: String, CaseIterable, Sendable {
 /// The choices in Settings › General, read from the defaults at each launch, reopen and quit, so a change
 /// applies from the next one. The answer to the reopen question at a quit sets them too.
 public struct LaunchSettings: Equatable, Sendable {
-    /// "When Next Term opens:".
+    /// "At launch:".
     public var opens = LaunchOpens.standard
     /// "Ask whether to reopen projects when quitting": the reopen prompt, or the checkbox on the
     /// save-changes or "Quitting stops…" alert. Unsaved files and running work are asked about anyway.

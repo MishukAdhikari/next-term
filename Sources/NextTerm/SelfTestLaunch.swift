@@ -52,8 +52,8 @@ extension SelfTest {
               "\(titles), Welcome \(welcome), asks \(asks)")
         let group = view.opensGroup
         let role = group.accessibilityRole()
-        check(group.isAccessibilityElement() && role == .radioGroup && group.accessibilityLabel() == "When Next Term opens",
-              "VoiceOver reads the two choices as one radio group, When Next Term opens",
+        check(group.isAccessibilityElement() && role == .radioGroup && group.accessibilityLabel() == "At launch",
+              "VoiceOver reads the two choices as one radio group, named At launch as its visible label",
               "\(role?.rawValue ?? "no role"), \(group.accessibilityLabel() ?? "no label")")
         let help: [String] = (view.opens + [view.askToReopen]).map { $0.accessibilityHelp() ?? "" }
         let opensHelp = help.dropLast().allSatisfy { $0.contains("always opens directly") }
@@ -76,26 +76,38 @@ extension SelfTest {
     }
 
     /// The General tab's rows, laid out as the other tabs' are: "At launch:" beside the radio buttons and "At quit:" beside
-    /// the checkbox, in a 110 pt label column, so the controls start at one edge. The radio group keeps its own name, so
-    /// VoiceOver does not read "At launch:" too.
+    /// the checkbox, in a 110 pt label column, so the controls start at one edge. The radio group is named with the
+    /// label's words, so VoiceOver does not read "At launch:" too. Measured as Auto Layout places each view, by its
+    /// alignment rect: a label's frame is 2 pt wider on each side.
     private static func generalLayoutChecks() {
         let view = GeneralSettingsView(frame: NSRect(x: 0, y: 0, width: 640, height: 420))
         view.layoutSubtreeIfNeeded()
+        func placed(_ control: NSView) -> NSRect {
+            view.convert(control.alignmentRect(forFrame: control.frame), from: control.superview)
+        }
         let launch: NSTextField = view.launchLabel
         let quit: NSTextField = view.quitLabel
         let titles = launch.stringValue == "At launch:" && quit.stringValue == "At quit:"
-        let widths: [CGFloat] = [launch.frame.width, quit.frame.width]
+        let widths: [CGFloat] = [placed(launch).width, placed(quit).width]
         let column = widths.allSatisfy { abs($0 - 110) < 0.5 }
         let besideRadios = launch.superview != nil && launch.superview === view.opensGroup.superview
         let besideCheckbox = quit.superview != nil && quit.superview === view.askToReopen.superview
-        let radiosX: CGFloat = view.opensGroup.convert(view.opensGroup.bounds, to: view).minX
-        let checkboxX: CGFloat = view.askToReopen.convert(view.askToReopen.bounds, to: view).minX
-        let labelEnd: CGFloat = launch.convert(launch.bounds, to: view).maxX
+        let radiosX: CGFloat = placed(view.opensGroup).minX
+        let checkboxX: CGFloat = placed(view.askToReopen).minX
+        let labelEnd: CGFloat = placed(launch).maxX
         let oneEdge = abs(radiosX - checkboxX) < 0.5 && radiosX > labelEnd
         let readOnce = !launch.isAccessibilityElement()
-        check(titles && column && besideRadios && besideCheckbox && oneEdge && readOnce,
+        // The notes' rows start with an empty label in the column, which VoiceOver never reaches.
+        var blanks: [NSTextField] = []
+        var views: [NSView] = [view]
+        while let next = views.popLast() {
+            if let field = next as? NSTextField, field.stringValue.isEmpty { blanks.append(field) }
+            views.append(contentsOf: next.subviews)
+        }
+        let silent = blanks.count == 2 && blanks.allSatisfy { !$0.isAccessibilityElement() }
+        check(titles && column && besideRadios && besideCheckbox && oneEdge && readOnce && silent,
               "Settings › General: At launch beside the radio buttons and At quit beside the checkbox, in a 110 pt label column as in the other tabs",
-              "titles \(titles), widths \(widths), beside \(besideRadios) \(besideCheckbox), radios at \(radiosX), checkbox at \(checkboxX), label ends at \(labelEnd), VoiceOver once \(readOnce)")
+              "titles \(titles), widths \(widths), beside \(besideRadios) \(besideCheckbox), radios at \(radiosX), checkbox at \(checkboxX), label ends at \(labelEnd), VoiceOver once \(readOnce), empty labels silent \(silent)")
     }
 
     /// The quit's reopen question, with its dialogs built and never run (QuitReopenPrompt): the prompt alone, the

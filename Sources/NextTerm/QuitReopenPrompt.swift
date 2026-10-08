@@ -3,7 +3,7 @@ import NextTermCore
 
 /// The reopen question at a quit (QuitPolicy): "Reopen these projects next time?" on its own, when no other quit
 /// alert shows, or the checkbox on the save-changes or "Quitting stops…" alert, each saying "this project" when one is
-/// open. The answer sets Settings › General's "When Next Term opens" once the quit goes ahead. And why the quit happens,
+/// open. The answer sets Settings › General's "At launch" once the quit goes ahead. And why the quit happens,
 /// read from its Apple event.
 final class QuitReopenPrompt {
     let alert = NSAlert()
@@ -42,7 +42,7 @@ final class QuitReopenPrompt {
 
     /// "Reopen this project next time", or "Reopen these projects next time", on the save-changes or "Quitting stops…"
     /// alert, starting at the current setting. Its tooltip names the projects. The alert has no "Don’t ask again": its
-    /// checkbox sets only "When Next Term opens". Read once the alert returns.
+    /// checkbox sets only "At launch". Read once the alert returns.
     @discardableResult
     static func addCheckbox(to alert: NSAlert, checked: Bool, projects: [String]) -> NSButton {
         let checkbox = NSButton(checkboxWithTitle: QuitPolicy.checkboxTitle(projects), target: nil, action: nil)

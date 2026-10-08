@@ -151,7 +151,7 @@ public enum QuitPromptButton: CaseIterable, Sendable {
 
 extension QuitPolicy {
     /// The prompt's buttons in the order they are added. The choice that matches the setting comes first, so it is
-    /// the default, on top of the stacked buttons, and takes Return: Return never changes "When Next Term opens".
+    /// the default, on top of the stacked buttons, and takes Return: Return never changes "At launch".
     /// "Cancel" comes next, as it does in the save-changes alert, and sits at the bottom; the other choice last,
     /// between them.
     public static func promptButtons(returnKeyReopens: Bool) -> [QuitPromptButton] {

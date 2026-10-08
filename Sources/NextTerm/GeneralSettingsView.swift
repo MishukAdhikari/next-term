@@ -7,7 +7,7 @@ import NextTermCore
 final class GeneralSettingsView: NSView {
     /// A radio button for each choice, in LaunchOpens' order, beside "At launch:".
     let opens: [NSButton] = LaunchOpens.allCases.map { NSButton(radioButtonWithTitle: $0.title, target: nil, action: nil) }
-    /// The radio buttons, which VoiceOver reads as one group, "When Next Term opens".
+    /// The radio buttons, which VoiceOver reads as one group named as its visible label, "At launch".
     let opensGroup = NSStackView()
     /// Beside "At quit:".
     let askToReopen = NSButton(checkboxWithTitle: "Ask whether to reopen projects when quitting", target: nil, action: nil)
@@ -30,7 +30,7 @@ final class GeneralSettingsView: NSView {
         opensGroup.spacing = 6
         opensGroup.setAccessibilityElement(true)
         opensGroup.setAccessibilityRole(.radioGroup)
-        opensGroup.setAccessibilityLabel("When Next Term opens")
+        opensGroup.setAccessibilityLabel("At launch")
         askToReopen.target = self
         askToReopen.action = #selector(askToReopenChanged)
 
@@ -59,12 +59,18 @@ final class GeneralSettingsView: NSView {
             stack.spacing = 10
             return stack
         }
-        // The radio group already has its name, "When Next Term opens": VoiceOver reads it, not this label.
+        // The radio group has the label's words for its name, "At launch": VoiceOver reads them once, with the group.
         launchLabel.setAccessibilityElement(false)
+        // The notes' rows start with an empty label, for the column: nothing for VoiceOver to read.
+        func blank() -> NSTextField {
+            let label = NSTextField(labelWithString: "")
+            label.setAccessibilityElement(false)
+            return label
+        }
         let launchRow = row(launchLabel, [opensGroup])
-        let opensNoteRow = row(NSTextField(labelWithString: ""), [opensNote])
+        let opensNoteRow = row(blank(), [opensNote])
         let quitRow = row(quitLabel, [askToReopen])
-        let stack = NSStackView(views: [launchRow, opensNoteRow, quitRow, row(NSTextField(labelWithString: ""), [askNote])])
+        let stack = NSStackView(views: [launchRow, opensNoteRow, quitRow, row(blank(), [askNote])])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
