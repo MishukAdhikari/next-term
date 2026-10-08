@@ -8,6 +8,7 @@ extension SelfTest {
     /// tab reused, the list following the repository.
     static func gitDiffChecks(_ c: TerminalWindowController, proj: URL) async {
         guard let git = GitRunner.locateGit() else { return }
+        c.editorArea.closeAll() // the tabs counted below are the Git Diff tab's alone
         let layout = DiffLayout.current
         DiffLayout.current = .sideBySide
         let columnHidden = GitDiffPane.columnHidden
