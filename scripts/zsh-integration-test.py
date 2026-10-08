@@ -78,7 +78,7 @@ def env_for(zdot, user_zdotdir, completion_on=True, extra=None):
 
 class Shell:
     """A zsh in a pty with the shipped integration, read as Next Term reads it."""
-    def __init__(self, label, user_zdotdir, completion_on=True, cwd=None, zsh="/bin/zsh", extra_env=None, settle=4):
+    def __init__(self, label, user_zdotdir, completion_on=True, cwd=None, zsh="/bin/zsh", extra_env=None, settle=4, early=None):
         self.label = label
         self.zdot = tempfile.mkdtemp()
         open(os.path.join(self.zdot, ".zshenv"), "w").write(script)
@@ -88,6 +88,8 @@ class Shell:
         if self.pid == 0:
             os.chdir(cwd or os.path.expanduser("~"))
             os.execve(zsh, ["-zsh"], env)
+        if early:  # typed ahead, before the shell's first prompt
+            os.write(self.fd, early)
         self.buf = b""
         self.read_for(settle)  # let the config (oh-my-zsh, p10k...) finish
 
@@ -739,6 +741,36 @@ a = arms(sh, mark)
 check(a and a[-1][8] == "0", "[quiet] q0 puts it back", str(a))
 check("6973" not in sh.screen(start) and not sh.errors(), "[quiet] no junk and no errors")
 sh.close()
+
+# 7c. A tab started with its list off (NEXTTERM_COMPLETION=q, as Next Term starts it where its list answers Tab) has it
+# off from its first prompt with no key, so a command typed ahead of that prompt reads nothing of Next Term's: `cat`
+# below gets only what was typed after it.
+sh = Shell("quiet from the start", quietdot, extra_env={"NEXTTERM_COMPLETION": "q"}, early=b"cat\r")
+a = arms(sh)
+check(a and a[0][8] == "1", "[quiet] a tab started with q has its list off at its first prompt, with no key", str(a[:1]))
+start = len(sh.buf)
+sh.send("typed\r", 0.5)
+sh.send("\x04", 0.8)
+check("typed" in sh.screen(start) and "6973" not in sh.screen() and not sh.errors(),
+      "[quiet] and the command typed ahead of it reads nothing but what was typed", repr(sh.screen()[-120:]))
+sh.close()
+# A Tab key that says q1 quiets it too (a server's hook starts with it on), before its own report.
+sh = Shell("quiet from a Tab", quietdot)
+first = len(sh.buf)
+sh.send("ls ", 0.3)
+start = tab_key(sh, 51, 0.3, fields=["q1"])
+sh.send(frame("a", 51, ["n"]), 0.5)
+kinds = [(k, f[-1] if k == "arm" else "") for _, k, f in sh.marks(start)]
+check(kinds[:1] == [("arm", "1")] and ("tab", "") in kinds, "[quiet] a Tab key with q1 takes its list off, then completes", str(kinds))
+sh.send("\x03", 0.5)
+sh.send("ls ", 0.3)
+mark = tab_key(sh, 52, 0.3, fields=["q1"])
+sh.send(frame("a", 52, ["n"]), 0.5)
+check(not arms(sh, mark) and "tab" in [k for _, k, _ in sh.marks(mark)], "[quiet] and one already in effect sends no new `arm`")
+check("6973" not in sh.screen(first) and not sh.errors(), "[quiet] no junk and no errors from a Tab key's q1")
+sh.send("\x03", 0.5)
+sh.close()
+
 after = tree_hash(quietdot)
 changed = [k for k in set(before) | set(after) if before.get(k) != after.get(k) and not k.startswith(".zsh_history")]
 check(not changed, "[quiet] no file in the user's ZDOTDIR changed (AE4)", str(changed))
@@ -850,6 +882,16 @@ if plugins:
             sh.send(frame("c", 0, ["q0"]), 0.8)
             q = arms(sh, mark)
             check(q and q[-1][8] == "0" and lists("ls "), "[plugin zsh-autocomplete] q0 brings its list back")
+            # A tab started with it off (NEXTTERM_COMPLETION=q): off from the first prompt, with no key, though
+            # zsh-autocomplete puts its hook in at its own first precmd.
+            quiet = Shell("plugin zsh-autocomplete, started quiet", plugin_rc(name), cwd=tree, settle=5, extra_env={"NEXTTERM_COMPLETION": "q"})
+            q = arms(quiet)
+            check(q and q[0][8] == "1", "[plugin zsh-autocomplete] a tab started with q has it off from its first prompt", str(q[:1]))
+            mark = len(quiet.buf)
+            quiet.send("ls ", 2)
+            shown = quiet.screen(mark)
+            check(not ("Resources" in shown and "Tests" in shown) and not quiet.errors(), "[plugin zsh-autocomplete] and lists nothing as you type")
+            quiet.close()
         if a and name == "fzf-tab":
             # Chosen against: the capture lists zsh's matches through fzf-tab's copy of the completion, and fzf
             # never starts.
