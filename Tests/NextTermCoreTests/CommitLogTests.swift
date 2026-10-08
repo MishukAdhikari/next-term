@@ -67,6 +67,30 @@ import Testing
         // A whole name: anchored, so the text is escaped to match as it is.
         let whole = CommitQuery(text: "a.b", author: "Ann (QA)", exactAuthor: true).arguments(includeHead: true)
         #expect(whole.contains("--extended-regexp") && whole.contains("--grep=a\\.b") && whole.contains("--author=^Ann \\(QA\\) <"))
+        // Matching case: the text as typed, the author still either way.
+        let cased = CommitQuery(text: "Fix", matchCase: true).arguments(includeHead: true)
+        #expect(!cased.contains("--regexp-ignore-case") && cased.contains("--fixed-strings") && cased.contains("--grep=Fix"))
+        let casedAuthor = CommitQuery(text: "a.b", matchCase: true, author: "Ann (QA)").arguments(includeHead: true)
+        #expect(!casedAuthor.contains("--regexp-ignore-case") && casedAuthor.contains("--extended-regexp"))
+        #expect(casedAuthor.contains("--grep=a\\.b") && casedAuthor.contains("--author=[aA][nN][nN] \\([qQ][aA]\\)"))
+        // Nothing to match but the author: as before.
+        #expect(CommitQuery(matchCase: true, author: "Ann").arguments(includeHead: true).contains("--regexp-ignore-case"))
+    }
+
+    /// Match case finds the message only in the case typed; the author is found in any case still.
+    @Test func matchCase() throws {
+        let repo = try #require(ScratchRepo())
+        defer { repo.remove() }
+        try repo.write("a.txt", "a\n")
+        let upper = repo.commit("Fix Login", name: "Ann Lee")
+        try repo.write("b.txt", "b\n")
+        let lower = repo.commit("fix login", name: "Ann Lee")
+        func shas(_ query: CommitQuery) -> [String]? { CommitLog.page(query, in: repo.work, git: repo.git)?.map(\.sha) }
+        #expect(shas(CommitQuery(text: "fix")) == [lower, upper])
+        #expect(shas(CommitQuery(text: "Fix", matchCase: true)) == [upper])
+        #expect(shas(CommitQuery(text: "^f", regex: true, matchCase: true)) == [lower])
+        #expect(shas(CommitQuery(text: "Fix", matchCase: true, author: "ann lee")) == [upper])
+        #expect(shas(CommitQuery(text: "Fix", matchCase: true, author: "ANN LEE", exactAuthor: true)) == [upper])
     }
 
     @Test func orderOfIds() {

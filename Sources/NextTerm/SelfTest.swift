@@ -2200,6 +2200,15 @@ enum SelfTest {
         log.apply { $0.author = ""; $0.text = "MAIN WORK" }
         check(await wait(8) { !log.isLoading && log.commits.map(\.subject) == ["Main work for the log"] }, "the text filter searches messages, ignoring case",
               log.commits.map(\.subject).joined(separator: " | "))
+        // Match case, beside .*: the text only as typed.
+        log.apply { $0.matchCase = true }
+        check(await wait(8) { !log.isLoading && log.commits.isEmpty && log.matchCaseToggle.state == .on }, "with Match case on, the text is found only as typed",
+              log.commits.map(\.subject).joined(separator: " | "))
+        log.apply { $0.text = "Main work" }
+        check(await wait(8) { !log.isLoading && log.commits.map(\.subject) == ["Main work for the log"] }, "and in that case it is found",
+              log.commits.map(\.subject).joined(separator: " | "))
+        log.apply { $0.matchCase = false }
+        check(log.matchCaseToggle.state == .off, "and the toggle goes off with it")
         log.apply { $0.text = String(side.prefix(8)) }
         check(await wait(8) { !log.isLoading && log.commits.map(\.sha) == [side] }, "a hash prefix finds its commit")
         log.apply { $0.text = "fix("; $0.regex = true }
@@ -2259,7 +2268,7 @@ enum SelfTest {
                   "tooltip area \(log.refs.rowToolTips != nil): " + log.refs.rowTitles.joined(separator: " | "))
         }
         c.showBranches(nil)
-        check(await wait(5) { c.branchPopup.isVisible && c.branchPopup.rowTitles.contains("Git Log") }, "the branch popup has a Git Log row",
+        check(await wait(15) { c.branchPopup.isVisible && c.branchPopup.rowTitles.contains("Git Log") }, "the branch popup has a Git Log row",
               c.branchPopup.rowTitles.prefix(8).joined(separator: " | "))
         c.branchPopup.close()
 

@@ -159,10 +159,12 @@ public struct CommitQuery: Equatable, Sendable {
     }
 
     public var scope: Scope = .all
-    /// In the message, ignoring case: a fixed string, or an extended regular expression with `regex`.
-    /// A hash prefix that names a commit lists that commit alone.
+    /// In the message, ignoring case unless `matchCase`: a fixed string, or an extended regular expression
+    /// with `regex`. A hash prefix that names a commit lists that commit alone.
     public var text = ""
     public var regex = false
+    /// The text matches only in the case typed. The author still ignores case.
+    public var matchCase = false
     /// In "Name <email>", ignoring case, always a fixed string.
     public var author = ""
     /// The author is a whole name (picked from a list), not part of a name or an address: "Ann" is
@@ -174,11 +176,12 @@ public struct CommitQuery: Equatable, Sendable {
     /// From the work tree's root.
     public var paths: [String] = []
 
-    public init(scope: Scope = .all, text: String = "", regex: Bool = false, author: String = "", exactAuthor: Bool = false, since: String? = nil,
-                until: String? = nil, paths: [String] = []) {
+    public init(scope: Scope = .all, text: String = "", regex: Bool = false, matchCase: Bool = false, author: String = "", exactAuthor: Bool = false,
+                since: String? = nil, until: String? = nil, paths: [String] = []) {
         self.scope = scope
         self.text = text
         self.regex = regex
+        self.matchCase = matchCase
         self.author = author
         self.exactAuthor = exactAuthor
         self.since = since
@@ -214,22 +217,39 @@ public struct CommitQuery: Equatable, Sendable {
         return trimmed
     }
 
+    /// A pattern for `text` in either case, letter by letter ("Ann" → "[aA][nN][nN]"), everything else
+    /// escaped: an author that ignores case while the message matches it.
+    static func eitherCase(_ text: String) -> String {
+        text.map { character in
+            let lower = character.lowercased(), upper = character.uppercased()
+            guard lower != upper, lower.count == 1, upper.count == 1 else { return NSRegularExpression.escapedPattern(for: String(character)) }
+            return "[" + lower + upper + "]"
+        }.joined()
+    }
+
     /// The `git rev-list` options and revisions after `rev-list`: the ids the query lists, in order.
     func arguments(includeHead: Bool) -> [String] {
         var args = ["--topo-order"]
         let text = self.text.trimmingCharacters(in: .whitespaces), author = self.author.trimmingCharacters(in: .whitespaces)
-        // --fixed-strings covers --author as well, so with any regular expression (the text's, or the
-        // anchored one for a whole name) the other part is escaped instead.
+        // --regexp-ignore-case covers the author as well: matching the text's case, the author is a
+        // pattern that spells each letter both ways instead.
+        let ignoreCase = !matchCase || text.isEmpty
+        let caselessAuthor = !ignoreCase && !author.isEmpty
+        // --fixed-strings covers --author as well, so with any regular expression (the text's, the
+        // anchored one for a whole name, or the author's both ways) the other part is escaped instead.
         let exact = exactAuthor && !author.isEmpty
-        let patterns = (regex && !text.isEmpty) || exact
+        let patterns = (regex && !text.isEmpty) || exact || caselessAuthor
         let escape = { (part: String) in patterns ? NSRegularExpression.escapedPattern(for: part) : part }
         if !text.isEmpty || !author.isEmpty {
-            args.append("--regexp-ignore-case")
+            if ignoreCase { args.append("--regexp-ignore-case") }
             args.append(patterns ? "--extended-regexp" : "--fixed-strings")
         }
         if !text.isEmpty { args.append("--grep=" + (regex ? text : escape(text))) }
         // git matches the author against "Name <email> time zone".
-        if !author.isEmpty { args.append("--author=" + (exact ? "^" + escape(author) + " <" : escape(author))) }
+        if !author.isEmpty {
+            let name = caselessAuthor ? Self.eitherCase(author) : escape(author)
+            args.append("--author=" + (exact ? "^" + name + " <" : name))
+        }
         // git knows no "today", and versions differ on what they make of it (now, or the start of the
         // day), so it is never passed on: since today is since midnight, and until today is until now.
         if let since, !since.isEmpty {

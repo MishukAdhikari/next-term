@@ -40,6 +40,9 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     private let header = NSStackView()
     let searchField = NSSearchField()
     private let regexButton = NSButton()
+    private let caseButton = NSButton()
+    /// For the self-test: the match-case toggle, beside .*.
+    var matchCaseToggle: NSButton { caseButton }
     private let branchButton = GitLogFilterButton()
     private let authorButton = GitLogFilterButton()
     private let dateButton = GitLogFilterButton()
@@ -264,6 +267,7 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             query = CommitQuery()
             searchField.stringValue = ""
             regexButton.state = .off
+            caseButton.state = .off
             updateFilterTitles()
             return reload(keepSelection: false)
         }
@@ -304,6 +308,7 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         query = next
         if searchField.stringValue != query.text { searchField.stringValue = query.text }
         regexButton.state = query.regex ? .on : .off
+        caseButton.state = query.matchCase ? .on : .off
         updateFilterTitles()
         reload()
     }
@@ -313,6 +318,7 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
 
     @objc private func searchChanged() { apply { $0.text = searchField.stringValue } }
     @objc private func regexChanged() { apply { $0.regex = regexButton.state == .on } }
+    @objc private func caseChanged() { apply { $0.matchCase = caseButton.state == .on } }
     @objc private func refreshClicked() {
         refresh()
         readRefs()
@@ -539,14 +545,20 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         searchField.action = #selector(searchChanged)
         searchField.setAccessibilityLabel("Search commits by message text or hash")
         searchField.widthAnchor.constraint(equalToConstant: 220).isActive = true
-        regexButton.title = ".*"
-        regexButton.setButtonType(.pushOnPushOff)
-        regexButton.bezelStyle = .rounded
-        regexButton.controlSize = .small
-        regexButton.font = .monospacedSystemFont(ofSize: 11, weight: .semibold)
+        for (button, title) in [(caseButton, "Aa"), (regexButton, ".*")] {
+            button.title = title
+            button.setButtonType(.pushOnPushOff)
+            button.bezelStyle = .rounded
+            button.controlSize = .small
+            button.font = .monospacedSystemFont(ofSize: 11, weight: .semibold)
+            button.target = self
+        }
+        caseButton.toolTip = "Match case: find the text only in the case typed"
+        caseButton.action = #selector(caseChanged)
+        caseButton.setAccessibilityLabel("Match case")
         regexButton.toolTip = "Search the message with a regular expression"
-        regexButton.target = self
         regexButton.action = #selector(regexChanged)
+        regexButton.setAccessibilityLabel("Regular expression")
         branchButton.menuProvider = { [weak self] in self?.branchMenu() }
         authorButton.menuProvider = { [weak self] in self?.authorMenu() }
         dateButton.menuProvider = { [weak self] in self?.dateMenu() }
@@ -563,7 +575,7 @@ final class GitLogPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         refreshButton.toolTip = "Read the log again"
         refreshButton.target = self
         refreshButton.action = #selector(refreshClicked)
-        header.setViews([searchField, regexButton, branchButton, authorButton, dateButton, pathsButton, NSView(), status, refreshButton], in: .leading)
+        header.setViews([searchField, caseButton, regexButton, branchButton, authorButton, dateButton, pathsButton, NSView(), status, refreshButton], in: .leading)
         header.spacing = 8
         header.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
         header.wantsLayer = true
