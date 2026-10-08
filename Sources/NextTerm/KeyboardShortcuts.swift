@@ -195,10 +195,15 @@ final class KeyboardShortcuts {
     /// Posted when the shortcuts change (Settings, a preset, an import), for tooltips that name a key.
     static let changed = Notification.Name("NextTermKeyboardShortcutsChanged")
 
+    /// The key the menu command for `action` has now, if any.
+    func key(for action: Selector) -> KeyChord? {
+        let id = NSStringFromSelector(action)
+        return commands.first(where: { $0.id == id })?.item.flatMap(Self.chord(of:))
+    }
+
     /// "New tab (⌘T)": the words with the key the command has now, or the words alone without one.
     func hint(_ words: String, _ action: Selector) -> String {
-        let id = NSStringFromSelector(action)
-        guard let item = commands.first(where: { $0.id == id })?.item, let chord = Self.chord(of: item) else { return words }
+        guard let chord = key(for: action) else { return words }
         return "\(words) (\(chord.display))"
     }
 
@@ -324,6 +329,105 @@ final class ShortcutToolTip: NSObject {
 
     @objc private func update() {
         view?.toolTip = KeyboardShortcuts.shared.hint(words, action)
+    }
+}
+
+/// A menu command's key just before the icon button that does the same ("⌘B" before the sidebar icon), as a
+/// tab shows "⌘1" before its ×. It follows the key as Settings changes it and says nothing while the command
+/// has none; its owner shows it only while there is room. VoiceOver hears the key once, as the button's help.
+final class KeyHint: NSTextField {
+    /// A tab's "⌘1", and these: small and dim, never cut short.
+    static func style(_ label: NSTextField) {
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = Theme.textDim
+        label.alignment = .right
+        Typography.singleLine(label, truncation: .byClipping)
+        label.setAccessibilityElement(false) // the tab's or the button's help says it
+    }
+
+    /// From the key to the icon, as from a tab's "⌘1" to its ×.
+    static let gap: CGFloat = 7
+    /// Clear room before the key, a little more than `gap`, so it reads with its icon and not with what
+    /// comes before it (the last tab, the Pull button).
+    static let lead: CGFloat = 8
+
+    private let command: Selector?
+    private weak var button: NSButton?
+
+    /// The key `command`'s menu command has, before `button` (none: its owner places it).
+    init(_ command: Selector, for button: NSButton?) {
+        self.command = command
+        self.button = button
+        super.init(frame: .zero)
+        configure()
+        update()
+        NotificationCenter.default.addObserver(self, selector: #selector(update), name: KeyboardShortcuts.changed, object: nil)
+    }
+
+    /// A key of the view's own rather than a menu command's (the branch popup's ⌘R).
+    init(key: String, for button: NSButton) {
+        command = nil
+        self.button = button
+        super.init(frame: .zero)
+        configure()
+        stringValue = key
+        button.setAccessibilityHelp(key)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    private func configure() {
+        isEditable = false
+        isSelectable = false
+        isBezeled = false
+        isBordered = false
+        drawsBackground = false
+        Self.style(self)
+        isHidden = true
+    }
+
+    /// "⌘B", shown or not; empty while the command has no key.
+    var key: String { stringValue }
+    /// The key as it shows now: nil while hidden (for the self-test).
+    var shownKey: String? { isHidden ? nil : key }
+
+    @objc private func update() {
+        guard let command else { return }
+        let key = KeyboardShortcuts.shared.key(for: command)?.display ?? ""
+        guard key != stringValue else { return }
+        stringValue = key
+        button?.setAccessibilityHelp(key.isEmpty ? nil : key)
+        superview?.needsLayout = true // its owner decides again whether there is room
+    }
+
+    /// A label: a click goes to what is under it (the bar, which drags the window, or the button's margin).
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    var keyWidth: CGFloat { key.isEmpty ? 0 : ceil(intrinsicContentSize.width) }
+    private var iconWidth: CGFloat { button?.image?.size.width ?? 0 }
+
+    /// The room it takes before the frame of its button, `buttonWidth` wide, with its `lead` (it may use the
+    /// button's own margin beside the icon); 0 with no key.
+    func room(buttonWidth: CGFloat) -> CGFloat {
+        key.isEmpty ? 0 : max(0, Self.lead + keyWidth + Self.gap - (buttonWidth - iconWidth) / 2)
+    }
+
+    /// Lays it out just before its button's icon, centred on it, or hides it.
+    func place(shown: Bool) {
+        isHidden = !shown || key.isEmpty || button?.isHidden != false
+        guard !isHidden, let button else { return }
+        let height = intrinsicContentSize.height
+        frame = NSRect(x: button.frame.midX - iconWidth / 2 - Self.gap - keyWidth, y: button.frame.midY - height / 2,
+                       width: keyWidth, height: height)
+    }
+
+    /// The same place, for a button laid out by constraints.
+    func constraintsBeforeIcon() -> [NSLayoutConstraint] {
+        guard let button else { return [] }
+        translatesAutoresizingMaskIntoConstraints = false
+        isHidden = key.isEmpty
+        return [trailingAnchor.constraint(equalTo: button.centerXAnchor, constant: -iconWidth / 2 - Self.gap),
+                centerYAnchor.constraint(equalTo: button.centerYAnchor)]
     }
 }
 

@@ -547,12 +547,8 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         closeButton.action = #selector(closeClicked)
         closeTip = ShortcutToolTip(closeButton, "Close tab", #selector(TerminalWindowController.closeTab(_:)))
         addSubview(closeButton)
-        hint.font = .systemFont(ofSize: 11)
-        hint.textColor = Theme.textDim
-        hint.alignment = .right
-        Typography.singleLine(hint, truncation: .byClipping)
+        KeyHint.style(hint) // said in the tab's own help, as the buttons' keys are in theirs
         hint.isHidden = true
-        hint.setAccessibilityElement(false) // said in the tab's own help instead
         addSubview(hint)
 
         setAccessibilityElement(true)
