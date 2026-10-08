@@ -8,8 +8,9 @@ extension SelfTest {
     /// A download of `example-org/plugin` at one commit, built without the network: a skill folder that is
     /// also a Claude Code plugin with a server and hooks, and asks for MCP servers in Codex and Amp. The
     /// home facts (Claude Code's plugins, Codex's config) are read from the self-test's home, as a fetch
-    /// reads them. `plain`: a plain skill, plain-notes, comes in the same download, after it.
-    static func pluginDownload(home: String, plain: Bool = false) -> SkillsInstaller.Fetched {
+    /// reads them. `plain`: a plain skill, plain-notes, comes in the same download, after it. `extra`: files
+    /// written over the plugin folder's own, by path in it, as a later commit would change them.
+    static func pluginDownload(home: String, plain: Bool = false, extra: [String: String] = [:]) -> SkillsInstaller.Fetched {
         let manager = FileManager.default
         let scratch = SkillsInstaller.downloads.appendingPathComponent(UUID().uuidString)
         let top = scratch.appendingPathComponent("files/plugin-0123456").path
@@ -32,6 +33,7 @@ extension SelfTest {
               + "[mcp_servers.docs]\nurl = \"https://mcp.example.com/mcp\"\n\nA packed copy: https://example.com/releases/docs.mcpb\n")
         write("servers.json", #"{"mcpServers": {"remote": {"command": "npx", "args": ["-y", "mcp-remote@latest", "https://mcp.example.com/mcp"]}}}"#)
         write("docs.mcpb", "PK")
+        for (path, text) in extra { write(path, text) }
         chmod(folder + "/scripts/run.sh", 0o755)
         var skills = [SkillsGitHub.Found(path: "skills/demo-plugin", tree: GitHash.folder(folder) ?? "")]
         if plain {
@@ -86,6 +88,7 @@ extension SelfTest {
         serverWarningChecks(details)
         bothKindsChecks(home: home)
         await pluginChoiceChecks(home: home)
+        await pluginUpdateChecks(home: home)
         await settingsPluginChecks(home: home)
     }
 
@@ -345,6 +348,55 @@ extension SelfTest {
         } else {
             check(named && leftovers.contains(parts) && !leftovers.contains(key),
                   "skills plugins: removing a linked plugin names its parts, Amp's servers and the Codex server that may stay", said)
+        }
+    }
+
+    /// AE6: an update of the linked demo-plugin whose new commit declares another MCP server. The review's
+    /// default takes Claude Code's link away and says so beside the popup; Install puts the update in place
+    /// without the link, and Undo puts the link and the old copy back. Claude Code's settings in the
+    /// self-test's home keep their bytes and mode throughout. (Undo keeps one change, so this runs on an
+    /// install of its own, after pluginChoiceChecks.)
+    static func pluginUpdateChecks(home: String) async {
+        let manager = FileManager.default
+        let settings = (home as NSString).appendingPathComponent(".claude/settings.json")
+        let link = (home as NSString).appendingPathComponent(".claude/skills/demo-plugin")
+        let servers = (home as NSString).appendingPathComponent(".agents/skills/demo-plugin/.mcp.json")
+        defer { try? manager.removeItem(atPath: settings) }
+        manager.createFile(atPath: settings, contents: Data("{\n  \"model\": \"self-test\"\n}\n".utf8))
+        chmod(settings, 0o600)
+        let before = fileState(settings)
+        func declaresSecond() -> Bool? { (try? String(contentsOfFile: servers, encoding: .utf8)).map { $0.contains("second") } }
+
+        let first = pluginDownload(home: home)
+        defer { first.discard() }
+        guard let candidate = first.candidates.first else { return check(false, "skills plugins: the plugin download is reviewed, for its update") }
+        if case .failure(let failure) = await SkillsInstaller.install([candidate], fetched: first, claude: ["demo-plugin": .link]) {
+            return check(false, "skills plugins: adding the plugin to Claude Code, before its update, applies", failure.message)
+        }
+        let more = #"{"mcpServers": {"demo": {"command": "/usr/bin/true"}, "second": {"command": "/usr/bin/true"}}}"#
+        let update = pluginDownload(home: home, extra: [".mcp.json": more])
+        defer { update.discard() }
+        var answered: [String]?? = .none
+        let sheet = SkillsReviewSheet(fetched: update) { names in answered = .some(names) }
+        let popup = sheet.choice.popup
+        let offered = popup.itemTitles == ["Remove it from Claude Code", "Add it to Claude Code as a plugin"] && popup.indexOfSelectedItem == 0
+        let said = "demo-plugin: its link is removed, so Claude Code doesn't load it. npx skills update may link it again."
+        check(offered && sheet.choice.line.stringValue == said && sheet.installButton.title == "Update",
+              "skills plugins: an update that declares another server takes Claude Code's link away by default, and says so beside the popup",
+              "\(popup.itemTitles) \(popup.indexOfSelectedItem) \(sheet.choice.line.stringValue) \(sheet.installButton.title)")
+        sheet.installButton.performClick(nil)
+        _ = await wait(10) { answered != nil }
+        check(answered == .some(["demo-plugin"]) && declaresSecond() == true && !entryExists(link) && fileState(settings) == before,
+              "skills plugins: the update, with the default, goes in place without Claude Code's link, and writes no settings",
+              "\(String(describing: answered))")
+        if case .failure(let failure) = await SkillsStore.undo() { check(false, "skills plugins: Undo of the update applies", failure.message) }
+        check(entryExists(link) && declaresSecond() == false && fileState(settings) == before,
+              "skills plugins: Undo of the update puts Claude Code's link and the old copy back, and the settings stay byte for byte")
+
+        // The skill goes as Settings › Skills' Remove takes it, before the checks after these.
+        let (steps, _, _) = await SkillsInstaller.removal("demo-plugin")
+        if case .failure(let failure) = await SkillsStore.apply(steps, title: "Remove demo-plugin") {
+            check(false, "skills plugins: removing the plugin folder after its update applies", failure.message)
         }
     }
 }
