@@ -217,16 +217,26 @@ extension SelfTest {
               "\(place), then \(held) and \(header.titleFrame); heard over the row \(heardOver)")
     }
 
-    /// The branch popup's own ⌘R, before its fetch button.
+    /// The branch popup's Fetch key (⌘R unless Settings changes it), before its fetch button.
     private static func popupKeyHintChecks(_ popup: BranchPopupController) {
+        let shortcuts = KeyboardShortcuts.shared
         let background = popup.panelWindow.contentView
         let fetch = background?.subviews.compactMap { $0 as? NSButton }.first { $0.toolTip?.hasPrefix("Fetch") == true }
         let hints = background?.subviews.compactMap { $0 as? KeyHint } ?? []
         let heard = voiceOverHears(hints, in: background)
-        let named = fetch?.accessibilityLabel() == "Fetch from all remotes" && fetch?.accessibilityHelp() == "⌘R"
-        check(hints.map(\.key) == ["⌘R"] && !heard && named,
+        let key = shortcuts.chord(for: "branchPopup.fetch")?.display
+        let named = fetch?.accessibilityLabel() == "Fetch from all remotes" && fetch?.accessibilityHelp() == key
+        check(key == "⌘R" && hints.map(\.key) == ["⌘R"] && !heard && named,
               "key hints: the branch popup's fetch button is heard by its words, with ⌘R once, in its help",
               "\(hints.map(\.key)), heard \(heard), \(fetch?.accessibilityLabel() ?? "no button") | \(fetch?.accessibilityHelp() ?? "none")")
+        // It follows the key Settings gives Fetch, and goes while Fetch has none.
+        defer { shortcuts.reset("branchPopup.fetch") }
+        shortcuts.set(KeyChord(key: "r", command: true, option: true), for: "branchPopup.fetch")
+        let moved = (hints.map(\.key), fetch?.accessibilityHelp(), hints.first?.isHidden)
+        shortcuts.set(nil, for: "branchPopup.fetch")
+        let removed = (hints.map(\.key), fetch?.accessibilityHelp(), hints.first?.isHidden)
+        check(moved.0 == ["⌥⌘R"] && moved.1 == "⌥⌘R" && moved.2 == false && removed.0 == [""] && removed.1 == nil && removed.2 == true,
+              "key hints: the branch popup's follows the key Settings gives Fetch, and goes without one", "\(moved), then \(removed)")
     }
 
     private static func railKeyHintChecks() {

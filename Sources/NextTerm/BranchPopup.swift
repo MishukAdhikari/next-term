@@ -780,9 +780,9 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         fetchToolTip = PartToolTip(fetch, "Fetch from all remotes", command: "branchPopup.fetch")
         fetch.target = self
         fetch.action = #selector(fetchClicked)
-        // "⌘R" before it, as a tab shows "⌘1": the popup's own key, so it never changes. VoiceOver hears the
-        // key as the button's help, so its label carries the words the tooltip has.
-        let fetchHint = KeyHint(key: "⌘R", for: fetch)
+        // "⌘R" before it, as a tab shows "⌘1": Fetch's key as Settings has it, gone while Fetch has none. VoiceOver
+        // hears the key as the button's help, so its label carries the words the tooltip has.
+        let fetchHint = KeyHint(partCommand: "branchPopup.fetch", for: fetch)
         fetch.setAccessibilityLabel("Fetch from all remotes")
 
         let rule = NSBox()

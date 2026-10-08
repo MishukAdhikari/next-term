@@ -369,7 +369,11 @@ final class KeyHint: NSTextField {
     static let lead: CGFloat = 8
 
     private let command: Selector?
+    /// Or a command outside the menus (KeyBindings.partCommands).
+    private var partCommand: String?
     private weak var button: NSButton?
+    /// Laid out by constraints (`constraintsBeforeIcon`): no owner places it, so it hides itself without a key.
+    private var placedByConstraints = false
 
     /// The key `command`'s menu command has, before `button` (none: its owner places it, and says when the
     /// pointer is on its icon).
@@ -382,14 +386,15 @@ final class KeyHint: NSTextField {
         NotificationCenter.default.addObserver(self, selector: #selector(update), name: KeyboardShortcuts.changed, object: nil)
     }
 
-    /// A key of the view's own rather than a menu command's (the branch popup's ⌘R).
-    init(key: String, for button: NSButton) {
+    /// The key a command outside the menus has (the branch popup's Fetch, ⌘R unless Settings changes it).
+    init(partCommand id: String, for button: NSButton) {
         command = nil
+        partCommand = id
         self.button = button
         super.init(frame: .zero)
         configure()
-        stringValue = key
-        button.setAccessibilityHelp(key)
+        update()
+        NotificationCenter.default.addObserver(self, selector: #selector(update), name: KeyboardShortcuts.changed, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -413,9 +418,16 @@ final class KeyHint: NSTextField {
     var shownKey: String? { isHidden ? nil : key }
 
     @objc private func update() {
-        guard let command else { return }
-        let key = KeyboardShortcuts.shared.key(for: command)?.display ?? ""
+        let key: String
+        if let command {
+            key = KeyboardShortcuts.shared.key(for: command)?.display ?? ""
+        } else if let partCommand {
+            key = KeyboardShortcuts.shared.chord(for: partCommand)?.display ?? ""
+        } else {
+            return
+        }
         guard key != stringValue else { return }
+        if placedByConstraints { isHidden = key.isEmpty }
         stringValue = key
         if key.isEmpty { pointerOnIcon = false } // its exit would never come: a key given later starts clean
         button?.setAccessibilityHelp(key.isEmpty ? nil : key)
@@ -524,6 +536,7 @@ final class KeyHint: NSTextField {
     func constraintsBeforeIcon() -> [NSLayoutConstraint] {
         guard let button else { return [] }
         translatesAutoresizingMaskIntoConstraints = false
+        placedByConstraints = true
         isHidden = key.isEmpty
         return [trailingAnchor.constraint(equalTo: button.centerXAnchor, constant: -iconWidth / 2 - Self.gap),
                 centerYAnchor.constraint(equalTo: button.centerYAnchor)]
