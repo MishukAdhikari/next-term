@@ -95,7 +95,7 @@ public enum TextFile {
     /// Writes atomically to the file a path points at (through symlinks, so a link stays a link), through
     /// `SafeWrite`: it keeps its permissions (a script stays executable, an owner-only file owner-only) and
     /// extended attributes, and is never readable by others along the way. A read-only file is refused. A new
-    /// file is 0644, as files you make usually are. `expecting`: what the file must still hold (`SafeWrite`).
+    /// file is made as you make files: 0644 less the umask. `expecting`: what the file must still hold (`SafeWrite`).
     public static func write(_ data: Data, to url: URL, expecting expected: SafeWrite.Expectation = .anything) throws {
         try SafeWrite.replace(url.path, with: data, expecting: expected, newFileMode: 0o644)
     }

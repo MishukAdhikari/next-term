@@ -43,9 +43,31 @@ import Testing
         // A new file is its owner's alone unless the caller says otherwise.
         try SafeWrite.replace(dir + "/new", with: Data("x".utf8))
         try SafeWrite.replace(dir + "/shared", with: Data("x".utf8), newFileMode: 0o644)
-        #expect(mode(dir + "/new") == 0o600 && mode(dir + "/shared") == 0o644)
+        #expect(mode(dir + "/new") == 0o600 && mode(dir + "/shared") == Int(0o644 & ~SafeWrite.umask))
         // Nothing but the files themselves.
         #expect(names(dir).allSatisfy { !$0.hasPrefix(".") })
+    }
+
+    @Test func aNewFileIsNeverMoreOpenThanTheUmask() throws {
+        let dir = try folder()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        var system = SafeWrite.System()
+        system.umask = 0o077
+        try SafeWrite.replace(dir + "/skills-lock.json", with: Data("{}".utf8), expecting: .noFile, newFileMode: 0o644, system: system)
+        system.umask = 0o022
+        try SafeWrite.replace(dir + "/notes.txt", with: Data("x".utf8), expecting: .anything, newFileMode: 0o644, system: system)
+        system.umask = 0o002
+        try SafeWrite.replace(dir + "/private", with: Data("x".utf8), expecting: .anything, newFileMode: 0o600, system: system)
+        #expect(mode(dir + "/skills-lock.json") == 0o600 && mode(dir + "/notes.txt") == 0o644 && mode(dir + "/private") == 0o600)
+        // A file that is there keeps its own permissions, whatever the umask.
+        try put("x", dir + "/shared.txt", mode: 0o664)
+        system.umask = 0o077
+        try SafeWrite.replace(dir + "/shared.txt", with: Data("y".utf8), expecting: .anything, newFileMode: 0o600, system: system)
+        #expect(mode(dir + "/shared.txt") == 0o664)
+        // The umask read is this process's, as `open` applies it.
+        let probe = dir + "/probe"
+        close(open(probe, O_CREAT | O_WRONLY, 0o666))
+        #expect(mode(probe) == Int(0o666 & ~SafeWrite.umask))
     }
 
     @Test func theTemporaryFileIsPrivateUntilItHasTheFilesPermissions() throws {
@@ -264,7 +286,7 @@ import Testing
         #expect(read(env.path) == "A=2\n" && mode(env.path) == 0o600 && names(dir) == [".env"])
         // A file deleted on disk and saved again from the editor comes back as files are made.
         try TextFile.write(Data("x\n".utf8), to: URL(fileURLWithPath: dir + "/again.txt"))
-        #expect(mode(dir + "/again.txt") == 0o644)
+        #expect(mode(dir + "/again.txt") == Int(0o644 & ~SafeWrite.umask))
         try put("keep\n", dir + "/locked.txt", mode: 0o444)
         #expect(throws: SafeWrite.Failure.readOnly) { try TextFile.write(Data("lost\n".utf8), to: URL(fileURLWithPath: dir + "/locked.txt")) }
     }

@@ -16,8 +16,9 @@ import Darwin
 ///   it while it fills. Only once the bytes are in is it given the file's permissions.
 /// - **The file's permissions** (read, write and execute for owner, group and others; not setuid, setgid or
 ///   sticky): a script stays executable, an owner-only `.env` stays owner-only. A new file gets
-///   `newFileMode`, 0600 unless the caller says otherwise. Its group is kept when this account may set it;
-///   when it can't be, the group's permissions are dropped, so no account can read the file that couldn't before.
+///   `newFileMode`, 0600 unless the caller says otherwise, never more open than the umask (`umask`), as `open`
+///   would make it. Its group is kept when this account may set it; when it can't be, the group's permissions
+///   are dropped, so no account can read the file that couldn't before.
 /// - **Its extended attributes** (Finder tags and comments, the quarantine flag), copied before the rename.
 /// - **Through links.** `path` may be a link: the file it points to is replaced, and the link stays a link. A
 ///   link to a file that is not there (on a volume not mounted) is refused, since a file would take its place.
@@ -76,6 +77,15 @@ public enum SafeWrite {
         }
     }
 
+    /// This process's umask, which a new file's `newFileMode` is never more open than. Setting it is the only way to
+    /// read it, and a file another thread made in between would get 022: read once at launch (main.swift), while only
+    /// one thread runs.
+    public static let umask: mode_t = {
+        let mask = Darwin.umask(0o022)
+        Darwin.umask(mask)
+        return mask
+    }()
+
     /// Replaces the file at `path` with `data`, or throws `Failure` and changes nothing (see `SafeWrite`).
     public static func replace(_ path: String, with data: Data, expecting expected: Expectation = .anything,
                                newFileMode: mode_t = 0o600) throws {
@@ -91,6 +101,7 @@ public enum SafeWrite {
         /// Fails with ENOTSUP on exFAT, and EINVAL on a volume that refuses the flag.
         var exclusiveRename: (String, String) -> Int32 = { renamex_np($0, $1, UInt32(RENAME_EXCL)) }
         var beforeRename: (_ temporary: String) -> Void = { _ in }
+        var umask: mode_t = SafeWrite.umask
     }
 
     static func replace(_ path: String, with data: Data, expecting expected: Expectation, newFileMode: mode_t,
@@ -131,7 +142,7 @@ public enum SafeWrite {
             return 0
         }
         guard failure == 0 else { throw Failure.system(failure) }
-        var mode = exists ? info.st_mode & 0o777 : newFileMode & 0o777
+        var mode = exists ? info.st_mode & 0o777 : newFileMode & 0o777 & ~system.umask
         if exists {
             copyExtendedAttributes(of: target, to: descriptor)
             if !keepGroup(info.st_gid, of: descriptor) { mode &= ~0o070 }

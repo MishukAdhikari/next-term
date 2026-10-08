@@ -123,8 +123,8 @@ public struct SkillChanges: Sendable {
     // MARK: checks before doing anything
 
     /// Writes a lock file or the records over the bytes `read` from it (nil: there was none), through `SafeWrite`: a
-    /// save in between (the `skills` command's own) is kept, and this step fails instead. New files are 0644, as the
-    /// `skills` command makes them.
+    /// save in between (the `skills` command's own) is kept, and this step fails instead. New files are 0644 less the
+    /// umask, as the `skills` command makes them.
     static func write(_ data: Data, to path: String, over read: Data?) throws {
         try SafeWrite.replace(path, with: data, expecting: read.map { .contents($0) } ?? .noFile, newFileMode: 0o644)
     }

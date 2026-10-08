@@ -1,4 +1,8 @@
 import AppKit
+import NextTermCore
+
+// Read while this is the only thread: reading the umask sets it for a moment (SafeWrite.umask).
+_ = SafeWrite.umask
 
 // `nxtrm …` runs this binary as a command line tool: no window, no Dock icon.
 if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--cli" {
