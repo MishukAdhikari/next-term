@@ -177,12 +177,27 @@ public enum PathCompletion {
         }
     }
 
+    /// How a listing's links are followed and its folders tried: on this Mac's disk, or as a server said
+    /// (RemoteListing).
+    public struct Disk: Sendable {
+        public var follow: @Sendable ([UInt8]) -> Followed
+        public var canEnter: @Sendable ([UInt8]) -> Bool
+
+        public init(follow: @escaping @Sendable ([UInt8]) -> Followed, canEnter: @escaping @Sendable ([UInt8]) -> Bool) {
+            self.follow = follow
+            self.canEnter = canEnter
+        }
+
+        public static let local = Disk(follow: { PathCompletion.follow($0) }, canEnter: { PathCompletion.canEnter($0) })
+    }
+
     /// A listing narrowed to what a completion can offer (folders only or not, hidden or not), ranked again
     /// for each word typed.
     public final class Prepared: @unchecked Sendable {
         public let folder: String
         public let foldersOnly: Bool
         public let hidden: Bool
+        public let disk: Disk
         private let entries: [Entry]
         private let ranking: CompletionRanking
         private let extra: Int
@@ -193,10 +208,11 @@ public enum PathCompletion {
         private var followed: [Int: Followed] = [:]
         private var entered: [Int: Bool] = [:]
 
-        public init(_ listing: Listing, foldersOnly: Bool, hidden: Bool) {
+        public init(_ listing: Listing, foldersOnly: Bool, hidden: Bool, disk: Disk = .local) {
             folder = listing.folder
             self.foldersOnly = foldersOnly
             self.hidden = hidden
+            self.disk = disk
             let kept = listing.entries.filter { entry in
                 (hidden || !entry.isHidden) && (!foldersOnly || entry.kind != .file)
             }
@@ -211,9 +227,11 @@ public enum PathCompletion {
         }
 
         /// The candidates for the name typed so far, best first, `limit` at most. `follow` and `canEnter` take
-        /// absolute paths as bytes (tests stand in for the disk).
-        public func candidates(_ typed: String, limit: Int = maxShown, follow: ([UInt8]) -> Followed = PathCompletion.follow,
-                               canEnter: ([UInt8]) -> Bool = PathCompletion.canEnter) -> Result {
+        /// absolute paths as bytes (tests stand in for the disk); without them, the listing's own `disk` answers.
+        public func candidates(_ typed: String, limit: Int = maxShown, follow: (([UInt8]) -> Followed)? = nil,
+                               canEnter: (([UInt8]) -> Bool)? = nil) -> Result {
+            let follow = follow ?? disk.follow
+            let canEnter = canEnter ?? disk.canEnter
             let ranked = ranking.rank(typed)
             let base = Array(folder.utf8) + (folder.hasSuffix("/") ? [] : [UInt8(ascii: "/")])
             var shown: [Candidate] = []

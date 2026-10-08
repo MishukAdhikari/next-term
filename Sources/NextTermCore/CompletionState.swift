@@ -6,11 +6,14 @@ import Foundation
 ///                                              \--native, timeout, done native--> SteppedBack --typing, arm--> Armed
 ///
 /// Unknown always means Disarmed, and Disarmed sends a plain ^I. The latest `arm` mark says which path a Tab
-/// takes: Next Term's own engine, or zsh's completion system.
+/// takes: Next Term's own engine, or zsh's completion system. A server tab whose shell has no hook takes a third:
+/// the word is read off its screen, and its keys are plain text, never the private key.
 public struct CompletionState: Sendable {
     public enum Path: Equatable, Sendable {
         case engine
         case completionSystem
+        /// A server's folders and files, for a word on its screen (no hook, so no marks and no private keys).
+        case screen
     }
 
     public enum Phase: Equatable, Sendable {
@@ -102,6 +105,17 @@ public struct CompletionState: Sendable {
         return lastID
     }
 
+    /// A real Tab in a server tab whose shell has no hook: the id for its listing. nil while a Tab is in flight,
+    /// a list is open, or the shell's own Tab just ran (a second Tab is the shell's too, as it lists).
+    public mutating func startScreenTab() -> Int? {
+        guard phase == .disarmed || phase == .armed else { return nil }
+        lastID = lastID % 999_999 + 1
+        phase = .pending(id: lastID, path: .screen)
+        holding = true
+        shown = false
+        return lastID
+    }
+
     /// Bytes going to the shell (the user's or anyone's), read by `InputScan`.
     public mutating func input(_ scan: InputScan) {
         if scan.disarms {
@@ -115,10 +129,14 @@ public struct CompletionState: Sendable {
     public mutating func answered(_ id: Int, _ verdict: Verdict) {
         guard pendingID == id else { return }
         holding = false
+        let current = path ?? .engine
         switch verdict {
         case .native: phase = .steppedBack
         case .insert: phase = .armed
-        case .open: phase = .open(id: id, path: .engine)
+        case .open:
+            phase = .open(id: id, path: current)
+            // A server's list shows at once: there are no line reports to wait for.
+            shown = current == .screen
         }
     }
 

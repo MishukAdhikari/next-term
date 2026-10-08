@@ -156,4 +156,30 @@ import Testing
         s.forget()
         #expect(s.arm == nil && s.phase == .disarmed)
     }
+
+    /// A server tab with no hook: the word comes off the screen. Its list shows as soon as it opens, the shell's
+    /// own Tab leaves the next Tab to the shell too, and typing or Return start over.
+    @Test func screenPathOpensAtOnceAndStepsBack() {
+        var s = CompletionState()
+        let id = s.startScreenTab()
+        #expect(id == 1 && s.phase == .pending(id: 1, path: .screen) && s.holding)
+        #expect(s.startScreenTab() == nil) // one in flight
+        s.answered(1, .open)
+        #expect(s.phase == .open(id: 1, path: .screen) && s.shown && !s.holding)
+        #expect(s.startScreenTab() == nil) // a list is open
+        s.input(scan("\r"))
+        #expect(s.phase == .disarmed && !s.shown)
+
+        let second = s.startScreenTab()!
+        s.answered(second, .native)
+        #expect(s.phase == .steppedBack && s.startScreenTab() == nil) // the shell's own Tab lists next
+        s.input(scan("a"))
+        #expect(s.isArmed)
+        let third = s.startScreenTab()!
+        s.answered(third, .insert)
+        #expect(s.isArmed && !s.holding)
+        // A server's path never owes the shell an answer when the hold ends.
+        let fourth = s.startScreenTab()!
+        #expect(s.holdExpired(fourth) == false && s.pendingID == fourth)
+    }
 }
