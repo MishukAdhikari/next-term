@@ -126,6 +126,14 @@ extension SelfTest {
         cli.send(CopilotTestClient.request("DELETE", authorization: authorization, session: session))
         check(await wait(3) { !server.connected.contains { $0.id == session } && AppDelegate.shared.copilotSession(for: agentTab) == nil },
               "when copilot leaves, its session ends")
+
+        // Settings › Editor › Agents: its own switch stops the link and takes the lock away, and brings both back.
+        let app = AppDelegate.shared!
+        app.shareWithCopilot = false
+        check(!server.isRunning && lockJSON() == nil && !FileManager.default.fileExists(atPath: socket),
+              "turning Copilot's switch off stops its link and removes the lock and the socket")
+        app.shareWithCopilot = true
+        check(server.isRunning && lockJSON()?["socketPath"] as? String != socket, "turning it on starts it again, on a new socket")
     }
 
     /// Copilot's proposed edits: a diff to accept or reject, answered when you decide; Next Term never writes.
