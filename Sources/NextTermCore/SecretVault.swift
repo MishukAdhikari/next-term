@@ -64,14 +64,15 @@ public final class SecretBytes: @unchecked Sendable, Equatable, CustomStringConv
     public var debugDescription: String { "•••" }
     public var customMirror: Mirror { Mirror(self, children: [], displayStyle: .class) }
 
-    static func wipe(_ bytes: inout [UInt8]) {
+    /// Overwrites bytes that held a value with zeros (`memset_s`, which the compiler can't drop).
+    public static func wipe(_ bytes: inout [UInt8]) {
         bytes.withUnsafeMutableBytes { buffer in
             guard let base = buffer.baseAddress, buffer.count > 0 else { return }
             _ = memset_s(base, buffer.count, 0, buffer.count)
         }
     }
 
-    static func wipe(_ data: inout Data) {
+    public static func wipe(_ data: inout Data) {
         data.withUnsafeMutableBytes { buffer in
             guard let base = buffer.baseAddress, buffer.count > 0 else { return }
             _ = memset_s(base, buffer.count, 0, buffer.count)

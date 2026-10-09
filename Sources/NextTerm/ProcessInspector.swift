@@ -56,6 +56,37 @@ enum ProcessInspector {
         return (path, args)
     }
 
+    /// Every argument of a process owned by this user, with its executable path: `commandLine(of:)` without its
+    /// 16-argument limit, for Secrets' peer check (KTD13). Its own caps: nil past 4,096 arguments or 256 KB in all.
+    static func fullCommandLine(of pid: pid_t, maxArguments: Int = 4096, maxBytes: Int = 256 * 1024) -> (path: String, arguments: [String])? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard pid > 0, sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        let argc = buffer.withUnsafeBytes { Int($0.load(as: Int32.self)) }
+        guard argc >= 0, argc <= maxArguments else { return nil }
+        var index = MemoryLayout<Int32>.size
+        func nextString() -> String? {
+            let start = index
+            while index < size, buffer[index] != 0 { index += 1 }
+            guard index < size else { return nil } // cut off: not a whole argument
+            return String(decoding: buffer[start..<index], as: UTF8.self)
+        }
+        guard let path = nextString() else { return nil }
+        while index < size, buffer[index] == 0 { index += 1 } // padding after the executable path
+        var arguments: [String] = []
+        var bytes = 0
+        while arguments.count < argc {
+            guard let argument = nextString() else { return nil }
+            bytes += argument.utf8.count + 1
+            guard bytes <= maxBytes else { return nil }
+            arguments.append(argument)
+            index += 1
+        }
+        return (path, arguments)
+    }
+
     /// Current working directory of a process.
     static func currentDirectory(of pid: pid_t) -> String? {
         guard pid > 0 else { return nil }

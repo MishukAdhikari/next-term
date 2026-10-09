@@ -22,6 +22,7 @@ extension SelfTest {
         await secretsStoreChecks(base)
         await secretsMaskingChecks(c, base: base)
         await secretsPanelChecks(base)
+        await secretsWrapperChecks(base)
         check(secretsFolderDate(realFolder.url) == realBefore, "secrets: the real Secrets.noindex is untouched (unchanged, or not there)",
               "\(String(describing: realBefore)) → \(String(describing: secretsFolderDate(realFolder.url)))")
     }
@@ -501,5 +502,159 @@ extension SelfTest {
               "secrets: Pause Key Requests for 1 Hour, after its confirm, refuses the next request and says until when")
         requests.resumeAsking()
         _ = try? await store.perform(.delete(name: "PANEL_KEY"))
+    }
+}
+
+/// A wrapper run by the self-test: its exit code, and what it wrote to standard output and standard error.
+final class SecretsWrapperRun: @unchecked Sendable {
+    let process = Process()
+    private let output = Pipe()
+    private let errors = Pipe()
+    private(set) var stdout = Data()
+    private(set) var stderr = Data()
+
+    init(_ arguments: [String], environment: [String: String] = [:], wait: Int = 20, directory: URL? = nil) {
+        process.executableURL = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0])
+        process.currentDirectoryURL = directory
+        process.arguments = ["--cli", "--self-test-secret-wrapper", SelfTest.mcpSocketPath, String(wait), "secret", "run"] + arguments
+        process.environment = ProcessInfo.processInfo.environment.merging(environment) { $1 }
+        process.standardOutput = output
+        process.standardError = errors
+        process.standardInput = FileHandle.nullDevice
+    }
+
+    func start() -> Bool { (try? process.run()) != nil }
+
+    /// Waits for it to end, without blocking the main thread.
+    @MainActor
+    func finish(within seconds: Double = 40) async -> Int32? {
+        guard await SelfTest.wait(seconds, { !self.process.isRunning }) else {
+            process.terminate()
+            return nil
+        }
+        stdout = output.fileHandleForReading.readDataToEndOfFile()
+        stderr = errors.fileHandleForReading.readDataToEndOfFile()
+        return process.terminationStatus
+    }
+
+    var errorText: String { String(decoding: stderr, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) }
+}
+
+extension SelfTest {
+    // MARK: U5, nxtrm secret run
+
+    static func secretsWrapperChecks(_ base: URL) async {
+        let requests = SecretRequests.shared
+        let store = SecretsStore.shared
+        requests.resetForSelfTest()
+        defer { requests.resetForSelfTest() }
+        guard MCPControlServer.shared.isRunning else { return check(false, "secrets: the self-test's MCP socket is up for the wrapper") }
+        let value = secretsValue("wrap")
+        _ = try? await store.perform(.add(name: "WRAP_KEY", purpose: "the wrapper checks", purposeBy: .user, origin: .settings,
+                                          writeOnly: false, value: SecretBytes(utf8: value)))
+        _ = try? await store.perform(.add(name: "OTHER_KEY", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
+                                          value: SecretBytes(utf8: secretsValue("other"))))
+        defer {
+            Task { @MainActor in
+                _ = try? await store.perform(.delete(name: "WRAP_KEY"))
+                _ = try? await store.perform(.delete(name: "OTHER_KEY"))
+            }
+        }
+        let out = base.appendingPathComponent("wrapper", isDirectory: true)
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        func read(_ name: String) -> String {
+            ((try? String(contentsOf: out.appendingPathComponent(name), encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // Allowed: the child gets the key (it writes only its length), not OTHER_KEY, only fds 0 to 2, SIGPIPE at its default.
+        let script = "printf %s \"$K\" | wc -c | tr -d ' ' > len; if [ -z \"${OTHER_KEY+x}\" ]; then echo gone > other; fi; "
+            + "for n in 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 255; do if [ -e /dev/fd/$n ]; then echo $n >> fds; fi; done; "
+            + "ps -o ignored= -p $$ > ignored"
+        let allowed = SecretsWrapperRun(["WRAP_KEY=K", "--", "/bin/sh", "-c", script], environment: ["OTHER_KEY": "exported-in-the-parent"],
+                                        directory: out)
+        let started = allowed.start()
+        let shown = await wait(15) { requests.showing?.panel != nil }
+        let panel = requests.showing?.panel
+        let title = requests.showing.map(SecretApprovalPanel.title) ?? "no panel"
+        check(started && shown && title.contains("asks to start sh with WRAP_KEY"), "secrets: nxtrm secret run shows the panel", title)
+        panel?.allowButton.performClick(nil)
+        let allowedExit = await allowed.finish()
+        let ignored = UInt64(read("ignored"), radix: 16) ?? UInt64.max
+        check(allowedExit == 0 && read("len") == String(value.utf8.count) && allowed.stdout.isEmpty,
+              "secrets: after Allow the command runs with the key in its environment, and nothing goes to stdout",
+              "exit \(String(describing: allowedExit)), len \(read("len")), \(allowed.errorText)")
+        check(read("other") == "gone", "secrets: a stored key's name exported in the parent is gone in the command")
+        check(read("fds").isEmpty && ignored & (1 << 12) == 0,
+              "secrets: the command has only fds 0 to 2, and SIGPIPE at its default", "fds [\(read("fds"))], ignored \(read("ignored"))")
+        check(!String(decoding: store.folder.readAudit(), as: UTF8.self).contains(value), "secrets: the audit log holds no value")
+
+        // Declined: exit 1 and its line.
+        let declined = SecretsWrapperRun(["WRAP_KEY", "--", "/usr/bin/true"])
+        _ = declined.start()
+        _ = await wait(15) { requests.showing?.panel != nil }
+        requests.showing?.panel?.declineButton.performClick(nil)
+        let declinedExit = await declined.finish()
+        check(declinedExit == 1 && declined.errorText == "nxtrm: Next Term declined WRAP_KEY for true." && declined.stdout.isEmpty,
+              "secrets: a declined wrapper exits 1 with its line", declined.errorText)
+
+        // An unknown name, and an argument holding a stored value: exit 2, no panel.
+        let unknown = SecretsWrapperRun(["NOT_STORED", "--", "/usr/bin/true"])
+        _ = unknown.start()
+        let unknownExit = await unknown.finish()
+        check(unknownExit == 2 && unknown.errorText.contains("no key named NOT_STORED") && unknown.stdout.isEmpty && requests.showing == nil,
+              "secrets: a name not stored exits 2, with no panel", unknown.errorText)
+        let holding = SecretsWrapperRun(["WRAP_KEY", "--", "/bin/echo", value])
+        _ = holding.start()
+        let holdingExit = await holding.finish()
+        check(holdingExit == 2 && holding.errorText.contains("holds a stored key’s value") && holding.stdout.isEmpty && requests.showing == nil,
+              "secrets: an argument holding a stored value exits 2, with no panel", holding.errorText)
+
+        // No answer within the wait: the timed-out line, and the panel becomes a pending card that an identical request takes over.
+        let away = SecretsWrapperRun(["WRAP_KEY", "--", "/usr/bin/true", "away"], wait: 2)
+        _ = away.start()
+        let awayExit = await away.finish()
+        _ = await wait(5) { requests.showing?.gone == true }
+        let card = requests.showing
+        check(awayExit == 1 && away.errorText == "nxtrm: WRAP_KEY is waiting for your approval in Next Term. Allow it there, then restart this command."
+              && card?.panel?.durationChoice[.once]?.isEnabled == false,
+              "secrets: with no answer in time the wrapper says so, and the panel becomes a pending card", away.errorText)
+        let again = SecretsWrapperRun(["WRAP_KEY", "--", "/usr/bin/true", "away"], wait: 10)
+        _ = again.start()
+        _ = await wait(5) { card?.panel?.durationChoice[.once]?.isEnabled == true }
+        check(requests.queue.count == 1 && requests.showing === card && card?.panel?.durationChoice[.once]?.isEnabled == true,
+              "secrets: a second identical request takes the card over")
+        card?.panel?.declineButton.performClick(nil)
+        _ = await again.finish()
+
+        // Refused, with no panel: a program that is not nxtrm, a lying argv, and argv over the caps.
+        let nc = Process()
+        nc.executableURL = URL(fileURLWithPath: "/usr/bin/nc")
+        nc.arguments = ["-U", SelfTest.mcpSocketPath]
+        let ncIn = Pipe(), ncOut = Pipe()
+        nc.standardInput = ncIn
+        nc.standardOutput = ncOut
+        nc.standardError = FileHandle.nullDevice
+        if (try? nc.run()) != nil {
+            ncIn.fileHandleForWriting.write(Data(#"{"tool":"secret_run","arguments":{}}"#.utf8 + [0x0A]))
+            try? ncIn.fileHandleForWriting.close()
+            _ = await wait(10) { !nc.isRunning }
+            if nc.isRunning { nc.terminate() }
+            let said = String(decoding: ncOut.fileHandleForReading.availableData, as: UTF8.self)
+            check(said.contains("\"refused\"") && requests.showing == nil, "secrets: a program that is not nxtrm gets refused at the socket, and no panel shows",
+                  said)
+            check(secretsAudit(store).last.map { $0.event == .refused } == true, "secrets: the refusal is in the audit log")
+        }
+        let claimed = (try? JSONEncoder().encode([Bundle.main.executablePath ?? "", "--cli", "secret", "run", "WRAP_KEY", "--", "/usr/bin/true"]))
+            .map { String(decoding: $0, as: UTF8.self) } ?? "[]"
+        let liar = SecretsWrapperRun(["WRAP_KEY", "--", "/usr/bin/true"], environment: ["NEXTTERM_SELFTEST_ARGV_FULL": claimed])
+        _ = liar.start()
+        let liarExit = await liar.finish()
+        check(liarExit == 1 && liar.errorText == "nxtrm: Next Term refused this request." && requests.showing == nil,
+              "secrets: a wrapper whose argv is not the one it sent is refused, with no panel", liar.errorText)
+        let many = SecretsWrapperRun(["WRAP_KEY", "--", "/usr/bin/true"] + Array(repeating: "a", count: 4097))
+        _ = many.start()
+        let manyExit = await many.finish()
+        check(manyExit == 1 && many.errorText == "nxtrm: Next Term refused this request." && requests.showing == nil,
+              "secrets: a wrapper with 4,097 arguments after -- is refused, with no panel", many.errorText)
     }
 }

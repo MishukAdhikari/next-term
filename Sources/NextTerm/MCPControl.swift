@@ -105,8 +105,9 @@ final class MCPControlServer: @unchecked Sendable {
             var pid: pid_t = 0
             var size = socklen_t(MemoryLayout<pid_t>.size)
             let peer = getsockopt(client, SOL_LOCAL, LOCAL_PEERPID, &pid, &size) == 0 ? pid : nil
+            let token = PeerCode.auditToken(of: client) // Secrets' wrapper is checked by its code (SecretSocket)
             _ = fcntl(client, F_SETFL, fcntl(client, F_GETFL) & ~O_NONBLOCK)
-            DispatchQueue.global(qos: .userInitiated).async { self.serve(client, peer: peer) }
+            DispatchQueue.global(qos: .userInitiated).async { self.serve(client, peer: peer, token: token) }
         }
     }
 
@@ -114,7 +115,7 @@ final class MCPControlServer: @unchecked Sendable {
     static var requestLimit = MCPServer.maxRequestBytes
 
     /// One request line in, one answer line out.
-    private func serve(_ fd: Int32, peer: pid_t?) {
+    private func serve(_ fd: Int32, peer: pid_t?, token: audit_token_t? = nil) {
         var timeout = timeval(tv_sec: 10, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         var noSigPipe: Int32 = 1
@@ -137,6 +138,8 @@ final class MCPControlServer: @unchecked Sendable {
             return
         }
         let arguments = request["arguments"] as? [String: Any] ?? [:]
+        // `nxtrm secret run`'s request, answered on this connection alone; never an MCP tool.
+        if tool == SecretSocket.tool { return SecretSocket.handle(fd: fd, arguments: arguments, peer: peer, auditToken: token) }
         let done = DispatchSemaphore(value: 0)
         var answer = MCPServer.CallResult(text: "No answer", isError: true)
         DispatchQueue.main.async {

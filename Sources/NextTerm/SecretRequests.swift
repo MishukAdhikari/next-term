@@ -228,6 +228,12 @@ final class SecretRequests {
         finish(request, outcome: .unanswered, decision: nil)
     }
 
+    /// A ticket's wrapper redeems it. `run_with_secrets` makes tickets (U6); until then none is known, so every
+    /// ticket has expired.
+    func redeem(ticket: String, peerTab: TerminalTab?, request: SecretRun.Request, reply: @escaping (SecretRun.Answer) -> Void) {
+        reply(SecretRun.Answer(status: .expired, names: request.names))
+    }
+
     /// The request in the panel now, if any.
     var showing: Request? { queue.first { $0.panel != nil } }
 

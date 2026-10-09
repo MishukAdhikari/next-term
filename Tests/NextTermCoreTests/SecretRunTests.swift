@@ -1,0 +1,170 @@
+import Foundation
+import Testing
+@testable import NextTermCore
+
+@Suite struct SecretRunParseTests {
+    @Test func theSpellings() throws {
+        let one = try SecretRun.parse(["A", "--", "cmd"]).get()
+        #expect(one == SecretRun.Invocation(names: ["A"], map: ["A": "A"], argv: ["cmd"], ticket: nil))
+        let two = try SecretRun.parse(["A=B", "C", "--", "cmd", "x"]).get()
+        #expect(two.names == ["A", "C"] && two.map == ["A": "B", "C": "C"] && two.argv == ["cmd", "x"])
+        let ticket = SecretRun.newTicket()
+        #expect(SecretRun.isTicket(ticket))
+        #expect(try SecretRun.parse(["--ticket", ticket]).get().ticket == ticket)
+        // What comes after `--` is the command's own, `--` included.
+        #expect(try SecretRun.parse(["A", "--", "cmd", "--", "--flag"]).get().argv == ["cmd", "--", "--flag"])
+    }
+
+    @Test func badArgumentsAreUsageErrors() {
+        let bad: [[String]] = [
+            ["A", "cmd"],                    // no --
+            ["A", "--"],                     // nothing after --
+            ["--", "cmd"],                   // no key
+            ["github_token", "--", "cmd"],   // a bad name
+            ["A=PATH", "--", "cmd"],         // a refused ENVNAME
+            ["A=DYLD_X", "--", "cmd"],
+            ["A=b", "--", "cmd"],            // an ENVNAME that is not a name
+            ["A", "A", "--", "cmd"],         // a name twice
+            ["A=X", "B=X", "--", "cmd"],     // an ENVNAME twice
+            ["A", "B=A", "--", "cmd"],       // A is set as A and B is set as A
+            ["--ticket", "short"],
+            ["--ticket"],
+        ]
+        for arguments in bad {
+            if case .success = SecretRun.parse(arguments) { Issue.record("accepted \(arguments)") }
+        }
+    }
+}
+
+@Suite struct SecretRunStatusTests {
+    @Test func everyEndingHasItsLineAndExitCode() throws {
+        let utc = try #require(TimeZone(identifier: "UTC"))
+        let now = Date(timeIntervalSince1970: 1_791_547_200) // 12:00 UTC
+        func line(_ ending: SecretRun.Ending) -> (line: String, exit: Int32) {
+            SecretRun.ending(ending, names: ["GITHUB_TOKEN"], program: "npx", now: now, timeZone: utc)
+        }
+        let expected: [(SecretRun.Ending, String, Int32)] = [
+            (.noSocket, "nxtrm: Next Term is not running, or “Let agents control Next Term” is off in its Settings. Open Next Term, then restart this command.", 1),
+            (.peerCheck, "nxtrm: the program at Next Term’s socket is not this copy of Next Term, so no key was asked for.", 1),
+            (.timedOut, "nxtrm: GITHUB_TOKEN is waiting for your approval in Next Term. Allow it there, then restart this command.", 1),
+            (.timedOutTicket, "nxtrm: no answer in Next Term within 10 minutes, so no key was given.", 1),
+            (.answer(.declined, name: nil, until: nil), "nxtrm: Next Term declined GITHUB_TOKEN for npx.", 1),
+            (.answer(.paused, name: nil, until: now.addingTimeInterval(720)),
+             "nxtrm: you declined this a few minutes ago, so Next Term won’t ask again until 12:12 PM.", 1),
+            (.answer(.stopped, name: nil, until: nil),
+             "nxtrm: you chose Decline and Stop Asking for this command, so Next Term won’t ask again until it quits. Resume it in Settings › Secrets.", 1),
+            (.answer(.declining, name: nil, until: now.addingTimeInterval(37 * 60)), "nxtrm: Next Term is pausing key requests for the next 37 minutes.", 1),
+            (.answer(.busy, name: nil, until: nil), "nxtrm: too many key requests are waiting in Next Term. Answer them, then restart this command.", 1),
+            (.answer(.limited, name: nil, until: nil), "nxtrm: this command has asked too often. Resume it in Settings › Secrets, or restart Next Term.", 1),
+            (.answer(.expired, name: nil, until: nil), "nxtrm: this run’s approval expired or was used already, so no key was given.", 1),
+            (.answer(.cantOpen, name: nil, until: nil), "nxtrm: Next Term can’t open Secrets on this Mac. Open Settings › Secrets.", 1),
+            (.answer(.refused, name: nil, until: nil), "nxtrm: Next Term refused this request.", 1),
+            (.answer(.valueInCommand, name: nil, until: nil), "nxtrm: the command holds a stored key’s value. Use the key’s name instead.", 2),
+            (.answer(.unknown, name: "GITHUB_TOKEN", until: nil), "nxtrm: no key named GITHUB_TOKEN in Next Term’s Secrets (Settings › Secrets).", 2),
+            (.usage, "usage: nxtrm secret run NAME[=ENVNAME]... -- command [arguments...]", 2),
+            (.notFound("npx"), "nxtrm: npx: command not found", 127),
+            (.cantRun("npx"), "nxtrm: npx: can't run it", 126),
+        ]
+        for (ending, text, code) in expected {
+            let got = line(ending)
+            #expect(got.line == text && got.exit == code, "\(ending)")
+            #expect(got.line.hasPrefix("nxtrm: ") || got.line.hasPrefix("usage: "))
+            #expect(!got.line.contains("\n"))
+        }
+        #expect(SecretRun.ending(.timedOut, names: ["A", "B"], program: "x").line.contains("A and B is waiting") == true)
+    }
+
+    @Test func messagesRoundTripAndValuesOnlyInAllowed() throws {
+        let request = SecretRun.Request(names: ["A"], map: ["A": "B"], argv: ["node", "x.js"], executable: "/usr/local/bin/node",
+                                        directory: "/tmp", argvFull: ["/Applications/Next Term.app/Contents/MacOS/NextTerm", "--cli"],
+                                        warn: ["NODE_OPTIONS": "ab"], ticket: nil)
+        let line = try #require(request.line())
+        #expect(line.last == 0x0A)
+        let object = try #require(try JSONSerialization.jsonObject(with: line.dropLast()) as? [String: Any])
+        #expect(object["tool"] as? String == "secret_run")
+        let arguments = try #require(object["arguments"] as? [String: Any])
+        #expect(arguments["argv_full"] != nil)
+        #expect(SecretRun.Request.decode(arguments) == request)
+        let refused = SecretRun.Answer(status: .declined, note: "declined")
+        let decoded = try #require(SecretRun.Answer.decode(refused.line().dropLast()))
+        #expect(decoded.status == .declined && decoded.environment == nil)
+    }
+}
+
+@Suite struct SecretRunEnvironmentTests {
+    @Test func approvedKeysInOtherStoredNamesOut() {
+        let base = ["PATH": "/usr/bin", "OTHER": "stale", "HOME": "/Users/me", "A": "old"]
+        let answer = SecretRun.Answer(status: .allowed, environment: ["B": "value-of-a"], remove: ["OTHER", "A"])
+        let environment = SecretRun.environment(base: base, answer: answer)
+        #expect(environment == ["PATH": "/usr/bin", "HOME": "/Users/me", "B": "value-of-a"])
+        #expect(SecretRun.removed(stored: ["A", "B", "OTHER", "Z"], approved: ["B"]) == ["A", "OTHER", "Z"])
+    }
+
+    @Test func warnedVariablesAndTheirDigests() {
+        let one = SecretRun.warnings(environment: ["NODE_OPTIONS": "--require x", "https_proxy": "http://p", "OPENAI_BASE_URL": "https://a",
+                                                   "PATH": "/bin", "DYLD_INSERT_LIBRARIES": "/x.dylib", "HOME": "/h"])
+        #expect(Set(one.keys) == ["NODE_OPTIONS", "https_proxy", "OPENAI_BASE_URL", "DYLD_INSERT_LIBRARIES"])
+        let two = SecretRun.warnings(environment: ["NODE_OPTIONS": "--require y", "https_proxy": "http://p", "OPENAI_BASE_URL": "https://a"])
+        #expect(one["NODE_OPTIONS"] != two["NODE_OPTIONS"] && one["https_proxy"] == two["https_proxy"])
+        #expect(SecretRun.warningText(for: "NODE_OPTIONS") == "NODE_OPTIONS is set: it can change what this command runs.")
+        #expect(SecretRun.warningText(for: "HTTPS_PROXY") == "HTTPS_PROXY is set. The key may pass through that proxy.")
+    }
+
+    @Test func shellsAndAgentsAreFlagged() {
+        #expect(SecretRun.warnings(argv: ["bash", "-c", "x"]) == ["This command starts a shell (bash). Anything it runs gets the key."])
+        #expect(SecretRun.warnings(argv: ["claude"]) == ["This command starts an agent (claude). The agent and its tools get the key."])
+        #expect(SecretRun.warnings(argv: ["env", "FOO=1", "zsh"]).first?.contains("shell (zsh)") == true)
+        #expect(SecretRun.warnings(argv: ["node", "/x/node_modules/@anthropic-ai/claude-code/cli.js"]).contains { $0.contains("agent") })
+        #expect(SecretRun.warnings(argv: ["node", "server.js"]).isEmpty)
+        #expect(SecretRun.warnings(command: "npm test").isEmpty)
+        #expect(SecretRun.warnings(command: "cd x && codex exec y").contains { $0.contains("agent (codex)") })
+    }
+
+    @Test func unpinnedPackages() {
+        let flagged: [[String]] = [["npx", "-y", "pkg"], ["bunx", "pkg@latest"], ["pnpm", "dlx", "pkg"], ["yarn", "dlx", "pkg@^1"],
+                                   ["uvx", "pkg"], ["pipx", "run", "pkg"], ["pipx", "run", "--spec", "pkg", "tool"]]
+        for words in flagged {
+            #expect(SecretRun.warnings(argv: words).contains { $0.contains("runs the newest") }, "\(words)")
+        }
+        let pinned: [[String]] = [["npx", "-y", "pkg@1.2.3"], ["uvx", "pkg==1.2.3"], ["pipx", "run", "pkg==1.2.3"],
+                                  ["pipx", "run", "--spec", "pkg==1.2.3", "tool"], ["npx", "./local"]]
+        for words in pinned {
+            #expect(!SecretRun.warnings(argv: words).contains { $0.contains("runs the newest") }, "\(words)")
+        }
+        #expect(SecretRun.warnings(argv: ["npx", "-y", "@x/y"]).first
+                == "npx -y runs the newest @x/y each time, so code you haven't seen gets the key. Pin a version to avoid this.")
+        #expect(SecretRun.warnings(command: "cd x && npx -y pkg").contains { $0.hasPrefix("npx -y runs the newest pkg") })
+    }
+
+    @Test func theFoldersEnvFile() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("nt-run-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        #expect(SecretRun.envFileDigest(directory: folder.path) == "none")
+        #expect(SecretRun.envFileWarnings(directory: folder.path).isEmpty)
+        let env = folder.appendingPathComponent(".env")
+        try "DEBUG=1\nOPENAI_BASE_URL=https://example.invalid\n".write(to: env, atomically: true, encoding: .utf8)
+        let first = SecretRun.envFileDigest(directory: folder.path)
+        #expect(first != "none" && first.count == 64)
+        #expect(SecretRun.envFileWarnings(directory: folder.path) == [".env in this folder sets OPENAI_BASE_URL. The key may go to that address."])
+        try "DEBUG=2\nOPENAI_BASE_URL=https://example.invalid\n".write(to: env, atomically: true, encoding: .utf8)
+        #expect(SecretRun.envFileDigest(directory: folder.path) != first)
+    }
+
+    @Test func theProgramForTheTitle() {
+        #expect(SecretRun.programName(ofCommand: "npm test") == "npm")
+        #expect(SecretRun.programName(ofCommand: "cd api && FOO=1 npm run e2e") == "npm")
+        #expect(SecretRun.programName(ofCommand: "/usr/local/bin/node x.js") == "node")
+    }
+
+    @Test func aWrappersBinding() {
+        let request = SecretRun.Request(names: ["GITHUB_TOKEN"], map: ["GITHUB_TOKEN": "GITHUB_TOKEN"], argv: ["/usr/bin/true"],
+                                        executable: "/usr/bin/true", directory: "/tmp", argvFull: [], warn: [:], ticket: nil)
+        let one = SecretRun.binding(request: request, agentPath: "/usr/bin/env", agentScript: nil, program: "codex", envDigest: "none")
+        let two = SecretRun.binding(request: request, agentPath: "/usr/bin/env", agentScript: nil, program: "codex", envDigest: "none")
+        #expect(one == two && one.executableIdentity != nil && one.agentIdentity != nil && one.asker.hasPrefix("wrapper:/usr/bin/env:"))
+        var other = request
+        other.argv = ["/usr/bin/false"]
+        #expect(SecretRun.binding(request: other, agentPath: "/usr/bin/env", agentScript: nil, program: "codex", envDigest: "none").asker != one.asker)
+    }
+}
