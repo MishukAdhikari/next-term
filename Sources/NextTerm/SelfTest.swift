@@ -92,14 +92,15 @@ enum SelfTest {
 
     /// A stand-in agent's line after its `#!/bin/sh`, for one stopped with ^C as a real agent is. /bin/sh is bash 3.2:
     /// a ^C that lands as its child (a `sleep`, a `date`) is exiting by itself is taken as the child's own, and the
-    /// script runs on; under load that is about one ^C in a hundred. A trap stops it.
+    /// script runs on; under load that is about one ^C in a hundred. A trap stops it, with standInWait in the loops.
     static let stopsOnCtrlC = "trap 'exit 130' INT"
 
     /// A stand-in's wait between redraws, with no child in the foreground: `sleep` runs in the background and the
-    /// `wait` builtin, which a trapped ^C ends at once, waits for it; the loops print `$SECONDS`, not `$(date)`. With
-    /// the trap alone, the asker still survived a ^C about once in twenty launch runs, drawing nothing more: never
-    /// in 320 runs of it in a loop or 2,200 in a bare pty, so what bash waited on there is not known. Without a
-    /// foreground child, bash's own wait for one, where it reads the ^C, is never entered.
+    /// `wait` builtin waits for it; the loops print `$SECONDS`, not `$(date)`. bash 3.2 runs an INT trap for a ^C that
+    /// comes while it waits for a foreground child only when it then reaps a job: a ^C that comes after a command
+    /// substitution's child (`$(date)`, no job) has exited by itself, or after bash has reaped `sleep`, but before it
+    /// puts its handler back, only sets wait_sigint_received, which nothing reads after, so the loop runs on. Both
+    /// moments sit just before each redraw. In `wait`, a ^C goes to the trap at any moment.
     static func standInWait(_ seconds: String) -> String { "sleep \(seconds) & wait $!" }
 
     /// The processes on `tab`'s terminal with their state, for a check whose program didn't stop.
