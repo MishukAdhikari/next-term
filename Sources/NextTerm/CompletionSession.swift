@@ -105,6 +105,10 @@ final class CompletionSession {
     /// echoed, and until when what is on the way to it is let be. Going in, a word in that folder is it; going up
     /// (`exact`), only that word.
     private var drillEcho: (word: ScreenWord, until: TimeInterval, exact: Bool)?
+    /// Next Term's own engine keeps one id from the Tab to the folder gone into and back up, so the hook reports each
+    /// take that keeps the list open (into a folder, ← back up) under that id: the words those reports will have,
+    /// oldest first. A report for one a later take has gone past (→ then ← at once) is old news for the list showing.
+    private var takeEchoes: [String] = []
     /// The list VoiceOver was told of already ("In projects, 12 items"), so the popup doesn't say it again.
     private(set) weak var announced: CompletionList?
 
@@ -555,6 +559,11 @@ final class CompletionSession {
         lineInOutput = true
         // Going into a folder: the row was taken as the list stood when ⇥ was pressed.
         if state.isDrilling { return state.line(report) }
+        // The word of a take another take has gone on from since: the list showing is that one's.
+        if let at = takeEchoes.firstIndex(of: report.word) {
+            takeEchoes.removeFirst(at + 1)
+            if !takeEchoes.isEmpty { return state.line(report) }
+        }
         if let list {
             // ⌫ took the `/` after a folder gone into: back up.
             if let above = list.backUp(word: report.word) { return wentBackUp(above) }
@@ -745,6 +754,7 @@ final class CompletionSession {
         drillFallback = nil
         drillFrom = nil
         drillEcho = nil
+        takeEchoes = []
         singleInsert = nil
         singleKeys = nil
         // The list's keys that waited go; the keys typed after them go out after the writes held before them.
@@ -1137,6 +1147,7 @@ extension CompletionSession {
             let inside = CompletionList(id: from.list.id, context: into, listing: listing, prepared: prepared, result: result)
             inside.drilled(from: from.list, row: from.row)
             write(take)
+            takeEchoes.append(inside.word)
             list = inside
             state.drilled(.into)
             announce(into: name, inside)
@@ -1295,7 +1306,7 @@ extension CompletionSession {
         if state.path == .screen { return screenUp(list, since: TerminalTab.now) }
         guard let take = list.upTake(), let above = list.goUp() else { return NSSound.beep() }
         write(take)
-        if state.path == .completionSystem { state.reopened(above.id) }
+        if state.path == .completionSystem { state.reopened(above.id) } else { takeEchoes.append(above.word) }
         showUp(above)
     }
 
