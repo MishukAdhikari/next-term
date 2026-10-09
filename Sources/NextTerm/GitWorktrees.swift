@@ -169,9 +169,10 @@ extension GitActions {
                 if there, choice == 0 { goTo() }
             }
         case let .unlockFirst(reason):
+            // The question unlock(_:stale:) would ask is this one: Unlock goes at once (with Undo).
             GitPrompt.ask("“\(folder)” is locked", info: reason + "\n\nA lock keeps git from removing a worktree. Unlock it first if whatever locked it is done with it, then remove it.",
-                          buttons: [row.isStale ? "Unlock" : "Unlock…", "Cancel"], over: window) { choice in
-                if choice == 0 { unlock(w, stale: row.isStale) }
+                          buttons: ["Unlock", "Cancel"], over: window) { choice in
+                if choice == 0 { unlock(w, stale: true) }
             }
         }
     }
