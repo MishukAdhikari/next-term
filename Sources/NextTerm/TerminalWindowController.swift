@@ -193,7 +193,19 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     var onClose: ((TerminalWindowController, _ welcome: Bool) -> Void)?
     /// The project this window is for: the sidebar stays on it and new tabs open in it by default
     /// (you can still `cd` anywhere). nil: a plain terminal window whose sidebar follows the active tab.
-    private(set) var project: String?
+    private(set) var project: String? {
+        didSet { projectTitle = Self.title(ofProject: project) }
+    }
+    /// The project's name in the title, the Window menu and notifications: its folder's, or for a linked
+    /// worktree "xCloud ▸ 7027-sso", its repository's and its own.
+    private(set) var projectTitle = ""
+
+    static func title(ofProject project: String?) -> String {
+        guard let project else { return "" }
+        let folder = (project as NSString).lastPathComponent
+        guard let repository = WorktreeWindow.repository(ofLinkedWorktree: project) else { return folder }
+        return WorktreeWindow.title(repository: repository.name, folder: folder)
+    }
     private var opensWelcome = false
     /// The sheet asking to save before the last tab takes the window is up: it alone decides.
     private var askingToSave = false
@@ -216,6 +228,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     init(directory: String?, project: String? = nil) {
         self.project = project.map(canonicalPath)
+        projectTitle = Self.title(ofProject: self.project)
         let window = TerminalWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -702,7 +715,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// What a notification says the tab is in: the window's project, else the tab's folder.
     func placeName(of tab: TerminalTab) -> String {
-        if let project { return (project as NSString).lastPathComponent }
+        if project != nil { return projectTitle }
         if tab.directory == FileManager.default.homeDirectoryForCurrentUser.path { return "~" }
         let last = (tab.directory as NSString).lastPathComponent
         return last.isEmpty ? tab.directory : last
@@ -774,7 +787,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// in a remote tab (the Window menu, Mission Control and VoiceOver say where it runs), but "web-1: app —
     /// xCloud" when the tab's name says it already.
     func updateTitle() {
-        let name = project.map { ($0 as NSString).lastPathComponent }
+        let name = project.map { _ in projectTitle }
         let focus = isEditorFocused ? editorArea.activeName : activeTab?.title
         let host = isEditorFocused ? nil : activeTab?.remote.flatMap { remote -> String? in
             focus?.hasPrefix(remote.host.name + ": ") == true ? nil : "on \(remote.host.name)"

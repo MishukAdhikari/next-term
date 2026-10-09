@@ -111,6 +111,8 @@ public struct BranchModel: Equatable, Sendable {
     /// The remotes as `git remote` lists them: a remote's name may hold a "/" ("my/fork").
     public var configuredRemotes: [String] = []
     public var inProgress: GitInProgress?
+    /// The repository's main checkout (WorktreeFolder.mainCheckout); nil when it can't be told.
+    public var mainCheckout: String?
 
     public init(root: String, gitDir: String, commonDir: String) {
         self.root = root
@@ -154,6 +156,29 @@ public struct BranchModel: Equatable, Sendable {
         return remoteAndBranch(of: upstream)
     }
 
+    /// Whether `worktree` is the repository's main checkout: git lists it first.
+    public func isMainCheckout(_ worktree: Worktree) -> Bool {
+        worktrees.first.map { canonicalPath($0.path) == canonicalPath(worktree.path) } ?? false
+    }
+
+    /// git names a main checkout by its git folder when that isn't `<checkout>/.git` (a submodule's is in the
+    /// superproject's .git/modules): the worktrees and the branches checked out there get the checkout instead,
+    /// so its row opens it, and its branch isn't taken for one held by another worktree.
+    mutating func placeMainCheckout() {
+        guard (commonDir as NSString).lastPathComponent != ".git", let main = mainCheckout else { return }
+        let gitFolder = canonicalPath(commonDir)
+        guard canonicalPath(main) != gitFolder else { return }
+        func placed(_ path: String) -> String { canonicalPath(path) == gitFolder ? main : path }
+        worktrees = worktrees.map { w in
+            Worktree(path: placed(w.path), head: w.head, branch: w.branch, isBare: w.isBare, lockReason: w.lockReason, isPrunable: w.isPrunable)
+        }
+        locals = locals.map { b in
+            guard let path = b.worktree, canonicalPath(path) == gitFolder else { return b }
+            return BranchRef(name: b.name, isRemote: b.isRemote, sha: b.sha, date: b.date, upstream: b.upstream, ahead: b.ahead, behind: b.behind,
+                             upstreamGone: b.upstreamGone, isHead: b.isHead, worktree: main)
+        }
+    }
+
     /// The worktree a folder is in: the longest worktree path that holds it, as worktrees nest
     /// (`<repo>/.claude/worktrees/x` is inside `<repo>`).
     public func worktree(containing folder: String) -> Worktree? {
@@ -194,6 +219,8 @@ public struct BranchModel: Equatable, Sendable {
             .map { String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) }
         model.defaultBranch = defaultBranch(originHead: originHead, locals: Set(model.locals.map(\.name)))
         model.inProgress = inProgress(gitDir: model.gitDir)
+        model.mainCheckout = WorktreeFolder.mainCheckout(commonDir: model.commonDir, gitDir: model.gitDir, root: model.root)
+        model.placeMainCheckout()
         return model
     }
 
@@ -354,6 +381,14 @@ public struct BranchModel: Equatable, Sendable {
 /// Branch names as git accepts them (`git check-ref-format` on refs/heads/<name>), and a name made from
 /// whatever was typed.
 public enum BranchName {
+    /// Why a typed tag or revision can't be checked out, or nil if it can be tried: git would read one
+    /// that starts with "-" as an option.
+    public static func revisionProblem(_ revision: String) -> String? {
+        if revision.contains(" ") { return "No spaces in a revision." }
+        if revision.hasPrefix("-") { return "A revision can’t start with “-”." }
+        return nil
+    }
+
     /// Why `name` can't be a new branch, or nil if it can.
     public static func problem(_ name: String, existing: Set<String> = []) -> String? {
         if name.isEmpty { return "A branch needs a name." }
@@ -396,6 +431,8 @@ public enum GitFailure: Equatable, Sendable {
     /// Changes git would overwrite; the files it named.
     case localChanges(files: [String])
     case heldByWorktree(path: String?)
+    /// `git worktree add` into a folder that is there and not empty.
+    case pathExists(path: String?)
     case notFullyMerged
     case tagNotBranch
     case pushRejected
@@ -428,6 +465,10 @@ public enum GitOutput {
             let path = output.range(of: #"(worktree at|checked out at) '[^']*'"#, options: .regularExpression)
                 .map { String(output[$0]).components(separatedBy: "'").dropFirst().first ?? "" }
             return .heldByWorktree(path: path)
+        }
+        if let match = output.range(of: #"fatal: '[^']+' already exists"#, options: .regularExpression) {
+            let quoted = output[match].components(separatedBy: "'")
+            return .pathExists(path: quoted.count > 1 ? quoted[1] : nil)
         }
         if has("is not fully merged") { return .notFullyMerged }
         if has("a branch is expected, got tag") { return .tagNotBranch }

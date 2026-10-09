@@ -454,10 +454,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// A folder from outside (nxtrm, Finder, an agent): its window if it is open, an unused window, or a new one.
+    /// A linked worktree's folder is kept out of Recent Projects, as Open in New Window keeps it (openWorktreeWindow).
     @discardableResult
     func openFolder(_ path: String, newWindow: Bool) -> TerminalWindowController {
         let path = canonicalPath(path)
-        recent.add(path)
+        if WorktreeWindow.repository(ofLinkedWorktree: path) == nil { recent.add(path) }
         welcome?.close()
         if !newWindow, let open = controllers.first(where: { $0.project == path }) {
             open.window?.makeKeyAndOrderFront(nil)
@@ -741,6 +742,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     @objc func newWindow(_ sender: Any?) {
         openWindow(directory: nil)
+    }
+
+    /// A worktree's own window, with one shell tab in its folder, titled "xCloud ▸ 7027-sso": the window
+    /// already open on it brought forward, else a new one. Kept out of Recent Projects, which a repository's
+    /// many worktrees would fill.
+    @discardableResult
+    func openWorktreeWindow(_ path: String) -> TerminalWindowController {
+        let path = canonicalPath(path)
+        welcome?.close()
+        if let open = controllers.first(where: { $0.project == path }) {
+            open.window?.makeKeyAndOrderFront(nil)
+            return open
+        }
+        return openWindow(directory: path, project: path)
+    }
+
+    /// Where Open in New Worktree… puts new folders (Settings › Editor › Git): beside the repository, or in
+    /// its `.claude/worktrees` when it ignores that folder.
+    var worktreeLocation: WorktreeLocation {
+        get { WorktreeLocation(rawValue: UserDefaults.standard.string(forKey: "worktreeLocation") ?? "") ?? .beside }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "worktreeLocation") }
     }
 
     // MARK: projects

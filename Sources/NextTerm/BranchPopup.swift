@@ -655,6 +655,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             } else {
                 add("Checkout") { actions.checkout(ref) }
             }
+            if let target = actions.worktreeTarget(ref) { add(AgentGuard.openInNewWorktree) { actions.openInNewWorktree(target) } }
             if canCheckoutAndUpdate(ref, in: model), let tracking {
                 add("Checkout and Update", tip: "Switches to it, then brings it up to \(tracking.remote)/\(tracking.branch) (↓\(ref.behind)). ⌥↩") {
                     actions.checkoutAndUpdate(ref)
@@ -682,6 +683,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             add("Copy Name") { self.copy(ref.name) }
         case let .branch(ref, _, _, _):
             add("Checkout") { actions.checkout(ref) }
+            if let target = actions.worktreeTarget(ref) { add(AgentGuard.openInNewWorktree) { actions.openInNewWorktree(target) } }
             add("New Branch from “\(ref.name)”…") { actions.newBranch(from: ref) }
             add("Show History") { self.showHistory(of: ref) }
             menu.addItem(.separator())
@@ -700,23 +702,32 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             add("Copy Name") { self.copy(ref.name) }
         case let .tag(name, _):
             add("Checkout “\(name)” (detached)") { actions.checkoutTag(name) }
+            add(AgentGuard.openInNewWorktree) { actions.openInNewWorktree(.revision("refs/tags/" + name, shown: name)) }
             add("New Branch from “\(name)”…") { actions.newBranch(fromTag: name) }
             add("Show History") { self.showHistory(of: "refs/tags/" + name) }
             menu.addItem(.separator())
             add("Copy Name") { self.copy(name) }
         case let .worktree(row):
             let w = row.worktree
-            add("Open in New Tab") { actions.openWorktree(w.path) }
-            add("Open as Project") { _ = AppDelegate.shared.openFolder(w.path, newWindow: true) }
-            add("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: w.path)]) }
+            add("Open in New Tab", enabled: !w.isPrunable) { actions.openWorktree(w.path) }
+            // Its own window (brought forward when one is open), kept out of Recent Projects.
+            add("Open in New Window", enabled: !w.isPrunable) { AppDelegate.shared.openWorktreeWindow(w.path) }
+            add("Reveal in Finder", enabled: !w.isPrunable) { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: w.path)]) }
             add("Copy Path") { self.copy(w.path) }
+            let isMain = model.isMainCheckout(w)
+            if w.lockReason != nil || !isMain { menu.addItem(.separator()) }
             if w.lockReason != nil {
-                menu.addItem(.separator())
                 let live = row.holder.map { "\(AgentName.of(program: $0.program)) (pid \($0.pid)) still holds it." }
                 if row.holder != nil, row.holderAlive {
                     add("Unlock", enabled: false, tip: live) {}
                 } else {
                     add(row.isStale ? "Unlock" : "Unlock…") { actions.unlock(w, stale: row.isStale) }
+                }
+            }
+            // Not the repository's main checkout (listed when this window shows a linked worktree).
+            if !isMain {
+                add("Remove Worktree…", tip: "Deletes its folder and keeps its branch. Refused while a tab or an agent is in it, or it has changes.") {
+                    actions.removeWorktree(row)
                 }
             }
         default:

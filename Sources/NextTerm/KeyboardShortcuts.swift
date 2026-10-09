@@ -604,7 +604,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     private var rows: [KeyboardShortcuts.Command] = []
 
     init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 640), styleMask: [.titled, .closable, .resizable],
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 680), styleMask: [.titled, .closable, .resizable],
                               backing: .buffered, defer: false)
         window.title = "Settings"
         window.minSize = NSSize(width: 480, height: 320)
@@ -873,6 +873,8 @@ final class EditorSettingsView: NSView {
     private let fontFamily = FontFamilyPopup()
     /// How often git fetches by itself, to keep the sidebar's "Pull 3" up to date.
     let backgroundFetch = NSPopUpButton()
+    /// Where Open in New Worktree… makes folders.
+    let worktreeLocation = NSPopUpButton()
     /// Clean-up on save, and the files the sidebar hides (EditorSaving.swift).
     let saving = EditorSavingControls()
 
@@ -886,6 +888,16 @@ final class EditorSettingsView: NSView {
         backgroundFetch.target = self
         backgroundFetch.action = #selector(backgroundFetchChanged)
         backgroundFetch.toolTip = "Fetches the remotes your branches track, so the sidebar can say “Pull 3” by itself. It waits for the git commands Next Term runs for you, never asks for a password, and leaves FETCH_HEAD as it is."
+        for (location, title) in [(WorktreeLocation.beside, "Beside the repository"), (.claudeWorktrees, "Inside .claude/worktrees")] {
+            worktreeLocation.addItem(withTitle: title)
+            worktreeLocation.lastItem?.representedObject = location.rawValue
+        }
+        worktreeLocation.target = self
+        worktreeLocation.action = #selector(worktreeLocationChanged)
+        worktreeLocation.toolTip = "Where Open in New Worktree… makes folders: beside the repository (~/Code/xCloud-wt-7027-sso), or inside it (xCloud/.claude/worktrees/7027-sso), which is used only for a repository that already ignores .claude/worktrees. Next Term never edits an ignore file."
+        // VoiceOver reads each popup by its row's words, which are a label of their own.
+        backgroundFetch.setAccessibilityLabel("Fetch in the background")
+        worktreeLocation.setAccessibilityLabel("New worktrees")
         lineHeight.target = self
         lineHeight.action = #selector(lineHeightChanged)
         lineHeight.isContinuous = true
@@ -943,6 +955,7 @@ final class EditorSettingsView: NSView {
             row("", [dotIcons]),
             row("", [NSTextField(labelWithString: "Hide:"), saving.hidden]),
             row("Git:", [NSTextField(labelWithString: "Fetch in the background:"), backgroundFetch]),
+            row("", [NSTextField(labelWithString: "New worktrees:"), worktreeLocation]),
             row("Agents:", [claude]),
             row("", [copilot]),
             row("", [control]),
@@ -993,7 +1006,13 @@ final class EditorSettingsView: NSView {
         fontSizeValue.stringValue = "\(Int(app.fontSize)) pt"
         fontFamily.show(Preferences.editorFontFamily)
         backgroundFetch.selectItem(at: FetchFrequency.allCases.firstIndex(of: BackgroundFetcher.shared.frequency) ?? 0)
+        worktreeLocation.selectItem(at: app.worktreeLocation == .beside ? 0 : 1)
         saving.refresh()
+    }
+
+    @objc private func worktreeLocationChanged() {
+        guard let raw = worktreeLocation.selectedItem?.representedObject as? String, let location = WorktreeLocation(rawValue: raw) else { return }
+        AppDelegate.shared.worktreeLocation = location
     }
 
     @objc private func backgroundFetchChanged() {
