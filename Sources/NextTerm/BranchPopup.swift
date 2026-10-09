@@ -706,9 +706,10 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             add("Copy Name") { self.copy(name) }
         case let .worktree(row):
             let w = row.worktree
-            add("Open in New Tab") { actions.openWorktree(w.path) }
-            add("Open as Project") { _ = AppDelegate.shared.openFolder(w.path, newWindow: true) }
-            add("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: w.path)]) }
+            add("Open in New Tab", enabled: !w.isPrunable) { actions.openWorktree(w.path) }
+            // Its own window (brought forward when one is open), kept out of Recent Projects.
+            add("Open in New Window", enabled: !w.isPrunable) { AppDelegate.shared.openWorktreeWindow(w.path) }
+            add("Reveal in Finder", enabled: !w.isPrunable) { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: w.path)]) }
             add("Copy Path") { self.copy(w.path) }
             if w.lockReason != nil {
                 menu.addItem(.separator())
