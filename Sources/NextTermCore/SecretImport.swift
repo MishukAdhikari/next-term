@@ -341,7 +341,8 @@ public enum SecretImport {
 
     /// Why a detected env value can't be moved: one Secrets can't keep, or a variable `nxtrm secret run` can't set.
     static func valueRefusal(variable: String, value: String) -> String? {
-        if value.contains("\n") || value.contains("\r") { return "the value has line breaks, which Secrets can't keep yet" }
+        // By scalar: "\r\n" is one Character, equal to neither "\r" nor "\n".
+        if value.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" }) { return "the value has line breaks, which Secrets can't keep yet" }
         if value.utf8.count > SecretVault.maxValueBytes { return "the value is over 16 KB" }
         if value.contains("\u{0}") { return "the value holds a NUL character" }
         if !SecretName.isValid(variable) || SecretName.isRefusedEnvName(variable) {
@@ -736,11 +737,13 @@ public enum SecretImport {
     }
 
     /// The movable findings grouped by identical value, each group named after its first variable (capitals, `_`); a
-    /// clash with a stored key or another group adds `_2`, `_3`.
+    /// clash with a stored key or another group adds `_2`, `_3`. A group holds at most one variable of each entry.
     public static func groups(_ findings: [Finding], stored: [String]) -> [Group] {
         var groups: [(value: SecretBytes, findings: [Finding])] = []
         for finding in findings where finding.movable {
-            if let index = groups.firstIndex(where: { $0.value == finding.value }) {
+            // An entry that holds the value under two variables needs a key for each: the wrapper takes a name once.
+            let sameEntry = { (other: Finding) in other.source.path == finding.source.path && other.location == finding.location }
+            if let index = groups.firstIndex(where: { $0.value == finding.value && !$0.findings.contains(where: sameEntry) }) {
                 groups[index].findings.append(finding)
             } else {
                 groups.append((finding.value, [finding]))
@@ -928,8 +931,12 @@ public enum SecretImport {
 
     /// The new args: `secret`, `run`, each `NAME` or `NAME=ENVNAME`, `--`, then the old command and its arguments.
     static func wrapped(_ pairs: [(name: String, variable: String)], nxtrm: [String], command: [String]) -> [String] {
-        let keys = pairs.map { $0.name == $0.variable ? $0.name : "\($0.name)=\($0.variable)" }
-        return Array(nxtrm.dropFirst()) + ["secret", "run"] + keys + ["--"] + command
+        Array(nxtrm.dropFirst()) + ["secret", "run"] + keyArguments(pairs) + ["--"] + command
+    }
+
+    /// Each key as the wrapper takes it: `NAME`, or `NAME=ENVNAME` when the server reads it under another name.
+    static func keyArguments(_ pairs: [(name: String, variable: String)]) -> [String] {
+        pairs.map { $0.name == $0.variable ? $0.name : "\($0.name)=\($0.variable)" }
     }
 
     /// The entry's text with every detected value replaced by its marker, and the values kept in place, in order.
@@ -959,12 +966,23 @@ public enum SecretImport {
 
     static func sha256(_ text: String) -> String { SecretRun.digest(Data(text.utf8)) }
 
-    /// Replaces scalar ranges of `text`, which must not overlap.
-    static func replacing(_ text: String, _ changes: [(range: Range<Int>, with: String)]) -> String {
+    /// Replaces scalar ranges of `text`. An insertion (an empty range) goes before a change that starts where it does,
+    /// so a line added after `args` comes before the `env` line removed there. Ranges that overlap, or run past the
+    /// end, give nil: the edit is refused rather than guessed.
+    static func replacing(_ text: String, _ changes: [(range: Range<Int>, with: String)]) -> String? {
         let scalars = Array(text.unicodeScalars)
+        let ordered = changes.indices.sorted { first, second in
+            let a = changes[first].range
+            let b = changes[second].range
+            if a.lowerBound != b.lowerBound { return a.lowerBound < b.lowerBound }
+            if a.isEmpty != b.isEmpty { return a.isEmpty }
+            return first < second
+        }
         var out = String.UnicodeScalarView()
         var cursor = 0
-        for change in changes.sorted(by: { $0.range.lowerBound < $1.range.lowerBound }) {
+        for index in ordered {
+            let change = changes[index]
+            guard change.range.lowerBound >= cursor, change.range.upperBound <= scalars.count else { return nil }
             out.append(contentsOf: scalars[cursor..<change.range.lowerBound])
             out.append(contentsOf: change.with.unicodeScalars)
             cursor = change.range.upperBound
@@ -973,12 +991,20 @@ public enum SecretImport {
         return String(out)
     }
 
+    /// Why `nxtrm secret run` could not start the entry as planned: its keys and their variables, then the command, as
+    /// the wrapper parses them. Nil when they parse.
+    static func wrapperRefusal(_ pairs: [(name: String, variable: String)], command: [String]) -> String? {
+        guard case .failure(let error) = SecretRun.parse(keyArguments(pairs) + ["--"] + command) else { return nil }
+        return "nxtrm secret run couldn't start it that way: \(error.reason); give each key its own name, or edit it by hand"
+    }
+
     static func editJSON(_ text: String, source: Source, location: Location, pairs: [(name: String, variable: String)],
                          nxtrm: [String]) -> Result<Edited, EditFailure> {
         guard let entries = jsonEntries(text, source: source), let entry = entries.first(where: { $0.location == location }) else {
             return .failure(EditFailure("the entry is not there any more"))
         }
         if let reason = entry.notMovable { return .failure(EditFailure(reason)) }
+        if let reason = wrapperRefusal(pairs, command: entry.command + entry.args) { return .failure(EditFailure(reason)) }
         guard let document = JSONC(text), case .object(let root)? = document.root, let servers = object(at: location.container, in: root),
               let member = servers.member(location.server), var planned = member.value.object(in: text) as? [String: Any] else {
             return .failure(EditFailure("the entry can't be read"))
@@ -1003,8 +1029,10 @@ public enum SecretImport {
         guard let newEntry = MCPRegistrar.compact(planned) else { return .failure(EditFailure("the new entry can't be written")) }
         let moved = Dictionary(pairs.map { ($0.variable, $0.name) }, uniquingKeysWith: { first, _ in first })
         let backup = marked(text, entry: entry, moved: moved)
-        let updated = replacing(text, [(entry.range, newEntry)])
-        guard verifyJSON(updated, before: text, source: source, location: location, planned: planned) else { return .failure(EditFailure("check failed")) }
+        guard let updated = replacing(text, [(entry.range, newEntry)]),
+              verifyJSON(updated, before: text, source: source, location: location, planned: planned) else {
+            return .failure(EditFailure("check failed"))
+        }
         return .success(Edited(text: updated, original: backup.text, written: sha256(newEntry), kept: backup.kept))
     }
 
@@ -1028,6 +1056,7 @@ public enum SecretImport {
             return .failure(EditFailure("the entry is not there any more"))
         }
         if let reason = entry.notMovable { return .failure(EditFailure(reason)) }
+        if let reason = wrapperRefusal(pairs, command: entry.command + entry.args) { return .failure(EditFailure(reason)) }
         guard let outline = TOMLOutline(text), let table = tomlTables(outline).first(where: { $0.name == location.server }),
               let command = table.keys.first(where: { $0.path == ["command"] }), let commandString = outline.string(at: command.value) else {
             return .failure(EditFailure("the entry can't be read"))
@@ -1078,7 +1107,7 @@ public enum SecretImport {
         }
         let movedNames = Dictionary(pairs.map { ($0.variable, $0.name) }, uniquingKeysWith: { first, _ in first })
         let backup = marked(text, entry: entry, moved: movedNames)
-        let updated = replacing(text, changes)
+        guard let updated = replacing(text, changes) else { return .failure(EditFailure("check failed")) }
         guard let check = TOMLOutline(updated), let newTable = tomlTables(check).first(where: { $0.name == location.server }),
               let newEntry = tomlEntries(updated)?.first(where: { $0.location == location }),
               newEntry.command == [nxtrm[0]], newEntry.args == args,
@@ -1214,7 +1243,8 @@ public enum SecretImport {
         }
         guard !filled.contains(marker) else { return .keyMissing("a value kept in place") }
         guard let range = entryRange(backup.location, format: backup.format, in: text) else { return .changedSince }
-        return .text(replacing(text, [(range, filled)]))
+        guard let updated = replacing(text, [(range, filled)]) else { return .changedSince }
+        return .text(updated)
     }
 
     static func literal(_ value: String, format: Format) -> String {

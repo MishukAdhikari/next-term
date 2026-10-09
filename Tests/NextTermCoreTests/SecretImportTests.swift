@@ -5,7 +5,7 @@ import Testing
 typealias F = SecretImportFixtures
 
 /// The import moves keys out of each client's config in its own format, with per-entry backups that hold no value and
-/// an Undo that puts an entry back only while it is what Next Term wrote (KTD15, U8).
+/// an Undo that puts an entry back only while it is what Next Term wrote.
 @Suite struct SecretImportTests {
     func scan(_ home: F.Home, projects: [String] = [], isOpen: (String) -> Bool = { _ in false }) -> SecretImport.Scan {
         SecretImport.scan(F.sources(home, projects: projects), isOpen: isOpen)
@@ -86,21 +86,21 @@ typealias F = SecretImportFixtures
 
         // Free: Next Term takes it while it reads and writes, then removes it.
         var heldWhileReading = false
-        let applied = SecretImport.apply(edit, lockWait: 0.4) { path in
+        let applied = SecretImport.apply(edit, lockWait: 0.4, read: { path in
             heldWhileReading = heldWhileReading || FileManager.default.fileExists(atPath: lock)
             return SecretImport.readFile(path)
-        }
+        })
         #expect(applied == .written && heldWhileReading && !FileManager.default.fileExists(atPath: lock))
 
         // A write that fails, with the lock taken, lets it go too: the file turns read-only while Next Term reads it.
         home.write(".claude.json", F.claudeJSON)
         let again = try #require(finding(scan(home), "GITHUB_PERSONAL_ACCESS_TOKEN"))
         let second = try #require(SecretImport.plan([SecretImport.Move(name: "GITHUB_TOKEN", findings: [again])], nxtrm: F.nxtrm).edits.first)
-        let failed = SecretImport.apply(second, lockWait: 0.4) { path in
+        let failed = SecretImport.apply(second, lockWait: 0.4, read: { path in
             let data = SecretImport.readFile(path)
             chmod(path, 0o400)
             return data
-        }
+        })
         #expect(failed == .skipped("read-only") && !FileManager.default.fileExists(atPath: lock))
         chmod(home.file(".claude.json"), 0o600)
     }
@@ -158,6 +158,55 @@ typealias F = SecretImportFixtures
         #expect(text.hasPrefix("model = \"gpt-5\"\n\n# GitHub, for the agent\n[mcp_servers.github]\n"))
         #expect(text.hasSuffix("[mcp_servers]\ndotted.command = \"dotted-server\"\ndotted.env.DOTTED_TOKEN = \"\(F.github)Z\"\n\n[profiles.fast]\nmodel = \"gpt-5-mini\"\n"))
         #expect(SecretImport.verify(edit, written: home.data(".codex/config.toml")))
+    }
+
+    /// The commonest Codex shape: the only env member moves and there is no timeout, so the new lines go where the env
+    /// line was taken out. With no args, the args line goes there too.
+    @Test func codexEntryWhoseOnlyEnvMemberMoves() throws {
+        let home = F.Home()
+        defer { home.remove() }
+        home.write(".codex/config.toml", """
+            [mcp_servers.github]
+            command = "npx"
+            args = ["-y", "@modelcontextprotocol/server-github"]
+            env = { GITHUB_PERSONAL_ACCESS_TOKEN = "\(F.github)" }
+
+            [mcp_servers.local]
+            command = "local-server"
+            env = { LOCAL_API_KEY = "\(F.openai)" }
+
+            """)
+        let found = scan(home)
+        let github = try #require(finding(found, "GITHUB_PERSONAL_ACCESS_TOKEN"))
+        let local = try #require(finding(found, "LOCAL_API_KEY"))
+        let planned = SecretImport.plan([SecretImport.Move(name: "GITHUB_TOKEN", findings: [github]),
+                                         SecretImport.Move(name: "LOCAL_API_KEY", findings: [local])], nxtrm: F.nxtrm)
+        #expect(planned.failures.isEmpty)
+        let edit = try #require(planned.edits.first)
+        #expect(SecretImport.apply(edit, lockWait: 0.3) == .written)
+        #expect(home.read(".codex/config.toml") == """
+            [mcp_servers.github]
+            command = "\(F.nxtrm[0])"
+            args = ["secret", "run", "GITHUB_TOKEN=GITHUB_PERSONAL_ACCESS_TOKEN", "--", "npx", "-y", "@modelcontextprotocol/server-github"]
+            startup_timeout_sec = 30
+
+            [mcp_servers.local]
+            command = "\(F.nxtrm[0])"
+            args = ["secret", "run", "LOCAL_API_KEY", "--", "local-server"]
+            startup_timeout_sec = 30
+
+            """)
+    }
+
+    /// An insertion goes before a change that starts where it does, whatever order they come in; ranges that overlap or
+    /// run past the end refuse the edit.
+    @Test func replacingOrdersAnInsertionFirstAndRefusesOverlaps() {
+        let text = "ab\ncd\n"
+        #expect(SecretImport.replacing(text, [(3..<6, ""), (3..<3, "X\n")]) == "ab\nX\n")
+        #expect(SecretImport.replacing(text, [(3..<3, "X\n"), (3..<6, "")]) == "ab\nX\n")
+        #expect(SecretImport.replacing(text, [(3..<3, "1"), (3..<3, "2")]) == "ab\n12cd\n")
+        #expect(SecretImport.replacing(text, [(0..<4, "A"), (2..<5, "B")]) == nil)
+        #expect(SecretImport.replacing(text, [(4..<9, "")]) == nil)
     }
 
     // MARK: JSON clients
@@ -265,6 +314,50 @@ typealias F = SecretImportFixtures
     }
 
     // MARK: groups and backups
+
+    /// One entry holding a value under two variables gets a key for each, and every entry's new args parse as the
+    /// wrapper's. Moves that give both variables one name are refused, and the file is left as it was.
+    @Test func anEntryHoldingOneValueUnderTwoVariables() throws {
+        let home = F.Home()
+        defer { home.remove() }
+        let settings = """
+            {
+              "mcpServers": {
+                "github": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"],
+                           "env": {"GITHUB_TOKEN": "\(F.github)", "GITHUB_PERSONAL_ACCESS_TOKEN": "\(F.github)"}},
+                "lite": {"command": "npx", "args": ["-y", "gh-lite"], "env": {"GH_TOKEN": "\(F.github)"}}
+              }
+            }
+
+            """
+        home.write(".gemini/settings.json", settings)
+        let found = scan(home)
+        let groups = SecretImport.groups(found.findings, stored: [])
+        #expect(groups.map(\.name) == ["GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN"])
+        #expect(groups.first?.findings.map(\.variable) == ["GITHUB_TOKEN", "GH_TOKEN"])
+        let moves = groups.map { SecretImport.Move(name: $0.name, findings: $0.findings) }
+        let planned = SecretImport.plan(moves, nxtrm: F.nxtrm)
+        #expect(planned.failures.isEmpty)
+        let edit = try #require(planned.edits.first)
+        #expect(SecretImport.apply(edit, lockWait: 0.3) == .written)
+        let servers = try #require(object(home.read(".gemini/settings.json"))?["mcpServers"] as? [String: Any])
+        let github = (servers["github"] as? [String: Any])?["args"] as? [String]
+        #expect(github == ["secret", "run", "GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN", "--", "npx", "-y",
+                           "@modelcontextprotocol/server-github"])
+        for server in ["github", "lite"] {
+            let args = try #require((servers[server] as? [String: Any])?["args"] as? [String], "\(server)")
+            #expect(Array(args.prefix(2)) == ["secret", "run"], "\(server)")
+            if case .failure(let error) = SecretRun.parse(Array(args.dropFirst(2))) { Issue.record("\(server): \(error.reason)") }
+        }
+
+        home.write(".gemini/settings.json", settings)
+        let both = scan(home).findings.filter { $0.location.server == "github" }
+        #expect(both.count == 2)
+        let refused = SecretImport.plan([SecretImport.Move(name: "GITHUB_TOKEN", findings: both)], nxtrm: F.nxtrm)
+        #expect(refused.edits.isEmpty)
+        #expect(refused.failures.first?.reason.contains("GITHUB_TOKEN is named twice") == true)
+        #expect(home.read(".gemini/settings.json") == settings)
+    }
 
     @Test func oneValueInThreeServersIsOneGroup() throws {
         let home = F.Home()
@@ -396,5 +489,7 @@ typealias F = SecretImportFixtures
         #expect(SecretImport.detect(name: "DB_PASSWORD", value: "correct horse battery") == "a key, by its name")
         #expect(SecretImport.valueRefusal(variable: "api_key", value: "x")?.contains("can't set") == true)
         #expect(SecretImport.valueRefusal(variable: "NODE_OPTIONS", value: "x")?.contains("can't set") == true)
+        // "\r\n" is one Character, so the line break is looked for by scalar.
+        #expect(SecretImport.valueRefusal(variable: "API_KEY", value: "abc\r\ndef")?.contains("line breaks") == true)
     }
 }
