@@ -24,6 +24,8 @@ final class SecretClipboard {
     var clearAfter: TimeInterval = 60
     /// The change count Copy left, while its clear is due.
     private(set) var copiedCount: Int?
+    /// The last Copy asked for this Mac only (`.currentHostOnly`), for the self-test: macOS gives no way to read it back.
+    private(set) var preparedForThisMacOnly = false
 
     init(pasteboard: NSPasteboard) {
         self.pasteboard = pasteboard
@@ -35,6 +37,7 @@ final class SecretClipboard {
     func copy(_ value: SecretBytes) -> Bool {
         guard let text = value.utf8String() else { return false }
         pasteboard.prepareForNewContents(with: .currentHostOnly)
+        preparedForThisMacOnly = true
         let wrote = pasteboard.setString(text, forType: .string)
         pasteboard.setData(Data(), forType: Self.concealedType)
         pasteboard.setData(Data(), forType: Self.transientType)

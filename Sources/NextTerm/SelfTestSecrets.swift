@@ -27,6 +27,7 @@ extension SelfTest {
         await secretsPanelChecks(base)
         await secretsWrapperChecks(base)
         await secretsToolChecks(c, base: base, proj: proj)
+        await secretsSettingsChecks(base: base)
         check(secretsFolderDate(realFolder.url) == realBefore, "secrets: the real Secrets.noindex is untouched (unchanged, or not there)",
               "\(String(describing: realBefore)) → \(String(describing: secretsFolderDate(realFolder.url)))")
     }
@@ -1042,5 +1043,141 @@ extension SelfTest {
         _ = await wait(10) { lateTab?.screenTail().joined().contains("expired or was used already") == true }
         check(lateTab?.screenTail().joined().contains("expired or was used already") == true,
               "secrets: its wrapper, starting late, gets expired")
+    }
+}
+
+extension SelfTest {
+    // MARK: U7, Settings › Secrets and Window › Secrets
+
+    static func secretsSettingsChecks(base: URL) async {
+        let store = SecretsStore.shared
+        let requests = SecretRequests.shared
+        requests.resetForSelfTest()
+        defer { requests.resetForSelfTest() }
+
+        // The last Settings tab, after Skills; Window › Secrets with no key.
+        let tabs = (SettingsWindowController().window?.contentView as? NSTabView)?.tabViewItems.compactMap { $0.identifier as? String } ?? []
+        let skills = tabs.firstIndex(of: "skills")
+        check(tabs.last == "secrets" && skills.map { $0 < tabs.count - 1 } == true, "secrets: Secrets is the last Settings tab, after Skills",
+              tabs.joined(separator: ", "))
+        let windowMenu = NSApp.mainMenu?.items.first { $0.submenu?.title == "Window" }?.submenu
+        let item = windowMenu?.items.first { $0.title == "Secrets" }
+        let afterSkills = windowMenu.map { menu in
+            (menu.items.firstIndex { $0.title == "Skills" } ?? -1) < (menu.items.firstIndex { $0.title == "Secrets" } ?? -1)
+        } ?? false
+        check(item != nil && item?.keyEquivalent == "" && item?.action == #selector(AppDelegate.showSecrets(_:)) && afterSkills,
+              "secrets: Window › Secrets comes after Skills and has no key")
+        AppDelegate.shared.showSecrets(nil)
+        guard let controller = SecretsWindowController.shared, let window = controller.window, window.isVisible else {
+            return check(false, "secrets: Window › Secrets opens its window")
+        }
+        defer { window.close() }
+        let view = controller.secretsView
+        guard let presence = store.presence as? StandInPresence else { return }
+
+        // Add through the sheet; a write-only key has no Reveal or Copy, and says so under the table.
+        func addThroughSheet(_ name: String, value: String, writeOnly: Bool) async {
+            view.add()
+            guard let sheet = view.sheet else { return check(false, "secrets: Add… opens its sheet") }
+            sheet.nameField.stringValue = name.lowercased().replacingOccurrences(of: "_", with: "-")
+            sheet.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: sheet.nameField))
+            sheet.purposeField.stringValue = "the Settings checks"
+            sheet.valueField.stringValue = value
+            sheet.writeOnlyBox.state = writeOnly ? .on : .off
+            sheet.refresh()
+            sheet.saveButton.performClick(nil)
+            _ = await wait(10) { view.entries.contains { $0.name == name } && view.sheet == nil }
+        }
+        let shownValue = secretsValue("shown")
+        await addThroughSheet("SHOWN_KEY", value: shownValue, writeOnly: false)
+        await addThroughSheet("HIDDEN_KEY", value: secretsValue("hidden"), writeOnly: true)
+        check(view.entries.map(\.name).contains("SHOWN_KEY") && view.entries.first { $0.name == "HIDDEN_KEY" }?.writeOnly == true,
+              "secrets: Add… through the sheet lists the key, its name made capitals with _ as typed")
+        view.select("HIDDEN_KEY")
+        check(!view.revealButton.isEnabled && !view.copyButton.isEnabled && view.editButton.isEnabled && view.replaceButton.isEnabled
+              && view.deleteButton.isEnabled && !view.writeOnlyLabel.isHidden && view.writeOnlyLabel.stringValue == SecretsView.writeOnlyLine,
+              "secrets: a write-only key has Reveal and Copy off, Edit, Replace and Delete on, and the line under the table")
+
+        // Make Write-Only… asks first; Cancel changes nothing.
+        view.select("SHOWN_KEY")
+        let calls = presence.calls
+        view.writeOnlyButton.performClick(nil)
+        _ = await wait(5) { view.alert != nil }
+        let asked = view.alert?.messageText == "Make SHOWN_KEY write-only?"
+        view.alert?.buttons.last?.performClick(nil)
+        _ = await wait(5) { view.alert == nil }
+        check(asked && store.index?.entry(named: "SHOWN_KEY")?.writeOnly == false && presence.calls == calls,
+              "secrets: Make Write-Only… asks first, and Cancel changes nothing")
+
+        // Copy, on the self-test's own pasteboard: this Mac only, both markers, cleared after the delay unless changed.
+        let clipboard = SecretClipboard.shared
+        let general = NSPasteboard.general.changeCount
+        clipboard.clearAfter = 0.5
+        defer { clipboard.clearAfter = 60 }
+        view.copyButton.performClick(nil)
+        _ = await wait(10) { clipboard.pasteboard.string(forType: .string) == shownValue }
+        let types = clipboard.pasteboard.types ?? []
+        check(clipboard.preparedForThisMacOnly && types.contains(SecretClipboard.concealedType) && types.contains(SecretClipboard.transientType)
+              && view.actionLabel.stringValue == SecretClipboard.copiedLine,
+              "secrets: Copy puts the key on the pasteboard for this Mac only, marked concealed and transient, and says it clears in 60 seconds",
+              types.map(\.rawValue).joined(separator: ", "))
+        let cleared = await wait(5) { clipboard.pasteboard.string(forType: .string) == nil }
+        check(cleared, "secrets: Copy's pasteboard is cleared after the delay when nothing was copied since")
+        view.copyButton.performClick(nil)
+        _ = await wait(10) { clipboard.pasteboard.string(forType: .string) == shownValue }
+        clipboard.pasteboard.clearContents()
+        clipboard.pasteboard.setString("something else", forType: .string)
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        check(clipboard.pasteboard.string(forType: .string) == "something else" && NSPasteboard.general.changeCount == general,
+              "secrets: what was copied since is kept, and the general pasteboard was never touched")
+
+        // Allowed now lists a grant, and Revoke ends it.
+        let request = secretsRequest(asker: "wrapper:selftest-settings", command: ["true"], names: ["SHOWN_KEY"])
+        let answers = SecretsAnswers()
+        requests.ask(request) { answers.take($0) }
+        request.panel?.durationChoice[.fifteenMinutes]?.performClick(nil)
+        request.panel?.allowButton.performClick(nil)
+        _ = await wait(10) { !requests.grants.isEmpty }
+        view.reload()
+        let listed = view.allowedRows.count == 1 && SecretsView.grantText(requests.grants[0]).contains("SHOWN_KEY")
+        view.allowedRows.first?.revoke.performClick(nil)
+        check(listed && requests.grants.isEmpty && view.allowedRows.isEmpty, "secrets: Allowed now lists a grant, and Revoke ends it")
+
+        // With agent control off and a key stored, the line says what that means.
+        SecretsView.agentControlIsOn = { false }
+        view.reload()
+        let offShown = !view.agentControlLabel.isHidden
+        SecretsView.agentControlIsOn = { AppDelegate.shared.agentControl }
+        view.reload()
+        check(offShown && view.agentControlLabel.isHidden == AppDelegate.shared.agentControl,
+              "secrets: with agent control off and a key stored, Settings › Secrets says agents can't use the keys")
+
+        // A vault the keyring can't open: the text and Start Over… right after load(), before any use.
+        let vaultPath = store.folder.path(SecretFolder.vaultName)
+        if let original = FileManager.default.contents(atPath: vaultPath) {
+            let other = SoftwareKeyring(kind: .secureEnclave)
+            if let made = try? SecretVault.create(keyring: other),
+               let foreign = try? made.vault.add(name: "SHOWN_KEY", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
+                                                 value: SecretBytes(utf8: secretsValue("foreign"))) {
+                try? store.folder.write(SecretFolder.vaultName, data: foreign)
+                let before = presence.calls
+                await store.load()
+                check(view.statusLabel.stringValue == SecretsView.cantOpenLine && !view.startOverButton.isHidden && presence.calls == before,
+                      "secrets: a vault the keyring can't open shows the can't-open text and Start Over… right after load, with no Touch ID",
+                      view.statusLabel.stringValue)
+            }
+            // A tampered one shows its text after its first use.
+            if let planted = secretsTampered(original, { $0["purpose"] = "changed by hand" }) {
+                try? store.folder.write(SecretFolder.vaultName, data: planted)
+                await store.load()
+                let quiet = view.statusLabel.stringValue != SecretsView.tamperedLine
+                _ = try? await store.perform(.reveal(name: "SHOWN_KEY"))
+                check(quiet && view.statusLabel.stringValue == SecretsView.tamperedLine && !view.startOverButton.isHidden,
+                      "secrets: a tampered vault shows the tamper text and Start Over… after its first use", view.statusLabel.stringValue)
+            }
+            try? store.folder.write(SecretFolder.vaultName, data: original)
+            await store.load()
+        }
+        for name in ["SHOWN_KEY", "HIDDEN_KEY"] { _ = try? await store.perform(.delete(name: name)) }
     }
 }

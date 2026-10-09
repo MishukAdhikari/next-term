@@ -1399,6 +1399,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         window.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         item(window, "Welcome to Next Term", #selector(showWelcome(_:)), "", target: self)
         item(window, "Skills", #selector(showSkills(_:)), "", target: self)
+        item(window, "Secrets", #selector(showSecrets(_:)), "", target: self)
         NSApp.windowsMenu = window
 
         return main
