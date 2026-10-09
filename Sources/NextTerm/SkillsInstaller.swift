@@ -402,8 +402,11 @@ enum SkillsInstaller {
         return result.values.sorted { $0.name < $1.name }
     }
 
-    /// The last check's answers, by skill name (shown in Settings › Skills).
-    static var updates: [String: UpdateState] = [:]
+    /// The last check's answers, by skill name (shown in Settings › Skills, counted on Agents › Skills…). Each change
+    /// is posted (`updatesChanged`).
+    static var updates: [String: UpdateState] = [:] {
+        didSet { NotificationCenter.default.post(name: updatesChanged, object: nil) }
+    }
     static var lastCheck: Date? { UserDefaults.standard.object(forKey: "SkillsLastUpdateCheck") as? Date }
     static let updatesChanged = Notification.Name("NextTermSkillUpdatesChanged")
 
@@ -429,9 +432,8 @@ enum SkillsInstaller {
                 for item in group { answers[item.name] = .unknown(message) }
             }
         }
-        updates = answers
         UserDefaults.standard.set(Date(), forKey: "SkillsLastUpdateCheck")
-        NotificationCenter.default.post(name: updatesChanged, object: nil)
+        updates = answers
     }
 
     /// What changed between the installed copy and the downloaded one, as `diff -ruN` prints it. Caches

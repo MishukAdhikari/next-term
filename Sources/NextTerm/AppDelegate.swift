@@ -1314,7 +1314,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // The agents' own: their skills, their sessions, and what goes to them. Ids are the actions, so keys changed in
         // Settings before these moved here from File and Edit stay theirs. Window › Skills finds new skills.
         let agents = submenu(main, "Agents")
-        item(agents, "Skills…", #selector(showSkillsSettings(_:)), "", target: self)
+        let skills = item(agents, SkillsMenuItem.title, #selector(showSkillsSettings(_:)), "", target: self)
+        MainActor.assumeIsolated { SkillsMenuItem.follow(skills) } // with the count of skill updates
         agents.addItem(.separator())
         item(agents, "Resume Agent Session…", #selector(TerminalWindowController.resumeSession(_:)), "o", [.command, .option])
         item(agents, "Send to Agent", #selector(TerminalWindowController.sendToAgent(_:)), "k", [.command, .option])

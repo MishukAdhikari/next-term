@@ -305,6 +305,7 @@ enum SkillsMCP {
                                                  let check = SkillsStore.removalCheck(name, shown: shown)
                                                  switch await SkillsStore.apply(steps, title: "Remove \(name)", precheck: check) {
                                                  case .success:
+                                                     SkillsInstaller.updates[name] = nil
                                                      resolve(request, ["status": "removed", "skill": name])
                                                      window.finish()
                                                  case .failure(let failure):

@@ -435,8 +435,9 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
                     let (steps, _, _) = await SkillsInstaller.removal(row.name)
                     guard steps == shown else { return Self.tell("“\(row.name)” changed since you looked. Look again before removing it.", in: window) }
                     let check = SkillsStore.removalCheck(row.name, shown: shown)
-                    if case .failure(let failure) = await SkillsStore.apply(steps, title: "Remove \(row.name)", precheck: check) {
-                        Self.tell(failure.message, in: window)
+                    switch await SkillsStore.apply(steps, title: "Remove \(row.name)", precheck: check) {
+                    case .success: SkillsInstaller.updates[row.name] = nil // its update goes with it, and off Agents › Skills…' count
+                    case .failure(let failure): Self.tell(failure.message, in: window)
                     }
                 }
             }
