@@ -8,6 +8,10 @@ import Foundation
 ///
 /// What is left of a sequence (`[6n`) is plain text. The terminal's convertEol stays off, so the live terminal is
 /// unchanged: `feedable` writes each newline as CR LF instead.
+///
+/// It keeps text from starting a sequence, not from joining one already open: fed while the terminal is inside one
+/// (the shell's own output split across reads), it becomes part of it. Feed it only between sequences, as before the
+/// restored shell has printed anything.
 public enum TerminalText {
     /// `text` with only printable characters, newlines and tabs. A C1 control is one scalar however it came (UTF-8
     /// carries U+009B as C2 9B), so it goes too.
@@ -23,11 +27,19 @@ public enum TerminalText {
         sanitize(String(decoding: bytes, as: UTF8.self))
     }
 
-    /// Sanitized, on one line: each newline and tab a space. What a note or a list line is.
+    /// Sanitized, on one line: each newline, tab, and line or paragraph separator a space. What a note or a list line
+    /// is. A character a put-back line may not hold (KTD7), one that shows nothing or turns the text around it (bidi,
+    /// zero-width, format), shows as U+FFFD, so a folder or host name cannot make a note read as something else.
     public static func oneLine(_ text: String) -> String {
         var line = String.UnicodeScalarView()
         for scalar in sanitize(text).unicodeScalars {
-            line.append(scalar == "\n" || scalar == "\t" ? " " : scalar)
+            if scalar == "\t" || SessionSnapshot.Command.isLineBreak(scalar) {
+                line.append(" ")
+            } else if SessionSnapshot.Command.isUnsafe(scalar) {
+                line.append("\u{FFFD}")
+            } else {
+                line.append(scalar)
+            }
         }
         return String(line)
     }

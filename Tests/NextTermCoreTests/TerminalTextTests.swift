@@ -60,6 +60,15 @@ import Testing
         #expect(!TerminalText.oneLine(Self.hostile.joined(separator: "\n")).contains("\n"))
     }
 
+    @Test func oneLineShowsInvisibleAndDirectionCharactersAsReplacements() {
+        // Bidi overrides and isolates, zero-width characters and other format characters could make a note read as
+        // something else; line and paragraph separators would break it.
+        let text = "a\u{202E}b\u{2066}c\u{200B}d\u{FEFF}e\u{00AD}f\u{2028}g\u{2029}h"
+        #expect(TerminalText.oneLine(text) == "a\u{FFFD}b\u{FFFD}c\u{FFFD}d\u{FFFD}e\u{FFFD}f g h")
+        // Scrollback keeps them: a program printed them, and joiners hold emoji together.
+        #expect(TerminalText.sanitize("👩\u{200D}💻") == "👩\u{200D}💻")
+    }
+
     @Test func feedableWritesEachNewlineAsCRLF() {
         #expect(TerminalText.feedable("one\ntwo\n") == "one\r\ntwo\r\n")
         // A carriage return of its own is a control character: it goes, and the newline gets its own.
@@ -67,7 +76,8 @@ import Testing
         let fed = TerminalText.feedable(Self.hostile.joined(separator: "\n"))
         let crs = fed.unicodeScalars.filter { $0 == "\r" }.count
         let lfs = fed.unicodeScalars.filter { $0 == "\n" }.count
-        #expect(crs == lfs && lfs == Self.hostile.count - 1)
+        let breaks: Int = Self.hostile.count - 1
+        #expect(crs == lfs && lfs == breaks)
         #expect(Self.isPrintable(fed.replacingOccurrences(of: "\r\n", with: "\n")))
     }
 }

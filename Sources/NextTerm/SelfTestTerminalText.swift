@@ -18,7 +18,8 @@ extension SelfTest {
     }
 
     /// Device attributes and status queries, a clipboard write and read, Next Term's own integration channel with a
-    /// nonce, a settings query (DECRQSS), a title report, the end of a bracketed paste, and 8-bit C1 introducers.
+    /// nonce, a settings query (DECRQSS), a title report, the end of a bracketed paste, and C1 introducers as UTF-8
+    /// (which SwiftTerm only prints: Core's tests check that they go).
     private static let hostileTerminalText: [String] = [
         "\u{1B}[c", "\u{1B}[>c", "\u{1B}[5n", "\u{1B}[6n",
         "\u{1B}]52;c;aGVsbG8=\u{07}", "\u{1B}]52;c;?\u{1B}\\",
@@ -43,10 +44,14 @@ extension SelfTest {
         let fed = headlessReply(to: Array(TerminalText.feedable(raw).utf8))
         check(fed.sent.isEmpty && fed.clipboardWrites == 0, "terminal text: fed it sanitized, the terminal sends its host nothing",
               "\(fed.sent.count) bytes, \(fed.clipboardWrites) clipboard writes")
-        // As raw bytes: a lone 8-bit CSI (not UTF-8) and C1 encoded as UTF-8.
-        let bytes: [UInt8] = [0x9B, 0x36, 0x6E, 0xC2, 0x9B, 0x63, 0x1B, 0x5B, 0x63]
+        // SwiftTerm prints any byte above 0x1F between sequences, so a raw 8-bit CSI acts only inside one: here after an
+        // ESC, where it asks for the cursor position.
+        let bytes: [UInt8] = [0x1B, 0x9B, 0x36, 0x6E]
+        let eightBit = headlessReply(to: bytes)
+        check(!eightBit.sent.isEmpty, "terminal text: a headless terminal answers an 8-bit CSI after an ESC",
+              "\(eightBit.sent.count) bytes")
         let stray = headlessReply(to: Array(TerminalText.sanitize(utf8: bytes).utf8))
-        check(stray.sent.isEmpty, "terminal text: stray 8-bit and C1 bytes, sanitized, get no answer", "\(stray.sent.count) bytes")
+        check(stray.sent.isEmpty, "terminal text: the same bytes, sanitized, get no answer", "\(stray.sent.count) bytes")
         // A restored tab's note about a folder named with escapes.
         var note = RestoreNote(outcome: .idle)
         note.movedFrom = "/Users/x/\u{1B}[6n\u{1B}]52;c;aGk=\u{07}gone"

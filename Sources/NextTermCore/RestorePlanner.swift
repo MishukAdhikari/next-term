@@ -10,13 +10,15 @@ import Foundation
 // - a line that held a secret is not kept, and the note says so (a remote tab keeps its outcome);
 // - a shell without the integration gets a note: an agent's names its resume command;
 // - agy and Aider get a note on how to resume them;
-// - Claude Code, Codex and Qwen Code resume by themselves only on an update restore, with an exact id from their own
-//   session file and the gate passing (KTD5); every other agent's resume command goes on the line, unrun (R6);
+// - Claude Code, Codex and Qwen Code resume by themselves only on an update restore, still running from a line that
+//   passed its checks, with an exact id from their own session file and the gate passing (KTD5), and only in the tab
+//   selected last of those that held the session (R5); every other agent's resume command goes on the line, unrun
+//   (R6), in the folder its session ran in;
 // - a command still running goes back on the line, unrun, when it was typed whole in the system /bin/zsh (R9);
 //   any other gets a note;
 // - an idle tab gets its folder back, and a note with its last command.
 // A crash restore never resumes. In safe mode the plan is what Try Again would apply; until then each local tab only
-// says what it held. Nothing here runs or types anything.
+// says what it held, and its list line says it waits for Try Again. Nothing here runs or types anything.
 
 // MARK: - What the restore does
 
@@ -120,18 +122,30 @@ public struct NamedSession: Equatable, Sendable {
         self.date = date
     }
 
-    var identity: String { agent.rawValue + ":" + id }
+    /// The agent and id, whatever the id's case: an id typed in capitals names the same session.
+    var identity: String { agent.rawValue + ":" + id.lowercased() }
+}
+
+/// What the restore found of a folder within its time budget.
+public enum FolderCheck: Sendable {
+    case found
+    case gone
+    /// Not found in time: it may still be there.
+    case notChecked
 }
 
 /// The folder a local tab opens in.
 public struct FolderChoice: Equatable, Sendable {
     public var path: String
-    /// The folder it had, when that was gone: `path` is the nearest one left.
+    /// The folder it had, when that was gone or could not be checked in time: `path` is the nearest one left.
     public var movedFrom: String?
+    /// `movedFrom` could not be checked in time, so it may still be there.
+    public var notChecked: Bool
 
-    public init(path: String, movedFrom: String? = nil) {
+    public init(path: String, movedFrom: String? = nil, notChecked: Bool = false) {
         self.path = path
         self.movedFrom = movedFrom
+        self.notChecked = notChecked
     }
 }
 
@@ -142,11 +156,16 @@ public struct SessionLookup {
     public var read: (AgentKind, String, Date) -> [AgentSession]
     /// `AgentSessions.newest`: the newest session started in `folder` at or after the date, ids in the set left out.
     public var newest: (AgentKind, String, Date, Set<String>) -> AgentSession?
+    /// A folder as the stores name it: two tabs whose folders read the same share one folder's sessions.
+    public var canonical: (String) -> String
 
+    /// Without `canonical`, folders are compared as their text reads, `.` and `..` worked out.
     public init(read: @escaping (AgentKind, String, Date) -> [AgentSession],
-                newest: @escaping (AgentKind, String, Date, Set<String>) -> AgentSession?) {
+                newest: @escaping (AgentKind, String, Date, Set<String>) -> AgentSession?,
+                canonical: @escaping (String) -> String = { (path: String) -> String in RestorePlanner.lexical(path) ?? path }) {
         self.read = read
         self.newest = newest
+        self.canonical = canonical
     }
 
     /// The stores in `home`.
@@ -155,7 +174,7 @@ public struct SessionLookup {
             (try? agent.provider(home: home).sessions(in: canonicalPath(folder), subfolders: false, since: since)) ?? []
         }, newest: { (agent: AgentKind, folder: String, after: Date, excluding: Set<String>) -> AgentSession? in
             AgentSessions.newest(agent: agent, in: folder, after: after, excluding: excluding, home: home)
-        })
+        }, canonical: canonicalPath)
     }
 }
 
@@ -189,62 +208,72 @@ public enum RestorePlanner {
     /// What the planner reads of the Mac.
     public struct World {
         public var home: String
-        /// The folder is there, found within the restore's time budget.
-        public var folderExists: (String) -> Bool
-        /// The gate's facts for an agent's evidence, in a tab whose folder was the one given.
-        public var resumeFacts: (SessionSnapshot.Evidence, String?) -> ResumeFacts
+        /// What the restore found of a folder within its time budget.
+        public var checkFolder: (String) -> FolderCheck
+        /// The gate's facts for an agent's evidence, in a tab whose folder was the one given, with every project the
+        /// snapshot opens (ResumeFacts.read).
+        public var resumeFacts: (SessionSnapshot.Evidence, String?, [String]) -> ResumeFacts
         public var sessions: SessionLookup
         /// The names the user gave hosts, by host id.
         public var hostNames: [String: String]
 
-        public init(home: String = NSHomeDirectory(), folderExists: @escaping (String) -> Bool = World.isFolder,
-                    resumeFacts: @escaping (SessionSnapshot.Evidence, String?) -> ResumeFacts, sessions: SessionLookup? = nil,
+        public init(home: String = NSHomeDirectory(), checkFolder: @escaping (String) -> FolderCheck = World.check,
+                    resumeFacts: @escaping (SessionSnapshot.Evidence, String?, [String]) -> ResumeFacts, sessions: SessionLookup? = nil,
                     hostNames: [String: String] = [:]) {
             self.home = home
-            self.folderExists = folderExists
+            self.checkFolder = checkFolder
             self.resumeFacts = resumeFacts
             self.sessions = sessions ?? .live(home: home)
             self.hostNames = hostNames
         }
 
-        public static func isFolder(_ path: String) -> Bool {
+        /// A folder is found when it is a directory now. The time budget is the caller's to set.
+        public static func check(_ path: String) -> FolderCheck {
             var isDirectory: ObjCBool = false
-            return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
+            let found = FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
+            return found ? .found : .gone
         }
     }
 
-    /// Everything one pane's plan depends on.
-    public struct PaneInput: Sendable {
-        public var pane: SessionSnapshot.Pane
+    /// Everything one pane's plan depends on. Only the planner makes one, so a verdict always comes from the gate.
+    struct PaneInput: Sendable {
+        var pane: SessionSnapshot.Pane
         /// An update restore, or a crash restore. Anything else plans as a crash: nothing resumes.
-        public var kind: SessionSnapshot.RestoreKind
-        public var safeMode: Bool
+        var kind: SessionSnapshot.RestoreKind
+        var safeMode: Bool
         /// Where a local tab opens.
-        public var folder: FolderChoice?
+        var folder: FolderChoice?
         /// The session its agent names, or the one guessed for it.
-        public var session: NamedSession?
+        var session: NamedSession?
+        /// The folder its agent's session ran in, when that is still there: an agent's line finds its session only there.
+        var sessionFolder: String?
         /// The gate's verdict, for an agent that may resume by itself.
-        public var verdict: ResumeVerdict?
-        /// Another pane on the same session resumes it.
-        public var sharedSession: Bool
+        var verdict: ResumeVerdict?
+        /// Another pane that holds the same session was selected later: only that one may resume it (R5).
+        var selectedEarlier: Bool
+        /// That pane resumes it.
+        var sharedSession: Bool
         /// A remote tab's host, by name.
-        public var host: String?
+        var host: String?
 
-        public init(pane: SessionSnapshot.Pane, kind: SessionSnapshot.RestoreKind, safeMode: Bool = false, folder: FolderChoice? = nil,
-                    session: NamedSession? = nil, verdict: ResumeVerdict? = nil, sharedSession: Bool = false, host: String? = nil) {
+        init(pane: SessionSnapshot.Pane, kind: SessionSnapshot.RestoreKind, safeMode: Bool = false, folder: FolderChoice? = nil,
+             session: NamedSession? = nil, sessionFolder: String? = nil, verdict: ResumeVerdict? = nil, selectedEarlier: Bool = false,
+             sharedSession: Bool = false, host: String? = nil) {
             self.pane = pane
             self.kind = kind
             self.safeMode = safeMode
             self.folder = folder
             self.session = session
+            self.sessionFolder = sessionFolder
             self.verdict = verdict
+            self.selectedEarlier = selectedEarlier
             self.sharedSession = sharedSession
             self.host = host
         }
     }
 
     /// Every pane of `snapshot`, in reading order. Sessions are named first, so no two panes guess the same one, and of
-    /// two panes on one session only the one selected last resumes.
+    /// the panes that hold one session only the one selected last may resume it.
     public static func plan(_ snapshot: SessionSnapshot, kind: SessionSnapshot.RestoreKind, safeMode: Bool = false,
                             world: World) -> [PanePlan] {
         var panes: [SessionSnapshot.Pane] = []
@@ -255,23 +284,27 @@ public enum RestorePlanner {
                 projects.append(window.project)
             }
         }
+        let opened: [String] = snapshot.windows.compactMap(\.project)
         let sessions = namedSessions(panes, lookup: world.sessions)
         var inputs: [PaneInput] = []
         for (index, pane) in panes.enumerated() {
-            inputs.append(input(for: pane, project: projects[index], session: sessions[index], kind: kind, safeMode: safeMode, world: world))
+            let place = Place(project: projects[index], projects: opened)
+            inputs.append(input(for: pane, place: place, session: sessions[index], kind: kind, safeMode: safeMode, world: world))
         }
         var plans: [PanePlan] = inputs.map { (input: PaneInput) -> PanePlan in plan(input) }
-        for index in sharing(plans, panes: panes) {
-            inputs[index].sharedSession = true
+        for (index, last) in selectedEarlier(sessions, panes: panes) {
+            inputs[index].selectedEarlier = true
+            inputs[index].sharedSession = plans[last].outcome == .resume
             plans[index] = plan(inputs[index])
         }
         return plans
     }
 
     /// One pane's plan, from everything it depends on.
-    public static func plan(_ input: PaneInput) -> PanePlan {
+    static func plan(_ input: PaneInput) -> PanePlan {
         let pane = input.pane
         let decision = decide(input)
+        let folder = decision.folder ?? input.folder?.path
         var note = RestoreNote(outcome: decision.outcome)
         if pane.remote == nil { note.agent = pane.agent?.agent }
         note.line = decision.noteLine
@@ -289,34 +322,56 @@ public enum RestorePlanner {
         note.host = input.host
         if let moved = input.folder?.movedFrom {
             note.movedFrom = moved
-            note.openedIn = input.folder?.path
+            note.openedIn = folder
+            note.folderNotChecked = input.folder?.notChecked ?? false
         }
         note.reminted = pane.reminted
         note.safeMode = input.safeMode && pane.remote == nil
         let reason: SessionSnapshot.RestoreKind = input.safeMode ? .safeMode : input.kind
-        return PanePlan(pane: pane.id, outcome: decision.outcome, reason: reason, line: decision.line,
-                        folder: decision.folder ?? input.folder?.path, session: decision.session, note: note, listLine: note.listLine)
+        return PanePlan(pane: pane.id, outcome: decision.outcome, reason: reason, line: decision.line, folder: folder,
+                        session: decision.session, note: note, listLine: note.listLine)
     }
 
-    /// The folder a local tab opens in: its own; when that is gone, the nearest folder above it inside the project, then
-    /// the project, then home.
-    public static func folder(for recorded: String?, project: String?, home: String, exists: (String) -> Bool) -> FolderChoice {
+    /// The folder a local tab opens in: its own; when that is gone or was not found in time, the nearest folder above it
+    /// inside the project, then the project, then home. `.` and `..` are worked out first, so the walk up never leaves
+    /// the project, and only a folder found in time is opened.
+    public static func folder(for recorded: String?, project: String?, home: String, check: (String) -> FolderCheck) -> FolderChoice {
+        func found(_ path: String) -> Bool { check(path) == .found }
+        let project = project.flatMap(lexical)
         guard let recorded else {
-            guard let project, exists(project) else { return FolderChoice(path: home) }
+            guard let project, found(project) else { return FolderChoice(path: home) }
             return FolderChoice(path: project)
         }
-        if exists(recorded) { return FolderChoice(path: recorded) }
+        // A folder that is not absolute names nowhere: the tab opens as if its own were gone.
+        let path = lexical(recorded)
+        let state: FolderCheck = path.map(check) ?? .gone
+        if let path, state == .found { return FolderChoice(path: path) }
         var candidates: [String] = []
         if let project {
             let inside = project.hasSuffix("/") ? project : project + "/"
-            var current = (recorded as NSString).deletingLastPathComponent
+            var current = ((path ?? "") as NSString).deletingLastPathComponent
             while current.hasPrefix(inside) {
                 candidates.append(current)
                 current = (current as NSString).deletingLastPathComponent
             }
             candidates.append(project)
         }
-        return FolderChoice(path: candidates.first(where: exists) ?? home, movedFrom: recorded)
+        let opened = candidates.first(where: found) ?? home
+        return FolderChoice(path: opened, movedFrom: path ?? recorded, notChecked: state == .notChecked)
+    }
+
+    /// `path` with `.`, `..` and repeated slashes worked out from its text alone, or nil when it is not absolute.
+    public static func lexical(_ path: String) -> String? {
+        guard path.hasPrefix("/") else { return nil }
+        var parts: [Substring] = []
+        for part in path.split(separator: "/") where part != "." {
+            if part == ".." {
+                _ = parts.popLast()
+            } else {
+                parts.append(part)
+            }
+        }
+        return "/" + parts.joined(separator: "/")
     }
 
     /// The record a save writes for a restored pane: while its action is pending, the record it was restored from,
@@ -335,7 +390,7 @@ public enum RestorePlanner {
         var noteLine: String?
         var session: NamedSession?
         var notPutBack: NotPutBack?
-        /// Where a resume runs: the session's folder.
+        /// Where an agent's resume or line runs: its session's folder.
         var folder: String?
     }
 
@@ -362,108 +417,178 @@ public enum RestorePlanner {
         }
         // The note names the session the line names, and none when the line has no id.
         let session = line == agent.program ? nil : input.session
-        guard integrated else { return Decision(outcome: .agentNote, noteLine: line, session: session) }
-        if case .resume(let command)? = input.verdict, input.kind == .update, !input.sharedSession, input.folder?.movedFrom == nil,
-           let session, session.naming == .exact, session.id == evidence.sessionID {
+        // Most agents find a session by the folder they run in, so the line waits in the session's own.
+        guard integrated else { return Decision(outcome: .agentNote, noteLine: line, session: session, folder: input.sessionFolder) }
+        if let command = resumeCommand(input, evidence: evidence, session: session) {
             return Decision(outcome: .resume, line: command, noteLine: line, session: session, folder: evidence.sessionFolder)
         }
-        return Decision(outcome: .agentOnTheLine, line: line, noteLine: line, session: session)
+        return Decision(outcome: .agentOnTheLine, line: line, noteLine: line, session: session, folder: input.sessionFolder)
     }
 
-    private static func input(for pane: SessionSnapshot.Pane, project: String?, session: NamedSession?, kind: SessionSnapshot.RestoreKind,
+    /// The command an automatic resume runs, when it may run: an update restore, the gate passed, the pane selected last of
+    /// those on its session, in its own folder, with the exact id its evidence holds. Only the command the gate builds
+    /// from this pane's own evidence runs.
+    private static func resumeCommand(_ input: PaneInput, evidence: SessionSnapshot.Evidence, session: NamedSession?) -> String? {
+        guard case .resume(let command)? = input.verdict, input.kind == .update, !input.selectedEarlier else { return nil }
+        guard input.folder?.movedFrom == nil, let session, session.naming == .exact, session.id == evidence.sessionID else { return nil }
+        return command == evidence.resumeCommand ? command : nil
+    }
+
+    /// Where a pane is: its window's project, and every project the snapshot opens.
+    private struct Place {
+        var project: String?
+        var projects: [String]
+    }
+
+    private static func input(for pane: SessionSnapshot.Pane, place: Place, session: NamedSession?, kind: SessionSnapshot.RestoreKind,
                               safeMode: Bool, world: World) -> PaneInput {
         var input = PaneInput(pane: pane, kind: kind, safeMode: safeMode)
         if let remote = pane.remote {
             input.host = world.hostNames[remote.hostID] ?? remote.destination ?? "the server"
             return input
         }
-        input.folder = folder(for: pane.folder, project: project, home: world.home, exists: world.folderExists)
+        input.folder = folder(for: pane.folder, project: place.project, home: world.home, check: world.checkFolder)
         input.session = session
-        input.verdict = verdict(for: pane, kind: kind, world: world)
+        if let recorded = pane.agent?.sessionFolder, let sessionFolder = lexical(recorded), world.checkFolder(sessionFolder) == .found {
+            input.sessionFolder = sessionFolder
+        }
+        input.verdict = verdict(for: pane, kind: kind, projects: place.projects, world: world)
         return input
     }
 
     /// The gate's verdict, asked only where a resume could follow: an update restore, an agent that resumes by itself
-    /// with an exact id from its own session file, in a shell with the integration.
-    private static func verdict(for pane: SessionSnapshot.Pane, kind: SessionSnapshot.RestoreKind, world: World) -> ResumeVerdict? {
-        guard kind == .update, let command = pane.command, command.check != .secret, command.source == .integration else { return nil }
+    /// with an exact id from its own session file, still running from a line typed in a shell with the integration that
+    /// passed every check. A fact not known asks nothing.
+    private static func verdict(for pane: SessionSnapshot.Pane, kind: SessionSnapshot.RestoreKind, projects: [String],
+                                world: World) -> ResumeVerdict? {
+        guard kind == .update, let command = pane.command, command.check == .kept, command.line != nil else { return nil }
+        guard command.running, command.source == .integration else { return nil }
         guard let evidence = pane.agent, evidence.isExact, let source = evidence.agent.fileSource, evidence.source == source else { return nil }
-        return evidence.gate(world.resumeFacts(evidence, pane.folder))
+        var facts = world.resumeFacts(evidence, pane.folder, projects)
+        // Whatever the facts say, what runs stays out of every project, the tab's folder and the session's (KTD5).
+        let folders: [String] = projects + [pane.folder, evidence.sessionFolder].compactMap { $0 }
+        for folder in folders where !facts.outside.contains(folder) {
+            facts.outside.append(folder)
+        }
+        return evidence.gate(facts)
     }
 
-    /// The panes, by index, that name a session another pane resumes: of those that would resume it, the one selected
-    /// last does (the first of them on a tie), and every other pane naming it keeps its line.
-    private static func sharing(_ plans: [PanePlan], panes: [SessionSnapshot.Pane]) -> [Int] {
-        var resumer: [String: Int] = [:]
-        for (index, plan) in plans.enumerated() where plan.outcome == .resume {
-            guard let key = plan.session?.identity else { continue }
-            if let other = resumer[key], panes[other].lastSelected >= panes[index].lastSelected { continue }
-            resumer[key] = index
+    /// The panes, by index, that hold a session another pane holds too and was selected after them, each with that
+    /// pane's index: of the panes that hold one session, only the one selected last may resume it (the first of them on
+    /// a tie), and every other keeps its line (R5).
+    private static func selectedEarlier(_ sessions: [Int: NamedSession], panes: [SessionSnapshot.Pane]) -> [(index: Int, last: Int)] {
+        let held: [Int] = sessions.keys.sorted()
+        var last: [String: Int] = [:]
+        for index in held {
+            guard let key = sessions[index]?.identity else { continue }
+            if let other = last[key], panes[other].lastSelected >= panes[index].lastSelected { continue }
+            last[key] = index
         }
-        return plans.indices.filter { (index: Int) -> Bool in
-            guard let key = plans[index].session?.identity, let winner = resumer[key] else { return false }
-            return winner != index
+        return held.compactMap { (index: Int) -> (index: Int, last: Int)? in
+            guard let key = sessions[index]?.identity, let winner = last[key], winner != index else { return nil }
+            return (index, winner)
         }
     }
 
     // MARK: sessions
 
-    /// The session each local agent pane names, by index: its own id when it has one in its agent's pattern, else the
-    /// newest session its agent started in its folder since it started. The agent that started last guesses first, so
-    /// the newest session goes to it, and no pane takes a session another pane names.
+    /// A local pane's agent, as it bears on naming sessions.
+    private struct Holder {
+        var index: Int
+        var agent: RestoreAgent
+        /// The folder its sessions are looked up in, and that folder as the stores name it.
+        var folder: String?
+        var place: String?
+        /// When its agent started. Not known, it could have started any session.
+        var start: Date?
+        /// It names no session of its own, so one may be guessed for it.
+        var guesses: Bool
+    }
+
+    /// The session each local agent pane holds, by index: its own id when it has one in its agent's pattern, else the
+    /// newest session its agent started in its folder since it started. A pane whose line held a secret names none, but
+    /// the session it holds is still its own. Ids match whatever their case.
+    ///
+    /// Time alone cannot tell two panes of one agent in one folder apart, so a session goes to a pane only when no other
+    /// such pane still unnamed could have started it: better no pane than the wrong one. Panes guess earliest start
+    /// first, so once one has its session, the next can take the one after.
     static func namedSessions(_ panes: [SessionSnapshot.Pane], lookup: SessionLookup) -> [Int: NamedSession] {
         var named: [Int: NamedSession] = [:]
         var taken: [RestoreAgent: Set<String>] = [:]
-        var unnamed: [(index: Int, start: Date)] = []
+        var holders: [Holder] = []
         for (index, pane) in panes.enumerated() {
-            guard pane.remote == nil, pane.command?.check != .secret, let evidence = pane.agent, evidence.agent.hasResumeForm else { continue }
-            guard let id = evidence.sessionID else {
-                if let start = evidence.startedAt { unnamed.append((index, start)) }
-                continue
-            }
+            guard pane.remote == nil, let evidence = pane.agent, evidence.agent.hasResumeForm else { continue }
+            let folder = evidence.sessionFolder ?? pane.folder
+            let holder = Holder(index: index, agent: evidence.agent, folder: folder, place: folder.map(lookup.canonical),
+                                start: evidence.startedAt, guesses: evidence.sessionID == nil)
+            holders.append(holder)
             // An id outside its pattern names nothing: the line is the program alone, and nothing is guessed in its place.
-            guard evidence.agent.isSessionID(id) else { continue }
+            guard let id = evidence.sessionID, evidence.agent.isSessionID(id) else { continue }
             let naming: SessionNaming = evidence.isExact ? .exact : .unconfirmed
             named[index] = NamedSession(agent: evidence.agent, id: id, naming: naming, date: evidence.sessionDate)
-            taken[evidence.agent, default: []].insert(id)
+            taken[evidence.agent, default: []].insert(id.lowercased())
         }
-        unnamed.sort { (a: (index: Int, start: Date), b: (index: Int, start: Date)) -> Bool in
-            a.start != b.start ? a.start > b.start : a.index < b.index
+        let unnamed = holders.filter { (holder: Holder) -> Bool in holder.guesses && holder.start != nil }
+        let waiting = unnamed.sorted { (a: Holder, b: Holder) -> Bool in
+            let first: Date = a.start ?? .distantPast
+            let second: Date = b.start ?? .distantPast
+            return first != second ? first < second : a.index < b.index
         }
-        for entry in unnamed {
-            let pane = panes[entry.index]
-            guard let evidence = pane.agent, let folder = evidence.sessionFolder ?? pane.folder else { continue }
-            let excluding = taken[evidence.agent] ?? []
-            guard let found = guess(evidence.agent, in: folder, after: entry.start, excluding: excluding, lookup: lookup) else { continue }
-            named[entry.index] = found
-            taken[evidence.agent, default: []].insert(found.id)
+        for holder in waiting {
+            guard let start = holder.start, let folder = holder.folder else { continue }
+            let rivals = holders.filter { (other: Holder) -> Bool in
+                other.index != holder.index && named[other.index] == nil && other.agent == holder.agent && other.place == holder.place
+            }
+            let before: Date? = rivals.map { (other: Holder) -> Date in other.start ?? .distantPast }.min()
+            let excluding = taken[holder.agent] ?? []
+            let found = guess(holder.agent, in: folder, after: start, before: before, excluding: excluding, lookup: lookup)
+            guard let found else { continue }
+            named[holder.index] = found
+            taken[holder.agent, default: []].insert(found.id.lowercased())
         }
         return named
     }
 
-    /// The newest session `agent` started in `folder` at or after `start`, not in `taken`, from that agent's reader
-    /// (the plan's matrix): Claude Code, Codex and Command Code from their own, which also skip a session a live process
-    /// has open; Gemini CLI, Cursor Agent and opencode from `AgentSessions.newest`. Nil for every other agent: Qwen Code,
-    /// Copilot CLI, Amp and Junie have no reader for a guess, and Kiro CLI and Goose have no store the session list
-    /// reads (no AgentKind), so `newest` has none to read.
-    static func guess(_ agent: RestoreAgent, in folder: String, after start: Date, excluding taken: Set<String>,
+    /// The newest session `agent` started in `folder` at or after `start`, and before `limit` when there is one, not in
+    /// `taken` whatever its case, from that agent's reader (the plan's matrix): Claude Code, Codex and Command Code from
+    /// their own, which also skip a session a live process has open; Gemini CLI, Cursor Agent and opencode from
+    /// `AgentSessions.newest`. Nil for every other agent: Qwen Code, Copilot CLI, Amp and Junie have no reader for a
+    /// guess, and Kiro CLI and Goose have no store the session list reads (no AgentKind), so `newest` has none to read.
+    static func guess(_ agent: RestoreAgent, in folder: String, after start: Date, before limit: Date? = nil, excluding taken: Set<String>,
                       lookup: SessionLookup) -> NamedSession? {
+        if let limit, limit <= start { return nil }
+        let taken = Set(taken.map { (id: String) -> String in id.lowercased() })
+        func fits(_ session: AgentSession) -> Bool {
+            let started = startTime(session)
+            guard started >= start, !taken.contains(session.id.lowercased()), agent.isSessionID(session.id) else { return false }
+            return limit.map { (limit: Date) -> Bool in started < limit } ?? true
+        }
         let found: AgentSession?
         switch agent {
         case .claude, .codex, .commandCode:
             guard let kind = agent.kind else { return nil }
-            let fresh = lookup.read(kind, folder, start).filter { (session: AgentSession) -> Bool in
-                startTime(session) >= start && !session.isRunning && !taken.contains(session.id) && agent.isSessionID(session.id)
-            }
+            let fresh = lookup.read(kind, folder, start).filter { (session: AgentSession) -> Bool in !session.isRunning && fits(session) }
             found = fresh.max { (a: AgentSession, b: AgentSession) -> Bool in startTime(a) < startTime(b) }
         case .gemini, .cursor, .opencode:
             guard let kind = agent.kind else { return nil }
-            found = lookup.newest(kind, folder, start, taken)
+            found = newest(kind, in: folder, after: start, excluding: taken, fits: fits, lookup: lookup)
         case .qwen, .copilot, .amp, .junie, .kiro, .goose, .agy, .aider, .unknown:
             return nil
         }
-        guard let found, agent.isSessionID(found.id), !taken.contains(found.id) else { return nil }
+        guard let found else { return nil }
         return NamedSession(agent: agent, id: found.id, naming: .newest, date: found.updatedAt)
+    }
+
+    /// `AgentSessions.newest`, asked again with each session it gave that does not fit left out, a few times at most.
+    private static func newest(_ kind: AgentKind, in folder: String, after start: Date, excluding taken: Set<String>,
+                               fits: (AgentSession) -> Bool, lookup: SessionLookup) -> AgentSession? {
+        var excluding = taken
+        for _ in 0..<8 {
+            guard let found = lookup.newest(kind, folder, start, excluding) else { return nil }
+            if fits(found) { return found }
+            excluding.insert(found.id)
+        }
+        return nil
     }
 
     private static func startTime(_ session: AgentSession) -> Date { session.createdAt ?? session.updatedAt }
@@ -525,6 +650,8 @@ public struct RestoreNote: Equatable, Sendable {
     /// The tab's folder was gone: the folder it had, and the one it opened in.
     public var movedFrom: String?
     public var openedIn: String?
+    /// The folder it had was not found in time, so it is not said to be gone.
+    public var folderNotChecked = false
     /// Its tab id was another tab's too, so it has a fresh one (R23).
     public var reminted = false
     /// Safe mode: nothing ran, and the note says what the tab held.
@@ -540,7 +667,10 @@ public struct RestoreNote: Equatable, Sendable {
     public func text(dates: (Date) -> String = RestoreNote.dateText) -> String? {
         var parts: [String] = []
         if reminted { parts.append("This tab has a new id, because another tab had the same one.") }
-        if let movedFrom, let openedIn { parts.append("\(movedFrom) is gone, so this tab opened in \(openedIn).") }
+        if let movedFrom, let openedIn {
+            let why = folderNotChecked ? "could not be checked in time" : "is gone"
+            parts.append("\(movedFrom) \(why), so this tab opened in \(openedIn).")
+        }
         let main = sentences(dates: dates)
         if safeMode {
             parts.append("Nothing ran, because the last two restores did not finish.")
@@ -643,7 +773,11 @@ public struct RestoreNote: Equatable, Sendable {
         return said
     }
 
-    private var sharedText: [String] { sharedSession ? ["Another tab resumed this session."] : [] }
+    /// Another tab resumes the session. In safe mode nothing has resumed yet, so it only held it.
+    private var sharedText: [String] {
+        guard sharedSession else { return [] }
+        return [safeMode ? "Another tab held this session too." : "Another tab resumed this session."]
+    }
 
     private var leftOffText: [String] { leftOff.isEmpty ? [] : ["Left off: \(leftOff.joined(separator: ", "))."] }
 
@@ -653,7 +787,8 @@ public struct RestoreNote: Equatable, Sendable {
         return "Last command: \(command) (exit \(exitCode))."
     }
 
-    /// The keep-sessions sheet's words for the outcome. The sheet puts the tab's title or folder before them.
+    /// The keep-sessions sheet's words for the outcome. The sheet puts the tab's title or folder before them. In safe
+    /// mode nothing ran, so what would type or run says it waits for Try Again.
     public var listLine: String {
         let name = agent.flatMap { $0 == .unknown ? nil : $0.name } ?? "the agent"
         let words: String
@@ -679,6 +814,7 @@ public struct RestoreNote: Equatable, Sendable {
         case .freshConnection:
             words = "connection closes"
         }
-        return TerminalText.oneLine(words)
+        let waits = safeMode && outcome.action != .note
+        return TerminalText.oneLine(waits ? "on Try Again, " + words : words)
     }
 }

@@ -37,6 +37,20 @@ import Testing
 
     func outcomes(_ plans: [PanePlan]) -> [RestoreOutcome] { plans.map { (plan: PanePlan) -> RestoreOutcome in plan.outcome } }
 
+    /// The plans' lines, checked in one place: comparing arrays inside `#expect` is slow to type-check.
+    func expectLines(_ plans: [PanePlan], _ expected: String..., sourceLocation: SourceLocation = #_sourceLocation) {
+        let found: [String] = lines(plans)
+        let same: Bool = found == expected
+        #expect(same, "lines \(found)", sourceLocation: sourceLocation)
+    }
+
+    /// The plans' outcomes, checked in one place, for the same reason.
+    func expectOutcomes(_ plans: [PanePlan], _ expected: RestoreOutcome..., sourceLocation: SourceLocation = #_sourceLocation) {
+        let found: [RestoreOutcome] = outcomes(plans)
+        let same: Bool = found == expected
+        #expect(same, "outcomes \(found)", sourceLocation: sourceLocation)
+    }
+
     // MARK: fixtures
 
     /// The lookups a plan made, and the sessions they find.
@@ -48,13 +62,18 @@ import Testing
         var lookup: SessionLookup {
             SessionLookup(read: { (agent: AgentKind, folder: String, since: Date) -> [AgentSession] in
                 self.reads.append(agent)
-                return self.sessions.filter { $0.agent == agent && $0.cwd == folder }
+                return self.sessions.filter { (session: AgentSession) -> Bool in session.agent == agent && session.cwd == folder }
             }, newest: { (agent: AgentKind, folder: String, after: Date, excluding: Set<String>) -> AgentSession? in
                 self.newests.append(agent)
                 let found = self.sessions.filter { (session: AgentSession) -> Bool in
-                    session.agent == agent && session.cwd == folder && (session.createdAt ?? .distantPast) >= after && !excluding.contains(session.id)
+                    let created: Date = session.createdAt ?? .distantPast
+                    return session.agent == agent && session.cwd == folder && created >= after && !excluding.contains(session.id)
                 }
-                return found.max { ($0.createdAt ?? .distantPast) < ($1.createdAt ?? .distantPast) }
+                return found.max { (a: AgentSession, b: AgentSession) -> Bool in
+                    let first: Date = a.createdAt ?? .distantPast
+                    let second: Date = b.createdAt ?? .distantPast
+                    return first < second
+                }
             })
         }
     }
@@ -67,10 +86,15 @@ import Testing
                             gitBranch: nil, model: nil, isRunning: running)
     }
 
+    /// Folders in `notChecked` were not checked in time; the rest are there when `exists` says so.
     func world(facts: ResumeFacts = ResumeFacts(), lookups: Lookups = Lookups(), exists: @escaping (String) -> Bool = { _ in true },
-               hosts: [String: String] = ["h1": "web-1"]) -> RestorePlanner.World {
-        RestorePlanner.World(home: "/Users/x", folderExists: exists, resumeFacts: { (_: Evidence, _: String?) -> ResumeFacts in facts },
-                             sessions: lookups.lookup, hostNames: hosts)
+               notChecked: Set<String> = [], hosts: [String: String] = ["h1": "web-1"]) -> RestorePlanner.World {
+        let check = { (path: String) -> FolderCheck in
+            if notChecked.contains(path) { return .notChecked }
+            return exists(path) ? .found : .gone
+        }
+        let given = { (_: Evidence, _: String?, _: [String]) -> ResumeFacts in facts }
+        return RestorePlanner.World(home: "/Users/x", checkFolder: check, resumeFacts: given, sessions: lookups.lookup, hostNames: hosts)
     }
 
     /// A line the integration reported typed in the tab, kept unless the secret detector says otherwise.
@@ -197,7 +221,7 @@ import Testing
         let older = pane(1, typed("claude"), agent: evidence, selected: 10)
         let newer = pane(2, typed("claude"), agent: evidence, selected: 20)
         let plans = plan([older, newer], world: world(facts: facts))
-        #expect(outcomes(plans) == [.agentOnTheLine, .resume] as [RestoreOutcome])
+        expectOutcomes(plans, .agentOnTheLine, .resume)
         #expect(plans[0].line == "claude --resume \(s)")
         let expected = "claude --resume \(s) is back on the line, not run. Press Return to resume Claude Code session \(s), or edit it first. "
             + "Another tab resumed this session."
@@ -205,11 +229,88 @@ import Testing
         #expect(plans[0].listLine == "Claude Code's resume command goes on the line, as another tab resumes this session")
         // Either way round.
         let swapped = plan([newer, older], world: world(facts: facts))
-        #expect(outcomes(swapped) == [.resume, .agentOnTheLine] as [RestoreOutcome])
+        expectOutcomes(swapped, .resume, .agentOnTheLine)
         // On a crash neither resumes, and neither note says another did.
         let crash = plan([older, newer], kind: .crash, world: world(facts: facts))
-        #expect(outcomes(crash) == [.agentOnTheLine, .agentOnTheLine] as [RestoreOutcome])
+        expectOutcomes(crash, .agentOnTheLine, .agentOnTheLine)
         #expect(!text(crash[0]).contains("Another tab"))
+    }
+
+    @Test func onlyAKeptLineStillRunningLetsAnAgentResume() {
+        let (evidence, facts) = exactClaude()
+        let lines: [Command] = [
+            Command(line: nil, check: .unknown, source: .integration, running: true),
+            Command(line: "claude\nrm -rf x", check: .kept, source: .integration, running: true),
+            Command(line: String(repeating: "a", count: Command.longest), check: .kept, source: .integration, running: true),
+            Command(line: "claude \u{202E}x", check: .kept, source: .integration, running: true),
+            Command(line: nil, check: .kept, source: .integration, running: true),
+            Command(line: "claude", check: .kept, source: .integration, running: false),
+        ]
+        for command in lines {
+            let result = plan(pane(1, command, agent: evidence), world: world(facts: facts))
+            #expect(result.outcome == .agentOnTheLine && result.line == "claude --resume \(s)", "\(command.check) \(command.running)")
+            #expect(!text(result).hasPrefix("Resumed"), "\(command.check) \(command.running)")
+        }
+    }
+
+    @Test func aResumeRunsOnlyWhatThePanesOwnEvidenceBuilds() {
+        let (evidence, facts) = exactClaude()
+        let claude = pane(1, typed("claude"), agent: evidence)
+        let session = NamedSession(agent: .claude, id: s, naming: .exact)
+        var input = RestorePlanner.PaneInput(pane: claude, kind: .update, folder: FolderChoice(path: folder), session: session,
+                                             verdict: .resume("touch /tmp/x"))
+        let forged = RestorePlanner.plan(input)
+        #expect(forged.outcome == .agentOnTheLine && forged.line == "claude --resume \(s)")
+        input.verdict = evidence.gate(facts)
+        #expect(RestorePlanner.plan(input).outcome == .resume)
+    }
+
+    @Test func theGateKeepsCodeOutOfEveryProjectTheSnapshotOpens() {
+        let (evidence, base) = exactClaude()
+        var facts = base
+        // A world that leaves the projects out of the facts.
+        facts.outside = []
+        let tools = "/Users/x/.local"
+        var seen: [[String]] = []
+        let given = { (_: Evidence, _: String?, projects: [String]) -> ResumeFacts in
+            seen.append(projects)
+            return facts
+        }
+        let world = RestorePlanner.World(home: "/Users/x", checkFolder: { _ in .found }, resumeFacts: given, sessions: Lookups().lookup)
+        let claude = pane(1, typed("claude"), agent: evidence)
+        let idle = pane(2, typed("ls", running: false), folder: tools)
+        let header = SessionSnapshot.Header(launchID: id(900), generation: 1, clean: false, savedAt: start)
+        let windows: [SessionSnapshot.Window] = [
+            SessionSnapshot.Window(project: folder, groups: [SessionSnapshot.Group(root: .pane(claude), focused: claude.id)]),
+            SessionSnapshot.Window(project: tools, groups: [SessionSnapshot.Group(root: .pane(idle), focused: idle.id)]),
+        ]
+        let both = RestorePlanner.plan(SessionSnapshot(header: header, windows: windows), kind: .update, world: world)
+        // Claude Code's real path is inside the second window's project.
+        #expect(both[0].outcome == .agentOnTheLine)
+        let projects: [[String]] = [[folder, tools]]
+        let asked: Bool = seen == projects
+        #expect(asked, "\(seen)")
+        let alone = RestorePlanner.plan(SessionSnapshot(header: header, windows: [windows[0]]), kind: .update, world: world)
+        #expect(alone[0].outcome == .resume)
+    }
+
+    @Test func whenTheTabSelectedLastCannotResumeNoneDoes() {
+        let (evidence, facts) = exactClaude()
+        var bypass = evidence
+        bypass.leftOff = ["--dangerously-skip-permissions"]
+        bypass.flagsAllowed = false
+        let older = pane(1, typed("claude"), agent: evidence, selected: 10)
+        let newer = pane(2, typed("claude --dangerously-skip-permissions"), agent: bypass, selected: 20)
+        let plans = plan([older, newer], world: world(facts: facts))
+        expectOutcomes(plans, .agentOnTheLine, .agentOnTheLine)
+        #expect(!text(plans[0]).contains("Another tab") && !text(plans[1]).contains("Another tab"))
+        #expect(plans[0].listLine == "Claude Code's resume command goes on the line")
+        // An id written in capitals names the same session.
+        var capitals = evidence
+        capitals.sessionID = s.uppercased()
+        let shouting = plan([older, pane(3, typed("claude"), agent: capitals, selected: 20)], world: world(facts: facts))
+        expectOutcomes(shouting, .agentOnTheLine, .resume)
+        #expect(text(shouting[0]).hasSuffix("Another tab resumed this session."))
     }
 
     // MARK: agents put back on the line
@@ -239,16 +340,54 @@ import Testing
         lookups.sessions = [session(.gemini, g, at: 5), session(.gemini, g2, at: 65)]
         let first = pane(1, typed("gemini"), agent: Evidence(agent: .gemini, sessionFolder: folder, startedAt: start))
         let second = pane(2, typed("gemini"), agent: Evidence(agent: .gemini, sessionFolder: folder, startedAt: start.addingTimeInterval(60)))
-        let plans = plan([first, second], world: world(lookups: lookups))
-        let both: [String] = ["gemini --resume \(g)", "gemini --resume \(g2)"]
-        #expect(lines(plans) == both)
-        let swapped = plan([second, first], world: world(lookups: lookups))
-        #expect(lines(swapped) == Array(both.reversed()))
+        expectLines(plan([first, second], world: world(lookups: lookups)), "gemini --resume \(g)", "gemini --resume \(g2)")
+        expectLines(plan([second, first], world: world(lookups: lookups)), "gemini --resume \(g2)", "gemini --resume \(g)")
         // A session another pane names exactly is never guessed for this one.
-        let named = pane(3, typed("gemini --resume \(g2)"), agent: Evidence(agent: .gemini, sessionID: g2, source: .typedAndArgv))
+        let exact = pane(3, typed("gemini --resume \(g2)"), agent: Evidence(agent: .gemini, sessionID: g2, source: .typedAndArgv))
         let late = pane(4, typed("gemini"), agent: Evidence(agent: .gemini, sessionFolder: folder, startedAt: start.addingTimeInterval(60)))
-        let taken: [String] = ["gemini", "gemini --resume \(g2)"]
-        #expect(lines(plan([late, named], world: world(lookups: lookups))) == taken)
+        expectLines(plan([late, exact], world: world(lookups: lookups)), "gemini", "gemini --resume \(g2)")
+    }
+
+    @Test func aSessionEitherTabCouldHaveStartedGoesToNeither() {
+        let lookups = Lookups()
+        lookups.sessions = [session(.gemini, g, at: 100)]
+        let first = pane(1, typed("gemini"), agent: Evidence(agent: .gemini, sessionFolder: folder, startedAt: start))
+        let second = pane(2, typed("gemini"), agent: Evidence(agent: .gemini, sessionFolder: folder, startedAt: start.addingTimeInterval(60)))
+        expectLines(plan([first, second], world: world(lookups: lookups)), "gemini", "gemini")
+        expectLines(plan([second, first], world: world(lookups: lookups)), "gemini", "gemini")
+        // A session only the first could have started is its own; after that, the second's is its own too.
+        lookups.sessions = [session(.gemini, g, at: 5), session(.gemini, g2, at: 100)]
+        expectLines(plan([first, second], world: world(lookups: lookups)), "gemini --resume \(g)", "gemini --resume \(g2)")
+        // A tab whose start is not known could have started any session in its folder.
+        let unknownStart = pane(3, typed("gemini"), agent: Evidence(agent: .gemini, sessionFolder: folder))
+        expectLines(plan([unknownStart, second], world: world(lookups: lookups)), "gemini", "gemini")
+        // Another folder's tab is no rival.
+        let elsewhere = pane(4, typed("gemini"), agent: Evidence(agent: .gemini, sessionFolder: "/Users/x/other", startedAt: start))
+        expectLines(plan([elsewhere, second], world: world(lookups: lookups)), "gemini", "gemini --resume \(g2)")
+        // The same from Claude Code's own reader.
+        let claudes = Lookups()
+        claudes.sessions = [session(.claude, g, at: 100)]
+        let early = pane(5, typed("claude"), agent: Evidence(agent: .claude, sessionFolder: folder, startedAt: start))
+        let late = pane(6, typed("claude"), agent: Evidence(agent: .claude, sessionFolder: folder, startedAt: start.addingTimeInterval(60)))
+        expectLines(plan([early, late], world: world(lookups: claudes)), "claude", "claude")
+    }
+
+    @Test func aSessionAnotherTabHoldsIsNeverGuessed() {
+        let lookups = Lookups()
+        lookups.sessions = [session(.gemini, g, at: 100)]
+        let later = pane(2, typed("gemini"), agent: Evidence(agent: .gemini, sessionFolder: folder, startedAt: start.addingTimeInterval(60)))
+        // Its line held a secret, so it names nothing, but the session is still that tab's.
+        let secretLine = typed("GEMINI_API_KEY=abcdefghij123456 gemini --resume \(g)")
+        #expect(secretLine.check == .secret)
+        let holder = Evidence(agent: .gemini, sessionID: g, source: .typedAndArgv, sessionFolder: folder, startedAt: start)
+        let secret = plan([pane(1, secretLine, agent: holder), later], world: world(lookups: lookups))
+        expectOutcomes(secret, .notKept, .agentOnTheLine)
+        #expect(secret[1].line == "gemini")
+        // An id typed in capitals is the same session.
+        var capitals = holder
+        capitals.sessionID = g.uppercased()
+        let shouting = plan([pane(1, typed("gemini --resume \(g.uppercased())"), agent: capitals), later], world: world(lookups: lookups))
+        expectLines(shouting, "gemini --resume \(g.uppercased())", "gemini")
     }
 
     @Test func claudeCodexAndCommandCodeGuessesComeFromTheirOwnReaders() {
@@ -379,18 +518,21 @@ import Testing
 
     @Test func anIdleTabShowsItsLastCommand() {
         let result = plan(pane(1, typed("make test", running: false, exit: 2)), world: world())
-        #expect(result.outcome == .idle && result.line == nil && result.pending.action == .note && result.folder == folder)
+        #expect(result.outcome == .idle && result.line == nil)
+        #expect(result.pending.action == .note && result.folder == folder)
         #expect(text(result) == "Last command: make test (exit 2).")
         #expect(result.listLine == "opens in its folder")
         #expect(text(plan(pane(1, typed("ls", running: false)), world: world())) == "Last command: ls.")
-        #expect(plan(pane(1, nil), world: world()).note.text() == nil)
+        let nothing: PanePlan = plan(pane(1, nil), world: world())
+        #expect(nothing.note.text() == nil)
     }
 
     // MARK: remote tabs
 
     @Test func remoteTabsReattachOrReconnect() {
         let kept = plan(remote(1, keep: .tmux, typed("htop")), world: world())
-        #expect(kept.outcome == .reattach && kept.line == nil && kept.folder == nil && kept.pending.action == .reattach)
+        #expect(kept.outcome == .reattach && kept.line == nil)
+        #expect(kept.folder == nil && kept.pending.action == .reattach)
         #expect(kept.note.text() == nil && kept.listLine == "reattaches")
         let plain = plan(remote(1, keep: .off, typed("htop")), world: world())
         #expect(plain.outcome == .freshConnection && plain.pending.action == .freshConnection)
@@ -418,14 +560,35 @@ import Testing
         let home = "/Users/x"
         let present: Set<String> = [folder, folder + "/src", home]
         func choose(_ recorded: String?, _ exists: Set<String> = present) -> FolderChoice {
-            RestorePlanner.folder(for: recorded, project: folder, home: home) { exists.contains($0) }
+            RestorePlanner.folder(for: recorded, project: folder, home: home) { (path: String) -> FolderCheck in exists.contains(path) ? .found : .gone }
         }
         #expect(choose(folder + "/src") == FolderChoice(path: folder + "/src"))
         #expect(choose(folder + "/src/gone/deeper") == FolderChoice(path: folder + "/src", movedFrom: folder + "/src/gone/deeper"))
         #expect(choose("/Users/x/app-old/gone") == FolderChoice(path: folder, movedFrom: "/Users/x/app-old/gone"))
         #expect(choose(folder + "/src", [home]) == FolderChoice(path: home, movedFrom: folder + "/src"))
         #expect(choose(nil) == FolderChoice(path: folder))
-        #expect(RestorePlanner.folder(for: nil, project: nil, home: home) { _ in true } == FolderChoice(path: home))
+        #expect(RestorePlanner.folder(for: nil, project: nil, home: home) { _ in .found } == FolderChoice(path: home))
+        // `.` and `..` are worked out first, so the walk up never leaves the project.
+        let climbing = folder + "/../../../private/tmp/gone"
+        #expect(choose(climbing, present.union(["/private/tmp"])) == FolderChoice(path: folder, movedFrom: "/private/tmp/gone"))
+        let tidied: FolderChoice = choose(folder + "/./src/gone/..")
+        #expect(tidied == FolderChoice(path: folder + "/src"))
+        #expect(choose("app/src") == FolderChoice(path: folder, movedFrom: "app/src"))
+    }
+
+    @Test func aFolderNotCheckedInTimeIsNotCalledGone() {
+        let slow = folder + "/net"
+        let result = plan(pane(1, typed("ls", running: false, exit: 0), folder: slow), world: world(notChecked: [slow]))
+        #expect(result.folder == folder && result.outcome == .idle)
+        #expect(text(result) == "\(slow) could not be checked in time, so this tab opened in \(folder). Last command: ls (exit 0).")
+        // Nor does a tab open in a folder above it that was not checked in time.
+        let check = { (path: String) -> FolderCheck in path == self.folder ? .found : .notChecked }
+        let deeper = RestorePlanner.folder(for: slow + "/deeper", project: folder, home: "/Users/x", check: check)
+        #expect(deeper == FolderChoice(path: folder, movedFrom: slow + "/deeper", notChecked: true))
+        let gone = RestorePlanner.folder(for: slow + "/deeper", project: folder, home: "/Users/x") { (path: String) -> FolderCheck in
+            path == self.folder ? .found : .gone
+        }
+        #expect(gone == FolderChoice(path: folder, movedFrom: slow + "/deeper"))
     }
 
     @Test func nothingResumesInAFolderItFellBackTo() {
@@ -437,6 +600,24 @@ import Testing
         #expect(text(result).hasPrefix("\(gone) is gone, so this tab opened in \(folder). claude --resume \(s) is back on the line"))
         let idle = plan(pane(2, typed("ls", running: false, exit: 0), folder: gone), world: world(exists: { $0 != gone }))
         #expect(text(idle) == "\(gone) is gone, so this tab opened in \(folder). Last command: ls (exit 0).")
+    }
+
+    @Test func anAgentsLineWaitsInItsSessionsFolder() {
+        let sub = folder + "/sub"
+        let evidence = Evidence(agent: .gemini, sessionID: g, source: .typedAndArgv, sessionFolder: sub, startedAt: start)
+        let gemini = pane(1, typed("gemini --resume \(g)"), agent: evidence)
+        let result = plan(gemini, world: world())
+        #expect(result.outcome == .agentOnTheLine && result.line == "gemini --resume \(g)" && result.folder == sub)
+        // The tab's folder is gone, and the session's is still there.
+        let gone = folder + "/gone"
+        let moved = plan(pane(1, typed("gemini --resume \(g)"), agent: evidence, folder: gone), world: world(exists: { $0 != gone }))
+        #expect(moved.folder == sub && text(moved).hasPrefix("\(gone) is gone, so this tab opened in \(sub). gemini --resume"))
+        // The session's folder is gone: the tab's own.
+        let sessionGone: PanePlan = plan(gemini, world: world(exists: { (path: String) -> Bool in path != sub }))
+        #expect(sessionGone.folder == folder)
+        // In a shell without the integration, where the note's line is typed.
+        let bash = plan(pane(1, typed("gemini", source: .polled), agent: evidence, systemZsh: false), world: world())
+        #expect(bash.outcome == .agentNote && bash.folder == sub)
     }
 
     @Test func aRemintedTabSaysItHasANewID() {
@@ -453,7 +634,7 @@ import Testing
                      remote(4, keep: .off, typed("htop"))]
         let plans = plan(panes, kind: .update, safeMode: true, world: world(facts: facts))
         // What Try Again would apply: the update restore's own outcomes.
-        #expect(outcomes(plans) == [.resume, .commandOnTheLine, .idle, .freshConnection] as [RestoreOutcome])
+        expectOutcomes(plans, .resume, .commandOnTheLine, .idle, .freshConnection)
         #expect(plans.allSatisfy { $0.reason == .safeMode && $0.pending.reason == .safeMode })
         let held = "Nothing ran, because the last two restores did not finish. This tab held: "
         #expect(text(plans[0]) == held + "Claude Code was running. To resume it, type: claude --resume \(s)")
@@ -461,16 +642,33 @@ import Testing
         #expect(text(plans[2]) == held + "Last command: make test (exit 2).")
         #expect(text(plans[3]) == "New connection to web-1. Last command: htop.")
         let crash = plan(panes, kind: .crash, safeMode: true, world: world(facts: facts))
-        #expect(outcomes(crash) == [.agentOnTheLine, .commandOnTheLine, .idle, .freshConnection] as [RestoreOutcome])
+        expectOutcomes(crash, .agentOnTheLine, .commandOnTheLine, .idle, .freshConnection)
         #expect(text(crash[0]) == held + "Claude Code was running. To resume it, type: claude --resume \(s)")
         #expect(plan(pane(5, nil), safeMode: true, world: world()).note.text() == "Nothing ran, because the last two restores did not finish.")
+    }
+
+    @Test func safeModeNeverSaysAnythingRanAndItsListLinesWaitForTryAgain() {
+        let (evidence, facts) = exactClaude()
+        let older = pane(1, typed("claude"), agent: evidence, selected: 10)
+        let newer = pane(2, typed("claude"), agent: evidence, selected: 20)
+        let plans = plan([older, newer], safeMode: true, world: world(facts: facts))
+        expectOutcomes(plans, .agentOnTheLine, .resume)
+        let held = "Nothing ran, because the last two restores did not finish. This tab held: "
+        let expected = held + "Claude Code was running. Another tab held this session too. To resume it, type: claude --resume \(s)"
+        #expect(text(plans[0]) == expected)
+        #expect(plans[1].listLine == "on Try Again, Claude Code resumes")
+        #expect(plans[0].listLine == "on Try Again, Claude Code's resume command goes on the line, as another tab resumes this session")
+        let dev = plan(pane(3, typed("npm run dev")), safeMode: true, world: world())
+        #expect(dev.listLine == "on Try Again, npm run dev goes back on the line")
+        #expect(plan(pane(4, typed("ls", running: false)), safeMode: true, world: world()).listLine == "opens in its folder")
+        #expect(plan(remote(5, keep: .off, nil), safeMode: true, world: world()).listLine == "connection closes")
     }
 
     // MARK: every outcome and every note
 
     @Test func everyOutcomeHasAPlanAndEveryNoteIsOnePrintableLine() {
         let (evidence, facts) = exactClaude()
-        let hostileFolder = "/Users/x/app/\u{1B}]52;c;aGk=\u{07}gone\n\u{9B}6n"
+        let hostileFolder = "/Users/x/app/\u{1B}]52;c;aGk=\u{07}gone\n\u{9B}6n\u{202E}fdp.\u{200B}\u{2028}x"
         var bash = evidence
         bash.sessionID = nil
         let panes = [
@@ -493,6 +691,7 @@ import Testing
         for each in plans {
             let note = each.note.text() ?? ""
             #expect(TerminalText.oneLine(note) == note && TerminalTextTests.isPrintable(note), "\(each.outcome)")
+            #expect(!note.unicodeScalars.contains(where: Command.isUnsafe), "\(each.outcome)")
             #expect(TerminalText.oneLine(each.listLine) == each.listLine, "\(each.outcome)")
             if let line = each.line { #expect(Command.problem(with: line) == nil, "\(each.outcome)") }
         }
