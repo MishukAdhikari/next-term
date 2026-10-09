@@ -399,8 +399,12 @@ public enum CompletionProtocol {
     public static func takeMatch(id: Int, old: String, index: Int, drill: Int? = nil) -> [UInt8] {
         frame(.take, id: id, fields: ["m", old, String(index)] + (drill.map { [padded($0 % 1_000_000)] } ?? []))
     }
-    /// ⌫ took the `/` after a folder gone into on zsh's path (list `id`): the hook's list `parent` is open again.
-    public static func backUp(id: Int, to parent: Int) -> [UInt8] { frame(.take, id: id, fields: ["u", padded(parent % 1_000_000)]) }
+    /// Back up from a folder gone into on zsh's path (list `id`): the hook's list `parent` is open again. ⌫ took the `/`
+    /// already; ← sends the word now (`old`) and the one to put back (`new`), the word that folder was gone into from.
+    public static func backUp(id: Int, to parent: Int, old: String? = nil, new: String? = nil) -> [UInt8] {
+        let words = old.map { [$0, new ?? ""] } ?? []
+        return frame(.take, id: id, fields: ["u", padded(parent % 1_000_000)] + words)
+    }
     /// The list closed with nothing chosen: the shell stops reporting the line.
     public static func close(id: Int) -> [UInt8] { frame(.take, id: id, fields: ["c"]) }
     /// Suggest a Command's answer: the whole line, replaced (one line or several). It never runs.

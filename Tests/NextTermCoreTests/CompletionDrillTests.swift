@@ -278,6 +278,122 @@ import Testing
         #expect(CompletionDrill.backUpAnnouncement("projects", row: 2, of: 5) == "Back up, projects, 3 of 5")
     }
 
+    // MARK: the arrow keys
+
+    @Test func whatEachKeyDoes() {
+        // ⇥ and → on a row: into a folder, a beep on one that can't be entered, anything else on the line as ↩︎ puts it.
+        for key in [CompletionDrill.Key.tab, .right] {
+            #expect(CompletionDrill.action(key, on: .folder, inside: false) == .goIn)
+            #expect(CompletionDrill.action(key, on: .folder, inside: true) == .goIn)
+            #expect(CompletionDrill.action(key, on: .file, inside: false) == .putOnLine)
+            #expect(CompletionDrill.action(key, on: .closed, inside: true) == .beep)
+            // A server's hook from before going into folders: the name goes on the line, as ↩︎ puts it.
+            #expect(CompletionDrill.action(key, on: .folder, inside: false, drills: false) == .putOnLine)
+            #expect(CompletionDrill.action(key, on: .closed, inside: false, drills: false) == .putOnLine)
+            // While a folder is listed, the key waits for its list.
+            #expect(CompletionDrill.action(key, on: .file, inside: false, drilling: true) == .wait)
+        }
+        // No rows yet (Loading, or before the first report): ⇥ waits for them; → closes the list and moves the cursor.
+        #expect(CompletionDrill.action(.tab, on: nil, inside: false) == .wait)
+        #expect(CompletionDrill.action(.right, on: nil, inside: false) == .closeAndPass)
+        // ← in a folder a drill opened: back up, whatever row is chosen; at the top: the list closes, the cursor moves.
+        #expect(CompletionDrill.action(.left, on: .file, inside: true) == .backUp)
+        #expect(CompletionDrill.action(.left, on: nil, inside: true) == .backUp)
+        #expect(CompletionDrill.action(.left, on: .folder, inside: false) == .closeAndPass)
+        #expect(CompletionDrill.action(.left, on: nil, inside: false) == .closeAndPass)
+        #expect(CompletionDrill.action(.left, on: .folder, inside: true, drilling: true) == .wait)
+    }
+
+    @Test func leftGoesBackUpOnNextTermsEngine() throws {
+        let list = try #require(engine(["cd", "So"], entries: entries))
+        // At the top: nothing to go back to.
+        #expect(list.upTake() == nil && list.goUp() == nil && list.parentWord == nil)
+        let child = inside(try #require(list.drillContext(0)), [.init("inner", .folder), .init("deep", .folder)])
+        child.drilled(from: list, row: 0)
+        #expect(child.parentWord == "So")
+        // Narrowed inside, then ←: the word the folder was gone into from, in place of the word now, the list kept open.
+        #expect(child.update(word: "Sources/i", unquoted: "Sources/i") && child.rows.map(\.text) == ["inner"])
+        #expect(decode(child.upTake()) == Decoded(kind: "k", id: 4, fields: ["w", "Sources/i", "So", "o"]))
+        let up = try #require(child.goUp())
+        #expect(up === list && up.word == "So" && up.rows.map(\.text) == ["Sources", "Resources"] && up.preferredRow == 0)
+        // The shell reports that word: the rows stay, the folder chosen.
+        #expect(up.update(word: "So", unquoted: "So") && up.rows.map(\.text) == ["Sources", "Resources"] && up.preferredRow == 0)
+        // From the list Tab opened, ← has nowhere to go.
+        #expect(up.upTake() == nil && up.goUp() == nil)
+    }
+
+    @Test func leftTwoLevelsUp() throws {
+        let root = try #require(engine(["cd", "pr"], entries: [.init("projects", .folder), .init("Pictures", .folder), .init("prose", .folder)]))
+        let p = try #require(root.rows.firstIndex { $0.text == "projects" })
+        let projects = inside(try #require(root.drillContext(p)), [.init("next-term", .folder), .init("cv", .folder)])
+        projects.drilled(from: root, row: p)
+        #expect(projects.update(word: "projects/ne", unquoted: "projects/ne"))
+        let n = try #require(projects.rows.firstIndex { $0.text == "next-term" })
+        let next = inside(try #require(projects.drillContext(n)), [.init("Sources", .folder)])
+        next.drilled(from: projects, row: n)
+        #expect(decode(next.upTake())?.fields == ["w", "projects/next-term/", "projects/ne", "o"])
+        let up = try #require(next.goUp())
+        #expect(up === projects && up.word == "projects/ne" && up.preferredRow == n && up.rows.map(\.text) == ["next-term"])
+        #expect(decode(up.upTake())?.fields == ["w", "projects/ne", "pr", "o"])
+        let top = try #require(up.goUp())
+        #expect(top === root && top.word == "pr" && top.preferredRow == p && top.goUp() == nil)
+    }
+
+    @Test func leftGoesBackUpOnZshsPath() throws {
+        let matches = [CompletionProtocol.Match(text: "Sources/", kind: .folder, index: 1), CompletionProtocol.Match(text: "Resources/", kind: .folder, index: 2)]
+        let list = CompletionList(id: 7, matches: matches, total: 2, stem: "", stemUnquoted: "")
+        #expect(list.update(word: "", unquoted: "") && list.upTake() == nil)
+        let child = CompletionList(id: 8, matches: [CompletionProtocol.Match(text: "inner/", kind: .folder, index: 1)], total: 1,
+                                   stem: "Sources/", stemUnquoted: "Sources/")
+        child.drilled(from: list, row: 0)
+        #expect(child.update(word: "Sources/", unquoted: "Sources/"))
+        // The hook's u key with the words: the one now, and the one to put back (here none, after `cd `).
+        #expect(decode(child.upTake()) == Decoded(kind: "k", id: 8, fields: ["u", "000007", "Sources/", ""]))
+        let up = try #require(child.goUp())
+        #expect(up === list && up.word == "" && up.preferredRow == 0 && up.rows.count == 2)
+        #expect(up.update(word: "", unquoted: "") && up.rows.count == 2 && up.preferredRow == 0)
+        // ⌫'s u key has no words: the line is already the one zsh lists for.
+        #expect(decode(CompletionProtocol.backUp(id: 8, to: 7))?.fields == ["u", "000007"])
+    }
+
+    @Test func leftGoesBackUpOnAServersScreen() throws {
+        let listing = PathCompletion.Listing(folder: "/srv", entries: [.init("foo", .folder), .init("food.txt", .file), .init("fog", .folder)])
+        let disk = PathCompletion.Disk(follow: { _ in .missing }, canEnter: { _ in true })
+        let fo = try #require(ScreenWord.read("$ ls fo"))
+        let list = CompletionList(id: 1, screen: fo, listing: listing, disk: disk, shell: .bash)
+        let foo = try #require(list.rows.firstIndex { $0.text == "foo" })
+        #expect(list.upKeys(at: fo) == nil)
+        let into = try #require(list.drillScreen(foo))
+        let child = CompletionList(id: 1, screen: into, listing: PathCompletion.Listing(folder: "/srv/foo", entries: [.init("bar", .folder), .init("baz", .file)]),
+                                   disk: disk, shell: .bash)
+        child.drilled(from: list, row: foo)
+        #expect(child.parentWord == "fo")
+        // Typed inside, then ←: Backspaces back to the word gone in from, as typed.
+        let narrowed = try #require(ScreenWord.read("$ ls foo/b"))
+        #expect(child.update(screen: narrowed))
+        #expect(child.upKeys(at: narrowed).map { "\($0.erase) \($0.text)" } == "3 ")
+        #expect(child.upKeys(at: into).map { "\($0.erase) \($0.text)" } == "2 ")
+        // Another line before the word: no keys.
+        #expect(child.upKeys(at: try #require(ScreenWord.read("$ cat foo/"))) == nil)
+        #expect(child.upTake() == nil)
+        let up = try #require(child.goUp())
+        #expect(up === list && up.screenWord == fo && up.preferredRow == foo && up.rows.count == 3)
+        // Once the screen shows it, the rows stay, the folder chosen.
+        #expect(up.update(screen: fo) && up.rows.count == 3 && up.preferredRow == foo)
+    }
+
+    @Test func retypingAWordOnScreen() {
+        func keys(_ from: String, _ to: String) -> String? { CompletionDrill.retype(from, to: to).map { "\($0.erase) \($0.text)" } }
+        #expect(keys("foo/", "fo") == "2 ")
+        #expect(keys("foo/bar/", "") == "8 ")
+        #expect(keys("foo/", "fax") == "3 ax")
+        #expect(keys("fo", "fo") == "0 ")
+        // What goes must be plain ASCII: a Backspace is a byte or a character, by the server's locale.
+        #expect(keys("café/", "ca") == nil)
+        #expect(keys("café/x", "café/") == "1 ")
+        #expect(keys("ab", "acé") == "1 cé")
+    }
+
     // MARK: the state and the keys
 
     @Test func drillingOnNextTermsEngine() {

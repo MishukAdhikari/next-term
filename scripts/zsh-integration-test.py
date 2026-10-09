@@ -425,6 +425,21 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     check(drawn(sh, start, "cd Resources/"), f"[{label}] and a take from the list there replaces the word now", repr(sh.line(start)))
     sh.send("\x03", 0.4)
 
+    # ← from inside a folder: a take with o puts back the word it was gone into from, and the list stays open for it.
+    start = len(sh.buf)
+    sh.send("cd So", 0.3)
+    tab_key(sh, 53, 0.05)
+    if sh.wait_mark("tab", start, 1):
+        sh.send(frame("a", 53, ["o"]), 0.3)
+    sh.send(frame("k", 53, ["w", "So", "Sources/", "o"]), 0.4)
+    mark = len(sh.buf)
+    sh.send(frame("k", 53, ["w", "Sources/", "So", "o"]), 0.4)
+    lines = [f for _, k, f in sh.marks(mark) if k == "line"]
+    check(drawn(sh, start, "cd So") and lines == [["000053", "0", "So", "So"]],
+          f"[{label}] ←: a take with o puts back the word gone in from, and the list stays open", f"{sh.line(start)!r} {lines}")
+    sh.send(frame("k", 53, ["c"]), 0.2)
+    sh.send("\x03", 0.4)
+
     # A take with o for a word the line no longer has: nothing changes, and the list is reported gone.
     start = len(sh.buf)
     sh.send("ls Re", 0.3)
@@ -754,7 +769,7 @@ shutil.rmtree(many, ignore_errors=True)
 # entered, an empty one, and the single-match rule (the Tab key's d).
 def drill_checks(label, rc_extra=""):
     walk = tempfile.mkdtemp()
-    for d in ("projects/next-term/Sources", "projects/cv", "locked", "Pictures"):
+    for d in ("projects/next-term/Sources", "projects/cv", "locked", "Pictures", "pub"):
         os.makedirs(os.path.join(walk, d))
     open(os.path.join(walk, "projects", "notes.txt"), "w").close()
     os.chmod(os.path.join(walk, "locked"), 0)
@@ -788,6 +803,40 @@ def drill_checks(label, rc_extra=""):
     check(lines(mark) == [["000061", "0", "projects", "projects"]], f"[{label}] the u key: the list gone in from is open again", str(lines(mark)))
     sh.send(frame("k", 61, ["m", "projects", str(place(top, "Pictures"))]), 0.5)
     check(drawn(sh, start, "cd Pictures/"), f"[{label}] and a take from it, by its place there, replaces the word now", repr(sh.line(start)))
+    sh.send("\x03", 0.4)
+
+    # ←'s u key carries the word now and the word the folder was gone into from: that word goes back on the line, and
+    # the list gone in from is open again for it, its matches as they were.
+    start = len(sh.buf)
+    sh.send("cd p", 0.3)
+    tab_key(sh, 73, 0.6)
+    _, top, _, _ = comp_list(sh, start, 73)
+    mark = len(sh.buf)
+    sh.send(frame("k", 73, ["m", "p", str(place(top, "projects")), "000074"]), 0.8)
+    _, inner, _, _ = comp_list(sh, mark, 74)
+    sh.send("n", 0.3)
+    mark = len(sh.buf)
+    sh.send(frame("k", 74, ["u", "000073", "projects/n", "p"]), 0.5)
+    check(inner and drawn(sh, start, "cd p") and lines(mark) == [["000073", "0", "p", "p"]] and not dones(mark),
+          f"[{label}] ←'s u key: the word gone in from goes back, and that list is open again", f"{sh.line(start)!r} {lines(mark)}")
+    sh.send(frame("k", 73, ["m", "p", str(place(top, "pub"))]), 0.5)
+    check(drawn(sh, start, "cd pub/"), f"[{label}] and a take from it, by its place there, replaces that word", repr(sh.line(start)))
+    sh.send("\x03", 0.4)
+    # One whose word the line no longer has: the word stays (zsh's beep takes the slash zsh may take), and the list is
+    # gone.
+    start = len(sh.buf)
+    sh.send("cd p", 0.3)
+    tab_key(sh, 75, 0.6)
+    _, top, _, _ = comp_list(sh, start, 75)
+    sh.send(frame("k", 75, ["m", "p", str(place(top, "projects")), "000076"]), 0.8)
+    mark = len(sh.buf)
+    sh.send(frame("k", 76, ["u", "000075", "projects/zz", "p"]), 0.5)
+    stays = sh.wait_line(start, lambda line: line.rstrip("/").endswith("cd projects")).rstrip("/").endswith("cd projects")
+    check(stays and lines(mark) == [["000075", "1"]],
+          f"[{label}] ←'s u key for a word the line no longer has: the line stays, and the list is gone", f"{sh.line(start)!r} {lines(mark)}")
+    mark = len(sh.buf)
+    sh.send("x", 0.3)
+    check(not lines(mark), f"[{label}] and typing then reports nothing", str(lines(mark)))
     sh.send("\x03", 0.4)
 
     # A take into a folder for a word the line no longer has: nothing changes, and the list is reported gone.

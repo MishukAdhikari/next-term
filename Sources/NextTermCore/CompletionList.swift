@@ -211,8 +211,8 @@ public final class CompletionList: @unchecked Sendable {
 
     // MARK: going into a folder (CompletionDrill)
 
-    /// The list this one went into a folder from, which ⌫ goes back to, and that folder's row as it was shown there; nil
-    /// for the list Tab opened.
+    /// The list this one went into a folder from, which ⌫ and ← go back to, and that folder's row as it was shown there;
+    /// nil for the list Tab opened.
     public private(set) var parent: CompletionList?
     public private(set) var drilledName: String?
     /// The word right after going in: ⌫ that takes its `/` goes back up.
@@ -282,11 +282,52 @@ public final class CompletionList: @unchecked Sendable {
         return ScreenWord(kind: screen.word.kind, before: screen.word.before, word: word, folder: word, typed: "")
     }
 
-    /// This list is what is inside row `index`'s folder of `parent`: ⌫ that takes the `/` after it goes back there.
+    /// This list is what is inside row `index`'s folder of `parent`: ⌫ that takes the `/` after it goes back there, and
+    /// ← too, to the word `parent` had then.
     public func drilled(from parent: CompletionList, row index: Int) {
         self.parent = parent
         drilledName = parent.rows.indices.contains(index) ? parent.rows[index].text : nil
         drillWord = word
+        parentWord = parent.word
+        parentScreen = parent.screenWord
+    }
+
+    /// The word the list this one went in from had then, as the shell reported it (or the screen showed it): what ←
+    /// puts back. nil for the list Tab opened.
+    public private(set) var parentWord: String?
+    private var parentScreen: ScreenWord?
+
+    /// ← (CompletionDrill.Action.backUp): the private key that puts back the word this list's folder was gone into
+    /// from, in place of the word now. Next Term's own engine: that word, with the list kept open; zsh's path: the
+    /// hook's `u` with both words, for its list gone in from. nil for the list Tab opened, and on a server's screen
+    /// (keys typed as text: upKeys).
+    public func upTake() -> [UInt8]? {
+        guard let parent, let parentWord else { return nil }
+        switch source {
+        case .engine: return CompletionProtocol.takeWord(id: id, old: word, new: parentWord, open: true)
+        case .zsh: return CompletionProtocol.backUp(id: id, to: parent.id, old: word, new: parentWord)
+        case .screen: return nil
+        }
+    }
+
+    /// ← on a server's screen, with `now` read there: the keys that take the word back to the one this list's folder
+    /// was gone into from. nil for the list Tab opened, another line, or what can't be erased by Backspaces.
+    public func upKeys(at now: ScreenWord) -> (erase: Int, text: String)? {
+        guard parent != nil, let parentScreen, case let .screen(screen) = source, now.before == screen.word.before,
+              now.before == parentScreen.before else { return nil }
+        return CompletionDrill.retype(now.word, to: parentScreen.word)
+    }
+
+    /// ←: the list this one went into a folder from, its rows as they were, for the word it had then, with that folder
+    /// chosen. nil for the list Tab opened.
+    public func goUp() -> CompletionList? {
+        guard let parent, let parentWord else { return nil }
+        if let parentScreen, case var .screen(above) = parent.source {
+            above.word = parentScreen
+            parent.source = .screen(above)
+        }
+        parent.restore(word: parentWord, choosing: drilledName)
+        return parent
     }
 
     /// ⌫ took the `/` after the folder this list is inside (`now`: the word as the shell reports it): the list it went in

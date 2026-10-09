@@ -499,16 +499,26 @@ __nextterm_cpush() {
   __nextterm_cdepth=$n
 }
 
-# ⌫ took the `/` after a folder gone into (the key comes for the list open now): the list it was gone into from, open
-# again under its own id $1, for the word now. Anything else, such as a list that closed meanwhile: Next Term hears
-# that list is gone (`line` … left).
+# Back up from a folder gone into (the key comes for the list open now): the list it was gone into from, open again
+# under its own id $1, for the word now. ⌫ took the `/` already; ← sends the word now and the one that folder was gone
+# into from, which goes back in its place, and a line that no longer has that word beeps. Anything else, such as a list
+# that closed meanwhile: Next Term hears that list is gone (`line` … left).
 __nextterm_cup() {
   emulate -L zsh
-  local to=$1 n=$__nextterm_cdepth a src=__nextterm_cmid_$__nextterm_cdepth
+  local to=$1 old=${__nextterm_cf[3]-} n=$__nextterm_cdepth a src=__nextterm_cmid_$__nextterm_cdepth
   if [[ -z $__nextterm_copen || $__nextterm_cid != $__nextterm_copen ]] || (( n < 1 )) || [[ ${(P)src-} != $to ]]; then
     [[ $to == <-> ]] && __nextterm_cmark line $to 1
     [[ -n $__nextterm_copen && $__nextterm_cid == $__nextterm_copen ]] && __nextterm_cclose
     return 0
+  fi
+  if [[ -n $old ]]; then
+    if [[ $LBUFFER != "$__nextterm_cbase$old" || $RBUFFER != "$__nextterm_crbuf" ]]; then
+      zle beep
+      __nextterm_cmark line $to 1
+      __nextterm_cclose
+      return 0
+    fi
+    LBUFFER=$__nextterm_cbase${__nextterm_cf[4]-}
   fi
   for a in cmw cma cmp cmt cmd cmg cmk cmf; do
     src=__nextterm_${a}_$n
