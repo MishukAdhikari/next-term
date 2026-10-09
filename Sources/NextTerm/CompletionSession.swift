@@ -1089,19 +1089,31 @@ extension CompletionSession {
         guard let tab, let candidate = list.screenCandidate(index), let into = list.drillScreen(index),
               let request = RemoteCompletion.shared.request(typed: into.folder, in: tab) else { return accept(index) }
         guard let to = state.startDrill() else { return }
-        let wentIn = { [weak self] in self?.screenDrillWentIn(candidate, list) ?? () }
+        let start = TerminalTab.now
+        let wentIn = { [weak self] in self?.screenDrillWentIn(to, candidate, list, since: start) ?? () }
         startDrill(to, within: RemoteCompletion.deadline, fallback: wentIn)
         let listing = RemoteCompletion.shared.list(request, for: tab) { [weak self] result in
-            self?.screenDrilled(to, from: (list, index), candidate: candidate, into: into, result)
+            self?.screenDrilled(to, from: (list, index), candidate: candidate, into: into, result, since: start)
         }
         if !listing { wentIn() }
     }
 
+    /// The keys typed before ⇥ (`start`) echo before the screen's word is read, as for ↩︎ (screenAccept): 300 ms at most.
+    /// A listing kept from a moment ago comes back at once, before they have. True: `retry` runs again shortly.
+    private func echoPending(since start: TimeInterval, _ retry: @escaping () -> Void) -> Bool {
+        guard let tab, !settled(tab), TerminalTab.now - start < 0.3 else { return false }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.015, execute: retry)
+        return true
+    }
+
     private func screenDrilled(_ to: Int, from: (list: CompletionList, row: Int), candidate: PathCompletion.Candidate, into: ScreenWord,
-                               _ result: RemoteListing.Result?) {
+                               _ result: RemoteListing.Result?, since start: TimeInterval) {
         guard state.drillID == to, state.path == .screen, list === from.list, let tab else { return }
         drillTimer?.cancel()
         drillFallback = nil
+        if echoPending(since: start, { [weak self] in self?.screenDrilled(to, from: from, candidate: candidate, into: into, result, since: start) }) {
+            return
+        }
         guard let result else {
             lastDrill = .refused
             NSSound.beep()
@@ -1110,7 +1122,7 @@ extension CompletionSession {
             return changed()
         }
         let inside = CompletionList(id: from.list.id, screen: into, listing: result.listing, disk: result.disk, shell: result.quoting)
-        guard !inside.rows.isEmpty else { return screenDrillWentIn(candidate, from.list) }
+        guard !inside.rows.isEmpty else { return screenDrillWentIn(to, candidate, from.list, since: start) }
         guard let left = tab.lineLeftOfCursor(), let now = from.list.screenWord?.next(left),
               let keys = from.list.screenInsertion(candidate, at: now) else {
             NSSound.beep()
@@ -1128,10 +1140,11 @@ extension CompletionSession {
     }
 
     /// On a server's screen: the name's keys alone, and the list closes; then the keys held meanwhile.
-    private func screenDrillWentIn(_ candidate: PathCompletion.Candidate, _ list: CompletionList) {
-        guard state.isDrilling, let tab else { return }
+    private func screenDrillWentIn(_ to: Int, _ candidate: PathCompletion.Candidate, _ list: CompletionList, since start: TimeInterval) {
+        guard state.drillID == to, let tab else { return }
         drillTimer?.cancel()
         drillFallback = nil
+        if echoPending(since: start, { [weak self] in self?.screenDrillWentIn(to, candidate, list, since: start) }) { return }
         lastDrill = .wentIn
         guard let left = tab.lineLeftOfCursor(), let now = list.screenWord?.next(left), let keys = list.screenInsertion(candidate, at: now) else {
             NSSound.beep()

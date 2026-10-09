@@ -405,6 +405,22 @@ extension SelfTest {
         }
         await clear()
 
+        // A letter, then ⇥ on a folder listed a moment ago, at once: its listing is at hand before the letter has echoed,
+        // so ⇥ waits for the echo before it reads the word. The line ends in `foo/`, not `ffoo/`.
+        if await open("ls ~/app/") {
+            _ = choose("foo")
+            key("\t", 48)
+            _ = await wait(3) { promptLine(tab).hasSuffix("ls ~/app/foo/") && popup.shownTexts == ["bar", "x.txt"] }
+            left()
+            _ = await wait(3) { promptLine(tab).hasSuffix("ls ~/app/") && chosen() == "foo" }
+            typeKeys(window, "f")
+            key("\t", 48)
+            check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/foo/") && popup.shownTexts == ["bar", "x.txt"] } && !promptLine(tab).contains("ffoo"),
+                  "\(part): a letter and ⇥ on a folder listed a moment ago, at once: the name goes on after the letter's echo",
+                  "\(promptLine(tab)) \(popup.shownTexts)")
+        }
+        await clear()
+
         // After cd, folders only: lib is empty, so it goes in alone and the list closes.
         if await open("cd ~/app/") {
             check(!popup.shownTexts.contains("food.txt") && choose("lib"), "\(part): `cd ~/app/` lists only folders", "\(popup.shownTexts)")
