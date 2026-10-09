@@ -17,8 +17,10 @@ import Security
 final class SecretsStore {
     /// Posted after the index, the protection or the last uses changed.
     static let changed = Notification.Name("NextTermSecretsChanged")
-    /// Posted when the Mac locks, sleeps or the session resigns: grants and pending cards end (U4).
+    /// Posted when the Mac locks, sleeps or the session resigns: grants and pending cards end.
     static let locked = Notification.Name("NextTermSecretsLocked")
+    /// Posted with `names` when keys were replaced, renamed or deleted: the grants holding them end.
+    static let keysChanged = Notification.Name("NextTermSecretsKeysChanged")
 
     /// `loadMarks()` ran.
     nonisolated(unsafe) static var marksLoaded = false
@@ -99,6 +101,17 @@ final class SecretsStore {
         var isAdd: Bool {
             if case .add = self { return true }
             return false
+        }
+
+        /// The keys whose value or name this changes, so the grants holding them end.
+        var changedNames: [String]? {
+            switch self {
+            case .replace(let name, _, _, _), .delete(let name): return [name]
+            case .edit(let name, let newName, _, _):
+                guard let newName, newName != name else { return nil }
+                return [name]
+            default: return nil
+            }
         }
     }
 
@@ -341,6 +354,7 @@ final class SecretsStore {
             if action.event == .use, let line = work.line { for name in action.names { lastUse[name] = line } }
             publishMarks()
             NotificationCenter.default.post(name: Self.changed, object: self)
+            if let names = action.changedNames { NotificationCenter.default.post(name: Self.keysChanged, object: self, userInfo: ["names": names]) }
             return work.values
         case .failure(let error):
             throw handle(error, action: action, facts: facts)
@@ -465,6 +479,17 @@ final class SecretsStore {
         case .use(let names):
             for name in names { values[name] = try vault.value(of: name) }
             return nil
+        }
+    }
+
+    /// An audit line for what happens outside `perform`: a use a grant answered, a decline, a grant made or ended, a
+    /// refusal. Its text is masked when it is written.
+    func record(_ line: SecretAudit.Line) {
+        guard folder.exists else { return } // no vault yet: nothing to log against
+        try? folder.appendAudit(SecretAudit.encode(line, masking: { SecretMask.current.mask($0) }))
+        if line.event == .use {
+            for name in line.names { lastUse[name] = line }
+            NotificationCenter.default.post(name: Self.changed, object: self)
         }
     }
 

@@ -212,6 +212,7 @@ enum MCPControl {
 
     /// Input went in: watch for the work it starts (a command can start and end between two looks).
     private static func sent(to tab: TerminalTab) {
+        SecretRequests.tabGotInput(tab.id) // its run_with_secrets grants end
         driven.insert(tab.id)
         lastSent[tab.id] = Sent(at: TerminalTab.now, commands: tab.status.commandsStarted)
         func look(_ count: Int) {

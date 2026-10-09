@@ -21,6 +21,7 @@ extension SelfTest {
         defer { SecretMask.current = savedMask }
         await secretsStoreChecks(base)
         await secretsMaskingChecks(c, base: base)
+        await secretsPanelChecks(base)
         check(secretsFolderDate(realFolder.url) == realBefore, "secrets: the real Secrets.noindex is untouched (unchanged, or not there)",
               "\(String(describing: realBefore)) → \(String(describing: secretsFolderDate(realFolder.url)))")
     }
@@ -341,5 +342,164 @@ extension SelfTest {
         let params = ClaudeIDEServer.selectionParams(path: base.appendingPathComponent("notes.txt").path, text: "copy \(value) here",
                                                      start: (0, 0), end: (0, 10))
         check(params["text"] as? String == "copy ••• here", "secrets: the selection sent to IDE clients is masked", "\(params["text"] ?? "")")
+    }
+}
+
+/// A request's answers, collected as they come.
+@MainActor
+final class SecretsAnswers {
+    private(set) var all: [SecretRequests.Decision] = []
+    func take(_ decision: SecretRequests.Decision) { all.append(decision) }
+    var last: SecretRequests.Decision? { all.last }
+}
+
+extension SelfTest {
+    // MARK: U4, the panel and grants
+
+    /// A request as the socket or the tools build one, with Next Term's facts filled in.
+    static func secretsRequest(asker: String, command: [String], source: SecretBinding.Source = .wrapper, names: [String] = ["PANEL_KEY"],
+                               remote: String? = nil, agent: String? = "Codex", checked: Bool = true, tab: String? = nil,
+                               programTitle: String? = nil, words: String? = nil, folder: String = NSTemporaryDirectory()) -> SecretRequests.Request {
+        let keys = names.map { SecretRequests.Key(name: $0, envName: $0) }
+        let map = Dictionary(uniqueKeysWithValues: keys.map { ($0.name, $0.envName) })
+        let binding = SecretBinding(source: source, asker: asker, program: command.first ?? "", command: command, keys: map, folder: folder)
+        var facts = SecretRequests.AskedBy()
+        facts.agent = agent
+        facts.checkedNxtrm = checked && source == .wrapper
+        facts.connection = remote
+        facts.tab = tab
+        facts.programTitle = programTitle
+        facts.pid = 4242
+        facts.executable = "/usr/bin/true"
+        facts.arguments = ["NextTerm", "--cli", "secret", "run"] + names + ["--"] + command
+        let shown = source == .wrapper ? command.map(SecretApprovalPanel.escaped).joined(separator: " ") : command.joined(separator: " ")
+        let argv = source == .wrapper ? command : ["/bin/sh", "-c"] + command
+        return SecretRequests.Request(binding: binding, keys: keys, command: shown, argv: argv, folder: folder, warnings: [],
+                                      agentWords: words, askedBy: facts, program: ((command.first ?? "") as NSString).lastPathComponent,
+                                      isRemote: remote != nil)
+    }
+
+    static func secretsAllowed(_ decision: SecretRequests.Decision?) -> (values: [String: SecretBytes], how: SecretAudit.Approval)? {
+        if case .allowed(let values, let how)? = decision { return (values, how) }
+        return nil
+    }
+
+    static func secretsRefusal(_ decision: SecretRequests.Decision?) -> SecretLimits.Refusal? {
+        if case .refused(let refusal)? = decision { return refusal }
+        return nil
+    }
+
+    static func secretsPanelChecks(_ base: URL) async {
+        let requests = SecretRequests.shared
+        let store = SecretsStore.shared
+        requests.resetForSelfTest()
+        defer { requests.resetForSelfTest() }
+        let value = secretsValue("panel")
+        _ = try? await store.perform(.add(name: "PANEL_KEY", purpose: "the panel checks", purposeBy: .agent, origin: .settings,
+                                          writeOnly: true, value: SecretBytes(utf8: value)))
+
+        // A wrapper's request: Next Term's facts in their own rows, Details, and "until the Mac locks".
+        let answers = SecretsAnswers()
+        let command = ["npx", "-y", "server@1.0.0", "two words"]
+        let wrapper = secretsRequest(asker: "wrapper:selftest-a", command: command, tab: "tab 3",
+                                     programTitle: "evil\u{202E}title\u{0007}\u{200B}x")
+        requests.ask(wrapper) { answers.take($0) }
+        guard let panel = wrapper.panel, let window = panel.window else { return check(false, "secrets: a wrapper's request shows the panel") }
+        let shown = texts(window.contentView)
+        check(shown.contains("Asked through Next Term's own nxtrm (checked)") && shown.contains("Codex, going by its program's name")
+              && panel.durationChoice[.untilLock] != nil && panel.durationChoice[.once]?.state == .on,
+              "secrets: a wrapper's panel shows the checked nxtrm row, the agent going by its program's name, and until the Mac locks",
+              shown)
+        check(panel.detailsDisclosure.state == .off && shown.contains("\(wrapper.askedBy.arguments.count) arguments:") && shown.contains("\"two words\""),
+              "secrets: Details, closed at first, lists every argument escaped, with their count")
+        check(shown.contains("Tab title (set by a program): eviltitlex") && !shown.contains("\u{202E}") && !shown.contains("\u{200B}"),
+              "secrets: a tab title's control, bidi and zero-width characters are stripped")
+        check(shown.contains("(an agent wrote this)") && shown.contains("Write-only"),
+              "secrets: the key's row marks an agent's purpose and the write-only badge")
+        check(!window.isKeyWindow && window.collectionBehavior.contains(.canJoinAllSpaces) && window.collectionBehavior.contains(.fullScreenAuxiliary)
+              && window.level == .floating && window.styleMask.contains(.nonactivatingPanel)
+              && panel.allowButton.keyEquivalent.isEmpty && panel.allowButton.refusesFirstResponder,
+              "secrets: the panel never takes the keyboard, joins every Space and full-screen windows, floats, and has no default button")
+        check(SecretApprovalPanel.title(wrapper) == "Codex asks to start npx with PANEL_KEY", "secrets: the panel's title names the agent, the program and the key",
+              SecretApprovalPanel.title(wrapper))
+
+        // "Allow for 15 minutes": the same request again needs no panel, until the Mac locks.
+        panel.durationChoice[.fifteenMinutes]?.performClick(nil)
+        panel.allowButton.performClick(nil)
+        _ = await wait(10) { !answers.all.isEmpty }
+        let allowed = secretsAllowed(answers.last)
+        check(allowed?.values["PANEL_KEY"] == SecretBytes(utf8: value) && allowed?.how == .fifteenMinutes && wrapper.panel == nil,
+              "secrets: Allow for 15 minutes gives the key, after the presence check")
+        let again = secretsRequest(asker: "wrapper:selftest-a", command: command, tab: "tab 3")
+        requests.ask(again) { answers.take($0) }
+        check(secretsAllowed(answers.last)?.how == .grant && again.panel == nil && requests.grants.count == 1,
+              "secrets: the same request within 15 minutes starts with no panel")
+        store.handleLockEvent(.screenLocked)
+        let afterLock = secretsRequest(asker: "wrapper:selftest-a", command: command, tab: "tab 3")
+        requests.ask(afterLock) { answers.take($0) }
+        check(requests.grants.isEmpty && afterLock.panel != nil, "secrets: locking the Mac ends the grant, and the same request asks again")
+
+        // A pending card: its wrapper stopped waiting.
+        requests.wrapperLeft(afterLock)
+        check(afterLock.panel?.durationChoice[.fifteenMinutes]?.state == .on && afterLock.panel?.durationChoice[.once]?.isEnabled == false,
+              "secrets: a pending card has Allow for 15 minutes chosen and Allow once off")
+        let takeover = secretsRequest(asker: "wrapper:selftest-a", command: command, tab: "tab 3")
+        requests.ask(takeover) { answers.take($0) }
+        check(takeover.panel == nil && afterLock.panel != nil && requests.queue.count == 1 && afterLock.panel?.durationChoice[.once]?.isEnabled == true,
+              "secrets: an identical request takes the card over, and does not queue")
+        afterLock.panel?.declineButton.performClick(nil)
+
+        // Decline pauses that request only; Decline and Stop Asking stops the asker.
+        let tool = secretsRequest(asker: "selftest-tab-x", command: ["npm test"], source: .tool, agent: "Claude Code")
+        requests.ask(tool) { answers.take($0) }
+        tool.panel?.declineButton.performClick(nil)
+        let paused = secretsRequest(asker: "selftest-tab-x", command: ["npm test"], source: .tool, agent: "Claude Code")
+        requests.ask(paused) { answers.take($0) }
+        let pausedRefusal = secretsRefusal(answers.last)
+        let other = secretsRequest(asker: "selftest-tab-x", command: ["npm run e2e"], source: .tool, agent: "Claude Code")
+        requests.ask(other) { answers.take($0) }
+        let otherShown = other.panel != nil
+        check({ if case .paused? = pausedRefusal { return true }; return false }() && otherShown,
+              "secrets: Decline pauses that same request; another from the same agent still shows the panel")
+        other.panel?.stopButton.performClick(nil)
+        let third = secretsRequest(asker: "selftest-tab-x", command: ["npm run lint"], source: .tool, agent: "Claude Code")
+        requests.ask(third) { answers.take($0) }
+        check(secretsRefusal(answers.last) == .stopped, "secrets: Decline and Stop Asking refuses that agent's next, different request")
+
+        // A remote request offers only "Allow once".
+        let remote = secretsRequest(asker: "remote:grant-1", command: ["npm test"], source: .tool, remote: "Claude, phone", agent: nil)
+        requests.ask(remote) { answers.take($0) }
+        check(remote.panel.map { Array($0.durationChoice.keys) == [.once] } == true
+              && SecretApprovalPanel.title(remote) == "The remote connection “Claude, phone” asks to run npm with PANEL_KEY",
+              "secrets: a remote request's panel names the connection and offers only Allow once")
+        remote.panel?.declineButton.performClick(nil)
+
+        // A big request keeps its buttons on screen.
+        let names = (1...20).map { "BIG_KEY_\($0)" }
+        let big = secretsRequest(asker: "selftest-big", command: [String(repeating: "x", count: 2000)], source: .tool, names: names,
+                                 agent: "Claude Code", words: String(repeating: "w", count: 500))
+        requests.ask(big) { answers.take($0) }
+        if let bigWindow = big.panel?.window, let screen = bigWindow.screen ?? NSScreen.main, let allow = big.panel?.allowButton {
+            bigWindow.layoutIfNeeded()
+            let button = bigWindow.convertToScreen(allow.convert(allow.bounds, to: nil))
+            check(screen.visibleFrame.contains(bigWindow.frame) && bigWindow.frame.contains(button),
+                  "secrets: a panel with 20 keys, a 2,000-character command and 500 characters of words keeps its buttons on screen",
+                  "window \(bigWindow.frame), button \(button), screen \(screen.visibleFrame)")
+        } else {
+            check(false, "secrets: the big request shows a panel")
+        }
+
+        // The hour pause, after its confirm.
+        big.panel?.pauseButton.performClick(nil)
+        _ = await wait(5) { big.panel?.pauseAlert != nil }
+        big.panel?.pauseAlert?.buttons.first?.performClick(nil)
+        _ = await wait(5) { requests.pausedUntil != nil }
+        let next = secretsRequest(asker: "selftest-after-pause", command: ["true"], source: .tool, agent: "Claude Code")
+        requests.ask(next) { answers.take($0) }
+        let until = requests.pausedUntil
+        check(until.map { abs($0.timeIntervalSinceNow - 3600) < 120 } == true && { if case .declining? = secretsRefusal(answers.last) { return true }; return false }(),
+              "secrets: Pause Key Requests for 1 Hour, after its confirm, refuses the next request and says until when")
+        requests.resumeAsking()
+        _ = try? await store.perform(.delete(name: "PANEL_KEY"))
     }
 }
