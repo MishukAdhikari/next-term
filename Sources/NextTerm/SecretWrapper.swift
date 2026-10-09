@@ -12,6 +12,18 @@ import NextTermCore
 /// for writing before the answer (the app would read that as leaving), and before `execve` it closes the socket and
 /// every descriptor above 2, clears the signal mask, resets SIGPIPE, SIGINT and SIGTERM, and turns core dumps off.
 enum SecretWrapper {
+    /// The self-test's form, `--self-test-secret-wrapper <socket> <wait-seconds> secret run …`: its own socket and
+    /// wait, with the peer checks as ever. Its `argv_full` can be set with `NEXTTERM_SELFTEST_ARGV_FULL` (JSON), so the
+    /// self-test can check that a claim the kernel's argv doesn't match is refused. Only this form reads it.
+    static func runSelfTest(_ arguments: [String]) -> Never {
+        let claimed = ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ARGV_FULL"]
+            .flatMap { try? JSONDecoder().decode([String].self, from: Data($0.utf8)) }
+        let socket = arguments.count > 1 ? arguments[1] : ""
+        let wait = arguments.count > 2 ? Double(arguments[2]) : nil
+        run(Array(arguments.dropFirst(5)), socket: socket, wait: wait ?? SecretRun.wait,
+            argvFull: claimed ?? CommandLine.arguments)
+    }
+
     /// Runs it with the arguments after `secret run`. `socket` and `wait` are the self-test's
     /// (`--self-test-secret-wrapper`); a wrapper otherwise uses the fixed path and ignores `NEXTTERM_MCP_SOCKET`.
     static func run(_ arguments: [String], socket path: String = MCPServer.socketPath(), wait: TimeInterval? = nil,

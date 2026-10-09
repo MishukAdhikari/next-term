@@ -32,6 +32,4 @@ extension MCPServer {
              inputSchema: #"{"type": "object", "properties": {"secrets": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "string", "pattern": "\#(secretPairPattern)"}, "description": "The keys, as NAME or NAME=ENVNAME."}, "command": {"type": "string", "maxLength": 2000, "description": "One line, run with /bin/sh -c."}, "directory": {"type": "string", "description": "The absolute folder it runs in."}, "tab_id": {"type": "string", "description": "A local tab's id from list_tabs, at its shell's prompt and not your own: the command runs there. Default: a new tab."}, \#(secretReason), \#(secretRequestID)}, "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: false, timeout: 60),
     ]
-
-    public static func isSecretTool(_ name: String) -> Bool { secretTools.contains { $0.name == name } }
 }

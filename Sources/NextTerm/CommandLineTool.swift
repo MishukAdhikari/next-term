@@ -18,13 +18,9 @@ enum CommandLineTool {
                 exit(0)
             }
         }
-        // The self-test's wrapper: its own socket and wait, the peer checks as ever (the app refuses this form outside
-        // the self-test).
+        // The self-test's wrapper (SecretWrapper.runSelfTest); the app refuses this form outside the self-test.
         if arguments.count >= 5, arguments[0] == "--self-test-secret-wrapper", arguments[3] == "secret", arguments[4] == "run" {
-            let claimed = ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ARGV_FULL"]
-                .flatMap { try? JSONDecoder().decode([String].self, from: Data($0.utf8)) }
-            SecretWrapper.run(Array(arguments.dropFirst(5)), socket: arguments[1], wait: Double(arguments[2]) ?? SecretRun.wait,
-                              argvFull: claimed ?? CommandLine.arguments)
+            SecretWrapper.runSelfTest(arguments)
         }
         switch CommandLineOpen.parse(arguments, cwd: FileManager.default.currentDirectoryPath) {
         case .help:
