@@ -33,8 +33,8 @@ jobs:
           scripts/test.sh
 
       - name: zsh integration test
-        timeout-minutes: 5
-        run: python3 scripts/zsh-integration-test.py
+        timeout-minutes: 15 # about 5 minutes on a fast Mac since Tab completion's going-into-folders checks
+        run: python3 -u scripts/zsh-integration-test.py
 
       - name: Build DMG
         timeout-minutes: 20
