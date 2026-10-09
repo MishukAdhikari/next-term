@@ -604,7 +604,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     private var rows: [KeyboardShortcuts.Command] = []
 
     init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 640), styleMask: [.titled, .closable, .resizable],
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 680), styleMask: [.titled, .closable, .resizable],
                               backing: .buffered, defer: false)
         window.title = "Settings"
         window.minSize = NSSize(width: 480, height: 320)
@@ -895,6 +895,9 @@ final class EditorSettingsView: NSView {
         worktreeLocation.target = self
         worktreeLocation.action = #selector(worktreeLocationChanged)
         worktreeLocation.toolTip = "Where Open in New Worktree… makes folders: beside the repository (~/Code/xCloud-wt-7027-sso), or inside it (xCloud/.claude/worktrees/7027-sso), which is used only for a repository that already ignores .claude/worktrees. Next Term never edits an ignore file."
+        // VoiceOver reads each popup by its row's words, which are a label of their own.
+        backgroundFetch.setAccessibilityLabel("Fetch in the background")
+        worktreeLocation.setAccessibilityLabel("New worktrees")
         lineHeight.target = self
         lineHeight.action = #selector(lineHeightChanged)
         lineHeight.isContinuous = true
