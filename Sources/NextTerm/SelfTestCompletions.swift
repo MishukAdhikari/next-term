@@ -443,14 +443,14 @@ extension SelfTest {
         if await open("cd ") {
             // ⌘V as the keyboard sends it, through the app: Edit › Paste.
             pressAppKey(window, "v", code: 9, flags: .command)
-            check(await wait(2) { !popup.isVisible } && promptLine(tab).hasSuffix("cd Tes"), "Tab completion: ⌘V closes the list and pastes",
+            check(await wait(2) { !popup.isVisible && promptLine(tab).hasSuffix("cd Tes") }, "Tab completion: ⌘V closes the list and pastes",
                   promptLine(tab))
             await clearLine(tab)
         }
         if await open("cd ") {
             // A paste's bytes close it even while a key is dispatched, where the key's own bytes would keep it open.
             window.asKey { tab.view.paste(self) }
-            check(await wait(2) { !popup.isVisible } && promptLine(tab).hasSuffix("cd Tes"), "Tab completion: a paste under a key closes the list too",
+            check(await wait(2) { !popup.isVisible && promptLine(tab).hasSuffix("cd Tes") }, "Tab completion: a paste under a key closes the list too",
                   promptLine(tab))
             await clearLine(tab)
         }
