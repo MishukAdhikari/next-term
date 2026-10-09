@@ -199,6 +199,21 @@ extension SelfTest {
         if let editor { c.editorArea.close(editor) }
         check(terminalQuiet && editorQuiet, "sidebar menu keys: ⌥⌘C and ⌥⌘N do nothing with the terminal's or the editor's keyboard",
               "terminal (\(inTerminal)): \(terminalSaw); editor (\(editing)): \(fromEditor), \(untitled()), \(dispatched)")
+
+        // ⌘W with the project tree's keyboard closes the file in front, never a terminal tab; with no file open it is off.
+        c.editorArea.closeAll()
+        c.openFile(file)
+        window.makeFirstResponder(outline)
+        let tabs = c.tabs.count, closeItem = NSMenuItem(title: "Close Tab", action: #selector(TerminalWindowController.closeTab(_:)), keyEquivalent: "w")
+        let onWithFile = c.isSidebarFocused && c.validateMenuItem(closeItem)
+        c.closeTab(nil)
+        let fileClosed = c.editorArea.isEmpty && c.tabs.count == tabs
+        window.makeFirstResponder(outline)
+        let offWithout = !c.validateMenuItem(closeItem)
+        c.closeTab(nil)
+        check(onWithFile && fileClosed && offWithout && c.tabs.count == tabs,
+              "sidebar: ⌘W with the tree's keyboard closes the file in front, and never a terminal tab",
+              "on \(onWithFile), closed \(fileClosed), off without a file \(offWithout), tabs \(tabs) → \(c.tabs.count)")
         window.makeFirstResponder(terminal)
     }
 

@@ -912,7 +912,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             return editorArea.activeTextView != nil
         }
         if item.action == #selector(closeTab(_:)) {
-            item.title = !isEditorFocused && activeGroup?.isSplit == true ? "Close Pane" : "Close Tab"
+            let closesFile = isEditorFocused || isSidebarFocused
+            item.title = !closesFile && activeGroup?.isSplit == true ? "Close Pane" : "Close Tab"
+            if isSidebarFocused { return !editorArea.isHidden && !editorArea.isEmpty }
             return isEditorFocused || !terminalRailed
         }
         let paneActions: [Selector] = [#selector(selectPaneLeft(_:)), #selector(selectPaneRight(_:)), #selector(selectPaneAbove(_:)),
@@ -1427,6 +1429,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return view.isDescendant(of: editorArea)
     }
 
+    /// The project sidebar has the keyboard (its tree, or a name being edited in it).
+    var isSidebarFocused: Bool {
+        guard isSidebarVisible, let view = window?.firstResponder as? NSView else { return false }
+        return view.isDescendant(of: sidebar)
+    }
+
     func editorAreaDidShowOrHide(_ area: EditorArea) {
         followActiveFile()
         editorShownOrHidden()
@@ -1756,6 +1764,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// ⌘W closes what has the keyboard: the file being edited, or the terminal tab.
     @objc func closeTab(_ sender: Any?) {
         if isEditorFocused { return editorArea.closeActive() }
+        // From the project tree, the file in front in the editor, where its files open: never a terminal tab.
+        if isSidebarFocused { return editorArea.isHidden || editorArea.isEmpty ? NSSound.beep() : editorArea.closeActive() }
         if terminalRailed { return NSSound.beep() } // its tabs are folded away: nothing on screen to close
         if let tab = activeTab { requestClose(tab) }
     }

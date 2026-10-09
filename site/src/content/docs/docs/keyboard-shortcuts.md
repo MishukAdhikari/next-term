@@ -64,7 +64,7 @@ These are the defaults. Every menu command’s shortcut can be changed, removed 
 | Split Down | <kbd>⇧⌘D</kbd> |
 | Rename Tab… (while the project sidebar has the keyboard, <kbd>⌥⌘R</kbd> is Reveal in Finder) | <kbd>⌥⌘R</kbd> |
 | Use Option as Meta Key (off by default; for Emacs-style keys) | — |
-| Close Tab (Close Pane in a split tab; the file being edited when the editor has the keyboard) | <kbd>⌘W</kbd> |
+| Close Tab (Close Pane in a split tab; the file in front when the editor or the project sidebar has the keyboard) | <kbd>⌘W</kbd> |
 | Close Other Tabs, Close Tabs to the Right (the editor’s tabs when it has the keyboard) | — |
 | Close Window | <kbd>⇧⌘W</kbd> |
 
