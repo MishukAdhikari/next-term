@@ -79,13 +79,16 @@ final class CommandSuggestionRunner {
         return timeout
     }
 
-    /// Ends the request: the agent's process group goes (TERM, then KILL), and `done` isn't called.
+    /// Ends the request: the agent's process group goes (TERM, then KILL), and `done` isn't called. From the main
+    /// thread (the panel closing), the tab has no request from then on: not one main-queue turn later, by which time
+    /// the agent's group can be gone already.
     func cancel() {
         task?.cancel()
         stop(because: "cancelled")
-        DispatchQueue.main.async { [self] in
+        let forget = { [self] in
             if let key = Self.running.first(where: { $0.value === self })?.key { Self.running[key] = nil }
         }
+        if Thread.isMainThread { forget() } else { DispatchQueue.main.async(execute: forget) }
     }
 
     private func stop(because reason: String) {
