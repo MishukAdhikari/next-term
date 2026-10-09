@@ -257,6 +257,8 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
         placeDetail()
         if let page = allFiles, selectedPath == nil, diffs != nil || unreadable {
             page.reader = reader()
+            if let scope = changesScope { page.scope = context?.effective(scope) ?? scope }
+            page.untracked = changes?.untracked ?? []
             let text = listMessage ?? (unreadable ? "Git could not read these changes." : nil)
             page.show(files: ChangeTree.files(in: tree), diffs: diffs ?? [:], rows: rows, root: root, message: text)
             allFilesKey = changesScope.map { pageKey(for: $0) }
@@ -322,6 +324,7 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
             message.isHidden = true
             return
         }
+        if allFiles?.isHidden == false { NotificationCenter.default.post(name: DiffShare.changed, object: self) }
         allFiles?.isHidden = true
         let key = paneKey(for: path)
         guard let key else {
@@ -385,9 +388,12 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
     }
 
     private func removeDiffPane() {
+        let had = diffPane != nil
         diffPane?.removeFromSuperview()
         diffPane = nil
         shownKey = nil
+        // Its selected lines went with it: the agents hear what is selected now.
+        if had { NotificationCenter.default.post(name: DiffShare.changed, object: self) }
     }
 
     private func fill(_ view: NSView) {

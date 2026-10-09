@@ -6,7 +6,7 @@ import Shiki
 /// removed lines tinted red, added green, the changed words within a line stronger, both sides
 /// syntax-coloured and scrolling together. Hunk by hunk you can stage, unstage or revert, each checked
 /// against what the diff was made from, so a change an agent made meanwhile is never overwritten.
-final class DiffPane: NSView {
+final class DiffPane: NSView, DiffSelectionHost {
     let root: String
     /// Relative to `root`.
     let path: String
@@ -30,6 +30,12 @@ final class DiffPane: NSView {
     private let reject = NSButton(title: "Reject", target: nil, action: nil)
     /// Accept's tooltip, naming its key: ⌘↩, or what Settings › Keyboard Shortcuts gives it (`performKeyEquivalent`).
     private var acceptKey: PartToolTip?
+    /// The header's free space, where "⌥⌘K Ask Claude Code" shows while lines are selected.
+    let askRoom = AskAgentRoom()
+    /// The side whose selection counts (each side keeps its selection drawn): the one that took the keyboard or
+    /// had lines selected last. It changes only where the agents are told again, so what they were told last is
+    /// what it gives, wherever the keyboard goes after.
+    private var selectedSide: DiffSide = .new
 
     /// An agent's proposed edit (Claude Code's openDiff): your file against its version, to accept or
     /// reject. Next Term never writes the file; the agent does, once you accept.
@@ -292,7 +298,7 @@ final class DiffPane: NSView {
             acceptKey = PartToolTip(accept, "Accept", command: "diff.accept", then: ": \(proposal.author) then writes the file")
             accept.bezelColor = .controlAccentColor // the default button's colour, which ⌘↩ as its own key equivalent gave it
             reject.toolTip = "Reject: the file stays as it is"
-            header.setViews([pathLabel, counts, NSView(), previous, position, next, reject, accept], in: .leading)
+            header.setViews([pathLabel, counts, askRoom, previous, position, next, reject, accept], in: .leading)
         } else if let commit {
             text.append(Typography.gap(8, font: .systemFont(ofSize: 12)))
             text.append(NSAttributedString(string: "@ " + commit.sha.prefix(7), attributes: [
@@ -300,7 +306,7 @@ final class DiffPane: NSView {
             ]))
             pathLabel.attributedStringValue = Typography.truncating(text, .byTruncatingMiddle)
             pathLabel.toolTip = tooltip
-            header.setViews([pathLabel, counts, NSView(), previous, position, next], in: .leading)
+            header.setViews([pathLabel, counts, askRoom, previous, position, next], in: .leading)
         } else if let branch = branchChange.map({ BranchCompare.displayName($0.branch) }) ?? refName {
             // Which branch, after the name: "@ feat/x" for its change, "↔ feat/x" for the disk against it.
             text.append(Typography.gap(8, font: .systemFont(ofSize: 12)))
@@ -309,9 +315,9 @@ final class DiffPane: NSView {
             ]))
             pathLabel.attributedStringValue = Typography.truncating(text, .byTruncatingMiddle)
             pathLabel.toolTip = tooltip
-            header.setViews([pathLabel, counts, NSView(), previous, position, next], in: .leading)
+            header.setViews([pathLabel, counts, askRoom, previous, position, next], in: .leading)
         } else {
-            header.setViews([pathLabel, baseControl, counts, NSView(), previous, position, next, stage, unstage, revert], in: .leading)
+            header.setViews([pathLabel, baseControl, counts, askRoom, previous, position, next, stage, unstage, revert], in: .leading)
         }
         header.spacing = 8
         header.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
@@ -337,6 +343,7 @@ final class DiffPane: NSView {
             header.leadingAnchor.constraint(equalTo: leadingAnchor),
             header.trailingAnchor.constraint(equalTo: trailingAnchor),
             header.heightAnchor.constraint(equalToConstant: 34),
+            askRoom.heightAnchor.constraint(equalTo: header.heightAnchor),
             columns.topAnchor.constraint(equalTo: header.bottomAnchor),
             columns.leadingAnchor.constraint(equalTo: leadingAnchor),
             columns.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -346,6 +353,19 @@ final class DiffPane: NSView {
             message.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -40),
         ])
         unified.install(in: self, header: header, before: previous)
+        askRoom.hint.onClick = { [weak self] in
+            guard let self else { return }
+            (self.window?.windowController as? TerminalWindowController)?.askAgent(from: self)
+        }
+        // What is selected goes to the agents, as the editor's selection does.
+        for view in [left.textView, right.textView] {
+            NotificationCenter.default.addObserver(self, selector: #selector(sideSelectionChanged(_:)), name: NSTextView.didChangeSelectionNotification, object: view)
+            view.onFocus = { [weak self, weak view] in
+                guard let self, let view else { return }
+                self.selectedSide = view === self.left.textView ? .old : .new
+                self.selectionMayHaveChanged()
+            }
+        }
         // The sides scroll together, both ways.
         for (column, other) in [(left, right), (right, left)] {
             column.contentView.postsBoundsChangedNotifications = true
@@ -515,6 +535,7 @@ final class DiffPane: NSView {
             go(toHunk: wanted < 0 ? hunkRows.count - 1 : wanted)
         }
         onTitleChange?()
+        selectionMayHaveChanged() // the lines under the selection may be others now
     }
 
     func applyFont() {
@@ -532,82 +553,80 @@ final class DiffPane: NSView {
         unified.column.isHidden = !showRows || !unified.isOn
         if unified.isOn { unified.update(self) } else { applyFont() }
         if hunkRows.indices.contains(currentHunk) { go(toHunk: currentHunk) }
+        selectionMayHaveChanged() // the other view's selection is the one that counts now
     }
 
-    // MARK: send to agent
+    // MARK: the selection, for agents
 
-    /// What Send to Agent gives the agent: the file, at the new side's lines in the selection (the rows line
-    /// up, so a selection on the old side picks the same rows), or the whole file with nothing selected.
-    /// A staged or committed version is not the file on disk, so the note says which it is and its lines go
-    /// along as code; so do removed lines, selected on the old side alone. Nil for an agent's proposal (that
-    /// agent is waiting for your answer in its terminal), and for removed lines too many to paste.
+    /// What Send to Agent gives the agent: the selected lines (DiffShare.contextItem), or the whole file with
+    /// nothing selected. Nil for an agent's proposal: that agent is waiting for your answer in its terminal.
     func contextItem() -> ContextItem? {
-        if unified.isOn { return unified.contextItem(of: self) }
         guard proposal == nil else { return nil }
+        if let share = diffShare() { return share.contextItem() }
         var item = ContextItem(path: absolutePath)
-        let language = EditorLanguage.id(forFileName: (path as NSString).lastPathComponent) ?? "text"
-        let selected = selectedRows().filter { rows[$0].kind != .hunkHeader }
-        let numbered = selected.filter { right.number(at: $0) != nil }
-        if numbered.isEmpty, !selected.isEmpty {
-            // Only removed lines: the file no longer has them, so they are the code.
-            let removed = code(of: selected, on: left)
-            guard !removed.isEmpty, !AgentPrompt.isTooLargeToInline(removed) else { return nil }
-            if let commit {
-                item.note = "lines removed in commit \(commit.sha.prefix(7))"
-            } else {
-                item.note = FileManager.default.fileExists(atPath: absolutePath) ? "lines removed" : "deleted"
-            }
-            item.code = removed
-            item.language = language
-            return item
-        }
-        let lines = numbered.compactMap { right.number(at: $0) }
-        if let first = lines.first, let last = lines.last { item.lines = first...last }
         if let commit {
             item.note = "as of commit \(commit.sha.prefix(7))"
-        } else if base == .staged, item.lines != nil {
-            item.note = "as staged"
         } else if !FileManager.default.fileExists(atPath: absolutePath) {
             item.note = "deleted"
-        }
-        if commit != nil || base == .staged, item.lines != nil {
-            let code = code(of: numbered, on: right)
-            if !AgentPrompt.isTooLargeToInline(code) {
-                item.code = code
-                item.language = language
-            }
         }
         return item
     }
 
-    /// The lines of `rows` on one side, with a "⋯" line where its line numbers jump: the lines between two
-    /// hunks, which the diff doesn't show.
-    private func code(of rows: [Int], on column: DiffColumn) -> String {
-        var lines: [String] = []
-        var previous: Int?
-        for row in rows {
-            guard let number = column.number(at: row), let text = column.text(at: row) else { continue }
-            if let previous, number != previous + 1 { lines.append("⋯") }
-            previous = number
-            lines.append(text)
+    /// The lines selected, as the agents are told about them: in Unified, its column's; side by side, the
+    /// side that took the keyboard or had lines selected last (`selectedSide`).
+    func diffShare() -> DiffShare? {
+        guard message.isHidden, let file else { return nil }
+        let rows = unified.isOn ? unified.column.selectedDiffRows() : (selectedSide == .old ? left : right).selectedDiffRows()
+        guard let selection = DiffSelections.make(rows, in: unified.isOn ? unified.shownFile ?? file : file, today: today) else { return nil }
+        let version: DiffShare.Version
+        if proposal != nil {
+            version = .proposal
+        } else if let commit {
+            version = .commit(commit.sha)
+        } else if let branchChange {
+            version = .branch(BranchCompare.displayName(branchChange.branch))
+        } else {
+            version = base == .staged ? .staged : .workingTree
         }
-        return lines.joined(separator: "\n")
+        return DiffShare(path: absolutePath, selection: selection, holdsSecrets: holdsSecrets, isUncommitted: isUncommitted, version: version,
+                         language: EditorLanguage.id(forFileName: (path as NSString).lastPathComponent) ?? "text")
+    }
+
+    /// Changes not committed yet: the working tree's or the index's, against HEAD or each other (a file's diff
+    /// tab, Git Diff's Uncommitted); not a commit's, a branch's, an agent's proposal, or All changes since a base.
+    var isUncommitted: Bool { proposal == nil && commit == nil && branchChange == nil && workingTreeBranch == nil }
+
+    var offersAsk: Bool {
+        guard message.isHidden else { return false }
+        let lines = unified.isOn ? unified.column.hasSelectedLines : (selectedSide == .old ? left : right).hasSelectedLines
+        return DiffShare.offersAsk(hasLines: lines, isUncommitted: isUncommitted, holdsSecrets: holdsSecrets)
+    }
+
+    /// Any of the diff's names for its file holds secrets (.env, keys): the agents' link is told of no file, and
+    /// the Ask hint is not offered.
+    private var holdsSecrets: Bool { DiffShare.holdsSecrets([absolutePath, renamedFrom, commit?.oldPath, branchChange?.oldPath]) }
+
+    /// Which version is the file as it is now: the new side for the working tree's changes, your file for an
+    /// agent's proposal, neither for a commit's, a branch's or the index's version, or a file that is gone.
+    private var today: DiffToday {
+        let exists = FileManager.default.fileExists(atPath: absolutePath)
+        if proposal != nil { return exists ? .old : .neither }
+        if commit != nil || branchChange != nil || base == .staged { return .neither }
+        return exists ? .new : .neither
+    }
+
+    /// A side's selection changed: it is the side that counts when it has lines now, or has the keyboard (a click
+    /// that leaves nothing selected there is a choice of that side too).
+    @objc private func sideSelectionChanged(_ notification: Notification) {
+        guard let view = notification.object as? NSTextView else { return }
+        if view.selectedRange().length > 0 || window?.firstResponder === view { selectedSide = view === left.textView ? .old : .new }
+        selectionMayHaveChanged()
     }
 
     /// For the self-test: the old side, to select removed lines in.
     var oldSideView: NSTextView { left.textView }
-
-    /// The rows under the selection on the side that has the keyboard (else the new side).
-    private func selectedRows() -> [Int] {
-        let view = window?.firstResponder === left.textView ? left.textView : right.textView
-        let range = view.selectedRange()
-        guard range.length > 0 else { return [] }
-        let text = view.string as NSString
-        func row(at offset: Int) -> Int { text.substring(to: min(offset, text.length)).utf16.filter { $0 == 0x0A }.count }
-        // A selection ending at the start of a row does not include that row.
-        let first = row(at: range.location), last = row(at: max(range.location, NSMaxRange(range) - 1))
-        return Array(first...max(first, last)).filter { rows.indices.contains($0) }
-    }
+    /// For the self-test: where the toolbar's controls are (the Ask hint never moves them).
+    var toolbarFrames: [NSRect] { header.arrangedSubviews.filter { $0 !== askRoom && !$0.isHidden }.map(\.frame) }
 
     // MARK: hunks
 
@@ -834,6 +853,25 @@ final class DiffColumn: NSScrollView {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     private(set) var rows: [SideBySideRow] = []
+    /// Where each row's text starts (UTF-16).
+    private(set) var starts: [Int] = []
+
+    /// What the selection covers, row by row (a header or filler row has no line).
+    func selectedDiffRows() -> [DiffSelectedRow] {
+        let spans = DiffSelections.spans(of: textView.selectedRange(), starts: starts, length: textView.textStorage?.length ?? 0)
+        return spans.compactMap { span in
+            guard rows.indices.contains(span.row) else { return nil }
+            let row = rows[span.row]
+            let line = row.kind == .hunkHeader ? nil : (side == .left ? row.left : row.right)
+            return DiffSelectedRow(line: line, side: side == .left ? .old : .new, from: span.from, to: span.to)
+        }
+    }
+
+    /// The selection holds a line, not only a header or a filler: asked often, so it stops at the first.
+    var hasSelectedLines: Bool {
+        guard let touched = DiffSelections.rows(of: textView.selectedRange(), starts: starts) else { return false }
+        return touched.contains { rows.indices.contains($0) && rows[$0].kind != .hunkHeader && (side == .left ? rows[$0].left : rows[$0].right) != nil }
+    }
 
     /// Line number shown on each row (nil: a filler or a hunk header).
     func number(at row: Int) -> Int? {
@@ -891,6 +929,7 @@ final class DiffColumn: NSScrollView {
                 if NSMaxRange(shifted) <= text.length { text.addAttribute(.backgroundColor, value: wordTint, range: shifted) }
             }
         }
+        starts = lineStarts
         textView.textStorage?.setAttributedString(text)
         textView.layoutManager?.ensureLayout(for: textView.textContainer!)
         textView.sizeToFit()
@@ -906,6 +945,14 @@ final class DiffColumn: NSScrollView {
 /// has the line, a band for each hunk's start.
 final class DiffTextView: NSTextView {
     weak var column: DiffColumn?
+    /// It took the keyboard: its side's selection is the one that counts now.
+    var onFocus: (() -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became { onFocus?() }
+        return became
+    }
 
     override func mouseDown(with event: NSEvent) {
         super.mouseDown(with: event)

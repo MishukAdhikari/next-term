@@ -260,6 +260,23 @@ final class UnifiedColumn: NSScrollView {
         return Array(first...max(first, last)).filter { rows.indices.contains($0) }
     }
 
+    /// What the selection covers, row by row: a removed line is the old version's, the others the new one's (a
+    /// fold has no line).
+    func selectedDiffRows() -> [DiffSelectedRow] {
+        let spans = DiffSelections.spans(of: textView.selectedRange(), starts: starts, length: textView.textStorage?.length ?? 0)
+        return spans.compactMap { span in
+            guard rows.indices.contains(span.row) else { return nil }
+            let row = rows[span.row]
+            return DiffSelectedRow(line: row.kind == .fold ? nil : row.line, side: row.kind == .removed ? .old : .new, from: span.from, to: span.to)
+        }
+    }
+
+    /// The selection holds a line, not only folds: asked often, so it stops at the first.
+    var hasSelectedLines: Bool {
+        guard let touched = DiffSelections.rows(of: textView.selectedRange(), starts: starts) else { return false }
+        return touched.contains { rows.indices.contains($0) && rows[$0].kind != .fold }
+    }
+
     /// Selects `row`'s text (a right-click on a row outside the selection).
     func select(row: Int) {
         guard starts.indices.contains(row) else { return }
@@ -310,6 +327,14 @@ final class UnifiedColumn: NSScrollView {
 /// row picks its change, a right-click offers what can be done with it.
 final class UnifiedTextView: NSTextView {
     weak var column: UnifiedColumn?
+    /// It took the keyboard: on the All files page, its file's selection is the one that counts now.
+    var onFocus: (() -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became { onFocus?() }
+        return became
+    }
 
     private func row(for event: NSEvent) -> Int? {
         column?.row(atY: convert(event.locationInWindow, from: nil).y)
@@ -460,8 +485,9 @@ final class UnifiedDiffPart: NSObject, NSTextViewDelegate {
     let column = UnifiedColumn()
     private weak var pane: DiffPane?
     private(set) var rows: [UnifiedRow] = []
-    /// The diff the rows were made from: a right-click's hunk action acts on it.
-    private var shownFile: FileDiff?
+    /// The diff the rows were made from: a right-click's hunk action acts on it, and its lines are what a
+    /// selection in them shares.
+    private(set) var shownFile: FileDiff?
     /// The rows are an older diff's, shown until the whole file of the new one is read: their changes
     /// aren't the diff's own, so selecting, clicking or scrolling them picks none.
     private var stale = false
@@ -516,6 +542,7 @@ final class UnifiedDiffPart: NSObject, NSTextViewDelegate {
     /// Selecting lines makes the change they start in the current one: what the buttons act on is always
     /// the change "2 of 3" names and the gutter marks.
     func textViewDidChangeSelection(_ notification: Notification) {
+        pane?.selectionMayHaveChanged() // for the agents, as the editor's selection
         guard !rendering, !stale, let pane else { return }
         let range = column.textView.selectedRange()
         let under = range.length > 0 ? column.selectedRows() : [column.row(atOffset: range.location)]
@@ -623,58 +650,6 @@ final class UnifiedDiffPart: NSObject, NSTextViewDelegate {
         }
         menu.addBlock("Copy") { [weak self] in self?.column.textView.copy(nil) }
         return menu
-    }
-
-    /// Send to Agent from the Unified view, as from the side-by-side one: the file at the selected lines'
-    /// numbers in the new file, or the removed lines as code when only those are selected.
-    func contextItem(of pane: DiffPane) -> ContextItem? {
-        guard pane.proposal == nil else { return nil }
-        var item = ContextItem(path: pane.absolutePath)
-        let language = self.language(pane) ?? "text"
-        let selected = column.selectedRows().compactMap { rows[safe: $0] }.filter { $0.kind != .fold }
-        let kept = selected.filter { $0.kind != .removed }
-        if kept.isEmpty, !selected.isEmpty {
-            // Only removed lines: the file no longer has them, so they are the code.
-            let removed = Self.code(selected.compactMap { row in row.line.flatMap { line in line.oldNumber.map { ($0, line.text) } } })
-            guard !removed.isEmpty, !AgentPrompt.isTooLargeToInline(removed) else { return nil }
-            if let commit = pane.commit {
-                item.note = "lines removed in commit \(commit.sha.prefix(7))"
-            } else {
-                item.note = FileManager.default.fileExists(atPath: pane.absolutePath) ? "lines removed" : "deleted"
-            }
-            item.code = removed
-            item.language = language
-            return item
-        }
-        let numbered = kept.compactMap { row in row.line.flatMap { line in line.newNumber.map { ($0, line.text) } } }
-        if let first = numbered.first?.0, let last = numbered.last?.0 { item.lines = first...last }
-        if let commit = pane.commit {
-            item.note = "as of commit \(commit.sha.prefix(7))"
-        } else if pane.base == .staged, item.lines != nil {
-            item.note = "as staged"
-        } else if !FileManager.default.fileExists(atPath: pane.absolutePath) {
-            item.note = "deleted"
-        }
-        if pane.commit != nil || pane.base == .staged, item.lines != nil {
-            let code = Self.code(numbered)
-            if !AgentPrompt.isTooLargeToInline(code) {
-                item.code = code
-                item.language = language
-            }
-        }
-        return item
-    }
-
-    /// The lines, with a "⋯" line where their numbers jump (lines not selected, or not shown).
-    static func code(_ lines: [(Int, String)]) -> String {
-        var out: [String] = []
-        var previous: Int?
-        for (number, text) in lines {
-            if let previous, number != previous + 1 { out.append("⋯") }
-            previous = number
-            out.append(text)
-        }
-        return out.joined(separator: "\n")
     }
 }
 

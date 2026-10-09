@@ -71,6 +71,13 @@ extension SelfTest {
         check(await wait(5) { diff.hunkCount == 2 && diff.sideTexts.1.contains("line thirty-five") && !diff.showsUnified },
               "the file's changes show side by side, as a diff tab shows them", "\(diff.hunkCount) hunks")
         check(c.editorArea.panes.count == 1 && c.editorArea.activePath == app.path, "in one tab, with the file in front", "\(c.editorArea.panes.count) tabs")
+        // No agent runs in this window yet: lines selected in the diff offer no Ask hint (with one: diffSelectionChecks).
+        if c.agentTab == nil, let side = diff.focusView as? NSTextView {
+            side.setSelectedRange((side.string as NSString).range(of: "line two"))
+            check(diff.offersAsk && !diff.askRoom.wanted && diff.askRoom.shownTitle == nil,
+                  "with no agent running, lines selected in an uncommitted diff offer no Ask hint", diff.askRoom.shownTitle ?? "hidden")
+            side.setSelectedRange(NSRange(location: 0, length: 0))
+        }
 
         // Side by Side | Unified: the same changes in one column, the run between them folded.
         diff.unified.control.selectedSegment = 1
@@ -372,6 +379,260 @@ extension SelfTest {
         try? FileManager.default.removeItem(at: repo)
         GitDiffPane.columnHidden = columnHidden
         DiffLayout.current = layout
+    }
+
+    /// Lines selected in a diff reach the agents in the window's tabs as the editor's selection does (Claude Code's
+    /// selection_changed, from the stand-in `claude` connected to `agentTab`; Gemini CLI's open files): the new
+    /// side as the file's lines, the old side as its text with a caret where it was, both sides selected as the
+    /// side that took the keyboard or was selected last (the terminal taking the keyboard after changes nothing),
+    /// Unified, the All files page (a right-click's Send to Agent sends the file right-clicked), an .env file as
+    /// no file, a commit's version with no line claimed, and the editor's state again once the selection goes.
+    /// ⌥⌘K from both sides of the Git Diff tab, and the "⌥⌘K Ask Claude Code" hint in its toolbar while lines of
+    /// uncommitted changes are selected (never an .env file's). They need the window to have the keyboard.
+    static func diffSelectionChecks(_ c: TerminalWindowController, agentTab: TerminalTab, claude: ClaudeTestClient) async {
+        guard let window = c.window, let git = GitRunner.locateGit() else { return }
+        guard await bringToFront(window) else { return note("diff selections for agents: skipped, \(notFrontmost(window))") }
+        let restore = keepDiffSettings()
+        DiffLayout.current = .sideBySide
+        GitDiffPane.columnHidden = true // room in the toolbar for the hint
+        let repo = URL(fileURLWithPath: canonicalPath(NSTemporaryDirectory())).appendingPathComponent("nt-selftest-diffsel-\(getpid())")
+        try? FileManager.default.removeItem(at: repo)
+        try? FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        @discardableResult func run(_ args: String...) -> String {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: git)
+            p.arguments = ["-C", repo.path, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main"] + args
+            let out = Pipe()
+            p.standardOutput = out
+            p.standardError = FileHandle.nullDevice
+            p.standardInput = FileHandle.nullDevice
+            try? p.run()
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        // Line 5 changed, lines 15 and 16 removed, a line added after line 25. Beside it a second file and an .env
+        // file, each with a line changed.
+        let file = repo.appendingPathComponent("app.txt")
+        let notes = repo.appendingPathComponent("notes.txt"), env = repo.appendingPathComponent(".env")
+        var lines = (1...30).map { "line \($0)" }
+        try? (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+        try? "note one\nnote 2\nnote three\n".write(to: notes, atomically: true, encoding: .utf8)
+        try? "KEY=one\n".write(to: env, atomically: true, encoding: .utf8)
+        run("init", "-q")
+        run("add", "-A")
+        run("commit", "-qm", "Base")
+        lines[4] = "line five"
+        lines.insert("added after 25", at: 25)
+        lines.removeSubrange(14...15)
+        try? (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+        try? "note one\nnote two\nnote three\n".write(to: notes, atomically: true, encoding: .utf8)
+        try? "KEY=two\n".write(to: env, atomically: true, encoding: .utf8)
+
+        c.showChanges(of: file)
+        guard let tab = c.editorArea.activeGitDiff, let diff = c.editorArea.activeDiff, await wait(8, { diff.hunkCount == 3 }),
+              let new = diff.focusView as? NSTextView else {
+            restore()
+            return check(false, "the Git Diff tab shows the file's three changes", "\(c.editorArea.activeDiff?.hunkCount ?? -1) hunks")
+        }
+        let old = diff.oldSideView
+        /// What Claude Code was told last: the file, the text, where it starts and ends (0-based line, character).
+        func told() -> (path: String?, text: String?, start: [Int], end: [Int]) {
+            let params = claude.last("selection_changed")
+            let selection = params?["selection"] as? [String: Any]
+            func place(_ key: String) -> [Int] {
+                let at = selection?[key] as? [String: Any]
+                return [at?["line"] as? Int ?? -1, at?["character"] as? Int ?? -1]
+            }
+            return (params?["filePath"] as? String, params?["text"] as? String, place("start"), place("end"))
+        }
+        func isTold(_ text: String, _ start: [Int], _ end: [Int], in other: URL? = nil) async -> Bool {
+            let path = (other ?? file).path
+            return await wait(3) { let now = told(); return now.path == path && now.text == text && now.start == start && now.end == end }
+        }
+        /// Claude Code was told no file is selected (the editor's own state here: nothing open in it).
+        func isToldNoFile() async -> Bool { await wait(3) { claude.last("selection_changed").map { $0["filePath"] == nil } == true } }
+        func describe() -> String { "\(told())" }
+        /// Selects rows of `view`, then waits for Claude Code to be told `text` from `start` to `end`.
+        func select(_ view: NSTextView, _ first: String, through last: String, tells text: String, _ start: [Int], _ end: [Int]) async -> Bool {
+            guard selectRows(view, first, through: last) else { return false }
+            return await isTold(text, start, end)
+        }
+
+        // The new side: the file's lines 5–6, as the editor would select them; Gemini CLI's open files too.
+        window.contentView?.layoutSubtreeIfNeeded()
+        let toolbar = diff.toolbarFrames
+        window.makeFirstResponder(new)
+        check(await select(new, "line five", through: "line 6", tells: "line five\nline 6\n", [4, 0], [6, 0]),
+              "lines selected on a diff's new side reach Claude Code as the file's lines 5–6", describe())
+        let gemini = c.openFilesForGemini().first
+        check(gemini?["path"] as? String == file.path && gemini?["isActive"] as? Bool == true && gemini?["selectedText"] as? String == "line five\nline 6\n"
+              && (gemini?["cursor"] as? [String: Int])?["line"] == 5, "and Gemini CLI's open files have them, the caret on line 5", "\(gemini ?? [:])")
+
+        // The Ask hint: Send to Agent's key and the agent's name, at the end of the toolbar's free space.
+        let key = KeyboardShortcuts.shared.key(for: #selector(TerminalWindowController.sendToAgent(_:)))?.display ?? ""
+        let words = (key.isEmpty ? "" : key + " ") + "Ask Claude Code"
+        check(await wait(2) { diff.askRoom.wanted } && diff.askRoom.hint.title == words
+              && diff.askRoom.hint.toolTip == "Types the selected lines into Claude Code’s prompt in tab “\(agentTab.title)”. Nothing is sent until you press Return there.",
+              "with an agent running, the diff's toolbar offers “\(words)”", "\(diff.askRoom.hint.title) | \(diff.askRoom.hint.toolTip ?? "")")
+        window.contentView?.layoutSubtreeIfNeeded()
+        if diff.askRoom.bounds.width >= diff.askRoom.hint.fittingSize.width + 8 {
+            check(diff.askRoom.shownTitle == words && diff.toolbarFrames == toolbar, "shown, without moving the toolbar's controls",
+                  "\(diff.askRoom.shownTitle ?? "hidden"), moved: \(diff.toolbarFrames != toolbar)")
+        } else {
+            check(diff.askRoom.shownTitle == nil, "hidden while the toolbar has no room for it")
+            note("the Ask hint: the toolbar has \(Int(diff.askRoom.bounds.width)) points free, too few to show it")
+        }
+
+        // ⌥⌘K on the new side: Claude Code connected, an @-mention of lines 5–6 in its prompt.
+        c.sendToAgent(nil)
+        check(await wait(3) { claude.last("at_mentioned")?["filePath"] as? String == file.path && claude.last("at_mentioned")?["lineStart"] as? Int == 4
+                && claude.last("at_mentioned")?["lineEnd"] as? Int == 5 },
+              "⌥⌘K on the Git Diff tab's new side mentions the file's lines 5–6", "\(claude.last("at_mentioned") ?? [:])")
+
+        // The old side: the removed lines' text, a caret where they were (where line 17 is now: line 15).
+        window.makeFirstResponder(old)
+        check(await select(old, "line 15", through: "line 16", tells: "line 15\nline 16\n", [14, 0], [14, 0]),
+              "lines selected on the old side reach Claude Code as their text, with a caret where they were", describe())
+        // Both sides keep their selection drawn: the one selected last is what counts.
+        window.makeFirstResponder(new)
+        check(await select(new, "line 7", through: "line 8", tells: "line 7\nline 8\n", [6, 0], [8, 0]),
+              "with both sides selected, the new side's lines once selected last", describe())
+        window.makeFirstResponder(old)
+        check(await select(old, "line 14", through: "line 15", tells: "line 14\nline 15\n", [13, 0], [13, 0]),
+              "and the old side's once it is selected again (an unchanged line and a removed one: text, from where line 14 is)", describe())
+        check(await select(old, "line 15", through: "line 16", tells: "line 15\nline 16\n", [14, 0], [14, 0]), "the removed lines alone again", describe())
+
+        // ⌥⌘K on the old side: the removed lines' text with the file's path, typed into the prompt, never sent.
+        agentTab.view.feed(text: "\u{1b}[?2004h") // as an agent taking pastes asks
+        c.sendToAgent(nil)
+        let typed = await wait(4) {
+            let screen = agentTab.screenTail(12).joined()
+            return screen.contains("app.txt") && screen.contains("(lines removed)") && screen.contains("line 16")
+        }
+        check(typed, "⌥⌘K on the old side types the removed lines with the file's path into the agent's prompt",
+              agentTab.screenTail(6).joined(separator: " | "))
+        agentTab.view.feed(text: "\u{1b}[?2004l")
+
+        // Both sides still have lines selected: the keyboard going to one makes its lines count. A click there that
+        // leaves nothing selected tells the agents nothing is, and the keyboard moving on to the terminal changes
+        // nothing: the other side's lines, still drawn, are not what counts.
+        window.makeFirstResponder(new)
+        check(await isTold("line 7\nline 8\n", [6, 0], [8, 0]), "the keyboard back on the new side: its lines, still selected, count again", describe())
+        window.makeFirstResponder(old)
+        check(await isTold("line 15\nline 16\n", [14, 0], [14, 0]), "and on the old side, its", describe())
+        old.setSelectedRange(NSRange(location: old.selectedRange().location, length: 0)) // a click on the old side
+        let cleared = await isToldNoFile()
+        window.makeFirstResponder(agentTab.view)
+        _ = await wait(0.5) { false } // past the selection's debounce
+        check(cleared && claude.last("selection_changed").map { $0["filePath"] == nil } == true && c.currentSelectionForClaude()["filePath"] == nil
+              && diff.diffShare() == nil && !diff.askRoom.wanted,
+              "a click on the old side leaving nothing there tells Claude Code nothing is selected, and the terminal taking the keyboard keeps it so",
+              describe())
+
+        // Unified: removed, added and unchanged lines together are the file's lines; removed ones alone their text.
+        DiffLayout.current = .unified
+        let column = diff.unified.column
+        // Once the whole file is read: the three lines between the first two changes show (fewer than a fold takes).
+        if await wait(5, { diff.showsUnified && diff.unifiedRows.contains { $0.line?.text == "line 10" } }) {
+            window.makeFirstResponder(column.textView)
+            check(await select(column.textView, "line 5", through: "line 6", tells: "line five\nline 6\n", [4, 0], [6, 0]),
+                  "in Unified, a change selected with its unchanged line reaches Claude Code as the file's lines 5–6", describe())
+            check(await select(column.textView, "line 15", through: "line 16", tells: "line 15\nline 16\n", [14, 0], [14, 0]),
+                  "and removed lines alone as their text, with a caret where they were", describe())
+            // The selection goes: the editor's own state again (no file is being edited), and the hint goes.
+            column.textView.setSelectedRange(NSRange(location: 0, length: 0))
+            check(await wait(3) { claude.last("selection_changed").map { $0["filePath"] == nil } == true } && !diff.askRoom.wanted,
+                  "with the selection gone, Claude Code hears the editor's own state again and the Ask hint goes", describe())
+        } else {
+            check(false, "the diff shows Unified", "\(diff.unifiedRows.count) rows")
+        }
+        DiffLayout.current = .sideBySide
+
+        // An .env file's lines: Claude Code hears of no file, Gemini CLI's open files leave it out, no Ask hint.
+        c.showChanges(of: env)
+        if await wait(8, { c.editorArea.activeDiff?.path == ".env" && c.editorArea.activeDiff?.hunkCount == 1 }), let secret = c.editorArea.activeDiff,
+           let side = secret.focusView as? NSTextView {
+            window.makeFirstResponder(side)
+            // Claude Code was told of no file already (the selection went, above): what it would be told now is checked too.
+            let picked = selectRows(side, "KEY=two", through: "KEY=two")
+            let silent = await isToldNoFile()
+            let payload = c.currentSelectionForClaude()
+            check(picked && silent && secret.diffShare() != nil && payload["filePath"] == nil && payload["text"] == nil
+                  && !c.openFilesForGemini().contains { $0["path"] as? String == env.path }
+                  && !secret.offersAsk && !secret.askRoom.wanted,
+                  "lines selected in an .env file's diff reach no agent, and offer no Ask hint", describe())
+            side.setSelectedRange(NSRange(location: 0, length: 0))
+        } else {
+            check(false, "the Git Diff tab shows the .env file's change", c.editorArea.activeDiff?.title ?? "no diff")
+        }
+
+        // All files: a file's lines selected on the page reach the agents, the hint offered; a right-click on another
+        // file's line makes that file the one Send to Agent sends, though the first one had the keyboard.
+        tab.select(path: nil)
+        if await wait(8, { tab.allFiles.map { !$0.isHidden && Set($0.paths) == ["app.txt", "notes.txt", ".env"] } == true }), let page = tab.allFiles {
+            page.reveal("app.txt")
+            let first = page.entry(at: "app.txt")?.block?.column
+            page.reveal("notes.txt")
+            let second = page.entry(at: "notes.txt")?.block?.column
+            let row = second?.rows.firstIndex { $0.kind == .added && $0.line?.text == "note two" }
+            if let first, let second, let row {
+                window.makeFirstResponder(first.textView)
+                check(await select(first.textView, "line five", through: "line 6", tells: "line five\nline 6\n", [4, 0], [6, 0]),
+                      "lines selected on the All files page reach Claude Code as the file's lines 5–6", describe())
+                check(await wait(2) { page.askRoom.wanted }, "and the page's toolbar offers to ask the agent about them")
+                let menu = second.menuForRow?(row)
+                check(await isTold("note two\n", [1, 0], [2, 0], in: notes) && page.diffShare()?.path == notes.path,
+                      "a right-click on another file's line makes its line the one that counts", describe())
+                if let menu, let send = menu.items.firstIndex(where: { $0.title == "Send to Agent" }) {
+                    menu.performActionForItem(at: send)
+                    check(await wait(3) { claude.last("at_mentioned")?["filePath"] as? String == notes.path && claude.last("at_mentioned")?["lineStart"] as? Int == 1 },
+                          "and its Send to Agent mentions that file's line, not the first file's", "\(claude.last("at_mentioned") ?? [:])")
+                } else {
+                    check(false, "a line's right-click menu on the All files page offers Send to Agent")
+                }
+                first.textView.setSelectedRange(NSRange(location: 0, length: 0))
+                second.textView.setSelectedRange(NSRange(location: 0, length: 0))
+            } else {
+                check(false, "the All files page lays out both files' lines", page.blockTitles.joined(separator: " | "))
+            }
+        } else {
+            check(false, "All files shows the three changed files", tab.allFiles?.blockTitles.joined(separator: " | ") ?? "no page")
+        }
+
+        // A commit's version is not the file now: its text, no line claimed; and no Ask hint, it is committed.
+        run("commit", "-qam", "Change")
+        let sha = run("rev-parse", "HEAD"), parent = run("rev-parse", "HEAD~1")
+        c.editorArea.openCommitDiff(root: repo.path, path: "app.txt", change: DiffPane.CommitChange(sha: sha, parent: parent, oldPath: nil))
+        if let committed = c.editorArea.activeDiff, committed.commit?.sha == sha, await wait(8, { committed.hunkCount == 3 }),
+           let side = committed.focusView as? NSTextView {
+            window.makeFirstResponder(side)
+            check(await select(side, "line five", through: "line 6", tells: "line five\nline 6\n", [0, 0], [0, 0]),
+                  "lines selected in a commit's diff reach Claude Code as text, with no line of the file claimed", describe())
+            check(committed.diffShare() != nil && !committed.askRoom.wanted, "and offer no Ask hint: they are committed")
+            side.setSelectedRange(NSRange(location: 0, length: 0))
+            c.editorArea.close(committed)
+        } else {
+            check(false, "the commit's diff of the file opens", c.editorArea.activeDiff?.title ?? "no diff")
+        }
+        c.editorArea.close(tab)
+        try? FileManager.default.removeItem(at: repo)
+        restore()
+    }
+
+    /// Selects `view`'s rows from the one reading `first` through the line break of the one reading `last`.
+    private static func selectRows(_ view: NSTextView, _ first: String, through last: String) -> Bool {
+        var offset = 0, start: Int?
+        for line in view.string.components(separatedBy: "\n") {
+            let length = (line as NSString).length
+            if start == nil, line == first { start = offset }
+            if let start, line == last {
+                view.setSelectedRange(NSRange(location: start, length: offset + length + 1 - start))
+                return true
+            }
+            offset += length + 1
+        }
+        return false
     }
 
     /// The diff settings as they are now, put back by the closure returned: Side by Side or Unified, the Git

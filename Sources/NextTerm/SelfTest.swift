@@ -4334,16 +4334,14 @@ enum SelfTest {
             let item = diff.contextItem()
             check(item == ContextItem(path: file.path, lines: 2...3), "and the new side's lines when some are selected", "\(String(describing: item))")
             side.setSelectedRange(NSRange(location: 0, length: 0))
-            // The same rows selected on the old side: the new side's lines in them.
+            // The line it replaced, selected on the old side: not in the file any more, so its text with the file's path.
             let old = diff.oldSideView, oldText = old.string as NSString
-            let oldFrom = oldText.range(of: "line 2"), oldTo = oldText.range(of: "line 3\n")
-            if oldFrom.location != NSNotFound, oldTo.location != NSNotFound {
-                old.setSelectedRange(NSRange(location: oldFrom.location, length: NSMaxRange(oldTo) - oldFrom.location))
-            }
+            let removed = oldText.range(of: "line 2\n")
+            if removed.location != NSNotFound { old.setSelectedRange(removed) }
             c.window?.makeFirstResponder(old)
             let fromOld = diff.contextItem()
-            check(fromOld == ContextItem(path: file.path, lines: 2...3), "and from the old side, the new side's lines in the same rows",
-                  "\(String(describing: fromOld))")
+            check(fromOld == ContextItem(path: file.path, note: "lines removed", code: "line 2", language: fromOld?.language ?? ""),
+                  "and from the old side, the removed line's text with the file's path, no line claimed", "\(String(describing: fromOld))")
             old.setSelectedRange(NSRange(location: 0, length: 0))
             c.window?.makeFirstResponder(side)
         }
@@ -4481,6 +4479,7 @@ enum SelfTest {
                   "with Claude connected, a deleted file is typed with its note, not mentioned", agentTab.screenTail(3).joined(separator: " | "))
         }
 
+        await diffSelectionChecks(c, agentTab: agentTab, claude: claude)
         await geminiLinkChecks(c)
         await copilotLinkChecks(c, proj: proj, agentTab: agentTab)
         await opencodeLinkChecks(c, proj: proj)
