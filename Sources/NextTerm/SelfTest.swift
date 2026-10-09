@@ -116,6 +116,10 @@ enum SelfTest {
     }
 
     /// Why `bringToFront` could not: for the note of a skipped check.
+    /// The main display sleeps (a locked Mac left alone): nothing is drawn on screen, and drags posted to a
+    /// window reach no split view.
+    static var displayAsleep: Bool { CGDisplayIsAsleep(CGMainDisplayID()) != 0 }
+
     static func notFrontmost(_ window: NSWindow) -> String {
         "the app is not frontmost (active \(NSApp.isActive), key window \(NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "none"), "
             + "this one key \(window.isKeyWindow))"
@@ -3276,7 +3280,14 @@ enum SelfTest {
         // If this drag didn't arrive, the "leaves it hidden" checks below would pass without a press reaching
         // the window: they fail too, saying so.
         let moved = abs(area.frame.width - (editorWidth - 40)) <= 2
-        check(moved, "a drag on the line between editor and terminal moves it", "\(editorWidth) → \(area.frame.width)")
+        // While the display sleeps (a locked Mac left alone), a drag posted to the window reaches no split view:
+        // the checks that need one are skipped, said in a note.
+        let noHand = !moved && displayAsleep
+        if noHand {
+            note("a hand's drags at the work area's edge: skipped, the display is asleep, so a drag posted to the window reaches no split view")
+        } else {
+            check(moved, "a drag on the line between editor and terminal moves it", "\(editorWidth) → \(area.frame.width)")
+        }
         let unproven = "the drag on the visible line did not move it, so these presses prove nothing"
         area.closeAll()
         restoreFraction()
@@ -3298,6 +3309,7 @@ enum SelfTest {
         }
         var shot = false
         func edgeCheck(_ name: String, from: NSPoint, to: NSPoint, steps: Int = 1) async {
+            guard !noHand else { return }
             await drag(in: window, from: from, to: to, steps: steps)
             let found = problems()
             check(moved && found.isEmpty, name, moved ? found : unproven)
@@ -3364,9 +3376,11 @@ enum SelfTest {
         await drag(in: window, from: NSPoint(x: 2, y: middle), to: NSPoint(x: 42, y: middle), steps: 4)
         window.layoutIfNeeded()
         let mainFrame = main?.frame ?? .zero
-        check(moved && !c.isSidebarVisible && mainFrame.minX == 0 && mainFrame.width == outer.bounds.width,
-              "with the sidebar hidden, a drag at the window's edge leaves it hidden",
-              moved ? "sidebar hidden \(!c.isSidebarVisible), work area \(mainFrame) of \(outer.bounds.width)" : unproven)
+        if !noHand {
+            check(moved && !c.isSidebarVisible && mainFrame.minX == 0 && mainFrame.width == outer.bounds.width,
+                  "with the sidebar hidden, a drag at the window's edge leaves it hidden",
+                  moved ? "sidebar hidden \(!c.isSidebarVisible), work area \(mainFrame) of \(outer.bounds.width)" : unproven)
+        }
         app.sidebarVisible = true
         restore("sidebarWidth", saved.width) // a sidebar dragged out by AppKit saves its width
         c.setSidebarVisible(true)
@@ -3398,7 +3412,20 @@ enum SelfTest {
         }
         let events = [event(.leftMouseDown, at: from)] + path.map { event(.leftMouseDragged, at: $0) } + [event(.leftMouseUp, at: to)]
         for event in events.compactMap({ $0 }) { NSApp.postEvent(event, atStart: false) }
-        await pause(0.5)
+        // Then one event of our own: the app handles it only once a split view's or a control's tracking of the
+        // drag has taken the mouse-up and returned, however long a loaded machine takes to get there.
+        var handled = false
+        let monitor = NSEvent.addLocalMonitorForEvents(matching: .applicationDefined) { event in
+            if event.subtype.rawValue == 0x4E54, event.data1 == 0x6472 { handled = true; return nil }
+            return event
+        }
+        if let after = NSEvent.otherEvent(with: .applicationDefined, location: .zero, modifierFlags: [], timestamp: 0,
+                                          windowNumber: 0, context: nil, subtype: 0x4E54, data1: 0x6472, data2: 0) {
+            NSApp.postEvent(after, atStart: false)
+        }
+        _ = await wait(10) { handled }
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        await pause(0.2)
     }
 
     /// View › Annotate with Git Blame: who last changed each line, beside the numbers; edited lines are not

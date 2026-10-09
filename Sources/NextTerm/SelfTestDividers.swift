@@ -108,7 +108,10 @@ extension SelfTest {
             colour = lines.first.flatMap { screenColour(window, at: work.convert(NSPoint(x: $0.midX, y: $0.midY), to: nil)) }
             return colour.map { WorkSplitView.line.matches($0) } == true
         }
-        check(opened && between && colour.map { WorkSplitView.line.matches($0) } == true && outer.drawnLines.count == 1,
+        // While the display sleeps nothing reaches the screen: the lines are checked as placed, not as seen.
+        let seen = colour.map { WorkSplitView.line.matches($0) } == true
+        if !seen && displayAsleep { note("lines: the line's colour on screen not checked, the display is asleep") }
+        check(opened && between && (seen || displayAsleep) && outer.drawnLines.count == 1,
               "lines: a file open, one line shows between the editor and the terminal, and one beside the sidebar",
               "editor \(area.frame), terminal \(terminal.frame), lines \(lines), on screen \(colour.map { "\($0)" } ?? "none"), sidebar's \(outer.drawnLines)")
         await noStrayLines("lines: none over the terminal while the file is open")
