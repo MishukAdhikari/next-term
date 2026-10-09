@@ -17,13 +17,15 @@ struct UpdateFixture {
     var plan: UpdatePlan { planned() }
 
     func planned(busy: Set<UUID> = [], outcomes: [UUID: RestoreOutcome] = [:], leftOut: Set<UUID> = [],
-                 serving: Set<UUID> = []) -> UpdatePlan {
+                 serving: Set<UUID> = [], jobs: Set<UUID> = []) -> UpdatePlan {
         func pane(_ id: UUID, _ name: String, _ outcome: RestoreOutcome, _ listLine: String, split: Bool = false,
                   agent: Bool = false, remote: Bool = false) -> UpdatePane {
             let planned = outcomes[id] ?? outcome
-            return UpdatePane(id: id, name: name, split: split, outcome: planned, listLine: planned == outcome ? listLine : "\(planned)",
-                              busy: busy.contains(id), agent: agent, remote: remote, serving: serving.contains(id),
-                              leftOut: leftOut.contains(id))
+            var pane = UpdatePane(id: id, name: name, split: split, outcome: planned,
+                                  listLine: planned == outcome ? listLine : "\(planned)", busy: busy.contains(id), agent: agent,
+                                  remote: remote, serving: serving.contains(id), leftOut: leftOut.contains(id))
+            pane.jobs = jobs.contains(id)
+            return pane
         }
         let panes: [UpdatePane] = [
             pane(agent, "app", .resume, "Claude Code resumes", agent: true),
@@ -252,11 +254,130 @@ struct UpdateFixture {
     }
 
     @Test func aQuitWhileWaitingUsesNoConsent() {
-        // ⌘Q while waiting is a normal quit: the consent from "Wait for Them" does not exist yet.
+        // ⌘Q while waiting is a normal quit: the consent from "Wait for Them" does not exist yet, so the quit is the user's,
+        // asks the 0.11 quit questions ("Quitting stops…" with the box), and installs without relaunching.
         var flow = saw.flow(busy: [saw.agent])
         _ = flow.press(.waitForThem)
         #expect(flow.consent == nil)
-        #expect(QuitIntent.ordinary(reason: .user, settings: LaunchSettings(), consent: false)?.relaunches == false)
+        let reason = QuitReason.of(plainSelfTest: false, harness: nil, updateConsent: flow.consent != nil, appleEventReason: nil)
+        #expect(reason == .user)
+        let update: UpdateQuit? = flow.consent.map { (consent: UpdateConsent) -> UpdateQuit in
+            UpdateQuit(consent: consent, current: flow.plan)
+        }
+        let input = QuitInput(unsavedFiles: 0, busyTabs: 1, terminalWindows: 1, sheetAttached: false, reason: reason,
+                              settings: LaunchSettings(), update: update)
+        let asked: [QuitQuestion] = QuitPolicy.questions(input)
+        let expected: [QuitQuestion] = [.busy(resumeCheckbox: true)]
+        #expect(asked == expected, "\(asked)")
+        #expect(QuitIntent.ordinary(reason: reason, settings: LaunchSettings(), consent: false)?.relaunches == false)
+    }
+
+    @Test func aTabBusyOnlyWithItsJobsIsWaitedForAndSaysItsJobsStop() {
+        // `npm run dev &`, or vim stopped with ctrl-Z, at an idle prompt: busy, listed first, and waited for, as ⌘Q names it.
+        var flow = UpdateFlow(version: saw.version, plan: saw.planned(busy: [saw.split], jobs: [saw.split]), remembered: nil)
+        #expect(flow.state == .busy && flow.waitSet == [saw.split])
+        #expect(flow.busyPanes.map(\.id) == [saw.split])
+        #expect(line(flow, saw.split) == "waited for")
+        // Taken out: its jobs stop, and the tab comes back as planned, or closes with the box unchecked.
+        flow.setWaited(saw.split, false)
+        #expect(line(flow, saw.split) == "its jobs stop at the update; opens in its folder")
+        flow.setKeep(false)
+        #expect(line(flow, saw.split) == "its jobs stop at the update, and it closes")
+        // An agent idle in front of a background job: the job stops, and the agent still resumes.
+        var agent = UpdateFlow(version: saw.version, plan: saw.planned(busy: [saw.agent], jobs: [saw.agent]), remembered: nil)
+        agent.setWaited(saw.agent, false)
+        #expect(line(agent, saw.agent) == "its jobs stop at the update; Claude Code resumes")
+        // The wait counts it done once its jobs are gone.
+        var waiting = UpdateFlow(version: saw.version, plan: saw.planned(busy: [saw.split], jobs: [saw.split]), remembered: nil)
+        #expect(waiting.press(.waitForThem) == .startWait)
+        #expect(waiting.refresh(saw.plan) == .startCountdown)
+    }
+
+    @Test func showingTheSheetAgainKeepsTheUsersChoices() {
+        // The Update button or a check while the sheet is up: the plan now, with the box, the "Wait for this" choices and
+        // the marked lines as the user left them. A tab newly busy joins the wait; the one taken out stays out.
+        var flow = saw.flow(busy: [saw.agent, saw.command])
+        flow.setWaited(saw.command, false)
+        flow.setKeep(false)
+        flow.replan(saw.planned(busy: [saw.agent, saw.command, saw.split]))
+        #expect(flow.state == .busy && !flow.keep)
+        #expect(flow.waitSet == [saw.agent, saw.split])
+        // Every busy tab finished: the idle sheet.
+        flow.replan(saw.plan)
+        #expect(flow.state == .idle && flow.waitSet.isEmpty)
+        // The lines marked when the sheet showed again stay marked.
+        var again = saw.flow(busy: [saw.agent])
+        again.showAgain(saw.planned(busy: [saw.agent]), marking: [saw.agent])
+        again.replan(saw.planned(busy: [saw.agent]))
+        let changed: [UUID] = again.details.filter(\.changed).compactMap(\.pane)
+        #expect(changed == [saw.agent])
+        // Sessions that can no longer be kept: the box unchecked and dimmed.
+        var lost = saw.flow()
+        var unsaved = saw.plan
+        unsaved.refusal = .notSaved
+        lost.replan(unsaved)
+        #expect(!lost.keep && !lost.keepEnabled)
+        // While waiting nothing is planned again: the wait panel comes forward as it is.
+        var waiting = saw.flow(busy: [saw.agent])
+        _ = waiting.press(.waitForThem)
+        waiting.replan(saw.planned(busy: [saw.agent, saw.command]))
+        let unplanned = waiting.plan == saw.planned(busy: [saw.agent])
+        #expect(waiting.state == .waiting && waiting.waitSet == [saw.agent] && unplanned)
+    }
+
+    @Test func theBoxIsTheSameInEveryStateAndTheCountdownsConsentReadsIt() {
+        var flow = saw.flow(busy: [saw.agent])
+        _ = flow.press(.waitForThem)
+        flow.setKeep(false)
+        #expect(!flow.keep)
+        #expect(flow.refresh(saw.plan) == .startCountdown)
+        flow.setKeep(true)
+        #expect(flow.keep)
+        guard case .quit(let consent) = flow.countdownEnded(saw.plan) else {
+            Issue.record("the countdown's end gives the consent")
+            return
+        }
+        #expect(consent.keep)
+    }
+
+    @Test func anUpdateQuitOverADialogOrForAnotherVersionIsRefusedAndSaysWhy() {
+        let consent = saw.consent()
+        func refusal(staged: String?, sheet: Bool = false, modal: Bool = false, asking: Bool = false) -> UpdateQuitRefusal? {
+            UpdateFlow.quitRefusal(for: consent, staged: staged, sheetAttached: sheet, modalWindow: modal, askingToQuit: asking)
+        }
+        #expect(refusal(staged: saw.version) == nil)
+        // A commit sheet on another window, a modal window, or a quit's question: the press is kept, and the line says why.
+        #expect(refusal(staged: saw.version, sheet: true) == .dialogOpen)
+        #expect(refusal(staged: saw.version, modal: true) == .dialogOpen)
+        #expect(refusal(staged: saw.version, asking: true) == .dialogOpen)
+        #expect(refusal(staged: "0.13.0", sheet: true) == .dialogOpen)
+        // Another version staged since: the consent covered the one before.
+        #expect(refusal(staged: "0.13.0") == .otherVersion)
+        #expect(refusal(staged: nil) == .otherVersion)
+        // What the sheet or the wait panel says: click again, or, in the countdown, that it waits for the dialog to close.
+        let sheet = saw.flow()
+        #expect(sheet.heldLine == "The update can’t start while a dialog or sheet is open. Close it, then click Update Now again.")
+        var counting = saw.flow(busy: [saw.agent])
+        _ = counting.press(.waitForThem)
+        _ = counting.refresh(saw.plan)
+        #expect(counting.state == .countdown)
+        #expect(counting.heldLine == "The update starts once the open dialog or sheet is closed.")
+    }
+
+    @Test func aFailedInstallPromisesTheUpdateButtonOnlyAfterTheCheckItRuns() {
+        // R18, AE7: after the relaunch nothing is staged, so the Update button offers the update only once a check found
+        // it; the one alert says the check runs now, and never that the button offers it already.
+        for outcome in [InstallResult.Outcome.failedKeptOld, .failedRestoredBackup] {
+            let text = UpdateFlow.installFailedText(outcome)
+            #expect(text.contains("Next Term checks for it again now, and the Update button offers it once that check finds it."))
+            #expect(!text.contains("still offers"), "\(text)")
+            #expect(text.hasSuffix("You can download it from the release page instead."))
+        }
+        let backup = UpdateFlow.installFailedText(.failedRestoredBackup)
+        #expect(backup.hasPrefix("The new version could not be put in place, so this version was opened from its backup."))
+        let note = "This version opened again. Next Term checks for the update again now, and the Update button offers it once "
+            + "that check finds it."
+        #expect(UpdateFlow.didNotInstallText == note)
     }
 
     @Test func sessionsThatCannotBeKeptShowTheSheetWithTheBoxUncheckedAndDimmed() {

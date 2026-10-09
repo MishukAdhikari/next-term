@@ -5,9 +5,9 @@ import Foundation
 // for Them" at its countdown's end, creates. The sheet's lines come from the restore planner (RestorePlanner), run on
 // the open windows as the relaunch would run it, so the sheet promises only what the restore does.
 //
-// States: Idle (nothing busy), Busy (a local tab has an agent working or waiting on the user, or a running command),
-// Waiting (after "Wait for Them"), Countdown (every waited tab is done). No button is the default in any state, so Return
-// confirms nothing: the sheet opens by itself, often while the user types.
+// States: Idle (nothing busy), Busy (a local tab has an agent working or waiting on the user, a running command, or a
+// background or suspended job), Waiting (after "Wait for Them"), Countdown (every waited tab is done). No button is the
+// default in any state, so Return confirms nothing: the sheet opens by itself, often while the user types.
 
 /// Why an update can't keep sessions: the box is unchecked and dimmed, and this line says why.
 public enum KeepRefusal: Equatable, Sendable {
@@ -38,10 +38,14 @@ public struct UpdatePane: Equatable, Sendable {
     /// What the restore would do to it, and the planner's words for it.
     public var outcome: RestoreOutcome
     public var listLine: String
-    /// An agent working or waiting on the user, or a command running. A remote tab is never busy.
+    /// An agent working or waiting on the user, a command running, or a background or suspended job. A remote tab is never
+    /// busy.
     public var busy: Bool
     /// It runs an agent: taken out of the wait, its current turn stops.
     public var agent: Bool
+    /// Only its background or suspended jobs make it busy ("Quitting stops…" names them too): taken out of the wait, they
+    /// stop, and what runs in front comes back as planned.
+    public var jobs = false
     /// A tab on a server.
     public var remote: Bool
     /// Its running command serves a URL, so it never ends by itself.
@@ -240,8 +244,9 @@ public struct UpdateFlow: Equatable, Sendable {
     /// The busy tabs, listed first, each with its "Wait for this" checkbox.
     public var busyPanes: [UpdatePane] { plan.panes.filter(\.isBusy) }
 
+    /// The box, in every state: the consent reads it at the press, or at the countdown's end.
     public mutating func setKeep(_ on: Bool) {
-        guard keepEnabled, state != .countdown else { return }
+        guard keepEnabled else { return }
         keep = on
     }
 
@@ -260,6 +265,9 @@ public struct UpdateFlow: Equatable, Sendable {
         if pane.isBusy && state != .countdown {
             if waitSet.contains(pane.id) {
                 return pane.serving ? "waited for, though it never ends by itself" : "waited for"
+            }
+            if pane.jobs {
+                return "its jobs stop at the update" + (keeps ? "; " + pane.listLine : ", and it closes")
             }
             if pane.agent {
                 return "its current turn stops at the update, " + (keeps ? "then " + pane.listLine : "and closes")
@@ -401,6 +409,20 @@ public struct UpdateFlow: Equatable, Sendable {
         return .showAgain
     }
 
+    /// The sheet shown again while it is up (the Update button, a check): the plan now, with the box, each "Wait for this"
+    /// and the marked lines as the user left them. A tab newly busy joins the wait set; one the user took out stays out;
+    /// one that finished leaves. While waiting nothing changes: the wait panel comes forward as it is.
+    public mutating func replan(_ current: UpdatePlan) {
+        guard state == .idle || state == .busy else { return }
+        let wasBusy = Set(busyPanes.map(\.id))
+        let busyNow = Set(current.panes.filter(\.isBusy).map(\.id))
+        let takenOut = wasBusy.subtracting(waitSet)
+        plan = current
+        if !keepEnabled { keep = false }
+        waitSet = busyNow.subtracting(takenOut)
+        state = busyNow.isEmpty ? .idle : .busy
+    }
+
     /// The sheet again, with `current` and the lines that made it worse marked.
     public mutating func showAgain(_ current: UpdatePlan, marking panes: Set<UUID>) {
         plan = current
@@ -468,4 +490,44 @@ public struct UpdateFlow: Equatable, Sendable {
     public static func mayStart(sheetAttached: Bool, modalWindow: Bool, askingToQuit: Bool) -> Bool {
         !sheetAttached && !modalWindow && !askingToQuit
     }
+
+    /// Why the quit a press or the countdown's end asks for can't go ahead now, or nil when it can: a sheet, a modal
+    /// window or a quit's question is up, or the staged update is no longer the one the consent was given for. Never a
+    /// quiet no: the sheet or the wait panel says why, or the sheet shows for the version staged now.
+    public static func quitRefusal(for consent: UpdateConsent, staged: String?, sheetAttached: Bool, modalWindow: Bool,
+                                   askingToQuit: Bool) -> UpdateQuitRefusal? {
+        guard mayStart(sheetAttached: sheetAttached, modalWindow: modalWindow, askingToQuit: askingToQuit) else { return .dialogOpen }
+        return staged == consent.version ? nil : .otherVersion
+    }
+
+    /// The line the sheet or the wait panel shows when its quit waits for a dialog: Update Now is pressed again once it is
+    /// closed; the countdown runs again by itself.
+    public var heldLine: String {
+        guard state == .countdown else {
+            return "The update can’t start while a dialog or sheet is open. Close it, then click Update Now again."
+        }
+        return "The update starts once the open dialog or sheet is closed."
+    }
+
+    /// The one alert after a relaunch the install could not finish (R18), under "<version> was not installed". Nothing is
+    /// staged after the relaunch, so the Update button offers the update again only once the check that runs then finds it.
+    public static func installFailedText(_ outcome: InstallResult.Outcome) -> String {
+        let opened = outcome == .failedRestoredBackup
+            ? "The new version could not be put in place, so this version was opened from its backup."
+            : "The new version could not be put in place, so this version opened again."
+        return opened + " Next Term checks for it again now, and the Update button offers it once that check finds it."
+            + "\n\nYou can download it from the release page instead."
+    }
+
+    /// The note, once, when the update did not install and no result said so.
+    public static let didNotInstallText = "This version opened again. Next Term checks for the update again now, and the "
+        + "Update button offers it once that check finds it."
+}
+
+/// Why an update quit can't go ahead now.
+public enum UpdateQuitRefusal: Equatable, Sendable {
+    /// A sheet is attached, a modal window is up, or a quit asks its questions.
+    case dialogOpen
+    /// The staged update is another version than the consent's, or none.
+    case otherVersion
 }

@@ -18,9 +18,18 @@ final class UpdateKeepSessions {
     private(set) var flow: UpdateFlow?
     private(set) var sheet: UpdateSheetController?
     private(set) var panel: UpdateWaitPanel?
+    /// Each second while the sheet or the panel is up: the open decisions read again, and while waiting the waited tabs
+    /// and the countdown.
     private var timer: Timer?
     private var waitStarted: Date?
     private var countdownEnds: Date?
+    /// The countdown ended while a sheet, a modal window or a quit's question was up: the update waits for it to close,
+    /// then counts down again.
+    private var countdownHeld = false
+    /// A press's quit, waiting for an operation the update waits for (UpdateHolds).
+    private var pendingQuit: UpdateConsent?
+    /// Why the last press has not quit yet, shown until the next press.
+    private(set) var note: String?
 
     /// A wait for busy tabs is under way ("Wait for Them", then its countdown). MCP refuses new work elsewhere while it is.
     var isWaiting: Bool {
@@ -35,14 +44,23 @@ final class UpdateKeepSessions {
                                    askingToQuit: AppDelegate.shared.askingToQuit)
     }
 
-    /// Opens the sheet for the staged `version`, planned from the open windows, its box where the user last left it. While
-    /// a wait is under way, the wait panel comes forward instead.
+    /// Opens the sheet for the staged `version`, planned from the open windows, its box where the user last left it. Shown
+    /// again while it is up (the Update button, a check), it comes forward with the plan now and the user's choices kept;
+    /// while a wait is under way, the wait panel comes forward instead.
     func show(version: AppVersion, from entry: UpdateFlow.Entry) {
-        if isWaiting, flow?.version == version.description {
-            panel?.present()
+        if var flow, flow.version == version.description {
+            if isWaiting {
+                panel?.present()
+                return
+            }
+            flow.replan(UpdatePlanning.plan())
+            self.flow = flow
+            presentSheet()
             return
         }
         guard Self.mayStart else { return }
+        // Another version is staged now: what was up for the one before goes, its wait with it.
+        if flow != nil { closeAll() }
         let remembered = AppDelegate.shared.launchDefaults.object(forKey: UpdateFlow.rememberKey) as? Bool
         flow = UpdateFlow(version: version.description, plan: UpdatePlanning.plan(), remembered: remembered, from: entry)
         presentSheet()
@@ -56,10 +74,8 @@ final class UpdateKeepSessions {
         let worse = UpdateFlow.worse(update.current, than: update.consent)
         var again = UpdateFlow(version: update.consent.version, plan: update.current, remembered: update.consent.keep)
         again.showAgain(update.current, marking: worse?.panes ?? [])
+        if flow != nil { closeAll() }
         flow = again
-        endTimer()
-        panel?.close()
-        panel = nil
         presentSheet()
         announce("The update was not started: what happens to your tabs changed. Check the update sheet again.")
     }
@@ -68,18 +84,21 @@ final class UpdateKeepSessions {
 
     func pressed(_ button: UpdateButton) {
         guard var flow else { return }
+        note = nil
+        pendingQuit = nil
         let effect = flow.press(button)
         self.flow = flow
         apply(effect)
     }
 
-    /// The box: saved where the next sheet's box starts from. That is never consent: the press reads the box (R28).
+    /// The box, on the sheet or the wait panel: saved where the next sheet's box starts from. That is never consent: the
+    /// press, or the countdown's end, reads the box (R28).
     func keepChanged(_ on: Bool) {
         guard var flow else { return }
         flow.setKeep(on)
         self.flow = flow
         if flow.keepEnabled { AppDelegate.shared.launchDefaults.set(flow.keep, forKey: UpdateFlow.rememberKey) }
-        sheet?.render(flow)
+        render()
     }
 
     /// "Wait for this", on a busy tab's line.
@@ -87,7 +106,7 @@ final class UpdateKeepSessions {
         guard var flow else { return }
         flow.setWaited(pane, on)
         self.flow = flow
-        sheet?.render(flow)
+        render()
     }
 
     /// "Show" on a waited tab that needs an answer: its window and tab in front.
@@ -102,32 +121,25 @@ final class UpdateKeepSessions {
     }
 
     private func apply(_ effect: UpdateFlow.Effect) {
-        guard let flow else { return }
+        guard flow != nil else { return }
         switch effect {
         case .none:
-            sheet?.render(flow)
-            panel?.render(flow, elapsed: elapsed, remaining: remaining)
+            render()
         case .quit(let consent):
-            closeAll()
             quit(consent)
-        case .close:
+        case .close, .endWait:
             closeAll()
         case .startWait:
-            sheet?.close()
-            sheet = nil
+            closeSheet()
             waitStarted = Date()
-            showPanel(flow)
+            showPanel()
         case .startCountdown:
-            sheet?.close()
-            sheet = nil
+            closeSheet()
             if waitStarted == nil { waitStarted = Date() }
-            countdownEnds = Date().addingTimeInterval(UpdateFlow.countdown)
-            showPanel(flow)
-            announce("Every tab you waited for is done. Updating in 10 seconds.")
-        case .endWait:
-            closeAll()
+            showPanel()
+            startCountdown(announcing: "Every tab you waited for is done. Updating in 10 seconds.")
         case .showAgain:
-            endTimer()
+            stopWaitClock()
             panel?.close()
             panel = nil
             presentSheet()
@@ -135,29 +147,88 @@ final class UpdateKeepSessions {
         }
     }
 
-    /// Quits under the consent, once no operation the update waits for runs (UpdateHolds). A quit that is cancelled, or
-    /// refused because a sheet or a modal window came up meanwhile, leaves the update staged.
+    /// Quits under the consent, once no operation the update waits for runs (UpdateHolds). Never quietly refused: over a
+    /// sheet, a modal window or a quit's question the sheet or the panel stays and says why, and a countdown waits for it
+    /// to close, then counts down again; with another version staged since, the sheet shows for that one. A quit the user
+    /// then cancels leaves the update staged.
     private func quit(_ consent: UpdateConsent) {
-        guard UpdateHolds.shared.running.isEmpty else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.quit(consent) }
+        let running = UpdateHolds.shared.running
+        guard running.isEmpty else {
+            pendingQuit = consent
+            say("The update starts once what you approved has finished: " + running.joined(separator: "; ") + ".")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                guard let self, self.pendingQuit == consent else { return }
+                self.quit(consent)
+            }
             return
         }
+        pendingQuit = nil
+        if let refusal = Updater.shared.quitRefusal(for: consent) { return refused(refusal) }
+        closeAll()
         Updater.shared.quitForUpdate(consent)
     }
 
-    private func presentSheet() {
+    private func refused(_ refusal: UpdateQuitRefusal) {
         guard let flow else { return }
-        let sheet = self.sheet ?? UpdateSheetController()
-        self.sheet = sheet
-        sheet.render(flow, decisions: UpdateHolds.shared.openDecisions)
-        sheet.present(over: Self.frontWindow)
+        switch refusal {
+        case .dialogOpen:
+            if flow.state == .countdown {
+                countdownHeld = true
+                countdownEnds = nil
+            }
+            say(flow.heldLine)
+        case .otherVersion:
+            closeAll()
+            Updater.shared.offerStaged()
+            if sheet != nil { announce("Another version of the update is ready. Check the update sheet again.") }
+        }
     }
 
-    private func showPanel(_ flow: UpdateFlow) {
+    /// Why nothing quit yet, on the sheet or the panel, and for VoiceOver once.
+    private func say(_ text: String) {
+        guard note != text else { return }
+        note = text
+        render()
+        announce(text)
+    }
+
+    private func presentSheet() {
+        let sheet = self.sheet ?? UpdateSheetController()
+        self.sheet = sheet
+        render()
+        sheet.present(over: Self.frontWindow)
+        startTimer()
+    }
+
+    private func showPanel() {
         let panel = self.panel ?? UpdateWaitPanel()
         self.panel = panel
-        panel.render(flow, elapsed: elapsed, remaining: remaining)
+        render()
         panel.present()
+        startTimer()
+    }
+
+    private func closeSheet() {
+        sheet?.close()
+        sheet = nil
+    }
+
+    private func startCountdown(announcing text: String) {
+        countdownHeld = false
+        countdownEnds = Date().addingTimeInterval(UpdateFlow.countdown)
+        render()
+        announce(text)
+    }
+
+    /// What is up, drawn from the flow, the open decisions now and the note. Each draws only what changed.
+    private func render() {
+        guard let flow else { return }
+        let decisions = UpdateHolds.shared.openDecisions
+        sheet?.render(flow, decisions: decisions, note: note)
+        panel?.render(flow, elapsed: elapsed, remaining: remaining, decisions: decisions, note: note)
+    }
+
+    private func startTimer() {
         guard timer == nil else { return }
         let timer = Timer(timeInterval: 1, repeats: true) { _ in
             MainActor.assumeIsolated { UpdateKeepSessions.shared.tick() }
@@ -166,25 +237,30 @@ final class UpdateKeepSessions {
         self.timer = timer
     }
 
-    /// Each second while waiting: the waited tabs read again, the countdown counted, and at its end the plan again.
+    /// Each second: the open decisions read again; while waiting, the waited tabs read again; in the countdown, the time
+    /// counted, and at its end the plan again. A countdown held for a dialog counts down again once it is closed. A quit
+    /// pressed already, waiting for what the user approved, holds the rest.
     private func tick() {
-        guard var flow else { return endTimer() }
+        guard var flow else { return stopTimer() }
+        guard pendingQuit == nil else { return render() }
         switch flow.state {
+        case .idle, .busy:
+            render()
         case .waiting:
             let effect = flow.refresh(UpdatePlanning.refreshed(flow.plan))
             self.flow = flow
             apply(effect)
         case .countdown:
-            guard let ends = countdownEnds, Date() >= ends else {
-                panel?.render(flow, elapsed: elapsed, remaining: remaining)
-                return
+            if countdownHeld {
+                guard Self.mayStart else { return render() }
+                note = nil
+                return startCountdown(announcing: "Updating in 10 seconds.")
             }
+            guard let ends = countdownEnds, Date() >= ends else { return render() }
             countdownEnds = nil
             let effect = flow.countdownEnded(UpdatePlanning.plan())
             self.flow = flow
             apply(effect)
-        case .idle, .busy:
-            endTimer()
         }
     }
 
@@ -195,10 +271,14 @@ final class UpdateKeepSessions {
         return max(0, Int(countdownEnds.timeIntervalSinceNow.rounded(.up)))
     }
 
-    private func endTimer() {
+    private func stopTimer() {
         timer?.invalidate()
         timer = nil
+    }
+
+    private func stopWaitClock() {
         countdownEnds = nil
+        countdownHeld = false
         waitStarted = nil
     }
 
@@ -210,7 +290,10 @@ final class UpdateKeepSessions {
     }
 
     private func closeAll() {
-        endTimer()
+        stopTimer()
+        stopWaitClock()
+        pendingQuit = nil
+        note = nil
         sheet?.close()
         sheet = nil
         panel?.close()
@@ -218,7 +301,7 @@ final class UpdateKeepSessions {
         flow = nil
     }
 
-    /// For VoiceOver: the countdown started, or the sheet showed again.
+    /// For VoiceOver: the countdown started, the sheet showed again, or why nothing quit.
     private func announce(_ text: String) {
         let element: Any
         if let window = panel?.window ?? sheet?.window { element = window } else { element = NSApp as Any }
@@ -244,21 +327,21 @@ final class UpdateKeepSessions {
         let decision = found.decision
         let version = found.snapshot?.header.pendingToVersion
         let name = version.map { "Next Term \($0)" } ?? "The update"
+        // Nothing is staged after the relaunch: one check now brings the Update button back, as the alert says.
         if let outcome = decision.installAlert {
+            Updater.shared.checkAgainQuietly()
             let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = "\(name) was not installed"
-            let kept = outcome == .failedRestoredBackup
-                ? "The new version could not be put in place, so this version was opened from its backup."
-                : "The new version could not be put in place, so this version opened again."
-            alert.informativeText = kept + " The Update button still offers it.\n\nYou can download it from the release page instead."
+            alert.informativeText = UpdateFlow.installFailedText(outcome)
             alert.addButton(withTitle: "Open Release Page")
             alert.addButton(withTitle: "Cancel")
             if alert.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(releasePage(version)) }
         } else if decision.didNotInstallNote {
+            Updater.shared.checkAgainQuietly()
             let alert = NSAlert()
             alert.messageText = "\(name) did not install"
-            alert.informativeText = "This version opened again. The Update button still offers the update."
+            alert.informativeText = UpdateFlow.didNotInstallText
             alert.addButton(withTitle: "OK")
             alert.runModal()
         }
@@ -295,6 +378,7 @@ enum UpdatePlanning {
                     var pane = UpdatePane(id: tab.id, name: name(of: tab), split: index > 0, outcome: outcome,
                                           listLine: plan?.listLine ?? "opens in its folder")
                     pane.busy = isBusy(tab)
+                    pane.jobs = pane.busy && !frontBusy(tab)
                     pane.agent = tab.status.running && tab.status.kind == .agent
                     pane.remote = tab.remote != nil
                     pane.serving = tab.servedURL != nil
@@ -317,6 +401,7 @@ enum UpdatePlanning {
                 guard let tab = tabs[pane.id] else { return nil }
                 var pane = pane
                 pane.busy = isBusy(tab)
+                pane.jobs = pane.busy && !frontBusy(tab)
                 return pane
             }
         }
@@ -324,13 +409,28 @@ enum UpdatePlanning {
         return plan
     }
 
-    /// Busy (R15, KTD16): a local tab with an agent working or waiting on the user, or a running command. A remote tab
-    /// never is: what tmux or herdr keeps runs on, and a plain ssh tab only loses its connection.
+    /// Busy (R15, KTD16): a local tab with an agent working or waiting on the user, a running command, or a background or
+    /// suspended job, which the update stops as ⌘Q's "Quitting stops…" says. A remote tab never is: what tmux or herdr
+    /// keeps runs on, and a plain ssh tab only loses its connection.
     static func isBusy(_ tab: TerminalTab) -> Bool {
+        guard tab.remote == nil, !tab.exited else { return false }
+        return frontBusy(tab) || holdsJobs(tab)
+    }
+
+    /// What runs in front keeps the tab busy: a command, or an agent working or waiting on the user.
+    private static func frontBusy(_ tab: TerminalTab) -> Bool {
         let status = tab.status
-        guard tab.remote == nil, !tab.exited, status.running else { return false }
+        guard status.running else { return false }
         guard status.kind == .agent else { return true }
         return status.state == .working || status.state == .attention
+    }
+
+    /// Background or suspended jobs, as "Quitting stops…" counts them (TerminalTab.closeWarning): the integration's
+    /// count, or without it the shell's own child processes while nothing runs in front.
+    static func holdsJobs(_ tab: TerminalTab) -> Bool {
+        let status = tab.status
+        if status.integrated { return status.jobs > 0 }
+        return !status.running && !ProcessInspector.childProcessNames(of: tab.view.process.shellPid).isEmpty
     }
 
     /// Why sessions can't be kept: a translocated copy, or no session saved (no sessions folder, the save gate still
@@ -361,8 +461,9 @@ enum UpdatePlanning {
 // MARK: - Holds
 
 /// What the restart would cut off: operations the update waits for, and decisions only the user can make that the
-/// restart drops. The sheet lists the open decisions, always; the update quit answers each registered one with a definite
-/// no. Agent diff proposals are read from each editor area as they are, without editing it.
+/// restart drops. The sheet lists the open decisions, always; the update quit answers each one with a definite no. Agent
+/// diff proposals are read from each editor area as they are, without editing it; the agents' approval panels
+/// (AgentApprovalWindow: a skill to install or remove, an MCP write) are read from the open windows, without editing them.
 @MainActor
 final class UpdateHolds {
     static let shared = UpdateHolds()
@@ -394,10 +495,15 @@ final class UpdateHolds {
         operations[id] = nil
     }
 
-    /// The operations the update waits for, now.
-    var running: [String] { Array(operations.values) }
+    /// The operations the update waits for, now: each registered one, and each approved change an approval panel shows
+    /// under way.
+    var running: [String] {
+        let approved: [String] = approvalPanels.filter { Self.committed($0) }.map { Self.title($0) }
+        return Array(operations.values) + approved
+    }
 
-    /// The decisions the restart drops: each agent's diff proposal waiting in an editor, then each registered one.
+    /// The decisions the restart drops: each agent's diff proposal waiting in an editor, each approval panel waiting for
+    /// an answer, then each registered one.
     var openDecisions: [String] {
         var lines: [String] = []
         for controller in AppDelegate.shared.controllers {
@@ -406,41 +512,69 @@ final class UpdateHolds {
                 lines.append(TerminalText.oneLine("\(proposal.author)’s proposed change to \(pane.path)"))
             }
         }
-        return lines + decisions.map { TerminalText.oneLine($0.title) }
+        let asking: [String] = approvalPanels.filter { !Self.committed($0) }.map { Self.title($0) }
+        return lines + asking + decisions.map { TerminalText.oneLine($0.title) }
     }
 
-    /// At the update quit: every registered decision answered "no", so its asker gets a definite answer.
+    /// At the update quit: every open decision answered "no", so its asker gets a definite answer. An approval panel
+    /// closed unanswered declines (AgentApprovalWindow's own rule); one whose approved change is under way was waited for.
     func cancelAll() {
         let open = decisions
         decisions = []
         for decision in open { decision.cancel() }
+        for panel in approvalPanels where !Self.committed(panel) { panel.close() }
+    }
+
+    /// The agents' approval panels shown now.
+    private var approvalPanels: [AgentApprovalWindow] {
+        NSApp.windows.compactMap { (window: NSWindow) -> AgentApprovalWindow? in
+            window.isVisible ? window.windowController as? AgentApprovalWindow : nil
+        }
+    }
+
+    /// Its approved change has started and can't be stopped: the panel holds Decline (`setCommitted`).
+    private static func committed(_ panel: AgentApprovalWindow) -> Bool {
+        panel.declineButton?.isEnabled == false
+    }
+
+    private static func title(_ panel: AgentApprovalWindow) -> String {
+        TerminalText.oneLine(panel.window?.title ?? "An agent’s request")
     }
 }
 
 // MARK: - The sheet
 
 /// The update sheet's window, over the front terminal window without taking the keyboard (as the update window is
-/// presented). Its buttons are exposed for the self-test.
+/// presented). Its buttons are exposed for the self-test. Drawn again each second, it changes only what changed, so a
+/// click or VoiceOver's focus stays where it is; its lists scroll past a few lines, and it is never taller than the screen.
 @MainActor
 final class UpdateSheetController: NSWindowController, NSWindowDelegate {
     let titleLabel = NSTextField(labelWithString: "")
     let subtitleLabel = NSTextField(wrappingLabelWithString: UpdateFlow.subtitle)
-    let busyStack = NSStackView()
+    /// The busy tabs, each with "Wait for this".
+    let busyList = UpdateListScroll(maxHeight: 132, bordered: false, spacing: 4)
     let keepBox = NSButton(checkboxWithTitle: UpdateFlow.checkboxTitle, target: nil, action: nil)
     let refusalLabel = NSTextField(wrappingLabelWithString: "")
     let summaryLabel = NSTextField(wrappingLabelWithString: "")
     let detailsToggle = NSButton(title: "", target: nil, action: nil)
-    let detailsStack = NSStackView()
-    private let detailsScroll = NSScrollView()
-    let decisionsStack = NSStackView()
+    let detailsList = UpdateListScroll(maxHeight: 160, bordered: true, insets: NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8))
+    let decisionsList = UpdateListScroll(maxHeight: 88, bordered: false)
     /// Notes another feature adds (Remote access stopping), shown under the decisions; none yet.
     let notesStack = NSStackView()
-    let buttonRow = NSStackView()
-    /// The buttons now, by kind.
-    private(set) var buttons: [UpdateButton: NSButton] = [:]
+    /// Why the last press has not quit yet (a dialog is open, an approved change finishes).
+    let noteLabel = NSTextField(wrappingLabelWithString: "")
+    let buttonRow = UpdateButtonRow()
     /// Each busy tab's "Wait for this", by pane.
     private(set) var waitBoxes: [UUID: NSButton] = [:]
+    private var busyLines: [UUID: NSTextField] = [:]
+    private var busyShown: [UUID] = []
+    private var detailsDrawn: [UpdateDetail]?
+    private var decisionsShown: [String]?
     private weak var parentWindow: NSWindow?
+
+    var busyStack: NSStackView { busyList.stack }
+    var detailsStack: NSStackView { detailsList.stack }
+    var decisionsStack: NSStackView { decisionsList.stack }
 
     init() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 320), styleMask: [.titled, .closable],
@@ -459,9 +593,7 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
         titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         subtitleLabel.font = .systemFont(ofSize: 12)
         subtitleLabel.textColor = .secondaryLabelColor
-        busyStack.orientation = .vertical
-        busyStack.alignment = .leading
-        busyStack.spacing = 4
+        busyList.isHidden = true
         keepBox.target = self
         keepBox.action = #selector(keepChanged)
         refusalLabel.font = .systemFont(ofSize: 12)
@@ -478,45 +610,28 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
         detailsTitle.font = .systemFont(ofSize: 12)
         let detailsRow = NSStackView(views: [detailsToggle, detailsTitle])
         detailsRow.spacing = 4
-        detailsStack.orientation = .vertical
-        detailsStack.alignment = .leading
-        detailsStack.spacing = 2
-        detailsStack.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
-        detailsStack.translatesAutoresizingMaskIntoConstraints = false
-        let document = FlippedView()
-        document.translatesAutoresizingMaskIntoConstraints = false
-        document.addSubview(detailsStack)
-        detailsScroll.documentView = document
-        detailsScroll.hasVerticalScroller = true
-        detailsScroll.autohidesScrollers = true
-        detailsScroll.borderType = .bezelBorder
-        detailsScroll.isHidden = true
-        NSLayoutConstraint.activate([
-            detailsStack.topAnchor.constraint(equalTo: document.topAnchor),
-            detailsStack.leadingAnchor.constraint(equalTo: document.leadingAnchor),
-            detailsStack.trailingAnchor.constraint(equalTo: document.trailingAnchor),
-            detailsStack.bottomAnchor.constraint(equalTo: document.bottomAnchor),
-            document.widthAnchor.constraint(equalTo: detailsScroll.contentView.widthAnchor),
-            detailsScroll.heightAnchor.constraint(equalToConstant: 160),
-        ])
-        for stack in [decisionsStack, notesStack] {
-            stack.orientation = .vertical
-            stack.alignment = .leading
-            stack.spacing = 2
-        }
+        detailsList.isHidden = true
+        decisionsList.isHidden = true
+        notesStack.orientation = .vertical
+        notesStack.alignment = .leading
+        notesStack.spacing = 2
         notesStack.isHidden = true
+        noteLabel.font = .systemFont(ofSize: 12)
+        noteLabel.isHidden = true
         buttonRow.spacing = 8
+        buttonRow.escapeCancels = true
 
-        let stack = NSStackView(views: [titleLabel, subtitleLabel, busyStack, keepBox, refusalLabel, summaryLabel, detailsRow,
-                                        detailsScroll, decisionsStack, notesStack, buttonRow])
+        let stack = NSStackView(views: [titleLabel, subtitleLabel, busyList, keepBox, refusalLabel, summaryLabel, detailsRow,
+                                        detailsList, decisionsList, notesStack, noteLabel, buttonRow])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
         stack.setCustomSpacing(4, after: titleLabel)
         stack.setCustomSpacing(4, after: keepBox)
         stack.edgeInsets = NSEdgeInsets(top: 18, left: 20, bottom: 16, right: 20)
-        // The checkbox and the buttons stay in view however long the lists get: the details scroll past a fixed height.
-        for view in [subtitleLabel, refusalLabel, summaryLabel, detailsScroll, buttonRow] as [NSView] {
+        // The checkbox and the buttons stay in view however long the lists get: each scrolls past its height.
+        let wide: [NSView] = [subtitleLabel, busyList, refusalLabel, summaryLabel, detailsList, decisionsList, noteLabel, buttonRow]
+        for view in wide {
             view.translatesAutoresizingMaskIntoConstraints = false
             view.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
         }
@@ -526,37 +641,77 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
     }
 
     /// Shows `flow`: the busy tabs first, each with "Wait for this"; the box; the summary; the details; the open decisions;
-    /// and the state's buttons, none of them the default.
-    func render(_ flow: UpdateFlow, decisions: [String]? = nil) {
-        titleLabel.stringValue = flow.title
-        busyStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        waitBoxes = [:]
-        let busy = flow.busyPanes
-        busyStack.isHidden = busy.isEmpty || flow.state != .busy
-        for pane in busy where flow.state == .busy {
-            let line = NSTextField(labelWithString: pane.name + ": " + flow.line(pane))
-            line.font = .systemFont(ofSize: 12)
-            line.lineBreakMode = .byTruncatingTail
-            line.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            line.setAccessibilityLabel(pane.name + ", " + flow.line(pane))
-            let box = NSButton(checkboxWithTitle: "Wait for this", target: self, action: #selector(waitChanged(_:)))
-            box.state = flow.waitSet.contains(pane.id) ? .on : .off
-            box.identifier = NSUserInterfaceItemIdentifier(pane.id.uuidString)
-            box.setAccessibilityLabel("Wait for \(pane.name)")
-            waitBoxes[pane.id] = box
-            let row = NSStackView(views: [line, NSView(), box])
-            row.spacing = 8
-            busyStack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: busyStack.widthAnchor).isActive = true
+    /// why the last press has not quit; and the state's buttons, none of them the default.
+    func render(_ flow: UpdateFlow, decisions: [String], note: String?) {
+        titleLabel.showIfChanged(flow.title)
+        var resized = renderBusy(flow)
+        let keep: NSControl.StateValue = flow.keep ? .on : .off
+        if keepBox.state != keep { keepBox.state = keep }
+        if keepBox.isEnabled != flow.keepEnabled { keepBox.isEnabled = flow.keepEnabled }
+        let refusal = flow.plan.refusal?.text ?? ""
+        if refusalLabel.stringValue != refusal || refusalLabel.isHidden != refusal.isEmpty {
+            refusalLabel.stringValue = refusal
+            refusalLabel.isHidden = refusal.isEmpty
+            resized = true
         }
-        busyStack.translatesAutoresizingMaskIntoConstraints = false
-        keepBox.state = flow.keep ? .on : .off
-        keepBox.isEnabled = flow.keepEnabled
-        refusalLabel.stringValue = flow.plan.refusal?.text ?? ""
-        refusalLabel.isHidden = flow.plan.refusal == nil
-        summaryLabel.stringValue = flow.summary
+        summaryLabel.showIfChanged(flow.summary)
+        resized = renderDetails(flow.details) || resized
+        resized = renderDecisions(decisions) || resized
+        if noteLabel.stringValue != (note ?? "") || noteLabel.isHidden != (note == nil) {
+            noteLabel.stringValue = note ?? ""
+            noteLabel.isHidden = note == nil
+            resized = true
+        }
+        resized = buttonRow.show(flow.buttons) || resized
+        if resized { fit() }
+    }
+
+    /// The busy tabs, listed first while the sheet is busy: built again only when they change, else their words and boxes.
+    private func renderBusy(_ flow: UpdateFlow) -> Bool {
+        let busy: [UpdatePane] = flow.state == .busy ? flow.busyPanes : []
+        var rebuilt = false
+        if busy.map(\.id) != busyShown {
+            busyStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+            waitBoxes = [:]
+            busyLines = [:]
+            for pane in busy {
+                let line = NSTextField(labelWithString: "")
+                line.font = .systemFont(ofSize: 12)
+                line.lineBreakMode = .byTruncatingTail
+                line.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+                let box = NSButton(checkboxWithTitle: "Wait for this", target: self, action: #selector(waitChanged(_:)))
+                box.identifier = NSUserInterfaceItemIdentifier(pane.id.uuidString)
+                waitBoxes[pane.id] = box
+                busyLines[pane.id] = line
+                let row = NSStackView(views: [line, NSView(), box])
+                row.spacing = 8
+                busyStack.addArrangedSubview(row)
+                row.widthAnchor.constraint(equalTo: busyStack.widthAnchor).isActive = true
+            }
+            busyShown = busy.map(\.id)
+            busyList.isHidden = busy.isEmpty
+            rebuilt = true
+        }
+        for pane in busy {
+            let words = flow.line(pane)
+            if let line = busyLines[pane.id], line.stringValue != pane.name + ": " + words {
+                line.stringValue = pane.name + ": " + words
+                line.setAccessibilityLabel(pane.name + ", " + words)
+            }
+            guard let box = waitBoxes[pane.id] else { continue }
+            let state: NSControl.StateValue = flow.waitSet.contains(pane.id) ? .on : .off
+            if box.state != state { box.state = state }
+            let label = "Wait for \(pane.name)"
+            if box.accessibilityLabel() != label { box.setAccessibilityLabel(label) }
+        }
+        return rebuilt
+    }
+
+    private func renderDetails(_ details: [UpdateDetail]) -> Bool {
+        guard details != detailsDrawn else { return false }
+        detailsDrawn = details
         detailsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for detail in flow.details {
+        for detail in details {
             let line = NSTextField(labelWithString: (detail.changed ? "• " : "") + detail.text)
             line.font = detail.indent == 0 ? .systemFont(ofSize: 12, weight: .semibold) : .systemFont(ofSize: 12)
             line.lineBreakMode = .byTruncatingTail
@@ -565,49 +720,66 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
             indent.widthAnchor.constraint(equalToConstant: CGFloat(detail.indent) * 14).isActive = true
             detailsStack.addArrangedSubview(NSStackView(views: [indent, line]))
         }
-        if let decisions {
-            decisionsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-            decisionsStack.isHidden = decisions.isEmpty
-            if !decisions.isEmpty {
-                let head = NSTextField(labelWithString: "The restart drops these open decisions:")
-                head.font = .systemFont(ofSize: 12, weight: .semibold)
-                decisionsStack.addArrangedSubview(head)
-                for decision in decisions {
-                    let line = NSTextField(labelWithString: "• " + decision)
-                    line.font = .systemFont(ofSize: 12)
-                    line.lineBreakMode = .byTruncatingTail
-                    decisionsStack.addArrangedSubview(line)
-                }
-            }
-        }
-        renderButtons(flow)
-        if let window, let content = window.contentView { window.setContentSize(content.fittingSize) }
+        return true
     }
 
-    private func renderButtons(_ flow: UpdateFlow) {
-        buttonRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        buttons = [:]
-        var views: [NSView] = [NSView()]
-        for kind in flow.buttons {
-            let button = NSButton(title: kind.title, target: self, action: #selector(press(_:)))
-            button.bezelStyle = .rounded
-            // No default button: Return presses nothing (R15). Cancel takes ⎋, which asks for nothing.
-            button.keyEquivalent = kind == .cancel ? "\u{1b}" : ""
-            button.identifier = NSUserInterfaceItemIdentifier(kind.rawValue)
-            buttons[kind] = button
-            views.append(button)
+    /// The open decisions the restart drops, read again each second: one asked for after the sheet opened is listed too.
+    private func renderDecisions(_ decisions: [String]) -> Bool {
+        guard decisions != decisionsShown else { return false }
+        decisionsShown = decisions
+        decisionsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        decisionsList.isHidden = decisions.isEmpty
+        guard !decisions.isEmpty else { return true }
+        let head = NSTextField(labelWithString: "The restart drops these open decisions:")
+        head.font = .systemFont(ofSize: 12, weight: .semibold)
+        decisionsStack.addArrangedSubview(head)
+        for decision in decisions {
+            let line = NSTextField(labelWithString: "• " + decision)
+            line.font = .systemFont(ofSize: 12)
+            line.lineBreakMode = .byTruncatingTail
+            decisionsStack.addArrangedSubview(line)
         }
-        for view in views { buttonRow.addArrangedSubview(view) }
+        return true
+    }
+
+    /// The lists at the heights their lines need, the window at its content's, its top edge where it was, and never
+    /// taller than the screen: the details give up height first, then the busy tabs, then the decisions.
+    private func fit() {
+        guard let window, let content = window.contentView else { return }
+        let lists: [(list: UpdateListScroll, height: CGFloat)] = [(detailsList, 160), (busyList, 132), (decisionsList, 88)]
+        for (list, height) in lists {
+            list.maxHeight = height
+            list.fit()
+        }
+        let screen = (window.screen ?? parentWindow?.screen ?? NSScreen.main)?.visibleFrame
+        let chrome = window.frame.height - window.contentLayoutRect.height
+        if let screen {
+            var excess = content.fittingSize.height + chrome + 24 - screen.height
+            for (list, _) in lists where excess > 0 && !list.isHidden {
+                let cut = min(max(0, list.shownHeight - 44), excess)
+                list.maxHeight = list.shownHeight - cut
+                list.fit()
+                excess -= cut
+            }
+        }
+        var frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: content.fittingSize))
+        frame.origin = NSPoint(x: window.frame.minX, y: window.frame.maxY - frame.height)
+        if let screen, window.isVisible { frame.origin.y = min(max(frame.origin.y, screen.minY), screen.maxY - frame.height) }
+        window.setFrame(frame, display: window.isVisible)
     }
 
     /// The button for `kind` in the state shown, for the self-test.
-    func button(_ kind: UpdateButton) -> NSButton? { buttons[kind] }
+    func button(_ kind: UpdateButton) -> NSButton? { buttonRow.buttons[kind] }
 
     /// Over `parent` (it moves with it and stays above it until answered), or centred on its own, never taking the
-    /// keyboard: someone typing to an agent keeps typing, and a Return meant for the terminal confirms nothing.
+    /// keyboard: someone typing to an agent keeps typing, and a Return meant for the terminal confirms nothing. Shown
+    /// already, it comes forward.
     func present(over parent: NSWindow?) {
         guard let window else { return }
-        if window.isVisible { return }
+        if window.isVisible {
+            window.orderFront(nil)
+            return
+        }
         if let parent, parent.isVisible, !parent.isMiniaturized {
             let size = window.frame.size
             var origin = NSPoint(x: parent.frame.midX - size.width / 2, y: parent.frame.maxY - size.height - 64)
@@ -635,11 +807,6 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
         parentWindow = nil
     }
 
-    @objc private func press(_ sender: NSButton) {
-        guard let kind = buttons.first(where: { $0.value === sender })?.key else { return }
-        UpdateKeepSessions.shared.pressed(kind)
-    }
-
     @objc private func keepChanged() {
         UpdateKeepSessions.shared.keepChanged(keepBox.state == .on)
     }
@@ -650,12 +817,12 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func toggleDetails() {
-        detailsScroll.isHidden = detailsToggle.state != .on
-        if let window, let content = window.contentView { window.setContentSize(content.fittingSize) }
+        detailsList.isHidden = detailsToggle.state != .on
+        fit()
     }
 
     /// The details shown, for the self-test.
-    var detailsShown: Bool { !detailsScroll.isHidden }
+    var detailsShown: Bool { !detailsList.isHidden }
 
     /// The details' lines as shown.
     var detailLines: [String] {
@@ -678,28 +845,34 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
     }
 }
 
-/// A view whose origin is at the top, so the details list starts at the top of its scroll view.
-private final class FlippedView: NSView {
-    override var isFlipped: Bool { true }
-}
-
 // MARK: - The wait panel
 
 /// "Wait for Them" (KTD16): the waited tabs with their state, "working" or "needs your answer" with a Show button that
-/// brings that tab forward; the time waited, with no automatic timeout; "Update Now" and "Stop Waiting". Once every
-/// waited tab is done, "Updating in 10 s" with Cancel. It never takes the keyboard.
+/// brings that tab forward; the time waited, with no automatic timeout; the sheet's box; the open decisions the restart
+/// drops; "Update Now" and "Stop Waiting". Once every waited tab is done, "Updating in 10 s" with Cancel. It never takes
+/// the keyboard. Drawn again each second, it changes only what changed, so a click or VoiceOver's focus stays put.
 @MainActor
 final class UpdateWaitPanel: NSWindowController, NSWindowDelegate {
     let titleLabel = NSTextField(labelWithString: "")
     let tabsStack = NSStackView()
     let timeLabel = NSTextField(labelWithString: "")
-    let buttonRow = NSStackView()
-    private(set) var buttons: [UpdateButton: NSButton] = [:]
+    /// The sheet's box, the same in every state: the consent reads it at the press or the countdown's end.
+    let keepBox = NSButton(checkboxWithTitle: UpdateFlow.checkboxTitle, target: nil, action: nil)
+    let decisionsList = UpdateListScroll(maxHeight: 88, bordered: false)
+    /// Why the update has not quit yet.
+    let noteLabel = NSTextField(wrappingLabelWithString: "")
+    let buttonRow = UpdateButtonRow()
     /// Each "Show", by pane.
     private(set) var showButtons: [UUID: NSButton] = [:]
+    /// The rows shown, by pane, and whether each asks: built again only when these change.
+    private var rowsShown: [(id: UUID, asks: Bool)] = []
+    private var rowLines: [UUID: NSTextField] = [:]
+    private var decisionsShown: [String]?
+
+    var decisionsStack: NSStackView { decisionsList.stack }
 
     init() {
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 180),
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 180),
                             styleMask: [.titled, .utilityWindow, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Software Update"
         panel.isReleasedWhenClosed = false
@@ -720,65 +893,127 @@ final class UpdateWaitPanel: NSWindowController, NSWindowDelegate {
         tabsStack.spacing = 4
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         timeLabel.textColor = .secondaryLabelColor
+        keepBox.target = self
+        keepBox.action = #selector(keepChanged)
+        decisionsList.isHidden = true
+        noteLabel.font = .systemFont(ofSize: 12)
+        noteLabel.isHidden = true
         buttonRow.spacing = 8
-        let stack = NSStackView(views: [titleLabel, tabsStack, timeLabel, buttonRow])
+        let stack = NSStackView(views: [titleLabel, tabsStack, timeLabel, keepBox, decisionsList, noteLabel, buttonRow])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)
-        buttonRow.translatesAutoresizingMaskIntoConstraints = false
-        buttonRow.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true
-        stack.widthAnchor.constraint(equalToConstant: 380).isActive = true
+        for view in [decisionsList, noteLabel, buttonRow] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            view.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true
+        }
+        stack.widthAnchor.constraint(equalToConstant: 420).isActive = true
         window?.contentView = stack
     }
 
-    func render(_ flow: UpdateFlow, elapsed: TimeInterval, remaining: Int?) {
+    func render(_ flow: UpdateFlow, elapsed: TimeInterval, remaining: Int?, decisions: [String], note: String?) {
         let counting = flow.state == .countdown
-        titleLabel.stringValue = counting ? "Updating in \(remaining ?? Int(UpdateFlow.countdown)) s"
-            : "Waiting to update to \(flow.version)"
-        tabsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        showButtons = [:]
-        var tabs: [UUID: TerminalTab] = [:]
-        for tab in AppDelegate.shared.controllers.flatMap(\.tabs) { tabs[tab.id] = tab }
-        let waited = flow.plan.panes.filter { flow.waitSet.contains($0.id) }
-        for pane in waited where !counting {
-            let asks = tabs[pane.id]?.status.state == .attention
-            let line = NSTextField(labelWithString: pane.name + ": " + (asks ? "needs your answer" : "working"))
-            line.font = .systemFont(ofSize: 12)
-            line.lineBreakMode = .byTruncatingTail
-            var views: [NSView] = [line]
-            if asks {
-                let show = NSButton(title: "Show", target: self, action: #selector(showTab(_:)))
-                show.bezelStyle = .rounded
-                show.controlSize = .small
-                show.identifier = NSUserInterfaceItemIdentifier(pane.id.uuidString)
-                show.setAccessibilityLabel("Show \(pane.name)")
-                showButtons[pane.id] = show
-                views.append(show)
-            }
-            let row = NSStackView(views: views)
-            row.spacing = 8
-            tabsStack.addArrangedSubview(row)
-        }
-        tabsStack.isHidden = counting || waited.isEmpty
+        titleLabel.showIfChanged(counting ? "Updating in \(remaining ?? Int(UpdateFlow.countdown)) s"
+            : "Waiting to update to \(flow.version)")
+        var resized = renderTabs(flow, counting: counting)
         let seconds = Int(elapsed)
-        timeLabel.stringValue = String(format: "Waiting %d:%02d", seconds / 60, seconds % 60)
-        timeLabel.isHidden = counting
-        buttonRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        buttons = [:]
-        var views: [NSView] = [NSView()]
-        for kind in flow.buttons {
-            let button = NSButton(title: kind.title, target: self, action: #selector(press(_:)))
-            button.bezelStyle = .rounded
-            button.keyEquivalent = ""
-            buttons[kind] = button
-            views.append(button)
+        timeLabel.showIfChanged(String(format: "Waiting %d:%02d", seconds / 60, seconds % 60))
+        if timeLabel.isHidden != counting {
+            timeLabel.isHidden = counting
+            resized = true
         }
-        for view in views { buttonRow.addArrangedSubview(view) }
-        if let window, let content = window.contentView { window.setContentSize(content.fittingSize) }
+        let keep: NSControl.StateValue = flow.keep ? .on : .off
+        if keepBox.state != keep { keepBox.state = keep }
+        if keepBox.isEnabled != flow.keepEnabled { keepBox.isEnabled = flow.keepEnabled }
+        resized = renderDecisions(decisions) || resized
+        if noteLabel.stringValue != (note ?? "") || noteLabel.isHidden != (note == nil) {
+            noteLabel.stringValue = note ?? ""
+            noteLabel.isHidden = note == nil
+            resized = true
+        }
+        resized = buttonRow.show(flow.buttons) || resized
+        if resized, let window, let content = window.contentView {
+            // Its top edge stays where it is: the panel sits at the top of the screen.
+            decisionsList.fit()
+            let top = window.frame.maxY
+            window.setContentSize(content.fittingSize)
+            if window.isVisible { window.setFrameTopLeftPoint(NSPoint(x: window.frame.minX, y: top)) }
+        }
     }
 
-    func button(_ kind: UpdateButton) -> NSButton? { buttons[kind] }
+    /// The waited tabs, each with its state: built again only when the tabs, or which of them ask, change.
+    private func renderTabs(_ flow: UpdateFlow, counting: Bool) -> Bool {
+        var tabs: [UUID: TerminalTab] = [:]
+        for tab in AppDelegate.shared.controllers.flatMap(\.tabs) { tabs[tab.id] = tab }
+        let waited: [UpdatePane] = counting ? [] : flow.plan.panes.filter { flow.waitSet.contains($0.id) }
+        let rows: [(pane: UpdatePane, asks: Bool, state: String)] = waited.map {
+            (pane: UpdatePane) -> (pane: UpdatePane, asks: Bool, state: String) in
+            let tab = tabs[pane.id]
+            let asks = tab?.status.state == .attention
+            return (pane, asks, asks ? "needs your answer" : Self.state(of: tab))
+        }
+        var rebuilt = false
+        let shape = rows.map { (id: $0.pane.id, asks: $0.asks) }
+        if !shape.elementsEqual(rowsShown, by: { $0.id == $1.id && $0.asks == $1.asks }) {
+            tabsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+            showButtons = [:]
+            rowLines = [:]
+            for row in rows {
+                let line = NSTextField(labelWithString: "")
+                line.font = .systemFont(ofSize: 12)
+                line.lineBreakMode = .byTruncatingTail
+                rowLines[row.pane.id] = line
+                var views: [NSView] = [line]
+                if row.asks {
+                    let show = NSButton(title: "Show", target: self, action: #selector(showTab(_:)))
+                    show.bezelStyle = .rounded
+                    show.controlSize = .small
+                    show.identifier = NSUserInterfaceItemIdentifier(row.pane.id.uuidString)
+                    show.setAccessibilityLabel("Show \(row.pane.name)")
+                    showButtons[row.pane.id] = show
+                    views.append(show)
+                }
+                let stack = NSStackView(views: views)
+                stack.spacing = 8
+                tabsStack.addArrangedSubview(stack)
+            }
+            rowsShown = shape
+            rebuilt = true
+        }
+        for row in rows { rowLines[row.pane.id]?.showIfChanged(row.pane.name + ": " + row.state) }
+        if tabsStack.isHidden != rows.isEmpty {
+            tabsStack.isHidden = rows.isEmpty
+            rebuilt = true
+        }
+        return rebuilt
+    }
+
+    /// A waited tab that does not ask: "working", or, when only its jobs keep it busy, what they are doing.
+    private static func state(of tab: TerminalTab?) -> String {
+        guard let status = tab?.status, !status.running, status.jobs > 0 else { return "working" }
+        return status.jobSummary.contains("(running)") ? "a job runs in the background" : "a job is suspended"
+    }
+
+    private func renderDecisions(_ decisions: [String]) -> Bool {
+        guard decisions != decisionsShown else { return false }
+        decisionsShown = decisions
+        decisionsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        decisionsList.isHidden = decisions.isEmpty
+        guard !decisions.isEmpty else { return true }
+        let head = NSTextField(labelWithString: "The restart drops these open decisions:")
+        head.font = .systemFont(ofSize: 12, weight: .semibold)
+        decisionsStack.addArrangedSubview(head)
+        for decision in decisions {
+            let line = NSTextField(labelWithString: "• " + decision)
+            line.font = .systemFont(ofSize: 12)
+            line.lineBreakMode = .byTruncatingTail
+            decisionsStack.addArrangedSubview(line)
+        }
+        return true
+    }
+
+    func button(_ kind: UpdateButton) -> NSButton? { buttonRow.buttons[kind] }
 
     /// In front, at the top right of the screen, without taking the keyboard.
     func present() {
@@ -790,9 +1025,8 @@ final class UpdateWaitPanel: NSWindowController, NSWindowDelegate {
         window.orderFront(nil)
     }
 
-    @objc private func press(_ sender: NSButton) {
-        guard let kind = buttons.first(where: { $0.value === sender })?.key else { return }
-        UpdateKeepSessions.shared.pressed(kind)
+    @objc private func keepChanged() {
+        UpdateKeepSessions.shared.keepChanged(keepBox.state == .on)
     }
 
     @objc private func showTab(_ sender: NSButton) {

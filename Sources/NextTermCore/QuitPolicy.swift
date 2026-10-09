@@ -89,6 +89,14 @@ public enum QuitQuestion: Equatable, Sendable {
     case updateSheet
 }
 
+/// How a quit whose questions were answered ends (QuitPolicy.ending).
+public enum QuitEnding: Equatable, Sendable {
+    /// It goes ahead, for this reason.
+    case goAhead(QuitReason)
+    /// It is cancelled, and the update sheet shows for the version staged now.
+    case updateSheet
+}
+
 /// What was answered about resuming, at a quit that goes ahead. Cancel has no answer: nothing is written.
 public enum QuitAnswer: Equatable, Sendable {
     /// The plain dialog's "Quit": its box, and "Don’t ask again".
@@ -138,6 +146,25 @@ public enum QuitPolicy {
         if busy { questions.append(.busy(resumeCheckbox: checkbox)) }
         if questions.isEmpty, let checkbox { questions.append(.quit(resumeCheckbox: checkbox)) }
         return questions
+    }
+
+    /// The last question, once the questions before it are answered and the busy tabs read again (`busyTabs`): "Quitting
+    /// stops…" whenever a tab is busy, with the box only when the policy put it there (`planned`, its `busy` question).
+    /// When no tab is busy any more but that alert was to carry the box, the plain dialog asks instead, so the question
+    /// is still asked once (AE22, when the agent finishes under the save-changes alert).
+    public static func lastQuestion(planned: QuitQuestion?, busyTabs: Int) -> QuitQuestion? {
+        var checkbox: Bool?
+        if case .busy(let box) = planned { checkbox = box }
+        if busyTabs > 0 { return .busy(resumeCheckbox: checkbox) }
+        return checkbox.map { (box: Bool) -> QuitQuestion in .quit(resumeCheckbox: box) }
+    }
+
+    /// How a quit ends once its questions are answered: for the reason read before them, which the questions never
+    /// change. An update quit whose consent no longer holds (another version was staged while it asked) is cancelled, and
+    /// the sheet shows for the staged version: that consent covered the one before.
+    public static func ending(reason: QuitReason, consentBefore: UpdateConsent?, consentNow: UpdateConsent?) -> QuitEnding {
+        if let consentBefore, consentNow != consentBefore { return .updateSheet }
+        return .goAhead(reason)
     }
 
     /// The settings to save once the quit goes ahead: checked gives "Resume where I left off", unchecked the Welcome

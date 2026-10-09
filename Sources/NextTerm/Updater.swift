@@ -146,8 +146,16 @@ final class Updater {
         return seconds > 0 ? Date(timeIntervalSince1970: seconds) : nil
     }
 
-    /// "Check for Updates…": says so either way. The daily check speaks only when there is something new.
-    func check(userInitiated: Bool) {
+    /// After an install that did not finish (R18): one check now, whatever the schedule says, so the Update button
+    /// offers the update again. Nothing is staged after the relaunch, and this check only sets what the button offers: it
+    /// opens no window and downloads nothing.
+    func checkAgainQuietly() {
+        check(userInitiated: false, quietly: true)
+    }
+
+    /// "Check for Updates…": says so either way. The daily check speaks only when there is something new. `quietly`: only
+    /// the Update button changes.
+    func check(userInitiated: Bool, quietly: Bool = false) {
         guard !checking else { return }
         guard let current else {
             if userInitiated { tell("This is a development build", "Updates are for the released app.") }
@@ -166,7 +174,7 @@ final class Updater {
                     self.checking = false
                     // A failed check doesn't count as today's: the schedule tries again an hour later.
                     UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: failed ? "lastUpdateFailure" : "lastUpdateCheck")
-                    self.handle(release, current: current, userInitiated: userInitiated, failed: failed)
+                    self.handle(release, current: current, userInitiated: userInitiated, failed: failed, quietly: quietly)
                     if !self.observers.isEmpty { self.scheduleNext() }
                 }
             }
@@ -182,7 +190,7 @@ final class Updater {
         }.resume()
     }
 
-    private func handle(_ release: ReleaseInfo?, current: AppVersion, userInitiated: Bool, failed: Bool) {
+    private func handle(_ release: ReleaseInfo?, current: AppVersion, userInitiated: Bool, failed: Bool, quietly: Bool = false) {
         guard let release, current < release.version else {
             if !failed { available = nil } // withdrawn, or this is the newest
             if userInitiated {
@@ -193,6 +201,12 @@ final class Updater {
         }
         if staged?.version == release.version {
             if userInitiated { offerInstall(release.version, from: .check) }
+            return
+        }
+        if quietly {
+            if available?.tag != release.tag { availableNotes = [] }
+            offeredTo = current
+            available = release
             return
         }
         if testing, UserDefaults.standard.bool(forKey: "updateInstallWithoutAsking") {
@@ -561,16 +575,34 @@ final class Updater {
         return consent
     }
 
-    /// Quits for the update, under `consent`: never over a sheet, a modal window or a quit's question, checked again here,
-    /// just before `terminate`. A quit the user cancels clears the consent, so the next quit asks its own questions (AE5).
-    func quitForUpdate(_ consent: UpdateConsent) {
-        guard staged?.version.description == consent.version else { return }
+    /// The staged update's version, if one is staged.
+    var stagedVersion: AppVersion? { staged?.version }
+
+    /// The update sheet for the staged update, if one is staged: after a quit cancelled because another version was staged
+    /// while it asked.
+    func offerStaged() {
+        guard let staged else { return }
+        offerInstall(staged.version, from: .updateButton)
+    }
+
+    /// Why the update quit can't go ahead under `consent` now: a sheet, a modal window or a quit's question is up, or the
+    /// staged update is another version. Nil when it can.
+    func quitRefusal(for consent: UpdateConsent) -> UpdateQuitRefusal? {
         let sheet = NSApp.windows.contains { $0.attachedSheet != nil }
-        guard UpdateFlow.mayStart(sheetAttached: sheet, modalWindow: NSApp.modalWindow != nil,
-                                  askingToQuit: AppDelegate.shared.askingToQuit) else { return }
+        return UpdateFlow.quitRefusal(for: consent, staged: staged?.version.description, sheetAttached: sheet,
+                                      modalWindow: NSApp.modalWindow != nil, askingToQuit: AppDelegate.shared.askingToQuit)
+    }
+
+    /// Quits for the update, under `consent`: never over a sheet, a modal window or a quit's question, checked again here,
+    /// just before `terminate`; the refusal is returned for the sheet to say. A quit the user cancels clears the consent,
+    /// so the next quit asks its own questions (AE5).
+    @discardableResult
+    func quitForUpdate(_ consent: UpdateConsent) -> UpdateQuitRefusal? {
+        if let refusal = quitRefusal(for: consent) { return refusal }
         self.consent = consent
         NSApp.terminate(nil)
         self.consent = nil // the quit was cancelled: only then does `terminate` return
+        return nil
     }
 
     /// Called as Next Term quits, once the quit's last save is written (SessionRestore.finishAtQuit): if an update is

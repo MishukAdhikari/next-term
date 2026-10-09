@@ -258,9 +258,45 @@ import Testing
         #expect(!silent.quitConsent && silent.settings(from: chosen(.lastProjects)) == nil)
     }
 
+    @Test func whenNoTabIsBusyAnyMoreThePlainDialogAsksInstead() {
+        // AE22, raced: the save-changes alert showed without the box, which "Quitting stops…" was to carry; Claude finished
+        // its turn under it. The question is still asked once, on the plain dialog.
+        let gone: QuitQuestion? = QuitPolicy.lastQuestion(planned: busy(true), busyTabs: 0)
+        #expect(gone == plain(true))
+        let goneUnchecked: QuitQuestion? = QuitPolicy.lastQuestion(planned: busy(false), busyTabs: 0)
+        #expect(goneUnchecked == plain(false))
+        // Still busy: "Quitting stops…", with the box the policy gave it.
+        let still: QuitQuestion? = QuitPolicy.lastQuestion(planned: busy(true), busyTabs: 2)
+        #expect(still == busy(true))
+        // A tab that turned busy under a question before: "Quitting stops…", without the box another alert carried.
+        let turned: QuitQuestion? = QuitPolicy.lastQuestion(planned: nil, busyTabs: 1)
+        #expect(turned == busy(nil))
+        // Asking off, a logout, a sheet: no box was planned, so nothing more is asked.
+        #expect(QuitPolicy.lastQuestion(planned: busy(nil), busyTabs: 0) == nil)
+        #expect(QuitPolicy.lastQuestion(planned: nil, busyTabs: 0) == nil)
+        // Its Quit with the box checked gives the consent and sets Resume, as the busy alert's would have.
+        var asking = QuitAsking()
+        asking.reply(.goOn(resume: nil, dontAskAgain: false), to: saveChanges(nil))
+        asking.reply(.goOn(resume: true, dontAskAgain: false), to: plain(true))
+        #expect(asking.quitConsent && asking.settings(from: chosen(.welcome)) == chosen(.lastProjects))
+    }
+
     // MARK: the update path
 
     let saw = UpdateFixture()
+
+    @Test func aQuitGoesAheadForTheReasonReadBeforeItsQuestions() {
+        // Nothing changed under the questions: the update quit stays the update's relaunch, a user quit the user's.
+        let consent = saw.consent()
+        let update: QuitEnding = QuitPolicy.ending(reason: .updateRelaunch, consentBefore: consent, consentNow: consent)
+        #expect(update == .goAhead(.updateRelaunch))
+        let user: QuitEnding = QuitPolicy.ending(reason: .user, consentBefore: nil, consentNow: nil)
+        #expect(user == .goAhead(.user))
+        // Another version was staged under the unsaved-files question, so the consent no longer holds: the quit is
+        // cancelled and the sheet shows for the staged version, never a user quit that installs it without relaunching.
+        let other: QuitEnding = QuitPolicy.ending(reason: .updateRelaunch, consentBefore: consent, consentNow: nil)
+        #expect(other == .updateSheet)
+    }
 
     @Test func anUpdateQuitAsksOnlyAboutUnsavedFilesWithNoBox() {
         // AE9: none with nothing unsaved; one with an unsaved file, with no resume checkbox.

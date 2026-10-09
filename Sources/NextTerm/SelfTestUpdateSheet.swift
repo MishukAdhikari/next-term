@@ -3,10 +3,11 @@ import NextTermCore
 
 /// The update sheet (plan 003's U11), in one process and with no update staged, so no press here can quit or install:
 /// `Updater.quitForUpdate` goes ahead only for the staged version. Its title and line; its "Show Details" lines, which
-/// are the planner's for the same panes; that it opens without taking the keyboard and that Return presses nothing; that
-/// it never opens over a sheet; a running command in the system zsh made busy, listed first and waited for, then taken
-/// out (AE16); the wait panel, its countdown, and the sheet again when another tab turns busy before the countdown's end;
-/// and an open decision listed.
+/// are the planner's for the same panes; that it opens without taking the keyboard and that Return, on its own window too,
+/// presses nothing; that it never opens over a sheet, and that Update Now with a sheet up stays and says why; a running
+/// command in the system zsh made busy, listed first and waited for, then taken out (AE16); the wait panel, its
+/// countdown, and the sheet again when another tab turns busy before the countdown's end; a background job made busy;
+/// and a real approval panel listed, waited for once its change is under way, and declined at the update quit.
 extension SelfTest {
     static func updateSheetChecks(_ c: TerminalWindowController) async {
         guard let window = c.window else { return }
@@ -37,6 +38,14 @@ extension SelfTest {
         let keys: [String] = [UpdateButton.updateNow, .whenIQuit, .cancel].compactMap { sheet.button($0)?.keyEquivalent }
         check(keys.count == 3 && !keys.contains("\r") && sheetWindow.defaultButtonCell == nil,
               "no button on the update sheet takes Return", "\(keys.map { $0.unicodeScalars.map(\.value) })")
+        // Return on the sheet's own window, as after a click into it: no control takes it, and nothing is pressed.
+        let enter = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                                     timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: sheetWindow.windowNumber,
+                                     context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false,
+                                     keyCode: 36)
+        let taken = enter.map { (event: NSEvent) -> Bool in sheetWindow.performKeyEquivalent(with: event) } ?? true
+        let unchanged = sessions.sheet === sheet && sessions.flow == flow
+        check(!taken && unchanged && Updater.shared.validConsent == nil, "Return on the update sheet's own window presses nothing")
         // In the self-test nothing is saved, so the box is unchecked and dimmed with its reason.
         let refused = flow.plan.refusal != nil
         check(!refused || (!sheet.keepBox.isEnabled && sheet.keepBox.state == .off && !sheet.refusalLabel.isHidden),
@@ -61,6 +70,19 @@ extension SelfTest {
         check(sessions.sheet == nil && sessions.flow == nil, "the update sheet does not open while a sheet is up")
         window.endSheet(blocker)
         _ = await wait(2) { window.attachedSheet == nil }
+        // Update Now while a sheet is up: nothing quits, and the update sheet stays and says why.
+        sessions.show(version: version, from: .updateButton)
+        window.beginSheet(blocker, completionHandler: nil)
+        _ = await wait(2) { window.attachedSheet != nil }
+        sessions.pressed(.updateNow)
+        let held = sessions.sheet?.noteLabel.stringValue ?? ""
+        let stays = sessions.sheet?.window?.isVisible == true && sessions.sheet?.noteLabel.isHidden == false
+        let says = held.hasPrefix("The update can’t start while a dialog or sheet is open")
+        check(stays && says && Updater.shared.validConsent == nil,
+              "Update Now while a sheet is up keeps the update sheet, says why, and quits nothing", held)
+        window.endSheet(blocker)
+        _ = await wait(2) { window.attachedSheet == nil }
+        if sessions.flow != nil { sessions.pressed(.cancel) }
 
         // AE16: a long-running command in the system zsh, with the integration on, makes the sheet busy, listed first,
         // waited for.
@@ -123,18 +145,46 @@ extension SelfTest {
               "a new command elsewhere during the wait shows the sheet again at the countdown's end, with its line marked, and no consent")
         sessions.pressed(.cancel)
         other.view.send(txt: "\u{03}")
+        _ = await wait(5) { !other.status.running }
 
-        // An open decision: listed on the sheet, and answered at the update quit.
-        var answered = false
-        let decision = UpdateHolds.shared.open(decision: "An agent asks to install a skill") { answered = true }
+        // A background job at the prompt: busy, as ⌘Q's "Quitting stops…" names it, and waited for.
+        busyTab.view.send(txt: "sleep 600 &\r")
+        let backgrounded = await wait(5) { busyTab.status.jobs > 0 && !busyTab.status.running }
+        sessions.show(version: version, from: .updateButton)
+        let jobFlow = sessions.flow
+        let jobPane = jobFlow?.busyPanes.first { (pane: UpdatePane) -> Bool in pane.id == busyTab.id }
+        let jobLine = jobPane.flatMap { (pane: UpdatePane) -> String? in jobFlow?.line(pane) } ?? ""
+        let jobBusy = jobFlow?.state == .busy && jobFlow?.waitSet.contains(busyTab.id) == true
+        check(backgrounded && jobBusy && jobLine == "waited for", "a background job makes the update sheet busy, its tab waited for",
+              "\(String(describing: jobFlow?.state)), \(jobLine)")
+        if sessions.flow != nil { sessions.pressed(.cancel) }
+        busyTab.view.send(txt: "kill %1\r")
+
+        // A real approval panel (a skill to install): listed as an open decision; once its approved change is under way,
+        // waited for instead; declined at the update quit. A registered decision is answered too.
+        var declined = false
+        let request = AgentApprovalWindow.Request(title: "An agent asks to install a skill", requester: "the self-test",
+                                                  agentWords: nil, details: "Nothing is installed: the self-test declines it.",
+                                                  approveTitle: "Install")
+        let approval = AgentApprovalWindow(request, approve: { _ in }, decline: { _ in declined = true })
+        approval.present()
         sessions.show(version: version, from: .updateButton)
         let decisions: [String] = sessions.sheet?.decisionsStack.arrangedSubviews.compactMap { ($0 as? NSTextField)?.stringValue } ?? []
-        check(decisions.contains("• An agent asks to install a skill"), "an open decision the restart drops is listed on the sheet",
-              "\(decisions)")
+        check(decisions.contains("• An agent asks to install a skill"),
+              "an open approval panel is listed on the sheet as a decision the restart drops", "\(decisions)")
+        approval.setCommitted(true)
+        let underWay = UpdateHolds.shared.running.contains("An agent asks to install a skill")
+            && !UpdateHolds.shared.openDecisions.contains("An agent asks to install a skill")
+        check(underWay, "an approved change under way is waited for by the update quit, not listed as a decision")
+        approval.setCommitted(false)
         sessions.pressed(.cancel)
+        var answered = false
+        let decision = UpdateHolds.shared.open(decision: "An agent asks to change a file") { answered = true }
         UpdateHolds.shared.cancelAll()
-        check(answered, "the update quit answers each open decision")
+        check(declined && approval.window?.isVisible != true && answered,
+              "the update quit declines each open approval panel and answers each open decision")
         UpdateHolds.shared.close(decision)
+        if approval.window?.isVisible == true { approval.close() }
         window.makeKeyAndOrderFront(nil)
         if let focus { window.makeFirstResponder(focus) }
     }

@@ -638,14 +638,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // before, and a cancel clears what this one gave. The update consent is Updater's, cleared when this quit is
         // cancelled.
         MainActor.assumeIsolated { SessionRestore.shared.quitConsent = false }
+        // Why it quits is read once, before the questions: a download that ends under them never turns an update quit into
+        // a user quit.
         let update = MainActor.assumeIsolated { Updater.shared.validConsent }
-        guard let asking = askBeforeQuitting(update: update) else {
+        let reason = quitReason
+        guard let asking = askBeforeQuitting(update: update, reason: reason) else {
             MainActor.assumeIsolated { SessionRestore.shared.quitConsent = false }
+            return .terminateCancel
+        }
+        let now = MainActor.assumeIsolated { Updater.shared.validConsent }
+        guard case .goAhead(let ending) = QuitPolicy.ending(reason: reason, consentBefore: update, consentNow: now) else {
+            // Another version was staged while it asked: the consent covered the one before, so the sheet asks again.
+            MainActor.assumeIsolated { SessionRestore.shared.quitConsent = false }
+            DispatchQueue.main.async { MainActor.assumeIsolated { Updater.shared.offerStaged() } }
             return .terminateCancel
         }
         MainActor.assumeIsolated { SessionRestore.shared.quitConsent = asking.quitConsent }
         isTerminating = true
-        terminatingFor = quitReason
+        terminatingFor = ending
         terminatingUpdate = update
         // A skill change part-way finishes, and records its Undo, before Next Term quits.
         SkillsStore.waitForChanges()
@@ -657,7 +667,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// update consent: the unsaved-files question alone, with no checkbox, and when the plan got worse than the one the
     /// consent covers, no question at all but the update sheet again (R16). Nil when the quit is cancelled. The answer is
     /// saved only once the quit goes ahead; the quit consent comes from it (QuitAsking).
-    private func askBeforeQuitting(update consent: UpdateConsent?) -> QuitAsking? {
+    private func askBeforeQuitting(update consent: UpdateConsent?, reason: QuitReason) -> QuitAsking? {
         let dirty = controllers.flatMap(\.editorArea.dirtyDocuments)
         let projects = openProjects
         let settings = LaunchSettings(defaults: launchDefaults)
@@ -668,7 +678,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             UpdateQuit(consent: consent, current: MainActor.assumeIsolated { UpdatePlanning.plan() })
         }
         let input = QuitInput(unsavedFiles: dirty.count, busyTabs: busyCount, terminalWindows: controllers.count,
-                              sheetAttached: sheetAttached, reason: quitReason, settings: settings, update: update)
+                              sheetAttached: sheetAttached, reason: reason, settings: settings, update: update)
         let questions: [QuitQuestion] = QuitPolicy.questions(input)
         var asking = QuitAsking()
         guard !questions.isEmpty else { return asking }
@@ -679,7 +689,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         // A quit from the Dock while Next Term is behind another app: its first question shows in front.
         NSApp.activate(ignoringOtherApps: true)
-        var busyCheckbox: Bool?
+        var plannedBusy: QuitQuestion?
         for question in questions {
             switch question {
             case .saveChanges(let checkbox):
@@ -695,13 +705,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 default:
                     return nil
                 }
-            case .busy(let checkbox):
-                busyCheckbox = checkbox // asked below, once the busy tabs are read again
+            case .busy:
+                plannedBusy = question // asked below, once the busy tabs are read again
             case .quit(let checkbox):
-                let prompt = QuitReopenPrompt(projects: projects, checked: checkbox)
-                guard let answer = prompt.run() else { return nil }
-                let dontAskAgain = prompt.alert.suppressionButton?.state == .on
-                asking.reply(.goOn(resume: answer.resume, dontAskAgain: dontAskAgain), to: question)
+                guard askPlain(checked: checkbox, projects: projects, into: &asking) else { return nil }
             case .updateSheet:
                 return nil
             }
@@ -717,17 +724,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return asking
         }
         // Read again, as today: a tab that turned busy under a question before still gets "Quitting stops…". Only the
-        // alert the policy chose carries the checkbox, so the question is never asked twice; when that alert no longer
-        // applies, nothing is asked about resuming and the setting stays as it is.
+        // alert the policy chose carries the checkbox, so the question is never asked twice; when no tab is busy any more
+        // and that alert was to carry it, the plain dialog asks instead (AE22, QuitPolicy.lastQuestion).
         let busy = controllers.flatMap(\.busyTabs)
-        if !busy.isEmpty {
+        switch QuitPolicy.lastQuestion(planned: plannedBusy, busyTabs: busy.count) {
+        case .busy(let checkbox):
             let alert = Self.quitStopsAlert(busy)
-            let box = busyCheckbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
+            let box = checkbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
             guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-            asking.reply(.goOn(resume: box.map { $0.state == .on }, dontAskAgain: false), to: .busy(resumeCheckbox: busyCheckbox))
+            asking.reply(.goOn(resume: box.map { $0.state == .on }, dontAskAgain: false), to: .busy(resumeCheckbox: checkbox))
+        case .quit(let checkbox):
+            guard askPlain(checked: checkbox, projects: projects, into: &asking) else { return nil }
+        case .saveChanges, .updateSheet, nil:
+            break
         }
         asking.settings(from: settings)?.save(to: launchDefaults)
         return asking
+    }
+
+    /// The plain quit dialog, "Quit Next Term?", its answer put into `asking`. False when it was cancelled.
+    private func askPlain(checked: Bool, projects: [String], into asking: inout QuitAsking) -> Bool {
+        let prompt = QuitReopenPrompt(projects: projects, checked: checked)
+        guard let answer = prompt.run() else { return false }
+        let dontAskAgain = prompt.alert.suppressionButton?.state == .on
+        asking.reply(.goOn(resume: answer.resume, dontAskAgain: dontAskAgain), to: .quit(resumeCheckbox: checked))
+        return true
     }
 
     /// Why this quit happens: the plain self-test, the reason the relaunch harness sets, a valid update consent (the update
