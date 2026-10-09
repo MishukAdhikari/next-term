@@ -32,8 +32,10 @@ final class DiffPane: NSView, DiffSelectionHost {
     private var acceptKey: PartToolTip?
     /// The header's free space, where "⌥⌘K Ask Claude Code" shows while lines are selected.
     let askRoom = AskAgentRoom()
-    /// The side whose selection counts while neither has the keyboard: the one selected last.
-    private var lastSelectedSide: DiffSide = .new
+    /// The side whose selection counts (each side keeps its selection drawn): the one that took the keyboard or
+    /// had lines selected last. It changes only where the agents are told again, so what they were told last is
+    /// what it gives, wherever the keyboard goes after.
+    private var selectedSide: DiffSide = .new
 
     /// An agent's proposed edit (Claude Code's openDiff): your file against its version, to accept or
     /// reject. Next Term never writes the file; the agent does, once you accept.
@@ -358,6 +360,11 @@ final class DiffPane: NSView, DiffSelectionHost {
         // What is selected goes to the agents, as the editor's selection does.
         for view in [left.textView, right.textView] {
             NotificationCenter.default.addObserver(self, selector: #selector(sideSelectionChanged(_:)), name: NSTextView.didChangeSelectionNotification, object: view)
+            view.onFocus = { [weak self, weak view] in
+                guard let self, let view else { return }
+                self.selectedSide = view === self.left.textView ? .old : .new
+                self.selectionMayHaveChanged()
+            }
         }
         // The sides scroll together, both ways.
         for (column, other) in [(left, right), (right, left)] {
@@ -566,7 +573,7 @@ final class DiffPane: NSView, DiffSelectionHost {
     }
 
     /// The lines selected, as the agents are told about them: in Unified, its column's; side by side, the
-    /// side with the keyboard's, else the side selected last (each side keeps its selection drawn).
+    /// side that took the keyboard or had lines selected last (`selectedSide`).
     func diffShare() -> DiffShare? {
         guard message.isHidden, let file else { return nil }
         let rows = unified.isOn ? unified.column.selectedDiffRows() : (selectedSide == .old ? left : right).selectedDiffRows()
@@ -608,18 +615,11 @@ final class DiffPane: NSView, DiffSelectionHost {
         return exists ? .new : .neither
     }
 
-    /// The side with the keyboard, else the one selected last.
-    private var selectedSide: DiffSide {
-        if let responder = window?.firstResponder {
-            if responder === left.textView { return .old }
-            if responder === right.textView { return .new }
-        }
-        return lastSelectedSide
-    }
-
+    /// A side's selection changed: it is the side that counts when it has lines now, or has the keyboard (a click
+    /// that leaves nothing selected there is a choice of that side too).
     @objc private func sideSelectionChanged(_ notification: Notification) {
         guard let view = notification.object as? NSTextView else { return }
-        if view.selectedRange().length > 0 { lastSelectedSide = view === left.textView ? .old : .new }
+        if view.selectedRange().length > 0 || window?.firstResponder === view { selectedSide = view === left.textView ? .old : .new }
         selectionMayHaveChanged()
     }
 
@@ -945,6 +945,14 @@ final class DiffColumn: NSScrollView {
 /// has the line, a band for each hunk's start.
 final class DiffTextView: NSTextView {
     weak var column: DiffColumn?
+    /// It took the keyboard: its side's selection is the one that counts now.
+    var onFocus: (() -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became { onFocus?() }
+        return became
+    }
 
     override func mouseDown(with event: NSEvent) {
         super.mouseDown(with: event)

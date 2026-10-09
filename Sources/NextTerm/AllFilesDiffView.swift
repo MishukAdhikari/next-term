@@ -62,7 +62,8 @@ final class AllFilesView: NSView, DiffSelectionHost {
     var untracked: Set<String> = []
     /// The header's free space, where "⌥⌘K Ask Claude Code" shows while lines are selected.
     let askRoom = AskAgentRoom()
-    /// The file whose lines were selected last (each file's column keeps its selection drawn).
+    /// The file whose selection counts (each file's column keeps its selection drawn): the one whose column took
+    /// the keyboard or had lines selected last. It changes only where the agents are told again.
     private weak var selectedColumn: UnifiedColumn?
 
     override init(frame: NSRect) {
@@ -397,7 +398,11 @@ final class AllFilesView: NSView, DiffSelectionHost {
             }
             column.menuForRow = { [weak self, weak entry, weak column] row in
                 guard let self, let file = entry?.file else { return nil }
-                if let column, !column.selectedRows().contains(row) { column.select(row: row) }
+                // The file right-clicked is the one its Send to Agent sends, whichever had the keyboard before.
+                if let column {
+                    self.window?.makeFirstResponder(column.textView)
+                    if !column.selectedRows().contains(row) { column.select(row: row) }
+                }
                 let menu = NSMenu()
                 menu.addBlock("Open File", enabled: file.status != .deleted) { [weak self] in self?.onOpenFile?(file) }
                 menu.addBlock("Show Side by Side") { [weak self] in self?.onSideBySide?(file) }
@@ -411,6 +416,11 @@ final class AllFilesView: NSView, DiffSelectionHost {
             }
             NotificationCenter.default.addObserver(self, selector: #selector(columnSelectionChanged(_:)), name: NSTextView.didChangeSelectionNotification,
                                                    object: column.textView)
+            column.textView.onFocus = { [weak self, weak column] in
+                guard let self, let column else { return }
+                self.selectedColumn = column
+                self.selectionMayHaveChanged()
+            }
             block.column = column
         case let .note(text, action):
             let note = AllFilesNote(frame: NSRect(x: 0, y: Self.headerHeight, width: block.bounds.width, height: Self.noteHeight))
@@ -478,19 +488,18 @@ final class AllFilesView: NSView, DiffSelectionHost {
 
     // MARK: the selection, for agents
 
+    /// A file's selection changed: it is the one that counts when it has lines now, or has the keyboard (a click
+    /// that leaves nothing selected there is a choice of that file too).
     @objc private func columnSelectionChanged(_ notification: Notification) {
         guard let view = notification.object as? UnifiedTextView, let column = view.column else { return }
-        if view.selectedRange().length > 0 { selectedColumn = column }
+        if view.selectedRange().length > 0 || window?.firstResponder === view { selectedColumn = column }
         selectionMayHaveChanged()
     }
 
-    /// The file's column with the keyboard, else the one selected last; and its file.
+    /// The column whose selection counts (`selectedColumn`), and its file.
     private var selected: (column: UnifiedColumn, entry: Entry)? {
-        let focused = (window?.firstResponder as? UnifiedTextView)?.column
-        for column in [focused, selectedColumn].compactMap({ $0 }) {
-            if let entry = entries.first(where: { $0.block?.column === column }) { return (column, entry) }
-        }
-        return nil
+        guard let column = selectedColumn, let entry = entries.first(where: { $0.block?.column === column }) else { return nil }
+        return (column, entry)
     }
 
     /// The file's changes are not committed yet: the page shows Uncommitted, or git doesn't track the file.

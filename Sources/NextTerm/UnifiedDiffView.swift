@@ -327,6 +327,14 @@ final class UnifiedColumn: NSScrollView {
 /// row picks its change, a right-click offers what can be done with it.
 final class UnifiedTextView: NSTextView {
     weak var column: UnifiedColumn?
+    /// It took the keyboard: on the All files page, its file's selection is the one that counts now.
+    var onFocus: (() -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became { onFocus?() }
+        return became
+    }
 
     private func row(for event: NSEvent) -> Int? {
         column?.row(atY: convert(event.locationInWindow, from: nil).y)
