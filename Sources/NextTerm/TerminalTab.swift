@@ -606,6 +606,10 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// in it, and it holds nothing restored, such as a put-back line (KTD10).
     var isUntouched: Bool { restoredRecord == nil && status.command.isEmpty && !status.running }
 
+    /// The restore brought this tab back, and the user has not put anything in it since: its put-back line, note and
+    /// scrollback may be unseen, so Open Project does not replace it (TerminalWindowController.holdsRestore).
+    var holdsRestore: Bool { restoredRecord != nil && !touchedByUser }
+
     /// Notes where the command now starting showed, as the integration reports it.
     private func noteEcho(_ typed: String, expanded: String?) {
         runningEcho = SessionScrollback.echo(in: self, typed: typed)

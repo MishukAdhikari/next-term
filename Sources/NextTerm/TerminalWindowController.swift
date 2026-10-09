@@ -914,6 +914,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return tab.isUntouched && tab.closeWarning == nil
     }
 
+    /// A tab here holds what the restore brought back, and the user has not put anything in it yet: Open Project never
+    /// takes this window over or replaces its tabs, but opens a window of its own (ProjectOpening.placement).
+    var holdsRestore: Bool { tabs.contains(where: \.holdsRestore) }
+
     /// Turns this window into `path`'s project: a fresh tab in the project, the old tabs closed.
     /// Callers confirm first if the old tabs are busy.
     func adoptProject(_ path: String) {

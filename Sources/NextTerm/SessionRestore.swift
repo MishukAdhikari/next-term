@@ -113,31 +113,17 @@ final class SessionRestore {
         return ScrollbackText.take(ids, quit: decision.scrollbackQuit, from: files)
     }
 
-    /// Builds the snapshot's windows in this turn (KTD10) and hands each pane's action to `RestoreActions`. Windows a
-    /// request opened before the launch finished stay in front of them (R32), unless the restore brings their project back
-    /// and nothing happened in them yet. True when a window was built.
+    /// Builds the snapshot's windows in this turn (KTD10) and hands each pane's action to `RestoreActions`. Nothing a
+    /// request names has opened yet: AppDelegate holds what `application(_:open:)` names until this has run, and opens it
+    /// after, in front of these windows (R32). True when a window was built.
     private func restore(_ snapshot: SessionSnapshot, kind: SessionSnapshot.RestoreKind, safeMode: Bool, consent: Bool,
                          scrollback: [UUID: String]) -> Bool {
-        let early: [TerminalWindowController] = AppDelegate.shared.controllers
         RemoteConnection.holdRestore()
         let planned = RestorePlanning.plan(snapshot, kind: kind, safeMode: safeMode, quitConsent: consent)
         let savedAt: ScrollbackText.SavedAt? = kind == .update ? .update : kind == .quit ? .quit : nil
         let built = RestoreBuild.build(snapshot, planned: planned, scrollback: scrollback, savedAt: savedAt)
         RemoteConnection.releaseRestore(kept: built.keptRemote)
         RemoteConnection.tellSkipped(built.skipped, kept: false)
-        for controller in early {
-            let untouched = controller.tabs.allSatisfy(\.isUntouched) && controller.editorArea.isEmpty
-            let same = controller.project.flatMap { (project: String) -> TerminalWindowController? in
-                built.windows.first { $0.project == project }
-            }
-            if let same, untouched {
-                // The request named a project the restore brought back: its restored window is the one it opens.
-                controller.window?.close()
-                same.window?.makeKeyAndOrderFront(nil)
-            } else {
-                controller.window?.makeKeyAndOrderFront(nil)
-            }
-        }
         let actions = RestoreActions(panes: built.panes, safeMode: safeMode)
         MCPRestoredTabs.restored(built.panes)
         self.actions = actions

@@ -345,6 +345,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private(set) var remoteRestorePending = false
     /// A folder or file came through `application(_:open:)`. Read once, as the launch finishes: the launch named one.
     private var openedAtLaunch = false
+    /// What `application(_:open:)` names, by when it comes (R32): held until the launch hook has built the restored
+    /// windows, then opened in front of them as `nxtrm` opens it until the launch has shown what it shows.
+    private var requests = ProjectOpening.LaunchRequests()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         RemotePoller.shared.start() // status of remote tabs, from their hosts
@@ -373,6 +376,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // time it returns, before the self-test branch and `--open-request`, so a request launch keeps the quit's session
         // too and opens in front of it (R32). From here on the session is saved, and at the quit.
         let restore = MainActor.assumeIsolated { SessionRestore.shared.launch(settings: LaunchSettings(defaults: launchDefaults)) }
+        let named = requests.restored()
         NSApp.activate(ignoringOtherApps: true)
         // `nxtrm` in a terminal, while Next Term runs.
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(commandLineRequest(_:)),
@@ -382,7 +386,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // A step of the relaunch harness: a launch as the app's own, in the harness's folder and defaults, with no update
         // check, no `nxtrm` link and no clean-up in Application Support. SelfTestRestore drives the rest.
         if SelfTest.mode == .relaunchHarness {
-            openAtLaunch(kind: .normal, restore: restore, settings: LaunchSettings(defaults: launchDefaults), mayOfferImport: false)
+            // A step launched as `nxtrm` launches the app opens what it names, as the app's own launch does.
+            let command = Self.openRequest(in: CommandLine.arguments)
+            if let command { handle(command) }
+            open(named, asRequest: true)
+            let kind: LaunchKind = command != nil || openedAtLaunch ? .request : .normal
+            openAtLaunch(kind: kind, restore: restore, settings: LaunchSettings(defaults: launchDefaults), mayOfferImport: false)
+            requests.shown()
             restoreRemoteTabsOnceAWindowOpens()
             return SelfTestRestore.run(restore: restore)
         }
@@ -391,13 +401,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             // A normal launch, with the Welcome window whatever is saved and no import offer. The self-test's first
             // check opens the window the others use.
             openAtLaunch(kind: .normal, restore: .notRun, settings: LaunchSettings(), mayOfferImport: false)
+            requests.shown()
             restoreRemoteTabsOnceAWindowOpens()
             SelfTest.run()
             return
         }
         // `nxtrm` started us: what it asked for opens, in front of what the restore brought back, and the launch shows
-        // nothing more. A folder dropped on the app, `open -a "Next Term" dir` and Finder's Open With usually arrive before
-        // this and open themselves.
+        // nothing more. So does a folder dropped on the app, `open -a "Next Term" dir` and Finder's Open With: those that
+        // arrived before the hook open now, and those that arrive before the launch has shown what it shows open as they
+        // come, each as `nxtrm` opens it (`application(_:open:)`).
         let command = Self.openRequest(in: CommandLine.arguments)
         let kind: LaunchKind = command != nil || openedAtLaunch ? .request : .normal
         // `nxtrm` in other terminals: linked where that needs no password, else offered once with one.
@@ -408,8 +420,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Skill updates, once a day, for Agents › Skills…' count.
         MainActor.assumeIsolated { SkillsUpdateCheck.start() }
         if let command { handle(command) }
+        open(named, asRequest: true)
         let show = { [self] in
             openAtLaunch(kind: kind, restore: restore)
+            requests.shown()
             restoreRemoteTabsOnceAWindowOpens()
         }
         // A launch to open a document can get it just after this: a turn later, its window is open, and the launch
@@ -911,7 +925,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// Where Open Project goes when the current window is in use: ask, this window, or a new one.
-    enum ProjectTarget: String { case ask, thisWindow, newWindow }
+    typealias ProjectTarget = ProjectOpening.Setting
 
     var projectTarget: ProjectTarget {
         get { ProjectTarget(rawValue: UserDefaults.standard.string(forKey: "openProjectsIn") ?? "") ?? .ask }
@@ -952,7 +966,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// Opens a folder as a project. Reuses an untouched window; otherwise this window or a new one,
-    /// as the user chooses (and may remember), like an IDE.
+    /// as the user chooses (and may remember), like an IDE. A window the restore brought back is neither: while it holds
+    /// what came back, the folder opens in a window of its own (ProjectOpening.placement).
     func openProject(at url: URL, from controller: TerminalWindowController?) {
         let path = canonicalPath(url.path)
         var isDir: ObjCBool = false
@@ -969,16 +984,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             open.window?.makeKeyAndOrderFront(nil)
             return
         }
-        guard let target = controller ?? controllers.last(where: { $0.window?.isVisible == true }) else {
+        let target = controller ?? controllers.last(where: { $0.window?.isVisible == true })
+        let from = target.map { (target: TerminalWindowController) -> ProjectOpening.Target in
+            ProjectOpening.Target(pristine: target.isPristine, holdsRestore: target.holdsRestore)
+        }
+        var choice = projectTarget
+        let placement = ProjectOpening.placement(from: from, setting: choice)
+        guard let target, placement != .newWindow else {
             openWindow(directory: path, project: path)
             return
         }
-        if target.isPristine {
+        if placement == .adopt {
             target.adoptProject(path)
             target.window?.makeKeyAndOrderFront(nil)
             return
         }
-        var choice = projectTarget
         if choice == .ask {
             let alert = NSAlert()
             alert.messageText = "Where do you want to open “\(url.lastPathComponent)”?"
@@ -1020,10 +1040,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Read as the launch finishes: it named something, even when every item below is skipped. It then goes on
         // as a normal launch, without the first run's import offer.
         openedAtLaunch = true
+        switch requests.arrive(urls) {
+        case .held: break // until the restore has built its windows
+        case .asRequest: open(urls, asRequest: true)
+        case .asProject: open(urls, asRequest: false)
+        }
+    }
+
+    /// Opens what `application(_:open:)` named. `asRequest`: the launch's own request (R32), which opens as `nxtrm` does,
+    /// in front, each folder in its own window, its project's, an unused one or a new one, never in place of a window the
+    /// restore brought back. Otherwise a folder opens as Open Project does (`openProject`): an unused key window is taken
+    /// over and a used one may be replaced, as "Open Projects In" says, but one the restore brought back is neither.
+    private func open(_ urls: [URL], asRequest: Bool) {
         for url in urls {
             var isDir: ObjCBool = false
             guard url.isFileURL, FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { continue }
-            if isDir.boolValue {
+            if isDir.boolValue && asRequest {
+                openFolder(url.path, newWindow: false)
+            } else if isDir.boolValue {
                 openProject(at: url, from: NSApp.keyWindow?.windowController as? TerminalWindowController)
             } else {
                 openFile(url.path, line: nil, column: 1, newWindow: false) // Finder's Open With
