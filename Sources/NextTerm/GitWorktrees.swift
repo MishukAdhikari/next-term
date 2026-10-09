@@ -343,6 +343,11 @@ final class WorktreeSheet: NSObject, NSTextFieldDelegate {
         field.stringValue = text
         controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
     }
+    /// Typed as keys are: over the selection, through the field's editor.
+    func typeKeys(_ text: String) {
+        guard let editor = field.currentEditor() as? NSTextView else { return type(text) }
+        editor.insertText(text, replacementRange: editor.selectedRange())
+    }
     func pressCreate() { create.performClick(nil) }
     func pressCancel() { cancel.performClick(nil) }
 }
