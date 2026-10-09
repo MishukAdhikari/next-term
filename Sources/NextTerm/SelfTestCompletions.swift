@@ -59,7 +59,7 @@ extension SelfTest {
     static func typeKeys(_ window: NSWindow, _ text: String) {
         let codes: [Character: UInt16] = ["a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9, "b": 11, "q": 12,
                                           "w": 13, "e": 14, "r": 15, "y": 16, "t": 17, "o": 31, "u": 32, "i": 34, "p": 35, "l": 37,
-                                          "j": 38, "k": 40, "n": 45, "m": 46, " ": 49]
+                                          "j": 38, "k": 40, "n": 45, "m": 46, "/": 44, " ": 49]
         for character in text {
             let lower = Character(character.lowercased())
             let flags: NSEvent.ModifierFlags = character.isUppercase ? [.shift] : []
@@ -771,6 +771,28 @@ extension SelfTest {
                   "\(part): → then ← at once: back where it started", seen())
             closeShown()
         }
+        await clearLine(tab)
+        // Next Term's engine notes the word each take will report. → ← → at once, the folder held back 60 ms as a slow disk
+        // would: the hook's reports for → and ← come in while the second → lists it, and are counted off then. None is left
+        // over to pass for a word typed later: back at the top, `projects/` typed no longer fits the list, which closes.
+        if !zsh, await open("cd ") {
+            _ = choose("projects")
+            CompletionSession.drillListingDelay = 0.06
+            right()
+            left()
+            right()
+            let inside = await wait(3) { line("cd projects/") && shown().sorted() == ["cv", "next-term"] && popup.isVisible }
+            CompletionSession.drillListingDelay = 0
+            left()
+            let back = await wait(3) { line("$ cd ") && chosen() == "projects" && popup.isVisible }
+            typeKeys(window, "projects/")
+            let closed = await wait(3) { line("cd projects/") && !popup.isVisible }
+            let stages: [String?] = [inside ? nil : "→ ← → did not end inside projects", back ? nil : "← did not go back up"]
+            let detail = (stages.compactMap { $0 } + [seen()]).joined(separator: "; ")
+            check(inside && back && closed, "\(part): → ← → at once, ← and then `projects/` typed: the list closes, as for any `/` typed", detail)
+            closeShown()
+        }
+        CompletionSession.drillListingDelay = 0
         await clearLine(tab)
         // ↓ waits too: → ↓ ↩︎ at once puts the second row inside on the line.
         if await open("cd ") {

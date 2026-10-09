@@ -69,6 +69,11 @@ final class CompletionSession {
     private(set) var drills = 0
     private(set) var lastDrill: CompletionDrill.Step?
     private(set) var backUps = 0
+    #if DEBUG
+    /// For the self-test: how much later than it is read a folder gone into on this Mac is handed over, so the hook's
+    /// reports for the takes before it come in while it is being listed (well inside answerWithin).
+    nonisolated(unsafe) static var drillListingDelay: TimeInterval = 0
+    #endif
 
     /// Going into a folder: its deadline, and what then puts the name on the line alone.
     private var drillTimer: DispatchWorkItem?
@@ -557,13 +562,16 @@ final class CompletionSession {
             return listClosed()
         }
         lineInOutput = true
-        // Going into a folder: the row was taken as the list stood when ⇥ was pressed.
-        if state.isDrilling { return state.line(report) }
-        // The word of a take another take has gone on from since: the list showing is that one's.
+        // The word of a take another take has gone on from since: the list showing is that one's. Counted off while a
+        // folder is being listed too (→ ← → at once), so a report that came in then is not left over to match a word
+        // typed later.
+        var passed = false
         if let at = takeEchoes.firstIndex(of: report.word) {
             takeEchoes.removeFirst(at + 1)
-            if !takeEchoes.isEmpty { return state.line(report) }
+            passed = !takeEchoes.isEmpty
         }
+        // Going into a folder: the row was taken as the list stood when ⇥ was pressed.
+        if state.isDrilling || passed { return state.line(report) }
         if let list {
             // ⌫ took the `/` after a folder gone into: back up.
             if let above = list.backUp(word: report.word) { return wentBackUp(above) }
@@ -1125,6 +1133,11 @@ extension CompletionSession {
         let started = lister.start(into.folder) { listing in
             let prepared = PathCompletion.Prepared(listing, foldersOnly: into.kind == .folders, hidden: into.showsHidden)
             let result = listing.readable ? prepared.candidates(into.typed) : PathCompletion.Result()
+            #if DEBUG
+            if Self.drillListingDelay > 0 {
+                return DispatchQueue.main.asyncAfter(deadline: .now() + Self.drillListingDelay) { finish(listing, prepared, result) }
+            }
+            #endif
             DispatchQueue.main.async { finish(listing, prepared, result) }
         }
         // A listing still stuck (a hung volume): the name goes in alone.
