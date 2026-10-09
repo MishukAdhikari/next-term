@@ -2,12 +2,13 @@ import Foundation
 import NextTermCore
 import SwiftTerm
 
-/// Scrollback on the update path (R4, KTD9). At an update quit each tab's scrollback is read from its terminal
-/// (`capture`), made into masked text (`ScrollbackText`), and written to a private file in the sessions folder named for
-/// the quit's marker and a fresh id the pane's record keeps (`save`). At the relaunch only the launch that claimed that
-/// marker reads the files, and only those named for it; each is removed as it is read, and every other one unread
-/// (`take`). Any other launch that holds the folder removes them all unread (`removeAll`). A restored tab shows its text
-/// above a dim divider before its shell starts (`TerminalTab.restoredScrollback`).
+/// Scrollback on the update and quit paths (R4, KTD9). At an update quit, or a quit under "Resume where I left off", each
+/// tab's scrollback is read from its terminal (`capture`), with the id its pane's record will name it by, and made into
+/// masked text (`ScrollbackText`), which `ScrollbackText.save` writes to a private file in the sessions folder named for
+/// the quit and that id. At the next launch only the restore of that quit reads the files, and only those named for it;
+/// each is removed as it is read, and every other one unread (`ScrollbackText.take`). Any other launch that holds the
+/// folder removes them all unread (`ScrollbackText.removeAll`). A restored tab shows its text above a dim divider before
+/// its shell starts (`TerminalTab.restoredScrollback`).
 enum SessionScrollback {
     /// The most rows read from a terminal: a pane keeps `ScrollbackText.Limits.standard` lines at most, and a terminal can
     /// keep 100,000.
@@ -19,6 +20,9 @@ enum SessionScrollback {
 
     /// What a tab's terminal held, read on the main thread. `text` makes it the saved text, on any thread.
     struct Capture: Sendable {
+        /// The id the pane's record names its file by, chosen here: the state file that names it is written before the
+        /// file (KTD18).
+        let id = UUID()
         let rows: [ScrollbackText.Row]
         /// The scroll-invariant row of the first; nil for the normal buffer read as text behind the alternate screen.
         let firstRow: Int?
@@ -32,14 +36,14 @@ enum SessionScrollback {
 
     /// What `tab` holds now. With the normal buffer in front, its rows with their wrap flags, read as `clickedLine` reads
     /// them. With the alternate screen in front (an agent's or an editor's), the normal buffer behind it, which only reads
-    /// as text, without wrap flags. An agent's pane keeps only what came before its command, and nothing when that is not
-    /// known (a shell without the integration, a tab on a server).
+    /// as text, without wrap flags, each row noted as filling the width or not. An agent's pane keeps only what came before
+    /// its command, and nothing when that is not known (a shell without the integration, a tab on a server).
     static func capture(_ tab: TerminalTab) -> Capture {
         let terminal = tab.view.getTerminal()
         let agent = tab.status.running && tab.status.kind == .agent
         let extent: ScrollbackText.Extent = agent ? .before(tab.runningEcho) : .all
         if terminal.isCurrentBufferAlternate {
-            let rows = ScrollbackText.rows(bufferData: terminal.getBufferAsData(kind: .normal))
+            let rows = ScrollbackText.rows(bufferData: terminal.getBufferAsData(kind: .normal), columns: terminal.cols)
             return Capture(rows: Array(rows.suffix(rowsRead)), firstRow: nil, dropped: tab.droppedEchoes, extent: extent)
         }
         guard let last = tab.lastTextRow() else {
@@ -84,43 +88,5 @@ enum SessionScrollback {
     /// the line wraps on from it, as the wrapped line holds them.
     private static func text(of line: BufferLine, wrapsOn: Bool) -> String {
         line.translateToString(trimRight: !wrapsOn, skipNullCellsFollowingWide: true)
-    }
-
-    // MARK: files
-
-    /// Saves `text` for the update quit that writes `marker`, as a new private file in the sessions folder. Returns the id
-    /// the pane's record names it by (`SessionSnapshot.Pane.scrollback`), or nil when there was nothing to save or it was
-    /// not written.
-    static func save(_ text: String, marker: UUID, in files: SessionFiles) -> UUID? {
-        guard !text.isEmpty else { return nil }
-        let pane = UUID()
-        do {
-            try files.create(ScrollbackText.fileName(marker: marker, pane: pane), with: Data(text.utf8))
-            return pane
-        } catch {
-            return nil
-        }
-    }
-
-    /// At the relaunch: the saved scrollback of each pane in `panes` (the ids the snapshot's panes name), read only for the
-    /// claimed `marker` of an update restore, as untrusted files no larger than `limits` allows. Every scrollback file in
-    /// the folder is removed, read or not. Nil `marker`: none is read.
-    static func take(_ panes: Set<UUID>, marker: UUID?, from files: SessionFiles,
-                     limits: ScrollbackText.Limits = .standard) -> [UUID: String] {
-        guard let names = try? files.names() else { return [:] }
-        let sorted = ScrollbackText.sort(names, marker: marker, panes: panes)
-        var texts: [UUID: String] = [:]
-        for (pane, name) in sorted.read {
-            guard let data = (try? files.read(name, maxSize: limits.bytes)) ?? nil else { continue }
-            texts[pane] = String(decoding: data, as: UTF8.self)
-        }
-        for name in sorted.remove { try? files.remove(name) }
-        return texts
-    }
-
-    /// Removes every scrollback file unread: a launch that holds the folder and restores no update (a crash restore, safe
-    /// mode, a normal launch).
-    static func removeAll(from files: SessionFiles) {
-        _ = take([], marker: nil, from: files)
     }
 }

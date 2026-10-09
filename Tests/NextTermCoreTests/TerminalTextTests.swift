@@ -93,6 +93,17 @@ import Testing
     static let firstHalf = "ghp_abcdefgh"
     static let secondHalf = "ijklmnop1234QRST"
 
+    /// `line` over rows `width` cells wide, as a terminal wraps it.
+    static func wrapping(_ line: String, width: Int) -> [String] {
+        var rows: [String] = []
+        var rest = Substring(line)
+        while !rest.isEmpty {
+            rows.append(String(rest.prefix(width)))
+            rest = rest.dropFirst(width)
+        }
+        return rows
+    }
+
     /// What `saved` gives, with what it handed `CommandSecrets.mask`.
     private func savedAndMasked(_ rows: [Row], dropped: [Echo] = []) -> (saved: String, masked: [String]) {
         var masked: [String] = []
@@ -127,6 +138,71 @@ import Testing
         // A value split there: masked alone, the first row leaves the rest of it on the second; joined, it goes too.
         let split = [Row("DB_PASSWORD=hunt", wrapped: nil), Row("er2 next", wrapped: nil)]
         #expect(ScrollbackText.saved(split) == "DB_PASSWORD=•••\r\n••• next")
+    }
+
+    @Test func withoutWrapFlagsTheRestOfAKeyTheFirstRowMaskedAloneIsMaskedToo() {
+        // The first row alone holds enough of it to be masked; the rest, on the next row, only joined to the row as it was.
+        let rows = [Row("$ echo ghp_abcdefghijklmnopqrstUVWX", wrapped: nil), Row("YZ0123456789 done", wrapped: nil)]
+        #expect(ScrollbackText.saved(rows) == "$ echo •••\r\n••• done")
+        let key = "Ab3Cd4Ef5Gh6Ij7Kl8Mn9Op0Qr1St2Uv3Wx4Yz5Ab6Cd7Ef8Gh9Ij0Kl1Mn2Op"
+        let split = [Row("key " + key.prefix(33), wrapped: nil), Row(key.dropFirst(33) + " ok", wrapped: nil)]
+        #expect(ScrollbackText.saved(split) == "key •••\r\n••• ok")
+        // What masking a row alone found is kept as it was, and the rest of the row too.
+        let both = [Row("TOKEN=abc123 and $ echo ghp_abcdefghijklmnopqrstUVWX", wrapped: nil),
+                    Row("YZ0123456789 done SECRET=x9", wrapped: nil)]
+        #expect(ScrollbackText.saved(both) == "TOKEN=••• and $ echo •••\r\n••• done SECRET=•••")
+    }
+
+    @Test func withoutWrapFlagsAWrapAtABlankKeepsABlankBetweenTheRows() {
+        // getBufferAsData trims a row's empty cells, and a blank written at its end goes when it is saved: either way
+        // the rows are joined with a blank where the first did not fill the width, or ended in one.
+        let short = ScrollbackText.rows(bufferData: Data("% app --password\ns3cretValue9 && ls\n".utf8), columns: 20)
+        #expect(short.map(\.full) == [false, false])
+        #expect(ScrollbackText.saved(short) == "% app --password\r\n••• && ls")
+        let ended = ScrollbackText.rows(bufferData: Data("% app --password \ns3cretValue9\n".utf8), columns: 17)
+        #expect(ended.map(\.full) == [true, false])
+        #expect(ScrollbackText.saved(ended) == "% app --password\r\n•••")
+        // Not known to fill it: joined both ways.
+        let unknown = [Row("% app --password", wrapped: nil), Row("s3cretValue9 && ls", wrapped: nil)]
+        #expect(ScrollbackText.saved(unknown) == "% app --password\r\n••• && ls")
+    }
+
+    @Test func withoutWrapFlagsRowsThatFillTheWidthAreMaskedAsTheLineTheyWere() {
+        // docker login over three rows of 24: the tool on the first, the password on the last.
+        let docker = "% docker login registry.example.com --username sam -p Zq7Lw2Xr9"
+        let shown = Self.wrapping(docker, width: 24)
+        #expect(shown == ["% docker login registry.", "example.com --username s", "am -p Zq7Lw2Xr9"])
+        let rows = ScrollbackText.rows(bufferData: Data((shown + ["% ls"]).map { $0 + "\n" }.joined().utf8), columns: 24)
+        #expect(rows.map(\.full) == [true, true, false, false])
+        #expect(ScrollbackText.saved(rows) == "% docker login registry.\r\nexample.com --username s\r\nam -p •••\r\n% ls")
+        // A blank at the end of a full row stays between it and the next.
+        let mysql = ["% mysql -h db.example.internal ", "--user=root --database=app1 -pS", "3cretPass9"]
+        let rows31 = ScrollbackText.rows(bufferData: Data((mysql + ["% ls"]).map { $0 + "\n" }.joined().utf8), columns: 31)
+        #expect(rows31.map(\.full) == [true, true, false, false])
+        let masked31 = "% mysql -h db.example.internal\r\n--user=root --database=app1 -p•••\r\n•••\r\n% ls"
+        #expect(ScrollbackText.saved(rows31) == masked31)
+    }
+
+    @Test func withoutWrapFlagsADroppedCommandIsFoundOverTheRowsItWrappedOver() {
+        // Its echo is its line as one: rows read without wrap flags are each a line, so it is found by its text
+        // without blanks, over as many rows as it takes.
+        let docker = "% docker login registry.example.com --username sam -p Zq7Lw2Xr9"
+        let rows = Self.wrapping(docker, width: 24).map { (text: String) -> Row in Row(text, wrapped: nil) } + [Row("% ls", wrapped: nil)]
+        #expect(ScrollbackText.saved(rows, dropped: [Echo(row: 0, shown: [docker])]) == "\r\n\r\n\r\n% ls")
+        // Wrapped at a blank, which the row lost at its end; read as capture reads it, with no row numbers.
+        let mysql = "% mysql --host=db.example.internal --user=root --database=app -pS3cretPass9"
+        let at30 = ["% before", "% mysql --host=db.example.internal", "--user=root --database=app -pS3", "cretPass9", "% ls"]
+        let unnumbered = at30.map { (text: String) -> Row in Row(text, wrapped: nil) }
+        let saved = ScrollbackText.saved(unnumbered, firstRow: nil, dropped: [Echo(row: 7, shown: [mysql])])
+        #expect(saved == "\r\n\r\n\r\n% ls")
+        // A command typed over PS2 rows: each of its lines over its own rows.
+        let typed = ["% mysql -u root --host=db.example.internal \\", "> -pS3cretPass9 app"]
+        let ps2 = ["% mysql -u root --host=db.examp", "le.internal \\", "> -pS3cretPass9 app", "done"]
+        let ps2Rows = ps2.map { (text: String) -> Row in Row(text, wrapped: nil) }
+        #expect(ScrollbackText.saved(ps2Rows, dropped: [Echo(row: 0, shown: typed)]) == "\r\n\r\n\r\ndone")
+        // The same text spaced otherwise is the same line; other text is not.
+        let spaced = [Row("% ls  -la", wrapped: nil), Row("% ls -l", wrapped: nil)]
+        #expect(ScrollbackText.saved(spaced, dropped: [Echo(row: 0, shown: ["% ls -la"])]) == "\r\n% ls -l")
     }
 
     @Test func aSecretOnAPS2RowAfterABackslashIsMaskedAndTheRowKeepsItsPrompt() {
@@ -197,9 +273,17 @@ import Testing
         // Not known, or not found: nothing is kept.
         #expect(ScrollbackText.saved(rows, extent: .before(nil)).isEmpty)
         #expect(ScrollbackText.saved(rows, extent: .before(Echo(row: 0, shown: ["% codex"]))).isEmpty)
-        // Rows with no number to go by (the normal buffer behind the alternate screen): where it last shows.
-        let unnumbered = rows.map { (row: Row) -> Row in Row(row.text, wrapped: nil) }
+        // Rows with no number to go by (the normal buffer behind the alternate screen): where it last shows. The first
+        // row read there may be the end of a line, and goes.
+        let unnumbered = ([Row("ing tail")] + rows).map { (row: Row) -> Row in Row(row.text, wrapped: nil) }
         #expect(ScrollbackText.saved(unnumbered, firstRow: nil, extent: .before(start)) == moved)
+        // There a command that wrapped is found over its rows, at a blank that ended a row too.
+        let long = "% claude --dangerously-skip-permissions --model opus"
+        let wrapped = [Row("ing tail", wrapped: nil), Row("% npm test", wrapped: nil), Row("ok", wrapped: nil),
+                       Row("% claude --dangerously-skip-permissions", wrapped: nil), Row("--model opus", wrapped: nil),
+                       Row("╭──────╮", wrapped: nil)]
+        let agent = Echo(row: 3, shown: [long])
+        #expect(ScrollbackText.saved(wrapped, firstRow: nil, extent: .before(agent)) == "% npm test\r\nok")
     }
 
     @Test func theCapKeepsTheLatestLinesAndLeavesOutAPartCutFromWhatWentBefore() {
@@ -220,6 +304,38 @@ import Testing
     @Test func aLineWhoseStartScrolledOffTheBufferIsLeftOut() {
         let rows = [Row(Self.secondHalf + " done", wrapped: true), Row("next")]
         #expect(ScrollbackText.saved(rows) == "next")
+        // A PS2 row whose command line scrolled off (the scrollback setting at or below the cap, which then never cuts).
+        #expect(ScrollbackText.saved([Row("> -pS3cretTop"), Row("% ls"), Row("a b")], firstRow: 7_000) == "% ls\r\na b")
+        #expect(ScrollbackText.saved([Row("dquote> pw\" app"), Row("% ls")], firstRow: 7_000) == "% ls")
+        // At the very top of the terminal's history nothing went before it.
+        #expect(ScrollbackText.saved([Row("> quoted"), Row("% ls")], firstRow: 0) == "> quoted\r\n% ls")
+        // Without wrap flags the first row read may be the end of a wrapped line whether the cap cut or not, and so may
+        // the rows after it while each before fills the width.
+        let tail = [Row("ijklmnopQRST1234uvwx done", wrapped: nil), Row("% ls", wrapped: nil)]
+        #expect(ScrollbackText.saved(tail, firstRow: nil) == "% ls")
+        let rest = [Row("abcdef", wrapped: nil, full: true), Row("ghijkl", wrapped: nil, full: true),
+                    Row("mn op", wrapped: nil, full: false), Row("% ls", wrapped: nil, full: false)]
+        #expect(ScrollbackText.saved(rest, firstRow: nil) == "% ls")
+    }
+
+    @Test func aPrivateKeyWhoseStartWasCutIsLeftOut() {
+        let body = ["b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW",
+                    "QyNTUxOQAAACDk3x9yZ0Abc/Def/GhiJkl/mnoPQRst8uvwxyz0123456789abcAAAAJg",
+                    "Users/Code/Sources/abcdEFGH1234ijklMNOP5678qrstUVWX9012yzAB+/CDEF"]
+        let rows = [Row("% cat id_ed25519"), Row("-----BEGIN OPENSSH PRIVATE KEY-----")] + body.map { (line: String) -> Row in Row(line) }
+            + [Row("-----END OPENSSH PRIVATE KEY-----"), Row("% ls")]
+        // Whole, it is masked a line at a time.
+        let whole = ScrollbackText.saved(rows)
+        #expect(whole.hasPrefix("% cat id_ed25519\r\n"))
+        #expect(whole.hasSuffix("\r\n•••\r\n•••\r\n•••\r\n-----END OPENSSH PRIVATE KEY-----\r\n% ls"))
+        // Its start cut by the cap, or scrolled off the buffer: alone, a line of its body can read as a path.
+        #expect(ScrollbackText.saved(rows, limits: .init(lines: 4, bytes: 1 << 20)) == "% ls")
+        #expect(ScrollbackText.saved(Array(rows.dropFirst(2)), firstRow: 7_000) == "% ls")
+        let unflagged = rows.dropFirst(2).map { (row: Row) -> Row in Row(row.text, wrapped: nil, full: false) }
+        #expect(ScrollbackText.saved(unflagged, firstRow: nil) == "% ls")
+        // An END with its BEGIN kept is whole.
+        let fromBegin = whole.components(separatedBy: "\r\n").dropFirst().joined(separator: "\r\n")
+        #expect(ScrollbackText.saved(rows, limits: .init(lines: 6, bytes: 1 << 20)) == fromBegin)
     }
 
     @Test func everyNewlineIsCRLF() {
@@ -262,63 +378,94 @@ import Testing
 
     // MARK: files
 
-    @Test func fileNamesNameTheMarkerAndThePane() {
-        let marker = UUID(uuidString: "C4D5E6F7-1A2B-4C3D-8E9F-0A1B2C3D4E5F")!
-        let pane = UUID(uuidString: "9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d")!
-        let name = ScrollbackText.fileName(marker: marker, pane: pane)
+    @Test func fileNamesNameTheQuitAndTheScrollback() {
+        let quit = UUID(uuidString: "C4D5E6F7-1A2B-4C3D-8E9F-0A1B2C3D4E5F")!
+        let id = UUID(uuidString: "9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d")!
+        let name = ScrollbackText.fileName(quit: quit, id: id)
         #expect(name == "scrollback-c4d5e6f7-1a2b-4c3d-8e9f-0a1b2c3d4e5f-9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d")
-        #expect(ScrollbackText.parseFileName(name)?.marker == marker && ScrollbackText.parseFileName(name)?.pane == pane)
+        #expect(ScrollbackText.parseFileName(name)?.quit == quit && ScrollbackText.parseFileName(name)?.id == id)
         for planted in ["scrollback-../state-v1.json", "scrollback-/etc/passwd", name + "/x", name.uppercased(), "../" + name,
                         "scrollback-c4d5e6f7-1a2b-4c3d-8e9f-0a1b2c3d4e5f", name + ".prev"] {
             #expect(ScrollbackText.parseFileName(planted) == nil, "\(planted)")
         }
     }
 
-    @Test func onlyTheClaimedMarkersFilesAreReadAndEveryOneIsRemoved() {
+    @Test func onlyTheRestoredQuitsFilesAreReadAndEveryOneIsRemoved() {
         let marker = UUID(uuidString: "c4d5e6f7-1a2b-4c3d-8e9f-0a1b2c3d4e5f")!
-        let other = UUID(uuidString: "11111111-2222-4333-8444-555555555555")!
+        let launch = UUID(uuidString: "7d6c5b4a-3928-4716-a5b4-c3d2e1f0a9b8")!
         let wanted = UUID(uuidString: "9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d")!
         let unknown = UUID(uuidString: "0f0e0d0c-0b0a-4908-8706-050403020100")!
-        let scrollback: [String] = [ScrollbackText.fileName(marker: marker, pane: wanted),
-                                    ScrollbackText.fileName(marker: marker, pane: unknown),
-                                    ScrollbackText.fileName(marker: other, pane: wanted), "scrollback-planted"]
+        // An update quit names its files for its marker, a quit under "Resume where I left off" for its snapshot's
+        // launch id.
+        let scrollback: [String] = [ScrollbackText.fileName(quit: marker, id: wanted),
+                                    ScrollbackText.fileName(quit: marker, id: unknown),
+                                    ScrollbackText.fileName(quit: launch, id: wanted), "scrollback-planted"]
         let names: [String] = [SessionSnapshot.fileName()] + scrollback + ["owner.lock"]
-        let sorted = ScrollbackText.sort(names, marker: marker, panes: [wanted])
-        #expect(sorted.read == [wanted: scrollback[0]])
-        #expect(sorted.remove == scrollback)
-        let unread = ScrollbackText.sort(names, marker: nil, panes: [wanted])
+        let update = ScrollbackText.sort(names, quit: marker, ids: [wanted])
+        #expect(update.read == [wanted: scrollback[0]])
+        #expect(update.remove == scrollback)
+        let quit = ScrollbackText.sort(names, quit: launch, ids: [wanted])
+        #expect(quit.read == [wanted: scrollback[2]])
+        #expect(quit.remove == scrollback)
+        let unread = ScrollbackText.sort(names, quit: nil, ids: [wanted])
         #expect(unread.read.isEmpty)
         #expect(unread.remove == scrollback)
     }
 
     // MARK: showing it again
 
-    @Test func thePrefaceShowsTheLinesAboveADimDivider() {
-        let preface = ScrollbackText.preface("old one\r\nold two\u{1B}]52;c;aGk=\u{07}")
-        #expect(preface == "old one\r\nold two]52;c;aGk=\r\n\u{1B}[2m\(ScrollbackText.divider)\u{1B}[0m\r\n")
-        #expect(ScrollbackText.preface("") == "\u{1B}[2m\(ScrollbackText.divider)\u{1B}[0m\r\n")
+    @Test func thePrefaceShowsTheLinesAboveADimDividerThatSaysWhichQuit() {
+        let update = ScrollbackText.SavedAt.update.divider
+        let preface = ScrollbackText.preface("old one\r\nold two\u{1B}]52;c;aGk=\u{07}", savedAt: .update)
+        #expect(preface == "old one\r\nold two]52;c;aGk=\r\n\u{1B}[2m\(update)\u{1B}[0m\r\n")
+        #expect(ScrollbackText.preface("", savedAt: .update) == "\u{1B}[2m\(update)\u{1B}[0m\r\n")
         let fed = preface.replacingOccurrences(of: "\u{1B}[2m", with: "").replacingOccurrences(of: "\u{1B}[0m", with: "")
         #expect(TerminalTextTests.isPrintable(fed.replacingOccurrences(of: "\r\n", with: "\n")))
+        // A quit under "Resume where I left off" is no update.
+        let quit = ScrollbackText.SavedAt.quit.divider
+        #expect(update == "── Restored from before the update ──" && quit == "── Restored from before Next Term quit ──")
+        #expect(ScrollbackText.preface("old", savedAt: .quit) == "old\r\n\u{1B}[2m\(quit)\u{1B}[0m\r\n")
     }
 
     @Test func questionsAreReadOnlyBelowTheDivider() {
-        let divider = ScrollbackText.divider
-        let tail = ["Do you want to proceed? (y/n)", divider, "% claude --resume S", "Working"]
-        #expect(ScrollbackText.below(divider: divider, in: tail) == ["% claude --resume S", "Working"])
-        #expect(ScrollbackText.below(divider: divider, in: ["a", "b"]) == ["a", "b"])
-        // In a narrow pane it wraps, and the row before the wrap loses its trailing blank.
+        for divider in [ScrollbackText.SavedAt.update.divider, ScrollbackText.SavedAt.quit.divider] {
+            let tail = ["Do you want to proceed? (y/n)", divider, "% claude --resume S", "Working"]
+            #expect(ScrollbackText.below(divider: divider, in: tail) == ["% claude --resume S", "Working"])
+            #expect(ScrollbackText.below(divider: divider, in: ["a", "b"]) == ["a", "b"])
+            // In a narrow pane it wraps, and the row before the wrap loses its trailing blank.
+            let words = divider.split(separator: " ", maxSplits: 2).map(String.init)
+            let narrow = ["(y/n)", words[0] + " " + words[1], words[2], "live"]
+            #expect(ScrollbackText.below(divider: divider, in: narrow) == ["live"])
+            // A box an agent draws is no divider.
+            #expect(ScrollbackText.below(divider: divider, in: ["(y/n)", "──", "live"]) == ["(y/n)", "──", "live"])
+        }
+    }
+
+    @Test func theDividerIsFoundAtItsRowSoTheSameTextPrintedBelowItHidesNothing() {
+        let divider = ScrollbackText.SavedAt.update.divider
+        // Rows 100 to 104: the divider at 101, then a live question, and the same text printed after it.
+        let tail = ["old (y/n)", divider, "Do you want to proceed?", "(y/n)", divider]
+        #expect(ScrollbackText.below(divider: divider, row: 101, in: tail, first: 100) == Array(tail[2...]))
+        // Wrapped over two rows, it is noted at its last.
         let words = divider.split(separator: " ", maxSplits: 2).map(String.init)
-        let narrow = ["(y/n)", words[0] + " " + words[1], words[2], "live"]
-        #expect(ScrollbackText.below(divider: divider, in: narrow) == ["live"])
-        // A box an agent draws is no divider.
-        #expect(ScrollbackText.below(divider: divider, in: ["(y/n)", "──", "live"]) == ["(y/n)", "──", "live"])
+        let narrow = ["old (y/n)", words[0] + " " + words[1], words[2], "live", divider]
+        #expect(ScrollbackText.below(divider: divider, row: 102, in: narrow, first: 100) == ["live", divider])
+        #expect(ScrollbackText.below(divider: divider, row: 100, in: [words[2], "live"], first: 100) == ["live"])
+        // Above the tail: all of it is below.
+        #expect(ScrollbackText.below(divider: divider, row: 40, in: tail, first: 100) == tail)
+        // No longer at its row (the screen was cleared), or not known to be (the width changed since): by its text.
+        #expect(ScrollbackText.below(divider: divider, row: 102, in: tail, first: 100).isEmpty)
+        #expect(ScrollbackText.below(divider: divider, row: 300, in: ["a", "b"], first: 100) == ["a", "b"])
+        #expect(ScrollbackText.below(divider: divider, row: nil, in: tail, first: 100).isEmpty)
     }
 
     @Test func theNormalBufferReadAsTextHasNoWrapFlags() {
         // The other half of a wide character reads as U+0000 there too: it goes, and other empty cells are blanks.
         let data = Data("日\u{0}本\u{0}x\u{0}\u{0}y\n\nlast\n".utf8)
-        let rows = ScrollbackText.rows(bufferData: data)
+        let rows = ScrollbackText.rows(bufferData: data, columns: 8)
         #expect(rows.count == 3 && rows.allSatisfy { (row: Row) -> Bool in row.wrapped == nil })
+        // Whether each fills the width: a wide character takes two cells.
+        #expect(rows.map(\.full) == [true, false, false])
         #expect(ScrollbackText.saved(rows) == "日本x  y\r\n\r\nlast")
     }
 
@@ -332,5 +479,26 @@ import Testing
         let elapsed = clock.measure { saved = ScrollbackText.saved(rows) }
         #expect(saved.components(separatedBy: "\r\n").count == 5_000)
         #expect(elapsed < .seconds(2), "\(elapsed)")
+    }
+
+    @Test func aScrollbackFullOfWhatLooksLikeSecretsIsSavedInTimeEitherWay() {
+        let sample = ["echo a b c d e f g h i j k l m n o p q r s t u v w x y z | grep -v x | sed s/a/b/ | curl -s http://x",
+                      "Ab3Cd4Ef5Gh6Ij7Kl8Mn9Op0Qr1St2Uv3Wx4Yz5 sudo -S ls sudo -S ls sudo echo printf echo printf --password",
+                      "DB_PASSWORD=hunter2 API_KEY=xyz TOKEN=abc htpasswd -b a b c vault login -method=x a=b c d e f g h i j",
+                      String(repeating: "x", count: 100)]
+        let clock = ContinuousClock()
+        let flagged = (0..<5_000).map { (index: Int) -> Row in Row(sample[index % sample.count]) }
+        // In a pool of its own, so the masker's temporary strings go at once: other suites measure the process's memory.
+        let normal = clock.measure { autoreleasepool { _ = ScrollbackText.saved(flagged) } }
+        // Behind the alternate screen, in a pane 101 wide: rows that fill it go on to the next, so a line of one row
+        // alternates with one of three; and the commands that held a secret to find among them.
+        let data = Data(flagged.map { (row: Row) -> String in row.text + "\n" }.joined().utf8)
+        let rows = ScrollbackText.rows(bufferData: data, columns: 101)
+        let dropped = (0..<64).map { (index: Int) -> Echo in Echo(row: index, shown: ["% deploy --token t\(index)"]) }
+        let alternate = clock.measure { autoreleasepool { _ = ScrollbackText.saved(rows, firstRow: nil, dropped: dropped) } }
+        // About 0.7 s and 2.5 s in a debug build on a recent Mac: behind the alternate screen each row is masked alone
+        // and twice more beside its neighbours. Room is left for a slower machine.
+        #expect(normal < .seconds(4), "\(normal)")
+        #expect(alternate < .seconds(10), "\(alternate)")
     }
 }

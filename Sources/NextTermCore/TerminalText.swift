@@ -66,8 +66,8 @@ public enum TerminalText {
 
 // MARK: - Scrollback
 
-/// A tab's scrollback, saved at an update quit and shown again above the relaunched shell's first prompt (R4, KTD9). Only
-/// an update quit saves it, and only the launch that claims that update's marker reads it back.
+/// A tab's scrollback, saved at an update quit or a quit under "Resume where I left off", and shown again above the
+/// relaunched shell's first prompt (R4, KTD9). Only the launch that restores that quit reads it back.
 ///
 /// What is saved is plain text, sanitized, then masked through `CommandSecrets.mask`, best effort:
 /// - the rows of a line the terminal wrapped are masked as one line, so a token printed across a wrap is found;
@@ -80,10 +80,11 @@ public enum TerminalText {
 ///   is masked and in what is saved. A quoted value that a PS2 row closes (`--password "` then `> s3cret"`) is still
 ///   missed;
 /// - rows without wrap flags (the normal buffer of a pane in the alternate screen, read as text) are masked each alone,
-///   then each two adjacent rows joined, so a secret split by one wrap is still found;
-/// - the line of a command that held a secret (`holdsSecret`) is blanked, not masked;
+///   then as the lines they probably were, two at a time (`maskAcrossRows`);
+/// - the line of a command that held a secret (`holdsSecret`) is blanked, not masked: found at its row, or by what it
+///   showed, over as many rows as it takes where they have no wrap flags;
 /// - an agent's pane keeps only what came before the agent's command;
-/// - only the latest `Limits` are kept.
+/// - only the latest `Limits` are kept, and a part whose start was cut off goes (`kept`).
 /// `CommandSecrets.mayKeep` is never used on it: it refuses any text with a newline. Each newline is written as CR LF.
 public enum ScrollbackText {
     /// A row of a terminal's buffer.
@@ -91,12 +92,16 @@ public enum ScrollbackText {
         /// What it holds. A cell nothing was written to (one a tab moved past) reads as U+0000, a blank.
         public var text: String
         /// The terminal wrapped a line onto it: it goes on from the row before. Nil when the buffer did not say, as for
-        /// the normal buffer of a pane in the alternate screen (`rows(bufferData:)`).
+        /// the normal buffer of a pane in the alternate screen (`rows(bufferData:columns:)`).
         public var wrapped: Bool?
+        /// Without wrap flags: what it holds reaches the right edge, as on every row a line wrapped from. Nil when not
+        /// known, and then it may go on to the next row with a blank between them or without.
+        public var full: Bool?
 
-        public init(_ text: String, wrapped: Bool? = false) {
+        public init(_ text: String, wrapped: Bool? = false, full: Bool? = nil) {
             self.text = text
             self.wrapped = wrapped
+            self.full = full
         }
     }
 
@@ -109,10 +114,19 @@ public enum ScrollbackText {
         /// Each of its lines as it showed (prompt included, wrapped rows joined) as a fingerprint for this run of the
         /// app: a line that held a secret is never kept as text.
         public var lines: [Int]
+        /// Each of its lines without its blanks, as a fingerprint, and how many characters are left so. Rows read
+        /// without wrap flags do not say where a line wrapped, nor whether a blank at a row's end was trimmed: there it is
+        /// found by these, over as many rows as it takes.
+        public var bare: [Int]
+        public var bareCounts: [Int]
 
         public init(row: Int, shown: [String]) {
             self.row = row
-            lines = shown.map { (line: String) -> Int in ScrollbackText.fingerprint(ScrollbackText.normalized(line)) }
+            let normalized = shown.map { (line: String) -> String in ScrollbackText.normalized(line) }
+            lines = normalized.map { (line: String) -> Int in ScrollbackText.fingerprint(line) }
+            let bare = normalized.map { (line: String) -> [Unicode.Scalar] in ScrollbackText.bare(line) }
+            self.bare = bare.map { (scalars: [Unicode.Scalar]) -> Int in ScrollbackText.fingerprint(bare: [scalars]) }
+            bareCounts = bare.map { (scalars: [Unicode.Scalar]) -> Int in scalars.count }
         }
     }
 
@@ -138,6 +152,22 @@ public enum ScrollbackText {
         public static let standard = Limits(lines: 5_000, bytes: 512 * 1024)
     }
 
+    /// The quit a scrollback was saved at, which the divider under it names.
+    public enum SavedAt: Equatable, Sendable {
+        /// An update's: its files are named for the update's marker.
+        case update
+        /// One under "Resume where I left off": its files are named for the launch id of the snapshot it saved.
+        case quit
+
+        /// The line under the restored scrollback. Agent questions are read only below it (`below`).
+        public var divider: String {
+            switch self {
+            case .update: return "── Restored from before the update ──"
+            case .quit: return "── Restored from before Next Term quit ──"
+            }
+        }
+    }
+
     /// Whether a command's line is left out of the scrollback, its echo blanked: as typed (its continuation lines joined as
     /// PS2 rows are) or with its aliases expanded, it holds a secret that `CommandSecrets.mask` finds, or it starts with a
     /// blank, which keeps a line out of the shell's history.
@@ -161,9 +191,10 @@ public enum ScrollbackText {
         return text
     }
 
-    /// The text saved for `rows`, the first of them at scroll-invariant row `firstRow` (nil: rows with no number to go
-    /// by, and echoes are found by what they showed): the lines of `dropped` blanked, as much as `extent` keeps, at most
-    /// `limits`, masked, each newline as CR LF. Empty when nothing is kept.
+    /// The text saved for `rows`, the first of them at scroll-invariant row `firstRow`: 0 is the top of the terminal's
+    /// history, with nothing before it; nil, rows with no number to go by, and echoes are found by what they showed. The
+    /// lines of `dropped` blanked, as much as `extent` keeps, at most `limits`, masked, each newline as CR LF. Empty when
+    /// nothing is kept.
     public static func saved(_ rows: [Row], firstRow: Int? = 0, dropped: [Echo] = [], extent: Extent = .all,
                              limits: Limits = .standard) -> String {
         saved(rows, firstRow: firstRow, dropped: dropped, extent: extent, limits: limits, masking: CommandSecrets.mask)
@@ -174,21 +205,21 @@ public enum ScrollbackText {
                       masking mask: (String) -> String) -> String {
         let flagged = !rows.contains { (row: Row) -> Bool in row.wrapped == nil }
         var lines = logicalLines(rows, firstRow: firstRow ?? 0)
-        let index = dropped.isEmpty && extent == .all ? nil : LineIndex(lines, numbered: firstRow != nil)
+        let index = dropped.isEmpty && extent == .all ? nil : LineIndex(lines, numbered: firstRow != nil, flagged: flagged)
         if case .before(let echo) = extent {
             guard let echo, let start = index?.start(of: echo) else { return "" }
             lines.removeSubrange(start...)
         }
         var blank = Set<Int>()
         for echo in dropped {
-            for start in index?.places(of: echo) ?? [] where start < lines.count {
-                blank.formUnion(start..<min(start + echo.lines.count, lines.count))
+            for place in index?.places(of: echo) ?? [] {
+                blank.formUnion(place.clamped(to: 0..<lines.count))
             }
         }
         let prompts = continuationPrompts(lines, blank: blank)
-        let range = kept(lines, blank: blank, prompts: prompts, flagged: flagged, limits: limits)
+        let range = kept(lines, blank: blank, prompts: prompts, flagged: flagged, atTop: firstRow == 0, limits: limits)
         var out = masked(lines, range, blank: blank, prompts: prompts, mask: mask)
-        if !flagged { maskPairs(&out, mask: mask) }
+        if !flagged { maskAcrossRows(&out, lines, range, blank: blank, mask: mask) }
         return capped(out, bytes: limits.bytes).joined(separator: "\r\n")
     }
 
@@ -202,6 +233,10 @@ public enum ScrollbackText {
         var row: Int
         /// It goes on from a row no longer in the buffer: its start scrolled off.
         var cutAtTop: Bool
+        /// Its last row filled the width (`Row.full`).
+        var full: Bool?
+        /// Blanks at its end were trimmed.
+        var trimmed: Bool = false
     }
 
     static func logicalLines(_ rows: [Row], firstRow: Int) -> [Line] {
@@ -210,16 +245,27 @@ public enum ScrollbackText {
         for (offset, row) in rows.enumerated() {
             if row.wrapped == true, !raw.isEmpty {
                 raw[raw.count - 1].text += row.text
+                raw[raw.count - 1].full = row.full
             } else {
-                raw.append(Line(text: row.text, row: firstRow + offset, cutAtTop: offset == 0 && row.wrapped == true))
+                let cut = offset == 0 && row.wrapped == true
+                raw.append(Line(text: row.text, row: firstRow + offset, cutAtTop: cut, full: row.full))
             }
         }
-        for index in raw.indices { raw[index].text = normalized(raw[index].text) }
+        for index in raw.indices {
+            let normal = normalizing(raw[index].text)
+            raw[index].text = normal.text
+            raw[index].trimmed = normal.trimmed
+        }
         return raw
     }
 
     /// `text` as saved: sanitized, an empty cell (U+0000) as a blank, trimmed at the right.
     static func normalized(_ text: String) -> String {
+        normalizing(text).text
+    }
+
+    /// `normalized`, and whether blanks were trimmed from its end.
+    static func normalizing(_ text: String) -> (text: String, trimmed: Bool) {
         var kept = String.UnicodeScalarView()
         for scalar in text.unicodeScalars {
             if scalar == "\u{0}" || scalar == "\n" {
@@ -228,8 +274,12 @@ public enum ScrollbackText {
                 kept.append(scalar)
             }
         }
-        while let last = kept.last, last == " " || last == "\t" { kept.removeLast() }
-        return String(kept)
+        var trimmed = false
+        while let last = kept.last, last == " " || last == "\t" {
+            kept.removeLast()
+            trimmed = true
+        }
+        return (String(kept), trimmed)
     }
 
     static func fingerprint(_ text: String) -> Int {
@@ -238,13 +288,22 @@ public enum ScrollbackText {
         return hasher.finalize()
     }
 
-    /// Where echoes are among the lines: at their row, or by what they showed.
+    /// Where echoes are among the lines: at their row, or by what they showed. Without wrap flags each line is a row,
+    /// and an echo is found by its text without blanks (`BareRows`).
     struct LineIndex {
         let prints: [Int]
         let byRow: [Int: Int]
         let byPrint: [Int: [Int]]
+        let bare: BareRows?
 
-        init(_ lines: [Line], numbered: Bool) {
+        init(_ lines: [Line], numbered: Bool, flagged: Bool) {
+            guard flagged else {
+                prints = []
+                byRow = [:]
+                byPrint = [:]
+                bare = BareRows(lines)
+                return
+            }
             prints = lines.map { (line: Line) -> Int in ScrollbackText.fingerprint(line.text) }
             var byRow: [Int: Int] = [:]
             var byPrint: [Int: [Int]] = [:]
@@ -254,6 +313,7 @@ public enum ScrollbackText {
             }
             self.byRow = byRow
             self.byPrint = byPrint
+            bare = nil
         }
 
         func matches(_ echo: Echo, at start: Int) -> Bool {
@@ -261,16 +321,18 @@ public enum ScrollbackText {
             return echo.lines.indices.allSatisfy { (offset: Int) -> Bool in prints[start + offset] == echo.lines[offset] }
         }
 
-        /// Every place it shows.
-        func places(of echo: Echo) -> [Int] {
+        /// Every place it shows, as the lines it takes.
+        func places(of echo: Echo) -> [Range<Int>] {
+            if let bare { return bare.places(of: echo) }
             guard let first = echo.lines.first else { return [] }
-            return (byPrint[first] ?? []).filter { (start: Int) -> Bool in matches(echo, at: start) }
+            let starts = (byPrint[first] ?? []).filter { (start: Int) -> Bool in matches(echo, at: start) }
+            return starts.map { (start: Int) -> Range<Int> in start..<start + echo.lines.count }
         }
 
         /// Where its command started: at its row when it shows there, else the last place it shows.
         func start(of echo: Echo) -> Int? {
-            if let start = byRow[echo.row], matches(echo, at: start) { return start }
-            return places(of: echo).last
+            if bare == nil, let start = byRow[echo.row], matches(echo, at: start) { return start }
+            return places(of: echo).last?.lowerBound
         }
     }
 
@@ -325,10 +387,16 @@ public enum ScrollbackText {
 
     // MARK: keeping and masking
 
-    /// The lines kept: the latest, within `limits`, without blank ones at the end. A line cut from what went before it
-    /// goes too: a PS2 row whose start was left out, a line whose start scrolled off the buffer, and without wrap flags
-    /// the first row kept, which may be the end of a wrapped line.
-    static func kept(_ lines: [Line], blank: Set<Int>, prompts: [Int: String], flagged: Bool, limits: Limits) -> Range<Int> {
+    /// The lines kept: the latest, within `limits`, without blank ones at the end. What was cut from what went before it,
+    /// by the cap or off the top of the buffer (unless the lines start at the top of the terminal's history, `atTop`),
+    /// goes too, as alone it could not be masked:
+    /// - a line whose start scrolled off the buffer, and a first line that reads as a PS2 row;
+    /// - without wrap flags, the first row kept, which may be the end of a wrapped line, unless the row before it did not
+    ///   fill the width, and the rows after it while each before them did;
+    /// - the body of a private key whose start is not kept;
+    /// - a PS2 row whose start is not kept.
+    static func kept(_ lines: [Line], blank: Set<Int>, prompts: [Int: String], flagged: Bool, atTop: Bool,
+                     limits: Limits) -> Range<Int> {
         var end = lines.count
         while end > 0, blank.contains(end - 1) || lines[end - 1].text.isEmpty { end -= 1 }
         var start = end
@@ -339,13 +407,26 @@ public enum ScrollbackText {
             bytes += size
             start -= 1
         }
-        if start > 0 {
-            if !flagged { start = min(start + 1, end) }
-        } else if start < end, lines[start].cutAtTop {
+        let cut = start > 0 || !atTop
+        if !flagged, cut {
+            if start == 0 || lines[start - 1].full != false { start = min(start + 1, end) }
+            while start < end, lines[start - 1].full == true { start += 1 }
+        } else if start == 0, start < end, lines[0].cutAtTop || (!atTop && ps2Prompt(lines[0].text) != nil) {
             start += 1
         }
+        if cut, let after = afterKeyEnd(lines, start..<end) { start = after }
         while start < end, prompts[start] != nil { start += 1 }
         return start..<end
+    }
+
+    /// The line after the end of a private key whose start is not among `lines[range]`, if one ends before any starts: its
+    /// body, masked a line at a time, could read as paths.
+    static func afterKeyEnd(_ lines: [Line], _ range: Range<Int>) -> Int? {
+        for index in range where lines[index].text.contains("PRIVATE KEY") {
+            if lines[index].text.contains("-----END ") { return index + 1 }
+            if lines[index].text.contains("-----BEGIN ") { return nil }
+        }
+        return nil
     }
 
     /// `lines[range]` masked, in one pass when no newline is lost (the usual case), else a line and its continuation rows
@@ -410,29 +491,6 @@ public enum ScrollbackText {
         return (prompts[index] ?? "") + part
     }
 
-    /// Rows without wrap flags: each two adjacent rows masked joined, as one line, and what that masks more taken into
-    /// both rows, where it lies.
-    static func maskPairs(_ out: inout [String], mask: (String) -> String) {
-        let pairs = out.indices.dropLast().filter { (index: Int) -> Bool in !out[index].isEmpty && !out[index + 1].isEmpty }
-        guard !pairs.isEmpty else { return }
-        let scalars = out.map { (row: String) -> [Unicode.Scalar] in Array(row.unicodeScalars) }
-        let joined = pairs.map { (index: Int) -> String in
-            String(String.UnicodeScalarView(scalars[index] + scalars[index + 1]))
-        }
-        var masks = mask(joined.joined(separator: "\n")).components(separatedBy: "\n")
-        if masks.count != joined.count { masks = joined.map(mask) }
-        var spans: [Int: [Range<Int>]] = [:]
-        for (number, index) in pairs.enumerated() where masks[number] != joined[number] {
-            let first = scalars[index].count
-            guard let span = changed(Array(joined[number].unicodeScalars), Array(masks[number].unicodeScalars)) else { continue }
-            if span.lowerBound < first { spans[index, default: []].append(span.lowerBound..<min(span.upperBound, first)) }
-            if span.upperBound > first {
-                spans[index + 1, default: []].append(max(span.lowerBound, first) - first..<span.upperBound - first)
-            }
-        }
-        for (index, list) in spans { out[index] = masking(scalars[index], list) }
-    }
-
     /// The part of `text` that masking changed: from the first difference to the last.
     static func changed(_ text: [Unicode.Scalar], _ masked: [Unicode.Scalar]) -> Range<Int>? {
         var prefix = 0
@@ -449,7 +507,8 @@ public enum ScrollbackText {
     /// `row` with each of `spans` masked, those that touch as one.
     static func masking(_ row: [Unicode.Scalar], _ spans: [Range<Int>]) -> String {
         var merged: [Range<Int>] = []
-        for span in spans.sorted(by: { (a: Range<Int>, b: Range<Int>) -> Bool in a.lowerBound < b.lowerBound }) {
+        let sorted = spans.sorted { (a: Range<Int>, b: Range<Int>) -> Bool in a.lowerBound < b.lowerBound }
+        for span in sorted where !span.isEmpty {
             if let last = merged.last, span.lowerBound <= last.upperBound {
                 merged[merged.count - 1] = last.lowerBound..<max(last.upperBound, span.upperBound)
             } else {
@@ -480,85 +539,14 @@ public enum ScrollbackText {
         return lines[start...]
     }
 
-    // MARK: the alternate screen
-
-    /// The rows of a terminal's normal buffer as text (`getBufferAsData`), as it is read while the alternate screen is
-    /// on: one a line, with no wrap flags. The other half of a wide character reads as U+0000 there: it goes.
-    public static func rows(bufferData data: Data) -> [Row] {
-        var lines = String(decoding: data, as: UTF8.self).components(separatedBy: "\n")
-        if lines.last?.isEmpty == true { lines.removeLast() }
-        return lines.map { (line: String) -> Row in Row(withoutWideHalves(line), wrapped: nil) }
-    }
-
-    static func withoutWideHalves(_ text: String) -> String {
-        var kept = String.UnicodeScalarView()
-        var afterWide = false
-        for scalar in text.unicodeScalars {
-            if scalar == "\u{0}", afterWide {
-                afterWide = false
-                continue
-            }
-            kept.append(scalar)
-            afterWide = isWide(scalar)
-        }
-        return String(kept)
-    }
-
-    /// Takes two cells: the East Asian wide and fullwidth blocks, and the emoji ones. Close enough to know the empty cell
-    /// after it for its other half.
-    static func isWide(_ scalar: Unicode.Scalar) -> Bool {
-        switch scalar.value {
-        case 0x1100...0x115F, 0x2E80...0x303E, 0x3041...0x33FF, 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xA000...0xA4CF: return true
-        case 0xAC00...0xD7A3, 0xF900...0xFAFF, 0xFE30...0xFE4F, 0xFF00...0xFF60, 0xFFE0...0xFFE6: return true
-        case 0x1F300...0x1F64F, 0x1F900...0x1F9FF, 0x20000...0x3FFFD: return true
-        default: return false
-        }
-    }
-
-    // MARK: files
-
-    public static let filePrefix = "scrollback-"
-
-    /// The file a pane's scrollback is saved in at the update quit that writes `marker`: two UUIDs, so it can name
-    /// nothing outside the sessions folder, whatever the snapshot says.
-    public static func fileName(marker: UUID, pane: UUID) -> String {
-        filePrefix + marker.uuidString.lowercased() + "-" + pane.uuidString.lowercased()
-    }
-
-    /// The marker and pane a scrollback file is named for; nil for any other name.
-    public static func parseFileName(_ name: String) -> (marker: UUID, pane: UUID)? {
-        guard name.hasPrefix(filePrefix) else { return nil }
-        let ids = name.dropFirst(filePrefix.count)
-        guard ids.utf8.count == 73, let marker = UUID(uuidString: String(ids.prefix(36))),
-              let pane = UUID(uuidString: String(ids.suffix(36))), fileName(marker: marker, pane: pane) == name else { return nil }
-        return (marker, pane)
-    }
-
-    /// Of the names in a sessions folder, the scrollback files to read, by pane, and every scrollback file, each removed
-    /// once read or unread: only those named for the claimed `marker` are read (none without one), and only for a pane
-    /// the snapshot names.
-    public static func sort(_ names: [String], marker: UUID?, panes: Set<UUID>) -> (read: [UUID: String], remove: [String]) {
-        var read: [UUID: String] = [:]
-        var remove: [String] = []
-        for name in names where name.hasPrefix(filePrefix) {
-            remove.append(name)
-            guard let marker, let ids = parseFileName(name), ids.marker == marker, panes.contains(ids.pane) else { continue }
-            read[ids.pane] = name
-        }
-        return (read, remove)
-    }
-
     // MARK: showing it again
 
-    /// The line under the restored scrollback. Agent questions are read only below it (`below`).
-    public static let divider = "── Restored from before the update ──"
-
     /// What a restored tab shows before its shell starts: the saved scrollback, sanitized again (its file is read as
-    /// untrusted) with each newline as CR LF, then the divider, dim.
-    public static func preface(_ scrollback: String) -> String {
+    /// untrusted) with each newline as CR LF, then the divider for the quit it was saved at, dim.
+    public static func preface(_ scrollback: String, savedAt: SavedAt) -> String {
         let text = TerminalText.feedable(scrollback)
         let lines = text.isEmpty || text.hasSuffix("\r\n") ? text : text + "\r\n"
-        return lines + "\u{1B}[2m" + TerminalText.oneLine(divider) + "\u{1B}[0m\r\n"
+        return lines + "\u{1B}[2m" + TerminalText.oneLine(savedAt.divider) + "\u{1B}[0m\r\n"
     }
 
     /// The rows of `tail`, the screen's last, below the last divider in it: a question replayed above it asks nothing.
@@ -580,5 +568,31 @@ public enum ScrollbackText {
             if shown == target { return Array(tail[end...]) }
         }
         return tail
+    }
+
+    /// The rows of `tail`, rows `first...` of the screen, below the divider whose last row is `row`: only the divider
+    /// there counts, so a program that prints the same text below it hides nothing. A row above the tail leaves all of it
+    /// below. Where the row no longer holds the divider (the screen was cleared since), or is not known (`nil`: the width
+    /// changed since, and rows were wrapped again), it is found by its text (`below(divider:in:)`).
+    public static func below(divider: String, row: Int?, in tail: [String], first: Int) -> [String] {
+        guard let row else { return below(divider: divider, in: tail) }
+        if row < first { return tail }
+        let last = row - first
+        guard last < tail.count, ends(divider, at: last, in: tail) else { return below(divider: divider, in: tail) }
+        return Array(tail[(last + 1)...])
+    }
+
+    /// Whether the rows of `tail` up to `last` end with `divider`, blanks not compared. Its first rows may be above the
+    /// tail.
+    static func ends(_ divider: String, at last: Int, in tail: [String]) -> Bool {
+        let target = divider.filter { (character: Character) -> Bool in character != " " }
+        var shown = ""
+        for index in stride(from: last, through: 0, by: -1) {
+            let part = tail[index].filter { (character: Character) -> Bool in character != " " }
+            guard !part.isEmpty, target.hasSuffix(part + shown) else { return false }
+            shown = part + shown
+            if shown == target { return true }
+        }
+        return !shown.isEmpty
     }
 }

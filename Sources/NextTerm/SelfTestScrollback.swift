@@ -2,12 +2,14 @@ import AppKit
 import NextTermCore
 import SwiftTerm
 
-/// Scrollback on the update path (R4, KTD9) against real terminals, which Core's tests cannot link. A tab's scrollback is
-/// captured as an update quit captures it: a token printed across a row wrap is masked, the line of a command that held
-/// a secret is blank, a secret on a PS2 row of a shell without the integration is masked, the normal buffer behind the
-/// alternate screen is read as text, and an agent's pane keeps only what came before its command. The files go through a
-/// throwaway sessions folder: read back only for their marker, and none left. A tab given restored scrollback shows it
-/// above the divider, each line from the left edge, and a question in it asks nothing.
+/// Scrollback on the update and quit paths (R4, KTD9) against real terminals, which Core's tests cannot link. A tab's
+/// scrollback is captured as a quit captures it: a token printed across a row wrap is masked, the line of a command that
+/// held a secret is blank, a secret on a PS2 row of a shell without the integration is masked, the normal buffer behind
+/// the alternate screen is read as text (a secret command wrapped over three rows blank there too), and an agent's pane
+/// keeps only what came before its command. The files go through a throwaway sessions folder: read back only for their
+/// quit, and none left. A tab given restored scrollback shows it above the divider, each line from the left edge, and a
+/// question or an ssh refusal in it is not read as live; the same text printed below the divider hides nothing, and a tab
+/// that has started shows none.
 extension SelfTest {
     static func scrollbackChecks(proj: URL) async {
         guard let app = AppDelegate.shared else { return }
@@ -70,16 +72,28 @@ extension SelfTest {
         check(lines.contains("> •••") && !text.contains(secret), "scrollback: a secret on a PS2 continuation row is masked",
               lines.suffix(6).joined(separator: " | "))
 
-        // The alternate screen in front: the normal buffer behind it is read as text, and masked by pairs of rows.
+        // A command that held a secret, wrapped over three rows or more: its line is blank there, then behind the alternate
+        // screen too, where it is found over its rows by what it showed.
+        let longSecret = "Hs3Vd6Kc1Mn8Tb4Xr9Lw2Zq7"
+        let longPad = String(repeating: "y", count: terminal.cols * 2)
+        await run(": \(longPad); export NT_SELFTEST_LONG=\(longSecret); echo long-\(canary)")
+        check(!SessionScrollback.capture(tab).text().contains("NT_SELFTEST_LONG"), "scrollback: a secret command over three rows is blank")
+
+        // The alternate screen in front: the normal buffer behind it is read as text, and masked by the lines its rows
+        // probably were.
         tab.view.send(txt: "printf '\\e[?1049halt-only'; sleep 3; printf '\\e[?1049l'\r")
         if await wait(3, { terminal.isCurrentBufferAlternate }) {
             let behind = SessionScrollback.capture(tab)
             let behindText = behind.text()
             check(behind.firstRow == nil && behind.rows.allSatisfy { $0.wrapped == nil },
                   "scrollback: behind the alternate screen, the normal buffer is read without wrap flags", "\(behind.rows.count) rows")
+            check(behind.rows.contains { $0.full == true }, "scrollback: a row a line wrapped from reads as filling the width")
             check(behindText.contains(canary) && !behindText.contains("alt-only") && !behindText.contains(token),
-                  "scrollback: it holds the normal buffer's lines, the wrapped token masked by the row pair",
+                  "scrollback: it holds the normal buffer's lines, the wrapped token masked across its rows",
                   behindText.components(separatedBy: "\r\n").suffix(6).joined(separator: " | "))
+            check(behindText.contains("long-" + canary) && !behindText.contains("NT_SELFTEST_LONG") && !behindText.contains(longSecret),
+                  "scrollback: behind it, a secret command wrapped over three rows is blank, its output kept",
+                  behindText.components(separatedBy: "\r\n").suffix(8).joined(separator: " | "))
         } else {
             check(false, "scrollback: a tab switches to the alternate screen")
         }
@@ -99,51 +113,80 @@ extension SelfTest {
         _ = await wait(5) { !tab.status.running }
         check(tab.runningEcho == nil, "scrollback: the agent's command is forgotten once it ends")
 
-        scrollbackFileChecks(text, home: home)
+        // A tab that has started shows no restored scrollback: it would land among what its shell printed.
+        tab.restoredScrollback = ("late", .update)
+        tab.showRestoredScrollback()
+        check(tab.restoredScrollback == nil && tab.restoreDivider == nil && !tab.screenTail(6).contains("late"),
+              "scrollback: set once a tab has started, it is not shown")
+
+        scrollbackFileChecks(SessionScrollback.capture(tab), home: home)
         scrollbackPrefaceChecks(proj: proj)
     }
 
-    /// The files, in a throwaway sessions folder: only those named for the claimed marker are read, a `../` reference
+    /// The files, in a throwaway sessions folder: only those named for the restored quit are read, a `../` reference
     /// names no file, and none is left after any launch.
-    private static func scrollbackFileChecks(_ text: String, home: String) {
+    private static func scrollbackFileChecks(_ capture: SessionScrollback.Capture, home: String) {
         let parent = URL(fileURLWithPath: home + "/Application Support", isDirectory: true)
         guard let files = try? SessionFiles.open(in: parent, bundlePath: home + "/Next Term.app"), files.lock() else {
             return check(false, "scrollback: a throwaway sessions folder opens")
         }
         defer { files.unlock() }
+        // An update quit names its files for its marker, a quit under Resume for its snapshot's launch id; the ids are
+        // chosen at capture, before the file is written.
         let marker = UUID()
-        let saved = SessionScrollback.save(text, marker: marker, in: files)
-        let stray = SessionScrollback.save("another quit's", marker: UUID(), in: files)
-        check(saved != nil && stray != nil && SessionScrollback.save("", marker: marker, in: files) == nil,
-              "scrollback: each pane's text is a file of its own, and an empty one none")
-        guard let saved, let stray else { return }
-        let back = SessionScrollback.take([saved, stray], marker: marker, from: files)
-        check(back[saved] == text && back[stray] == nil, "scrollback: only the claimed marker's files are read",
+        let launch = UUID()
+        let text = capture.text()
+        let saved = capture.id
+        let stray = UUID()
+        let quitSaved = UUID()
+        check(ScrollbackText.save(text, id: saved, quit: marker, in: files)
+              && ScrollbackText.save("another quit's", id: stray, quit: UUID(), in: files)
+              && !ScrollbackText.save("", id: UUID(), quit: marker, in: files),
+              "scrollback: each pane's text is a file of its own, under the id chosen at capture, and an empty one none")
+        let back = ScrollbackText.take([saved, stray], quit: marker, from: files)
+        check(back[saved] == text && back[stray] == nil, "scrollback: only the restored update's files are read",
               back.keys.map(\.uuidString).joined(separator: ", "))
         let names = { () -> [String] in ((try? files.names()) ?? ["unreadable"]).filter { $0.hasPrefix(ScrollbackText.filePrefix) } }
         check(names().isEmpty, "scrollback: every scrollback file is gone once read", names().joined(separator: ", "))
+        _ = ScrollbackText.save(text, id: quitSaved, quit: launch, in: files)
+        check(ScrollbackText.take([quitSaved], quit: launch, from: files)[quitSaved] == text && names().isEmpty,
+              "scrollback: a quit restore reads those named for its snapshot's launch id")
         // A crash relaunch, safe mode or a normal launch reads none, and removes them all.
-        _ = SessionScrollback.save(text, marker: marker, in: files)
-        SessionScrollback.removeAll(from: files)
-        check(names().isEmpty, "scrollback: a launch that restores no update removes them unread", names().joined(separator: ", "))
+        _ = ScrollbackText.save(text, id: saved, quit: marker, in: files)
+        ScrollbackText.removeAll(from: files)
+        check(names().isEmpty, "scrollback: a launch that restores no quit removes them unread", names().joined(separator: ", "))
         // A planted reference names no file: the snapshot holds a UUID, and file names are made from UUIDs only.
         check(ScrollbackText.parseFileName(ScrollbackText.filePrefix + "../" + SessionSnapshot.fileName()) == nil
               && ScrollbackText.parseFileName("/etc/passwd") == nil, "scrollback: a planted ../ or absolute name is refused")
     }
 
-    /// A tab given restored scrollback, never started: the lines above the divider each from the left edge (CR LF, no
-    /// staircase), and a question among them reads as none where questions are read.
+    /// Tabs given restored scrollback, never started: the lines above the divider each from the left edge (CR LF, no
+    /// staircase), and a question or an ssh refusal among them reads as none where live text is read.
     private static func scrollbackPrefaceChecks(proj: URL) {
         let restored = TerminalTab(directory: proj.path, fontSize: 13)
-        restored.restoredScrollback = "old line one\r\nold line two\r\nDo you want to proceed? (y/n)"
+        let divider = ScrollbackText.SavedAt.update.divider
+        restored.restoredScrollback = ("old line one\r\nPermission denied (publickey).\r\nDo you want to proceed? (y/n)", .update)
         restored.showRestoredScrollback()
         let shown = restored.screenTail(10)
-        let expected = ["old line one", "old line two", "Do you want to proceed? (y/n)", ScrollbackText.divider]
+        let expected = ["old line one", "Permission denied (publickey).", "Do you want to proceed? (y/n)", divider]
         check(shown == expected && restored.restoredScrollback == nil,
               "scrollback: restored lines show once, above the divider, each from the left edge", shown.joined(separator: " | "))
         check(AgentScreen.activity(screenLines: restored.screenTail()) == .asking("Do you want to proceed?"),
               "scrollback: the replayed question reads as one on the whole screen")
-        check(AgentScreen.activity(screenLines: restored.questionTail()) == .idle,
+        check(AgentScreen.activity(screenLines: restored.liveTail()) == .idle,
               "scrollback: questions are read only below the divider, so it asks nothing")
+        check(TerminalTab.loginRefusal(restored.screenTail(16)) != nil && TerminalTab.loginRefusal(restored.liveTail(16)) == nil,
+              "scrollback: a replayed ssh refusal is not this connection's")
+        // A program that prints the divider's text after its question hides nothing: the divider is known by its row.
+        restored.view.feed(text: "Do you want to proceed? (y/n)\r\n" + divider + "\r\n")
+        check(restored.liveTail().contains("Do you want to proceed? (y/n)"),
+              "scrollback: the divider's text printed below it hides nothing", restored.liveTail().joined(separator: " | "))
+
+        // After a quit under Resume the divider says so.
+        let afterQuit = TerminalTab(directory: proj.path, fontSize: 13)
+        afterQuit.restoredScrollback = ("old", .quit)
+        afterQuit.showRestoredScrollback()
+        check(afterQuit.screenTail(4) == ["old", ScrollbackText.SavedAt.quit.divider],
+              "scrollback: after a quit under Resume the divider names the quit", afterQuit.screenTail(4).joined(separator: " | "))
     }
 }

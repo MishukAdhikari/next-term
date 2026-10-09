@@ -396,6 +396,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     func start() {
         showRestoredScrollback()
+        started = true
         if let remote {
             if controlSlot == nil { controlSlot = RemoteConnection.slot(for: self, host: remote.host) }
             let path = RemoteConnection.controlPath(remote.host, slot: controlSlot ?? 0)
@@ -538,10 +539,15 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// the active buffer that end at the last line with text. Agents draw inline where the cursor is,
     /// so after a screen clear their UI sits at the top with blank rows below it.
     func screenTail(_ count: Int = AgentScreen.scannedLines) -> [String] {
+        tailRows(count).rows
+    }
+
+    /// `screenTail`, with the scroll-invariant row of its first line.
+    private func tailRows(_ count: Int) -> (first: Int, rows: [String]) {
         let terminal = view.getTerminal()
-        guard let last = lastTextRow() else { return [] }
+        guard let last = lastTextRow() else { return (0, []) }
         let first = max(terminal.buffer.totalLinesTrimmed, last - count + 1)
-        return (first...last).compactMap { terminal.getScrollInvariantLine(row: $0)?.translateToString(trimRight: true) }
+        return (first, (first...last).map { terminal.getScrollInvariantLine(row: $0)?.translateToString(trimRight: true) ?? "" })
     }
 
     /// The last line with text, in scroll-invariant rows (as getScrollInvariantLine counts them).
@@ -564,18 +570,22 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         return last
     }
 
-    // MARK: scrollback on the update path (SessionScrollback)
+    // MARK: scrollback on the update and quit paths (SessionScrollback)
 
-    /// Where each command whose line held a secret showed (`ScrollbackText.holdsSecret`), the latest: the scrollback an
-    /// update quit saves has those lines blanked.
+    /// Where each command whose line held a secret showed (`ScrollbackText.holdsSecret`), the latest: the scrollback a
+    /// quit saves has those lines blanked.
     private(set) var droppedEchoes: [ScrollbackText.Echo] = []
     /// Where the running command showed: an agent's pane saves only what came before it.
     private(set) var runningEcho: ScrollbackText.Echo?
-    /// The scrollback saved at the update quit, read back at the relaunch. `start()` shows it once, before the shell
-    /// starts, above a dim divider.
-    var restoredScrollback: String?
-    /// The divider under it, once shown: agent questions are read only below it (`questionTail`).
-    private(set) var restoreDivider: String?
+    /// The scrollback saved at the quit restored, read back at the launch after, and the quit it was saved at. The first
+    /// `start()` shows it once, before the shell starts, above a dim divider; set once the tab has started, it is never
+    /// shown.
+    var restoredScrollback: (text: String, savedAt: ScrollbackText.SavedAt)?
+    /// The divider under it, once shown, with its last row and the width it was shown at: what is read as live (agent
+    /// questions, ssh refusing a login) is read only below it (`liveTail`).
+    private(set) var restoreDivider: (text: String, row: Int?, columns: Int)?
+    /// `start()` has run: anything fed now would land among what the shell printed.
+    private var started = false
 
     /// Notes where the command now starting showed, as the integration reports it.
     private func noteEcho(_ typed: String, expanded: String?) {
@@ -588,20 +598,22 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     /// Feeds the restored scrollback and its divider, once, before the shell has printed anything: nothing it prints can
-    /// be inside them, and they are sanitized again, as their file was read as untrusted.
+    /// be inside them, and they are sanitized again, as their file was read as untrusted. Notes the divider's last row.
     func showRestoredScrollback() {
-        guard let scrollback = restoredScrollback else { return }
+        guard let restored = restoredScrollback else { return }
         restoredScrollback = nil
-        view.feed(text: ScrollbackText.preface(scrollback))
-        restoreDivider = ScrollbackText.divider
+        guard !started else { return }
+        view.feed(text: ScrollbackText.preface(restored.text, savedAt: restored.savedAt))
+        restoreDivider = (restored.savedAt.divider, lastTextRow(), view.getTerminal().cols)
     }
 
-    /// The screen's tail as agent questions are read from it: below a restore's divider, so a question replayed above it
-    /// asks nothing.
-    func questionTail() -> [String] {
-        let tail = screenTail()
-        guard let restoreDivider else { return tail }
-        return ScrollbackText.below(divider: restoreDivider, in: tail)
+    /// The screen's last `count` lines that are live: below a restore's divider, so a question or a refusal replayed above
+    /// it is not read as one now. The divider is known by its row until the width changes (`sizeChanged`), which wraps
+    /// the rows above it again; then by its text.
+    func liveTail(_ count: Int = AgentScreen.scannedLines) -> [String] {
+        let tail = tailRows(count)
+        guard let divider = restoreDivider else { return tail.rows }
+        return ScrollbackText.below(divider: divider.text, row: divider.row, in: tail.rows, first: tail.first)
     }
 
     // MARK: serving
@@ -657,7 +669,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     func pollAgentScreen() {
         guard !exited, status.running, status.kind == .agent, remote?.keep != .herdr || fellBack else { return } // herdr reports its own
         let before = (status.state, status.question)
-        status.observe(agentScreen: AgentScreen.activity(screenLines: questionTail()), at: Self.now)
+        status.observe(agentScreen: AgentScreen.activity(screenLines: liveTail()), at: Self.now)
         if before.0 != status.state || before.1 != status.question { delegate?.tabDidChange(self) }
     }
 
@@ -864,6 +876,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     // MARK: LocalProcessTerminalViewDelegate
 
     func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {
+        // Rows wrapped again: the restore divider's row no longer says where it is.
+        if let divider = restoreDivider, newCols != divider.columns { restoreDivider?.row = nil }
         // Programs redraw after a resize; that is not work.
         status.resized(at: Self.now)
         completion.viewChanged()
@@ -970,7 +984,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         // tab's script ran, "Permission denied" on its screen is some program's (a git push), not ssh's.
         let provedLogin = remoteConnected
         if provedLogin { reconnectAttempts = 0 }
-        let refusal = provedLogin ? nil : Self.loginRefusal(screenTail(16))
+        // Read below a restore's divider: a "Permission denied" replayed above it is from before.
+        let refusal = provedLogin ? nil : Self.loginRefusal(liveTail(16))
         loginRefused = refusal != nil
         let stopped = !isKept && status.running ? status.program : nil
         disconnected = true
