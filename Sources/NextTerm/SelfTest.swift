@@ -819,6 +819,7 @@ enum SelfTest {
         await linkChecks(c)
         await notificationChecks(c)
         await skillsChecks()
+        await secretsChecks(c, proj: proj)
         await mcpWriteChecks(c, proj: proj)
         await completionChecks(c)
 

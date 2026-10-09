@@ -959,6 +959,7 @@ public final class SecretFolder: @unchecked Sendable {
 
     /// Runs `body` holding `flock(LOCK_EX)` on `vault.lock`, waiting for another copy of Next Term to let it go. Not
     /// to be nested: a second lock in the same process waits for the first.
+    @discardableResult
     public func withLock<T>(_ body: () throws -> T) throws -> T {
         try checkPrivate()
         let descriptor = open(path(Self.lockName), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)

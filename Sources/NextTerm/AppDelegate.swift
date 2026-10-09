@@ -101,6 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func startAgentControl() {
+        SecretsStore.marksLoadedBeforeSocket = SecretsStore.marksLoaded
         MCPControlServer.shared.start(path: SelfTest.isRequested ? SelfTest.mcpSocketPath : nil)
         MCPRegistration.update(on: true)
     }
@@ -322,6 +323,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var openedAtLaunch = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Secrets' marks first, with no crypto, so the first MCP answer and IDE message are already masked; then the
+        // load check, off the main thread.
+        MainActor.assumeIsolated { SecretsStore.shared.loadMarks() }
+        Task { @MainActor in await SecretsStore.shared.load() }
         RemotePoller.shared.start() // status of remote tabs, from their hosts
         // Claude Code's IDE link, before the first tab so every tab can use it.
         if shareWithClaude { startClaudeLink() }
