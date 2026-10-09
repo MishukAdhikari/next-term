@@ -870,6 +870,7 @@ enum SelfTest {
         await moreSessionChecks(proj: proj)
         await agentEvidenceChecks(proj: proj)
         terminalTextChecks()
+        await scrollbackChecks(proj: proj)
 
         await lastTabChecks()
         await dockReopenChecks(c)

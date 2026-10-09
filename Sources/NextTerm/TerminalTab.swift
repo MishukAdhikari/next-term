@@ -395,6 +395,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     static var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
     func start() {
+        showRestoredScrollback()
         if let remote {
             if controlSlot == nil { controlSlot = RemoteConnection.slot(for: self, host: remote.host) }
             let path = RemoteConnection.controlPath(remote.host, slot: controlSlot ?? 0)
@@ -563,6 +564,46 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         return last
     }
 
+    // MARK: scrollback on the update path (SessionScrollback)
+
+    /// Where each command whose line held a secret showed (`ScrollbackText.holdsSecret`), the latest: the scrollback an
+    /// update quit saves has those lines blanked.
+    private(set) var droppedEchoes: [ScrollbackText.Echo] = []
+    /// Where the running command showed: an agent's pane saves only what came before it.
+    private(set) var runningEcho: ScrollbackText.Echo?
+    /// The scrollback saved at the update quit, read back at the relaunch. `start()` shows it once, before the shell
+    /// starts, above a dim divider.
+    var restoredScrollback: String?
+    /// The divider under it, once shown: agent questions are read only below it (`questionTail`).
+    private(set) var restoreDivider: String?
+
+    /// Notes where the command now starting showed, as the integration reports it.
+    private func noteEcho(_ typed: String, expanded: String?) {
+        runningEcho = SessionScrollback.echo(in: self, typed: typed)
+        guard let echo = runningEcho, ScrollbackText.holdsSecret(typed: typed, expanded: expanded) else { return }
+        droppedEchoes.append(echo)
+        if droppedEchoes.count > SessionScrollback.droppedKept {
+            droppedEchoes.removeFirst(droppedEchoes.count - SessionScrollback.droppedKept)
+        }
+    }
+
+    /// Feeds the restored scrollback and its divider, once, before the shell has printed anything: nothing it prints can
+    /// be inside them, and they are sanitized again, as their file was read as untrusted.
+    func showRestoredScrollback() {
+        guard let scrollback = restoredScrollback else { return }
+        restoredScrollback = nil
+        view.feed(text: ScrollbackText.preface(scrollback))
+        restoreDivider = ScrollbackText.divider
+    }
+
+    /// The screen's tail as agent questions are read from it: below a restore's divider, so a question replayed above it
+    /// asks nothing.
+    func questionTail() -> [String] {
+        let tail = screenTail()
+        guard let restoreDivider else { return tail }
+        return ScrollbackText.below(divider: restoreDivider, in: tail)
+    }
+
     // MARK: serving
 
     /// The local address a running server printed (`npm run dev`, `langgraph dev`, `uvicorn`): shown as
@@ -616,7 +657,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     func pollAgentScreen() {
         guard !exited, status.running, status.kind == .agent, remote?.keep != .herdr || fellBack else { return } // herdr reports its own
         let before = (status.state, status.question)
-        status.observe(agentScreen: AgentScreen.activity(screenLines: screenTail()), at: Self.now)
+        status.observe(agentScreen: AgentScreen.activity(screenLines: questionTail()), at: Self.now)
         if before.0 != status.state || before.1 != status.question { delegate?.tabDidChange(self) }
     }
 
@@ -799,11 +840,13 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             programTitle = nil
             // Its output starts below the line the command was typed on.
             pendingServingStart = (lastTextRow() ?? 0) + 1
+            noteEcho(line, expanded: expanded)
             status.commandStarted(line, expanded: expanded, at: Self.now)
             // Gemini or Qwen starting (or installed since launch): their IDE switch on, for the next start too.
             if ["gemini", "gemini-cli", "qwen", "qwen-code"].contains(status.program) { AppDelegate.shared.enableAgentIDEModes() }
         case .commandFinished(let code):
             programTitle = nil
+            runningEcho = nil
             status.commandFinished(exitCode: code, at: Self.now)
         case .directory(let dir):
             if !dir.isEmpty { directory = dir }
