@@ -67,7 +67,8 @@ extension GitActions {
                     sheet.finish()
                     let opened = AppDelegate.shared.openWorktreeWindow(path)
                     guard result.ok else {
-                        return failed("“\(folder)” was made, but git reported an error", result, retry: nil, over: opened.window)
+                        let skipped = update && target.branchName != nil ? "It wasn’t brought up to date: Update Project there does it." : nil
+                        return failed("“\(folder)” was made, but git reported an error", result, retry: nil, note: skipped, there: (opened, path))
                     }
                     let on = target.branchName.map { "on \($0)" } ?? "at \(target.shown), detached"
                     let notice = "New worktree \(on)" + Self.copiedNotice(copied)
@@ -105,7 +106,10 @@ extension GitActions {
     private func fastForward(_ branch: String, in path: String, repository: String, over opened: TerminalWindowController, notice: String) {
         GitWriter.shared.run("Update \(branch)", in: path, repository: repository, steps: [BranchCommand.fastForward], activity: .pulling) { result in
             opened.sidebar.git.refresh()
-            guard result.ok else { return failed("Could not bring “\(branch)” up to date", result, retry: BranchCommand.fastForward, over: opened.window) }
+            guard result.ok else {
+                // Its Open Terminal opens in the new worktree's window and folder, never in the checkout left alone.
+                return failed("Could not bring “\(branch)” up to date", result, retry: BranchCommand.fastForward, there: (opened, path))
+            }
             GitToast.show(notice + (result.failure == .nothingToDo ? ", up to date" : ", updated"), in: opened.window)
         }
     }

@@ -740,10 +740,14 @@ struct GitActions {
         toast("Written in “\(tab.title)”: press Return to send")
     }
 
-    /// A new tab in the worktree with the git command typed and waiting for Return.
-    func runInTerminal(_ args: [String]) {
-        guard let controller else { return }
-        let tab = controller.addTab(directory: root)
+    /// Another checkout an error is about, and its window: a new worktree's.
+    typealias Elsewhere = (window: TerminalWindowController, folder: String)
+
+    /// A new tab in the worktree with the git command typed and waiting for Return; in `there`'s window and
+    /// folder when given.
+    func runInTerminal(_ args: [String], there: Elsewhere? = nil) {
+        guard let controller = there?.window ?? controller else { return }
+        let tab = controller.addTab(directory: there?.folder ?? root)
         let command = GitWriter.commandLine(args)
         var tries = 0
         Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { timer in
@@ -759,9 +763,9 @@ struct GitActions {
         output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\n", omittingEmptySubsequences: false).suffix(lines).joined(separator: "\n")
     }
 
-    /// Says what went wrong in plain words, with git's own last lines, and what can be done now; over
-    /// `other` when given (a worktree's new window), else this window.
-    func failed(_ title: String, _ result: GitWriter.Result, retry: [String]?, over other: NSWindow? = nil) {
+    /// Says what went wrong in plain words, with git's own last lines, `note`, and what can be done now; over
+    /// `there`'s window when given (a new worktree's), with Open Terminal in its folder, else this window.
+    func failed(_ title: String, _ result: GitWriter.Result, retry: [String]?, note: String? = nil, there: Elsewhere? = nil) {
         var info = Self.tail(result.output)
         var person = false
         switch result.failure {
@@ -786,11 +790,12 @@ struct GitActions {
         default:
             person = retry != nil
         }
+        if let note { info += "\n\n" + note }
         var buttons = ["OK", "Show Git Commands"]
         if person, retry != nil { buttons.append("Open Terminal") }
-        GitPrompt.ask(title, info: info, buttons: buttons, style: .warning, over: other ?? window) { choice in
+        GitPrompt.ask(title, info: info, buttons: buttons, style: .warning, over: there?.window.window ?? window) { choice in
             if choice == 1 { GitCommandsWindowController.shared.present() }
-            if choice == 2, let retry { runInTerminal(retry) }
+            if choice == 2, let retry { runInTerminal(retry, there: there) }
         }
     }
 }
