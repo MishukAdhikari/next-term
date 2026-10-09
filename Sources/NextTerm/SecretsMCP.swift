@@ -42,16 +42,32 @@ enum SecretsMCP {
 
     static let cantOpenNote = "Secrets can't be opened on this Mac. The user can see why in Settings › Secrets."
     static let listNote = "Values are never returned. Use run_with_secrets, or nxtrm secret run in an MCP server's config."
+    static let atTheMacNote = "Only someone at the Mac can add keys."
 
+    /// A call through plan 004's remote door: one with a `requester`, or a `connection`.
+    static func isRemote(requester: String?, connection: String?) -> Bool { requester != nil || connection != nil }
+
+    /// The remote rules (KTD20) hold whatever `approval` says: a connection's "Ask on this Mac before changes" being off
+    /// (`.preApprovedByGrant`) never lets `run_with_secrets` skip its panel and Touch ID, so `approval` is not read here.
+    /// A remote `run_with_secrets` shows the panel with the connection's name and only "Allow once", and never makes or
+    /// uses a grant (`SecretRequests`). Remote `request_secret` and `store_secret` are refused. `list_secrets` is the
+    /// same as on the Mac: names, never a value.
     static func call(_ tool: String, _ arguments: [String: Any], caller: TerminalTab?, pid: pid_t?, approval: MCPApproval = .askOnMac,
                      requester: String? = nil, connection: String? = nil, reply: @escaping Reply) {
         if tool == "list_secrets" { return reply(MCPControl.ok(listSecrets())) }
+        if isRemote(requester: requester, connection: connection), tool == "request_secret" || tool == "store_secret" {
+            let name = (arguments["name"] as? String).flatMap { SecretName.isValid($0) ? $0 : nil }
+            let who = "the remote connection “\(connectionName(requester ?? "a remote connection"))”"
+            SecretsStore.shared.record(SecretAudit.Line(event: .refused, names: name.map { [$0] } ?? [], who: who,
+                                                        outcome: "\(tool) from a remote connection: only someone at the Mac can add keys"))
+            return reply(answer(.refused, note: atTheMacNote))
+        }
         let asker = MCPWriteControl.asker(connection: connection, requester: requester, caller: caller)
         if let id = (arguments["request_id"] as? String)?.lowercased(), !id.isEmpty {
             guard let call = calls[id], call.asker == asker, call.tool == tool else { return reply(answer(.refused, note: "No such request.")) }
             return wait(call, reply: reply)
         }
-        let facts = askedBy(caller: caller, pid: pid, requester: requester)
+        let facts = askedBy(caller: caller, pid: pid, requester: requester, connection: connection)
         let words = (arguments["reason"] as? String).map { String($0.prefix(4000)) }
         switch tool {
         case "request_secret": requestSecret(arguments, asker: asker, facts: facts, words: words, reply: reply)
@@ -95,10 +111,11 @@ enum SecretsMCP {
 
     /// Next Term's facts about the caller, for the panel's Asked by rows: its tab and project, its agent going by its
     /// program's name, the title a program set, its process; or the remote connection.
-    static func askedBy(caller: TerminalTab?, pid: pid_t?, requester: String?) -> SecretRequests.AskedBy {
+    static func askedBy(caller: TerminalTab?, pid: pid_t?, requester: String?, connection: String? = nil) -> SecretRequests.AskedBy {
         var facts = SecretRequests.AskedBy()
-        if let requester {
-            facts.connection = connectionName(requester)
+        if isRemote(requester: requester, connection: connection) {
+            // A remote request is one with a connection, named or not: the panel and the ticket then treat it so.
+            facts.connection = requester.map(connectionName) ?? "a remote connection"
             return facts
         }
         if let pid {

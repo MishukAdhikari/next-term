@@ -34,6 +34,7 @@ extension SelfTest {
         await secretsToolChecks(c, base: base, proj: proj)
         await secretsSettingsChecks(base: base)
         await secretsImportChecks(base: base)
+        await secretsRemoteChecks(proj: proj)
         check(secretsFolderDate(realFolder.url) == realBefore, "secrets: the real Secrets.noindex is untouched (unchanged, or not there)",
               "\(String(describing: realBefore)) → \(String(describing: secretsFolderDate(realFolder.url)))")
     }
@@ -1295,5 +1296,75 @@ extension SelfTest {
         check(store.recentBackups().isEmpty && store.index?.entry(named: "GITHUB_TOKEN") != nil,
               "secrets: the backups that went back are removed, and the key stays in Secrets")
         _ = try? await store.perform(.delete(name: "GITHUB_TOKEN"))
+    }
+}
+
+extension SelfTest {
+    // MARK: U9, remote hooks for plan 004
+
+    /// A remote connection, as plan 004's door will call: run_with_secrets still shows the panel, with only "Allow once",
+    /// and asks Touch ID even when the connection's changes are pre-approved; the same call asks again; request_secret
+    /// and store_secret are refused; list_secrets holds no value.
+    static func secretsRemoteChecks(proj: URL) async {
+        let requests = SecretRequests.shared
+        let store = SecretsStore.shared
+        requests.resetForSelfTest()
+        let folder = proj.appendingPathComponent("secrets-remote", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let app = AppDelegate.shared!
+        let before = Set(app.controllers.flatMap(\.tabs).map(\.id))
+        defer {
+            requests.resetForSelfTest()
+            for tab in app.controllers.flatMap(\.tabs) where !before.contains(tab.id) { MCPControl.controller(of: tab)?.requestClose(tab) }
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let value = secretsValue("remote")
+        _ = try? await store.perform(.add(name: "REMOTE_KEY", purpose: "the remote checks", purposeBy: .user, origin: .settings,
+                                          writeOnly: false, value: SecretBytes(utf8: value)))
+        let requester = "the connection “test”"
+        let grant = MCPApproval.preApprovedByGrant("grant-1")
+        let arguments: [String: Any] = ["secrets": ["REMOTE_KEY=K"], "command": #"printf "%s" "$K" | wc -c"#, "directory": folder.path,
+                                        "reason": "from the phone"]
+        let presence = store.presence as? StandInPresence
+        let asked = presence?.calls ?? 0
+
+        // The panel names the connection and offers only "Allow once"; Allow asks for presence.
+        let call = secretsStart("run_with_secrets", arguments, requester: requester, connection: "grant-1", approval: grant)
+        let shown = await wait(15) { requests.showing?.panel != nil }
+        let panel = requests.showing?.panel
+        check(shown && panel?.window?.title == "The remote connection “test” asks to run printf with REMOTE_KEY"
+              && panel?.durationChoice[.once] != nil && panel?.durationChoice[.fifteenMinutes] == nil && panel?.durationChoice[.untilLock] == nil,
+              "secrets: a remote run_with_secrets shows the panel, naming the connection, with only Allow once, though its changes are pre-approved",
+              panel?.window?.title ?? "no panel")
+        panel?.allowButton.performClick(nil)
+        let started = await call.value
+        check(started["status"] as? String == "started" && started["approved"] as? String == "once" && started["tab_id"] != nil
+              && (presence?.calls ?? 0) == asked + 1 && !secretsJSON(started).contains(value),
+              "secrets: after Allow and one presence check, the remote gets started with the tab's id and no value", secretsJSON(started))
+
+        // The same call asks again: no grant is made for a remote request.
+        let again = secretsStart("run_with_secrets", arguments, requester: requester, connection: "grant-1", approval: grant)
+        let askedAgain = await wait(15) { requests.showing?.panel != nil }
+        check(askedAgain && requests.grants.isEmpty, "secrets: the same remote call shows the panel again, and no grant is kept")
+        requests.showing?.panel?.declineButton.performClick(nil)
+        _ = await again.value
+
+        // Adding keys is for someone at the Mac.
+        let phone = secretsValue("phone")
+        let request = await secretsTool("request_secret", ["name": "PHONE_KEY", "reason": "x"], approval: grant, requester: requester,
+                                        connection: "grant-1")
+        let stored = await secretsTool("store_secret", ["name": "PHONE_KEY", "value": phone, "reason": "x"], approval: grant,
+                                       requester: requester, connection: "grant-1")
+        check(request["status"] as? String == "refused" && request["note"] as? String == "Only someone at the Mac can add keys."
+              && stored["status"] as? String == "refused" && stored["note"] as? String == "Only someone at the Mac can add keys."
+              && requests.showing == nil && store.index?.entry(named: "PHONE_KEY") == nil && !secretsJSON(stored).contains(phone),
+              "secrets: remote request_secret and store_secret are refused, with no window or panel", secretsJSON(stored))
+
+        // Listing works as on the Mac, with no value.
+        let listed = await secretsTool("list_secrets", [:], approval: grant, requester: requester, connection: "grant-1")
+        let names = (listed["secrets"] as? [[String: Any]])?.compactMap { $0["name"] as? String } ?? []
+        check(listed["vault"] as? String == "ok" && names.contains("REMOTE_KEY") && !secretsJSON(listed).contains(value),
+              "secrets: a remote list_secrets lists names and holds no value", secretsJSON(listed))
+        _ = try? await store.perform(.delete(name: "REMOTE_KEY"))
     }
 }
