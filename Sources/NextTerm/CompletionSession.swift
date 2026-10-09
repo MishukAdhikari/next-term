@@ -82,6 +82,11 @@ final class CompletionSession {
         case left
     }
     private var waitingKeys: [WaitingKey] = []
+    /// ← on a server's screen, until what was typed has echoed and the keys back up are typed: the list's keys wait.
+    private var upPending = false
+    /// A folder is being listed, or ← is going back up on a server's screen: the list's keys wait (and a click does
+    /// nothing).
+    var isWalking: Bool { state.isDrilling || upPending }
     /// The list on screen when a key began to wait while a folder was listed: still the one (it couldn't be entered),
     /// the key takes the row chosen in it; another (the folder's, or the one gone back up to), its own row.
     private weak var keyList: CompletionList?
@@ -231,7 +236,7 @@ final class CompletionSession {
     /// The keys that waited for a folder's list, in order, each on the list showing then, until one goes into a folder
     /// again. None if the list closed meanwhile (the name went in alone): a key in the list never reaches the shell.
     private func followKeys() {
-        while let key = waitingKeys.first, !state.isDrilling {
+        while let key = waitingKeys.first, !isWalking {
             guard isListOpen else {
                 waitingKeys = []
                 return
@@ -535,7 +540,7 @@ final class CompletionSession {
         guard isListOpen else { return false }
         let index = row.flatMap { list?.rows.indices.contains($0) == true ? $0 : nil }
         let target = index.flatMap { list?.tabTarget($0) }
-        let action = CompletionDrill.action(key, on: target, inside: list?.parent != nil, drills: entersFolders, drilling: state.isDrilling)
+        let action = CompletionDrill.action(key, on: target, inside: list?.parent != nil, drills: entersFolders, drilling: isWalking)
         switch action {
         case .goIn, .putOnLine, .beep: if let index { tab(on: index) }
         case .backUp: goUp()
@@ -543,7 +548,7 @@ final class CompletionSession {
             closeList()
             return false
         case .wait:
-            if state.isDrilling { wait(key == .left ? .left : .tab) } else if key == .tab { tabBeforeRows() }
+            if isWalking { wait(key == .left ? .left : .tab) } else if key == .tab { tabBeforeRows() }
         }
         return true
     }
@@ -557,7 +562,7 @@ final class CompletionSession {
     /// waits, for the folder's list.
     func tab(on index: Int) {
         guard isListOpen, let list, list.rows.indices.contains(index) else { return }
-        if state.isDrilling { return wait(.tab) }
+        if isWalking { return wait(.tab) }
         tabWaiting = false
         switch CompletionDrill.action(.tab, on: list.tabTarget(index), inside: list.parent != nil, drills: entersFolders) {
         case .goIn: drill(index, list)
@@ -569,7 +574,7 @@ final class CompletionSession {
     /// ↩︎ on row `index`: while a folder is listed it waits, then takes the row chosen in the folder's list.
     func enter(on index: Int) {
         guard isListOpen else { return }
-        if state.isDrilling { return wait(.enter) }
+        if isWalking { return wait(.enter) }
         accept(index)
     }
 
@@ -639,6 +644,7 @@ final class CompletionSession {
         singleInsert = nil
         singleKeys = nil
         waitingKeys = []
+        upPending = false
         list = nil
         caretRow = nil
         screenWord = nil
@@ -1165,11 +1171,14 @@ extension CompletionSession {
     /// ← on a server's screen: once what was typed has echoed (300 ms at most), Backspaces back to the word gone in
     /// from (and the rest of it, typed). The list that was open meanwhile stays until the screen shows that word.
     private func screenUp(_ list: CompletionList, since start: TimeInterval) {
-        guard state.openID == list.id, self.list === list, !state.isDrilling, let tab else { return }
+        upPending = false
+        guard state.openID == list.id, self.list === list, !state.isDrilling, let tab else { return followKeys() }
         if !settled(tab), TerminalTab.now - start < 0.3 {
+            upPending = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.015) { [weak self] in self?.screenUp(list, since: start) }
             return
         }
+        defer { followKeys() }
         guard let left = tab.lineLeftOfCursor(), let now = list.screenWord?.next(left), let keys = list.upKeys(at: now),
               let above = list.goUp(), let word = above.screenWord else { return NSSound.beep() }
         typeOnScreen(keys)

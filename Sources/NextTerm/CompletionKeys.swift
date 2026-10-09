@@ -12,7 +12,7 @@ final class CompletionController {
         let popup = CompletionPopup()
         // A click puts the row on the line; not while a folder is being listed, whose rows are about to change.
         popup.onPick = { [weak self] row in
-            guard let session = self?.shown, !session.state.isDrilling else { return }
+            guard let session = self?.shown, !session.isWalking else { return }
             session.accept(row)
         }
         return popup
@@ -123,7 +123,7 @@ final class CompletionController {
             return session.walk(.left, row: row)
         case (36, []), (76, []): // Return, Enter
             // While a folder is listed it waits for the folder's list; under Loading it does nothing.
-            if rows || session.state.isDrilling { session.enter(on: popup.selected) }
+            if rows || session.isWalking { session.enter(on: popup.selected) }
             return true
         case (125, []): // ↓
             popup.move(by: 1)
