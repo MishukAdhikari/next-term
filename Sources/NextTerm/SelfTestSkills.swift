@@ -51,7 +51,7 @@ extension SelfTest {
 
         // Unify, keeping Claude Code's version.
         guard let winner = sync?.copies.first(where: { $0.root.kind == .claude }) else { return check(false, "skills: the Claude copy is found") }
-        let steps = SkillUnify.plan(sync!, winner: winner, in: inventory)
+        let steps = SkillUnify.plan(sync!, winner: winner, in: inventory, claude: .link)
         // While it runs, Settings offers nothing that would start another change (Undo would reverse
         // whatever is on top by then). Offered before it: an earlier change to undo, and the row selected.
         let shared = (home as NSString).appendingPathComponent(".agents/skills/tidy-prose")
@@ -219,9 +219,11 @@ extension SelfTest {
             let resolved = SkillsGitHub.Resolved(source: source, commit: String(repeating: "0123456789", count: 4), date: nil, skills: [found], truncated: false)
             let top = scratch.appendingPathComponent("files/skills-0123456").path
             let candidates = SkillsInstaller.check([found], top: top, repo: "skills")
+            // The home facts, from the self-test's home, as a fetch reads them.
+            let claude = SkillClaudeSettings.snapshot(home: home, keys: [])
             return (SkillsInstaller.Fetched(resolved: resolved, info: nil, scratch: scratch, candidates: candidates,
                                             lockPath: SkillLock.path(home: home, environment: [:]), inventory: SkillsStore.inventory(),
-                                            editedSinceInstall: [], projects: []), folder)
+                                            editedSinceInstall: [], projects: [], claude: claude, codex: SkillServers.codexConfig(home: home)), folder)
         }
 
         // A hand-made copy of the name in Command Code's folder, and a lock file `npx skills` wrote.
@@ -244,9 +246,12 @@ extension SelfTest {
               "skills: the review sheet offers Replace for a name already used, and Return never installs",
               "\(sheet.installButton.title) key=\(sheet.installButton.keyEquivalent.debugDescription) enabled=\(sheet.installButton.isEnabled)")
         check(sheet.textView.string.contains("Use it well."), "skills: the review sheet shows SKILL.md as written")
+        check(!sheet.claudeLink.isHidden && sheet.choice.view.isHidden,
+              "skills: a plain skill gets the checkbox for Claude Code's link, and no plugin popup",
+              "checkbox hidden=\(sheet.claudeLink.isHidden) popup hidden=\(sheet.choice.view.isHidden)")
 
         guard let candidate else { return }
-        if case .failure(let failure) = await SkillsInstaller.install([candidate], fetched: fetched, linkForClaude: true) {
+        if case .failure(let failure) = await SkillsInstaller.install([candidate], fetched: fetched, claude: ["demo-skill": .link]) {
             check(false, "skills: Install applies", failure.message)
         }
         let lock = (try? SkillLock.entries(at: lockPath).get()) ?? [:]
@@ -267,7 +272,7 @@ extension SelfTest {
 
         // Undo refuses when the installed skill was changed since: it would overwrite that.
         let (again, _) = download()
-        _ = await SkillsInstaller.install(again.candidates, fetched: again, linkForClaude: false)
+        _ = await SkillsInstaller.install(again.candidates, fetched: again, claude: ["demo-skill": .skip])
         try? "edited\n".write(toFile: (home as NSString).appendingPathComponent(".agents/skills/demo-skill/SKILL.md"), atomically: true, encoding: .utf8)
         let refused = await SkillsStore.undo()
         var refusedMessage = ""
@@ -292,7 +297,7 @@ extension SelfTest {
         try? manager.createDirectory(atPath: codexCopy, withIntermediateDirectories: true)
         try? "---\nname: demo-skill\ndescription: Mine.\n---\ncodex\n".write(toFile: codexCopy + "/SKILL.md", atomically: true, encoding: .utf8)
         var driftMessage = ""
-        if case .failure(let failure) = await SkillsInstaller.install(drift.candidates, fetched: drift, linkForClaude: false) { driftMessage = failure.message }
+        if case .failure(let failure) = await SkillsInstaller.install(drift.candidates, fetched: drift, claude: ["demo-skill": .skip]) { driftMessage = failure.message }
         check(driftMessage.contains("changed since the review") && manager.fileExists(atPath: codexCopy + "/SKILL.md"),
               "skills: Install refuses when the skill folders changed since the review", driftMessage)
         drift.discard()
@@ -310,6 +315,8 @@ extension SelfTest {
 
         let window = SkillsWindowController()
         check(window.window?.title == "Skills" && SkillFeatured.list.count >= 10, "skills: Window › Skills opens with the Featured list")
+
+        await pluginReviewChecks(home: home)
     }
 
     /// Looks at the window the moment a skill change starts, for checks that hold only while it runs.

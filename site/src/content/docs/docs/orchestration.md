@@ -75,9 +75,9 @@ Add a stdio server that runs `nxtrm mcp`. `nxtrm` is on the `PATH` in Next Term�
 | `show_tab` | Brings a tab and its window to the front, for you to see. | Brings it forward |
 | `close_tab` | Closes a tab. A tab with something running is refused unless `force` is true, which stops it. The last tab in a window with unsaved files in its editor would close the window, so you are asked whether to save them first, and the answer says `closed: false`. | Yes: asks first |
 | `open_in_editor` | Opens a file in the editor, at a line and column if given. | Opens a file |
-| `list_skills` | Your personal agent skills, and what Claude Code, Codex and Command Code each do with each one (`loads`, `off`, `skipped` or `none`), where it came from, and whether an update was found. | No |
+| `list_skills` | Your personal agent skills, and what Claude Code, Codex and Command Code each do with each one (`loads`, `off`, `skipped` or `none`; `off` also for a skill folder whose Claude Code plugin you turned off in `/plugin`), where it came from, and whether an update was found. | No |
 | `install_skill` | Asks you to install a skill from a public GitHub `source`, with the agent’s `reason`. Nothing is fetched until you choose Fetch and Review in Next Term, and nothing is written until you install it from the review. See [Agents asking for skills](#agents-asking-for-skills). | Only if you say so |
-| `remove_skill` | Asks you to remove an installed skill by `name`; you see what goes and decide, and Undo puts it back. | Only if you say so |
+| `remove_skill` | Asks you to remove an installed skill by `name`; you see what goes, and what may stay in other apps, then decide. Undo puts it back. | Only if you say so |
 
 “Asks first” means the tool is marked as destructive in its MCP description, so agents that ask before risky actions ask you before using it. Every tool is marked honestly: the eleven in this table that only read say so.
 
@@ -94,6 +94,8 @@ The orchestrator is the one waiting, so a tab it opened with `new_tab` or gave i
 ### Agents asking for skills
 
 `install_skill` and `remove_skill` are requests, not actions. Each opens a small window naming the tab that asked, or saying the request came from outside Next Term’s tabs, with the agent’s reason shown as its own words. The window does not take the keyboard and has no Return button, so typing meant for a terminal never answers it. One request is open at a time: another one gets `busy`. A source you decline stays declined until Next Term quits. The call answers within about 50 seconds: `installed`, `removed`, `declined`, `failed` with a `note` saying why (for example, the download changed after the review), or `pending` with a `request_id` the agent passes again to keep waiting.
+
+Fetch and Review opens the same review as Window › Skills, with the same choice for Claude Code and the same default: a skill folder that is also a Claude Code plugin is left out of Claude Code unless it brings nothing beyond its own skill, or you pick “Add it to Claude Code as a plugin” there. A removal names what may stay, as Settings › Skills does: an MCP server Codex may have added for the skill, and what sessions open now keep until they restart. See [Skills from GitHub](/docs/security-and-privacy/#skills-from-github).
 
 ## An example: two projects, two agents
 

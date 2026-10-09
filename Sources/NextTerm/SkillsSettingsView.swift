@@ -12,7 +12,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     private let openButton = NSButton(title: "Open SKILL.md", target: nil, action: nil)
     private let revealButton = NSButton(title: "Show in Finder", target: nil, action: nil)
     let undoButton = NSButton(title: "Undo", target: nil, action: nil)
-    private let linkButton = NSButton(title: "Link for Claude Code", target: nil, action: nil)
+    let linkButton = NSButton(title: "Link for Claude Code", target: nil, action: nil)
     private let updateButton = NSButton(title: "Update…", target: nil, action: nil)
     private let removeButton = NSButton(title: "Remove…", target: nil, action: nil)
     private let checkButton = NSButton(title: "Check for Updates", target: nil, action: nil)
@@ -29,6 +29,8 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     /// A change landed and the rows shown are from before it, until the reload shows.
     private var pendingReload = false
     private var keyObserver: NSObjectProtocol?
+    /// Link is reading the shared copy, or asking about it: a second click starts nothing.
+    private var linking = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -55,7 +57,8 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     // MARK: layout
 
     private func build() {
-        let intro = NSTextField(wrappingLabelWithString: "Skills your agents load from ~/.agents/skills (shared), ~/.claude/skills, ~/.codex/skills and ~/.commandcode/skills. Claude Code reads only its own folder; Codex and Command Code also read the shared one.")
+        let intro = NSTextField(wrappingLabelWithString: Self.introText)
+        intro.toolTip = Self.introTip
         intro.textColor = .secondaryLabelColor
         intro.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
 
@@ -129,6 +132,19 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
             top.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
             scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 200),
         ])
+    }
+
+    /// Where agents load skills from, and who reads which folder (SkillReaders, as of October 2026).
+    static var introText: String {
+        let folders = "Skills your agents load from ~/.agents/skills (shared), ~/.claude/skills, ~/.codex/skills and ~/.commandcode/skills."
+        let readers = "Claude Code reads only its own folder. Codex, Command Code and most other agents read the shared one."
+        return folders + " " + readers + " " + SkillPackage.list(SkillReaders.claude) + " also read ~/.claude/skills."
+    }
+
+    /// Every agent that reads the shared folder, by name.
+    static var introTip: String {
+        let names = ["Codex", "Command Code"] + SkillReaders.shared
+        return "Agents that read ~/.agents/skills, as of October 2026: " + SkillPackage.list(names) + "."
     }
 
     // MARK: data
@@ -256,6 +272,10 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         let load = row.load(for: agent)
         if let reason = load.skippedBecause { return ("skipped", "\(agent.title) skips this skill: \(reason)") }
         guard let used = load.used else { return ("—", "\(agent.title) does not see this skill.") }
+        if load.switchedOff, agent == .claudeCode, let key = row.claudePluginOffKey {
+            let quoted = "“" + SkillReview.oneLine(key, limit: 80) + "”"
+            return ("off", "Claude Code's settings turn its plugin off (\(quoted): false), so Claude Code loads nothing from it.")
+        }
         if load.switchedOff { return ("off", "\(agent.title)'s own settings switch this skill off (\(SkillStep.short(used.realPath))).") }
         var text = used.root.kind == .shared ? "● shared" : used.isLink ? "● link" : "● own copy"
         var tip = "\(agent.title) loads \(SkillStep.short(used.realPath))"
@@ -303,7 +323,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         unifyButton.isEnabled = idle && personal && (row.map { !$0.isUnified && !$0.distinctCopies.isEmpty } ?? false)
         let claudeRoot = inventory?.root(.claude)
         let claudeHasIt = row?.copies.contains { $0.root.kind == .claude } != false
-        linkButton.isEnabled = idle && personal && sharedCopy != nil && claudeRoot != nil && !claudeHasIt
+        linkButton.isEnabled = idle && !linking && personal && sharedCopy != nil && claudeRoot != nil && !claudeHasIt
         removeButton.isEnabled = idle && personal && sharedCopy != nil
         // A skill neither Next Term nor npx skills installed is only moved to the Trash.
         removeButton.title = row.map { SkillsInstaller.tracksInstall($0.name) } == false ? "Move to Trash…" : "Remove…"
@@ -334,13 +354,18 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         }
     }
 
-    /// Claude Code reads only ~/.claude/skills: a link there to the shared copy.
+    /// Claude Code reads only ~/.claude/skills: a link there to the shared copy. A shared copy that is also a
+    /// Claude Code plugin that runs something, or whose name meets another plugin, is asked about first.
     @objc private func linkForClaude() {
-        guard showsPersonal, let row = selectedRow, let inventory, let claudeRoot = inventory.root(.claude), let sharedRoot = inventory.root(.shared), let window else { return }
+        guard showsPersonal, !linking, let row = selectedRow, let inventory, let claudeRoot = inventory.root(.claude), let sharedRoot = inventory.root(.shared), let window else { return }
         let at = (claudeRoot.path as NSString).appendingPathComponent(row.name)
         let to = (sharedRoot.path as NSString).appendingPathComponent(row.name)
+        linking = true
+        updateButtons()
         Task {
-            if case .failure(let failure) = await SkillsStore.apply([.link(at: at, to: to)], title: "Link \(row.name) for Claude Code") { Self.tell(failure.message, in: window) }
+            await SkillsClaudeChoice.askToLink(row.name, at: at, to: to, in: window)
+            linking = false
+            updateButtons()
         }
     }
 
@@ -430,13 +455,23 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     }
 
     /// Unify: one shared copy every agent sees. Shows the steps first; for copies that differ, the user
-    /// picks the version that wins.
+    /// picks the version that wins. A kept copy that is also a Claude Code plugin gets Claude Code's popup.
     @objc private func unify() {
-        guard showsPersonal, let row = selectedRow, let inventory, let window else { return }
-        let sheet = SkillsUnifySheet(row: row, inventory: inventory)
-        sheet.begin(over: window) { steps in
-            guard let steps else { return }
-            Task { if case .failure(let failure) = await SkillsStore.apply(steps, title: "Unify \(row.name)") { Self.tell(failure.message, in: window) } }
+        guard showsPersonal, let row = selectedRow, let inventory, let window, window.attachedSheet == nil else { return }
+        let copies = row.distinctCopies
+        let home = inventory.home
+        Task {
+            // The copies' packages and Claude Code's plugins, read off the main thread. Only read.
+            let plugins = await Task.detached { SkillInstall.pluginFacts(copies, home: home) }.value
+            guard window.attachedSheet == nil else { return }
+            let sheet = SkillsUnifySheet(row: row, inventory: inventory, plugins: plugins)
+            sheet.begin(over: window) { confirmed in
+                guard let confirmed else { return }
+                Task {
+                    let applied = await SkillsStore.apply(confirmed.steps, title: "Unify \(row.name)", precheck: confirmed.precheck)
+                    if case .failure(let failure) = applied { Self.tell(failure.message, in: window) }
+                }
+            }
         }
     }
 
@@ -449,18 +484,33 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     }
 }
 
-/// The unify sheet: which copy wins (when they differ), and the exact steps that will happen.
+/// The unify sheet: which copy wins (when they differ), and the exact steps that will happen. A kept copy
+/// that is also a Claude Code plugin, while Claude Code had the skill, gets Claude Code's popup and the
+/// plugin block (SkillsUnifyChoice), and the steps follow the popup.
+@MainActor
 final class SkillsUnifySheet: NSObject {
+    /// What the user confirmed: the steps, and the check that runs in the change's own turn.
+    struct Confirmed {
+        let steps: [SkillStep]
+        let precheck: @Sendable () -> String?
+    }
+
     private let row: SkillRow
     private let inventory: SkillInventory
+    /// The copies' packages and Claude Code's plugins, read before the sheet opened.
+    private let plugins: SkillInstall.PluginFacts
     private let choice = NSPopUpButton()
-    private let stepsText = NSTextField(wrappingLabelWithString: "")
+    /// The steps as shown (readable by the self-test).
+    let stepsText = NSTextField(wrappingLabelWithString: "")
+    /// Claude Code's link for a kept copy that is also a Claude Code plugin (readable by the self-test).
+    let claude = SkillsUnifyChoice(width: 460)
     private let copies: [SkillCopy]
     private weak var unifyButton: NSButton?
 
-    init(row: SkillRow, inventory: SkillInventory) {
+    init(row: SkillRow, inventory: SkillInventory, plugins: SkillInstall.PluginFacts) {
         self.row = row
         self.inventory = inventory
+        self.plugins = plugins
         // The copy each candidate stands for, newest first.
         copies = row.distinctCopies.sorted { Self.modified($0) > Self.modified($1) }
         super.init()
@@ -476,7 +526,19 @@ final class SkillsUnifySheet: NSObject {
     /// The first copy that can win, so the sheet opens on a choice that works.
     private var firstGood: Int { copies.firstIndex { row.cannotWin($0) == nil } ?? 0 }
 
-    func begin(over window: NSWindow, done: @escaping ([SkillStep]?) -> Void) {
+    /// What Unify asks about Claude Code's link when `copy` is kept: nil when it is no Claude Code plugin Link
+    /// would ask about (one that runs nothing and meets no other plugin is linked as before), or Claude Code
+    /// did not have the skill.
+    private func pluginLink(_ copy: SkillCopy) -> SkillInstall.PluginLink? {
+        SkillsUnifyChoice.asking(row, winner: copy, in: inventory, read: plugins)
+    }
+
+    /// Claude Code's copy is a link to `copy`: leaving it out removes that link.
+    private func claudeLinks(to copy: SkillCopy) -> Bool {
+        row.copies.contains { $0.root.kind == .claude && $0.isLink && $0.realPath == copy.realPath }
+    }
+
+    func begin(over window: NSWindow, done: @escaping (Confirmed?) -> Void) {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         for copy in copies {
@@ -487,33 +549,55 @@ final class SkillsUnifySheet: NSObject {
         choice.selectItem(at: firstGood)
         choice.target = self
         choice.action = #selector(choiceChanged)
+        claude.choice.onChange = { [weak self] in self?.updateSteps() }
         stepsText.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
         let drifted = row.health == .drifted
         let label = NSTextField(labelWithString: drifted ? "The copies differ. Keep:" : "Keep:")
         let chooser = NSStackView(views: [label, choice])
         chooser.spacing = 6
-        let stack = NSStackView(views: [chooser, stepsText])
+        // Room for Claude Code's popup and the plugin block only when some copy that can be kept would ask.
+        let mayAsk = copies.contains { pluginLink($0) != nil }
+        let views: [NSView] = mayAsk ? [chooser, claude.view, stepsText] : [chooser, stepsText]
+        let stack = NSStackView(views: views)
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
-        stack.frame = NSRect(x: 0, y: 0, width: 460, height: 230)
+        stack.frame = NSRect(x: 0, y: 0, width: 460, height: 230 + (mayAsk ? SkillsUnifyChoice.height : 0))
         stepsText.preferredMaxLayoutWidth = 460
         choiceChanged()
 
         let alert = NSAlert()
         alert.messageText = "Unify “\(row.name)”?"
-        alert.informativeText = "One copy stays, in ~/.agents/skills: Codex and Command Code read it there, and Claude Code through a link. The other copies go to the Trash, and links are removed (never what they point to). Undo puts everything back."
+        let claudeText = mayAsk ? "and Claude Code through a link, unless you leave it out of Claude Code below" : "and Claude Code through a link"
+        alert.informativeText = "One copy stays, in ~/.agents/skills: Codex and Command Code read it there, \(claudeText). "
+            + "The other copies go to the Trash, and links are removed (never what they point to). Undo puts everything back."
         alert.accessoryView = stack
         unifyButton = alert.addButton(withTitle: "Unify")
         alert.addButton(withTitle: "Cancel")
         choiceChanged()
         alert.beginSheetModal(for: window) { [self] response in
             guard response == .alertFirstButtonReturn, let winner, row.cannotWin(winner) == nil else { return done(nil) }
-            done(SkillUnify.plan(row, winner: winner, in: inventory))
+            let steps = SkillUnify.plan(row, winner: winner, in: inventory, claude: claude.value)
+            done(Confirmed(steps: steps, precheck: SkillsClaudeChoice.unifyCheck(row.name, winner: winner.path, shown: claude.shown)))
         }
     }
 
+    /// For the self-test: keeps `copy`, as picking it in the sheet does.
+    func keepForTest(_ copy: SkillCopy) {
+        guard let index = copies.firstIndex(of: copy) else { return }
+        choice.selectItem(at: index)
+        choiceChanged()
+    }
+
+    /// Another copy to keep: Claude Code's part follows it, then the steps.
     @objc private func choiceChanged() {
+        guard let winner else { return }
+        let canWin = row.cannotWin(winner) == nil
+        claude.show(canWin ? pluginLink(winner) : nil, linked: claudeLinks(to: winner))
+        updateSteps()
+    }
+
+    private func updateSteps() {
         guard let winner else { return }
         if let problem = row.cannotWin(winner) {
             // Command Code would skip the result: this copy can't be the one kept.
@@ -522,8 +606,9 @@ final class SkillsUnifySheet: NSObject {
             return
         }
         unifyButton?.isEnabled = true
+        let claudeLink = claude.value
         // The staging copy is a detail: show "copy the winner to the shared folder" once.
-        let steps = SkillUnify.plan(row, winner: winner, in: inventory)
+        let steps = SkillUnify.plan(row, winner: winner, in: inventory, claude: claudeLink)
         var placed: [String: String] = [:]
         for step in steps { if case .move(let from, let to) = step { placed[from] = to } }
         var lines = steps.compactMap { step -> String? in
@@ -533,13 +618,14 @@ final class SkillsUnifySheet: NSObject {
             default: return step.summary
             }
         }
+        if claudeLink == .skip, claude.shown != nil { lines.append(SkillReviewText.unifyLeftOut) }
         if row.copies.contains(where: { $0.hasGit && $0.realPath != winner.realPath }) {
             lines.append("A copy that goes to the Trash is a git clone: its history goes with it (Undo puts it back)")
         }
-        for agent in SkillUnify.switchesLost(row, in: inventory) {
+        for agent in SkillUnify.switchesLost(row, winner: winner, in: inventory, claude: claudeLink) {
             lines.append("\(agent.title) switches this skill off under its old name or place: after Unify it loads it again, until you switch it off there")
         }
-        let gained = SkillUnify.gained(row, in: inventory)
+        let gained = SkillUnify.gained(row, in: inventory).filter { claudeLink == .link || $0 != .claudeCode }
         if !gained.isEmpty {
             let names = gained.map(\.title).joined(separator: " and ")
             lines.append("\(names) will load it too\(winner.hasScripts ? ", scripts included" : "")")

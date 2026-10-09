@@ -133,11 +133,10 @@ public struct SkillFrontMatter: Equatable, Sendable {
         while index < block.count {
             let line = block[index]
             index += 1
-            guard !line.hasPrefix(" "), !line.hasPrefix("\t"), let colon = line.firstIndex(of: ":") else { continue }
-            let key = String(line[..<colon]).trimmingCharacters(in: .whitespaces)
-            guard !key.isEmpty, !key.hasPrefix("#") else { continue }
+            guard !line.hasPrefix(" "), !line.hasPrefix("\t"), !line.hasPrefix("#"), let split = splitKey(line), !split.0.isEmpty else { continue }
+            let (key, rest) = split
             result.keys.append(key)
-            var value = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+            var value = rest.trimmingCharacters(in: .whitespaces)
             if value.hasPrefix("|") || value.hasPrefix(">") {
                 // A block scalar: the indented lines that follow.
                 let folded = value.hasPrefix(">")
@@ -173,6 +172,22 @@ public struct SkillFrontMatter: Equatable, Sendable {
             }
         }
         return result
+    }
+
+    /// A top-level `key: value` line's key and the text after its colon. A quoted key is the key itself,
+    /// as YAML reads it (`"hooks":` is `hooks`), so a colon inside the quotes is part of it.
+    static func splitKey(_ line: String) -> (String, Substring)? {
+        guard let quote = line.first, quote == "\"" || quote == "'" else {
+            guard let colon = line.firstIndex(of: ":") else { return nil }
+            return (String(line[..<colon]).trimmingCharacters(in: .whitespaces), line[line.index(after: colon)...])
+        }
+        let body = line.dropFirst()
+        guard let close = body.firstIndex(of: quote) else { return nil }
+        let after = body[body.index(after: close)...].drop { $0 == " " || $0 == "\t" }
+        guard after.first == ":" else { return nil }
+        let raw = String(body[..<close])
+        let key = quote == "\"" ? raw.replacingOccurrences(of: "\\\"", with: "\"") : raw.replacingOccurrences(of: "''", with: "'")
+        return (key, after.dropFirst())
     }
 
     /// Names Claude Code keeps for itself: `synced` is the folder claude.ai's skills arrive in.
@@ -218,8 +233,13 @@ public struct SkillCopy: Equatable, Sendable {
     /// SHA-256 over the folder's files (see SkillHash.folder), computed only when a name has more than
     /// one copy to compare; nil otherwise, and when broken.
     public var contentHash: String?
-    /// The plugin the folder also is (.claude-plugin/plugin.json): Codex then lists it as plugin:name.
+    /// Codex's namespace for the skill, from the first package manifest with a name in Codex's order (an
+    /// Agent Plugins plugin.json, then .codex-plugin, .claude-plugin, .cursor-plugin): Codex then lists it
+    /// as plugin:name.
     public var pluginName: String?
+    /// The Claude Code plugin the folder also is (.claude-plugin/plugin.json): its usable `name`, else
+    /// this entry's own name, which is what Claude Code keys it by ("<name>@skills-dir").
+    public var claudePluginName: String?
     /// The folder is a git clone (has .git): its history is part of what Unify would move.
     public var hasGit: Bool { FileManager.default.fileExists(atPath: (realPath as NSString).appendingPathComponent(".git")) }
     /// The folder holds files that run: scripts or executables (read when asked).
@@ -344,6 +364,18 @@ public struct SkillInventory: Sendable {
 
     public func root(_ kind: SkillRoot.Kind) -> SkillRoot? { roots.first { $0.kind == kind } }
 
+    /// Claude Code is on this Mac (~/.claude is there) with a skills folder of its own, so a link for it can
+    /// be made there. Without ~/.claude no link is made, since making one would make Claude Code's folder.
+    public var claudeAvailable: Bool {
+        root(.claude) != nil && FileManager.default.fileExists(atPath: (home as NSString).appendingPathComponent(".claude"))
+    }
+
+    /// ~/.claude/skills is a link to the shared folder (or the other way round): Claude Code reads every
+    /// shared skill there itself, so no link of its own can leave one out.
+    public var claudeReadsShared: Bool {
+        root(.claude) == nil && root(.shared)?.readers.contains(.claudeCode) == true
+    }
+
     /// Whether a path is inside one of the personal skill folders (rather than, say, the developer's own
     /// repository that a skill links to).
     public func isInsideRoots(_ path: String) -> Bool {
@@ -399,11 +431,10 @@ public struct SkillInventory: Sendable {
                 return SkillCopy(root: root, path: path, realPath: real, isLink: isLink, broken: true, frontMatter: nil, contentHash: nil)
             }
             let text = (try? String(contentsOfFile: skillFile, encoding: .utf8)) ?? ""
-            let plugin = (real as NSString).appendingPathComponent(".claude-plugin/plugin.json")
-            let pluginName = FileManager.default.contents(atPath: plugin)
-                .flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }?["name"] as? String
-            return SkillCopy(root: root, path: path, realPath: real, isLink: isLink, broken: false,
-                             frontMatter: SkillFrontMatter.parse(text), contentHash: nil, pluginName: pluginName)
+            let names = SkillPackage.names(folder: real)
+            let claudePlugin = names.claude ?? (names.isClaudePlugin ? name : nil)
+            return SkillCopy(root: root, path: path, realPath: real, isLink: isLink, broken: false, frontMatter: SkillFrontMatter.parse(text),
+                             contentHash: nil, pluginName: names.codex, claudePluginName: claudePlugin)
         }
     }
 }
@@ -458,6 +489,14 @@ public struct SkillRow: Equatable, Sendable {
         var load = rawLoad(for: agent)
         if off.contains(agent), load.used != nil { load.switchedOff = true }
         return load
+    }
+
+    /// The `enabledPlugins` key ("<plugin>@skills-dir", set to false) that turns off the plugin of the copy
+    /// Claude Code loads, so Claude Code loads nothing from it (hand check H4); nil when none does.
+    public var claudePluginOffKey: String? {
+        guard let keys = offKeys[.claudeCode], let plugin = rawLoad(for: .claudeCode).used?.claudePluginName else { return nil }
+        let key = SkillClaudeSettings.key(plugin)
+        return keys.contains(key) ? key : nil
     }
 
     func rawLoad(for agent: SkillAgent) -> Load {
@@ -585,7 +624,10 @@ public enum SkillUnify {
         (home as NSString).appendingPathComponent("Library/Application Support/Next Term/skill-staging/\(name)-\(UUID().uuidString.prefix(8))")
     }
 
-    public static func plan(_ row: SkillRow, winner: SkillCopy, in inventory: SkillInventory, staging: String? = nil) -> [SkillStep] {
+    /// `claude`: Claude Code's link, when it had the skill. `.skip` moves its copy or link to the Trash and
+    /// makes no new one (for a folder that is also a Claude Code plugin the user leaves out).
+    public static func plan(_ row: SkillRow, winner: SkillCopy, in inventory: SkillInventory, claude: SkillInstall.ClaudeLink,
+                            staging: String? = nil) -> [SkillStep] {
         guard let sharedRoot = inventory.root(.shared) else { return [] }
         let shared = (sharedRoot.path as NSString).appendingPathComponent(row.name)
         var steps: [SkillStep] = []
@@ -608,14 +650,17 @@ public enum SkillUnify {
                 steps.append(.move(from: staging, to: shared))
             }
         }
-        // Claude Code (when it had the skill, and its folder is not the shared one): a link to the shared copy.
+        // Claude Code (when it had the skill, and its folder is not the shared one): a link to the shared
+        // copy, or nothing when it is left out.
         if let claudeRoot = inventory.root(.claude), let claudeCopy = row.copies.first(where: { $0.root.kind == .claude }) {
-            let claude = (claudeRoot.path as NSString).appendingPathComponent(row.name)
+            let claudePath = (claudeRoot.path as NSString).appendingPathComponent(row.name)
             let finalReal = winnerIsShared ? existingShared?.realPath : nil
             let alreadyLinked = claudeCopy.isLink && finalReal != nil && claudeCopy.realPath == finalReal
-            if !alreadyLinked {
-                steps.append(.trash(claude))
-                steps.append(.link(at: claude, to: shared))
+            if claude == .skip {
+                steps.append(.trash(claudePath))
+            } else if !alreadyLinked {
+                steps.append(.trash(claudePath))
+                steps.append(.link(at: claudePath, to: shared))
             }
         }
         // Codex and Command Code read the shared folder: their own copies (or links) go.
@@ -634,15 +679,23 @@ public enum SkillUnify {
     }
 
     /// Agents whose own off switch would stop matching after Unify, so the skill would come back on:
-    /// Claude Code keys its switch by the skill's name (Unify keeps only a copy named like its folder),
-    /// Codex by the copy's path (Unify moves it to the shared folder).
-    public static func switchesLost(_ row: SkillRow, in inventory: SkillInventory) -> [SkillAgent] {
+    /// Claude Code keys its switch by the skill's name (Unify keeps only a copy named like its folder), or
+    /// its plugin's by the winner's plugin name ("<name>@skills-dir"); Codex by the copy's path (Unify
+    /// moves it to the shared folder). Claude Code left out of a skill (`claude` .skip) loses nothing.
+    public static func switchesLost(_ row: SkillRow, winner: SkillCopy, in inventory: SkillInventory,
+                                    claude: SkillInstall.ClaudeLink) -> [SkillAgent] {
         guard let sharedRoot = inventory.root(.shared) else { return [] }
         let shared = (sharedRoot.path as NSString).appendingPathComponent(row.name)
         let realShared = (sharedRoot.realPath as NSString).appendingPathComponent(row.name)
-        var after: [SkillAgent: Set<String>] = [.claudeCode: [row.name]]
+        var claudeKeys: Set<String> = [row.name]
+        // The link Unify leaves is named like the row, which is what a manifest without a usable name is
+        // keyed by: the winner's plugin name already says so.
+        if let plugin = winner.claudePluginName { claudeKeys.insert(SkillClaudeSettings.key(plugin)) }
+        var after: [SkillAgent: Set<String>] = [.claudeCode: claudeKeys]
         after[.codex] = [row.name, shared, realShared, shared + "/SKILL.md", realShared + "/SKILL.md"]
+        let leftOut = claude == .skip && inventory.root(.claude) != nil
         return SkillAgent.allCases.filter { agent in
+            if agent == .claudeCode && leftOut { return false }
             guard let keys = row.offKeys[agent], !keys.isEmpty else { return false }
             return keys.isDisjoint(with: after[agent] ?? [])
         }
@@ -662,10 +715,14 @@ public enum SkillUnify {
 // MARK: - Each agent's own switches
 
 /// Skills an agent's own settings switch off: Claude Code's `skillOverrides` in ~/.claude/settings.json
-/// (keyed by the skill's name, "off"), and Codex's `[[skills.config]]` tables in ~/.codex/config.toml
-/// (a `path` or `name` with `enabled = false`). Command Code's store is not read yet.
+/// (keyed by the skill's name, "off"), its `enabledPlugins` keys "<plugin>@skills-dir" set to false (a
+/// skill folder that is also that plugin then loads nothing, not even its skill: hand check H4), and
+/// Codex's `[[skills.config]]` tables in ~/.codex/config.toml (a `path` or `name` with `enabled = false`).
+/// Command Code's store is not read yet.
 public struct SkillSwitches: Sendable {
     public var claudeOff: Set<String> = []
+    /// `enabledPlugins` keys of skills-dir plugins set to false, as written ("writing-helper@skills-dir").
+    public var claudePluginsOff: Set<String> = []
     /// Paths (a skill folder or its SKILL.md) and names Codex has switched off.
     public var codexOff: Set<String> = []
 
@@ -674,12 +731,16 @@ public struct SkillSwitches: Sendable {
     public static func read(home: String) -> SkillSwitches {
         var switches = SkillSwitches()
         let settings = (home as NSString).appendingPathComponent(".claude/settings.json")
-        if let data = FileManager.default.contents(atPath: settings),
-           let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-           let overrides = json["skillOverrides"] as? [String: Any] {
-            for (name, value) in overrides where (value as? String)?.lowercased() == "off" || (value as? Bool) == false {
-                switches.claudeOff.insert(name)
+        if let data = FileManager.default.contents(atPath: settings) {
+            if let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+               let overrides = json["skillOverrides"] as? [String: Any] {
+                for (name, value) in overrides where (value as? String)?.lowercased() == "off" || (value as? Bool) == false {
+                    switches.claudeOff.insert(name)
+                }
             }
+            // Read as the review reads it (SkillClaudeSettings.snapshot), so the two never disagree.
+            let plugins = data.count <= SkillReview.maxReadSize ? SkillClaudeSettings.enabledPlugins(data) : [:]
+            for (key, on) in plugins where !on && key.hasSuffix(SkillClaudeSettings.sentinel) { switches.claudePluginsOff.insert(key) }
         }
         let config = (home as NSString).appendingPathComponent(".codex/config.toml")
         if let text = try? String(contentsOfFile: config, encoding: .utf8) {
@@ -725,7 +786,13 @@ public struct SkillSwitches: Sendable {
     public func offKeys(name: String, copies: [SkillCopy]) -> [SkillAgent: Set<String>] {
         var result: [SkillAgent: Set<String>] = [:]
         let names = Set([name] + copies.compactMap { $0.frontMatter?.name })
-        let claude = claudeOff.intersection(names)
+        var claude = claudeOff.intersection(names)
+        // A plugin key counts for the copies Claude Code reads, compared exactly, as Claude Code does (H2).
+        for copy in copies where !copy.broken && copy.root.readers.contains(.claudeCode) {
+            guard let plugin = copy.claudePluginName else { continue }
+            let key = SkillClaudeSettings.key(plugin)
+            if claudePluginsOff.contains(key) { claude.insert(key) }
+        }
         if !claude.isEmpty { result[.claudeCode] = claude }
         var codexKeys = names
         for copy in copies {

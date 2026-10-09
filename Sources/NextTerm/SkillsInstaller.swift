@@ -34,13 +34,24 @@ enum SkillsInstaller {
         let editedSinceInstall: Set<String>
         /// Projects open when this was fetched.
         let projects: [String]
+        /// Claude Code's plugins when this was fetched (read off the main thread): the candidates' keys in
+        /// enabledPlugins, and the plugins installed or synced from claude.ai. Read only.
+        var claude = SkillClaudeSettings.Snapshot()
+        /// The MCP server tables in ~/.codex/config.toml when this was fetched, for the review's Codex line.
+        /// Read only.
+        var codex = SkillServers.CodexConfig()
+        /// The installed copies of the plugin folders, by skill name, read off the main thread with the
+        /// inventory: an update compares what it declares with them (defaultClaudeLink).
+        var installed: [String: SkillPackage] = [:]
 
         func discard() { try? FileManager.default.removeItem(at: scratch) }
 
-        /// The same review, planned against the skill folders as they are now.
-        func with(inventory: SkillInventory) -> Fetched {
+        /// The same review, planned against the skill folders, their installed plugins, Claude Code's plugins
+        /// and Codex's config as they are now.
+        func with(inventory: SkillInventory, claude: SkillClaudeSettings.Snapshot, codex: SkillServers.CodexConfig,
+                  installed: [String: SkillPackage]) -> Fetched {
             Fetched(resolved: resolved, info: info, scratch: scratch, candidates: candidates, lockPath: lockPath, inventory: inventory,
-                    editedSinceInstall: editedSinceInstall, projects: projects)
+                    editedSinceInstall: editedSinceInstall, projects: projects, claude: claude, codex: codex, installed: installed)
         }
     }
 
@@ -89,8 +100,12 @@ enum SkillsInstaller {
             let records = records()
             let names = candidates.map(\.name)
             let edited = await editedSinceInstall(names, inventory: inventory, lockPath: lockPath, records: records)
+            let claude = await claudeFacts(candidates)
+            let codex = await codexFacts()
+            let installed = await Task.detached { installedPackages(candidates, inventory: inventory) }.value
             return Fetched(resolved: resolved, info: await info, scratch: scratch, candidates: candidates, lockPath: lockPath,
-                           inventory: inventory, editedSinceInstall: edited, projects: openProjects)
+                           inventory: inventory, editedSinceInstall: edited, projects: openProjects, claude: claude, codex: codex,
+                           installed: installed)
         } catch {
             try? FileManager.default.removeItem(at: scratch)
             throw error
@@ -173,29 +188,94 @@ enum SkillsInstaller {
     /// Project folders open in Next Term: their skills are never touched, but a name they share is named.
     static var openProjects: [String] {
         guard SkillsStore.home == NSHomeDirectory() else { return [] }
-        return NSApp.windows.compactMap { ($0.windowController as? TerminalWindowController)?.sidebar.root?.path }
+        let controllers = NSApp.windows.compactMap { $0.windowController as? TerminalWindowController }
+        return controllers.compactMap { $0.sidebar.root?.path }
     }
 
-    static func plan(_ candidate: Candidate, fetched: Fetched, linkForClaude: Bool, inventory: SkillInventory? = nil) -> SkillInstallPlan {
+    /// Claude Code's plugins, for these candidates' keys, read off the main thread. Never written.
+    nonisolated static func claudeFacts(_ candidates: [Candidate]) async -> SkillClaudeSettings.Snapshot {
+        let home = SkillsStore.home
+        let keys = candidates.compactMap { $0.review.package?.claude.map { SkillClaudeSettings.key($0.name) } }
+        return await Task.detached { SkillClaudeSettings.snapshot(home: home, keys: keys) }.value
+    }
+
+    /// The installed copy's package of each candidate that is a plugin folder, by skill name. It reads
+    /// each folder in full (nested manifests too): call it off the main thread.
+    nonisolated static func installedPackages(_ candidates: [Candidate], inventory: SkillInventory) -> [String: SkillPackage] {
+        var packages: [String: SkillPackage] = [:]
+        for candidate in candidates where candidate.review.package?.claude != nil {
+            let row = inventory.rows.first { $0.name == candidate.name }
+            guard let copy = row?.copies.first(where: { $0.root.kind == .shared && !$0.broken }) else { continue }
+            packages[candidate.name] = SkillPackage.read(folder: copy.realPath, folderName: candidate.name)
+        }
+        return packages
+    }
+
+    /// The MCP server tables in ~/.codex/config.toml, read off the main thread. Never written.
+    nonisolated static func codexFacts() async -> SkillServers.CodexConfig {
+        let home = SkillsStore.home
+        return await Task.detached { SkillServers.codexConfig(home: home) }.value
+    }
+
+    /// The Claude Code plugin names of skills installed together, by skill name.
+    static func pluginNames(_ candidates: [Candidate]) -> [String: String] {
+        var names: [String: String] = [:]
+        for candidate in candidates {
+            if let plugin = candidate.review.package?.claude?.name { names[candidate.name] = plugin }
+        }
+        return names
+    }
+
+    /// `claude`: Claude Code's link for this skill. `together`: the skills installed with it, whose
+    /// plugin names it may share. `facts`: Claude Code's plugins, when read again since the fetch.
+    static func plan(_ candidate: Candidate, fetched: Fetched, claude: SkillInstall.ClaudeLink, together: [Candidate] = [],
+                     inventory: SkillInventory? = nil, facts: SkillClaudeSettings.Snapshot? = nil) -> SkillInstallPlan {
         // The copy is made in the download's own folder first, then moved into place.
         let staging = fetched.scratch.appendingPathComponent("ready", isDirectory: true).appendingPathComponent(candidate.name).path
         return SkillInstall.plan(name: candidate.name, staged: candidate.folder, staging: staging, inventory: inventory ?? fetched.inventory,
-                                 linkForClaude: linkForClaude, sameSource: sameSource(candidate, fetched: fetched), projects: fetched.projects)
+                                 claude: claude, package: candidate.review.package, facts: facts ?? fetched.claude,
+                                 ticked: pluginNames(together), sameSource: sameSource(candidate, fetched: fetched), projects: fetched.projects)
+    }
+
+    /// What the review offers first for Claude Code's link to this skill (SkillInstall.defaultClaudeLink):
+    /// a plain skill is linked; a plugin folder that runs something, or whose name clashes, is left out.
+    /// Without Claude Code on this Mac (no ~/.claude), or with a ~/.claude/skills that is a link to the shared
+    /// folder, nothing is linked (SkillInventory.claudeAvailable), as the review's checkbox shows. Reads
+    /// nothing from disk: the installed copy's package was read with the fetch.
+    static func defaultClaudeLink(_ candidate: Candidate, fetched: Fetched, together: [Candidate] = []) -> SkillInstall.ClaudeLink {
+        guard fetched.inventory.claudeAvailable else { return .skip }
+        guard let package = candidate.review.package, package.claude != nil else { return .link }
+        let shown = plan(candidate, fetched: fetched, claude: .skip, together: together)
+        // An update compares what it declares with the installed copy's.
+        let installed = fetched.installed[candidate.name]
+        return SkillInstall.defaultClaudeLink(shown, package: package, installed: installed, facts: fetched.claude)
     }
 
     /// Puts the chosen skills in place, with their lock entries and records, as one change for Undo.
-    /// It installs only what the review showed: if the skill folders changed since, nothing happens and
-    /// the review is redrawn. The downloaded files are checked against the commit right before they are
-    /// copied, and the installed copy again after, as part of the same change: a mismatch puts it all
-    /// back before anything else can run. The download is removed once installed; after a failure it
-    /// stays, so Install can be tried again.
-    static func install(_ chosen: [Candidate], fetched: Fetched, linkForClaude: Bool) async -> Result<String, SkillsStore.Failure> {
+    /// `claude`: Claude Code's link for each skill, by name; nil, or a name left out, gets the review's
+    /// default (so a plugin folder that runs something is not linked). Nothing writes Claude Code's
+    /// settings. It installs only what the review showed: if the skill folders or Claude Code's plugins
+    /// changed since, nothing happens and the review is redrawn. The downloaded files are checked against
+    /// the commit right before they are copied, and the installed copy again after, as part of the same
+    /// change: a mismatch puts it all back before anything else can run. The download is removed once
+    /// installed; after a failure it stays, so Install can be tried again.
+    static func install(_ chosen: [Candidate], fetched: Fetched, claude: [String: SkillInstall.ClaudeLink]? = nil) async -> Result<String, SkillsStore.Failure> {
         let inventory = await SkillsStore.scan()
+        let facts = await claudeFacts(fetched.candidates)
+        var choices: [String: SkillInstall.ClaudeLink] = [:]
         for candidate in chosen {
-            let shown = plan(candidate, fetched: fetched, linkForClaude: linkForClaude)
-            let now = plan(candidate, fetched: fetched, linkForClaude: linkForClaude, inventory: inventory)
+            let choice = claude?[candidate.name] ?? defaultClaudeLink(candidate, fetched: fetched, together: chosen)
+            choices[candidate.name] = choice
+            let shown = plan(candidate, fetched: fetched, claude: choice, together: chosen)
+            let now = plan(candidate, fetched: fetched, claude: choice, together: chosen, inventory: inventory, facts: facts)
+            let key = candidate.review.package?.claude?.name
+            let sameKey = key.map { fetched.claude.value(for: $0) == facts.value(for: $0) } ?? true
             guard shown.steps == now.steps, shown.existing == now.existing else {
                 return .failure(SkillsStore.Failure(message: "Your skill folders changed since the review (\(candidate.name)). Nothing was installed; look at the review again."))
+            }
+            guard shown.clashes == now.clashes, sameKey else {
+                let message = "Your Claude Code plugins changed since the review (\(candidate.name)). Nothing was installed; look at the review again."
+                return .failure(SkillsStore.Failure(message: message))
             }
         }
         let source = fetched.resolved.source
@@ -212,7 +292,7 @@ enum SkillsInstaller {
         }
         var parts: [[SkillStep]] = []
         for candidate in chosen {
-            let plan = plan(candidate, fetched: fetched, linkForClaude: linkForClaude, inventory: inventory)
+            let plan = plan(candidate, fetched: fetched, claude: choices[candidate.name] ?? .skip, together: chosen, inventory: inventory, facts: facts)
             var part = plan.steps
             if lockKnown {
                 let hash = candidate.found.path.isEmpty ? fetched.resolved.commit : candidate.found.tree
@@ -249,6 +329,24 @@ enum SkillsInstaller {
         return .success(notes.joined(separator: " "))
     }
 
+    // MARK: SkillsMCP's grant install
+
+    // SkillsMCP.swift (not edited here) still calls these Bool forms for a pre-approved install. They give
+    // each skill the review's default (true) or leave Claude Code out (false), so a plugin folder that runs
+    // something is never linked through them. They go once that call passes `claude:` instead:
+    // `plan(candidate, fetched: fetched, claude: defaultClaudeLink(candidate, fetched: fetched))` and
+    // `install([candidate], fetched: fetched)`.
+
+    static func plan(_ candidate: Candidate, fetched: Fetched, linkForClaude: Bool) -> SkillInstallPlan {
+        plan(candidate, fetched: fetched, claude: linkForClaude ? defaultClaudeLink(candidate, fetched: fetched) : .skip)
+    }
+
+    static func install(_ chosen: [Candidate], fetched: Fetched, linkForClaude: Bool) async -> Result<String, SkillsStore.Failure> {
+        var leftOut: [String: SkillInstall.ClaudeLink] = [:]
+        for candidate in chosen { leftOut[candidate.name] = .skip }
+        return await install(chosen, fetched: fetched, claude: linkForClaude ? nil : leftOut)
+    }
+
     // MARK: removing
 
     /// Whether Next Term or `npx skills` installed a skill of that name (its record or lock entry), as
@@ -277,8 +375,13 @@ enum SkillsInstaller {
             steps.append(.recordEntry(path: recordsFile, name: name, record: nil))
             installed = true
         }
-        let front = inventory.rows.first { $0.name == name }?.copies.first { $0.root.kind == .shared }?.frontMatter
-        return (steps, SkillInstall.leftovers(frontMatter: front), installed)
+        let shared = inventory.rows.first { $0.name == name }?.copies.first { $0.root.kind == .shared }
+        let front = shared?.frontMatter
+        let folder = shared.flatMap { $0.broken ? nil : $0.path }
+        // Reads the installed copy's plugin and servers, Claude Code's settings and Codex's config: only read.
+        let home = SkillsStore.home
+        let leftovers = await Task.detached { SkillInstall.leftovers(frontMatter: front, folder: folder, home: home) }.value
+        return (steps, leftovers, installed)
     }
 
     // MARK: updates

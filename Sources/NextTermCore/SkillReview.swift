@@ -40,6 +40,12 @@ public struct SkillReview: Sendable {
     public let urls: [String]
     /// The first line of the skill's own licence file (LICENSE, LICENSE.txt, …): "Apache License", say.
     public let licenseFile: String?
+    /// The plugin or extension the folder also is, with what its Claude Code plugin would start; nil for
+    /// a plain skill.
+    public let package: SkillPackage?
+    /// The MCP servers each agent would use: Claude Code's plugin, Codex's agents/openai.yaml, Amp's
+    /// front matter or mcp.json.
+    public let servers: SkillServers
 
     /// The licence as stated: SKILL.md's `license` field, else the skill's licence file.
     public var license: String? {
@@ -56,8 +62,9 @@ public struct SkillReview: Sendable {
     public var refused: Bool { flags.contains { $0.level == .refuse } }
 
     /// Reads a skill folder that has been downloaded but not installed. `folderName` is the name it will
-    /// be installed under.
-    public static func review(folder: String, folderName: String) -> SkillReview {
+    /// be installed under; `home` expands `~` in a plugin manifest's paths (without it they count as
+    /// outside the folder).
+    public static func review(folder: String, folderName: String, home: String? = nil) -> SkillReview {
         let manager = FileManager.default
         var files: [File] = []
         var flags: [Flag] = []
@@ -70,6 +77,11 @@ public struct SkillReview: Sendable {
         var nameProblem: String?
         if let front { nameProblem = front.problem(folder: folderName) } else if skillFile != nil { nameProblem = "SKILL.md has no front matter (name and description)." }
         if let nameProblem { flags.append(Flag(level: .refuse, file: "SKILL.md", text: nameProblem + " Command Code would skip it.")) }
+        // Read before the walk: the files a row lists as declaring servers get no second warning for them.
+        let package = SkillPackage.read(folder: folder, folderName: folderName, home: home)
+        let servers = SkillServers.read(folder: folder, skillText: skillText, skillFile: skillFile ?? "SKILL.md", package: package)
+        let listed = serverFiles(folder: folder, package: package, servers: servers)
+        let skillFileKey = (skillFile ?? "SKILL.md").lowercased()
 
         let walker = manager.enumerator(atPath: folder)
         let realFolder = realPath(folder)
@@ -122,12 +134,17 @@ public struct SkillReview: Sendable {
             if looksBinary, !program {
                 flags.append(Flag(level: .warning, file: relative, text: "Starts like a compiled program but is text: it is shown below."))
             }
+            // Named by its extension, so a packed file too large to read is still called one (bundles often are).
+            if packedExtensions.contains(ext) {
+                let packed = bundleExtensions.contains(ext) ? bundleText : "An archive: its contents are not reviewed here."
+                flags.append(Flag(level: .warning, file: relative, text: packed))
+            }
             if !readable {
-                flags.append(Flag(level: .warning, file: relative, text: "A large file (\(size / 1_000_000) MB): too large to check here."))
+                let text = "A large file (\(size / 1_000_000) MB): too large to check here, so no command or server setting in it was checked."
+                flags.append(Flag(level: .warning, file: relative, text: text))
                 continue
             }
             if size > 1_000_000 { flags.append(Flag(level: .warning, file: relative, text: "A large file (\(size / 1000) KB).")) }
-            if packedExtensions.contains(ext) { flags.append(Flag(level: .warning, file: relative, text: "An archive: its contents are not reviewed here.")) }
             // Checked even when not valid UTF-8 (one bad byte must not hide a script's lines from the checks).
             let text = String(decoding: data, as: UTF8.self)
             guard !binary else {
@@ -142,10 +159,17 @@ public struct SkillReview: Sendable {
             if String(data: data, encoding: .utf8) == nil {
                 flags.append(Flag(level: .warning, file: relative, text: "Not valid UTF-8: shown with replacement characters."))
             }
-            flags += textFlags(text, file: relative, readByAgents: readByAgentsExtensions.contains(ext))
+            // A JSON file Next Term reads is checked for its servers; any other falls back to the prose patterns.
+            let serverJSON = ext == "json" ? serverJSONFlags(data, file: relative) : nil
+            let frontMatterRead = relative.lowercased() == skillFileKey && servers.frontMatterServersRead
+            flags += textFlags(text, file: relative, readByAgents: readByAgentsExtensions.contains(ext), listed: listed,
+                               frontMatterRead: frontMatterRead, quotedJSON: serverJSON == nil)
+            flags += serverJSON ?? []
             // A program's addresses from its text runs: decoded whole, its code signature reads as junk, and
             // printable ASCII alone would cut an address at its first non-ASCII letter (a look-alike host).
-            for url in findURLs(program ? textRuns(data, minimum: 4) : text) { urls.insert(url) }
+            let found = findURLs(program ? textRuns(data, minimum: 4) : text)
+            for url in found { urls.insert(url) }
+            if found.contains(where: isBundleAddress) { flags.append(Flag(level: .warning, file: relative, text: bundleLinkText)) }
         }
         if total > 20_000_000 { flags.append(Flag(level: .warning, file: "", text: "The skill is large (\(total / 1_000_000) MB).")) }
         if !executables.isEmpty {
@@ -160,13 +184,21 @@ public struct SkillReview: Sendable {
             let lines = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
             if let first = lines.first(where: { !$0.isEmpty }) { licenseFile = String(first.prefix(100)) }
         }
+        flags += package?.flags ?? []
+        flags += servers.flags
+        // One server file can be read for two agents (Amp's mcp.json is also Cursor's): each flag once.
+        var seen = Set<String>()
+        flags = flags.filter { seen.insert("\($0.level.rawValue)\u{0}\($0.file)\u{0}\($0.text)").inserted }
+        let said = capabilities(front: front, skillText: skillText, files: files, package: package, servers: servers)
         return SkillReview(name: folderName, frontMatter: front, skillText: skillText, files: files.sorted { $0.path < $1.path },
-                           flags: flags.sorted { $0.level > $1.level }, capabilities: capabilities(front: front, skillText: skillText, files: files),
-                           urls: urls.sorted(), licenseFile: licenseFile)
+                           flags: flags.sorted { $0.level > $1.level }, capabilities: said,
+                           urls: urls.sorted(), licenseFile: licenseFile, package: package, servers: servers)
     }
 
     static let scriptExtensions: Set<String> = ["sh", "bash", "zsh", "fish", "py", "js", "mjs", "cjs", "ts", "rb", "pl", "php", "ps1", "command", "applescript", "scpt"]
-    static let packedExtensions: Set<String> = ["zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "jar", "whl", "dmg", "pkg"]
+    static let packedExtensions: Set<String> = ["zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "jar", "whl", "dmg", "pkg", "mcpb", "dxt"]
+    /// MCP bundles: packed servers that Claude Code unpacks and runs (`.dxt` is the older name).
+    static let bundleExtensions: Set<String> = ["mcpb", "dxt"]
     /// Files an agent reads as instructions (SKILL.md and the notes it points to), where an HTML comment
     /// is text the agent sees and a rendered view hides. In HTML or code, `<!--` is ordinary.
     static let readByAgentsExtensions: Set<String> = ["md", "markdown", "mdx", "txt", ""]
@@ -269,11 +301,22 @@ public struct SkillReview: Sendable {
         return magic.contains { data.starts(with: $0) }
     }
 
-    /// Hidden characters, HTML comments, and commands that fetch and run code that the commit does not hold.
-    static func textFlags(_ text: String, file: String, readByAgents: Bool = true) -> [Flag] {
+    /// Hidden characters, HTML comments, commands that fetch and run code that the commit does not hold or
+    /// add MCP servers, and MCP server settings in a file that no row of the review lists.
+    /// - `listed`: the lowercased paths a row lists as declaring servers (`serverFiles`).
+    /// - `frontMatterRead`: the file is SKILL.md, and the Amp row shows its front matter's `mcpServers`, so
+    ///   only the text after the front matter is checked for server settings.
+    /// - `quotedJSON`: check server JSON quoted in the text; off for a JSON file the server check read.
+    static func textFlags(_ text: String, file: String, readByAgents: Bool = true, listed: Set<String> = [],
+                          frontMatterRead: Bool = false, quotedJSON: Bool = true) -> [Flag] {
         var flags = hiddenFlags(text, file: file)
         if readByAgents, text.contains("<!--") { flags.append(Flag(level: .warning, file: file, text: "An HTML comment: text agents read but rendered Markdown hides.")) }
-        return flags + commandFlags(text.lowercased(), file: file)
+        let lower = text.lowercased()
+        flags += commandFlags(lower, file: file, quotedJSON: quotedJSON)
+        if !listed.contains(file.lowercased()) {
+            flags += settingsFlags(frontMatterRead ? afterFrontMatter(lower) : lower, file: file)
+        }
+        return flags
     }
 
     /// Characters that draw as nothing, counted by kind.
@@ -340,23 +383,31 @@ public struct SkillReview: Sendable {
         return String(out)
     }
 
-    /// Commands that fetch and run code the commit does not hold, or reach for credentials.
-    static func commandFlags(_ lower: String, file: String) -> [Flag] {
+    /// Commands that fetch and run code the commit does not hold, add MCP servers or plugins, or reach for
+    /// credentials. `quotedJSON`: also server JSON quoted in the text (`"command": "npx", "args": […]`).
+    static func commandFlags(_ lower: String, file: String, quotedJSON: Bool = true) -> [Flag] {
         var flags: [Flag] = []
-        let patterns: [(String, String)] = [
+        var patterns: [(String, String)] = [
             (#"(curl|wget)[^\n|]*\|\s*(sudo\s+)?(sh|bash|zsh|python3?)\b"#, "Downloads a script and runs it (curl … | sh)."),
-            // A package name with no @version after it (a scope's leading @ is part of the name).
-            (#"\bnpx\s+(-y\s+|--yes\s+)?@?[a-z0-9][a-z0-9/_.-]*(\s|$)"#, "Runs an npm package without a pinned version (npx)."),
-            (#"\b(uvx|pipx run)\s+[a-z0-9_.-]+(\s|$)"#, "Runs a Python package without a pinned version."),
+            (unpinnedNPX, "Runs an npm package without a pinned version (npx)."),
+            (unpinnedPython, "Runs a Python package without a pinned version."),
             (#"\bpip3?\s+install\s+(?!-r)[a-z0-9_.-]+(\s|$)"#, "Installs a Python package without a pinned version."),
             (#"base64\s+(-d|--decode)[^\n]*\|\s*(sh|bash|eval)"#, "Decodes hidden text and runs it."),
             (#"\beval\s*\(?\s*\$?\(?\s*(atob|base64)"#, "Decodes hidden text and runs it."),
             (#"(~|\$home)/\.(ssh|aws|gnupg|config/gh|netrc|docker/config)"#, "Mentions a folder that holds credentials."),
             // A .env file, not code's `process.env`.
             (#"\b(id_rsa|id_ed25519|keychain)|(?<![\w])\.env\b"#, "Mentions keys or secrets."),
+            (mcpAdd, "Adds an MCP server to an agent's settings (… mcp add)."),
+            (pluginInstall, "Installs a plugin or extension, which can bring its own MCP servers and hooks."),
         ]
+        if quotedJSON {
+            for quoted in quotedServerPatterns where quoted.words.contains(where: { lower.contains($0) }) {
+                patterns.append((quoted.pattern, unpinnedServerText))
+            }
+        }
         for (pattern, message) in patterns where lower.range(of: pattern, options: .regularExpression) != nil {
-            flags.append(Flag(level: .warning, file: file, text: message))
+            // One flag per message: two quoted server forms say the same thing.
+            if !flags.contains(where: { $0.text == message }) { flags.append(Flag(level: .warning, file: file, text: message)) }
         }
         return flags
     }
@@ -424,6 +475,29 @@ public struct SkillReview: Sendable {
         return String(out)
     }
 
+    /// Text from a skill's files on one line, for a row: hidden characters and line breaks written out
+    /// (⟦U+000A⟧), and cut at `limit` characters with "…", never inside a written-out character.
+    public static func oneLine(_ text: String, limit: Int = 200) -> String {
+        var out = String.UnicodeScalarView()
+        for scalar in revealHidden(text).unicodeScalars {
+            if lineBreaks.contains(scalar.value) {
+                out.append(contentsOf: String(format: "⟦U+%04X⟧", scalar.value).unicodeScalars)
+            } else {
+                out.append(scalar)
+            }
+        }
+        let line = String(out)
+        guard line.count > limit else { return line }
+        var cut = String(line.prefix(limit))
+        if let open = cut.range(of: "⟦", options: .backwards), !cut[open.upperBound...].contains("⟧") {
+            cut = String(cut[..<open.lowerBound])
+        }
+        return cut + "…"
+    }
+
+    /// Characters that break a line (revealHidden leaves them, as text needs them).
+    static let lineBreaks: Set<UInt32> = [0x0A, 0x0B, 0x0C, 0x0D, 0x85, 0x2028, 0x2029]
+
     /// The text with every hidden character written out, so the user sees it: ⟦U+200B⟧.
     public static func revealHidden(_ text: String) -> String {
         let scalars = Array(text.unicodeScalars)
@@ -442,18 +516,222 @@ public struct SkillReview: Sendable {
     }
 
     /// In plain words, what the skill may do once installed (Claude Code and Command Code honour
-    /// most of these).
-    static func capabilities(front: SkillFrontMatter?, skillText: String, files: [File]) -> [String] {
+    /// most of these), and which agent runs its parts by itself when it is also a package, or when Amp
+    /// starts its servers.
+    static func capabilities(front: SkillFrontMatter?, skillText: String, files: [File], package: SkillPackage? = nil,
+                             servers: SkillServers? = nil) -> [String] {
         var items: [String] = []
         let keys = Set(front?.keys ?? [])
         if let tools = front?.allowedTools, !tools.isEmpty { items.append("Runs these tools without asking while it is used: \(tools)") }
         if keys.contains("hooks") { items.append("Adds hooks that run commands for the rest of the session (Claude Code).") }
-        if skillText.contains("!`") { items.append("Runs shell commands before the agent reads it (!`…` lines).") }
+        if runsShellLines(skillText) { items.append("Runs shell commands before the agent reads it (!`…` lines or ```! blocks).") }
         if keys.contains("disable-model-invocation") { items.append("Is used only when you name it.") } else { items.append("The agent may use it on its own when the task fits its description.") }
         if keys.contains("context") || keys.contains("agent") { items.append("Runs in a separate agent context.") }
-        if keys.contains("mcpServers") { items.append("Asks for MCP servers.") }
+        if let plugin = package?.claude, plugin.startsPrograms { items.append(claudeStartsLine(plugin)) }
+        // Of the agents checked, only Amp starts a skill's own servers: Claude Code ignores mcpServers in SKILL.md.
+        if servers?.hasAmp == true { items.append(ampLine) }
         let scripts = files.filter { $0.script || $0.executable || $0.binary }.count
-        if scripts > 0 { items.append("Brings \(scripts) file\(scripts == 1 ? "" : "s") that can run (scripts or programs); the agent runs them only through its own tools.") }
+        if scripts > 0 {
+            let counted = "Brings \(scripts) file\(scripts == 1 ? "" : "s") that can run (scripts or programs)"
+            // Only the agent's own tools run them, unless a package's parts, or Amp's servers, run by themselves.
+            let byItself = package?.runsPartsByItself == true || servers?.ampRunsPrograms == true
+            items.append(byItself ? counted + "." : counted + "; the agent runs them only through its own tools.")
+        }
         return items
+    }
+
+    static let ampLine = "Amp connects to the MCP servers it declares, and starts any program among them, when it finds the skill."
+
+    /// Claude Code runs a skill's `` !`…` `` lines and ```` ```! ```` blocks in its shell before the agent
+    /// reads the skill.
+    static func runsShellLines(_ text: String) -> Bool {
+        if text.contains("!`") { return true }
+        return text.split(whereSeparator: \.isNewline).contains { line in
+            line.drop { $0 == " " || $0 == "\t" }.hasPrefix("```!")
+        }
+    }
+
+    /// Who starts what in a Claude Code plugin: "Claude Code starts its MCP servers and hooks by itself …".
+    static func claudeStartsLine(_ plugin: SkillPackage.ClaudePlugin) -> String {
+        var started: [String] = []
+        if plugin.serverCount > 0 { started.append("MCP servers") }
+        if plugin.partCounts[.hook] != nil { started.append("hooks") }
+        if plugin.partCounts[.monitor] != nil { started.append("monitors") }
+        if plugin.partCounts[.lspServer] != nil { started.append("LSP servers") }
+        guard !started.isEmpty else {
+            // bin/ is not started: Claude Code puts it on its shell's PATH (hand check H6).
+            if plugin.programCount > 0 {
+                return "Claude Code puts the programs in its bin/ folder on its shell's PATH once it is added, so they run by name."
+            }
+            return "Claude Code loads its plugin parts by itself once it is added, without the agent asking you first."
+        }
+        return "Claude Code starts its \(SkillPackage.list(started)) by itself once it is added, without the agent asking you first."
+    }
+}
+
+// MARK: - MCP servers in text and files
+
+// Text and files that add MCP servers or fetch server code outside the commit: commands that add a server
+// or install a plugin, servers that run a package with no exact version (in a JSON file, in JSON quoted in
+// prose, or as a command), server settings outside the files the review already lists, and MCP bundles.
+// Patterns run on lowercased text, as the other command checks do.
+extension SkillReview {
+    static let unpinnedServerText = "An MCP server runs a package without a pinned version (npx, bunx, pnpm dlx, yarn dlx or uvx). "
+        + "MCP clients start it with no question, fetching whatever version npm or PyPI has then."
+    static let settingsText = "Holds MCP server settings (mcpServers or [mcp_servers]). An agent may copy them into its own settings."
+    static let bundleText = "An MCP bundle (.mcpb or .dxt): a packed server that Claude Code unpacks and runs. Its contents are not reviewed here."
+    static let bundleLinkText = "A link to an MCP bundle: a server fetched from the web, outside this commit."
+
+    /// An exact version, as npm writes one: 1.2.3, 1.2.3-beta.1, 1.2.3+build.5. `@latest`, `@next`, `@^1`,
+    /// `@1` and other ranges are not one.
+    static let exactVersion = #"\d+\.\d+\.\d+(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?"#
+    /// Where a package name ends in prose: a space, a quote, a backtick, a closing bracket, or the end.
+    static let wordEnd = #"(?:[\s`'")\]]|$)"#
+    /// `@` and anything but an exact version (a sentence's full stop may follow one), or nothing.
+    static let unpinnedVersion = #"(?:@(?!"# + exactVersion + #"[.,;:]*"# + wordEnd + #")[^\s`'")\]]*)?"#
+    /// npx and a package name, a scope's leading @ included, with no exact version after it.
+    static let unpinnedNPX = #"\bnpx\s+(?:-y\s+|--yes\s+)?@?[a-z0-9][a-z0-9/_.-]*"# + unpinnedVersion + wordEnd
+    static let unpinnedPython = #"\b(?:uvx|pipx run)\s+[a-z0-9_.-]+"# + unpinnedVersion + wordEnd
+    // The regular expression engine skips ahead to the words the two patterns below start with. With `\b`
+    // in front of the words, or the look-behind for the program's name in front of `mcp`, it tried every
+    // position: about a second per MB. And `\b[a-z][a-z0-9_-]*\s+mcp` read a run such as `a-a-a-…` again
+    // from each part, in time that grew with the square of its length.
+    /// A slash command has no word boundary before it.
+    static let pluginInstall = #"(?:(?<!\w)(?:claude\s+plugins?\s+install|gemini\s+extensions?\s+install|codex\s+plugins?\s+add)|/plugin\s+install)\b"#
+    /// `codex mcp add`, `claude mcp add-json`, `gemini mcp add`, …: a program's name, up to 40 characters of
+    /// it, before `mcp`.
+    static let mcpAdd = #"mcp(?<=[a-z][a-z0-9_-]{0,40}\s{1,20}mcp)\s+add(?:-json)?\b"#
+
+    /// Server JSON quoted in prose, in one array or one `{…}` that holds no other brace: npx, bunx or uvx
+    /// (or pnpm or yarn with dlx first), maybe `-y`, then a quoted package with no exact version. Each comes
+    /// with the quoted words one of which the text must hold, a quick test that most files fail.
+    static let quotedServerPatterns: [(words: [String], pattern: String)] = {
+        let package = ##""@?[a-z0-9][a-z0-9/_.-]*(?:@(?!"## + exactVersion + ##"")[^"]*)?""##
+        let flag = ##"(?:"(?:-y|--yes)"\s*,\s*)?"##
+        // Both parts, in either order, between one `{` and the next brace. Each is looked for after the `{`,
+        // up to 2,000 characters, so a crafted file can't make the check slow.
+        func within(_ part: String) -> String { #"(?=[^{}]{0,2000}?"# + part + ")" }
+        let runner = ##""command"\s*:\s*"(?:npx|bunx|uvx)""##
+        let dlxRunner = ##""command"\s*:\s*"(?:pnpm|yarn)""##
+        let args = ##""args"\s*:\s*\[\s*"## + flag + package
+        let dlxArgs = ##""args"\s*:\s*\[\s*"dlx"\s*,\s*"## + flag + package
+        // As an array's first word: `"command": "npx", "args": …` is the forms below.
+        let array = ##"\[\s*"npx"\s*,\s*"## + flag + package
+        let server = #"\{"# + within(runner) + within(args)
+        let dlxServer = #"\{"# + within(dlxRunner) + within(dlxArgs)
+        return [(words: [#""npx""#], pattern: array),
+                (words: [#""npx""#, #""bunx""#, #""uvx""#], pattern: server),
+                (words: [#""pnpm""#, #""yarn""#], pattern: dlxServer)]
+    }()
+
+    /// `"mcpServers": …`, a YAML `mcpServers:` line, and Codex's `[mcp_servers.…]` tables.
+    static let settingsPatterns = [#""mcpservers"\s*:"#, #"(?m)^[ \t]*mcpservers[ \t]*:"#, #"\[mcp_servers[.\]]"#]
+
+    static func settingsFlags(_ lower: String, file: String) -> [Flag] {
+        guard settingsPatterns.contains(where: { lower.range(of: $0, options: .regularExpression) != nil }) else { return [] }
+        return [Flag(level: .warning, file: file, text: settingsText)]
+    }
+
+    /// The text after SKILL.md's front matter (the lines between its first two `---` lines, as
+    /// SkillFrontMatter reads them); all of it when there is none.
+    static func afterFrontMatter(_ text: String) -> String {
+        let lines = text.components(separatedBy: "\n")
+        func fence(_ line: String) -> Bool {
+            let bare = line.hasSuffix("\r") ? String(line.dropLast()) : line
+            return bare.trimmingCharacters(in: .whitespaces) == "---"
+        }
+        guard let first = lines.first, fence(first), let end = lines.dropFirst().firstIndex(where: fence) else { return text }
+        return lines[(end + 1)...].joined(separator: "\n")
+    }
+
+    /// The servers in a JSON file that run a package with no exact version: every object with a string
+    /// `command` (or a list of words, as opencode writes one) is a server. Nil when the file is not JSON
+    /// that every reader takes the same way (comments, a trailing comma, a key twice): the prose
+    /// patterns check it then.
+    static func serverJSONFlags(_ data: Data, file: String) -> [Flag]? {
+        guard case .success(let root) = SkillJSONText.parse(data), SkillJSONText.duplicateKey(in: root) == nil else { return nil }
+        var pending = [root]
+        while let node = pending.popLast() {
+            if node.kind == .object, runsUnpinned(node) { return [Flag(level: .warning, file: file, text: unpinnedServerText)] }
+            pending += node.members.map(\.value)
+            pending += node.items
+        }
+        return []
+    }
+
+    static func runsUnpinned(_ object: SkillJSONText.Node) -> Bool {
+        guard let command = object.member("command").first?.value else { return false }
+        let args = strings(object.member("args").first?.value)
+        switch command.kind {
+        case .string: return unpinnedPackage([command.string ?? ""] + args)
+        case .array: return unpinnedPackage(strings(command) + args)
+        default: return false
+        }
+    }
+
+    static func strings(_ node: SkillJSONText.Node?) -> [String] {
+        guard let node, node.kind == .array else { return [] }
+        return node.items.compactMap { $0.kind == .string ? $0.string : nil }
+    }
+
+    /// A command's words run a package with no exact version: npx, bunx or uvx, or pnpm or yarn with dlx
+    /// first. The package is the first word after them that is not a flag.
+    static func unpinnedPackage(_ words: [String]) -> Bool {
+        guard let first = words.first else { return false }
+        var program = (first as NSString).lastPathComponent.lowercased()
+        for suffix in [".cmd", ".exe"] where program.hasSuffix(suffix) { program.removeLast(suffix.count) }
+        var rest = words.dropFirst()
+        switch program {
+        case "npx", "bunx", "uvx": break
+        case "pnpm", "yarn":
+            guard rest.first?.lowercased() == "dlx" else { return false }
+            rest = rest.dropFirst()
+        default: return false
+        }
+        guard let package = rest.first(where: { !$0.hasPrefix("-") }) else { return false }
+        return !isPinned(package, python: program == "uvx")
+    }
+
+    /// `name@1.2.3` (`@scope/name@1.2.3`), or for uvx also `name==1.2.3`. A path is the folder's own code,
+    /// not a package fetched by name.
+    static func isPinned(_ package: String, python: Bool) -> Bool {
+        if package.hasPrefix(".") || package.hasPrefix("/") || package.hasPrefix("~") { return true }
+        var name = Substring(package.lowercased())
+        if name.hasPrefix("@") { name = name.dropFirst() }
+        if let at = name.firstIndex(of: "@") { return isExactVersion(name[name.index(after: at)...]) }
+        if python, let equals = name.range(of: "==") { return isExactVersion(name[equals.upperBound...]) }
+        return false
+    }
+
+    static func isExactVersion(_ text: Substring) -> Bool {
+        String(text).range(of: "^" + exactVersion + "$", options: .regularExpression) != nil
+    }
+
+    /// A web address whose path ends in .mcpb or .dxt.
+    static func isBundleAddress(_ url: String) -> Bool {
+        guard let path = URL(string: url)?.path else { return PackageReader.isBundle(url, address: true) }
+        return PackageReader.isBundle(path, address: false)
+    }
+
+    /// The files a row of the review lists as declaring MCP servers, lowercased, with where their links
+    /// inside the folder lead: the Needs MCP servers row's files, and each package manifest with its
+    /// server files and the files it could not read. They get no server settings warning. SKILL.md is
+    /// never one: only its front matter is skipped, and only when the Amp row shows it.
+    static func serverFiles(folder: String, package: SkillPackage?, servers: SkillServers) -> Set<String> {
+        var files = servers.files
+        for manifest in package?.manifests ?? [] {
+            files.append(manifest.file)
+            files += manifest.servers.map(\.file)
+            files += manifest.unread.map(\.file)
+        }
+        files += package?.claude?.unread.map(\.file) ?? []
+        let realFolder = realPath(folder)
+        var listed = Set<String>()
+        for file in files where file.lowercased() != servers.skillFile.lowercased() {
+            listed.insert(file.lowercased())
+            let real = realPath((folder as NSString).appendingPathComponent(file))
+            if real.hasPrefix(realFolder + "/") { listed.insert(String(real.dropFirst(realFolder.count + 1)).lowercased()) }
+        }
+        return listed
     }
 }
