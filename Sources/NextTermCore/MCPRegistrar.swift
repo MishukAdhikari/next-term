@@ -551,11 +551,13 @@ public enum MCPRegistrar {
 
     // MARK: files
 
-    /// A regular file's bytes and text (the text leaves out a UTF-8 byte order mark; `write` puts it back).
+    /// A regular file's bytes and text (the text leaves out a UTF-8 byte order mark; `write` puts it back). The
+    /// mark is cut off here: whether Foundation's UTF-8 decoding drops it differs between macOS versions.
     private static func read(_ path: String) -> (data: Data, text: String)? {
-        guard isRegularFile(canonicalPath(path)), let data = FileManager.default.contents(atPath: path),
-              let text = String(data: data, encoding: .utf8) else { return nil }
-        return (data, text)
+        guard isRegularFile(canonicalPath(path)), let data = FileManager.default.contents(atPath: path) else { return nil }
+        let mark = Data([0xEF, 0xBB, 0xBF])
+        guard let text = String(data: data.starts(with: mark) ? data.dropFirst(3) : data, encoding: .utf8) else { return nil }
+        return (data, text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text)
     }
 
     static func compact(_ value: Any) -> String? {
