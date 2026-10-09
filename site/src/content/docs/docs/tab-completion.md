@@ -3,7 +3,7 @@ title: Tab completion
 description: "Tab opens a list at the cursor: zsh’s own completions, or folders and files, on your Mac and your servers. Type to narrow it; Return picks. Nothing runs."
 ---
 
-Press Tab (<kbd>⇥</kbd>) at a zsh prompt and Next Term lists what can complete the word under the cursor, in a list at the cursor. Type to narrow it, pick with the arrow keys and <kbd>↩︎</kbd>, and the name goes on the line, quoted so the shell reads it back exactly. Nothing runs until you press <kbd>↩︎</kbd> again at the prompt.
+Press Tab (<kbd>⇥</kbd>) at a zsh prompt and Next Term lists what can complete the word under the cursor, in a list at the cursor. Type to narrow it, pick with the arrow keys and <kbd>↩︎</kbd>, and the name goes on the line, quoted so the shell reads it back exactly. On a folder, <kbd>⇥</kbd> or <kbd>→</kbd> goes into it and lists what is inside, so you can walk down a path one folder at a time. Nothing runs until you press <kbd>↩︎</kbd> again at the prompt.
 
 Your shell keeps its own line editor: your zsh config, theme and key bindings work as before, and every agent CLI keeps its own input. Next Term only draws the list.
 
@@ -18,7 +18,7 @@ Your shell keeps its own line editor: your zsh config, theme and key bindings wo
   Everything else (a command name, an option, `git checkout `) gets zsh’s own <kbd>⇥</kbd>.
 - **Hidden files and folders** only when the name you typed starts with a dot.
 
-Names that start with what you typed come first, in any case and either Unicode form, shortest first; then names that have your letters in order anywhere. When only one name matches, and it starts with what you typed, it goes straight onto the line with no list. No match gets zsh’s own <kbd>⇥</kbd>.
+Names that start with what you typed come first, in any case and either Unicode form, shortest first; then names that have your letters in order anywhere. When only one name matches, and it starts with what you typed, it goes straight onto the line with no list. If that one name is a folder with something inside, it goes in and the list shows what is inside, as zsh’s automatic `/` and a second <kbd>⇥</kbd> would; an empty one just goes in. No match gets zsh’s own <kbd>⇥</kbd>.
 
 A long list shows its best 2,000 and says so (“2,000 of 10,000. Type to narrow.”). A folder that can’t be read within a tenth of a second (a sleeping network volume) gets zsh’s own <kbd>⇥</kbd> instead. A slow zsh completion shows **Loading…** until zsh is done.
 
@@ -29,11 +29,29 @@ While the list is open, the terminal keeps the keyboard: letters and <kbd>⌫</k
 | Keys | What they do |
 |---|---|
 | <kbd>↓</kbd> <kbd>↑</kbd>, <kbd>⌃N</kbd> <kbd>⌃P</kbd>, <kbd>⇧⇥</kbd> | Choose a row |
-| <kbd>↩︎</kbd> or <kbd>⇥</kbd>, or a click | Put the chosen name on the line |
+| <kbd>→</kbd> or <kbd>⇥</kbd> on a folder | Go into it: `name/` goes on the line, and the list shows what is inside |
+| <kbd>→</kbd> or <kbd>⇥</kbd> on a file, <kbd>↩︎</kbd>, or a click | Put the chosen name on the line, and close the list |
+| <kbd>←</kbd>, or <kbd>⌫</kbd> right after going in | Back up: the list you went in from, with that folder chosen |
+| <kbd>←</kbd> at the top | Close the list, and the cursor moves |
 | <kbd>⎋</kbd> | Close the list. Nothing is sent to the shell. |
-| <kbd>→</kbd>, <kbd>⌃C</kbd>, <kbd>⌃J</kbd>, any <kbd>⌘</kbd> shortcut | Close the list, and the key does what it always does |
+| <kbd>⌃C</kbd>, <kbd>⌃J</kbd>, any <kbd>⌘</kbd> shortcut | Close the list, and the key does what it always does |
 
-A second <kbd>⇥</kbd> pressed before the list shows waits for it, then puts the first name on the line, as zsh’s own second <kbd>⇥</kbd> does. Under **Loading…** it does nothing.
+A second <kbd>⇥</kbd> pressed before the list shows waits for it, then does on the first row what <kbd>⇥</kbd> does there, as zsh’s own second <kbd>⇥</kbd> puts in its first match. Under **Loading…** it does nothing, and <kbd>→</kbd> closes the list and moves the cursor.
+
+### Going into folders
+
+<kbd>⇥</kbd> or <kbd>→</kbd> on a folder puts its name and a `/` on the line, quoted as <kbd>↩︎</kbd> would, and the same list shows what is inside, its first row chosen: folders only after `cd` and the other commands that take a folder, files and folders where the list showed both. Type to narrow it, and press <kbd>⇥</kbd> again to go deeper. <kbd>↩︎</kbd> and a click still put the chosen name on the line and close the list.
+
+<kbd>⌫</kbd> right after going in takes the `/` and goes back up: the list you went in from, with that folder chosen. <kbd>←</kbd> goes back up from anywhere inside, and puts back the word you had before going in, so what you typed inside goes too. At the list you started from, <kbd>←</kbd> closes it and moves the cursor, as it always did.
+
+- An empty folder, or one with no folders inside after `cd`, goes in and the list closes.
+- A folder that can’t be entered (no permission, or gone) beeps, and the list stays as it was.
+- A folder that isn’t read in time (a tenth of a second on your Mac, 0.8 seconds on a server) goes in and the list closes, so it never stalls. zsh’s own completions show **Loading…** until zsh is done, as for <kbd>⇥</kbd>.
+- Keys you press while a folder is being listed wait for it, and act in the order you pressed them.
+- With zsh’s own completions, a match zsh calls a folder is one; Next Term’s hook checks it can be entered, and zsh lists what is inside.
+- In a remote tab without the hook, a folder whose name needs quoting goes on the line as <kbd>↩︎</kbd> puts it. With a hook from an earlier Next Term, still loaded in a shell started before, <kbd>⇥</kbd> puts the name on the line until that shell starts again.
+
+VoiceOver says where you are: “In projects, 12 items”, and “Back up, projects, 3 of 5”.
 
 The list also closes when you click elsewhere, scroll, switch tab, pane or app, resize the window, or paste, and when output moves the cursor’s line.
 

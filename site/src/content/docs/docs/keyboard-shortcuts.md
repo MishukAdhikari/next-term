@@ -190,7 +190,9 @@ These are fixed:
 | Terminal | Suspend the running program | <kbd>⌃Z</kbd> |
 | Terminal | [Tab completion](/docs/tab-completion/): list what completes the word, at a zsh prompt or in a remote tab | <kbd>⇥</kbd> |
 | Tab completion list | Choose a row | <kbd>↓</kbd> <kbd>↑</kbd>, <kbd>⌃N</kbd> <kbd>⌃P</kbd>, <kbd>⇧⇥</kbd> |
-| Tab completion list | Put the chosen name on the line | <kbd>↩︎</kbd> or <kbd>⇥</kbd> |
+| Tab completion list | [Go into the chosen folder](/docs/tab-completion/#going-into-folders), listing what is inside | <kbd>→</kbd> or <kbd>⇥</kbd> |
+| Tab completion list | Back up from a folder gone into | <kbd>←</kbd>, or <kbd>⌫</kbd> right after going in |
+| Tab completion list | Put the chosen name on the line | <kbd>↩︎</kbd>; <kbd>→</kbd> or <kbd>⇥</kbd> on a file |
 | Tab completion list | Close it, sending the shell nothing | <kbd>⎋</kbd> |
 | Editor | Indent or outdent the selected lines | <kbd>⇥</kbd>, <kbd>⇧⇥</kbd> |
 | Sidebar | Open | Double-click (one click, with **Open files with a single click** on) |
