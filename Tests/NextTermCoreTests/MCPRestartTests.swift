@@ -205,13 +205,17 @@ import Testing
     func plan(_ outcome: RestoreOutcome, kind: SessionSnapshot.RestoreKind = .update, remote: Bool = false,
               state: SessionSnapshot.ActionState = .applied) -> (PanePlan, SessionSnapshot.Pane) {
         let id = UUID()
+        let agent = outcome == .resume || outcome == .agentOnTheLine
         var note = RestoreNote(outcome: outcome)
-        note.agent = outcome == .resume ? .claude : nil
-        note.line = outcome == .resume ? "claude --resume S" : nil
-        note.session = outcome == .resume ? NamedSession(agent: .claude, id: "S", naming: .exact) : nil
+        note.agent = agent ? .claude : nil
+        note.line = agent ? "claude --resume S" : nil
+        note.session = agent ? NamedSession(agent: .claude, id: "S", naming: .exact) : nil
+        note.command = outcome == .commandOnTheLine ? "npm run dev" : nil
         note.interrupted = true
-        let plan = PanePlan(pane: id, outcome: outcome, reason: kind, line: outcome == .resume ? "claude --resume S" : nil,
-                            folder: nil, session: note.session, note: note, listLine: "")
+        note.afterQuit = kind == .quit
+        let line: String? = agent ? "claude --resume S" : (outcome == .commandOnTheLine ? "npm run dev" : nil)
+        let plan = PanePlan(pane: id, outcome: outcome, reason: kind, line: line, folder: nil, session: note.session, note: note,
+                            listLine: "")
         var record = SessionSnapshot.Pane(id: id, stateBefore: .working, interrupted: true)
         if remote {
             let keep: KeepMode = outcome == .reattach ? .tmux : .off
@@ -254,6 +258,52 @@ import Testing
         let (_, waiting) = plan(.resume, state: .pending)
         let pending = try #require(MCPRestored(plan: resume, record: waiting, since: MCPRestored.Since(commands: 0, beforeInput: nil)))
         #expect(pending.outcome == .resume && pending.note == nil && pending.inputRefusal?.contains("being restored") == true)
+    }
+
+    /// R24: an action that types was cancelled when something reached the tab's line before its shell was ready, so the
+    /// restore typed nothing there. Its details say so, until the first command after the restore: never that the agent
+    /// resumed, nor that a line waits on the prompt.
+    @Test func anActionCancelledBeforeItTypedSaysItWasCancelledAndNothingWasTyped() throws {
+        let typedFirst = "something was typed in the tab before its shell was ready"
+        func cancelled(_ outcome: RestoreOutcome, _ commands: Int = 0) -> MCPRestored? {
+            let (plan, record) = plan(outcome, state: .cancelled)
+            return MCPRestored(plan: plan, record: record, since: MCPRestored.Since(commands: commands, beforeInput: 0))
+        }
+        // An automatic resume the user typed over before it was typed: it never ran.
+        let resume = try #require(cancelled(.resume))
+        #expect(resume.outcome == nil && resume.fields["outcome"] as? String == "cancelled")
+        #expect(resume.fields["action"] as? String == "cancelled")
+        #expect(resume.note == "Claude Code session S did not resume: \(typedFirst). Its last turn was cut off by the update. "
+            + "To resume it, type: claude --resume S")
+        #expect(resume.fields["note"] as? String == resume.note)
+        #expect(!resume.lineHeld && resume.fields["line_held"] == nil && resume.inputRefusal == nil)
+        // The user's first command ends the details, as after any restore that ran nothing of its own.
+        #expect(cancelled(.resume, 1) == nil)
+        // A resume command, or a command, that was to go back on the line: nothing was put there.
+        let line = try #require(cancelled(.agentOnTheLine))
+        #expect(line.outcome == nil && line.fields["outcome"] as? String == "cancelled")
+        #expect(line.note == "Claude Code was running. Its line was not put back: \(typedFirst). To resume it, type: claude --resume S")
+        let command = try #require(cancelled(.commandOnTheLine))
+        #expect(command.outcome == nil && command.fields["outcome"] as? String == "cancelled" && !command.lineHeld)
+        #expect(command.note == "npm run dev was running. It was not put back: \(typedFirst).")
+        for each in [resume, line, command] {
+            #expect(each.note?.contains("Resumed") == false && each.note?.contains("back on the line") == false)
+            #expect(each.inputRefusal == nil)
+        }
+        // After a quit the cut-off turn names the quit.
+        let (quitPlan, quitRecord) = plan(.resume, kind: .quit, state: .cancelled)
+        let quit = try #require(MCPRestored(plan: quitPlan, record: quitRecord, since: MCPRestored.Since(commands: 0, beforeInput: 0)))
+        #expect(quit.fields["reason"] as? String == "quit" && quit.note?.contains("cut off by the quit") == true)
+        // An outcome whose action types nothing keeps its own, whatever its state.
+        #expect(MCPRestored.outcome(planned: .idle, action: .cancelled, since: MCPRestored.Since(commands: 0, beforeInput: 0)) == .idle)
+        #expect(MCPRestored.outcome(planned: .reattach, action: .cancelled, since: MCPRestored.Since(commands: 0, beforeInput: 0)) == .reattach)
+        // Every action that types, cancelled, did nothing; applied, it did what it says.
+        let none = MCPRestored.Since(commands: 0, beforeInput: nil)
+        for planned in [RestoreOutcome.resume, .agentOnTheLine, .commandOnTheLine] {
+            #expect(MCPRestored.outcome(planned: planned, action: .cancelled, since: none) == nil, "\(planned)")
+        }
+        #expect(MCPRestored.outcome(planned: .agentOnTheLine, action: .applied, since: none) == .agentOnTheLine)
+        #expect(MCPRestored.outcome(planned: .commandOnTheLine, action: .applied, since: none) == .commandOnTheLine)
     }
 
     /// R24 on a server: a remote tab has no shell integration, so what it counts comes from what the host reports in

@@ -778,6 +778,53 @@ import Testing
         #expect(RestoreLayout.resumeStart(dev, sessionAvailable: true) == .putBack(line: nil, note: nil))
     }
 
+    /// What a tab's note says once its action that types was cancelled, because something reached the line before the
+    /// shell was ready: nothing was typed, so no agent resumed and no line waits. It names what would resume the agent,
+    /// last, and never the words of a note that says it happened.
+    func cancelled(_ plan: PanePlan) -> String {
+        let start = self.start
+        return plan.note.cancelledText { (date: Date) -> String in "T+\(Int(date.timeIntervalSince(start)))" } ?? ""
+    }
+
+    @Test func aCancelledActionSaysNothingWasTypedAndHowToResume() {
+        let typedFirst = "something was typed in the tab before its shell was ready"
+        let (evidence, facts) = exactClaude()
+        var claude = pane(1, typed("claude"), agent: evidence)
+        claude.interrupted = true
+        let resume = plan(claude, world: world(facts: facts))
+        #expect(resume.outcome == .resume)
+        #expect(cancelled(resume) == "Claude Code session \(s) did not resume: \(typedFirst). "
+            + "Its last turn was cut off by the update. To resume it, type: claude --resume \(s)")
+        let afterQuit = plan(claude, kind: .quit, quitConsent: true, world: world(facts: facts))
+        #expect(afterQuit.outcome == .resume && cancelled(afterQuit).contains("cut off by the quit."))
+        // A guessed session says it is a guess, and its date.
+        let lookups = Lookups()
+        lookups.sessions = [session(.gemini, g, at: 30, updated: 90)]
+        let gemini = plan(pane(2, typed("gemini \"fix the login bug\""), agent: Evidence(agent: .gemini, sessionFolder: folder, startedAt: start)),
+                          world: world(lookups: lookups))
+        #expect(gemini.outcome == .agentOnTheLine)
+        #expect(cancelled(gemini) == "Gemini CLI was running. Its line was not put back: \(typedFirst). "
+            + "This is a guess: the newest session in this folder. Last used T+90. To resume it, type: gemini --resume \(g)")
+        let nameless = plan(pane(3, typed("gemini"), agent: Evidence(agent: .gemini)), world: world())
+        #expect(cancelled(nameless) == "Gemini CLI was running. Its line was not put back: \(typedFirst). "
+            + "No Gemini CLI session could be named. To start it again, type: gemini")
+        let dev = plan(pane(4, typed("npm run dev")), world: world())
+        #expect(dev.outcome == .commandOnTheLine)
+        #expect(cancelled(dev) == "npm run dev was running. It was not put back: \(typedFirst).")
+        for each in [resume, afterQuit, gemini, nameless, dev] {
+            let said = cancelled(each)
+            #expect(!said.contains("Resumed") && !said.contains("back on the line") && !said.contains("Press Return"), "\(said)")
+            #expect(TerminalText.oneLine(said) == said)
+        }
+        // A note that types nothing, and safe mode, whose note already says nothing ran, read as they always do.
+        let idle = plan(pane(5, typed("make test", running: false, exit: 2)), world: world())
+        #expect(cancelled(idle) == text(idle))
+        let held = plan(pane(6, typed("npm run dev")), safeMode: true, world: world())
+        #expect(cancelled(held) == text(held))
+        let kept = plan(remote(7, keep: .off, typed("htop")), world: world())
+        #expect(cancelled(kept) == text(kept))
+    }
+
     // MARK: every outcome and every note
 
     @Test func everyOutcomeHasAPlanAndEveryNoteIsOnePrintableLine() {

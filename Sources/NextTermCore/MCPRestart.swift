@@ -174,7 +174,9 @@ extension MCPServer {
 public struct MCPRestored: Equatable, Sendable {
     /// An update, a quit under "Resume where I left off", a crash, or safe mode.
     public var reason: SessionSnapshot.RestoreKind
-    public var outcome: RestoreOutcome
+    /// What the restore does or did to the tab; nil when its action that types was cancelled before it typed anything,
+    /// which MCP gives as "cancelled".
+    public var outcome: RestoreOutcome?
     /// The restore's action: pending until the shell is ready, then applied, or cancelled when the user typed first, or
     /// dismissed (a shell not ready in time, Keep As Is).
     public var action: SessionSnapshot.ActionState
@@ -185,7 +187,7 @@ public struct MCPRestored: Equatable, Sendable {
     /// The line the restore put back is still on the prompt, unrun, and the user has not typed in the tab since.
     public var lineHeld: Bool
 
-    public init(reason: SessionSnapshot.RestoreKind, outcome: RestoreOutcome, action: SessionSnapshot.ActionState,
+    public init(reason: SessionSnapshot.RestoreKind, outcome: RestoreOutcome?, action: SessionSnapshot.ActionState,
                 stateBefore: SessionSnapshot.PriorState, interrupted: Bool, note: String?, lineHeld: Bool) {
         self.reason = reason
         self.outcome = outcome
@@ -217,20 +219,29 @@ public struct MCPRestored: Equatable, Sendable {
         guard let pending = record.pending else { return nil }
         let outcome = Self.outcome(planned: plan.outcome, action: pending.state, since: since)
         var note = plan.note
-        note.outcome = outcome
+        let text: String?
+        if let outcome {
+            note.outcome = outcome
+            text = pending.state == .pending ? nil : note.text()
+        } else {
+            text = note.cancelledText()
+        }
         let typed = since.beforeInput != nil
         let held = record.remote == nil
             && Self.lineHeld(action: pending.action, state: pending.state, userTyped: typed, commandsRun: since.commands)
         self.init(reason: plan.reason, outcome: outcome, action: pending.state, stateBefore: record.stateBefore,
-                  interrupted: record.interrupted, note: pending.state == .pending ? nil : note.text(), lineHeld: held)
+                  interrupted: record.interrupted, note: text, lineHeld: held)
         guard shows(commands: since.commands) else { return nil }
     }
 
-    /// What the restore did, as it turned out. An automatic resume whose action was applied ran only when a command started
-    /// at the tab's prompt before the user put anything there: nothing else can start one sooner, as input over MCP is
-    /// refused while the line is the restore's. Otherwise its session was taken by another process since, or the user
-    /// typed over it before its Return, and the agent's resume command is on the line instead, unrun.
-    public static func outcome(planned: RestoreOutcome, action: SessionSnapshot.ActionState, since: Since) -> RestoreOutcome {
+    /// What the restore did, as it turned out. An action that types, cancelled because something reached the line before
+    /// the shell was ready, typed nothing: no agent resumed and no line waits (nil). An automatic resume whose action was
+    /// applied ran only when a command started at the tab's prompt before the user put anything there: nothing else can
+    /// start one sooner, as input over MCP is refused while the line is the restore's. Otherwise its session was taken by
+    /// another process since, or the user typed over it before its Return, and the agent's resume command is on the line
+    /// instead, unrun.
+    public static func outcome(planned: RestoreOutcome, action: SessionSnapshot.ActionState, since: Since) -> RestoreOutcome? {
+        if action == .cancelled && planned.action.types { return nil }
         guard planned == .resume, action == .applied else { return planned }
         return (since.beforeInput ?? since.commands) >= 1 ? .resume : .agentOnTheLine
     }
@@ -247,15 +258,14 @@ public struct MCPRestored: Equatable, Sendable {
     /// whose session another process had taken was put back instead.
     public static func lineHeld(action: SessionSnapshot.Action, state: SessionSnapshot.ActionState, userTyped: Bool,
                                 commandsRun: Int) -> Bool {
-        let types = action == .resume || action == .onTheLine || action == .typeIn
-        return types && state == .applied && !userTyped && commandsRun == 0
+        action.types && state == .applied && !userTyped && commandsRun == 0
     }
 
     /// As MCP gives them, under "restored".
     public var fields: [String: Any] {
         var fields: [String: Any] = [
             "reason": Self.word(reason),
-            "outcome": Self.word(outcome),
+            "outcome": outcome.map(Self.word) ?? "cancelled",
             "action": action.rawValue,
             "state_before": stateBefore.rawValue,
             "interrupted": interrupted,
@@ -268,8 +278,7 @@ public struct MCPRestored: Equatable, Sendable {
     /// Why input into the tab is refused, or nil (R25): its action waits for the shell, or its prompt holds the line the
     /// restore put back. Either is not the user's own line, and no tool can run, edit or clear it.
     public var inputRefusal: String? {
-        let types = outcome.action == .resume || outcome.action == .onTheLine || outcome.action == .typeIn
-        if types && action == .pending {
+        if outcome?.action.types == true && action == .pending {
             return "That tab is being restored after Next Term restarted, and what the restore types there waits for its shell. "
                 + "Nothing was typed: try again in a few seconds."
         }

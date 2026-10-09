@@ -627,6 +627,11 @@ public enum RestorePlanner {
 
 // MARK: - Pending actions
 
+extension SessionSnapshot.Action {
+    /// It types into the tab's shell once it is ready: an automatic resume, or a line put back.
+    public var types: Bool { self == .resume || self == .onTheLine || self == .typeIn }
+}
+
 extension SessionSnapshot.PendingAction {
     /// What can happen to a pane's pending action.
     public enum Event: String, CaseIterable, Sendable {
@@ -698,14 +703,22 @@ public struct RestoreNote: Equatable, Sendable {
 
     /// The note: one line of printable text, or nil when there is nothing to say. `dates` writes a session's date.
     public func text(dates: (Date) -> String = RestoreNote.dateText) -> String? {
-        render(dates: dates, waiting: false)
+        render(dates: dates, when: .done)
     }
 
     /// The note as its tab shows it, before the shell starts. An action that types (a resume, a line put back) waits for
     /// the shell to be ready, and the user typing first drops it, so its note says what happens then, unless the user
     /// types first; `text` says what happened. Every other note, and safe mode's, reads the same either way.
     public func shownBeforeShell(dates: (Date) -> String = RestoreNote.dateText) -> String? {
-        render(dates: dates, waiting: true)
+        render(dates: dates, when: .waiting)
+    }
+
+    /// The note once an action that types was cancelled: something reached the tab's line before its shell was ready
+    /// (`RestoreLayout.LineWatch`), so the restore typed nothing there. No agent resumed and no line waits on the prompt;
+    /// it says how to resume the agent, or which command was not put back. Every other note, and safe mode's, which
+    /// already says nothing ran, reads as `text`.
+    public func cancelledText(dates: (Date) -> String = RestoreNote.dateText) -> String? {
+        render(dates: dates, when: .cancelled)
     }
 
     /// What an automatic resume's tab says when, as its turn came, a process had its session open (KTD5): it did not
@@ -719,15 +732,22 @@ public struct RestoreNote: Equatable, Sendable {
 
     /// When an action that types happens: once the shell is ready, unless the user types first.
     static let onceReady = "once the shell is ready, unless you type first"
+    /// Why an action that types was cancelled.
+    static let typedFirst = "something was typed in the tab before its shell was ready"
 
-    private func render(dates: (Date) -> String, waiting: Bool) -> String? {
+    /// Where the note's action stands as it is told: it has happened, it waits for the shell, or it was cancelled.
+    private enum Moment {
+        case done, waiting, cancelled
+    }
+
+    private func render(dates: (Date) -> String, when: Moment) -> String? {
         var parts: [String] = []
         if reminted { parts.append("This tab has a new id, because another tab had the same one.") }
         if let movedFrom, let openedIn {
             let why = folderNotChecked ? "could not be checked in time" : "is gone"
             parts.append("\(movedFrom) \(why), so this tab opened in \(openedIn).")
         }
-        let main = sentences(dates: dates, waiting: waiting)
+        let main = sentences(dates: dates, when: when)
         if safeMode {
             parts.append("Nothing ran, because the last two restores did not finish.")
             if !main.isEmpty { parts.append("This tab held: " + main.joined(separator: " ")) }
@@ -746,11 +766,25 @@ public struct RestoreNote: Equatable, Sendable {
     }
 
     /// What the outcome says. In safe mode, an action that did not happen is told as what the tab held. `waiting`: an
-    /// action that types has not happened yet, and says what happens once the shell is ready.
-    private func sentences(dates: (Date) -> String, waiting: Bool) -> [String] {
+    /// action that types has not happened yet, and says what happens once the shell is ready; `cancelled`: it never will.
+    private func sentences(dates: (Date) -> String, when: Moment) -> [String] {
         let name = agent?.name ?? "An agent"
+        let waiting = when == .waiting
         let back = waiting ? "goes back on the line, not run, \(Self.onceReady)." : "is back on the line, not run."
         switch outcome {
+        case .resume where !safeMode && when == .cancelled:
+            var said = ["\(name) session \(session?.id ?? "") did not resume: \(Self.typedFirst)."]
+            if interrupted { said.append("Its last turn was cut off by \(afterQuit ? "the quit" : "the update").") }
+            if let session { said += about(session, dates) }
+            said += leftOffText
+            said.append("To resume it, type: \(line ?? agent?.program ?? "")")
+            return said
+        case .agentOnTheLine where !safeMode && when == .cancelled:
+            var said = typeToResume(dates)
+            said.insert("Its line was not put back: \(Self.typedFirst).", at: 1)
+            return said
+        case .commandOnTheLine where !safeMode && when == .cancelled:
+            return ["\(command ?? "A command") was running. It was not put back: \(Self.typedFirst)."]
         case .resume where !safeMode:
             let id = session?.id ?? ""
             var said = [waiting ? "\(name) session \(id) resumes \(Self.onceReady)." : "Resumed \(name) session \(id)."]

@@ -46,7 +46,7 @@ final class RestoreActions {
         for pane in panes {
             let action = pane.plan.outcome.action
             let local = pane.tab.remote == nil
-            let types = action == .resume || action == .onTheLine || action == .typeIn
+            let types = action.types
             let line = RestoreLayout.LineWatch(writes: pane.tab.view.inputWrites)
             let entry = Waiting(tab: pane.tab, plan: pane.plan, since: now, line: line)
             if types && local && pane.plan.line != nil {
