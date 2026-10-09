@@ -61,7 +61,7 @@ import Testing
                 guard let quoted = WordQuote.quote(name, in: context, shell: kind) else { Issue.record("no quoting for \(name)"); continue }
                 #expect(!quoted.unicodeScalars.contains(where: ShellQuote.isControl), "control character in \(quoted)")
                 let open = context == .double ? "\"" : context == .single ? "'" : ""
-                let word = open + quoted + WordQuote.ending(folder: false, in: context).dropLast()
+                let word = open + quoted + String(WordQuote.ending(folder: false, in: context).dropLast())
                 #expect(try readBack(word, shell: shell) == name, "\(shell) \(context): \(word)")
             }
         }
