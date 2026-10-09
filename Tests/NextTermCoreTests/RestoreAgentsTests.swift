@@ -38,8 +38,10 @@ import Testing
             #expect(RestoreAgent(kind: kind).name == kind.name)
         }
         #expect(RestoreAgent.amp.kind == nil && RestoreAgent.agy.kind == nil)
-        #expect(RestoreAgent.allCases.filter(\.resumesAutomatically) == Self.automatic)
-        #expect(RestoreAgent.allCases.filter { !$0.hasResumeForm } == [.agy, .aider, .unknown])
+        let automatic: [RestoreAgent] = RestoreAgent.allCases.filter(\.resumesAutomatically)
+        #expect(automatic == Self.automatic)
+        let formless: [RestoreAgent] = RestoreAgent.allCases.filter { !$0.hasResumeForm }
+        #expect(formless == [.agy, .aider, .unknown])
     }
 
     @Test func agyIsAnAgentEverywhere() {
@@ -92,7 +94,8 @@ import Testing
             (.kiro, "kiro-cli chat --resume-id s-42_a.b"),
             (.goose, "goose session --resume --session-id s-42_a.b"),
         ]
-        #expect(lines.count == RestoreAgent.allCases.filter(\.hasResumeForm).count)
+        let withForm: [RestoreAgent] = RestoreAgent.allCases.filter(\.hasResumeForm)
+        #expect(lines.count == withForm.count)
         for (agent, line) in lines {
             #expect(agent.putBackLine(id: Self.sampleID(agent), folder: "/Users/x/app") == line)
         }
@@ -154,8 +157,8 @@ import Testing
         let unset = RestoreAgent.claude.autoContinueVariables.map { "-u " + $0 }.joined(separator: " ")
         #expect(RestoreAgent.claude.autoContinueVariables.contains("CLAUDE_CODE_RESUME_INTERRUPTED_TURN"))
         #expect(claudeBinary.resumeCommand == "/usr/bin/env \(unset) /Users/x/.local/bin/claude --resume \(uuid)")
-        #expect(claudeScript.resumeCommand == "/usr/bin/env \(unset) /opt/homebrew/bin/node "
-                + "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js --resume \(uuid)")
+        let script = "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js"
+        #expect(claudeScript.resumeCommand == "/usr/bin/env \(unset) /opt/homebrew/bin/node \(script) --resume \(uuid)")
         #expect(codexBinary.resumeCommand == "/usr/bin/env /opt/homebrew/bin/codex resume \(uuid) -C /Users/x/app")
         var spaced = claudeBinary
         spaced.executable = "/Users/x/My Tools/claude"
@@ -195,8 +198,10 @@ import Testing
             }
         }
         #expect(RestoreAgent.codex.options(in: ["exec", "fix it"]) == AgentOptions(carried: [], leftOff: ["exec"], allowed: false))
-        #expect(RestoreAgent.claude.options(in: ["--permission-mode", "plan"]).leftOff == ["--permission-mode"])
-        #expect(RestoreAgent.claude.options(in: ["-p", "hi"]).leftOff == ["-p"])
+        let mode: [String] = RestoreAgent.claude.options(in: ["--permission-mode", "plan"]).leftOff
+        #expect(mode == ["--permission-mode"])
+        let print: [String] = RestoreAgent.claude.options(in: ["-p", "hi"]).leftOff
+        #expect(print == ["-p"])
     }
 
     @Test func aModelIsCarriedOnlyWithinItsPattern() {
@@ -218,7 +223,8 @@ import Testing
                 #expect(evidence.gate(facts) == .onTheLine([.flags]))
             }
             #expect(!agent.options(in: [flag]).allowed)
-            #expect(agent.options(in: [flag, "-x"]).leftOff == [flag, "-x"])
+            let dashed: [String] = agent.options(in: [flag, "-x"]).leftOff
+            #expect(dashed == [flag, "-x"])
         }
     }
 
@@ -245,14 +251,18 @@ import Testing
         let user = geteuid()
         let source: SessionSnapshot.IDSource = agent == .claude ? .sessionFile : agent == .codex ? .openRollout : .runtimeFile
         let program = agent.program ?? "agent"
-        var evidence = Evidence(agent: agent, sessionID: Self.sampleID(agent), source: source, sessionFolder: "/Users/x/app",
+        let store = agent.resumesAutomatically ? "/Users/x/.\(program)" : nil
+        var evidence = Evidence(agent: agent, sessionID: Self.sampleID(agent), source: source, sessionFolder: "/Users/x/app", store: store,
                                 executable: "/Users/x/.local/bin/\(program)", startedAt: Date(timeIntervalSince1970: 1_790_000_000),
                                 routingMatchesShell: true, autoContinueOff: true, ranAsTyped: true)
         evidence.flagsAllowed = true
-        let binary = FileFacts(realPath: "/Users/x/.local/share/\(program)/2.1.280", owner: user, mode: 0o755, isRegular: true)
+        let link = "/Users/x/.local/bin/\(program)"
+        let binary = FileFacts(realPath: "/Users/x/.local/share/\(program)/2.1.280", owner: user, mode: 0o755, isRegular: true,
+                               linksFollowed: [link])
         let folder = FileFacts(realPath: "/Users/x/app", owner: user, mode: 0o755, isDirectory: true)
-        let facts = ResumeFacts(user: user, files: ["/Users/x/.local/bin/\(program)": binary, "/Users/x/app": folder],
-                                outside: ["/Users/x/app"], temporaryFolders: ["/private/tmp", "/private/var/folders/zz/abc"],
+        var files = [link: binary, "/Users/x/app": folder]
+        if let store { files[store] = FileFacts(realPath: store, owner: user, mode: 0o700, isDirectory: true) }
+        let facts = ResumeFacts(user: user, files: files, outside: ["/Users/x/app"], temporaryFolders: ["/private/tmp", "/private/var/folders/zz/abc"],
                                 sessionAvailable: true, projectConfigChanged: false, settingsAutoContinue: false)
         return (evidence, facts)
     }
@@ -263,9 +273,9 @@ import Testing
             #expect(evidence.gate(facts) == .resume(evidence.resumeCommand ?? "none"), "\(agent)")
         }
         let (claude, facts) = passing(.claude)
-        #expect(claude.gate(facts) == .resume("/usr/bin/env "
-            + RestoreAgent.claude.autoContinueVariables.map { "-u " + $0 }.joined(separator: " ")
-            + " /Users/x/.local/bin/claude --resume \(uuid)"))
+        let unset: String = RestoreAgent.claude.autoContinueVariables.map { "-u " + $0 }.joined(separator: " ")
+        let command = "/usr/bin/env \(unset) /Users/x/.local/bin/claude --resume \(uuid)"
+        #expect(claude.gate(facts) == .resume(command))
     }
 
     @Test func theRestGetTheirLineOrANote() {
@@ -323,6 +333,13 @@ import Testing
             ("the executable is gone", .executable, { _, f in f.files["/Users/x/.local/bin/claude"] = nil }),
             ("project config changed", .projectConfig, { _, f in f.projectConfigChanged = true }),
             ("no start time", .projectConfig, { e, _ in e.startedAt = nil }),
+            ("no store recorded", .store, { e, _ in e.store = nil }),
+            ("the store is gone", .store, { _, f in f.files["/Users/x/.claude"] = nil }),
+            ("a store in the workspace", .store, { _, f in f.files["/Users/x/.claude"]?.realPath = "/Users/x/app/.claude-store" }),
+            ("a store in a temporary folder", .store, { _, f in f.files["/Users/x/.claude"]?.realPath = "/private/tmp/claude" }),
+            ("a store others can write", .store, { _, f in f.files["/Users/x/.claude"]?.mode = 0o777 }),
+            ("a store of another user's", .store, { _, f in f.files["/Users/x/.claude"]?.owner = user + 1 }),
+            ("a file where the store was", .store, { _, f in f.files["/Users/x/.claude"]?.isDirectory = false }),
         ]
         for (name, check, change) in cases {
             var (evidence, facts) = passing(.claude)
@@ -348,6 +365,51 @@ import Testing
         #expect(gate(realPath: "/private/tmp/claude") == .onTheLine([.location]))
         // A sibling whose name only starts like the project is not inside it.
         if case .onTheLine = gate(realPath: "/Users/x/app2/claude") { Issue.record("a sibling folder counted as the project") }
+    }
+
+    /// The resume runs the recorded path, so every link it passes must lie where nothing in a tab can change it: a
+    /// link in the workspace (a PATH folder direnv adds) or a temporary folder could be pointed elsewhere between the
+    /// check and the run, whatever it leads to now.
+    @Test func aLinkInTheWorkspaceOrTempGoesOnTheLineThoughItLeadsOut() {
+        for links in [["/Users/x/app/bin/claude"], ["/Users/x/.local/bin/claude", "/Users/x/app/tools/claude"],
+                      ["/Users/x/.local/bin/claude", "/private/tmp/claude"]] {
+            var (evidence, facts) = passing(.claude)
+            evidence.executable = links[0]
+            facts.files[links[0]] = FileFacts(realPath: "/Users/x/.local/share/claude/2.1.280", owner: geteuid(), mode: 0o755, isRegular: true,
+                                              linksFollowed: links)
+            #expect(evidence.gate(facts) == .onTheLine([.location]), "\(links)")
+        }
+        // Links outside them pass, and the resume runs the path that was recorded.
+        let (evidence, facts) = passing(.claude)
+        guard case .resume(let command) = evidence.gate(facts) else {
+            Issue.record("a link in ~/.local/bin did not pass")
+            return
+        }
+        #expect(command.contains(" /Users/x/.local/bin/claude --resume "))
+    }
+
+    /// FileFacts names every link it follows, by the link's own path: one in a folder on the way counts too.
+    @Test func fileFactsNameTheLinksFollowed() throws {
+        let root = canonicalPath(FileManager.default.temporaryDirectory.path) + "/nt-links-\(UUID().uuidString)"
+        let fm = FileManager.default
+        defer { try? fm.removeItem(atPath: root) }
+        try fm.createDirectory(atPath: root + "/share/claude/versions", withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: root + "/app", withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: root + "/bin", withIntermediateDirectories: true)
+        fm.createFile(atPath: root + "/share/claude/versions/2.1.280", contents: Data(), attributes: [.posixPermissions: 0o755])
+        try fm.createSymbolicLink(atPath: root + "/app/claude", withDestinationPath: "../share/claude/versions/2.1.280")
+        try fm.createSymbolicLink(atPath: root + "/bin/claude", withDestinationPath: root + "/app/claude")
+        try fm.createSymbolicLink(atPath: root + "/versions", withDestinationPath: "share/claude/versions")
+        let chain = try #require(FileFacts.read(root + "/bin/claude"))
+        #expect(chain.realPath == root + "/share/claude/versions/2.1.280" && chain.isRegular)
+        let followed: [String] = [root + "/bin/claude", root + "/app/claude"]
+        #expect(chain.linksFollowed == followed)
+        let folder = try #require(FileFacts.read(root + "/versions/2.1.280"))
+        #expect(folder.realPath == chain.realPath && folder.linksFollowed == [root + "/versions"])
+        let plain = try #require(FileFacts.read(root + "/share/claude/versions/2.1.280"))
+        #expect(plain.linksFollowed.isEmpty)
+        try fm.createSymbolicLink(atPath: root + "/loop", withDestinationPath: root + "/loop")
+        #expect(FileFacts.read(root + "/loop") == nil)
     }
 
     @Test func codeOthersCanWriteGoesOnTheLine() {
@@ -392,7 +454,7 @@ import Testing
         #expect(link.realPath == root + "/app/tools/claude" && link.isRegular && link.owner == geteuid() && link.mode == 0o755)
         var (evidence, facts) = passing(.claude)
         evidence.executable = root + "/home/.local/bin/claude"
-        facts.files = [evidence.executable!: link, "/Users/x/app": facts.files["/Users/x/app"]!]
+        facts.files[root + "/home/.local/bin/claude"] = link
         facts.temporaryFolders = []
         facts.outside = ["/Users/x/app", root + "/app"]
         #expect(evidence.gate(facts) == .onTheLine([.location]))
@@ -418,8 +480,9 @@ import Testing
 
     // MARK: rebuilt commands
 
-    /// Random ids, folders and paths from a pool of plain, shell, control, bidi, format and zero-width characters:
-    /// no line or command built from them holds a control or format character.
+    /// Random ids, folders, paths and model names from a pool of plain, shell, control, bidi, format and zero-width
+    /// characters, each odd piece mixed into a resume that would otherwise be built: no line or command built from
+    /// them holds a control or format character, and enough of them are built to say so.
     @Test func fuzzedRebuiltCommandsHoldNoControlOrFormatCharacter() {
         var random = SeededRandom(seed: 0x5EED)
         let odd: [UInt32] = [0x00, 0x07, 0x09, 0x0A, 0x0D, 0x1B, 0x7F, 0x85, 0x9B, 0xAD, 0x061C, 0x200B, 0x200E, 0x202A, 0x202E,
@@ -430,20 +493,33 @@ import Testing
             for _ in 0..<count { scalars.append(pool[Int(random.next() % UInt64(pool.count))]) }
             return String(scalars)
         }
+        /// `plain`, or with odd text set into it one time in `odds`.
+        func mixed(_ plain: String, _ odds: UInt64) -> String {
+            random.next() % odds == 0 ? plain + text(1 + Int(random.next() % 4)) : plain
+        }
+        var built = (lines: 0, commands: 0)
         for round in 0..<2000 {
             let agent = RestoreAgent.allCases[round % RestoreAgent.allCases.count]
-            let id = round % 3 == 0 ? Self.sampleID(agent) + text(1) : text(Int(random.next() % 12))
-            let folder = "/" + text(Int(random.next() % 16))
+            let id = mixed(Self.sampleID(agent), 3)
+            let folder = mixed("/Users/x/app", 3)
             var lines = [agent.putBackLine(id: id, folder: folder)]
-            var evidence = Evidence(agent: agent, sessionID: id, source: .sessionFile, sessionFolder: folder,
-                                    executable: "/" + text(8), interpreter: round % 2 == 0 ? "/" + text(6) : nil,
-                                    script: round % 2 == 0 ? "/" + text(6) : nil)
-            evidence.flags = ["--model", text(4)]
-            lines.append(evidence.resumeCommand)
+            let automatic = Self.automatic[round % Self.automatic.count]
+            let script = round % 2 == 0
+            var evidence = Evidence(agent: automatic, sessionID: mixed(Self.sampleID(automatic), 4), source: .sessionFile,
+                                    sessionFolder: mixed("/Users/x/app", 4), executable: mixed("/opt/homebrew/bin/node", 5),
+                                    interpreter: script ? mixed("/opt/homebrew/bin/node", 5) : nil,
+                                    script: script ? mixed("/opt/homebrew/lib/agent/cli.js", 5) : nil)
+            evidence.flags = automatic == .codex ? ["-m", mixed("gpt-5", 3)] : ["--model", mixed("opus", 3)]
+            let command = evidence.resumeCommand
+            lines.append(command)
+            if command != nil { built.commands += 1 }
+            if let line = lines[0], line.contains(" ") { built.lines += 1 }
             for line in lines.compactMap({ $0 }) {
                 #expect(SessionSnapshot.Command.problem(with: line) == nil, "\(line.unicodeScalars.map(\.value))")
             }
         }
+        #expect(built.commands >= 400, "\(built.commands) resume commands built")
+        #expect(built.lines >= 600, "\(built.lines) put-back lines with an id built")
     }
 }
 

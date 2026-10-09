@@ -158,10 +158,12 @@ public enum AgentSessions {
         claudeProcess(pid: pid, store: (home as NSString).appendingPathComponent(".claude"))
     }
 
-    /// The same in a store of Claude Code's own (CLAUDE_CONFIG_DIR).
+    /// The same in a store of Claude Code's own (CLAUDE_CONFIG_DIR). Only a file whose real path lies in the store's
+    /// real folder is its own: a sessions folder linked out of it leads to none.
     static func claudeProcess(pid: Int32, store: String) -> Result<ClaudeProcessRecord, AgentEvidence.Problem> {
-        let path = (store as NSString).appendingPathComponent("sessions/\(pid).json")
-        guard pid > 0, let file = StoreFile.read(path, maxSize: 65_536) else { return .failure(.unreadable) }
+        let real = canonicalPath(store)
+        let path = (real as NSString).appendingPathComponent("sessions/\(pid).json")
+        guard pid > 0, let file = StoreFile.read(path, maxSize: 65_536, inside: real) else { return .failure(.unreadable) }
         return AgentEvidence.claudeRecord(file.data)
     }
 

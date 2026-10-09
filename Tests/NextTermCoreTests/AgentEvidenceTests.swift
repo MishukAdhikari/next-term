@@ -36,17 +36,22 @@ import Testing
         return Date(timeIntervalSince1970: Double(info.pbi_start_tvsec) + Double(info.pbi_start_tvusec) / 1_000_000)
     }
 
-    /// This process, described as an agent run with `arguments` in `directory`.
+    /// This process, described as an agent run with `arguments` in `directory`. `routing` holds values, digested here
+    /// as capture reads them.
     func process(_ arguments: [String], executable: String = "/Users/x/.local/share/claude/versions/2.1.280",
-                 directory: String? = nil, environment: [String: String] = [:], openFiles: [String] = []) throws -> AgentProcess {
+                 directory: String? = nil, environment: [String: String] = [:], openFiles: [String] = [],
+                 routing: [String: String] = [:]) throws -> AgentProcess {
         AgentProcess(pid: getpid(), startedAt: try ownStart(), executable: executable, arguments: arguments, environment: environment,
-                     directory: directory, openFiles: openFiles)
+                     directory: directory, openFiles: openFiles, routing: routing.mapValues(AgentEvidence.routingDigest))
     }
 
+    /// `shell`: the login shell's routing variables, as values (digested here); nil when the login shell is not known.
     func capture(_ leader: AgentProcess?, typed: String? = nil, home: String, children: [String] = [],
-                 shell: [String: String] = [:]) -> Evidence? {
-        AgentEvidence.capture(AgentEvidence.Capture(leader: leader, verified: true, childSessionIDs: children, typedLine: typed,
-                                                    shellEnvironment: shell, home: home))
+                 shell: [String: String]? = nil) -> Evidence? {
+        let routing = shell?.mapValues(AgentEvidence.routingDigest)
+        let input = AgentEvidence.Capture(leader: leader, verified: true, childSessionIDs: children, typedLine: typed,
+                                          shellRouting: routing, home: home)
+        return AgentEvidence.capture(input)
     }
 
     // MARK: KERN_PROCARGS2
@@ -67,10 +72,35 @@ import Testing
                                        "executable_path=/opt/homebrew/bin/node"])
         let parsed = try #require(ProcessArguments.parse(bytes, keeping: ["PATH", "ANTHROPIC_BASE_URL", "executable_path"]))
         #expect(parsed.executable == "/opt/homebrew/bin/node")
-        #expect(parsed.arguments == ["node", "/opt/lib/cli.js", "--resume"])
+        let argv: [String] = ["node", "/opt/lib/cli.js", "--resume"]
+        #expect(parsed.arguments == argv)
         #expect(parsed.environment == ["PATH": "/usr/bin:/bin", "ANTHROPIC_BASE_URL": "https://example.com"])
         let many = procArgs(argc: 20, ["/bin/x"] + (0..<20).map { "a\($0)" })
         #expect(try #require(ProcessArguments.parse(many, keeping: [])).arguments.count == 20)
+    }
+
+    /// KTD5: routing values are compared as digests made in memory. The record keeps a digest of each, never the value.
+    @Test func procArgsDigestRoutingVariablesAndKeepNoValue() throws {
+        let bytes = procArgs(argc: 1, ["/opt/homebrew/bin/codex", "codex", "PATH=/usr/bin", "OPENAI_API_KEY=sk-proj-abcdef123456", "",
+                                       "executable_path=/opt/homebrew/bin/codex"])
+        let parsed = try #require(ProcessArguments.parse(bytes, keeping: ["PATH"], digesting: ["OPENAI_API_KEY", "PATH"]))
+        #expect(parsed.environment == ["PATH": "/usr/bin"])
+        let digests = ["OPENAI_API_KEY": AgentEvidence.routingDigest("sk-proj-abcdef123456"), "PATH": AgentEvidence.routingDigest("/usr/bin")]
+        #expect(parsed.routing == digests)
+        #expect(!String(describing: parsed).contains("sk-proj"))
+        #expect(AgentEvidence.routingDigest("a") == AgentEvidence.routingDigest("a"))
+        #expect(AgentEvidence.routingDigest("a") != AgentEvidence.routingDigest("b") && AgentEvidence.routingDigest("a") != "a")
+    }
+
+    /// The login shell's environment as `/usr/bin/env` lists it: only the routing variables, each as a digest.
+    @Test func theLoginShellsRoutingIsReadAsDigests() {
+        let listing = "PATH=/usr/bin:/bin\nOPENAI_API_KEY=sk-proj-abc\nHOME=/Users/x\nANTHROPIC_BASE_URL=https://a.example.com\n"
+            + "GITHUB_TOKEN=ghp_abc\nnot a variable\n=x\n"
+        let digests = AgentEvidence.routingDigests(environmentListing: listing)
+        let expected = ["OPENAI_API_KEY": AgentEvidence.routingDigest("sk-proj-abc"),
+                        "ANTHROPIC_BASE_URL": AgentEvidence.routingDigest("https://a.example.com")]
+        #expect(digests == expected)
+        #expect(AgentEvidence.routingDigests(environmentListing: "").isEmpty)
     }
 
     @Test func procArgsRefuseWhatIsCutShortOrNotThere() {
@@ -95,9 +125,9 @@ import Testing
     }
 
     @Test func procStartReadsAsPsWritesIt() throws {
-        let date = try #require(AgentEvidence.procStart("Wed Oct  7 18:05:43 2026"))
-        #expect(date == Date(timeIntervalSince1970: 1_791_396_343))
-        #expect(AgentEvidence.procStartText(date) == "Wed Oct  7 18:05:43 2026")
+        let date = try #require(AgentEvidence.procStart("Thu Oct  1 09:30:15 2026"))
+        #expect(date == Date(timeIntervalSince1970: 1_790_847_015))
+        #expect(AgentEvidence.procStartText(date) == "Thu Oct  1 09:30:15 2026")
         #expect(AgentEvidence.procStartText(Date(timeIntervalSince1970: 1_792_000_000.9)) == "Wed Oct 14 17:46:40 2026")
         #expect(AgentEvidence.procStart("yesterday") == nil && AgentEvidence.procStart("") == nil)
     }
@@ -164,6 +194,68 @@ import Testing
         #expect(evidence?.executable == nil && evidence?.startedAt == nil)
     }
 
+    /// KTD4: the file's real path lies in the agent's own store. A sessions folder linked out of the store, into the
+    /// workspace, is not the store's, and neither is a store a link leads into the workspace (the gate checks that one).
+    @Test func aClaudeFileReachedThroughALinkedFolderIsAGuess() throws {
+        let (home, project) = try makeHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let fm = FileManager.default
+        try fm.createDirectory(atPath: home + "/.claude", withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: project + "/planted", withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: home + "/.claude/sessions", withDestinationPath: project + "/planted")
+        try write(json(claudeFields(start: try ownStart(), cwd: project)), to: project + "/planted/\(getpid()).json")
+        let linked = capture(try process(["claude"], directory: project), typed: "claude", home: home)
+        #expect(linked?.source == .guess && linked?.sessionID == nil)
+        #expect(throws: AgentEvidence.Problem.unreadable) { try AgentSessions.claudeProcess(pid: getpid(), home: home).get() }
+        // The store itself as a link: the file is read in the store's real place, which capture records.
+        try fm.removeItem(atPath: home + "/.claude")
+        try fm.createDirectory(atPath: home + "/dotfiles/claude/sessions", withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: home + "/.claude", withDestinationPath: home + "/dotfiles/claude")
+        try write(json(claudeFields(start: try ownStart(), cwd: project)), to: home + "/dotfiles/claude/sessions/\(getpid()).json")
+        let moved = capture(try process(["claude"], directory: project), typed: "claude", home: home)
+        #expect(moved?.source == .sessionFile && moved?.store == home + "/dotfiles/claude")
+    }
+
+    /// CLAUDE_CONFIG_DIR moves the store: the file is read there, and capture records where it is.
+    @Test func aMovedClaudeStoreIsRecorded() throws {
+        let (home, project) = try makeHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        try write(json(claudeFields(start: try ownStart(), cwd: project)), to: home + "/work/sessions/\(getpid()).json")
+        let moved = try process(["claude"], directory: project, environment: ["CLAUDE_CONFIG_DIR": home + "/work"])
+        let evidence = try #require(capture(moved, typed: "claude", home: home))
+        #expect(evidence.source == .sessionFile && evidence.store == home + "/work")
+        let plain = try #require(capture(try process(["claude"], directory: project), typed: "claude", home: home))
+        #expect(plain.store == home + "/.claude" && plain.source == .guess)
+        // Only an automatic agent's store is recorded.
+        let gemini = capture(try process(["gemini"], executable: "/opt/homebrew/bin/gemini"), typed: "gemini", home: home)
+        #expect(gemini?.agent == .gemini && gemini?.store == nil)
+    }
+
+    /// Claude Code does not run itself again in a child: a `claude` below the tab's (one its Bash tool started) never
+    /// names the tab's session, nor makes the tab's own a guess.
+    @Test func aClaudeBelowTheLeaderIsNotTheTabs() throws {
+        let (home, project) = try makeHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let start = try ownStart()
+        var fields = claudeFields(start: start, cwd: project + "/elsewhere")
+        fields["pid"] = Int(getppid())
+        fields["sessionId"] = other
+        try claudeFile(home: home, pid: getppid(), fields: fields)
+        let leader = try process(["claude"], directory: project)
+        let child = AgentProcess(pid: getppid(), startedAt: start, executable: "/Users/x/.local/share/claude/versions/2.1.280",
+                                 arguments: ["claude", "-p", "hi"], directory: project + "/elsewhere")
+        func evidence() -> Evidence? {
+            AgentEvidence.capture(AgentEvidence.Capture(leader: leader, relaunched: [child], verified: true, typedLine: "claude", home: home))
+        }
+        #expect(evidence()?.sessionID == nil && evidence()?.source == .guess)
+        try claudeFile(home: home, fields: claudeFields(start: start, cwd: project))
+        let own = try #require(evidence())
+        #expect(own.sessionID == uuid && own.source == .sessionFile && own.sessionFolder == project)
+        // Only Codex's npm build and Qwen Code run themselves again in a child.
+        let relaunching: [RestoreAgent] = RestoreAgent.allCases.filter(\.relaunchesItself)
+        #expect(relaunching == [.codex, .qwen])
+    }
+
     // MARK: Codex
 
     func rollout(_ home: String, id: String, day: String = "2026/10/07") -> String {
@@ -221,6 +313,28 @@ import Testing
         #expect(none?.source == .guess && none?.sessionID == nil)
     }
 
+    /// KTD4: a rollout counts only by its real path in Codex's store. A sessions folder linked into the workspace
+    /// leads out of it, so what is open there names nothing; the store is recorded by its real path.
+    @Test func aRolloutReachedThroughALinkedFolderIsAGuess() throws {
+        let (home, project) = try makeHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let fm = FileManager.default
+        try fm.createDirectory(atPath: home + "/.codex", withIntermediateDirectories: true)
+        let planted = project + "/planted/2026/10/07/rollout-2026-10-07T10-00-00-\(uuid).jsonl"
+        try write(json(["type": "session_meta", "payload": ["id": uuid, "cwd": project]]), to: planted)
+        try fm.createSymbolicLink(atPath: home + "/.codex/sessions", withDestinationPath: project + "/planted")
+        // The kernel names an open file by its real path.
+        let leader = try process(["codex"], executable: "/opt/homebrew/bin/codex", directory: project, openFiles: [planted])
+        let linked = try #require(capture(leader, typed: "codex", home: home))
+        #expect(linked.source == .guess && linked.sessionID == nil && linked.store == home + "/.codex")
+        // CODEX_HOME moves the store, and the rollout open in it is exact.
+        try write(json(["type": "session_meta", "payload": ["id": uuid, "cwd": project]]), to: rollout(home + "/moved", id: uuid))
+        let moved = try process(["codex"], executable: "/opt/homebrew/bin/codex", directory: project,
+                                environment: ["CODEX_HOME": home + "/moved/.codex"], openFiles: [rollout(home + "/moved", id: uuid)])
+        let exact = try #require(capture(moved, typed: "codex", home: home))
+        #expect(exact.source == .openRollout && exact.sessionID == uuid && exact.store == home + "/moved/.codex")
+    }
+
     // MARK: Qwen Code
 
     @Test func aQwenRuntimeFileWithThisPidIsExact() throws {
@@ -232,6 +346,14 @@ import Testing
                                  directory: project)
         let evidence = try #require(capture(leader, typed: "qwen", home: home))
         #expect(evidence.agent == .qwen && evidence.sessionID == uuid && evidence.source == .runtimeFile && evidence.sessionFolder == project)
+        #expect(evidence.store == home + "/.qwen")
+        // The chats folder linked out of the store, into the workspace: the file there is not the store's.
+        let fm = FileManager.default
+        try fm.moveItem(atPath: chats, toPath: project + "/chats")
+        try fm.createSymbolicLink(atPath: String(chats.dropLast()), withDestinationPath: project + "/chats")
+        #expect(capture(leader, typed: "qwen", home: home)?.source == .guess)
+        try fm.removeItem(atPath: String(chats.dropLast()))
+        try fm.moveItem(atPath: project + "/chats", toPath: chats)
         // Another process's file, or one named for another session, is not.
         try write(json(["pid": Int(getpid()) + 1, "session_id": uuid, "work_dir": project]), to: chats + uuid + ".runtime.json")
         #expect(capture(leader, typed: "qwen", home: home)?.source == .guess)
@@ -307,6 +429,74 @@ import Testing
         #expect(two?.sessionID == nil && two?.source == .guess)
     }
 
+    // MARK: which agent
+
+    /// An agent the classifier knows that the matrix does not is still an agent: its tab gets a note, never its
+    /// line with the prompt put back as a command's (R6, R8).
+    @Test func agentsOutsideTheMatrixAreUnknownAgents() throws {
+        let home = try makeHome().home
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        for program in ["droid", "kimi", "crush", "cline", "auggie", "plandex", "q"] {
+            let typed = program + " 'delete the tests'"
+            let leader = try process([program, "delete the tests"], executable: "/opt/homebrew/bin/" + program)
+            for evidence in [capture(leader, typed: typed, home: home), capture(nil, typed: typed, home: home)] {
+                let found = try #require(evidence, "\(program)")
+                #expect(found.agent == .unknown && found.sessionID == nil, "\(program)")
+                #expect(found.gate(ResumeFacts()) == .note, "\(program)")
+            }
+            #expect(capture(leader, home: home)?.agent == .unknown, "\(program)")
+        }
+    }
+
+    /// A folder named like an agent does not make what runs in it that agent: the command stays a command (R9).
+    /// An agent's own script, by its name or its package, still names it.
+    @Test func aFolderNamedLikeAnAgentNamesNoAgent() throws {
+        let home = try makeHome().home
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let commands: [[String]] = [
+            ["node", "/Users/x/Code/codex/server.js"],
+            ["node", "/Users/x/Code/opencode-site/dev.js"],
+            ["python3", "/Users/x/Code/aider-notes/run.py"],
+            ["node", "/Users/x/Code/claude-code/scripts/build.js"],
+            ["node", "/Users/x/Code/codex/node_modules/.bin/vite"],
+        ]
+        for argv in commands {
+            let line = argv.joined(separator: " ")
+            #expect(CommandClassifier.programName(line) == argv[0], "\(line)")
+            let leader = try process(argv, executable: "/opt/homebrew/bin/" + argv[0])
+            #expect(RestoreAgent(process: leader) == nil, "\(line)")
+            #expect(capture(leader, typed: line, home: home) == nil, "\(line)")
+        }
+        let agents: [([String], RestoreAgent)] = [
+            (["node", "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js"], .claude),
+            (["node", "/opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js"], .codex),
+            (["node", "/opt/homebrew/lib/node_modules/opencode-ai/bin/opencode"], .opencode),
+            (["node", "/Users/x/.npm-global/lib/node_modules/@qwen-code/qwen-code/cli.js"], .qwen),
+            (["python3", "/Users/x/.local/bin/aider"], .aider),
+            (["python3", "-m", "aider"], .aider),
+        ]
+        for (argv, agent) in agents {
+            let line = argv.joined(separator: " ")
+            #expect(RestoreAgent(line: line) == agent, "\(line)")
+            #expect(RestoreAgent(process: try process(argv, executable: "/opt/homebrew/bin/" + argv[0])) == agent, "\(line)")
+            #expect(capture(nil, typed: line, home: home)?.agent == agent, "\(line)")
+        }
+        // A tab's program is named the same way: the agent's own package names it, a project folder does not.
+        #expect(CommandClassifier.programName("node /opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js") == "codex")
+        #expect(CommandClassifier.programName("node /Users/x/Code/opencode/node_modules/vite/bin/vite.js") == "node")
+    }
+
+    /// The tab's own agent, found the strict way, in a line that also runs other commands; a line running none is nil.
+    @Test func aTypedLineNamesItsAgentStrictly() {
+        #expect(RestoreAgent(line: "cd ~/Code/codex && claude --model opus") == .claude)
+        #expect(RestoreAgent(line: "npx @anthropic-ai/claude-code") == .claude)
+        #expect(RestoreAgent(line: "env -u CLAUDE_CODE_RESUME_PROMPT codex resume x") == .codex)
+        #expect(RestoreAgent(line: "droid exec 'fix it'") == .unknown)
+        for line in ["cd ~/Code/codex && npm run dev", "node ~/Code/aider/run.js", "make", ""] {
+            #expect(RestoreAgent(line: line) == nil, "\(line)")
+        }
+    }
+
     // MARK: the facts beside the id
 
     @Test func optionsAreRecordedFromArgv() throws {
@@ -351,20 +541,30 @@ import Testing
         #expect(failed.contains(.typedLine) && failed.contains(.routing))
     }
 
-    @Test func routingIsComparedWithTheShellAndAutoContinueIsSeen() throws {
+    /// KTD5: the agent's routing variables are compared with the login shell's, the environment a restored tab starts
+    /// with. A key .zshrc exports reaches both, so it matches; one set only in the tab, or only in the login shell,
+    /// does not; a login shell not read yet matches nothing.
+    @Test func routingIsComparedWithTheLoginShellAndAutoContinueIsSeen() throws {
         let home = try makeHome().home
         defer { try? FileManager.default.removeItem(atPath: home) }
-        func evidence(_ environment: [String: String], shell: [String: String]) throws -> Evidence {
-            try #require(capture(try process(["claude"], environment: environment), typed: "claude", home: home, shell: shell))
+        func evidence(_ routing: [String: String], environment: [String: String] = [:], shell: [String: String]?,
+                      argv: [String] = ["claude"]) throws -> Evidence {
+            let agent = try process(argv, environment: environment, routing: routing)
+            return try #require(capture(agent, typed: argv.joined(separator: " "), home: home, shell: shell))
         }
-        let same = try evidence(["ANTHROPIC_BASE_URL": "https://a.example.com", "PATH": "/usr/bin"],
-                                shell: ["ANTHROPIC_BASE_URL": "https://a.example.com", "PATH": "/bin"])
+        let exported = ["ANTHROPIC_API_KEY": "sk-ant-api03-abc", "AWS_PROFILE": "work"]
+        let same = try evidence(exported, shell: exported.merging(["OPENAI_API_KEY": "sk-proj-x"]) { $1 })
         #expect(same.routingMatchesShell && same.autoContinueOff)
-        #expect(!(try evidence(["ANTHROPIC_BASE_URL": "https://b.example.com"], shell: ["ANTHROPIC_BASE_URL": "https://a.example.com"]))
-            .routingMatchesShell)
+        let codexKey = ["OPENAI_API_KEY": "sk-proj-x"]
+        #expect(try evidence(codexKey, shell: codexKey, argv: ["codex"]).routingMatchesShell)
+        #expect(!(try evidence(codexKey, shell: ["OPENAI_API_KEY": "sk-proj-y"], argv: ["codex"])).routingMatchesShell)
+        let other = ["ANTHROPIC_BASE_URL": "https://b.example.com"]
+        #expect(!(try evidence(other, shell: ["ANTHROPIC_BASE_URL": "https://a.example.com"])).routingMatchesShell)
         #expect(!(try evidence(["CLAUDE_CONFIG_DIR": "/Users/x/other"], shell: [:])).routingMatchesShell)
         #expect(!(try evidence([:], shell: ["AWS_PROFILE": "prod"])).routingMatchesShell)
-        let continues = try evidence(["CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "1"], shell: [:])
+        #expect(!(try evidence([:], shell: nil)).routingMatchesShell)
+        #expect(try evidence([:], shell: [:]).routingMatchesShell)
+        let continues = try evidence([:], environment: ["CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "1"], shell: [:])
         #expect(!continues.autoContinueOff && continues.routingMatchesShell)
         var gated = continues
         gated.flagsAllowed = true
@@ -374,8 +574,12 @@ import Testing
             return
         }
         #expect(failed.contains(.autoContinue))
-        #expect(AgentEvidence.environmentKeys.isSuperset(of: RestoreAgent.claude.routingVariables + RestoreAgent.claude.autoContinueVariables))
-        #expect(!AgentEvidence.environmentKeys.contains("GITHUB_TOKEN"))
+        // Values are kept only for the search path, the stores and the auto-continue variables; routing ones only as digests.
+        #expect(AgentEvidence.environmentKeys.isSuperset(of: RestoreAgent.claude.autoContinueVariables + ["PATH", "CLAUDE_CONFIG_DIR"]))
+        #expect(AgentEvidence.routingKeys.isSuperset(of: RestoreAgent.allCases.flatMap(\.routingVariables)))
+        for key in ["GITHUB_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_AUTH_TOKEN"] {
+            #expect(!AgentEvidence.environmentKeys.contains(key), "\(key)")
+        }
     }
 
     @Test func autoContinueInClaudeSettingsIsSeen() throws {
@@ -396,6 +600,77 @@ import Testing
         #expect(sets())
         try write("{ not json", to: managed)
         #expect(sets())
+    }
+
+    /// R8: CLAUDE_CONFIG_DIR moves the user's settings with the store, and `env -u` cannot unset what they put back.
+    @Test func autoContinueInAMovedStoresSettingsIsSeen() throws {
+        let (home, project) = try makeHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let managed = home + "/managed-settings.json"
+        let store = home + "/work/claude"
+        func sets() -> Bool { AgentEvidence.claudeSettingsAutoContinue(home: home, store: store, folder: project, managed: managed) }
+        #expect(!sets())
+        try write(json(["env": ["CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "1"]]), to: store + "/settings.json")
+        #expect(sets())
+        try FileManager.default.removeItem(atPath: store + "/settings.json")
+        try write(json(["env": ["CLAUDE_CODE_RESUME_PROMPT": "go on"]]), to: store + "/settings.local.json")
+        #expect(sets())
+        // The gate reads the store the evidence names: its settings, and where it is now.
+        let evidence = Evidence(agent: .claude, sessionFolder: project, store: store, startedAt: Date())
+        let facts = ResumeFacts.read(for: evidence, projects: [project], tabFolder: project, sessionAvailable: true, home: home)
+        #expect(facts.settingsAutoContinue)
+        #expect(facts.files[store]?.isDirectory == true && facts.files[store]?.realPath == store)
+    }
+
+    /// A settings file, or a folder on the way to one, that cannot be read counts as one that sets auto-continue
+    /// and as a changed config: a mode set back after the check would otherwise hide what it holds.
+    @Test func configThatCannotBeReadCountsAgainstAResume() throws {
+        let (home, project) = try makeHome()
+        defer {
+            chmod(project + "/.claude", 0o755)
+            try? FileManager.default.removeItem(atPath: home)
+        }
+        let start = Date().addingTimeInterval(-60)
+        try write(json(["env": ["CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "1"]]), to: project + "/.claude/settings.json")
+        func sets() -> Bool { AgentEvidence.claudeSettingsAutoContinue(home: home, folder: project, managed: home + "/managed.json") }
+        func changed() -> Bool { AgentEvidence.projectConfigChanged(agent: .claude, folder: project, since: start, home: home) }
+        #expect(sets() && changed())
+        #expect(chmod(project + "/.claude", 0) == 0)
+        #expect(sets())
+        #expect(AgentEvidence.projectConfigChanged(agent: .claude, folder: project, since: Date().addingTimeInterval(60), home: home))
+    }
+
+    /// A config folder renamed or linked into place keeps its files' old times; the folder's own change shows it.
+    @Test func aConfigFolderMovedOrLinkedIntoPlaceIsSeen() throws {
+        let (home, project) = try makeHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let fm = FileManager.default
+        try write(json(["hooks": [:]]), to: project + "/docs/old/.claude/settings.json")
+        try write("{}", to: project + "/docs/old/.mcp.json")
+        usleep(20_000)
+        let start = Date()
+        usleep(20_000)
+        func changed() -> Bool { AgentEvidence.projectConfigChanged(agent: .claude, folder: project, since: start, home: home) }
+        #expect(!changed())
+        try fm.moveItem(atPath: project + "/docs/old/.claude", toPath: project + "/.claude")
+        #expect(changed())
+        try fm.moveItem(atPath: project + "/.claude", toPath: project + "/docs/old/.claude")
+        try fm.createSymbolicLink(atPath: project + "/.claude", withDestinationPath: project + "/docs/old/.claude")
+        #expect(changed())
+        try fm.removeItem(atPath: project + "/.claude")
+        try fm.moveItem(atPath: project + "/docs/old/.mcp.json", toPath: project + "/.mcp.json")
+        #expect(changed())
+    }
+
+    /// A session run in the home folder reads the home folder's project config like any other's. Above a project,
+    /// the home folder's is the user's own and is not counted.
+    @Test func aSessionInTheHomeFolderChecksItsConfig() throws {
+        let (home, project) = try makeHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let start = Date().addingTimeInterval(-60)
+        try write("{}", to: home + "/.mcp.json")
+        #expect(AgentEvidence.projectConfigChanged(agent: .claude, folder: home, since: start, home: home))
+        #expect(!AgentEvidence.projectConfigChanged(agent: .claude, folder: project, since: start, home: home))
     }
 
     @Test func projectConfigTouchedAfterTheStartIsSeen() throws {
@@ -445,6 +720,37 @@ import Testing
         #expect(AgentEvidence.invokedPath("./bin/x", searchPath: nil, directory: "/Users/x/app") == "/Users/x/app/bin/x")
     }
 
+    /// A link a folder on the PATH gained in the workspace (direnv's bin) is what capture finds first, and it leads to
+    /// the very file that ran. The resume would run that link, which anything in the tab can point elsewhere: on the
+    /// line. The same link in the user's own bin folder passes.
+    @Test func aWorkspaceLinkOnThePathGoesOnTheLine() throws {
+        let (home, project) = try makeHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let fm = FileManager.default
+        let binary = home + "/.local/share/claude/versions/2.1.280"
+        try fm.createDirectory(atPath: (binary as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        fm.createFile(atPath: binary, contents: Data(), attributes: [.posixPermissions: 0o755])
+        try write(json(claudeFields(start: try ownStart(), cwd: project)), to: home + "/.claude/sessions/\(getpid()).json")
+        for folder in [project + "/bin", home + "/.local/bin"] {
+            try fm.createDirectory(atPath: folder, withIntermediateDirectories: true)
+            try fm.createSymbolicLink(atPath: folder + "/claude", withDestinationPath: binary)
+            let leader = try process(["claude"], executable: binary, directory: project, environment: ["PATH": folder + ":/usr/bin"])
+            var evidence = try #require(capture(leader, typed: "claude", home: home, shell: [:]))
+            #expect(evidence.executable == folder + "/claude" && evidence.source == .sessionFile)
+            evidence.flagsAllowed = true
+            var facts = ResumeFacts.read(for: evidence, projects: [project], tabFolder: project, sessionAvailable: true, home: home)
+            facts.temporaryFolders = [] // the test's home is in one
+            facts.projectConfigChanged = false
+            let verdict = evidence.gate(facts)
+            if folder.hasPrefix(project) {
+                #expect(verdict == .onTheLine([.location]), "\(verdict)")
+            } else if case .onTheLine(let failed) = verdict {
+                Issue.record("a link in the user's bin folder failed \(failed)")
+            }
+            try fm.removeItem(atPath: folder + "/claude")
+        }
+    }
+
     @Test func aScriptAgentRecordsItsInterpreterAndTheScriptsRealPath() throws {
         let (home, project) = try makeHome()
         defer { try? FileManager.default.removeItem(atPath: home) }
@@ -486,5 +792,13 @@ import Testing
         let back = try SessionSnapshot.decode(try mended.encoded()).panes.first?.agent
         #expect(back?.flags == [] && back?.leftOff == [] && back?.flagsAllowed == false)
         #expect(back?.sessionID == "ses_6a3f2b9c1d")
+        // The store an automatic agent used is kept, so the restore checks and reads that one; one that is not a plain
+        // absolute path is dropped.
+        let stores: [(String, String?)] = [("/Users/x/work/claude", "/Users/x/work/claude"), ("work/claude", nil), ("/Users/x/a\u{202E}b", nil)]
+        for (store, kept) in stores {
+            pane.agent = Evidence(agent: .claude, sessionID: uuid, source: .sessionFile, store: store)
+            let saved = SessionSnapshot(header: snapshot.header, windows: [.init(groups: [.init(root: .pane(pane), focused: pane.id)])])
+            #expect(try SessionSnapshot.decode(try saved.encoded()).panes.first?.agent?.store == kept, "\(store)")
+        }
     }
 }

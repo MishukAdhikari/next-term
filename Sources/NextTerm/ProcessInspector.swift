@@ -88,41 +88,54 @@ enum ProcessInspector {
 
     /// The evidence of the agent a tab runs (KTD4), read now: on each periodic save, and again at quit before any
     /// signal reaches the tab. The process leading the tab's foreground group counts only when it descends from the
-    /// tab's shell; copies of the same agent below it (a CLI that runs itself again in a child) are read with it, and
-    /// for Copilot CLI the session its commands are told. The shell's environment as it started is what the agent's
-    /// routing variables are compared with. Nil when the tab runs no agent.
+    /// tab's shell. For an agent that runs itself again in a child (RestoreAgent.relaunchesItself), that child is read
+    /// with it; for Copilot CLI, the session its commands are told. The agent's routing variables are compared with the
+    /// login shell's (LoginShell.routing), the environment a restored tab's shell starts with: the tab's own shell
+    /// shows the kernel no environment, and what its rc files export never reaches that record. Nil when the tab runs
+    /// no agent.
     static func agentEvidence(ptyFileDescriptor fd: Int32, shellPid: pid_t, status: TabStatus,
                               home: String = NSHomeDirectory()) -> SessionSnapshot.Evidence? {
         var capture = AgentEvidence.Capture(status: status, home: home)
-        let routing = Set(RestoreAgent.allCases.flatMap(\.routingVariables))
-        capture.shellEnvironment = arguments(of: shellPid, keeping: routing)?.environment ?? [:]
+        capture.shellRouting = LoginShell.routing
         let leaderID = fd >= 0 && shellPid > 0 ? tcgetpgrp(fd) : -1
-        if leaderID > 0, var leader = agentProcess(leaderID) {
-            let agent = RestoreAgent(process: leader)
+        if leaderID > 0, let found = agentProcess(leaderID) {
+            let agent = RestoreAgent(process: found)
             let readsFiles = agent == .codex
-            if readsFiles { leader.openFiles = openFiles(of: leaderID) }
-            capture.leader = leader
+            capture.leader = readsFiles ? holdingFiles(found) : found
             capture.verified = descends(leaderID, from: shellPid)
-            let family = agent == nil ? [] : descendants(of: leaderID)
-            capture.relaunched = family.compactMap { child -> AgentProcess? in
-                guard var process = agentProcess(child), RestoreAgent(process: process) == agent else { return nil }
-                if readsFiles { process.openFiles = openFiles(of: child) }
-                return process
+            if agent?.relaunchesItself == true {
+                // Only a child of its own is the agent run again: a copy further down is one its tools started.
+                capture.relaunched = children(of: leaderID).compactMap { child -> AgentProcess? in
+                    guard let process = agentProcess(child), RestoreAgent(process: process) == agent else { return nil }
+                    return readsFiles ? holdingFiles(process) : process
+                }
             }
             if agent == .copilot {
                 let key = AgentEvidence.copilotSessionKey
-                capture.childSessionIDs = family.compactMap { arguments(of: $0, keeping: [key])?.environment[key] }
+                capture.childSessionIDs = descendants(of: leaderID).compactMap { arguments(of: $0, keeping: [key])?.environment[key] }
             }
         }
         return AgentEvidence.capture(capture)
     }
 
     /// What capture reads of one process: when it started, the file the kernel ran, its whole argv, the variables of
-    /// AgentEvidence.environmentKeys and no others, and its folder.
+    /// AgentEvidence.environmentKeys by value and of AgentEvidence.routingKeys as digests only, and its folder. Each is
+    /// a call of its own, so the start time is read first and again last: a pid the kernel gave another process in
+    /// between would mix the two, and reads as none.
     static func agentProcess(_ pid: pid_t) -> AgentProcess? {
-        guard let path = executablePath(of: pid), let read = arguments(of: pid, keeping: AgentEvidence.environmentKeys) else { return nil }
-        return AgentProcess(pid: pid, startedAt: startTime(of: pid), executable: path, arguments: read.arguments,
-                            environment: read.environment, directory: currentDirectory(of: pid))
+        guard let start = startTime(of: pid), let path = executablePath(of: pid),
+              let read = arguments(of: pid, keeping: AgentEvidence.environmentKeys, digesting: AgentEvidence.routingKeys) else { return nil }
+        let directory = currentDirectory(of: pid)
+        guard startTime(of: pid) == start else { return nil }
+        return AgentProcess(pid: pid, startedAt: start, executable: path, arguments: read.arguments, environment: read.environment,
+                            directory: directory, routing: read.routing)
+    }
+
+    /// `process` with the files it holds open, while it is still the process that was read.
+    private static func holdingFiles(_ process: AgentProcess) -> AgentProcess? {
+        var holding = process
+        holding.openFiles = openFiles(of: process.pid)
+        return startTime(of: process.pid) == process.startedAt ? holding : nil
     }
 
     /// When a process started, by the kernel's clock.
@@ -150,15 +163,15 @@ enum ProcessInspector {
         return String(cString: buffer)
     }
 
-    /// A process's whole argv and the variables of `keys` in its environment (KERN_PROCARGS2). Only a process of this
-    /// user's can be read.
-    static func arguments(of pid: pid_t, keeping keys: Set<String>) -> ProcessArguments? {
+    /// A process's whole argv, the variables of `keys` in its environment, and those of `secret` as digests
+    /// (KERN_PROCARGS2). Only a process of this user's can be read.
+    static func arguments(of pid: pid_t, keeping keys: Set<String>, digesting secret: Set<String> = []) -> ProcessArguments? {
         var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
         var size = 0
         guard pid > 0, sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 0 else { return nil }
         var buffer = [UInt8](repeating: 0, count: size)
         guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return nil }
-        return ProcessArguments.parse(Array(buffer.prefix(size)), keeping: keys)
+        return ProcessArguments.parse(Array(buffer.prefix(size)), keeping: keys, digesting: secret)
     }
 
     /// `pid` is `ancestor`, or below it.

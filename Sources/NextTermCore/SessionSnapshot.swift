@@ -309,6 +309,9 @@ extension SessionSnapshot {
         public var source: IDSource
         /// The folder the session recorded.
         public var sessionFolder: String?
+        /// For Claude Code, Codex and Qwen Code, the real path of the store their session file was read in
+        /// (CLAUDE_CONFIG_DIR and CODEX_HOME move it): the restore checks it and reads its settings and sessions.
+        public var store: String?
         /// The agent's executable as it ran, an absolute path. For a script agent, `interpreter` and `script`
         /// say what runs: a resume runs the interpreter on the script, never through the script's shebang.
         public var executable: String?
@@ -338,7 +341,7 @@ extension SessionSnapshot {
         public var flagsAllowed: Bool
 
         /// Each fact not known reads as the answer that resumes nothing: nil, or false.
-        public init(agent: Agent, sessionID: String? = nil, source: IDSource = .guess, sessionFolder: String? = nil,
+        public init(agent: Agent, sessionID: String? = nil, source: IDSource = .guess, sessionFolder: String? = nil, store: String? = nil,
                     executable: String? = nil, interpreter: String? = nil, script: String? = nil, startedAt: Date? = nil,
                     sessionDate: Date? = nil, routingMatchesShell: Bool = false, autoContinueOff: Bool = false,
                     ranAsTyped: Bool = false, flags: [String] = [], leftOff: [String] = [], flagsAllowed: Bool = false) {
@@ -346,6 +349,7 @@ extension SessionSnapshot {
             self.sessionID = sessionID
             self.source = source
             self.sessionFolder = sessionFolder
+            self.store = store
             self.executable = executable
             self.interpreter = interpreter
             self.script = script
@@ -891,6 +895,7 @@ extension SessionSnapshot.Evidence {
         var fixed = self
         fixed.sessionID = SnapshotText.token(sessionID, max: 128, extra: "._:_-")
         fixed.sessionFolder = SnapshotText.plainPath(sessionFolder, max: limits.path)
+        fixed.store = SnapshotText.plainPath(store, max: limits.path)
         fixed.executable = SnapshotText.plainPath(executable, max: limits.path)
         fixed.interpreter = SnapshotText.plainPath(interpreter, max: limits.path)
         fixed.script = SnapshotText.plainPath(script, max: limits.path)
@@ -1336,8 +1341,8 @@ extension SessionSnapshot.Command: Codable {
 
 extension SessionSnapshot.Evidence: Codable {
     private enum Keys: String, CodingKey {
-        case agent, sessionID, source, sessionFolder, executable, interpreter, script, startedAt, sessionDate, routingMatchesShell
-        case autoContinueOff, ranAsTyped, flags, leftOff, flagsAllowed
+        case agent, sessionID, source, sessionFolder, store, executable, interpreter, script, startedAt, sessionDate
+        case routingMatchesShell, autoContinueOff, ranAsTyped, flags, leftOff, flagsAllowed
     }
 
     public init(from decoder: Decoder) throws {
@@ -1345,6 +1350,7 @@ extension SessionSnapshot.Evidence: Codable {
         self.init(agent: c.value(.agent, or: .unknown), source: c.value(.source, or: .unknown))
         sessionID = c.optional(String.self, .sessionID)
         sessionFolder = c.optional(String.self, .sessionFolder)
+        store = c.optional(String.self, .store)
         executable = c.optional(String.self, .executable)
         interpreter = c.optional(String.self, .interpreter)
         script = c.optional(String.self, .script)
@@ -1370,6 +1376,7 @@ extension SessionSnapshot.Evidence: Codable {
         try c.encodeIfPresent(sessionID, forKey: .sessionID)
         try c.encode(source.rawValue, forKey: .source)
         try c.encodeIfPresent(sessionFolder, forKey: .sessionFolder)
+        try c.encodeIfPresent(store, forKey: .store)
         try c.encodeIfPresent(executable, forKey: .executable)
         try c.encodeIfPresent(interpreter, forKey: .interpreter)
         try c.encodeIfPresent(script, forKey: .script)

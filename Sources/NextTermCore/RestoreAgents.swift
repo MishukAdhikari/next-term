@@ -72,19 +72,24 @@ extension SessionSnapshot.Agent {
         }
     }
 
-    /// The agent a process runs, as the kernel shows it: by its name, argv and path hints, or (an npm install's
-    /// `bin/claude` link, run by node) by its script's name.
+    /// The agent a process runs, as the kernel shows it, judged strictly (CommandClassifier.agentName): by its
+    /// executable's or argv[0]'s name, an agent's own install, or the script an interpreter runs (an npm install's
+    /// `bin/claude` link, run by node). One the matrix does not know is `.unknown`, still an agent; a process that runs
+    /// none, such as a dev server in a folder named like an agent, is nil.
     public init?(process: AgentProcess) {
-        let name = (process.executable as NSString).lastPathComponent
-        let foreground = ForegroundProcess(isShell: false, name: name, arguments: process.arguments, executablePath: process.executable)
-        if CommandClassifier.kind(of: foreground) == .agent, let agent = Self(program: CommandClassifier.programName(of: foreground)) {
-            self = agent
-            return
-        }
-        guard let index = Self.scriptIndex(argv: process.arguments, executable: process.executable),
-              let agent = Self.scriptAgent(process.arguments[index]) else { return nil }
-        self = agent
+        guard let name = CommandClassifier.agentName(executable: process.executable, arguments: process.arguments) else { return nil }
+        self = Self(program: name) ?? .unknown
     }
+
+    /// The agent a typed line runs, judged as strictly: `.unknown` for one the matrix does not know, nil for none.
+    public init?(line: String) {
+        guard let name = CommandClassifier.agentName(line) else { return nil }
+        self = Self(program: name) ?? .unknown
+    }
+
+    /// It runs itself again in a child whose own record is the session's: Codex's npm build starts its native binary,
+    /// Qwen Code restarts node with more memory. Another agent's copy below it is one its tools ran: another session.
+    public var relaunchesItself: Bool { self == .codex || self == .qwen }
 
     /// The session list's agent, when it knows this one.
     public var kind: AgentKind? {
@@ -274,9 +279,9 @@ extension SessionSnapshot.Agent {
         return argv.indices.dropFirst().first { !argv[$0].hasPrefix("-") }
     }
 
-    /// The agent a script is, by its name or a path hint.
+    /// The agent a script is, by its name or its own package (CommandClassifier.scriptAgentName).
     static func scriptAgent(_ script: String) -> Self? {
-        Self(program: CommandClassifier.baseName(script)) ?? CommandClassifier.hintedAgentName(in: script).flatMap { Self(program: $0) }
+        CommandClassifier.scriptAgentName(script).map { Self(program: $0) ?? .unknown }
     }
 
     // MARK: the put-back line
@@ -475,6 +480,9 @@ public enum ResumeCheck: String, CaseIterable, Sendable {
     case autoContinue
     /// The session is not in its store, or a live process holds it.
     case session
+    /// The store its session file was read in is gone, is no longer that real folder, is not the user's alone, or lies
+    /// where a tab can write: a project, the tab's or session's folder, a temporary folder (KTD4).
+    case store
     /// The session's folder is gone, someone else's, writable by others or not local.
     case folder
     /// What runs no longer resolves.
@@ -499,8 +507,8 @@ public enum ResumeVerdict: Equatable, Sendable {
 /// What the gate reads of the Mac as it is at restore.
 public struct ResumeFacts: Sendable {
     public var user: uid_t
-    /// By the path the evidence records: the executable, interpreter, script and session folder. A path missing
-    /// here leads nowhere.
+    /// By the path the evidence records: the executable, interpreter, script, session folder and store. A path
+    /// missing here leads nowhere.
     public var files: [String: FileFacts]
     /// Folders the agent's code must lie outside: every open project, the tab's folder, the session's folder.
     public var outside: [String]
@@ -526,7 +534,8 @@ public struct ResumeFacts: Sendable {
     public static func read(for evidence: SessionSnapshot.Evidence, projects: [String], tabFolder: String?, sessionAvailable: Bool,
                             home: String = NSHomeDirectory()) -> ResumeFacts {
         var facts = ResumeFacts(sessionAvailable: sessionAvailable)
-        for path in [evidence.executable, evidence.interpreter, evidence.script, evidence.sessionFolder].compactMap({ $0 }) {
+        let paths = [evidence.executable, evidence.interpreter, evidence.script, evidence.sessionFolder, evidence.store]
+        for path in paths.compactMap({ $0 }) {
             facts.files[path] = FileFacts.read(path)
         }
         facts.outside = (projects + [tabFolder, evidence.sessionFolder].compactMap { $0 }).map(canonicalPath)
@@ -535,7 +544,8 @@ public struct ResumeFacts: Sendable {
         facts.projectConfigChanged = folder.map {
             AgentEvidence.projectConfigChanged(agent: evidence.agent, folder: $0, since: evidence.startedAt, home: home)
         } ?? true
-        facts.settingsAutoContinue = evidence.agent == .claude && AgentEvidence.claudeSettingsAutoContinue(home: home, folder: folder)
+        let claude = evidence.agent == .claude
+        facts.settingsAutoContinue = claude && AgentEvidence.claudeSettingsAutoContinue(home: home, store: evidence.store, folder: folder)
         return facts
     }
 
@@ -561,6 +571,7 @@ extension SessionSnapshot.Evidence {
         if !routingMatchesShell { failed.append(.routing) }
         if !autoContinueOff || facts.settingsAutoContinue { failed.append(.autoContinue) }
         if !facts.sessionAvailable { failed.append(.session) }
+        if !storeIsSafe(facts) { failed.append(.store) }
         if !folderIsSafe(facts) { failed.append(.folder) }
         failed += codeProblems(facts)
         if startedAt == nil || facts.projectConfigChanged { failed.append(.projectConfig) }
@@ -575,8 +586,18 @@ extension SessionSnapshot.Evidence {
         return found.isDirectory && found.owner == facts.user && !found.othersCanWrite && found.isLocal
     }
 
+    /// The store capture read the session file in is still that real folder, the user's alone, and outside every
+    /// folder a tab can write.
+    private func storeIsSafe(_ facts: ResumeFacts) -> Bool {
+        guard let store, let found = facts.files[store] else { return false }
+        let owned = found.isDirectory && found.owner == facts.user && !found.othersCanWrite
+        return owned && found.realPath == store && !facts.forbids(found.realPath)
+    }
+
     /// What runs (the executable, or a script agent's interpreter and script), by real path: there, a regular file of
-    /// the user's or root's that others cannot write, outside projects and temporary folders.
+    /// the user's or root's that others cannot write, outside projects and temporary folders. The resume runs the
+    /// recorded path, so each link it passes on the way must lie outside them too: one there could be pointed
+    /// elsewhere between this check and the run.
     private func codeProblems(_ facts: ResumeFacts) -> [ResumeCheck] {
         guard let paths = codePaths else { return [.executable] }
         var problems: [ResumeCheck] = []
@@ -585,7 +606,7 @@ extension SessionSnapshot.Evidence {
                 problems.append(.executable)
                 continue
             }
-            if facts.forbids(file.realPath) { problems.append(.location) }
+            if facts.forbids(file.realPath) || file.linksFollowed.contains(where: facts.forbids) { problems.append(.location) }
             let owned = file.owner == facts.user || file.owner == 0
             if !file.isRegular || !owned || file.othersCanWrite { problems.append(.ownership) }
         }
@@ -603,8 +624,8 @@ extension SessionSnapshot.Evidence {
 
     /// The automatic resume (KTD5): `/usr/bin/env -u <auto-continue variables>`, the recorded absolute path (a
     /// script agent's interpreter and script), the resume form with the id, and the options it may carry. Nil when
-    /// any of it is missing or not one plain line. It holds no prompt words.
-    public var resumeCommand: String? {
+    /// any of it is missing or not one plain line. It holds no prompt words. Only the gate hands it out (`.resume`).
+    var resumeCommand: String? {
         guard agent.resumesAutomatically, let id = sessionID, agent.isSessionID(id), agent.carries(flags),
               SnapshotText.plainPath(sessionFolder, max: SessionSnapshot.Limits.standard.path) != nil,
               let paths = codePaths, let words = agent.resumeWords(id: id, folder: sessionFolder) else { return nil }

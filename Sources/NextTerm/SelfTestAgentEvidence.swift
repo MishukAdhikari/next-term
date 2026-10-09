@@ -50,6 +50,7 @@ extension SelfTest {
         check(exact?.sessionFolder == project && exact?.executable == bin + "/claude" && exact?.ranAsTyped == true
               && exact?.flagsAllowed == true && exact?.startedAt != nil,
               "evidence: it records the session's folder, the path that ran, and that the line ran as typed", String(describing: exact))
+        check(exact?.store == home + "/.claude", "evidence: it records the store the session file was read in", exact?.store ?? "none")
         let guessed = capture(started: start.addingTimeInterval(-3600))
         check(guessed?.agent == .claude && guessed?.source == .guess && guessed?.sessionID == nil,
               "evidence: the same file for another start of that pid is a guess", String(describing: guessed))
