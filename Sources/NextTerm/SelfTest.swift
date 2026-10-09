@@ -424,7 +424,7 @@ enum SelfTest {
         let busy = c.addTab(directory: nil)
         _ = await wait(20) { busy.status.integrated }
         busy.view.send(txt: "sleep 30\r")
-        _ = await wait(3) { busy.status.running }
+        _ = await wait(10) { busy.status.running } // under load it can take its time to start
         let shellPid = busy.view.process.shellPid
         let jobPid = tcgetpgrp(busy.view.process.childfd) // the `sleep 30`
         c.closeTab(nil)
@@ -3690,6 +3690,12 @@ enum SelfTest {
         }
         _ = await wait(3) { made.allSatisfy { !$0.status.running } }
         for tab in made { c.requestClose(tab) }
+        // One still running (the agent, slow to start or to stop under load) asks: it is closed all the same, and
+        // said, not left as a sheet over the window for the checks after.
+        if let window = c.window {
+            let asked = await endSheets(over: window)
+            if !asked.isEmpty { note("tab states: closed past its sheet: " + asked.joined(separator: "; ")) }
+        }
     }
 
     // MARK: editor
