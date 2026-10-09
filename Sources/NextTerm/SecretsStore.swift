@@ -400,11 +400,31 @@ final class SecretsStore {
     nonisolated private static func work(_ action: Action, facts: Facts, folder: SecretFolder,
                                          keyring: (SecretVault.Index) -> VaultKeyring, newKeyring: () throws -> VaultKeyring,
                                          token: AnyObject) throws -> Work {
+        var values: [String: SecretBytes] = [:]
+        var earlier: SecretVault.Origin?
+        var work = try unlocked(makes: action.isAdd, firstName: action.names.first, folder: folder, keyring: keyring,
+                                newKeyring: newKeyring, token: token) { vault, maskKey in
+            try apply(action, to: vault, maskKey: maskKey, values: &values, earlier: &earlier)
+        }
+        work.values = values
+        let line = SecretAudit.Line(event: action.event, names: action.names, who: facts.who, command: facts.command,
+                                    folder: facts.folder, approval: facts.approval, outcome: "done",
+                                    earlierOrigin: earlier?.rawValue)
+        try? folder.appendAudit(SecretAudit.encode(line, masking: { SecretMask.current.mask($0) }))
+        work.line = line
+        return work
+    }
+
+    /// The vault unlocked under its lock (or made, when `makes` and there is none), `change` run on it, and what it
+    /// returns written; the vault key dropped after. A missing `mask.key` is made again, with new marks.
+    nonisolated private static func unlocked(makes: Bool, firstName: String?, folder: SecretFolder,
+                                             keyring: (SecretVault.Index) -> VaultKeyring, newKeyring: () throws -> VaultKeyring,
+                                             token: AnyObject,
+                                             change: (SecretVault, SymmetricKey?) throws -> Data?) throws -> Work {
         try folder.ensure()
         var vault: SecretVault?
         defer { vault?.wipe() }
         var work = Work()
-        var earlier: SecretVault.Origin?
         try folder.withLock {
             try folder.update { current in
                 let opened: SecretVault
@@ -416,7 +436,7 @@ final class SecretsStore {
                     let index = try SecretVault.index(from: current)
                     opened = try SecretVault.unlock(current, keyring: keyring(index), context: token)
                 } else {
-                    guard action.isAdd else { throw SecretVault.Failure.noSuchKey(action.names.first ?? "") }
+                    guard makes else { throw SecretVault.Failure.noSuchKey(firstName ?? "") }
                     let made: (vault: SecretVault, maskKey: SecretBytes)
                     do {
                         made = try SecretVault.create(keyring: newKeyring())
@@ -444,17 +464,150 @@ final class SecretsStore {
                         remarked = true
                     }
                 }
-                let written = try apply(action, to: opened, maskKey: maskKey, values: &work.values, earlier: &earlier)
+                let written = try change(opened, maskKey)
                 return written ?? (remarked ? opened.file : nil)
             }
         }
         work.index = vault?.index
-        let line = SecretAudit.Line(event: action.event, names: action.names, who: facts.who, command: facts.command,
-                                    folder: facts.folder, approval: facts.approval, outcome: "done",
-                                    earlierOrigin: earlier?.rawValue)
-        try? folder.appendAudit(SecretAudit.encode(line, masking: { SecretMask.current.mask($0) }))
-        work.line = line
         return work
+    }
+
+    // MARK: the import
+
+    /// A key the import saves.
+    struct ImportKey {
+        var name: String
+        var purpose: String
+        var value: SecretBytes
+    }
+
+    /// One Touch ID for an import: saves its keys (origin `import`) and seals each backup's kept values under the vault
+    /// key. Returns the sealed boxes by backup id. Nothing is saved on a failure.
+    func performImport(_ keys: [ImportKey], kept: [String: [SecretBytes]], reason: String) async throws -> [String: Data] {
+        var boxes: [String: Data] = [:]
+        let names = keys.map(\.name)
+        try await run(makes: true, names: names, reason: reason) { vault, maskKey in
+            var file: Data?
+            for key in keys {
+                file = try vault.add(name: key.name, purpose: key.purpose, purposeBy: .user, origin: .import, writeOnly: false, value: key.value,
+                                     maskKey: maskKey)
+            }
+            for (id, values) in kept where !values.isEmpty { boxes[id] = try vault.sealBackup(values, id: id) }
+            return file
+        } line: { SecretAudit.Line(event: .import, names: names, outcome: "moved \(names.count) \(names.count == 1 ? "key" : "keys")") }
+        return boxes
+    }
+
+    /// One Touch ID for an Undo: the keys' values and each backup's kept values, handed to `put`, which writes the
+    /// files and says which keys' entries all went back. A write-only key's value is never handed over: Next Term never
+    /// shows it again, in a file either, so its entries are left. With `delete`, those keys are then deleted from
+    /// Secrets, in the same unlock; a key whose entry was left stays stored. `put` runs once, even when the vault's
+    /// write is tried again.
+    func performUndo(names: [String], kept: [String: Data], delete: Bool, reason: String,
+                     put: @escaping @Sendable ([String: SecretBytes], [String: [SecretBytes]]) -> Set<String>) async throws {
+        var deleted: [String] = []
+        var putBack: Set<String>?
+        try await run(makes: false, names: names, reason: reason) { vault, _ in
+            var values: [String: SecretBytes] = [:]
+            for name in names {
+                guard let entry = vault.index.entry(named: name), !entry.writeOnly else { continue }
+                values[name] = try vault.value(of: name)
+            }
+            var opened: [String: [SecretBytes]] = [:]
+            for (id, box) in kept { opened[id] = try vault.openBackup(box, id: id) }
+            let back = putBack ?? put(values, opened)
+            putBack = back
+            guard delete else { return nil }
+            var file: Data?
+            for name in names where back.contains(name) && vault.index.entry(named: name) != nil {
+                file = try vault.delete(name)
+                deleted.append(name)
+            }
+            return file
+        } line: { SecretAudit.Line(event: .undo, names: names, outcome: deleted.isEmpty ? "put back" : "put back, and deleted \(deleted.joined(separator: ", "))") }
+        if !deleted.isEmpty { NotificationCenter.default.post(name: Self.keysChanged, object: self, userInfo: ["names": deleted]) }
+    }
+
+    /// A presence check, then `change` on the unlocked vault off the main thread, then `line` in the audit log.
+    private func run(makes: Bool, names: [String], reason: String, change: @escaping (SecretVault, SymmetricKey?) throws -> Data?,
+                     line: @escaping () -> SecretAudit.Line) async throws {
+        reloadIfChanged()
+        if protection == .tampered { throw Failure.vault(.tampered) }
+        if protection == .cantOpen { throw Failure.vault(.cantOpen) }
+        if index == nil, !makes { throw Failure.vault(.noSuchKey(names.first ?? "")) }
+        let control = index?.keyring == .secureEnclave ? UserPresence.secureEnclaveAccessControl() : nil
+        let isKeychain = index?.keyring == .keychain
+        let token: AnyObject
+        do {
+            token = try await presence.confirm(reason: reason, accessControl: control)
+        } catch let failure as UserPresence.Failure {
+            throw failure == .cancelled ? Failure.cancelled : Failure.unavailable
+        }
+        defer { presence.finish(token) }
+        if isKeychain { setWaitingForKeychain(true) }
+        let folder = folder
+        let keyring = keyring
+        let newKeyring = newKeyring
+        let box = UncheckedBox(change)
+        let result = await onQueue { () -> Result<Work, Error> in
+            Result { try Self.unlocked(makes: makes, firstName: names.first, folder: folder, keyring: keyring, newKeyring: newKeyring, token: token,
+                                       change: box.value) }
+        }
+        if isKeychain { setWaitingForKeychain(false) }
+        switch result {
+        case .success(let work):
+            if let changed = work.index { index = changed }
+            if protection == .none, let index { protection = Self.protection(of: index) }
+            indexDate = folder.modificationDate(of: SecretFolder.vaultName)
+            try? folder.appendAudit(SecretAudit.encode(line(), masking: { SecretMask.current.mask($0) }))
+            publishMarks()
+            NotificationCenter.default.post(name: Self.changed, object: self)
+        case .failure(let error):
+            throw handle(error, action: .use(names: names), facts: Facts())
+        }
+    }
+
+    // MARK: backups
+
+    /// Writes an import's backups to `imports/`, 0600, excluded from backups.
+    func saveBackups(_ backups: [SecretImport.EntryBackup]) throws {
+        _ = try folder.ensureImports()
+        for backup in backups {
+            guard let data = backup.encoded() else { continue }
+            try folder.write(SecretFolder.importsName + "/" + backup.fileName, data: data)
+        }
+    }
+
+    /// The backups younger than 30 days, newest first. Older ones are removed.
+    func recentBackups(now: Date = Date()) -> [SecretImport.EntryBackup] {
+        let imports = folder.url.appendingPathComponent(SecretFolder.importsName)
+        guard PrivateFolder.isPrivate(imports.path, owner: geteuid()),
+              let names = try? FileManager.default.contentsOfDirectory(atPath: imports.path) else { return [] }
+        var found: [SecretImport.EntryBackup] = []
+        for name in names where name.hasSuffix(".json") {
+            // A record's id is in its file's name: one whose id names another file (a crafted id) is not read.
+            guard let data = try? folder.read(SecretFolder.importsName + "/" + name, cap: 1 << 20),
+                  let backup = SecretImport.EntryBackup.decode(data), Self.isPlainID(backup.id), name.hasSuffix("-\(backup.id).json") else { continue }
+            if now.timeIntervalSince(backup.date) > SecretImport.keptFor {
+                try? FileManager.default.removeItem(at: imports.appendingPathComponent(name))
+                continue
+            }
+            found.append(backup)
+        }
+        return found.sorted { $0.date > $1.date }
+    }
+
+    /// Removes a backup's record: the file in `imports/` whose name ends with its id.
+    func removeBackup(_ backup: SecretImport.EntryBackup) {
+        let imports = folder.url.appendingPathComponent(SecretFolder.importsName)
+        guard Self.isPlainID(backup.id), let names = try? FileManager.default.contentsOfDirectory(atPath: imports.path) else { return }
+        for name in names where name.hasSuffix("-\(backup.id).json") { try? FileManager.default.removeItem(at: imports.appendingPathComponent(name)) }
+        NotificationCenter.default.post(name: Self.changed, object: self)
+    }
+
+    /// A backup's id as Next Term makes them: lowercase letters, digits and hyphens.
+    nonisolated static func isPlainID(_ id: String) -> Bool {
+        !id.isEmpty && id.count <= 64 && id.unicodeScalars.allSatisfy { ("a"..."z").contains($0) || ("0"..."9").contains($0) || $0 == "-" }
     }
 
     /// The action on an unlocked vault: the new file's bytes, or nil when nothing is written (reveal, copy, use).
@@ -520,6 +673,12 @@ final class SecretsStore {
             queue.async { done.resume(returning: body()) }
         }
     }
+}
+
+/// A value handed to the store's queue: the closures `run` takes are used on that queue alone, while their caller waits.
+final class UncheckedBox<T>: @unchecked Sendable {
+    let value: T
+    init(_ value: T) { self.value = value }
 }
 
 /// The self-test's presence check: it passes at once, or refuses when told to, and counts its calls. Never a sheet.

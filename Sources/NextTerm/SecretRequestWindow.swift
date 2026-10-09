@@ -188,7 +188,7 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
     }
 
     /// The name as it will be saved: uppercased, spaces and hyphens made `_`.
-    static func normalized(_ typed: String) -> String {
+    nonisolated static func normalized(_ typed: String) -> String {
         String(typed.uppercased().map { $0 == " " || $0 == "-" ? "_" : $0 })
     }
 

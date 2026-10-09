@@ -13,7 +13,12 @@ extension SelfTest {
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         defer {
             try? FileManager.default.removeItem(at: base)
-            try? FileManager.default.removeItem(at: SecretsStore.shared.folder.url.deletingLastPathComponent().deletingLastPathComponent())
+            // The self-test store's own temporary folder, and only that: never a folder outside the temporary one.
+            let storeBase = SecretsStore.shared.folder.url.deletingLastPathComponent().deletingLastPathComponent()
+            if storeBase.lastPathComponent.hasPrefix("nt-secrets-"), storeBase.path.hasPrefix(canonicalPath(NSTemporaryDirectory()))
+                || storeBase.path.hasPrefix(NSTemporaryDirectory()) {
+                try? FileManager.default.removeItem(at: storeBase)
+            }
         }
         let realFolder = SecretFolder(applicationSupport: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
         let realBefore = secretsFolderDate(realFolder.url)
@@ -28,6 +33,7 @@ extension SelfTest {
         await secretsWrapperChecks(base)
         await secretsToolChecks(c, base: base, proj: proj)
         await secretsSettingsChecks(base: base)
+        await secretsImportChecks(base: base)
         check(secretsFolderDate(realFolder.url) == realBefore, "secrets: the real Secrets.noindex is untouched (unchanged, or not there)",
               "\(String(describing: realBefore)) → \(String(describing: secretsFolderDate(realFolder.url)))")
     }
@@ -1179,5 +1185,115 @@ extension SelfTest {
             await store.load()
         }
         for name in ["SHOWN_KEY", "HIDDEN_KEY"] { _ = try? await store.perform(.delete(name: name)) }
+    }
+}
+
+extension SelfTest {
+    // MARK: U8, the import
+
+    /// Fixture configs in a temporary home: the sheet moves one group, the files run the wrapper, the backups hold
+    /// markers, and Undo puts the entries back. With agent control off, the sheet refuses.
+    static func secretsImportChecks(base: URL) async {
+        let store = SecretsStore.shared
+        let home = base.appendingPathComponent("import-home", isDirectory: true)
+        let fm = FileManager.default
+        try? fm.createDirectory(at: home.appendingPathComponent(".cursor"), withIntermediateDirectories: true)
+        try? fm.createDirectory(at: home.appendingPathComponent(".codex"), withIntermediateDirectories: true)
+        let token = "ghp_" + "SelfTest" + secretsValue("")
+        let cursor = home.appendingPathComponent(".cursor/mcp.json")
+        let codex = home.appendingPathComponent(".codex/config.toml")
+        let cursorText = """
+            {
+              // the self-test's servers
+              "mcpServers": {
+                "github": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"], "env": {"GITHUB_TOKEN": "\(token)"}},
+                "other": {"command": "other-server"}
+              }
+            }
+
+            """
+        let codexText = """
+            [mcp_servers.github]
+            command = "npx"
+            args = ["-y", "@modelcontextprotocol/server-github"]
+            env = { GITHUB_TOKEN = "\(token)" }
+
+            """
+        try? cursorText.write(to: cursor, atomically: true, encoding: .utf8)
+        try? codexText.write(to: codex, atomically: true, encoding: .utf8)
+        func read(_ url: URL) -> String { (try? String(contentsOf: url, encoding: .utf8)) ?? "" }
+
+        let savedSetup = SecretsView.importSetup
+        defer { SecretsView.importSetup = savedSetup }
+        var setup = SecretImportSheet.Setup()
+        setup.home = home.path
+        setup.agentControl = false
+        setup.lockWait = 0.5
+        SecretsView.importSetup = { setup }
+        AppDelegate.shared.showSecrets(nil)
+        guard let controller = SecretsWindowController.shared, let window = controller.window else {
+            return check(false, "secrets: Window › Secrets for the import checks")
+        }
+        defer { window.close() }
+        let view = controller.secretsView
+
+        // Agent control off: the refusal, and nothing else.
+        view.importKeys()
+        let refused = view.importSheet
+        check(refused?.headerLabel.stringValue == SecretImportSheet.refusal && refused?.groupRows.isEmpty == true && refused?.moveButton.isEnabled == false,
+              "secrets: with agent control off, the import says to turn it on first and moves nothing", refused?.headerLabel.stringValue ?? "no sheet")
+        refused?.closeSheet()
+        _ = await wait(5) { view.importSheet == nil }
+
+        // On: one group for the token in two files, unticked; ticked and moved after the confirm and one Touch ID.
+        setup.agentControl = true
+        SecretsView.importSetup = { setup }
+        view.importKeys()
+        guard let sheet = view.importSheet else { return check(false, "secrets: Import from MCP Configs… opens its sheet") }
+        _ = await wait(10) { !sheet.groupRows.isEmpty }
+        let row = sheet.groupRows.first
+        check(sheet.groupRows.count == 1 && row?.box.state == .off && row?.group.name == "GITHUB_TOKEN" && row?.group.summary == "Same value in 2 servers"
+              && !sheet.moveButton.isEnabled,
+              "secrets: the import finds one key in two files, as one unticked group named after its variable",
+              "\(sheet.groupRows.map(\.group.name))")
+        sheet.tick("GITHUB_TOKEN")
+        sheet.moveButton.performClick(nil)
+        _ = await wait(5) { sheet.confirmAlert != nil }
+        let confirm = sheet.confirmAlert
+        check(confirm?.messageText == "Move 1 key into Secrets?" && confirm?.informativeText.contains(".cursor/mcp.json") == true
+              && confirm?.informativeText.contains(SecretImportSheet.startsAfter) == true,
+              "secrets: the confirm names the files and says how the servers start afterwards", confirm?.informativeText ?? "")
+        confirm?.buttons.first?.performClick(nil)
+        _ = await wait(15) { !sheet.summaryLabel.isHidden }
+        let cursorAfter = read(cursor)
+        let codexAfter = read(codex)
+        check(sheet.summaryLabel.stringValue.hasPrefix("Moved 1 key from 2 files.") && store.index?.entry(named: "GITHUB_TOKEN")?.origin == .import,
+              "secrets: the key is saved, and the summary says what moved", sheet.summaryLabel.stringValue)
+        check(cursorAfter.contains("\"secret\",\"run\",\"GITHUB_TOKEN\",\"--\",\"npx\"") && !cursorAfter.contains(token)
+              && cursorAfter.contains("// the self-test's servers") && codexAfter.contains("\"secret\", \"run\", \"GITHUB_TOKEN\", \"--\", \"npx\"")
+              && codexAfter.contains("startup_timeout_sec = 30") && !codexAfter.contains(token),
+              "secrets: both files now start the server through nxtrm secret run, with no key in them", cursorAfter)
+        let backups = store.recentBackups()
+        let records = backups.compactMap { $0.encoded() }.map { String(decoding: $0, as: UTF8.self) }
+        check(backups.count == 2 && backups.allSatisfy { $0.original.contains("⟦nextterm:GITHUB_TOKEN⟧") } && records.allSatisfy { !$0.contains(token) },
+              "secrets: each changed entry has a backup with a marker in place of the key, and no key")
+        sheet.closeSheet()
+        _ = await wait(5) { view.importSheet == nil }
+
+        // Undo, after its confirm: the entries are as they were, and the backups go.
+        view.reload()
+        guard let undo = view.importRows.first?.undo else { return check(false, "secrets: Recent imports lists the import, with Undo") }
+        undo.performClick(nil)
+        _ = await wait(5) { view.alert != nil }
+        check(view.alert?.messageText == "Put 1 key back into these files as plain text?" && view.undoDeleteBox?.state == .off,
+              "secrets: Undo asks first, with deleting the keys off")
+        view.alert?.buttons.first?.performClick(nil)
+        _ = await wait(15) { read(cursor).contains(token) && read(codex).contains(token) }
+        check(read(cursor) == cursorText && read(codex) == codexText,
+              "secrets: Undo puts each entry back as it was", read(codex))
+        _ = await wait(5) { store.recentBackups().isEmpty }
+        check(store.recentBackups().isEmpty && store.index?.entry(named: "GITHUB_TOKEN") != nil,
+              "secrets: the backups that went back are removed, and the key stays in Secrets")
+        _ = try? await store.perform(.delete(name: "GITHUB_TOKEN"))
     }
 }

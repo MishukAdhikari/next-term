@@ -8,6 +8,21 @@ import NextTermCore
 final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
     /// Whether "Let agents control Next Term" is on (the self-test sets its own, so the socket stays up).
     static var agentControlIsOn: () -> Bool = { AppDelegate.shared.agentControl }
+    /// Where the import looks and what runs now (the self-test points it at a temporary home).
+    static var importSetup: () -> SecretImportSheet.Setup = {
+        var setup = SecretImportSheet.Setup()
+        var seen = Set<String>()
+        setup.projects = AppDelegate.shared.controllers.compactMap(\.project).filter { seen.insert($0).inserted }
+        setup.agentControl = SecretsView.agentControlIsOn()
+        setup.running = SecretsView.runningApps()
+        return setup
+    }
+
+    /// The bundle identifiers of the apps that save their MCP file whole (the Claude app), when they run.
+    static func runningApps() -> Set<String> {
+        let claude = MCPRegistrar.claudeAppBundle
+        return NSRunningApplication.runningApplications(withBundleIdentifier: claude).isEmpty ? [] : [claude]
+    }
     static let docsURL = URL(string: "https://nxtrm.mishuk.me/docs/secrets/")!
 
     static let secureEnclaveLine = "Protected by this Mac's Secure Enclave. Using a key needs your approval with Touch ID or your password."
@@ -58,6 +73,11 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     private(set) var sheet: SecretEditSheet?
     private(set) var revealPopover: NSPopover?
     private(set) var revealField: NSTextField?
+    private(set) var importSheet: SecretImportSheet?
+    /// Recent imports, by batch, with their Undo buttons.
+    private(set) var importRows: [(batch: String, backups: [SecretImport.EntryBackup], undo: NSButton)] = []
+    /// The checkbox in Undo's confirm: also delete the keys from Secrets.
+    private(set) var undoDeleteBox: NSButton?
     private var timer: Timer?
     private var lockObserver: NSObjectProtocol?
 
@@ -143,7 +163,6 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
             button.action = action
             button.bezelStyle = .rounded
         }
-        importButton.isEnabled = false // U8: the import assistant
         let keyButtons = NSStackView(views: [addButton, editButton, replaceButton, deleteButton])
         keyButtons.spacing = 8
         let valueButtons = NSStackView(views: [revealButton, copyButton, writeOnlyButton, NSView(), importButton])
@@ -211,8 +230,10 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         agentControlLabel.isHidden = entries.isEmpty || Self.agentControlIsOn()
         emptyLabel.isHidden = !entries.isEmpty || broken
         addButton.isEnabled = !broken
+        importButton.isEnabled = !broken
         refreshButtons()
         reloadAllowed()
+        reloadImports()
         reloadPaused()
     }
 
@@ -497,7 +518,123 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         }
     }
 
-    @objc func importKeys() {}
+    @objc func importKeys() {
+        guard importSheet == nil, let window else { return }
+        let sheet = SecretImportSheet(Self.importSetup()) { [weak self] in
+            guard let self else { return }
+            if self.importSheet?.window?.sheetParent == nil { self.importSheet = nil }
+            self.reload()
+        }
+        importSheet = sheet
+        sheet.begin(on: window)
+    }
+
+    // MARK: Recent imports
+
+    private func reloadImports() {
+        for view in importsBox.arrangedSubviews { view.removeFromSuperview() }
+        importRows = []
+        let backups = SecretsStore.shared.recentBackups()
+        importsBox.isHidden = backups.isEmpty
+        guard !backups.isEmpty else { return }
+        importsBox.addArrangedSubview(Self.heading("Recent imports"))
+        var batches: [String] = []
+        for backup in backups where !batches.contains(backup.batch) { batches.append(backup.batch) }
+        for batch in batches {
+            let entries = backups.filter { $0.batch == batch }
+            let undo = NSButton(title: "Undo…", target: self, action: #selector(undoImport(_:)))
+            undo.bezelStyle = .rounded
+            undo.identifier = NSUserInterfaceItemIdentifier(batch)
+            let label = SecretApprovalPanel.label(Self.importText(entries), size: 12)
+            label.preferredMaxLayoutWidth = 420
+            let row = NSStackView(views: [label, NSView(), undo])
+            row.spacing = 8
+            importsBox.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: importsBox.widthAnchor).isActive = true
+            importRows.append((batch, entries, undo))
+        }
+    }
+
+    /// "9 Oct: GITHUB_TOKEN from 3 entries in 2 files".
+    static func importText(_ entries: [SecretImport.EntryBackup]) -> String {
+        let names = Array(Set(entries.flatMap(\.names))).sorted()
+        let files = Set(entries.map(\.path)).count
+        let day = entries.first.map { SecretRequests.dayText($0.date) } ?? ""
+        return "\(day): \(SecretRun.keysText(names)) from \(entries.count) \(entries.count == 1 ? "entry" : "entries") in \(files) "
+            + (files == 1 ? "file" : "files")
+    }
+
+    @objc func undoImport(_ sender: NSButton) {
+        guard let batch = sender.identifier?.rawValue, let row = importRows.first(where: { $0.batch == batch }), self.alert == nil,
+              let window else { return }
+        let names = Array(Set(row.backups.flatMap(\.names))).sorted()
+        let alert = NSAlert()
+        alert.messageText = "Put \(names.count) \(names.count == 1 ? "key" : "keys") back into these files as plain text?"
+        alert.informativeText = Set(row.backups.map(\.path)).sorted().map { "• " + SecretImportSheet.file($0) }.joined(separator: "\n")
+        alert.addButton(withTitle: "Put Back")
+        alert.addButton(withTitle: "Cancel")
+        let box = NSButton(checkboxWithTitle: "Also delete these keys from Secrets", target: nil, action: nil)
+        box.state = .off
+        alert.accessoryView = box
+        undoDeleteBox = box
+        self.alert = alert
+        alert.beginSheetModal(for: window) { [weak self] response in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.alert = nil
+                let delete = box.state == .on
+                self.undoDeleteBox = nil
+                if response == .alertFirstButtonReturn { self.putBack(row.backups, names: names, delete: delete) }
+            }
+        }
+    }
+
+    /// One Touch ID, then each entry put back while it is what Next Term wrote; the backups that went back are removed.
+    /// An entry that holds a write-only key is left: Next Term never shows that key again, in a file either.
+    func putBack(_ backups: [SecretImport.EntryBackup], names: [String], delete: Bool) {
+        let running = Self.runningApps()
+        let importSetup = Self.importSetup()
+        let lockWait = importSetup.lockWait
+        let home = importSetup.home
+        let writeOnly = Set(names.filter { SecretsStore.shared.index?.entry(named: $0)?.writeOnly == true })
+        let held = backups.filter { !$0.names.contains(where: writeOnly.contains) }
+        let refusals = backups.filter { $0.names.contains(where: writeOnly.contains) }.map { backup -> String in
+            let name = backup.names.first(where: writeOnly.contains) ?? ""
+            return "\(name) is write-only: Next Term never shows it again, so it left the “\(backup.location.server)” entry in "
+                + "\(SecretImportSheet.file(backup.path)) as it is."
+        }
+        guard !held.isEmpty else { return say(refusals.joined(separator: " ")) }
+        let asked = Array(Set(held.flatMap(\.names))).sorted()
+        var kept: [String: Data] = [:]
+        for backup in held { if let box = backup.keptBox { kept[backup.id] = box } }
+        let outcome = UndoOutcome()
+        Task { @MainActor in
+            do {
+                try await SecretsStore.shared.performUndo(names: asked, kept: kept, delete: delete, reason: SecretReason.putBack(asked.count)) { values, opened in
+                    var back = Set(asked)
+                    for backup in held {
+                        let result = SecretImport.undo(backup, values: values, kept: opened[backup.id] ?? [], home: home, lockWait: lockWait,
+                                                       isOpen: { running.contains($0) })
+                        outcome.add(backup, result)
+                        if result != .written { back.subtract(backup.names) }
+                    }
+                    return back
+                }
+                for (backup, result) in outcome.results where result == .written { SecretsStore.shared.removeBackup(backup) }
+                let left = refusals + outcome.results.compactMap { pair -> String? in
+                    if case .skipped(let reason) = pair.1 { return reason }
+                    return pair.1 == .written ? nil : SecretImportSheet.text(pair.1)
+                }
+                let back = outcome.results.filter { $0.1 == .written }.count
+                self.say(left.isEmpty ? "Put \(back) \(back == 1 ? "entry" : "entries") back." : left.joined(separator: " "))
+            } catch SecretsStore.Failure.cancelled {
+                self.say("Not approved.")
+            } catch {
+                self.say((error as? LocalizedError)?.errorDescription ?? "Next Term couldn’t put the keys back.")
+            }
+            self.reload()
+        }
+    }
 
     @objc private func openDocs() { NSWorkspace.shared.open(Self.docsURL) }
 
@@ -574,6 +711,24 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         revealField = nil
         revealPopover?.close()
         revealPopover = nil
+    }
+}
+
+/// What an Undo did to each entry, filled on the store's queue while the view waits.
+final class UndoOutcome: @unchecked Sendable {
+    private let lock = NSLock()
+    private var list: [(SecretImport.EntryBackup, SecretImport.Applied)] = []
+
+    func add(_ backup: SecretImport.EntryBackup, _ result: SecretImport.Applied) {
+        lock.lock()
+        list.append((backup, result))
+        lock.unlock()
+    }
+
+    var results: [(SecretImport.EntryBackup, SecretImport.Applied)] {
+        lock.lock()
+        defer { lock.unlock() }
+        return list
     }
 }
 
