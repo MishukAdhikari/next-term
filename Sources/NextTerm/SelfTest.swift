@@ -4478,6 +4478,7 @@ enum SelfTest {
                   "with Claude connected, a deleted file is typed with its note, not mentioned", agentTab.screenTail(3).joined(separator: " | "))
         }
 
+        await diffSelectionChecks(c, agentTab: agentTab, claude: claude)
         await geminiLinkChecks(c)
         await copilotLinkChecks(c, proj: proj, agentTab: agentTab)
         await opencodeLinkChecks(c, proj: proj)
