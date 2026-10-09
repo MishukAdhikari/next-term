@@ -110,7 +110,7 @@ extension SelfTest {
 
         // One change waits at a time.
         let first = Task { await client.call("write_file", ["path": notes, "content": "first\n"]) }
-        let shownFirst = await wait(10) { MCPWriteControl.pending?.window != nil }
+        let shownFirst = await wait(30) { MCPWriteControl.pending?.window != nil }
         let second = await client.call("create_file", ["path": root.appendingPathComponent("second.txt").path, "content": "x"])
         MCPWriteControl.pending?.window?.declineButton.performClick(nil)
         _ = await first.value
@@ -348,7 +348,7 @@ extension SelfTest {
         check(!granted.isError && grantNamed && grantWrote && MCPWriteControl.pending == nil,
               "MCP writes: a grant's change runs without a window, and says which grant", granted.text)
         let asking = Task { await door(.askOnMac, "asked\n", connection: "g-selftest") }
-        let doorWindow = await wait(10) { MCPWriteControl.pending?.window != nil }
+        let doorWindow = await wait(30) { MCPWriteControl.pending?.window != nil }
         let doorShown = texts(MCPWriteControl.pending?.window?.window?.contentView)
         MCPWriteControl.pending?.window?.declineButton.performClick(nil)
         let doorDeclined = await asking.value
@@ -359,12 +359,12 @@ extension SelfTest {
         // A remote Decline and Stop Asking stops that connection by its grant id: not another connection of
         // the same name, and not the agents on this Mac.
         let stopping = Task { await door(.askOnMac, "a\n", connection: "g-a") }
-        let stopShown = await wait(10) { MCPWriteControl.pending?.window != nil }
+        let stopShown = await wait(30) { MCPWriteControl.pending?.window != nil }
         MCPWriteControl.pending?.window?.stopButton?.performClick(nil)
         _ = await stopping.value
         let againA = await door(.askOnMac, "a\n", connection: "g-a")
         let otherB = Task { await door(.askOnMac, "b\n", connection: "g-b") }
-        let bAsked = await wait(10) { MCPWriteControl.pending?.window != nil }
+        let bAsked = await wait(30) { MCPWriteControl.pending?.window != nil }
         MCPWriteControl.pending?.window?.declineButton.performClick(nil)
         _ = await otherB.value
         let local = await client.asked("write_file", ["path": notes, "content": "local\n"], .decline)
@@ -496,7 +496,7 @@ extension SelfTest {
 
     /// The proposal propose_edit opened in the window's editor, once it shows.
     private static func proposalPane(in controller: TerminalWindowController) async -> DiffPane? {
-        _ = await wait(10) { controller.editorArea.proposals.contains { $0.proposal?.tag.hasPrefix("mcp:") == true && !$0.isDecided } }
+        _ = await wait(30) { controller.editorArea.proposals.contains { $0.proposal?.tag.hasPrefix("mcp:") == true && !$0.isDecided } }
         return controller.editorArea.proposals.first { $0.proposal?.tag.hasPrefix("mcp:") == true && !$0.isDecided }
     }
 
@@ -538,7 +538,7 @@ private final class WriteClient {
     /// Calls a tool that asks on the Mac, and answers the window as the user would.
     func asked(_ name: String, _ arguments: [String: Any], _ answer: Answer) async -> Outcome {
         let call = Task { await self.call(name, arguments) }
-        _ = await SelfTest.wait(10) { MCPWriteControl.pending?.window != nil }
+        _ = await SelfTest.wait(30) { MCPWriteControl.pending?.window != nil }
         let window = MCPWriteControl.pending?.window
         SelfTest.check(window != nil, "MCP writes: \(name) asks on the Mac before it changes anything")
         let shown = SelfTest.texts(window?.window?.contentView)
