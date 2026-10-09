@@ -185,15 +185,16 @@ extension SelfTest {
             typeKeys(window, "od")
             check(await wait(3) { popup.shownTexts == ["food.txt"] }, "Tab completion, servers: typing narrows the list from the screen", "\(popup.shownTexts)")
             pressKey(window, "\r", code: 36)
-            check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/food.txt") } && !popup.isVisible,
-                  "Tab completion, servers: Return types the rest of the name", promptLine(tab))
+            // The rest of the name, then the space a shell's own Tab puts after a file's.
+            check(await wait(3) { lineToCaret(tab).hasSuffix("ls ~/app/food.txt ") } && !popup.isVisible,
+                  "Tab completion, servers: Return types the rest of the name", lineToCaret(tab).debugDescription)
             await clear()
 
             // The shell's own folder (lsof on this Mac's stand-in, /proc on Linux), and a name with a space, quoted.
             await type("cat My")
             tabKey()
-            check(await wait(3) { promptLine(tab).hasSuffix("cat My\\ file.txt") }, "Tab completion, servers: a name in the shell's folder goes in quoted",
-                  promptLine(tab))
+            check(await wait(3) { lineToCaret(tab).hasSuffix("cat My\\ file.txt ") }, "Tab completion, servers: a name in the shell's folder goes in quoted",
+                  lineToCaret(tab).debugDescription)
             await clear()
 
             // A word that stops being plain closes the list; a quoted word gets the shell's own Tab.
@@ -219,15 +220,15 @@ extension SelfTest {
             server.flag("slow", true)
             await type("ls ~/app/li")
             tabKey()
-            check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/lib/") } && session.lastWrite == [0x09],
-                  "Tab completion, servers: a listing that takes too long is the shell's own Tab", "\(promptLine(tab)) \(session.lastWrite)")
+            check(await wait(3) { lineToCaret(tab).hasSuffix("ls ~/app/lib/") } && session.lastWrite == [0x09],
+                  "Tab completion, servers: a listing that takes too long is the shell's own Tab", "\(lineToCaret(tab).debugDescription) \(session.lastWrite)")
             await clear()
             RemoteCompletion.shared.forget()
             await type("ls ~/app/li")
             tabKey()
             typeKeys(window, "x")
-            check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/lib/x") }, "Tab completion, servers: keys typed while it lists go after the shell's own Tab",
-                  promptLine(tab))
+            check(await wait(3) { lineToCaret(tab).hasSuffix("ls ~/app/lib/x") }, "Tab completion, servers: keys typed while it lists go after the shell's own Tab",
+                  lineToCaret(tab).debugDescription)
             server.flag("slow", false)
             await clear()
             // A dropped check: the shell's own Tab.
@@ -236,8 +237,8 @@ extension SelfTest {
             server.flag("drop", true)
             await type("ls ~/app/li")
             tabKey()
-            check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/lib/") } && session.lastWrite == [0x09],
-                  "Tab completion, servers: a check that drops gives the shell's own Tab", "\(promptLine(tab)) \(session.lastWrite)")
+            check(await wait(3) { lineToCaret(tab).hasSuffix("ls ~/app/lib/") } && session.lastWrite == [0x09],
+                  "Tab completion, servers: a check that drops gives the shell's own Tab", "\(lineToCaret(tab).debugDescription) \(session.lastWrite)")
             server.flag("drop", false)
             await clear()
 
@@ -461,7 +462,8 @@ extension SelfTest {
             if let index = popup.shownTexts.firstIndex(of: "main") {
                 for _ in 0..<index { pressKey(window, "", code: 125) }
                 pressKey(window, "\r", code: 36)
-                check(await wait(3) { promptLine(tab).hasSuffix("git checkout main") }, "and Return puts it on the line, zsh's way", promptLine(tab))
+                check(await wait(3) { lineToCaret(tab).hasSuffix("git checkout main ") }, "and Return puts it on the line, zsh's way",
+                      lineToCaret(tab).debugDescription)
             }
             tab.view.send(txt: "\u{3}")
             _ = await wait(3) { session.state.isArmed }

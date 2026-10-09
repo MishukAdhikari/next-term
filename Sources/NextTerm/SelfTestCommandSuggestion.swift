@@ -169,8 +169,9 @@ extension SelfTest {
               "Suggest a Command: a line changed while it was asked waits for Replace Line", "\(late.primaryTitle) | \(promptLine(tab))")
         late.submit()
         let replaced = await closed()
-        check(await wait(3) { replaced && promptLine(tab).hasSuffix("ls -la") && !promptLine(tab).contains("typed") },
-              "and Replace Line replaces it", promptLine(tab))
+        // zsh blanks what's left of the longer line with spaces past the caret: the line is what's up to it.
+        check(await wait(3) { replaced && lineToCaret(tab).hasSuffix("$ ls -la") && !promptLine(tab).contains("typed") },
+              "and Replace Line replaces it", lineToCaret(tab).debugDescription)
         await clearLine(tab)
 
         // The agent fails: its message; too slow: stopped, with what it started; Cancel: the same.

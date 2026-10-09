@@ -69,6 +69,19 @@ extension SelfTest {
     /// The prompt's line as drawn, for checks on what Tab did to it.
     static func promptLine(_ tab: TerminalTab) -> String { tab.screenTail(2).last ?? "" }
 
+    /// The caret's line up to the caret, as the shell holds it. A space the shell put there is a drawn cell or a
+    /// blank one it moved past, depending on how it redrew the line (zsh's `main ` after a match, a space typed after
+    /// a word): either way it is here, and a cell drawn past the caret (left over from a longer line) is not.
+    static func lineToCaret(_ tab: TerminalTab) -> String {
+        let terminal = tab.view.getTerminal()
+        let caret = terminal.getCursorLocation()
+        guard let line = terminal.getLine(row: caret.y) else { return "" }
+        return line.translateToString(trimRight: false, startCol: 0, endCol: min(caret.x, terminal.cols)) { cell in
+            let character = cell.getCharacter()
+            return character == "\u{0}" ? " " : character
+        }
+    }
+
     #if DEBUG
     /// A zsh tab in `dir` whose own config is `zshrc` (in a fresh folder under `dir`), at its prompt, with the
     /// keyboard. nil when its hook never armed (a failed check), or when the app can't come in front for the real
@@ -498,8 +511,9 @@ extension SelfTest {
         if let index = popup.shownTexts.firstIndex(of: "main") {
             for _ in 0..<index { pressKey(window, "", code: 125) }
             pressKey(window, "\r", code: 36)
-            check(await wait(3) { promptLine(tab).hasSuffix("git checkout main") } && !popup.isVisible, "and Return inserts the branch zsh's way",
-                  promptLine(tab))
+            // zsh's way: the match, then the space zsh's own Tab puts after it.
+            check(await wait(3) { lineToCaret(tab).hasSuffix("git checkout main ") } && !popup.isVisible, "and Return inserts the branch zsh's way",
+                  lineToCaret(tab).debugDescription)
         }
         await clearLine(tab)
 
@@ -520,7 +534,8 @@ extension SelfTest {
         _ = await wait(0.8) { popup.isVisible }
         pressKey(window, "\u{1b}", code: 53)
         await pause(1.5)
-        check(!popup.isVisible && promptLine(tab).hasSuffix("ntslow"), "Tab completion: Esc while Loading drops the late matches", promptLine(tab))
+        check(!popup.isVisible && lineToCaret(tab).hasSuffix("$ ntslow "), "Tab completion: Esc while Loading drops the late matches",
+              "\(popup.isVisible ? "the list shows; " : "")\(lineToCaret(tab).debugDescription)")
         await clearLine(tab)
         // A second Tab while zsh works, past the hold and before the Loading row: zsh never gets it as ^I, which would
         // run its own list beside Next Term's once the first is done.
@@ -534,7 +549,8 @@ extension SelfTest {
               "Tab completion: a second Tab while a slow completer works sends zsh no ^I", "\(session.lastWrite)")
         pressKey(window, "\u{1b}", code: 53)
         await pause(0.3)
-        check(!popup.isVisible && promptLine(tab).hasSuffix("ntslow") && session.state.isArmed, "and the line stays as it was", promptLine(tab))
+        check(!popup.isVisible && lineToCaret(tab).hasSuffix("$ ntslow ") && session.state.isArmed, "and the line stays as it was",
+              "\(popup.isVisible ? "the list shows; " : "")\(lineToCaret(tab).debugDescription) \(session.state.phase)")
         await clearLine(tab)
     }
 
