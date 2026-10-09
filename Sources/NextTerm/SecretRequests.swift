@@ -124,7 +124,8 @@ final class SecretRequests {
         /// A wrapper request whose wrapper stopped waiting: a pending card.
         fileprivate(set) var gone = false
         fileprivate var goneAt: ContinuousClock.Instant?
-        fileprivate var replies: [(Decision) -> Void] = []
+        /// Who waits for the answer: its own caller, and each identical request that took it over.
+        fileprivate var replies: [(id: UUID, reply: (Decision) -> Void)] = []
         fileprivate(set) var panel: SecretApprovalPanel?
         /// request_secret's window, in place of the panel.
         fileprivate(set) var requestWindow: SecretRequestWindow?
@@ -154,8 +155,17 @@ final class SecretRequests {
         }
     }
 
+    /// Where a caller's reply waits: the request that holds it (its own, or the one it took over) and the reply's id.
+    /// A caller that leaves takes only its own reply away.
+    struct Waiting {
+        let request: Request
+        let reply: UUID
+    }
+
     /// Waiting requests, the one in the panel first.
     private(set) var queue: [Request] = []
+    /// Panels kept on screen after their request ended (Q1's line), until the user closes them.
+    private var lingering: [SecretApprovalPanel] = []
     private(set) var limits = SecretLimits()
     private(set) var book = SecretGrantBook()
     /// Each grant's own values, by its id.
@@ -178,7 +188,9 @@ final class SecretRequests {
     // MARK: asking
 
     /// Answers `request` from a grant, refuses it, lets it take over an identical one, or queues it for the panel.
-    func ask(_ request: Request, reply: @escaping (Decision) -> Void) {
+    /// Returns where its reply waits, or nil when it was answered at once.
+    @discardableResult
+    func ask(_ request: Request, reply: @escaping (Decision) -> Void) -> Waiting? {
         let now = now()
         expire(at: now)
         if request.isUse, !request.isRemote, let grant = book.take(request.binding, at: now), let values = held[grant.id] {
@@ -186,26 +198,32 @@ final class SecretRequests {
             if grant.isExpired(at: now) { drop(grant.id) }
             audit(.use, request, approval: .grant, outcome: "allowed")
             changedNow()
-            return reply(.allowed(copies(values), how: .grant))
+            reply(.allowed(copies(values), how: .grant))
+            return nil
         }
         if let refusal = limits.admit(asker: request.asker, binding: request.binding, at: now) {
             limits.record(.refusedByLimits, asker: request.asker, binding: request.binding, at: now)
             audit(.refused, request, outcome: Self.word(refusal))
-            return reply(.refused(refusal))
+            reply(.refused(refusal))
+            return nil
         }
+        let id = UUID()
         if let waiting = queue.first(where: { $0.binding == request.binding && !$0.isAnswered }) {
             limits.record(.tookOver, asker: request.asker, binding: request.binding, at: now)
-            waiting.replies.append(reply)
+            waiting.replies.append((id, reply))
             if waiting.gone {
                 waiting.gone = false
                 waiting.goneAt = nil
                 waiting.panel?.markBack()
             }
             changedNow()
-            return
+            return Waiting(request: waiting, reply: id)
         }
-        if SecretLimits.isBusy(waiting: queue.count) { return reply(.refused(.busy)) }
-        request.replies = [reply]
+        if SecretLimits.isBusy(waiting: queue.count) {
+            reply(.refused(.busy))
+            return nil
+        }
+        request.replies = [(id, reply)]
         queue.append(request)
         let drop = Self.dropAfter
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.seconds(drop)) { [weak request] in
@@ -216,13 +234,17 @@ final class SecretRequests {
         }
         showNext()
         changedNow()
+        return Waiting(request: request, reply: id)
     }
 
-    /// The wrapper behind a request stopped waiting (after 25 seconds, or it left): its panel becomes a pending card.
-    /// Nothing ends and nothing counts until the card is dropped.
-    func wrapperLeft(_ request: Request) {
+    /// A wrapper stopped waiting (after 25 seconds, or it left): its reply goes. When no other wrapper that took the
+    /// request over still waits, the panel becomes a pending card. Nothing ends and nothing counts until the card is
+    /// dropped.
+    func wrapperLeft(_ waiting: Waiting) {
+        let request = waiting.request
         guard !request.isAnswered, request.isWrapper else { return }
-        request.replies.removeAll()
+        request.replies.removeAll { $0.id == waiting.reply }
+        guard request.replies.isEmpty else { return changedNow() }
         request.gone = true
         request.goneAt = now()
         request.panel?.markGone()
@@ -237,10 +259,15 @@ final class SecretRequests {
     }
 
     /// The wrapper of a ticket's request left before the user answered (its 10 minutes ran out, or its tab closed):
-    /// the request ends unanswered, and the tool call hears it was not answered.
-    func callerLeft(_ request: Request) {
-        guard !request.isAnswered else { return }
-        finish(request, outcome: .unanswered, decision: .unanswered)
+    /// its tool call hears it was not answered. The request ends unanswered once no other ticket's wrapper that took
+    /// it over still waits.
+    func callerLeft(_ waiting: Waiting) {
+        let request = waiting.request
+        guard !request.isAnswered, let index = request.replies.firstIndex(where: { $0.id == waiting.reply }) else { return }
+        let left = request.replies.remove(at: index)
+        left.reply(.unanswered)
+        guard request.replies.isEmpty else { return changedNow() }
+        finish(request, outcome: .unanswered, decision: nil)
     }
 
     /// Drops a pending card after 30 minutes, and a tool request whose panel waited 30 minutes with no answer.
@@ -348,8 +375,15 @@ final class SecretRequests {
         }
         if stoppedDuringApproval {
             request.isAnswered = true
-            request.panel?.showStoppedDuringApproval()
+            if let panel = request.panel {
+                // It stays up with its line until the user closes it, while the queue goes on.
+                panel.showStoppedDuringApproval()
+                linger(panel)
+            }
+            request.panel = nil
             queue.removeAll { $0 === request }
+            showNext()
+            refreshWaitingLine()
             changedNow()
             return
         }
@@ -443,7 +477,7 @@ final class SecretRequests {
         limits.record(outcome, asker: request.asker, binding: request.binding, at: now())
         let replies = request.replies
         request.replies.removeAll()
-        if let decision { for reply in replies { reply(decision) } }
+        if let decision { for waiting in replies { waiting.reply(decision) } }
         request.panel?.finish()
         request.panel = nil
         request.requestWindow?.finish()
@@ -453,6 +487,17 @@ final class SecretRequests {
         showNext()
         refreshWaitingLine()
         changedNow()
+    }
+
+    /// Keeps an ended request's panel until its window closes.
+    private func linger(_ panel: SecretApprovalPanel) {
+        lingering.append(panel)
+        panel.onClosed = { [weak self, weak panel] in
+            // After the close: the panel is not let go inside its own delegate call.
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.lingering.removeAll { $0 === panel || $0.window?.isVisible != true } }
+            }
+        }
     }
 
     // MARK: tickets
@@ -562,11 +607,11 @@ final class SecretRequests {
 
     /// A ticket's wrapper redeems it, from the tab Next Term typed its line in, within 30 seconds of the typing, once.
     /// The request is built from the ticket's facts, the wrapper's warned variables and the folder's `.env`, so the
-    /// panel shows the tab's real environment before Allow, and a grant checks it too. Returns the request, for the
-    /// socket to notice the wrapper leaving.
+    /// panel shows the tab's real environment before Allow, and a grant checks it too. Returns where its reply waits,
+    /// for the socket to notice the wrapper leaving.
     @discardableResult
     func redeem(ticket id: String, peerTab: TerminalTab?, request: SecretRun.Request,
-                reply: @escaping (SecretRun.Answer) -> Void) -> Request? {
+                reply: @escaping (SecretRun.Answer) -> Void) -> Waiting? {
         let now = now()
         guard let ticket = tickets[id], !ticket.used, let typedAt = ticket.typedAt, now - typedAt <= Self.ticketWindow else {
             reply(SecretRun.Answer(status: .expired, names: request.names))
@@ -597,11 +642,10 @@ final class SecretRequests {
         let folder = ticket.folder
         let decided = ticket.decided
         ticket.decided = nil
-        ask(asking) { decision in
+        return ask(asking) { decision in
             reply(SecretSocket.answer(for: decision, request: asked, argv: argv, directory: folder))
             decided?(decision)
         }
-        return asking
     }
 
     // MARK: grants
@@ -640,6 +684,9 @@ final class SecretRequests {
         case .displaySleep: return
         }
         for card in queue where card.gone && !card.isAnswered { finish(card, outcome: .unanswered, decision: .unanswered) }
+        // Q1's one-use approval ended with the lock: its line is over too.
+        for panel in lingering { panel.finish() }
+        lingering.removeAll()
     }
 
     private func expire(at now: ContinuousClock.Instant) {
@@ -695,6 +742,8 @@ final class SecretRequests {
             request.kind = .use
         }
         queue.removeAll()
+        for panel in lingering { panel.finish() }
+        lingering.removeAll()
         tickets.removeAll()
         limits = SecretLimits()
         book = SecretGrantBook()

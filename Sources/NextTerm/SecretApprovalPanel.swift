@@ -68,6 +68,8 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
     private var scrollHeight: NSLayoutConstraint?
     private var answered = false
     private(set) var isBusy = false
+    /// Called when its window closes, however it closes.
+    var onClosed: (() -> Void)?
 
     init(_ content: Content, onAllow: @escaping (SecretRequests.How) -> Void, onDecline: @escaping (_ stopAsking: Bool) -> Void,
          onPause: @escaping () -> Void) {
@@ -416,6 +418,7 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
     /// Q1: the wrapper left during Touch ID after "Allow once": a one-use approval waits 2 minutes.
     func showStoppedDuringApproval() {
         answered = true
+        window?.level = .normal // nothing waits on it any more
         setBusy(false)
         for button in [allowButton, declineButton, stopButton, pauseButton] { button?.isEnabled = false }
         for button in durationChoice.values { button.isEnabled = false }
@@ -499,6 +502,9 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
 
     /// Closing the panel without choosing is a decline.
     func windowWillClose(_ notification: Notification) {
+        let closed = onClosed
+        onClosed = nil
+        closed?()
         guard !answered else { return }
         answered = true
         onDecline(false)

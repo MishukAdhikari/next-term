@@ -451,18 +451,57 @@ extension SelfTest {
               "secrets: the same request within 15 minutes starts with no panel")
         store.handleLockEvent(.screenLocked)
         let afterLock = secretsRequest(asker: "wrapper:selftest-a", command: command, tab: "tab 3")
-        requests.ask(afterLock) { answers.take($0) }
+        let afterLockWaits = requests.ask(afterLock) { answers.take($0) }
         check(requests.grants.isEmpty && afterLock.panel != nil, "secrets: locking the Mac ends the grant, and the same request asks again")
 
         // A pending card: its wrapper stopped waiting.
-        requests.wrapperLeft(afterLock)
+        if let afterLockWaits { requests.wrapperLeft(afterLockWaits) }
         check(afterLock.panel?.durationChoice[.fifteenMinutes]?.state == .on && afterLock.panel?.durationChoice[.once]?.isEnabled == false,
               "secrets: a pending card has Allow for 15 minutes chosen and Allow once off")
         let takeover = secretsRequest(asker: "wrapper:selftest-a", command: command, tab: "tab 3")
-        requests.ask(takeover) { answers.take($0) }
-        check(takeover.panel == nil && afterLock.panel != nil && requests.queue.count == 1 && afterLock.panel?.durationChoice[.once]?.isEnabled == true,
+        let takeoverWaits = requests.ask(takeover) { answers.take($0) }
+        check(takeover.panel == nil && afterLock.panel != nil && requests.queue.count == 1 && afterLock.panel?.durationChoice[.once]?.isEnabled == true
+              && takeoverWaits?.request === afterLock,
               "secrets: an identical request takes the card over, and does not queue")
+        // The wrapper that took it over stops waiting too: the card is a card again.
+        if let takeoverWaits { requests.wrapperLeft(takeoverWaits) }
+        check(afterLock.gone && afterLock.panel?.durationChoice[.once]?.isEnabled == false,
+              "secrets: when the wrapper that took a card over leaves, the card says so again")
         afterLock.panel?.declineButton.performClick(nil)
+
+        // Two identical wrappers wait on one panel: the first leaving leaves the second waiting, and it gets the answer.
+        let first = secretsRequest(asker: "wrapper:selftest-a", command: command, tab: "tab 3")
+        let firstWaits = requests.ask(first) { _ in }
+        let secondAnswers = SecretsAnswers()
+        let second = secretsRequest(asker: "wrapper:selftest-a", command: command, tab: "tab 3")
+        requests.ask(second) { secondAnswers.take($0) }
+        if let firstWaits { requests.wrapperLeft(firstWaits) }
+        check(!first.gone && first.panel?.durationChoice[.once]?.isEnabled == true && secondAnswers.all.isEmpty,
+              "secrets: the first of two identical wrappers leaving is no pending card while the second waits")
+        first.panel?.declineButton.performClick(nil)
+        check({ if case .declined? = secondAnswers.last { return true }; return false }(),
+              "secrets: the wrapper still waiting gets the answer")
+
+        // The wrapper leaves while the user is in the Touch ID sheet after "Allow once": a one-use approval, the panel
+        // stays up saying so, and the request waiting behind it gets its panel.
+        let stopping = secretsRequest(asker: "wrapper:selftest-stopping", command: ["node", "server.js"], tab: "tab 3")
+        let stoppingWaits = requests.ask(stopping) { _ in }
+        let behind = secretsRequest(asker: "wrapper:selftest-behind", command: ["node", "other.js"], tab: "tab 4")
+        requests.ask(behind) { answers.take($0) }
+        let stoppingPanel = stopping.panel
+        stoppingPanel?.allowButton.performClick(nil)
+        if let stoppingWaits { requests.wrapperLeft(stoppingWaits) }
+        _ = await wait(10) { behind.panel != nil }
+        let lingers = stoppingPanel?.window.map { $0.isVisible && texts($0.contentView).contains(SecretApprovalPanel.stoppedDuringApprovalText) }
+        check(behind.panel != nil && lingers == true && requests.grants.contains { $0.kind == .oneUse },
+              "secrets: a wrapper that leaves during Touch ID after Allow once gets a one-use approval, its panel says so, and the next request shows")
+        stoppingPanel?.close()
+        behind.panel?.declineButton.performClick(nil)
+        let restartAnswers = SecretsAnswers()
+        let restarted = secretsRequest(asker: "wrapper:selftest-stopping", command: ["node", "server.js"], tab: "tab 3")
+        requests.ask(restarted) { restartAnswers.take($0) }
+        check(secretsAllowed(restartAnswers.last)?.how == .grant && restarted.panel == nil && !requests.grants.contains { $0.kind == .oneUse },
+              "secrets: restarted within 2 minutes, it is answered by that one-use approval, once")
 
         // Decline pauses that request only; Decline and Stop Asking stops the asker.
         let tool = secretsRequest(asker: "selftest-tab-x", command: ["npm test"], source: .tool, agent: "Claude Code")

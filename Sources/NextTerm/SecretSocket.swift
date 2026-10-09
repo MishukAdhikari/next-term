@@ -72,8 +72,8 @@ enum SecretSocket {
     final class Waiter: @unchecked Sendable {
         private let lock = NSLock()
         private var answer: SecretRun.Answer?
-        private var request: SecretRequests.Request?
-        private var isTicket = false
+        /// Where this wrapper's reply waits, set on the main thread once it is asked.
+        private var waiting: SecretRequests.Waiting?
 
         func set(_ answer: SecretRun.Answer) {
             lock.lock()
@@ -87,17 +87,16 @@ enum SecretSocket {
             return answer
         }
 
-        func asked(_ request: SecretRequests.Request?, ticket: Bool) {
+        func asked(_ waiting: SecretRequests.Waiting?) {
             lock.lock()
-            self.request = request
-            isTicket = ticket
+            self.waiting = waiting
             lock.unlock()
         }
 
-        var asking: (request: SecretRequests.Request?, ticket: Bool) {
+        var asking: SecretRequests.Waiting? {
             lock.lock()
             defer { lock.unlock() }
-            return (request, isTicket)
+            return waiting
         }
     }
 
@@ -117,8 +116,7 @@ enum SecretSocket {
         let tabs = AppDelegate.shared.controllers.flatMap(\.tabs)
         let tab = ClaudeIDEServer.tab(for: pid, among: tabs)
         if let ticket = request.ticket {
-            let asking = SecretRequests.shared.redeem(ticket: ticket, peerTab: tab, request: request) { waiter.set($0) }
-            return waiter.asked(asking, ticket: true)
+            return waiter.asked(SecretRequests.shared.redeem(ticket: ticket, peerTab: tab, request: request) { waiter.set($0) })
         }
         var facts = SecretRequests.AskedBy()
         facts.agent = agent?.name
@@ -140,10 +138,10 @@ enum SecretSocket {
         let program = ((request.argv.first ?? "") as NSString).lastPathComponent
         let asking = SecretRequests.Request(binding: binding, keys: keys, command: shown, argv: request.argv, folder: request.directory,
                                             warnings: warnings, agentWords: nil, askedBy: facts, program: program, isRemote: false)
-        waiter.asked(asking, ticket: false)
-        SecretRequests.shared.ask(asking) { decision in
+        let waiting = SecretRequests.shared.ask(asking) { decision in
             waiter.set(answer(for: decision, request: request))
         }
+        waiter.asked(waiting)
     }
 
     /// The wrapper's answer for a decision. Values go only into an `allowed` answer.
@@ -199,12 +197,17 @@ enum SecretSocket {
             var byte: UInt8 = 0
             let peeked = recv(fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT)
             if peeked == 0 || (peeked < 0 && errno != EAGAIN && errno != EINTR) {
-                // The wrapper left: a wrapper's request becomes a pending card; a ticket's ends unanswered.
-                let asking = waiter.asking
+                // The wrapper left: its reply goes. A wrapper's request becomes a pending card, a ticket's ends unanswered,
+                // unless an identical request that took it over still waits. Read on the main thread, after the ask
+                // queued there first, so a wrapper that leaves at once is not missed.
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
-                        guard let request = asking.request else { return }
-                        if request.isWrapper { SecretRequests.shared.wrapperLeft(request) } else { SecretRequests.shared.callerLeft(request) }
+                        guard let waiting = waiter.asking else { return }
+                        if waiting.request.isWrapper {
+                            SecretRequests.shared.wrapperLeft(waiting)
+                        } else {
+                            SecretRequests.shared.callerLeft(waiting)
+                        }
                     }
                 }
                 return
