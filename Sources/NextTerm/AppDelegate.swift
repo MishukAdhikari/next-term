@@ -678,8 +678,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// Why this quit happens: the plain self-test, the reason the relaunch harness sets, "Relaunch Now", a logout, restart
-    /// or shutdown (the quit Apple event), or else the user.
-    private var quitReason: QuitReason {
+    /// or shutdown (the quit Apple event), or else the user. The relaunch harness checks it.
+    var quitReason: QuitReason {
         if SelfTest.mode == .plain { return .selfTest }
         #if DEBUG
         if let reason = SelfTestRestore.quitReason { return reason }

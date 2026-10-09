@@ -24,7 +24,7 @@ enum SelfTest {
     }()
 
     /// Either self-test: the guards that keep it off the user's machine apply, except those the relaunch harness points
-    /// at its own folder (`keptDefaults`, `sessionsParent`, `mcpSocketPath`).
+    /// at its own folder (`keptDefaults`, `supportFolder`, `sessionsParent`, `mcpSocketPath`).
     nonisolated static var isRequested: Bool { mode != .app }
 
     /// Where the records one launch leaves the next are kept (the projects open at quit, kept remote tabs, Settings ›
@@ -43,22 +43,19 @@ enum SelfTest {
         }
     }
 
-    /// Where the sessions folder is made (SessionFiles): Next Term's folder in the user's Application Support, the
-    /// relaunch harness's own, or none for the plain self-test, which never saves or restores sessions.
-    nonisolated static var sessionsParent: URL? {
-        switch mode {
-        case .app:
-            let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            return support?.appendingPathComponent("Next Term", isDirectory: true)
-        case .plain: return nil
-        case .relaunchHarness:
-            #if DEBUG
-            return SelfTestRestore.harness?.stateFolder
-            #else
-            return nil
-            #endif
-        }
+    /// Next Term's folder in Application Support, where the zsh integration and the sessions folders go: the user's, or
+    /// the relaunch harness's own, which writes nothing in the user's.
+    nonisolated static var supportFolder: URL? {
+        #if DEBUG
+        if let harness = SelfTestRestore.harness { return harness.stateFolder }
+        #endif
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        return support?.appendingPathComponent("Next Term", isDirectory: true)
     }
+
+    /// Where the sessions folder is made (SessionFiles): `supportFolder`, or none for the plain self-test, which never
+    /// saves or restores sessions.
+    nonisolated static var sessionsParent: URL? { mode == .plain ? nil : supportFolder }
 
     /// The self-test's own MCP socket, so it never answers for (or takes over from) the Next Term you use: the relaunch
     /// harness's in its folder, kept across its relaunch, else one for this process.

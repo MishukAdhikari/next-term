@@ -35,7 +35,12 @@ relaunch() {
 </dict>
 </plist>
 PLIST
-    codesign --force --sign - "$app" >/dev/null 2>&1
+    local signed
+    if ! signed="$(codesign --force --sign - "$app" 2>&1)"; then
+      echo "error: $app could not be signed ad hoc: $signed" >&2
+      echo "The harness's folder is kept: $folder" >&2
+      exit 1
+    fi
   }
   make_app "$folder/install" 0.0.1
   make_app "$folder/update" 0.0.2

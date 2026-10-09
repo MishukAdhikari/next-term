@@ -1124,9 +1124,10 @@ enum Preferences {
 }
 
 enum AppSupport {
-    /// Where the zsh integration lives; written at launch so it always matches this build.
+    /// Where the zsh integration lives; written at launch so it always matches this build. In Next Term's folder in
+    /// Application Support, which is the relaunch harness's own for it (`SelfTest.supportFolder`).
     static let zshIntegrationDirectory: URL? = {
-        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
-        return try? ShellIntegration.install(in: base.appendingPathComponent("Next Term", isDirectory: true))
+        guard let folder = SelfTest.supportFolder else { return nil }
+        return try? ShellIntegration.install(in: folder)
     }()
 }

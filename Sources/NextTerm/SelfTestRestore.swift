@@ -53,7 +53,7 @@ enum SelfTestRestore {
         var project: URL { folder.appendingPathComponent("project") }
         var report: URL { folder.appendingPathComponent("report.txt") }
         /// What the first step read of the user's own state, for the second to compare.
-        var realState: URL { folder.appendingPathComponent("real-state.txt") }
+        var realState: URL { folder.appendingPathComponent("real-state.json") }
         /// The defaults suite, a file in the folder (`defaults.plist`).
         var defaultsSuite: String { folder.path + "/defaults" }
         /// Where the sessions folder is made: the harness's Application Support/Next Term.
@@ -72,8 +72,12 @@ enum SelfTestRestore {
     /// which only the plain self-test has.
     nonisolated(unsafe) static var quitReason: QuitReason?
 
-    /// The user's own Next Term, whose defaults the harness must leave as they are.
+    /// The user's own Next Term, whose defaults and folder in Application Support the harness must leave as they are.
     private static let realBundleID = CommandLineLink.bundleIdentifier
+    private static var realSupportFolder: URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return support.appendingPathComponent("Next Term", isDirectory: true)
+    }
     /// Written by the first step in its sessions folder, read back by the second.
     private static let probeName = "harness-probe"
 
@@ -99,7 +103,7 @@ enum SelfTestRestore {
 
     private static func updateQuit(_ harness: Harness, launchKind: LaunchKind) async {
         record("STEP update-quit, version \(Updater.shared.current?.description ?? "none")")
-        try? realState().write(to: harness.realState, atomically: true, encoding: .utf8)
+        try? JSONEncoder().encode(realState()).write(to: harness.realState)
         let app = AppDelegate.shared!
         let installed = Bundle.main.bundleURL.path == harness.install.path
         check(installed && launchKind == .normal, "the harness launches the installed copy as a normal launch",
@@ -137,9 +141,13 @@ enum SelfTestRestore {
               "the stand-in stages the update, to install and open only paths in the harness's folder",
               "staged \(staged), install \(target.app), open \(target.open)")
 
-        // The quit, through the real button and the real question. It ends as the app's does, so the self-test's Copilot
-        // lock folder, which `finish` removes, goes as it ends.
+        // The quit, through the real button and the real question, for the reason "Relaunch Now" gives. It ends as the
+        // app's does, so the self-test's Copilot lock folder, which `finish` removes, goes as it ends.
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { _ in
+            MainActor.assumeIsolated {
+                let reason = AppDelegate.shared.quitReason
+                check(reason == .updateRelaunch, "the update quit goes ahead as the update's relaunch", "\(reason)")
+            }
             try? FileManager.default.removeItem(at: SelfTest.copilotLockFolder)
         }
         press(["Relaunch Now", "Quit"])
@@ -199,26 +207,41 @@ enum SelfTestRestore {
                   probe ?? "none")
         }
 
-        // Nothing outside the harness's folder changed.
-        let before = (try? String(contentsOf: harness.realState, encoding: .utf8)) ?? "not recorded"
+        // Nothing outside the harness's folder changed: what only the harness could have put there, whoever else runs,
+        // and the rest as the first step found it, unless the user's own Next Term ran meanwhile and changed it itself.
+        leakChecks(harness)
+        let before = (try? Data(contentsOf: harness.realState)).flatMap { try? JSONDecoder().decode(RealState.self, from: $0) }
         let after = realState()
-        check(before == after, "the user's own defaults, MCP socket and sessions folder are as they were",
-              "before: \(before) — after: \(after)")
+        if let before {
+            let names = Set(before.items.keys).union(after.items.keys)
+            let changed: [String] = names.sorted().filter { before.items[$0] != after.items[$0] }
+            if !before.running, !after.running {
+                check(changed.isEmpty, "the user's own defaults, MCP socket and folder in Application Support are as they were",
+                      "changed: \(changed)")
+            } else if !changed.isEmpty {
+                record("NOTE [after-update] your own Next Term ran meanwhile, so these changes may be its own: \(changed)")
+            }
+        } else {
+            check(false, "the first step recorded the user's own state")
+        }
         finish()
     }
 
     // MARK: checks
 
-    /// The harness counts as a self-test, with its defaults, MCP socket and quit reason its own.
+    /// The harness counts as a self-test, with its defaults, MCP socket, zsh integration and quit reason its own.
     private static func isolationChecks(_ harness: Harness) {
         let app = AppDelegate.shared!
         let ownDefaults = defaults != nil && app.launchDefaults === defaults && SelfTest.keptDefaults === defaults
         let socket = MCPControlServer.shared.path
         let ownSocket = harness.mcpSocket.map { $0 == socket } ?? !socket.hasPrefix(NSHomeDirectory() + "/Library/")
-        check(SelfTest.isRequested && SelfTest.mode == .relaunchHarness && quitReason != .selfTest,
-              "the relaunch harness counts as a self-test, and never quits as the plain one")
-        check(ownDefaults && ownSocket, "the harness keeps its records and its MCP socket in its own folder",
-              "defaults \(ownDefaults), socket \(socket)")
+        let zsh = AppSupport.zshIntegrationDirectory?.path ?? "none"
+        let ownZsh = zsh.hasPrefix(harness.folder.path + "/")
+        let reason = app.quitReason
+        check(SelfTest.isRequested && SelfTest.mode == .relaunchHarness && reason != .selfTest,
+              "the relaunch harness counts as a self-test, and never quits as the plain one", "quit reason \(reason)")
+        check(ownDefaults && ownSocket && ownZsh, "the harness keeps its records, MCP socket and zsh integration in its own folder",
+              "defaults \(ownDefaults), socket \(socket), zsh integration \(zsh)")
     }
 
     /// The harness's sessions folder: in its own folder, private, out of backups and Spotlight, with this copy's path
@@ -251,20 +274,52 @@ enum SelfTestRestore {
         return locked ? files : nil
     }
 
-    /// What the harness must never change outside its folder: the user's own Next Term defaults (the keys a launch and a
-    /// quit write), the user's MCP socket, and a sessions folder of this copy's in the user's Application Support.
-    private static func realState() -> String {
+    /// What the harness must leave as it is outside its folder, as one step found it.
+    private struct RealState: Codable {
+        /// Whether the user's own Next Term ran, which changes some of it itself.
+        var running: Bool
+        /// Each thing, by name: as `describe` or `identity` puts it.
+        var items: [String: String]
+    }
+
+    /// The user's own Next Term's defaults (the keys a launch and a quit write, and Settings › General), and what is in its
+    /// folder in Application Support: its MCP socket, its zsh integration and the rest.
+    private static func realState() -> RealState {
+        var items: [String: String] = [:]
         let keys = ["sessionProjects", "remoteTabs", Updater.relaunchFlagKey] + LaunchSettings.Key.all
-        var lines: [String] = keys.map { key in
-            let value = CFPreferencesCopyAppValue(key as CFString, realBundleID as CFString)
-            return key + "=" + describe(value)
+        for key in keys {
+            items["defaults " + key] = describe(CFPreferencesCopyAppValue(key as CFString, realBundleID as CFString))
         }
-        lines.append("mcp.sock=" + identity(MCPServer.socketPath()))
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let folder = realSupportFolder
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [] {
+            items["Application Support " + name] = identity(folder.appendingPathComponent(name).path)
+        }
+        items["zsh integration"] = identity(folder.appendingPathComponent("shell/zsh/.zshenv").path)
+        let running = !NSRunningApplication.runningApplications(withBundleIdentifier: realBundleID).isEmpty
+        return RealState(running: running, items: items)
+    }
+
+    /// What only the harness could have put in the user's own state, whoever else runs: a value in the user's Next Term
+    /// defaults that names the harness's folder, or a sessions folder for this copy in the user's Application Support.
+    private static func leakChecks(_ harness: Harness) {
+        let domain = UserDefaults.standard.persistentDomain(forName: realBundleID) ?? [:]
+        // JSON (kept remote tabs) writes each slash as `\/`.
+        let paths = [harness.folder.path, harness.folder.path.replacingOccurrences(of: "/", with: "\\/")]
+        let naming: [String] = domain.keys.sorted().filter { key in
+            let text = describeText(domain[key])
+            return paths.contains { text.contains($0) }
+        }
         let key = SessionFiles.key(forBundlePath: Bundle.main.bundlePath)
-        let folder = support.appendingPathComponent("Next Term").appendingPathComponent(SessionFiles.folderName(key: key))
-        lines.append("sessions folder=" + identity(folder.path))
-        return lines.joined(separator: "\n")
+        let sessions = realSupportFolder.appendingPathComponent(SessionFiles.folderName(key: key)).path
+        let noSessions = identity(sessions) == "none"
+        check(naming.isEmpty && noSessions, "nothing in the user's own defaults or Application Support is the harness's",
+              "defaults naming its folder \(naming), \(sessions) there \(!noSessions)")
+    }
+
+    /// A value as text, data as UTF-8: what a path in it would read as.
+    private static func describeText(_ value: Any?) -> String {
+        guard let data = value as? Data else { return describe(value) }
+        return String(decoding: data, as: UTF8.self)
     }
 
     private static func describe(_ value: Any?) -> String {

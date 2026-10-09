@@ -50,6 +50,44 @@ import Testing
         try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: path)
     }
 
+    /// A Unix socket at `path`: bound at a short name (a socket's path has at most 104 bytes), then moved there.
+    func plantSocket(_ path: String) {
+        let short = FileManager.default.temporaryDirectory.path + "/nt-\(UUID().uuidString.prefix(8)).sock"
+        let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+        defer { close(descriptor) }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let bytes = Array(short.utf8CString)
+        withUnsafeMutableBytes(of: &address.sun_path) { buffer in
+            bytes.withUnsafeBytes { buffer.copyMemory(from: UnsafeRawBufferPointer(rebasing: $0.prefix(buffer.count))) }
+        }
+        let size = socklen_t(MemoryLayout<sockaddr_un>.size)
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(descriptor, $0, size) }
+        }
+        #expect(bound == 0 && rename(short, path) == 0)
+    }
+
+    /// Whether `path` (never followed) has an ACL.
+    func hasACL(_ path: String) -> Bool {
+        guard let acl = acl_get_link_np(path, ACL_TYPE_EXTENDED) else { return false }
+        acl_free(UnsafeMutableRawPointer(acl))
+        return true
+    }
+
+    /// Adds `entry` to the ACL of `path`, as `chmod +a` does.
+    func addACL(_ entry: String, to path: String) throws {
+        let chmod = Process()
+        chmod.executableURL = URL(fileURLWithPath: "/bin/chmod")
+        chmod.arguments = ["+a", entry, path]
+        try chmod.run()
+        chmod.waitUntilExit()
+        #expect(chmod.terminationStatus == 0)
+    }
+
+    /// Keeps the file there now as the one before, whatever it holds.
+    let anyPrevious = SessionFiles.Previous(maxSize: 1 << 20) { _ in true }
+
     func failure(_ body: () throws -> Void) -> SessionFiles.Failure? {
         do {
             try body()
@@ -133,6 +171,24 @@ import Testing
         #expect(!first.lock())
     }
 
+    @Test func threadsTakingTheLockAtOnceAllHoldIt() throws {
+        let parent = try makeParent()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        // A folder of its own for each round: nothing else ever held its lock.
+        for round in 0..<50 {
+            let files = try SessionFiles.open(in: parent, bundlePath: "/Users/x/Applications/Copy \(round).app")
+            let lock = NSLock()
+            var refused = 0
+            DispatchQueue.concurrentPerform(iterations: 4) { _ in
+                guard !files.lock() else { return }
+                lock.lock()
+                refused += 1
+                lock.unlock()
+            }
+            #expect(refused == 0 && files.isOwner, "round \(round)")
+        }
+    }
+
     @Test func closingAnotherDescriptorToTheLockFileKeepsTheLock() throws {
         let parent = try makeParent()
         defer { try? FileManager.default.removeItem(at: parent) }
@@ -149,6 +205,8 @@ import Testing
         let parent = try makeParent()
         defer { try? FileManager.default.removeItem(at: parent) }
         let first = try owned(in: parent)
+        // Nor the folder's descriptor.
+        #expect(fcntl(first.folder, F_GETFD) & FD_CLOEXEC != 0)
         // A shell started in a tab: posix_spawn hands it every descriptor not marked close-on-exec.
         var child: pid_t = 0
         let arguments: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sleep"), strdup("30"), nil]
@@ -172,11 +230,12 @@ import Testing
         let lock = files.url.appendingPathComponent(SessionFiles.lockName).path
         let victim = parent.appendingPathComponent("victim").path
         try put("theirs", victim)
-        // A link (never followed), a named pipe (never waited on) and an empty folder: each goes, and a plain file takes
-        // its place.
+        // A link (never followed), a named pipe (never waited on), a socket and an empty folder: each goes, and a plain
+        // file takes its place.
         let plant: [(String, () throws -> Void)] = [
             ("link", { try FileManager.default.createSymbolicLink(atPath: lock, withDestinationPath: victim) }),
             ("pipe", { #expect(mkfifo(lock, 0o600) == 0) }),
+            ("socket", { plantSocket(lock) }),
             ("folder", { try FileManager.default.createDirectory(atPath: lock, withIntermediateDirectories: false) }),
         ]
         for (kind, planted) in plant {
@@ -220,7 +279,7 @@ import Testing
         try files.replace("state-v1.json", with: Data("two".utf8))
         #expect(text(state) == "two" && mode(state) == 0o600)
         // The previous one kept, private too.
-        try files.replace("state-v1.json", with: Data("three".utf8), keepingPrevious: true)
+        try files.replace("state-v1.json", with: Data("three".utf8), keepingPrevious: anyPrevious)
         #expect(text(state) == "three" && text(state + ".prev") == "two" && mode(state + ".prev") == 0o600)
         // A new file made in one step: never there with other bits, nothing to replace.
         try files.create("scrollback-1", with: Data("rows".utf8))
@@ -250,7 +309,7 @@ import Testing
         // A link is never kept as the previous file either.
         try FileManager.default.removeItem(atPath: state)
         try FileManager.default.createSymbolicLink(atPath: state, withDestinationPath: victim)
-        try files.replace("state-v1.json", with: Data("again".utf8), keepingPrevious: true)
+        try files.replace("state-v1.json", with: Data("again".utf8), keepingPrevious: anyPrevious)
         #expect(!isLink(state) && text(state) == "again" && !FileManager.default.fileExists(atPath: state + ".prev"))
         #expect(text(victim) == "theirs")
         // A link where a new file goes: create refuses it, and leaves both alone.
@@ -266,11 +325,13 @@ import Testing
         let parent = try makeParent()
         defer { try? FileManager.default.removeItem(at: parent) }
         let files = try owned(in: parent)
+        func decode(_ data: Data) -> Saved? { try? JSONDecoder().decode(Saved.self, from: data) }
         func save(_ generation: Int) throws {
-            try files.replace("state-v1.json", with: try JSONEncoder().encode(Saved(generation: generation)), keepingPrevious: true)
+            let data = try JSONEncoder().encode(Saved(generation: generation))
+            try files.replace("state-v1.json", with: data, keepingPrevious: .init(maxSize: 1000) { decode($0) != nil })
         }
         func load() -> Int? {
-            files.load("state-v1.json", maxSize: 1000) { try? JSONDecoder().decode(Saved.self, from: $0) }?.generation
+            files.load("state-v1.json", maxSize: 1000, decode: decode)?.generation
         }
         try save(1)
         try save(2)
@@ -284,6 +345,97 @@ import Testing
         // Neither reads: nothing.
         #expect(truncate(state + ".prev", 3) == 0)
         #expect(load() == nil)
+    }
+
+    @Test func aCurrentFileThatNoLongerReadsNeverTakesThePlaceOfTheGoodOne() throws {
+        struct Saved: Codable { var generation: Int }
+        let parent = try makeParent()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let files = try owned(in: parent)
+        func decode(_ data: Data) -> Saved? { try? JSONDecoder().decode(Saved.self, from: data) }
+        func save(_ generation: Int) throws {
+            let data = try JSONEncoder().encode(Saved(generation: generation))
+            try files.replace("state-v1.json", with: data, keepingPrevious: .init(maxSize: 1000) { decode($0) != nil })
+        }
+        func generation(_ name: String) -> Int? {
+            (try? files.read(name, maxSize: 1000)).flatMap { $0 }.flatMap(decode)?.generation
+        }
+        try save(1)
+        try save(2)
+        let state = files.url.appendingPathComponent("state-v1.json").path
+        #expect(truncate(state, 5) == 0)
+        // The next save replaces the cut-off file, and the good one before it stays.
+        try save(3)
+        #expect(generation("state-v1.json") == 3 && generation("state-v1.json.prev") == 1)
+        try save(4)
+        #expect(generation("state-v1.json") == 4 && generation("state-v1.json.prev") == 3)
+        // Nor one over its cap.
+        try files.replace("state-v1.json", with: Data(repeating: 32, count: 2000))
+        try save(5)
+        #expect(generation("state-v1.json") == 5 && generation("state-v1.json.prev") == 3)
+    }
+
+    @Test func aSaveThatFailsLeavesBothFilesAsTheyWere() throws {
+        let parent = try makeParent()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let files = try owned(in: parent)
+        try files.replace("state-v1.json", with: Data("one".utf8))
+        try files.replace("state-v1.json", with: Data("two".utf8), keepingPrevious: anyPrevious)
+        // A full disk.
+        files.calls.write = { _, _, _ in
+            errno = ENOSPC
+            return -1
+        }
+        let three = Data("three".utf8)
+        #expect(failure { try files.replace("state-v1.json", with: three, keepingPrevious: anyPrevious) } == .system(ENOSPC))
+        #expect(failure { try files.replace("state-v1.json", with: three) } == .system(ENOSPC))
+        #expect(failure { try files.create("scrollback-1", with: Data("rows".utf8)) } == .system(ENOSPC))
+        #expect(try files.read("state-v1.json", maxSize: 100) == Data("two".utf8))
+        #expect(try files.read("state-v1.json.prev", maxSize: 100) == Data("one".utf8))
+        // Nothing left half-made.
+        #expect(try files.names() == [SessionFiles.appPathName, SessionFiles.lockName, "state-v1.json", "state-v1.json.prev"])
+    }
+
+    @Test func everyFileIsFlushedWithABarrierBeforeItTakesItsName() throws {
+        let parent = try makeParent()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let files = try owned(in: parent)
+        var commands: [Int32] = []
+        files.calls.fcntl = { descriptor, command in
+            commands.append(command)
+            return fcntl(descriptor, command)
+        }
+        try files.replace("state-v1.json", with: Data("one".utf8))
+        try files.replace("state-v1.json", with: Data("two".utf8), keepingPrevious: anyPrevious)
+        try files.create("scrollback-1", with: Data("rows".utf8))
+        #expect(commands == [F_BARRIERFSYNC, F_BARRIERFSYNC, F_BARRIERFSYNC])
+        // A volume with no barrier: a plain fsync, and the file is written.
+        files.calls.fcntl = { _, _ in
+            errno = ENOTSUP
+            return -1
+        }
+        try files.replace("state-v1.json", with: Data("three".utf8))
+        #expect(try files.read("state-v1.json", maxSize: 100) == Data("three".utf8))
+    }
+
+    @Test func noCallerTouchesTheLocksOwnFiles() throws {
+        let parent = try makeParent()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let holder = try owned(in: parent)
+        try holder.replace("marker.json", with: Data("{}".utf8))
+        for name in [SessionFiles.lockName, SessionFiles.appPathName] {
+            #expect(failure { try holder.replace(name, with: Data("x".utf8)) } == .badName, "\(name)")
+            #expect(failure { try holder.replace(name, with: Data("x".utf8), keepingPrevious: anyPrevious) } == .badName, "\(name)")
+            #expect(failure { try holder.create(name, with: Data("x".utf8)) } == .badName, "\(name)")
+            #expect(failure { try holder.remove(name) } == .badName, "\(name)")
+            #expect(failure { _ = try holder.read(name, maxSize: 4096) } == .badName, "\(name)")
+            #expect(failure { _ = try holder.claim(name, as: "taken") } == .badName, "\(name)")
+            #expect(failure { _ = try holder.claim("marker.json", as: name) } == .badName, "\(name)")
+        }
+        // The lock is still its holder's alone, and the app's path as the lock recorded it.
+        let second = try SessionFiles.open(in: parent, bundlePath: "/Users/x/Applications/Next Term.app")
+        #expect(!second.lock())
+        #expect(SessionFiles.recordedBundlePath(in: holder.url) == "/Users/x/Applications/Next Term.app")
     }
 
     @Test func onlyAPlainFileOfTheOwnersAloneIsRead() throws {
@@ -315,6 +467,50 @@ import Testing
         // A folder.
         try FileManager.default.createDirectory(atPath: folder + "/folder", withIntermediateDirectories: false)
         #expect(failure { _ = try files.read("folder", maxSize: 10) } == .refused)
+        // A socket.
+        plantSocket(folder + "/socket")
+        #expect(failure { _ = try files.read("socket", maxSize: 10) } == .refused)
+    }
+
+    @Test func theRecordedAppPathIsReadAsUntrusted() throws {
+        let parent = try makeParent()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let files = try owned(in: parent)
+        let recorded = files.url.appendingPathComponent(SessionFiles.appPathName).path
+        #expect(SessionFiles.recordedBundlePath(in: files.url) == "/Users/x/Applications/Next Term.app")
+        // Another user's.
+        #expect(SessionFiles.recordedBundlePath(in: files.url, owner: geteuid() + 1) == nil)
+        // Open to others.
+        chmod(recorded, 0o644)
+        #expect(SessionFiles.recordedBundlePath(in: files.url) == nil)
+        // Not one absolute path: relative, two lines, empty, or longer than any path.
+        for path in ["Applications/Next Term.app", "/Users/x/A.app\n/Users/x/B.app", "", "/" + String(repeating: "a", count: 5000)] {
+            try put(path, recorded)
+            #expect(SessionFiles.recordedBundlePath(in: files.url) == nil, "\(path.prefix(40))")
+        }
+        // A link, to a file that would pass.
+        try put("/Users/x/Elsewhere.app", parent.path + "/elsewhere")
+        try FileManager.default.removeItem(atPath: recorded)
+        try FileManager.default.createSymbolicLink(atPath: recorded, withDestinationPath: parent.path + "/elsewhere")
+        #expect(SessionFiles.recordedBundlePath(in: files.url) == nil)
+    }
+
+    @Test func noACLOpensTheFolderToOthers() throws {
+        let parent = try makeParent()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        // One the folder would inherit from its parent when it is made.
+        try addACL("everyone allow list,search,add_file,add_subdirectory,read,write,file_inherit,directory_inherit", to: parent.path)
+        let files = try owned(in: parent)
+        #expect(!hasACL(files.url.path))
+        try files.replace("state-v1.json", with: Data("{}".utf8))
+        try files.create("scrollback-1", with: Data("rows".utf8))
+        let made = ["state-v1.json", "scrollback-1", SessionFiles.lockName, SessionFiles.appPathName]
+        #expect(made.allSatisfy { !hasACL(files.url.appendingPathComponent($0).path) })
+        // One set on it since: gone the next time it is opened.
+        try addACL("everyone allow list,search,add_file,read,write", to: files.url.path)
+        #expect(hasACL(files.url.path))
+        _ = try SessionFiles.open(in: parent, bundlePath: "/Users/x/Applications/Next Term.app")
+        #expect(!hasACL(files.url.path))
     }
 
     // MARK: claiming
@@ -374,6 +570,60 @@ import Testing
         #expect(FileManager.default.fileExists(atPath: parent.path))
     }
 
+    @Test func aSweepNeverRemovesASaveInFlight() throws {
+        let parent = try makeParent()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let files = try owned(in: parent)
+        let data = Data(repeating: 7, count: 1 << 20)
+        let previous = SessionFiles.Previous(maxSize: 2 << 20) { _ in true }
+        // A sweep on another thread all the while.
+        let stop = Flag()
+        let stopped = DispatchSemaphore(value: 0)
+        Thread {
+            while !stop.isSet {
+                _ = try? files.sweep()
+                usleep(200)
+            }
+            stopped.signal()
+        }.start()
+        var failures: [String] = []
+        for _ in 0..<20 {
+            do {
+                try files.replace("state-v1.json", with: data, keepingPrevious: previous)
+            } catch {
+                failures.append("\(error)")
+            }
+        }
+        stop.set()
+        stopped.wait()
+        #expect(failures.isEmpty)
+        #expect(try files.read("state-v1.json", maxSize: 2 << 20) == data)
+    }
+
+    @Test func aFolderUsedLatelyIsKeptWhileItsAppIsAway() throws {
+        let parent = try makeParent()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let app = parent.appendingPathComponent("Next Term.app").path
+        try FileManager.default.createDirectory(atPath: app, withIntermediateDirectories: false)
+        // A copy quits for an update: it leaves its marker, and the install moves it aside a moment (or for good, when
+        // neither app can go back and the backup waits for its first launch).
+        let quitting = try owned(in: parent, app: app)
+        try quitting.replace("marker.json", with: Data("{}".utf8))
+        quitting.unlock()
+        try FileManager.default.moveItem(atPath: app, toPath: app + ".held")
+        let other = try owned(in: parent, app: "/Users/x/Applications/Other.app")
+        #expect(SessionFiles.sweepSiblings(in: parent, keeping: [other.key]).isEmpty)
+        #expect(FileManager.default.fileExists(atPath: quitting.url.appendingPathComponent("marker.json").path))
+        // Untouched for longer than that: gone.
+        let later = Date(timeIntervalSinceNow: SessionFiles.goneAppAge + 60)
+        var removed: [String] = []
+        for _ in 0..<100 where FileManager.default.fileExists(atPath: quitting.url.path) {
+            removed += SessionFiles.sweepSiblings(in: parent, keeping: [other.key], now: later)
+            if FileManager.default.fileExists(atPath: quitting.url.path) { usleep(10_000) }
+        }
+        #expect(removed == [quitting.url.lastPathComponent])
+    }
+
     @Test func foldersWhoseAppIsGoneAreSwept() throws {
         let parent = try makeParent()
         defer { try? FileManager.default.removeItem(at: parent) }
@@ -403,11 +653,12 @@ import Testing
         let linkName = SessionFiles.folderName(key: SessionFiles.key(forBundlePath: apps + "/Linked.app"))
         try FileManager.default.createSymbolicLink(atPath: parent.path + "/" + linkName, withDestinationPath: deleted.url.path)
 
-        // Swept again while the quiet copy's lock looks held: a process another test starts holds it a moment
-        // (`lockOnceFree`).
+        // Once they have been gone a while (`aFolderUsedLatelyIsKeptWhileItsAppIsAway`). Swept again while the quiet copy's
+        // lock looks held: a process another test starts holds it a moment (`lockOnceFree`).
+        let later = Date(timeIntervalSinceNow: SessionFiles.goneAppAge + 60)
         var removed: [String] = []
         for _ in 0..<100 where FileManager.default.fileExists(atPath: deleted.url.path) {
-            removed += SessionFiles.sweepSiblings(in: parent, keeping: [own.key, backup.key])
+            removed += SessionFiles.sweepSiblings(in: parent, keeping: [own.key, backup.key], now: later)
             if FileManager.default.fileExists(atPath: deleted.url.path) { usleep(10_000) }
         }
         #expect(removed == [deleted.url.lastPathComponent])
@@ -415,5 +666,23 @@ import Testing
         let kept = [own, installed, running, backup, unrecorded, opened].map(\.url.lastPathComponent)
         #expect(left == Set(kept + ["Applications", linkName]))
         #expect(running.isOwner)
+    }
+
+    /// A flag one thread sets and another reads.
+    final class Flag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = false
+
+        var isSet: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
+
+        func set() {
+            lock.lock()
+            value = true
+            lock.unlock()
+        }
     }
 }
