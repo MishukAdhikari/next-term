@@ -396,6 +396,8 @@ public enum GitFailure: Equatable, Sendable {
     /// Changes git would overwrite; the files it named.
     case localChanges(files: [String])
     case heldByWorktree(path: String?)
+    /// `git worktree add` into a folder that is there and not empty.
+    case pathExists(path: String?)
     case notFullyMerged
     case tagNotBranch
     case pushRejected
@@ -428,6 +430,10 @@ public enum GitOutput {
             let path = output.range(of: #"(worktree at|checked out at) '[^']*'"#, options: .regularExpression)
                 .map { String(output[$0]).components(separatedBy: "'").dropFirst().first ?? "" }
             return .heldByWorktree(path: path)
+        }
+        if let match = output.range(of: #"fatal: '[^']+' already exists"#, options: .regularExpression) {
+            let quoted = output[match].components(separatedBy: "'")
+            return .pathExists(path: quoted.count > 1 ? quoted[1] : nil)
         }
         if has("is not fully merged") { return .notFullyMerged }
         if has("a branch is expected, got tag") { return .tagNotBranch }
