@@ -44,7 +44,7 @@ extension SelfTest {
         #!/bin/sh
         \(stopsOnCtrlC)
         while true; do
-          if [ -f "$CTL/dir" ]; then cd "$(cat "$CTL/dir")"; rm -f "$CTL/dir"; fi
+          if [ -f "$CTL/dir" ]; then IFS= read -r d < "$CTL/dir"; cd "$d"; rm -f "$CTL/dir"; fi
           if [ -f "$CTL/working" ]; then printf '\\r\\342\\234\\273 Working (esc to interrupt) %s' "$SECONDS"; else printf '\\r\\033[K> %s' "$SECONDS"; fi
           \(standInWait("0.3"))
         done
