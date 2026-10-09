@@ -34,8 +34,8 @@ public enum QuitIntent: Equatable, Sendable {
     }
 
     /// The intent of a quit no update consent covers: Settings › General's "At launch", read once the quit's answer is
-    /// saved. Only a user's quit carries the quit consent; a logout, restart or shutdown, and "Relaunch Now", asked nothing
-    /// that could give it. Nil for the plain self-test, which never saves.
+    /// saved. Only a user's quit carries the quit consent; a logout, restart or shutdown, and an update relaunch, asked
+    /// nothing that could give it. Nil for the plain self-test, which never saves.
     public static func ordinary(reason: QuitReason, settings: LaunchSettings, consent: Bool) -> QuitIntent? {
         guard reason != .selfTest else { return nil }
         let resume = settings.opens == .lastProjects

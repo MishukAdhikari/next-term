@@ -6,10 +6,12 @@ import Testing
     @Test func defaults() {
         let s = LaunchSettings()
         #expect(s.opens == LaunchOpens.welcome)
+        #expect(!s.opensChosen)
         #expect(s.askToReopenOnQuit)
+        #expect(s.keepScrollback)
         // In the order of the radio buttons. Compared outside `#expect`, where arrays are slow to type-check.
         let titles: [String] = LaunchOpens.allCases.map(\.title)
-        let expected: [String] = ["Show the Welcome window", "Reopen the projects that were open"]
+        let expected: [String] = ["Show the Welcome window", "Resume where I left off"]
         let same: Bool = titles == expected
         #expect(same, "\(titles)")
     }
@@ -18,26 +20,75 @@ import Testing
         let name = "nextterm-launch-settings-tests-\(getpid())"
         let defaults = try #require(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
-        // Never set, for a new user and for one updating into this release: the Welcome window, and Ask on.
+        // Never set, for a new user and for one updating into this release: the Welcome window, never chosen, Ask on, and
+        // scrollback kept.
         #expect(LaunchSettings(defaults: defaults) == LaunchSettings())
+        #expect(!LaunchSettings(defaults: defaults).opensChosen)
         var changed = LaunchSettings()
         changed.opens = .lastProjects
         changed.askToReopenOnQuit = false
+        changed.keepScrollback = false
+        #expect(changed.opensChosen)
         changed.save(to: defaults)
         let opens: String? = defaults.string(forKey: LaunchSettings.Key.opens)
         let ask: Bool? = defaults.object(forKey: LaunchSettings.Key.askToReopenOnQuit) as? Bool
+        let scrollback: Bool? = defaults.object(forKey: LaunchSettings.Key.keepScrollback) as? Bool
         #expect(opens == "lastProjects")
         #expect(ask == false)
+        #expect(scrollback == false)
         #expect(LaunchSettings(defaults: defaults) == changed)
-        LaunchSettings().save(to: defaults)
+        var welcome = LaunchSettings()
+        welcome.opens = .welcome
+        welcome.save(to: defaults)
         let reset: String? = defaults.string(forKey: LaunchSettings.Key.opens)
         #expect(reset == "welcome")
-        #expect(LaunchSettings(defaults: defaults) == LaunchSettings())
-        // Something that is not one of the choices reads as the default.
+        #expect(LaunchSettings(defaults: defaults) == welcome)
+        #expect(LaunchSettings(defaults: defaults).opensChosen)
+        // Something that is not one of the choices reads as the default, never chosen.
         defaults.set("everything", forKey: LaunchSettings.Key.opens)
         defaults.set("sometimes", forKey: LaunchSettings.Key.askToReopenOnQuit)
+        defaults.set("often", forKey: LaunchSettings.Key.keepScrollback)
         #expect(LaunchSettings(defaults: defaults) == LaunchSettings())
-        #expect(Set(LaunchSettings.Key.all).count == 2)
+        #expect(Set(LaunchSettings.Key.all).count == 3)
+    }
+
+    @Test func aStoredReopenReadsAsResume() throws {
+        // 0.10 stored "Reopen the projects that were open" as `lastProjects`: 0.11 reads it as "Resume where I left off".
+        let name = "nextterm-launch-settings-resume-\(getpid())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set("lastProjects", forKey: LaunchSettings.Key.opens)
+        let read = LaunchSettings(defaults: defaults)
+        #expect(read.opens == .lastProjects && read.opensChosen)
+        #expect(read.opens.title == "Resume where I left off")
+    }
+
+    @Test func eachSettingSavesOnlyItsOwnKey() throws {
+        // Settings › General's controls: "At launch" counts as chosen only once the user chose it.
+        let name = "nextterm-launch-settings-own-key-\(getpid())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        var settings = LaunchSettings(defaults: defaults)
+        settings.keepScrollback = false
+        settings.save(.keepScrollback, to: defaults)
+        settings.askToReopenOnQuit = false
+        settings.save(.askToReopenOnQuit, to: defaults)
+        let stored: [String] = defaults.dictionaryRepresentation().keys.filter { LaunchSettings.Key.all.contains($0) }.sorted()
+        let expected: [String] = [LaunchSettings.Key.askToReopenOnQuit, LaunchSettings.Key.keepScrollback].sorted()
+        let same: Bool = stored == expected
+        #expect(same, "\(stored)")
+        let read = LaunchSettings(defaults: defaults)
+        #expect(!read.opensChosen && !read.keepScrollback && !read.askToReopenOnQuit)
+        settings.opens = .lastProjects
+        settings.save(.opens, to: defaults)
+        #expect(LaunchSettings(defaults: defaults).opensChosen)
+        // A whole save of settings whose "At launch" nobody chose leaves it unchosen.
+        let name2 = name + "-whole"
+        let other = try #require(UserDefaults(suiteName: name2))
+        defer { other.removePersistentDomain(forName: name2) }
+        LaunchSettings().save(to: other)
+        #expect(other.object(forKey: LaunchSettings.Key.opens) == nil)
+        #expect(!LaunchSettings(defaults: other).opensChosen)
     }
 }
 

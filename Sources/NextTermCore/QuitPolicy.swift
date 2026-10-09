@@ -1,10 +1,11 @@
 import Foundation
 
-/// Why Next Term is quitting. Only a user's quit asks about reopening.
+/// Why Next Term is quitting. Only a user's quit asks about resuming.
 public enum QuitReason: CaseIterable, Sendable {
     /// ⌘Q, the Dock's Quit, a scripted quit: anything the others are not.
     case user
-    /// "Relaunch Now" (`Updater.relaunching`).
+    /// The update quit the user agreed to on the update sheet: a valid update consent ("Update Now", or "Wait for Them" at
+    /// its countdown's end). Nothing else gives it, a test switch neither.
     case updateRelaunch
     /// A logout, restart or shutdown, read from the quit Apple event. The one signal for it.
     case systemSession
@@ -21,8 +22,29 @@ public enum QuitReason: CaseIterable, Sendable {
         if let code, Self.systemSessionCodes.contains(code) { self = .systemSession } else { self = .user }
     }
 
+    /// Why a quit happens: the plain self-test first, then the reason the relaunch harness sets, then a valid update
+    /// consent, then the quit Apple event's reason. A quit with no update consent is never the update's relaunch, so a
+    /// test switch that quits without the sheet quits as the user's.
+    public static func of(plainSelfTest: Bool, harness: QuitReason?, updateConsent: Bool, appleEventReason: UInt32?) -> QuitReason {
+        if plainSelfTest { return .selfTest }
+        if let harness { return harness }
+        if updateConsent { return .updateRelaunch }
+        return QuitReason(appleEventReason: appleEventReason)
+    }
+
     private static func fourCharCode(_ text: String) -> UInt32 {
         text.utf8.reduce(0) { (code: UInt32, byte: UInt8) -> UInt32 in code << 8 | UInt32(byte) }
+    }
+}
+
+/// An update quit's consent and the plan now, which the quit compares with the plan the consent covers (KTD2).
+public struct UpdateQuit: Sendable {
+    public var consent: UpdateConsent
+    public var current: UpdatePlan
+
+    public init(consent: UpdateConsent, current: UpdatePlan) {
+        self.consent = consent
+        self.current = current
     }
 }
 
@@ -32,146 +54,187 @@ public struct QuitInput: Sendable {
     public var unsavedFiles: Int
     /// Tabs running something that quitting stops.
     public var busyTabs: Int
-    /// Windows with a project, one per path.
-    public var projectWindows: Int
+    /// Terminal windows, with a project or not.
+    public var terminalWindows: Int
     /// A sheet is attached to some window (the `nxtrm` install offer, an Open panel).
     public var sheetAttached: Bool
     public var reason: QuitReason
     public var settings: LaunchSettings
+    /// The valid update consent this quit goes ahead under, and the plan now; nil with none.
+    public var update: UpdateQuit?
 
-    public init(unsavedFiles: Int, busyTabs: Int, projectWindows: Int, sheetAttached: Bool, reason: QuitReason,
-                settings: LaunchSettings) {
+    public init(unsavedFiles: Int, busyTabs: Int, terminalWindows: Int, sheetAttached: Bool, reason: QuitReason,
+                settings: LaunchSettings, update: UpdateQuit? = nil) {
         self.unsavedFiles = unsavedFiles
         self.busyTabs = busyTabs
-        self.projectWindows = projectWindows
+        self.terminalWindows = terminalWindows
         self.sheetAttached = sheetAttached
         self.reason = reason
         self.settings = settings
+        self.update = update
     }
 }
 
-/// One question a quit asks, in turn. `reopenCheckbox` is the starting state of "Reopen these projects next
-/// time" (`checkboxTitle`) on that alert, nil for no checkbox.
+/// One question a quit asks, in turn. `resumeCheckbox` is the starting state of "Reopen windows and resume sessions when
+/// Next Term opens" (`QuitPolicy.checkboxTitle`) on that alert, nil for no checkbox.
 public enum QuitQuestion: Equatable, Sendable {
     /// "Save changes to … before quitting?"
-    case saveChanges(reopenCheckbox: Bool?)
+    case saveChanges(resumeCheckbox: Bool?)
     /// "Quit Next Term?", "Quitting stops …".
-    case busy(reopenCheckbox: Bool?)
-    /// "Reopen these projects next time?" (`promptTitle`), alone. `returnKeyReopens`: "Reopen" is the
-    /// default button, else "Don’t Reopen" is.
-    case reopen(returnKeyReopens: Bool)
+    case busy(resumeCheckbox: Bool?)
+    /// "Quit Next Term?" alone, the plain quit dialog: the checkbox, "Don’t ask again", Quit and Cancel.
+    case quit(resumeCheckbox: Bool)
+    /// The plan the update consent covers got worse: this quit is cancelled, the consent cleared, and the update sheet
+    /// shows again.
+    case updateSheet
 }
 
-/// What was answered about reopening, at a quit that goes ahead. Cancel has no answer: nothing is written.
+/// What was answered about resuming, at a quit that goes ahead. Cancel has no answer: nothing is written.
 public enum QuitAnswer: Equatable, Sendable {
-    /// The prompt's "Reopen", with "Don’t ask again" checked or not.
-    case reopen(dontAskAgain: Bool)
-    /// The prompt's "Don’t Reopen".
-    case dontReopen(dontAskAgain: Bool)
-    /// The alert's "Reopen these projects next time", as it was when the quit went ahead.
+    /// The plain dialog's "Quit": its box, and "Don’t ask again".
+    case quit(resume: Bool, dontAskAgain: Bool)
+    /// The box on the save-changes or "Quitting stops…" alert, as it was when the quit went ahead.
     case checkbox(checked: Bool)
+
+    /// The box was checked.
+    public var resume: Bool {
+        switch self {
+        case .quit(let resume, _): return resume
+        case .checkbox(let checked): return checked
+        }
+    }
 }
 
-/// The one table that says what a quit asks. The save-changes and "Quitting stops…" alerts show whenever
-/// they apply, as they always have. A quit asks about reopening in one of them at most: "Quitting
-/// stops…" when it shows, else the save-changes alert, else the reopen prompt alone.
+/// The one table that says what a quit asks (R29). The save-changes and "Quitting stops…" alerts show whenever they
+/// apply, as they always have. A quit asks about resuming in one of them at most: "Quitting stops…" when it shows, else
+/// the save-changes alert, else the plain quit dialog alone. An update quit with a valid consent asks only about unsaved
+/// files, with no checkbox, or shows the update sheet again when its plan got worse (R16).
 public enum QuitPolicy {
-    /// Whether this quit asks about reopening: a user's quit, with Ask on, a project window open and no
-    /// sheet up.
-    public static func asksAboutReopening(_ input: QuitInput) -> Bool {
-        guard input.reason == .user, input.settings.askToReopenOnQuit else { return false }
-        return input.projectWindows > 0 && !input.sheetAttached
+    /// Whether this quit asks about resuming: a user's quit, with Ask on, a terminal window open and no sheet up.
+    public static func asksAboutResuming(_ input: QuitInput) -> Bool {
+        guard input.reason == .user, input.update == nil, input.settings.askToReopenOnQuit else { return false }
+        return input.terminalWindows > 0 && !input.sheetAttached
+    }
+
+    /// Where the resume checkbox starts: at the stored "At launch" choice, and checked when none is stored.
+    public static func resumeCheckbox(_ settings: LaunchSettings) -> Bool {
+        settings.opensChosen ? settings.opens == .lastProjects : true
     }
 
     /// The questions, in order. None in the self-test.
     public static func questions(_ input: QuitInput) -> [QuitQuestion] {
         if input.reason == .selfTest { return [] }
-        let asks = asksAboutReopening(input)
-        // The checkbox and the prompt's default both start at the current setting.
-        let reopens = input.settings.opens == .lastProjects
-        let checkbox: Bool? = asks ? reopens : nil
+        // The update path: the sheet showed what stops, and its box answered about resuming.
+        if input.update != nil || input.reason == .updateRelaunch {
+            if let update = input.update, UpdateFlow.worse(update.current, than: update.consent) != nil { return [.updateSheet] }
+            return input.unsavedFiles > 0 ? [.saveChanges(resumeCheckbox: nil)] : []
+        }
+        let asks = asksAboutResuming(input)
+        let checkbox: Bool? = asks ? resumeCheckbox(input.settings) : nil
         let busy = input.busyTabs > 0
         var questions: [QuitQuestion] = []
         // When "Quitting stops…" follows, it carries the checkbox, so the question is asked once.
-        if input.unsavedFiles > 0 { questions.append(.saveChanges(reopenCheckbox: busy ? nil : checkbox)) }
-        if busy { questions.append(.busy(reopenCheckbox: checkbox)) }
-        if questions.isEmpty && asks { questions.append(.reopen(returnKeyReopens: reopens)) }
+        if input.unsavedFiles > 0 { questions.append(.saveChanges(resumeCheckbox: busy ? nil : checkbox)) }
+        if busy { questions.append(.busy(resumeCheckbox: checkbox)) }
+        if questions.isEmpty, let checkbox { questions.append(.quit(resumeCheckbox: checkbox)) }
         return questions
     }
 
-    /// The settings to save once the quit goes ahead.
+    /// The settings to save once the quit goes ahead: checked gives "Resume where I left off", unchecked the Welcome
+    /// window, and "Don’t ask again" turns Ask off.
     public static func settings(after answer: QuitAnswer, from settings: LaunchSettings) -> LaunchSettings {
         var updated = settings
-        switch answer {
-        case .reopen(let dontAskAgain):
-            updated.opens = .lastProjects
-            if dontAskAgain { updated.askToReopenOnQuit = false }
-        case .dontReopen(let dontAskAgain):
-            updated.opens = .welcome
-            if dontAskAgain { updated.askToReopenOnQuit = false }
-        case .checkbox(let checked):
-            // The alerts have no "Don’t ask again": Ask stays as it is.
-            updated.opens = checked ? .lastProjects : .welcome
-        }
+        updated.opens = answer.resume ? .lastProjects : .welcome
+        if case .quit(_, true) = answer { updated.askToReopenOnQuit = false }
         return updated
+    }
+
+    /// The quit consent (R30): only a press that lets the quit go ahead with the box checked. A quit that asked nothing
+    /// has no answer, and gives none, whatever "At launch" says.
+    public static func quitConsent(after answer: QuitAnswer?) -> Bool {
+        answer?.resume == true
     }
 }
 
-/// A button of the reopen prompt, "Reopen these projects next time?" (`QuitPolicy.promptTitle`).
+/// One quit's questions as they are answered (KTD2, R29, R30): whether the quit goes ahead, the settings its answer saves,
+/// and the quit consent, which only a go-ahead press with the box checked gives, and any cancel after it takes back.
+public struct QuitAsking: Equatable, Sendable {
+    /// A press on a question's dialog.
+    public enum Reply: Equatable, Sendable {
+        /// A button that lets the quit go on ("Quit", "Save", "Don’t Save"), with the box as it was (nil when the dialog
+        /// had none) and "Don’t ask again".
+        case goOn(resume: Bool?, dontAskAgain: Bool)
+        /// "Cancel", ⎋ or ⌘., or a Save All that failed.
+        case cancel
+    }
+
+    public private(set) var cancelled = false
+    /// The answer about resuming, from the one question that carried the box.
+    public private(set) var answer: QuitAnswer?
+
+    public init() {}
+
+    public mutating func reply(_ reply: Reply, to question: QuitQuestion) {
+        switch reply {
+        case .cancel:
+            cancelled = true
+            answer = nil
+        case .goOn(let resume, let dontAskAgain):
+            guard !cancelled, let resume else { return }
+            switch question {
+            case .quit: answer = .quit(resume: resume, dontAskAgain: dontAskAgain)
+            case .saveChanges, .busy: answer = .checkbox(checked: resume)
+            case .updateSheet: break
+            }
+        }
+    }
+
+    /// The quit consent, while the quit goes ahead.
+    public var quitConsent: Bool { !cancelled && QuitPolicy.quitConsent(after: answer) }
+
+    /// What to save once the quit goes ahead; nil when it was cancelled or nothing was answered about resuming.
+    public func settings(from settings: LaunchSettings) -> LaunchSettings? {
+        guard !cancelled, let answer else { return nil }
+        return QuitPolicy.settings(after: answer, from: settings)
+    }
+}
+
+/// A button of the plain quit dialog, "Quit Next Term?" (`QuitPolicy.promptTitle`).
 public enum QuitPromptButton: CaseIterable, Sendable {
-    case reopen, cancel, dontReopen
+    case quit, cancel
 
     public var title: String {
         switch self {
-        case .reopen: return "Reopen"
+        case .quit: return "Quit"
         case .cancel: return "Cancel"
-        case .dontReopen: return "Don’t Reopen"
         }
     }
 
-    /// Its key with ⌘ when it is the other choice, added last: NSAlert gives the default Return and "Cancel" ⎋.
-    /// "Don’t Reopen" takes ⌘D, as "Don’t Save" does in the save-changes alert.
-    public var commandKey: String? {
+    /// What pressing it answers, with the box and "Don’t ask again" as they were. Cancel has none: the quit is cancelled.
+    public func answer(resume: Bool, dontAskAgain: Bool) -> QuitAnswer? {
         switch self {
-        case .reopen: return "r"
+        case .quit: return .quit(resume: resume, dontAskAgain: dontAskAgain)
         case .cancel: return nil
-        case .dontReopen: return "d"
-        }
-    }
-
-    /// What pressing it answers, with "Don’t ask again" as it was. Cancel has none: the quit is cancelled.
-    public func answer(dontAskAgain: Bool) -> QuitAnswer? {
-        switch self {
-        case .reopen: return .reopen(dontAskAgain: dontAskAgain)
-        case .cancel: return nil
-        case .dontReopen: return .dontReopen(dontAskAgain: dontAskAgain)
         }
     }
 }
 
 extension QuitPolicy {
-    /// The prompt's buttons in the order they are added. The choice that matches the setting comes first, so it is
-    /// the default, on top of the stacked buttons, and takes Return: Return never changes "At launch".
-    /// "Cancel" comes next, as it does in the save-changes alert, and sits at the bottom; the other choice last,
-    /// between them.
-    public static func promptButtons(returnKeyReopens: Bool) -> [QuitPromptButton] {
-        returnKeyReopens ? [.reopen, .cancel, .dontReopen] : [.dontReopen, .cancel, .reopen]
-    }
+    /// The plain dialog's buttons in the order they are added: "Quit", then "Cancel". Neither is the default: the dialog
+    /// clears Quit's Return, and NSAlert gives Cancel ⎋, which ⌘. presses too.
+    public static let promptButtons: [QuitPromptButton] = [.quit, .cancel]
 
-    /// The prompt's title: "Reopen this project next time?" for one project, "Reopen these projects next time?"
-    /// for more. Two windows on one project are one project.
-    public static func promptTitle(_ paths: [String]) -> String {
-        reopenWhat(paths) + " next time?"
-    }
+    /// The plain dialog's title. It has no informative text.
+    public static let promptTitle = "Quit Next Term?"
 
-    /// The checkbox on the save-changes and "Quitting stops…" alerts: "Reopen this project next time", or
-    /// "Reopen these projects next time" for more than one.
-    public static func checkboxTitle(_ paths: [String]) -> String {
-        reopenWhat(paths) + " next time"
-    }
+    /// The checkbox on the plain dialog and on the save-changes and "Quitting stops…" alerts.
+    public static let checkboxTitle = "Reopen windows and resume sessions when Next Term opens"
 
-    private static func reopenWhat(_ paths: [String]) -> String {
-        Set(paths).count == 1 ? "Reopen this project" : "Reopen these projects"
+    /// The checkbox's tooltip, naming the open projects.
+    public static func checkboxToolTip(_ projects: [String]) -> String {
+        let what = projects.isEmpty ? "its windows" : projectList(projects)
+        return "Checked: Next Term brings back \(what) with their tabs, splits and sessions next time it opens. Unchecked: it "
+            + "shows the Welcome window. You can change this in Settings › General."
     }
 
     /// The open projects by their folders' names, each once, in order. Folders with one name get their parent

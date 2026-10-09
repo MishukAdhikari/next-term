@@ -798,7 +798,7 @@ import Testing
         #expect(QuitIntent.ordinary(reason: .user, settings: resume, consent: true) == .quit(resume: true, consent: true))
         #expect(QuitIntent.ordinary(reason: .user, settings: resume, consent: false) == .quit(resume: true, consent: false))
         #expect(QuitIntent.ordinary(reason: .user, settings: welcome, consent: true) == .quit(resume: false, consent: false))
-        // A logout, restart or shutdown, and "Relaunch Now", asked nothing that could give it.
+        // A logout, restart or shutdown, and an update relaunch, asked nothing that could give it.
         #expect(QuitIntent.ordinary(reason: .systemSession, settings: resume, consent: true) == .quit(resume: true, consent: false))
         #expect(QuitIntent.ordinary(reason: .updateRelaunch, settings: resume, consent: true) == .quit(resume: true, consent: false))
         // The plain self-test never saves.

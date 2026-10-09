@@ -608,10 +608,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     /// Set while a quit asks its questions. They are app-modal, and main-queue work still runs under them (a download
-    /// that ends, an MCP call): a second quit then is cancelled, and "Relaunch Now" is not offered (`Updater`).
+    /// that ends, an MCP call): a second quit then is cancelled, and the update sheet is not offered (`Updater`).
     var askingToQuit = false
     /// Why the quit that went ahead happens, read as it went ahead: the quit's last save and the install go by it.
     private var terminatingFor: QuitReason?
+    /// The update consent the quit went ahead under, read as it went ahead: the update's intent and its relaunch.
+    private var terminatingUpdate: UpdateConsent?
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // A second quit while the first asks: cancelled, and the first's answers, its quit consent among them, stay its own.
@@ -619,84 +621,115 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         askingToQuit = true
         defer { askingToQuit = false }
         // The quit consent comes only from a press in this quit's questions (R30): none is left from a quit cancelled
-        // before, and a cancel clears what this one gave.
+        // before, and a cancel clears what this one gave. The update consent is Updater's, cleared when this quit is
+        // cancelled.
         MainActor.assumeIsolated { SessionRestore.shared.quitConsent = false }
-        guard askBeforeQuitting() else {
+        let update = MainActor.assumeIsolated { Updater.shared.validConsent }
+        guard let asking = askBeforeQuitting(update: update) else {
             MainActor.assumeIsolated { SessionRestore.shared.quitConsent = false }
             return .terminateCancel
         }
+        MainActor.assumeIsolated { SessionRestore.shared.quitConsent = asking.quitConsent }
         isTerminating = true
         terminatingFor = quitReason
+        terminatingUpdate = update
         // A skill change part-way finishes, and records its Undo, before Next Term quits.
         SkillsStore.waitForChanges()
         return .terminateNow
     }
 
     /// The quit's questions (QuitPolicy), one at a time: the save-changes and "Quitting stops…" alerts whenever they
-    /// apply, as always, with the reopen question on one of them, or else on its own. False when one cancels the
-    /// quit. The reopen answer is saved only once the quit goes ahead.
-    private func askBeforeQuitting() -> Bool {
+    /// apply, as always, with the resume question on one of them, or else the plain quit dialog on its own. Under an
+    /// update consent: the unsaved-files question alone, with no checkbox, and when the plan got worse than the one the
+    /// consent covers, no question at all but the update sheet again (R16). Nil when the quit is cancelled. The answer is
+    /// saved only once the quit goes ahead; the quit consent comes from it (QuitAsking).
+    private func askBeforeQuitting(update consent: UpdateConsent?) -> QuitAsking? {
         let dirty = controllers.flatMap(\.editorArea.dirtyDocuments)
         let projects = openProjects
         let settings = LaunchSettings(defaults: launchDefaults)
         let sheetAttached = NSApp.windows.contains { $0.attachedSheet != nil }
         let busyCount = controllers.flatMap(\.busyTabs).count
-        let input = QuitInput(unsavedFiles: dirty.count, busyTabs: busyCount, projectWindows: projects.count,
-                              sheetAttached: sheetAttached, reason: quitReason, settings: settings)
+        // The update quit plans again, to compare with the plan its consent covers (KTD2).
+        let update: UpdateQuit? = consent.map { (consent: UpdateConsent) -> UpdateQuit in
+            UpdateQuit(consent: consent, current: MainActor.assumeIsolated { UpdatePlanning.plan() })
+        }
+        let input = QuitInput(unsavedFiles: dirty.count, busyTabs: busyCount, terminalWindows: controllers.count,
+                              sheetAttached: sheetAttached, reason: quitReason, settings: settings, update: update)
         let questions: [QuitQuestion] = QuitPolicy.questions(input)
-        guard !questions.isEmpty else { return true }
+        var asking = QuitAsking()
+        guard !questions.isEmpty else { return asking }
+        if questions == [.updateSheet], let update {
+            // Worse than what the user agreed to: this quit is cancelled, and the sheet shows again once it has returned.
+            DispatchQueue.main.async { MainActor.assumeIsolated { UpdateKeepSessions.shared.showAgain(update) } }
+            return nil
+        }
         // A quit from the Dock while Next Term is behind another app: its first question shows in front.
         NSApp.activate(ignoringOtherApps: true)
-        var answer: QuitAnswer?
         var busyCheckbox: Bool?
         for question in questions {
             switch question {
             case .saveChanges(let checkbox):
                 let alert = Self.saveBeforeQuittingAlert(dirty.map(\.name))
-                let reopen = checkbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
+                let box = checkbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
+                let resume: Bool? = box.map { $0.state == .on }
                 switch alert.runModal() {
                 case .alertFirstButtonReturn:
-                    guard controllers.allSatisfy({ $0.editorArea.saveAll() }) else { return false }
+                    asking.reply(.goOn(resume: resume, dontAskAgain: false), to: question)
+                    guard controllers.allSatisfy({ $0.editorArea.saveAll() }) else { return nil }
                 case .alertThirdButtonReturn:
-                    break
+                    asking.reply(.goOn(resume: resume, dontAskAgain: false), to: question)
                 default:
-                    return false
+                    return nil
                 }
-                if let reopen { answer = .checkbox(checked: reopen.state == .on) }
             case .busy(let checkbox):
                 busyCheckbox = checkbox // asked below, once the busy tabs are read again
-            case .reopen(let returnKeyReopens):
-                let prompt = QuitReopenPrompt(projects: projects, returnKeyReopens: returnKeyReopens)
-                guard let reopen = prompt.run() else { return false }
-                answer = reopen
+            case .quit(let checkbox):
+                let prompt = QuitReopenPrompt(projects: projects, checked: checkbox)
+                guard let answer = prompt.run() else { return nil }
+                let dontAskAgain = prompt.alert.suppressionButton?.state == .on
+                asking.reply(.goOn(resume: answer.resume, dontAskAgain: dontAskAgain), to: question)
+            case .updateSheet:
+                return nil
             }
+        }
+        if let update {
+            // The update path asks nothing about busy tabs: the sheet showed what stops. A tab that turned busy under the
+            // unsaved-files question makes the plan worse: the sheet again, never "Quitting stops…".
+            let now = UpdateQuit(consent: update.consent, current: MainActor.assumeIsolated { UpdatePlanning.plan() })
+            guard UpdateFlow.worse(now.current, than: now.consent) == nil else {
+                DispatchQueue.main.async { MainActor.assumeIsolated { UpdateKeepSessions.shared.showAgain(now) } }
+                return nil
+            }
+            return asking
         }
         // Read again, as today: a tab that turned busy under a question before still gets "Quitting stops…". Only the
         // alert the policy chose carries the checkbox, so the question is never asked twice; when that alert no longer
-        // applies, nothing is asked about reopening and the setting stays as it is.
+        // applies, nothing is asked about resuming and the setting stays as it is.
         let busy = controllers.flatMap(\.busyTabs)
         if !busy.isEmpty {
             let alert = Self.quitStopsAlert(busy)
-            let reopen = busyCheckbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
-            guard alert.runModal() == .alertFirstButtonReturn else { return false }
-            if let reopen { answer = .checkbox(checked: reopen.state == .on) }
+            let box = busyCheckbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
+            guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+            asking.reply(.goOn(resume: box.map { $0.state == .on }, dontAskAgain: false), to: .busy(resumeCheckbox: busyCheckbox))
         }
-        if let answer { QuitPolicy.settings(after: answer, from: settings).save(to: launchDefaults) }
-        return true
+        asking.settings(from: settings)?.save(to: launchDefaults)
+        return asking
     }
 
-    /// Why this quit happens: the plain self-test, the reason the relaunch harness sets, "Relaunch Now", a logout, restart
-    /// or shutdown (the quit Apple event), or else the user. The relaunch harness checks it.
+    /// Why this quit happens: the plain self-test, the reason the relaunch harness sets, a valid update consent (the update
+    /// sheet's "Update Now", or "Wait for Them" at its countdown's end), a logout, restart or shutdown (the quit Apple
+    /// event), or else the user. The relaunch harness checks it.
     var quitReason: QuitReason {
-        if SelfTest.mode == .plain { return .selfTest }
+        var harness: QuitReason?
         #if DEBUG
-        if let reason = SelfTestRestore.quitReason { return reason }
+        harness = SelfTestRestore.quitReason
         #endif
-        if MainActor.assumeIsolated({ Updater.shared.relaunching }) { return .updateRelaunch }
-        return QuitReopenPrompt.reason(of: NSAppleEventManager.shared().currentAppleEvent)
+        let consent = MainActor.assumeIsolated { Updater.shared.validConsent != nil }
+        let code = QuitReopenPrompt.reasonCode(of: NSAppleEventManager.shared().currentAppleEvent)
+        return QuitReason.of(plainSelfTest: SelfTest.mode == .plain, harness: harness, updateConsent: consent, appleEventReason: code)
     }
 
-    /// The windows' projects, each once, in window order: what the reopen question names.
+    /// The windows' projects, each once, in window order: what the resume checkbox's tooltip names.
     private var openProjects: [String] {
         var seen = Set<String>()
         return controllers.compactMap(\.project).filter { seen.insert($0).inserted }
@@ -715,13 +748,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return alert
     }
 
-    /// "Quit Next Term?", with what quitting stops: Quit, Cancel.
+    /// "Quit Next Term?", with what quitting stops: Quit, Cancel. Quit is not the default, so Return quits nothing (R29);
+    /// NSAlert gives Cancel ⎋.
     static func quitStopsAlert(_ busy: [TerminalTab]) -> NSAlert {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Quit Next Term?"
         alert.informativeText = "Quitting stops " + TerminalWindowController.stopList(busy)
-        alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "Quit").keyEquivalent = ""
         alert.addButton(withTitle: "Cancel")
         return alert
     }
@@ -731,22 +765,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         ClaudeIDEServer.shared.stop() // removes the lock file
         GeminiIDEServer.shared.stop()
         CopilotIDEServer.shared.stop()
-        // The quit's last save (KTD18): what Settings › General says now, with the quit's answer saved. Settings › General
-        // has no "Keep scrollback" yet: it is on, its default.
+        // The quit's last save (KTD18): the update's, under its consent, or what Settings › General says now, with the quit's
+        // answer saved; scrollback only while "Keep scrollback" is on.
         let reason = terminatingFor ?? quitReason
         let settings = LaunchSettings(defaults: launchDefaults)
+        let update = terminatingUpdate
         MainActor.assumeIsolated {
             let sessions = SessionRestore.shared
             var finished = SessionRestore.Finished()
-            if let intent = QuitIntent.ordinary(reason: reason, settings: settings, consent: sessions.quitConsent) {
-                finished = sessions.finishAtQuit(intent, keepScrollback: true)
+            var intent = QuitIntent.ordinary(reason: reason, settings: settings, consent: sessions.quitConsent)
+            if reason == .updateRelaunch, let consent = update ?? Updater.shared.validConsent {
+                intent = QuitIntent.forUpdate(consent, from: Updater.shared.current?.description ?? "")
+                // The open decisions the restart drops get a definite answer now.
+                UpdateHolds.shared.cancelAll()
             }
+            if let intent { finished = sessions.finishAtQuit(intent, keepScrollback: settings.keepScrollback) }
             #if DEBUG
             // The relaunch harness reads the quit's last save as it left the sessions folder, before the install.
             if SelfTest.mode == .relaunchHarness { SelfTestRestore.quitSaved() }
             #endif
             // A logout, restart or shutdown installs nothing: it could end the install part-way. It waits for the next quit.
-            if reason.installsStagedUpdate { Updater.shared.installStagedUpdateOnQuit(sessions: finished) }
+            // Only the update's quit starts the new version; any other installs it alone (R17).
+            let relaunch = intent?.relaunches ?? false
+            if reason.installsStagedUpdate { Updater.shared.installStagedUpdateOnQuit(sessions: finished, relaunch: relaunch) }
         }
         if SelfTest.mode != .plain { sessionProjects = controllers.compactMap(\.project) }
         RemoteConnection.saveTabs(controllers)

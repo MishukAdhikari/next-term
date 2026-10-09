@@ -51,8 +51,8 @@ final class SessionRestore {
     /// The restored panes' actions, while any waits (or safe mode holds them).
     private(set) var actions: RestoreActions?
     /// The quit consent (R30): the user let this quit go ahead with the resume box checked, on the dialog that carried it.
-    /// Set by that press; cleared as each quit starts asking and when it is cancelled (AppDelegate), so none outlives its
-    /// quit. Only a user's quit reads it. No quit dialog carries the box yet, so no quit has it.
+    /// Set by that press, once the quit goes ahead (AppDelegate, QuitAsking); cleared as each quit starts asking and when
+    /// it is cancelled, so none outlives its quit. Only a user's quit reads it.
     var quitConsent = false
 
     /// The last save's result: whether it was written, and the panes the file leaves out, which nothing may promise back.

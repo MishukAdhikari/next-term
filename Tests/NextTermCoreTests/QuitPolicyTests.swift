@@ -25,14 +25,14 @@ import Testing
 }
 
 @Suite struct QuitPolicyTests {
-    /// A user quit with two project windows open, nothing unsaved or busy and the default settings.
-    func input(unsaved: Int = 0, busy: Int = 0, projects: Int = 2, sheet: Bool = false, reason: QuitReason = .user,
-               opens: LaunchOpens = .welcome, ask: Bool = true) -> QuitInput {
+    /// A user quit with two terminal windows open, nothing unsaved or busy, and "At launch" as given: nil, never chosen.
+    func input(unsaved: Int = 0, busy: Int = 0, windows: Int = 2, sheet: Bool = false, reason: QuitReason = .user,
+               opens: LaunchOpens? = .welcome, ask: Bool = true, update: UpdateQuit? = nil) -> QuitInput {
         var settings = LaunchSettings()
-        settings.opens = opens
+        if let opens { settings.opens = opens }
         settings.askToReopenOnQuit = ask
-        return QuitInput(unsavedFiles: unsaved, busyTabs: busy, projectWindows: projects, sheetAttached: sheet,
-                         reason: reason, settings: settings)
+        return QuitInput(unsavedFiles: unsaved, busyTabs: busy, terminalWindows: windows, sheetAttached: sheet, reason: reason,
+                         settings: settings, update: update)
     }
 
     /// The questions `input` gives, checked in one place: comparing arrays of enums inside `#expect` is
@@ -44,65 +44,70 @@ import Testing
     }
 
     // The questions by name, typed.
-    func prompt(returnKeyReopens: Bool) -> QuitQuestion { .reopen(returnKeyReopens: returnKeyReopens) }
-    func saveChanges(_ reopenCheckbox: Bool?) -> QuitQuestion { .saveChanges(reopenCheckbox: reopenCheckbox) }
-    func busy(_ reopenCheckbox: Bool?) -> QuitQuestion { .busy(reopenCheckbox: reopenCheckbox) }
+    func plain(_ resumeCheckbox: Bool) -> QuitQuestion { .quit(resumeCheckbox: resumeCheckbox) }
+    func saveChanges(_ resumeCheckbox: Bool?) -> QuitQuestion { .saveChanges(resumeCheckbox: resumeCheckbox) }
+    func busy(_ resumeCheckbox: Bool?) -> QuitQuestion { .busy(resumeCheckbox: resumeCheckbox) }
 
-    /// Whether a question asks about reopening: the prompt, or an alert with the checkbox.
-    func asksAboutReopening(_ question: QuitQuestion) -> Bool {
+    /// Whether a question carries the resume checkbox: the plain dialog, or an alert with it.
+    func carriesTheBox(_ question: QuitQuestion) -> Bool {
         switch question {
         case .saveChanges(let checkbox), .busy(let checkbox): return checkbox != nil
-        case .reopen: return true
+        case .quit: return true
+        case .updateSheet: return false
         }
     }
 
-    @Test func aQuitWithNothingElseToAskShowsThePromptAlone() {
-        // AE6: Return takes the choice that matches the setting.
-        expectQuestions(input(), prompt(returnKeyReopens: false))
-        expectQuestions(input(opens: .lastProjects), prompt(returnKeyReopens: true))
-        expectQuestions(input(projects: 1), prompt(returnKeyReopens: false))
+    @Test func aQuitWithNothingElseToAskShowsThePlainDialogAlone() {
+        // AE17, AE19: the box starts at the stored "At launch" choice, and checked when none is stored.
+        expectQuestions(input(opens: nil), plain(true))
+        expectQuestions(input(opens: .welcome), plain(false))
+        expectQuestions(input(opens: .lastProjects), plain(true))
+        expectQuestions(input(windows: 1, opens: nil), plain(true))
+    }
+
+    @Test func aTerminalWindowWithoutAProjectAsksAndTheWelcomeWindowAloneDoesNot() {
+        expectQuestions(input(windows: 1, opens: .lastProjects), plain(true))
+        expectQuestions(input(windows: 0))
+        expectQuestions(input(unsaved: 1, windows: 0), saveChanges(nil))
+        expectQuestions(input(busy: 1, windows: 0), busy(nil))
     }
 
     @Test func theQuittingStopsAlertCarriesTheCheckboxWhenItShows() {
-        // AE7: the save-changes alert first, without it; then "Quitting stops…", checked under Reopen.
+        // AE22: the save-changes alert first, without it; then "Quitting stops…", checked under Resume.
         expectQuestions(input(unsaved: 1, busy: 1, opens: .lastProjects), saveChanges(nil), busy(true))
         expectQuestions(input(unsaved: 3, busy: 2), saveChanges(nil), busy(false))
+        expectQuestions(input(unsaved: 1, busy: 1, opens: nil), saveChanges(nil), busy(true))
         expectQuestions(input(busy: 1), busy(false))
         expectQuestions(input(busy: 1, opens: .lastProjects), busy(true))
     }
 
     @Test func elseTheSaveChangesAlertCarriesIt() {
-        // AE14: no prompt follows it.
+        // No plain dialog follows it.
         expectQuestions(input(unsaved: 1), saveChanges(false))
         expectQuestions(input(unsaved: 2, opens: .lastProjects), saveChanges(true))
+        expectQuestions(input(unsaved: 1, opens: nil), saveChanges(true))
     }
 
-    @Test func askOffAsksNothingAboutReopening() {
-        // AE8: the safety questions stay.
+    @Test func askOffAsksNothingAboutResuming() {
+        // AE18: the safety questions stay.
         expectQuestions(input(ask: false))
         expectQuestions(input(unsaved: 1, ask: false), saveChanges(nil))
         expectQuestions(input(unsaved: 1, busy: 1, opens: .lastProjects, ask: false), saveChanges(nil), busy(nil))
     }
 
-    @Test func aLogoutOrAnUpdateRelaunchAsksNothingAboutReopening() {
-        // AE9, AE10: unsaved files and running work are still asked about.
-        let reasons: [QuitReason] = [.systemSession, .updateRelaunch]
-        for reason in reasons {
-            expectQuestions(input(reason: reason, opens: .lastProjects))
-            expectQuestions(input(unsaved: 1, reason: reason), saveChanges(nil))
-            expectQuestions(input(busy: 1, reason: reason), busy(nil))
-        }
+    @Test func aLogoutOrAnUpdateRelaunchAsksNothingAboutResuming() {
+        // Unsaved files are still asked about; a logout's running work too. An update relaunch never asks about busy tabs:
+        // its sheet showed what stops.
+        expectQuestions(input(reason: .systemSession, opens: .lastProjects))
+        expectQuestions(input(unsaved: 1, reason: .systemSession), saveChanges(nil))
+        expectQuestions(input(busy: 1, reason: .systemSession), busy(nil))
+        expectQuestions(input(reason: .updateRelaunch, opens: .lastProjects))
+        expectQuestions(input(unsaved: 1, reason: .updateRelaunch), saveChanges(nil))
+        expectQuestions(input(busy: 1, reason: .updateRelaunch))
     }
 
-    @Test func noProjectWindowAsksNothingAboutReopening() {
-        // AE11: the Welcome window alone, or terminal windows without a project.
-        expectQuestions(input(projects: 0))
-        expectQuestions(input(unsaved: 1, projects: 0), saveChanges(nil))
-        expectQuestions(input(busy: 1, projects: 0), busy(nil))
-    }
-
-    @Test func aSheetUpAsksNothingAboutReopening() {
-        // R15: the `nxtrm` install offer, an Open panel.
+    @Test func aSheetUpAsksNothingAboutResuming() {
+        // The `nxtrm` install offer, an Open panel.
         expectQuestions(input(sheet: true))
         expectQuestions(input(unsaved: 1, sheet: true), saveChanges(nil))
         expectQuestions(input(busy: 1, sheet: true), busy(nil))
@@ -113,19 +118,20 @@ import Testing
         expectQuestions(input(reason: .selfTest))
     }
 
-    /// Over every mix: the reopen choice in one question at most, and in one exactly when asking applies;
-    /// the prompt alone; the save-changes alert first; and the save-changes and "Quitting stops…" alerts
-    /// whenever there are unsaved files or busy tabs, outside the self-test.
-    @Test func everyMixAsksAboutReopeningOnceAtMost() {
+    /// Over every mix: the box on one question at most, and on one exactly when asking applies; the plain dialog alone;
+    /// the save-changes alert first; and the save-changes and "Quitting stops…" alerts whenever there are unsaved files
+    /// or busy tabs, outside the self-test and the update relaunch, which never asks about busy tabs.
+    @Test func everyMixAsksAboutResumingOnceAtMost() {
         let counts = [0, 1, 3]
+        let choices: [LaunchOpens?] = [nil] + LaunchOpens.allCases.map { (opens: LaunchOpens) -> LaunchOpens? in opens }
         for unsaved in counts {
             for busy in counts {
-                for projects in counts {
+                for windows in counts {
                     for sheet in [false, true] {
                         for reason in QuitReason.allCases {
-                            for opens in LaunchOpens.allCases {
+                            for opens in choices {
                                 for ask in [false, true] {
-                                    let quit = input(unsaved: unsaved, busy: busy, projects: projects, sheet: sheet,
+                                    let quit = input(unsaved: unsaved, busy: busy, windows: windows, sheet: sheet,
                                                      reason: reason, opens: opens, ask: ask)
                                     check(quit)
                                 }
@@ -145,28 +151,31 @@ import Testing
             return
         }
         let userAsks: Bool = quit.reason == .user && quit.settings.askToReopenOnQuit
-        let applies: Bool = userAsks && quit.projectWindows > 0 && !quit.sheetAttached
-        #expect(QuitPolicy.asksAboutReopening(quit) == applies, "\(label)")
-        let carriers: [QuitQuestion] = asked.filter(asksAboutReopening)
+        let applies: Bool = userAsks && quit.terminalWindows > 0 && !quit.sheetAttached
+        #expect(QuitPolicy.asksAboutResuming(quit) == applies, "\(label)")
+        let carriers: [QuitQuestion] = asked.filter(carriesTheBox)
         let once: Int = applies ? 1 : 0
         #expect(carriers.count == once, "\(label)")
-        let reopens: Bool = quit.settings.opens == .lastProjects
+        let starts: Bool = !quit.settings.opensChosen || quit.settings.opens == .lastProjects
         for question in carriers {
             switch question {
-            case .saveChanges(let checkbox), .busy(let checkbox): #expect(checkbox == reopens, "\(label)")
-            case .reopen(let returnKeyReopens): #expect(returnKeyReopens == reopens, "\(label)")
+            case .saveChanges(let checkbox), .busy(let checkbox): #expect(checkbox == starts, "\(label)")
+            case .quit(let checkbox): #expect(checkbox == starts, "\(label)")
+            case .updateSheet: #expect(Bool(false), "\(label)")
             }
         }
-        if asked.contains(where: isPrompt) { #expect(asked.count == 1, "\(label)") }
+        if asked.contains(where: isPlain) { #expect(asked.count == 1, "\(label)") }
         let saves: Int? = asked.firstIndex(where: isSaveChanges)
         let stops: Int? = asked.firstIndex(where: isBusy)
         #expect((saves != nil) == (quit.unsavedFiles > 0), "\(label)")
-        #expect((stops != nil) == (quit.busyTabs > 0), "\(label)")
+        let busyAsked: Bool = quit.busyTabs > 0 && quit.reason != .updateRelaunch
+        #expect((stops != nil) == busyAsked, "\(label)")
         if let saves { #expect(saves == 0, "\(label)") }
+        #expect(!asked.contains(.updateSheet), "\(label)")
     }
 
-    func isPrompt(_ question: QuitQuestion) -> Bool {
-        if case .reopen = question { return true } else { return false }
+    func isPlain(_ question: QuitQuestion) -> Bool {
+        if case .quit = question { return true } else { return false }
     }
 
     func isSaveChanges(_ question: QuitQuestion) -> Bool {
@@ -177,86 +186,210 @@ import Testing
         if case .busy = question { return true } else { return false }
     }
 
-    @Test func theAnswerSetsWhenNextTermOpens() {
-        let welcome = LaunchSettings()
-        var reopen = LaunchSettings()
-        reopen.opens = .lastProjects
-        // The prompt's buttons.
-        #expect(QuitPolicy.settings(after: .reopen(dontAskAgain: false), from: welcome) == reopen)
-        #expect(QuitPolicy.settings(after: .dontReopen(dontAskAgain: false), from: reopen) == welcome)
-        #expect(QuitPolicy.settings(after: .reopen(dontAskAgain: false), from: reopen) == reopen)
+    @Test func theAnswerSetsAtLaunch() {
+        let welcome = chosen(.welcome)
+        let resume = chosen(.lastProjects)
+        // The plain dialog's Quit: the box's state.
+        #expect(QuitPolicy.settings(after: .quit(resume: true, dontAskAgain: false), from: welcome) == resume)
+        #expect(QuitPolicy.settings(after: .quit(resume: false, dontAskAgain: false), from: resume) == welcome)
+        #expect(QuitPolicy.settings(after: .quit(resume: true, dontAskAgain: false), from: LaunchSettings()) == resume)
+        #expect(QuitPolicy.settings(after: .quit(resume: false, dontAskAgain: false), from: LaunchSettings()) == welcome)
         // "Don’t ask again" turns Ask off too.
-        var reopenQuietly = reopen
-        reopenQuietly.askToReopenOnQuit = false
+        var resumeQuietly = resume
+        resumeQuietly.askToReopenOnQuit = false
         var welcomeQuietly = welcome
         welcomeQuietly.askToReopenOnQuit = false
-        #expect(QuitPolicy.settings(after: .reopen(dontAskAgain: true), from: welcome) == reopenQuietly)
-        #expect(QuitPolicy.settings(after: .dontReopen(dontAskAgain: true), from: reopen) == welcomeQuietly)
+        #expect(QuitPolicy.settings(after: .quit(resume: true, dontAskAgain: true), from: welcome) == resumeQuietly)
+        #expect(QuitPolicy.settings(after: .quit(resume: false, dontAskAgain: true), from: resume) == welcomeQuietly)
         // The alerts' checkbox sets only "At launch".
-        #expect(QuitPolicy.settings(after: .checkbox(checked: true), from: welcome) == reopen)
-        #expect(QuitPolicy.settings(after: .checkbox(checked: false), from: reopen) == welcome)
+        #expect(QuitPolicy.settings(after: .checkbox(checked: true), from: welcome) == resume)
+        #expect(QuitPolicy.settings(after: .checkbox(checked: false), from: resume) == welcome)
         #expect(QuitPolicy.settings(after: .checkbox(checked: false), from: welcome) == welcome)
+        // Keep scrollback is never touched.
+        var noScrollback = welcome
+        noScrollback.keepScrollback = false
+        #expect(!QuitPolicy.settings(after: .quit(resume: true, dontAskAgain: true), from: noScrollback).keepScrollback)
+    }
+
+    func chosen(_ opens: LaunchOpens) -> LaunchSettings {
+        var settings = LaunchSettings()
+        settings.opens = opens
+        return settings
+    }
+
+    @Test func onlyAGoAheadWithTheBoxCheckedGivesTheQuitConsent() {
+        // R30, AE18: the plain dialog's Quit and the alerts' go-ahead buttons, with the box checked.
+        #expect(QuitPolicy.quitConsent(after: .quit(resume: true, dontAskAgain: false)))
+        #expect(QuitPolicy.quitConsent(after: .quit(resume: true, dontAskAgain: true)))
+        #expect(QuitPolicy.quitConsent(after: .checkbox(checked: true)))
+        #expect(!QuitPolicy.quitConsent(after: .quit(resume: false, dontAskAgain: false)))
+        #expect(!QuitPolicy.quitConsent(after: .checkbox(checked: false)))
+        // A quit that asked nothing: no answer, no consent, whatever "At launch" says.
+        #expect(!QuitPolicy.quitConsent(after: nil))
+    }
+
+    @Test func aQuitsRepliesGiveTheConsentOnlyWhenItGoesAhead() {
+        // The plain dialog, Quit with the box checked.
+        var plainQuit = QuitAsking()
+        plainQuit.reply(.goOn(resume: true, dontAskAgain: false), to: plain(true))
+        #expect(!plainQuit.cancelled && plainQuit.quitConsent)
+        #expect(plainQuit.settings(from: chosen(.welcome)) == chosen(.lastProjects))
+        // AE19: unchecked, Welcome and no consent; Cancel writes nothing and gives none.
+        var unchecked = QuitAsking()
+        unchecked.reply(.goOn(resume: false, dontAskAgain: false), to: plain(true))
+        #expect(!unchecked.quitConsent && unchecked.settings(from: chosen(.lastProjects)) == chosen(.welcome))
+        var cancelled = QuitAsking()
+        cancelled.reply(.cancel, to: plain(true))
+        #expect(cancelled.cancelled && !cancelled.quitConsent && cancelled.settings(from: chosen(.lastProjects)) == nil)
+        // AE22: Don’t Save on the save-changes alert without the box, then Quit on "Quitting stops…" with it checked.
+        var both = QuitAsking()
+        both.reply(.goOn(resume: nil, dontAskAgain: false), to: saveChanges(nil))
+        #expect(!both.quitConsent)
+        both.reply(.goOn(resume: true, dontAskAgain: false), to: busy(true))
+        #expect(both.quitConsent)
+        // A failed Save All, after the box was checked on the save-changes alert, cancels: the consent goes with it.
+        var failedSave = QuitAsking()
+        failedSave.reply(.goOn(resume: true, dontAskAgain: false), to: saveChanges(true))
+        #expect(failedSave.quitConsent)
+        failedSave.reply(.cancel, to: saveChanges(true))
+        #expect(failedSave.cancelled && !failedSave.quitConsent && failedSave.settings(from: LaunchSettings()) == nil)
+        // A quit that asked nothing gives none, and saves nothing.
+        let silent = QuitAsking()
+        #expect(!silent.quitConsent && silent.settings(from: chosen(.lastProjects)) == nil)
+    }
+
+    // MARK: the update path
+
+    let saw = UpdateFixture()
+
+    @Test func anUpdateQuitAsksOnlyAboutUnsavedFilesWithNoBox() {
+        // AE9: none with nothing unsaved; one with an unsaved file, with no resume checkbox.
+        let consent = saw.consent()
+        let quit = UpdateQuit(consent: consent, current: saw.plan)
+        expectQuestions(input(reason: .updateRelaunch, opens: nil, update: quit))
+        expectQuestions(input(unsaved: 1, reason: .updateRelaunch, opens: nil, update: quit), saveChanges(nil))
+        // A busy tab the plan covered is never asked about: the sheet showed it stops.
+        let busy = saw.consent(busy: [saw.agent])
+        let stillBusy = UpdateQuit(consent: busy, current: saw.planned(busy: [saw.agent]))
+        expectQuestions(input(busy: 1, reason: .updateRelaunch, update: stillBusy))
+    }
+
+    @Test func aCancelledUpdateQuitLeavesTheNextQuitToTheQuitQuestions() {
+        // AE5: the unsaved-files question cancelled; the consent is cleared, so the next ⌘Q has none.
+        var asking = QuitAsking()
+        asking.reply(.cancel, to: saveChanges(nil))
+        #expect(asking.cancelled && asking.settings(from: LaunchSettings()) == nil)
+        expectQuestions(input(opens: nil), plain(true))
+        expectQuestions(input(unsaved: 1, busy: 1, opens: nil), saveChanges(nil), busy(true))
+    }
+
+    @Test func eachKindOfWorsePlanShowsTheUpdateSheetAgainNeverTheBusyQuestion() {
+        let consent = saw.consent()
+        // A new busy tab.
+        let newBusy = UpdateQuit(consent: consent, current: saw.planned(busy: [saw.command]))
+        expectQuestions(input(unsaved: 1, busy: 1, reason: .updateRelaunch, update: newBusy), .updateSheet)
+        // A session that can no longer be kept: the last save failed.
+        var unsaved = saw.plan
+        unsaved.refusal = .notSaved
+        expectQuestions(input(reason: .updateRelaunch, update: UpdateQuit(consent: consent, current: unsaved)), .updateSheet)
+        // A remote tab that would now be lost: its tmux fell back to a plain connection.
+        let lost = saw.planned(outcomes: [saw.kept: .freshConnection])
+        expectQuestions(input(reason: .updateRelaunch, update: UpdateQuit(consent: consent, current: lost)), .updateSheet)
+    }
+
+    @Test func aPlanThatOnlyGotBetterQuitsWithTheConsent() {
+        // The busy agent finished its turn; the command that ran finished too.
+        let consent = saw.consent(busy: [saw.agent, saw.command])
+        let better = saw.planned(outcomes: [saw.command: .idle])
+        expectQuestions(input(reason: .updateRelaunch, update: UpdateQuit(consent: consent, current: better)))
+        // A tab closed.
+        var fewer = saw.plan
+        fewer.windows[0].panes.removeAll { (pane: UpdatePane) -> Bool in pane.id == saw.command }
+        expectQuestions(input(reason: .updateRelaunch, update: UpdateQuit(consent: consent, current: fewer)))
+    }
+
+    @Test func aWaitForThemConsentCoversTheTabsTakenOut() {
+        // The waited agent finished; the command the user took out of the wait still runs: no busy question, no sheet.
+        var flow = saw.flow(busy: [saw.agent, saw.command])
+        flow.setWaited(saw.command, false)
+        #expect(flow.press(.waitForThem) == .startWait)
+        let finished = saw.planned(busy: [saw.command])
+        #expect(flow.refresh(finished) == .startCountdown)
+        guard case .quit(let consent) = flow.countdownEnded(finished) else {
+            Issue.record("the countdown's end gives the consent")
+            return
+        }
+        expectQuestions(input(busy: 1, reason: .updateRelaunch, update: UpdateQuit(consent: consent, current: finished)))
+        // A busy tab outside the plan it covers: the waited agent working again.
+        let again = saw.planned(busy: [saw.command, saw.agent])
+        expectQuestions(input(busy: 2, reason: .updateRelaunch, update: UpdateQuit(consent: consent, current: again)), .updateSheet)
+    }
+
+    @Test func onlyAValidUpdateConsentGivesTheUpdateRelaunch() {
+        // The `updateInstallWithoutAsking` switch quits without the sheet: a user quit. So does any other test switch.
+        #expect(QuitReason.of(plainSelfTest: false, harness: nil, updateConsent: false, appleEventReason: nil) == .user)
+        #expect(QuitReason.of(plainSelfTest: false, harness: nil, updateConsent: true, appleEventReason: nil) == .updateRelaunch)
+        let shutdown = QuitReason.of(plainSelfTest: false, harness: nil, updateConsent: false, appleEventReason: kAEShutDown)
+        #expect(shutdown == .systemSession)
+        #expect(QuitReason.of(plainSelfTest: true, harness: nil, updateConsent: true, appleEventReason: nil) == .selfTest)
+        #expect(QuitReason.of(plainSelfTest: false, harness: .user, updateConsent: true, appleEventReason: nil) == .user)
+        // A valid update consent asks no resume question: no box, no plain dialog.
+        let quit = UpdateQuit(consent: saw.consent(), current: saw.plan)
+        let asked: [QuitQuestion] = QuitPolicy.questions(input(unsaved: 1, reason: .updateRelaunch, opens: nil, update: quit))
+        #expect(!asked.contains(where: carriesTheBox))
+    }
+
+    @Test func anUpdateConsentWithTheBoxUncheckedStillSkipsTheBusyQuestionAndKeepsNoSessions() {
+        let consent = saw.consent(keep: false, busy: [saw.agent])
+        let quit = UpdateQuit(consent: consent, current: saw.planned(busy: [saw.agent]))
+        expectQuestions(input(busy: 1, reason: .updateRelaunch, update: quit))
+        let intent = QuitIntent.forUpdate(consent, from: "0.11.0")
+        #expect(intent == .update(keep: false, from: "0.11.0", to: saw.version))
+        #expect(!intent.savesSession && intent.relaunches)
+        #expect(QuitIntent.forUpdate(saw.consent(), from: "0.11.0").savesSession)
+        #expect(!QuitIntent.quit(resume: true, consent: true).relaunches)
+    }
+
+    @Test func aSystemSessionQuitGivesNoConsentEvenWithTheBoxChecked() {
+        // A logout asks nothing, so nothing checked counts: its intent carries no consent.
+        var resume = LaunchSettings()
+        resume.opens = .lastProjects
+        var asking = QuitAsking()
+        asking.reply(.goOn(resume: true, dontAskAgain: false), to: plain(true))
+        let intent = QuitIntent.ordinary(reason: .systemSession, settings: resume, consent: asking.quitConsent)
+        #expect(intent == .quit(resume: true, consent: false))
+        #expect(QuitIntent.ordinary(reason: .user, settings: resume, consent: asking.quitConsent) == .quit(resume: true, consent: true))
     }
 }
 
-/// The reopen prompt's buttons and the names it lists, with made-up folders.
+/// The plain quit dialog's buttons and checkbox, and the names its tooltip lists, with made-up folders.
 @Suite struct QuitPromptTests {
     let app = "/Users/x/Code/app"
     let api = "/Users/x/Code/api"
 
-    /// The buttons' titles, as added: compared outside `#expect`, where arrays are slow to type-check.
-    func titles(returnKeyReopens: Bool) -> [String] {
-        let buttons: [QuitPromptButton] = QuitPolicy.promptButtons(returnKeyReopens: returnKeyReopens)
-        return buttons.map(\.title)
+    @Test func quitThenCancelAndNeitherIsChosenByItsPlace() {
+        // R29: "Quit" then "Cancel". Quit carries no key (the dialog clears its Return); NSAlert gives Cancel ⎋.
+        let buttons: [QuitPromptButton] = QuitPolicy.promptButtons
+        let titles: [String] = buttons.map(\.title)
+        let same: Bool = titles == ["Quit", "Cancel"]
+        #expect(same, "\(titles)")
+        #expect(QuitPolicy.promptTitle == "Quit Next Term?")
+        #expect(QuitPolicy.checkboxTitle == "Reopen windows and resume sessions when Next Term opens")
     }
 
-    @Test func theChoiceThatMatchesTheSettingIsTheDefault() {
-        // AE6: added first, it is the default, on top of the stacked buttons, and takes Return. "Cancel" is
-        // added next, as in the save-changes alert, and sits at the bottom; the other choice last, between them.
-        let welcome: [String] = titles(returnKeyReopens: false)
-        let reopen: [String] = titles(returnKeyReopens: true)
-        let welcomeOrder: Bool = welcome == ["Don’t Reopen", "Cancel", "Reopen"]
-        let reopenOrder: Bool = reopen == ["Reopen", "Cancel", "Don’t Reopen"]
-        #expect(welcomeOrder, "\(welcome)")
-        #expect(reopenOrder, "\(reopen)")
+    @Test func eachButtonAnswersForItself() {
+        // Quit gives the box's state and "Don’t ask again"; Cancel gives nothing, whatever is checked.
+        #expect(QuitPromptButton.quit.answer(resume: true, dontAskAgain: false) == .quit(resume: true, dontAskAgain: false))
+        #expect(QuitPromptButton.quit.answer(resume: false, dontAskAgain: true) == .quit(resume: false, dontAskAgain: true))
+        #expect(QuitPromptButton.cancel.answer(resume: true, dontAskAgain: true) == nil)
+        #expect(QuitPromptButton.cancel.answer(resume: false, dontAskAgain: false) == nil)
     }
 
-    @Test func eachButtonAnswersForItselfWhereverItSits() {
-        // The answer comes from the button pressed, never its place, since the place follows the setting.
-        #expect(QuitPromptButton.reopen.answer(dontAskAgain: false) == .reopen(dontAskAgain: false))
-        #expect(QuitPromptButton.reopen.answer(dontAskAgain: true) == .reopen(dontAskAgain: true))
-        #expect(QuitPromptButton.dontReopen.answer(dontAskAgain: false) == .dontReopen(dontAskAgain: false))
-        #expect(QuitPromptButton.dontReopen.answer(dontAskAgain: true) == .dontReopen(dontAskAgain: true))
-        // AE13: Cancel has no answer, even with "Don’t ask again" checked: nothing is written.
-        #expect(QuitPromptButton.cancel.answer(dontAskAgain: true) == nil)
-        #expect(QuitPromptButton.cancel.answer(dontAskAgain: false) == nil)
-        for reopens in [false, true] {
-            let buttons: [QuitPromptButton] = QuitPolicy.promptButtons(returnKeyReopens: reopens)
-            #expect(Set(buttons) == Set(QuitPromptButton.allCases), "\(buttons)")
-            #expect(buttons.count == 3 && buttons[1] == .cancel, "\(buttons)")
-        }
-    }
-
-    @Test func theQuestionSaysThisProjectOrTheseProjectsByTheCount() {
-        // The prompt's title, and the checkbox on the save-changes and "Quitting stops…" alerts.
-        #expect(QuitPolicy.promptTitle([app]) == "Reopen this project next time?")
-        #expect(QuitPolicy.promptTitle([app, api]) == "Reopen these projects next time?")
-        #expect(QuitPolicy.checkboxTitle([app]) == "Reopen this project next time")
-        #expect(QuitPolicy.checkboxTitle([app, api, "/Users/x/Code/web"]) == "Reopen these projects next time")
-        // Two windows on one project are one project.
-        #expect(QuitPolicy.promptTitle([app, app]) == "Reopen this project next time?")
-        #expect(QuitPolicy.checkboxTitle([app, app]) == "Reopen this project next time")
-        // Two folders of one name are two projects.
-        let alike: [String] = ["/Users/x/work/app", "/Users/x/home/app"]
-        #expect(QuitPolicy.promptTitle(alike) == "Reopen these projects next time?")
-    }
-
-    @Test func theOtherChoiceTakesACommandKey() {
-        // NSAlert gives the default Return and "Cancel" ⎋. The other choice, added last, is not left to a click:
-        // "Don’t Reopen" takes ⌘D, as "Don’t Save" does in the save-changes alert, and "Reopen" ⌘R.
-        #expect(QuitPromptButton.dontReopen.commandKey == "d")
-        #expect(QuitPromptButton.reopen.commandKey == "r")
-        #expect(QuitPromptButton.cancel.commandKey == nil)
+    @Test func theCheckboxTooltipNamesTheOpenProjects() {
+        let two = QuitPolicy.checkboxToolTip([app, api, app])
+        #expect(two.contains("“app” and “api”") && two.contains("Settings › General"))
+        let none = QuitPolicy.checkboxToolTip([])
+        #expect(none.contains("its windows") && !none.contains("“"))
     }
 
     /// The names `paths` lists, compared outside `#expect`.

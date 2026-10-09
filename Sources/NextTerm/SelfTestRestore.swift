@@ -15,9 +15,10 @@ import NextTermCore
 /// kept remote tabs, Settings › General), its sessions folder (the session the app saves, and its quit's last save) and
 /// its MCP socket. Its shells read a zsh config of its own, which keeps their history in its folder. Its quits ask the
 /// real questions, answered through their buttons, and its update is staged by the stand-in in `Updater`, installed by
-/// the real script against paths in its folder. "Relaunch Now" asks no resume question, so under "Resume where I left
-/// off" the after-update launch is a quit restore without the quit consent: its windows, tabs, split and scrollback come
-/// back, and the command running at the quit waits on the prompt line. It ends with a quit of its own, under Welcome.
+/// the real script against paths in its folder. The update sheet's real "Update Now", with "Reopen windows and resume
+/// sessions after the update" checked, gives the update consent, so the after-update launch is an update restore: its
+/// windows, tabs, split and scrollback come back, and the command running at the quit waits on the prompt line. It ends
+/// with a quit of its own, the plain quit dialog's box unchecked: under Welcome.
 @MainActor
 enum SelfTestRestore {
     /// Where a run keeps everything, and which step this process is.
@@ -25,7 +26,7 @@ enum SelfTestRestore {
         static let argument = "--relaunch-harness"
 
         enum Step: String, Sendable {
-            /// Stages the update stand-in, then quits through "Relaunch Now", answering the quit's question.
+            /// Stages the update stand-in, then quits through the update sheet's "Update Now".
             case updateQuit = "update-quit"
             /// The swapped app, launched again: checks what the quit and the install left, then quits under Welcome.
             case afterUpdate = "after-update"
@@ -77,8 +78,8 @@ enum SelfTestRestore {
     nonisolated static let harness = Harness(arguments: CommandLine.arguments)
     /// The harness's own defaults suite: AppDelegate's `launchDefaults`, and where remote tabs are kept.
     nonisolated(unsafe) static let defaults: UserDefaults? = harness.flatMap { UserDefaults(suiteName: $0.defaultsSuite) }
-    /// The reason the harness gives its quit; nil: the real one ("Relaunch Now" gives `updateRelaunch`). Never `selfTest`,
-    /// which only the plain self-test has.
+    /// The reason the harness gives its quit; nil: the real one (the update sheet's consent gives `updateRelaunch`). Never
+    /// `selfTest`, which only the plain self-test has.
     nonisolated(unsafe) static var quitReason: QuitReason?
 
     /// The user's own Next Term, whose defaults and folder in Application Support the harness must leave as they are.
@@ -139,15 +140,15 @@ enum SelfTestRestore {
             check(false, "the sessions folder takes a file", "\(error)")
         }
 
-        // "Resume where I left off": the quit, which asks nothing about it, saves the whole session, and the relaunch
-        // reopens the project.
+        // "Resume where I left off": the last quit's plain dialog starts checked, and the update's own box decides what the
+        // relaunch brings back.
         if let defaults {
             var settings = LaunchSettings(defaults: defaults)
             settings.opens = .lastProjects
             settings.save(to: defaults)
         }
 
-        // A project window with a command running, so the quit has a question to ask.
+        // A project window with a command running, so the sheet has a busy tab to show.
         let controller = app.openFolder(harness.project.path, newWindow: false)
         guard let tab = controller.tabs.first, await SelfTest.wait(20, { tab.status.integrated }) else {
             check(false, "the project window's shell starts")
@@ -175,8 +176,8 @@ enum SelfTestRestore {
               "the stand-in stages the update, to install and open only paths in the harness's folder",
               "staged \(staged), install \(target.app), open \(target.open)")
 
-        // The quit, through the real button and the real question, for the reason "Relaunch Now" gives. It ends as the
-        // app's does, so the self-test's Copilot lock folder, which `finish` removes, goes as it ends.
+        // The quit, through the update sheet's real button, for the reason its consent gives. It ends as the app's does, so
+        // the self-test's Copilot lock folder, which `finish` removes, goes as it ends.
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { _ in
             MainActor.assumeIsolated {
                 let reason = AppDelegate.shared.quitReason
@@ -184,10 +185,15 @@ enum SelfTestRestore {
             }
             try? FileManager.default.removeItem(at: SelfTest.copilotLockFolder)
         }
-        press(["Relaunch Now", "Quit"])
+        press([UpdateButton.updateNow.title])
         record("STEP update-quit: quitting")
         Updater.shared.showAvailable()
-        // Reached only when the quit was cancelled.
+        let sheet = UpdateKeepSessions.shared.flow
+        let busy = sheet?.state == .busy && sheet?.keep == true && sheet?.waitSet == [tab.id]
+        check(busy, "the update sheet shows the running command as busy and waited for, with the box checked",
+              "\(String(describing: sheet?.state)), keep \(sheet?.keep ?? false), waited \(sheet?.waitSet.count ?? 0)")
+        // The press quits the app; reached only when the quit did not go ahead.
+        await SelfTest.pause(60)
         check(false, "the update quit goes ahead")
         finish()
     }
@@ -211,15 +217,15 @@ enum SelfTestRestore {
         check(stagingGone && leftovers.isEmpty, "the install removed its staging folder and the old copy's backup",
               "staging there \(!stagingGone), beside the app \(leftovers)")
 
-        // The quit asked its question, and the harness answered both through their buttons.
+        // The update sheet's Update Now was the button's press, and the update quit asked nothing more: no "Quitting
+        // stops…", though a command ran (R16).
         let report = (try? String(contentsOf: harness.report, encoding: .utf8)) ?? ""
-        let pressedRelaunch = report.contains("pressed “Relaunch Now”")
+        let pressedUpdate = report.contains("pressed “Update Now”")
         let pressedQuit = report.contains("pressed “Quit”")
-        check(pressedRelaunch && pressedQuit, "the update quit asked “Quitting stops…”, and both presses were the buttons'",
-              "Relaunch Now \(pressedRelaunch), Quit \(pressedQuit)")
+        check(pressedUpdate && !pressedQuit, "the update quit went ahead on the sheet's Update Now, with no Quitting stops alert",
+              "Update Now \(pressedUpdate), Quit \(pressedQuit)")
 
-        // The relaunch under "Resume where I left off": the quit restore brings the project's window back, with the other
-        // one, and no Welcome window.
+        // The relaunch: the update restore brings the project's window back, with the other one, and no Welcome window.
         let windows = await SelfTest.wait(10) { !app.controllers.isEmpty }
         let welcome = app.welcomeController?.window?.isVisible == true
         let projects: [String] = app.controllers.compactMap(\.project)
@@ -402,10 +408,10 @@ enum SelfTestRestore {
               "\(tabs.count) tabs in \(windows.count) windows, shells started \(started), \(timing)")
     }
 
-    /// What the update quit left, as this launch found it before it wrote anything: under "Resume where I left off", with no
-    /// quit consent ("Relaunch Now" asks nothing that could give it), the whole session marked clean with no consent id
-    /// and no marker, nothing left behind, the scrollback named for its session, read by this launch's quit restore and
-    /// removed, and the install's result, taken once. The secret typed before the quit is in no file the install left or
+    /// What the update quit left, as this launch found it before it wrote anything: with the sheet's box checked, the whole
+    /// session, unclean and waiting for the marker, with no consent id, the marker beside it, nothing else left behind, the
+    /// scrollback named for its session, read by this launch's update restore and removed, and the install's result, naming
+    /// the marker, taken once. The secret typed before the quit is in no file the install left or
     /// the sessions folder holds now, in the harness's defaults, in the unified log or in the report; the quit's own files,
     /// its scrollback among them, were searched as it wrote them (`quitSaved`).
     private static func quitSaveChecks(_ harness: Harness, files: SessionFiles) async {
@@ -413,24 +419,25 @@ enum SelfTestRestore {
         let snapshot = found?.snapshot
         let names: [String] = found?.names ?? []
         let header = snapshot?.header
-        let clean = header?.clean == true && header?.resumeConsent == nil && header?.awaitingMarker == nil
+        let awaiting = header?.clean == false && header?.resumeConsent == nil && header?.awaitingMarker != nil
         let windows = snapshot?.windows.count ?? 0
-        check(clean && windows == 2, "the update quit under Resume saved both windows, clean, with no consent id and no marker",
-              "clean \(header?.clean ?? false), consent \(header?.resumeConsent != nil), windows \(windows)")
+        check(awaiting && windows == 2 && names.contains(UpdateMarker.fileName),
+              "the update quit saved both windows, waiting for its marker, with no consent id, and wrote the marker",
+              "clean \(header?.clean ?? true), consent \(header?.resumeConsent != nil), awaiting \(header?.awaitingMarker != nil), windows \(windows)")
         let lingering: [String] = names.filter { (name: String) -> Bool in
-            name.hasPrefix(".") || name.hasSuffix(SessionFiles.previousSuffix) || name == UpdateMarker.fileName
+            name.hasPrefix(".") || name.hasSuffix(SessionFiles.previousSuffix)
         }
-        check(lingering.isEmpty, "the quit left no previous file, temporary file or marker", "\(lingering)")
+        check(lingering.isEmpty, "the quit left no previous file or temporary file", "\(lingering)")
         let launch = header?.launchID
         let quitScrollback = names.filter { (name: String) -> Bool in ScrollbackText.parseFileName(name)?.quit == launch }
         let left = ((try? files.names()) ?? []).filter { (name: String) -> Bool in name.hasPrefix(ScrollbackText.filePrefix) }
         check(!quitScrollback.isEmpty && left.isEmpty,
-              "the quit saved scrollback named for its session, and this launch's quit restore read it and removed it",
+              "the quit saved scrollback named for its session, and this launch's update restore read it and removed it",
               "saved \(quitScrollback.count), left \(left)")
         let result = found?.installResult
         let resultLeft = ((try? files.names()) ?? []).contains(InstallResult.fileName)
-        check(result == InstallResult(outcome: .installed, marker: nil) && !resultLeft,
-              "the install left its result in the sessions folder, naming no marker, and the launch took it once",
+        check(result == InstallResult(outcome: .installed, marker: header?.awaitingMarker) && !resultLeft,
+              "the install left its result in the sessions folder, naming the quit's marker, and the launch took it once",
               result.map { "\($0.outcome.rawValue), marker \($0.marker?.uuidString ?? "none"), left \(resultLeft)" } ?? "none")
 
         guard let secret = try? String(contentsOf: harness.canary, encoding: .utf8), !secret.isEmpty else {
@@ -448,17 +455,17 @@ enum SelfTestRestore {
               "\(holding)")
     }
 
-    /// The quit restore (plan 003's U10), as the after-update launch built it: a quit restore with no consent, every tab with
-    /// the id it had, both windows, the split at 0.3, the scrollback above its divider, `sleep 600` (running at the quit)
-    /// back on the prompt line and not run, the split pane whose line held a secret saying it was not kept and showing no
-    /// part of it, no restored tab taken for reuse, and the restore done once each action ran.
+    /// The update restore (plan 003's U10), as the after-update launch built it: every tab with the id it had, both windows,
+    /// the split at 0.3, the scrollback above its divider, `sleep 600` (running at the quit) back on the prompt line and not
+    /// run, the split pane whose line held a secret saying it was not kept and showing no part of it, no restored tab taken
+    /// for reuse, and the restore done once each action ran.
     private static func restoreChecks(_ harness: Harness, restore: LaunchRestoreResult) async {
         let app = AppDelegate.shared!
         let sessions = SessionRestore.shared
         let decision = sessions.found?.decision
-        let quit = decision?.kind == .restore(.quit) && decision?.quitConsent == false
-        check(quit && restore == .openedWindows,
-              "the launch after an update quit under Resume is a quit restore without the quit consent: Relaunch Now asks no resume question",
+        let update = decision?.kind == .restore(.update) && decision?.quitConsent == false
+        check(update && restore == .openedWindows,
+              "the launch after the sheet's Update Now, its box checked, is an update restore",
               "\(String(describing: decision?.kind)), consent \(decision?.quitConsent ?? false), \(restore)")
         let saved = Set(sessions.found?.snapshot?.panes.map(\.id) ?? [])
         let open = Set(app.controllers.flatMap(\.tabs).map(\.id))
@@ -478,8 +485,8 @@ enum SelfTestRestore {
         check(applied && line.contains("sleep 600") && !first.status.running,
               "sleep 600, running at the quit, waits on the prompt line and does not run", "applied \(applied), line “\(line)”")
         let shown = first.screenTail(400).joined(separator: "\n")
-        check(first.restoreDivider != nil && shown.contains(ScrollbackText.SavedAt.quit.divider),
-              "the project tab shows the scrollback saved at the quit, above its divider")
+        check(first.restoreDivider != nil && shown.contains(ScrollbackText.SavedAt.update.divider),
+              "the project tab shows the scrollback saved at the update, above its divider")
         let secret = (try? String(contentsOf: harness.canary, encoding: .utf8)) ?? ""
         let noted = second.screenTail(40).joined(separator: "\n")
         let screens = app.controllers.flatMap(\.tabs).map { (tab: TerminalTab) -> String in tab.screenTail(400).joined(separator: "\n") }
@@ -553,10 +560,11 @@ enum SelfTestRestore {
         check(secret.isEmpty, "the secret typed before the quit is in no file its last save left, its scrollback included", "\(secret)")
     }
 
-    /// The last quit, the user's own: "Don’t Reopen" on the reopen question sets "Show the Welcome window", and the quit's
-    /// last save, which reads the setting once the answer is saved, is the tombstone (`welcomeQuitChecks`).
+    /// The last quit, the user's own: the plain quit dialog's box, checked under Resume, unchecked, then its "Quit", sets
+    /// "Show the Welcome window", and the quit's last save, which reads the setting once the answer is saved, is the
+    /// tombstone (`welcomeQuitChecks`).
     private static func welcomeQuit() {
-        press([QuitPromptButton.dontReopen.title])
+        press([QuitPolicy.checkboxTitle, QuitPromptButton.quit.title])
         record("STEP after-update: quitting under Welcome")
         NSApp.terminate(nil)
         // Reached only when the quit was cancelled.
@@ -664,8 +672,9 @@ enum SelfTestRestore {
 
     // MARK: pressing buttons
 
-    /// Presses each button in `titles` in turn, once an app-modal alert shows it: a click, as the user's. Each press is
-    /// in the report before it happens, since the process may quit right after. Gives up after 60 seconds.
+    /// Presses each button in `titles` in turn, once an app-modal alert, or the update sheet, shows it: a click, as the
+    /// user's. Each press is in the report before it happens, since the process may quit right after. Gives up after 60
+    /// seconds.
     private static func press(_ titles: [String]) {
         presses = titles
         let started = Date()
@@ -687,7 +696,7 @@ enum SelfTestRestore {
             presses = []
             return
         }
-        guard let window = NSApp.modalWindow, let content = window.contentView,
+        guard let window = NSApp.modalWindow ?? UpdateKeepSessions.shared.sheet?.window, let content = window.contentView,
               let button = buttons(in: content).first(where: { $0.title == title }) else { return }
         presses.removeFirst()
         record("PASS [\(harness?.step.rawValue ?? "")] pressed “\(title)”")

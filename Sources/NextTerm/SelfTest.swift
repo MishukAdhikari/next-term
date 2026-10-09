@@ -694,6 +694,7 @@ enum SelfTest {
         await databaseChecks(c, proj: proj)
         await dataChecks(c, proj: proj)
         await updateChecks(c)
+        await updateSheetChecks(c)
         await updateSignatureChecks()
         await updateWaitChecks()
         await platformLinkChecks(c)
@@ -3071,8 +3072,11 @@ enum SelfTest {
         check(text.contains("Next Term 99.0.0") && text.contains("Next Term 98.1.0") && text.contains("•\tThe update window.")
               && text.contains("◦\tNested, with code and a link.") && !text.contains("Drag it to Applications"),
               "it shows the notes of every version since this one, without the install steps", text)
-        check(prompt.installButton.title == "Install and Relaunch" && prompt.skipButton.title == "Skip This Version"
-              && prompt.laterButton.title == "Remind Me Later", "with Install and Relaunch, Remind Me Later and Skip This Version")
+        let installTip = prompt.installButton.toolTip ?? ""
+        check(prompt.installButton.title == "Install Update…" && prompt.skipButton.title == "Skip This Version"
+              && prompt.laterButton.title == "Remind Me Later", "with Install Update…, Remind Me Later and Skip This Version")
+        check(installTip == "Downloads and checks 99.0.0, then shows what happens to your tabs before relaunching.",
+              "Install Update… says it shows what happens to the tabs before relaunching", installTip)
         let bar = c.topRightBar
         let other = bar === c.tabBar ? c.editorArea.tabBar : c.tabBar
         bar.layoutSubtreeIfNeeded()

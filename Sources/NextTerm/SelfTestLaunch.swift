@@ -3,7 +3,7 @@ import NextTermCore
 
 /// What a launch shows, and a Dock click with every window closed: the Welcome window, or the projects Settings ›
 /// General says to reopen (LaunchDecision). Kept remote tabs wait for the first terminal window. And what a quit asks
-/// about reopening.
+/// about resuming (R29).
 extension SelfTest {
     /// First of all: the self-test launches as a normal launch does, with the Welcome window whatever is saved, and
     /// then opens its window as New Terminal does, for every check after this one. Settings › General is checked here
@@ -36,8 +36,8 @@ extension SelfTest {
         }
     }
 
-    /// The General tab: its controls show the defaults, each one saves its choice as it changes, where the launch and
-    /// the quit read it, and a new tab shows what was saved.
+    /// The General tab: its controls show the defaults, each one saves only its own choice as it changes, where the launch
+    /// and the quit read it, and a new tab shows what was saved.
     private static func generalSettingsChecks() {
         let defaults = AppDelegate.shared.launchDefaults
         let restore = defaultLaunchSettings(defaults)
@@ -45,23 +45,33 @@ extension SelfTest {
         let view = GeneralSettingsView(frame: .zero)
         let titles: [String] = view.opens.map(\.title)
         let welcome = view.radio(.welcome).state == .on && view.radio(.lastProjects).state == .off
-        let asks = view.askToReopen.state == .on
-        check(titles == ["Show the Welcome window", "Reopen the projects that were open"] && welcome && asks,
-              "Settings › General: At launch shows the Welcome window, and At quit asks whether to reopen projects, until changed",
-              "\(titles), Welcome \(welcome), asks \(asks)")
+        let asks = view.askToResume.state == .on
+        let keeps = view.keepScrollback.state == .on
+        let labels = view.askToResume.title == "Ask whether to resume when quitting" && view.keepScrollback.title == "Keep scrollback"
+        check(titles == ["Show the Welcome window", "Resume where I left off"] && welcome && asks && keeps && labels,
+              "Settings › General: At launch shows the Welcome window, At quit asks whether to resume, and scrollback is kept, until changed",
+              "\(titles), Welcome \(welcome), asks \(asks), keeps scrollback \(keeps), \(view.askToResume.title), \(view.keepScrollback.title)")
         let group = view.opensGroup
         let role = group.accessibilityRole()
         check(group.isAccessibilityElement() && role == .radioGroup && group.accessibilityLabel() == "At launch",
               "VoiceOver reads the two choices as one radio group, named At launch as its visible label",
               "\(role?.rawValue ?? "no role"), \(group.accessibilityLabel() ?? "no label")")
-        let help: [String] = (view.opens + [view.askToReopen]).map { $0.accessibilityHelp() ?? "" }
-        let opensHelp = help.dropLast().allSatisfy { $0.contains("always opens directly") }
-        check(opensHelp && help.last?.contains("always asked about") == true,
-              "VoiceOver reads each General note as the help of the controls it is about", "\(help)")
+        let opensHelp: [String] = view.opens.map { $0.accessibilityHelp() ?? "" }
+        let askHelp = view.askToResume.accessibilityHelp() ?? ""
+        let scrollbackHelp = view.keepScrollback.accessibilityHelp() ?? ""
+        let resumeNote = opensHelp.allSatisfy { $0.hasPrefix("Brings back windows, tabs, splits, scrollback and agents.") }
+        check(resumeNote && askHelp.contains("always asked about") && scrollbackHelp.contains("best-effort basis"),
+              "VoiceOver reads each General note as the help of the controls it is about", "\(opensHelp), \(askHelp), \(scrollbackHelp)")
         generalLayoutChecks()
 
+        // Unchecking Keep scrollback saves false and touches no other key: At launch stays unchosen.
+        view.keepScrollback.performClick(nil)
+        let stored: [String] = LaunchSettings.Key.all.filter { defaults.object(forKey: $0) != nil }
+        let scrollbackOff = defaults.object(forKey: LaunchSettings.Key.keepScrollback) as? Bool == false
+        check(scrollbackOff && stored == [LaunchSettings.Key.keepScrollback] && !LaunchSettings(defaults: defaults).opensChosen,
+              "unchecking Keep scrollback saves it alone, and At launch stays never chosen", "stored \(stored)")
         view.radio(.lastProjects).performClick(nil)
-        view.askToReopen.performClick(nil)
+        view.askToResume.performClick(nil)
         let saved = LaunchSettings(defaults: defaults)
         let savedOpens = defaults.string(forKey: LaunchSettings.Key.opens)
         let onlyOne = view.radio(.welcome).state == .off
@@ -70,31 +80,39 @@ extension SelfTest {
               "\(savedOpens ?? "nothing saved"), asks \(saved.askToReopenOnQuit), Welcome still on \(!onlyOne)")
         let reopened = GeneralSettingsView(frame: .zero)
         let shown = reopened.radio(.lastProjects).state == .on && reopened.radio(.welcome).state == .off
-        check(shown && reopened.askToReopen.state == .off, "and a new General tab shows it",
-              "Reopen on \(shown), asks \(reopened.askToReopen.state == .on)")
+        check(shown && reopened.askToResume.state == .off && reopened.keepScrollback.state == .off, "and a new General tab shows it",
+              "Resume on \(shown), asks \(reopened.askToResume.state == .on), keeps \(reopened.keepScrollback.state == .on)")
+        // A stored 0.10 "Reopen the projects that were open" selects Resume where I left off.
+        defaults.set("lastProjects", forKey: LaunchSettings.Key.opens)
+        let carried = GeneralSettingsView(frame: .zero)
+        check(carried.radio(.lastProjects).state == .on && carried.radio(.lastProjects).title == "Resume where I left off",
+              "a stored lastProjects selects Resume where I left off")
     }
 
-    /// The General tab's rows, laid out as the other tabs' are: "At launch:" beside the radio buttons and "At quit:" beside
-    /// the checkbox, in a 110 pt label column, so the controls start at one edge. The radio group is named with the
-    /// label's words, so VoiceOver does not read "At launch:" too. Measured as Auto Layout places each view, by its
-    /// alignment rect: a label's frame is 2 pt wider on each side.
+    /// The General tab's rows, laid out as the other tabs' are: "At launch:" beside the radio buttons, "At quit:" and
+    /// "Sessions:" beside their checkboxes, in a 110 pt label column, so the controls start at one edge. The radio group is
+    /// named with the label's words, so VoiceOver does not read "At launch:" too. Measured as Auto Layout places each view,
+    /// by its alignment rect: a label's frame is 2 pt wider on each side.
     private static func generalLayoutChecks() {
-        let view = GeneralSettingsView(frame: NSRect(x: 0, y: 0, width: 640, height: 420))
+        let view = GeneralSettingsView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
         view.layoutSubtreeIfNeeded()
         func placed(_ control: NSView) -> NSRect {
             view.convert(control.alignmentRect(forFrame: control.frame), from: control.superview)
         }
         let launch: NSTextField = view.launchLabel
         let quit: NSTextField = view.quitLabel
-        let titles = launch.stringValue == "At launch:" && quit.stringValue == "At quit:"
-        let widths: [CGFloat] = [placed(launch).width, placed(quit).width]
+        let sessions: NSTextField = view.sessionsLabel
+        let titles = launch.stringValue == "At launch:" && quit.stringValue == "At quit:" && sessions.stringValue == "Sessions:"
+        let widths: [CGFloat] = [placed(launch).width, placed(quit).width, placed(sessions).width]
         let column = widths.allSatisfy { abs($0 - 110) < 0.5 }
         let besideRadios = launch.superview != nil && launch.superview === view.opensGroup.superview
-        let besideCheckbox = quit.superview != nil && quit.superview === view.askToReopen.superview
+        let besideAsk = quit.superview != nil && quit.superview === view.askToResume.superview
+        let besideScrollback = sessions.superview != nil && sessions.superview === view.keepScrollback.superview
         let radiosX: CGFloat = placed(view.opensGroup).minX
-        let checkboxX: CGFloat = placed(view.askToReopen).minX
+        let askX: CGFloat = placed(view.askToResume).minX
+        let scrollbackX: CGFloat = placed(view.keepScrollback).minX
         let labelEnd: CGFloat = placed(launch).maxX
-        let oneEdge = abs(radiosX - checkboxX) < 0.5 && radiosX > labelEnd
+        let oneEdge = abs(radiosX - askX) < 0.5 && abs(radiosX - scrollbackX) < 0.5 && radiosX > labelEnd
         let readOnce = !launch.isAccessibilityElement()
         // The notes' rows start with an empty label in the column, which VoiceOver never reaches.
         var blanks: [NSTextField] = []
@@ -103,46 +121,45 @@ extension SelfTest {
             if let field = next as? NSTextField, field.stringValue.isEmpty { blanks.append(field) }
             views.append(contentsOf: next.subviews)
         }
-        let silent = blanks.count == 2 && blanks.allSatisfy { !$0.isAccessibilityElement() }
-        check(titles && column && besideRadios && besideCheckbox && oneEdge && readOnce && silent,
-              "Settings › General: At launch beside the radio buttons and At quit beside the checkbox, in a 110 pt label column as in the other tabs",
-              "titles \(titles), widths \(widths), beside \(besideRadios) \(besideCheckbox), radios at \(radiosX), checkbox at \(checkboxX), label ends at \(labelEnd), VoiceOver once \(readOnce), empty labels silent \(silent)")
+        let silent = blanks.count == 3 && blanks.allSatisfy { !$0.isAccessibilityElement() }
+        let beside = besideRadios && besideAsk && besideScrollback
+        check(titles && column && beside && oneEdge && readOnce && silent,
+              "Settings › General: At launch, At quit and Sessions beside their controls, in a 110 pt label column as in the other tabs",
+              "titles \(titles), widths \(widths), beside \(besideRadios) \(besideAsk) \(besideScrollback), radios at \(radiosX), checkboxes at \(askX) \(scrollbackX), label ends at \(labelEnd), VoiceOver once \(readOnce), empty labels silent \(silent)")
     }
 
-    /// The quit's reopen question, with its dialogs built and never run (QuitReopenPrompt): the prompt alone, the
-    /// checkbox on the save-changes and "Quitting stops…" alerts, the quit Apple event's reason, and a second quit
-    /// while one asks. Made-up folders: nothing here touches the disk.
+    /// The quit's resume question (R29), with its dialogs built and never run (QuitReopenPrompt): the plain dialog, the
+    /// checkbox on the save-changes and "Quitting stops…" alerts and their Return keys, the quit Apple event's reason, and a
+    /// second quit while one asks. Made-up folders: nothing here touches the disk.
     private static func quitDialogChecks() {
         let app = "/Users/x/Code/app"
         let api = "/Users/x/Code/api"
-        let prompt = QuitReopenPrompt(projects: [app, api, app], returnKeyReopens: false)
-        let text = prompt.alert.informativeText
-        let named = text.contains("reopen “app” and “api”, or show the Welcome window") && text.contains("Settings › General")
+        let prompt = QuitReopenPrompt(projects: [app, api, app], checked: true)
         let dontAsk = prompt.alert.showsSuppressionButton && prompt.alert.suppressionButton?.title == "Don’t ask again"
-        check(prompt.alert.messageText == "Reopen these projects next time?" && named && dontAsk,
-              "the reopen prompt names each open project once, says both outcomes, and has Don’t ask again",
-              "\(prompt.alert.messageText) \(text), Don’t ask again \(dontAsk)")
-        let one = QuitReopenPrompt(projects: [app, app], returnKeyReopens: false)
-        check(one.alert.messageText == "Reopen this project next time?" && one.alert.informativeText.contains("reopen “app”, or"),
-              "with one project open, the reopen prompt asks about this project", one.alert.messageText)
-        let alike = QuitReopenPrompt(projects: ["/Users/x/work/app", "/Users/x/home/app"], returnKeyReopens: false)
-        check(alike.alert.informativeText.contains("reopen “work/app” and “home/app”,"),
-              "two projects in folders of one name are told apart by their parent folders", alike.alert.informativeText)
-        promptButtonChecks(returnKeyReopens: false, ["Don’t Reopen", "Cancel", "Reopen"])
-        promptButtonChecks(returnKeyReopens: true, ["Reopen", "Cancel", "Don’t Reopen"])
+        let box = prompt.checkbox
+        let boxShown = prompt.alert.accessoryView === box && box.title == QuitPolicy.checkboxTitle && box.state == .on
+        let named = (box.toolTip ?? "").contains("“app” and “api”")
+        check(prompt.alert.messageText == "Quit Next Term?" && prompt.alert.informativeText.isEmpty && dontAsk && boxShown && named,
+              "the plain quit dialog reads Quit Next Term?, with the resume checkbox naming each open project once, and Don’t ask again",
+              "\(prompt.alert.messageText) “\(prompt.alert.informativeText)”, Don’t ask again \(dontAsk), box \(boxShown), tooltip \(box.toolTip ?? "none")")
+        let unchecked = QuitReopenPrompt(projects: [app], checked: false)
+        check(unchecked.checkbox.state == .off, "the plain dialog's box starts as the policy says: unchecked under Welcome")
+        promptButtonChecks()
 
         let save = AppDelegate.saveBeforeQuittingAlert(["notes.md"])
         checkboxChecks(save, "the save-changes alert", checked: false, projects: [app, api])
         let stops = AppDelegate.quitStopsAlert([])
         checkboxChecks(stops, "the Quitting stops alert", checked: true, projects: [app, api])
-        let saveOne = AppDelegate.saveBeforeQuittingAlert(["notes.md"])
-        checkboxChecks(saveOne, "the save-changes alert", checked: true, projects: [app])
-        let stopsOne = AppDelegate.quitStopsAlert([])
-        checkboxChecks(stopsOne, "the Quitting stops alert", checked: false, projects: [app])
+        // Return: the busy alert's Quit carries none, so Return quits nothing; the save-changes alert keeps Save on Return.
+        let stopKeys: [String] = stops.buttons.map(\.keyEquivalent)
+        let saveKeys: [String] = save.buttons.map(\.keyEquivalent)
+        check(stops.buttons.first?.title == "Quit" && stopKeys.first == "" && saveKeys.first == "\r",
+              "the Quitting stops alert's Quit has no Return, and the save-changes alert's Save keeps it",
+              "Quitting stops \(stopKeys.map { $0.unicodeScalars.map(\.value) }), save-changes \(saveKeys.map { $0.unicodeScalars.map(\.value) })")
 
         reasonChecks()
 
-        // A second quit while one asks (an MCP call, the Dock's Quit under the prompt) is cancelled at once.
+        // A second quit while one asks (an MCP call, the Dock's Quit under the dialog) is cancelled at once.
         let delegate = AppDelegate.shared!
         delegate.askingToQuit = true
         let reply = delegate.applicationShouldTerminate(NSApp)
@@ -153,50 +170,41 @@ extension SelfTest {
               "reply \(reply.rawValue), still asking \(stillAsking), terminating \(delegate.isTerminating)")
     }
 
-    /// The prompt's buttons under one setting: the matching choice first, the default with Return; "Cancel" next with
-    /// ⎋; the other choice last, with ⌘D or ⌘R; and each button answers for itself, Cancel with nothing even with Don’t
-    /// ask again checked.
-    private static func promptButtonChecks(returnKeyReopens: Bool, _ expected: [String]) {
-        let prompt = QuitReopenPrompt(projects: ["/Users/x/Code/app"], returnKeyReopens: returnKeyReopens)
+    /// The plain dialog's buttons: "Quit" then "Cancel"; Quit carries no key, so Return presses nothing, and Cancel takes
+    /// ⎋. Each button answers for itself: Quit with the box's state and Don’t ask again, Cancel with nothing.
+    private static func promptButtonChecks() {
+        let prompt = QuitReopenPrompt(projects: ["/Users/x/Code/app"], checked: true)
         let buttons: [NSButton] = prompt.alert.buttons
         let titles: [String] = buttons.map(\.title)
         let keys: [String] = buttons.map(\.keyEquivalent)
-        let setting = returnKeyReopens ? "Reopen" : "the Welcome window"
-        let otherKey = returnKeyReopens ? "d" : "r"
-        let command = buttons.last?.keyEquivalentModifierMask == .command
-        check(titles == expected && keys == ["\r", "\u{1b}", otherKey] && command,
-              "under \(setting), the reopen prompt's default is \(expected[0]), with Cancel on ⎋ and \(expected[2]) on ⌘\(otherKey.uppercased())",
-              "\(titles), keys \(keys.map { $0.unicodeScalars.map { $0.value } }), ⌘ \(command)")
+        check(titles == ["Quit", "Cancel"] && keys == ["", "\u{1b}"],
+              "the plain quit dialog has Quit then Cancel; Quit has no Return, and Cancel has ⎋",
+              "\(titles), keys \(keys.map { $0.unicodeScalars.map(\.value) })")
         let first = NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
-        for dontAskAgain in [false, true] {
-            prompt.alert.suppressionButton?.state = dontAskAgain ? .on : .off
-            var wrong: [String] = []
-            for (index, title) in titles.enumerated() {
-                let answer: QuitAnswer? = prompt.answer(for: NSApplication.ModalResponse(rawValue: first + index))
-                let wanted: QuitAnswer?
-                switch title {
-                case "Reopen": wanted = .reopen(dontAskAgain: dontAskAgain)
-                case "Don’t Reopen": wanted = .dontReopen(dontAskAgain: dontAskAgain)
-                default: wanted = nil
-                }
-                if answer != wanted { wrong.append("\(title): \(String(describing: answer))") }
+        for resume in [false, true] {
+            for dontAskAgain in [false, true] {
+                prompt.checkbox.state = resume ? .on : .off
+                prompt.alert.suppressionButton?.state = dontAskAgain ? .on : .off
+                let quit: QuitAnswer? = prompt.answer(for: NSApplication.ModalResponse(rawValue: first))
+                let cancel: QuitAnswer? = prompt.answer(for: NSApplication.ModalResponse(rawValue: first + 1))
+                let wanted: QuitAnswer = .quit(resume: resume, dontAskAgain: dontAskAgain)
+                check(quit == wanted && cancel == nil,
+                      "Quit answers with the box \(resume ? "checked" : "unchecked") and Don’t ask again \(dontAskAgain ? "on" : "off"), and Cancel with nothing",
+                      "Quit \(String(describing: quit)), Cancel \(String(describing: cancel))")
             }
-            check(wrong.isEmpty, "under \(setting), each reopen prompt button answers for itself, and Cancel with nothing (Don’t ask again \(dontAskAgain))",
-                  wrong.joined(separator: "; "))
         }
     }
 
-    /// The reopen checkbox on a quit alert: its title by the count of projects ("app" alone, or "app" and "api"), its
-    /// starting state, the projects in its tooltip, and no Don’t ask again.
+    /// The resume checkbox on a quit alert: its title, its starting state, the projects in its tooltip, and no Don’t ask
+    /// again.
     private static func checkboxChecks(_ alert: NSAlert, _ name: String, checked: Bool, projects: [String]) {
         let box = QuitReopenPrompt.addCheckbox(to: alert, checked: checked, projects: projects)
         let tip = box.toolTip ?? ""
         let state = box.state == .on
-        let several = projects.count > 1
-        let title = several ? "Reopen these projects next time" : "Reopen this project next time"
-        let named = tip.contains(several ? "reopens “app” and “api” next" : "reopens “app” next")
-        check(box.title == title && state == checked && named && alert.accessoryView === box && !alert.showsSuppressionButton,
-              "\(name) carries \(title), \(checked ? "checked" : "unchecked") as the setting is, naming the projects, with no Don’t ask again",
+        let named = tip.contains(projects.count > 1 ? "“app” and “api”" : "“app”")
+        check(box.title == QuitPolicy.checkboxTitle && state == checked && named && alert.accessoryView === box
+              && !alert.showsSuppressionButton,
+              "\(name) carries the resume checkbox, \(checked ? "checked" : "unchecked") as the policy says, naming the projects, with no Don’t ask again",
               "\(box.title), on \(state), tooltip \(tip), suppression \(alert.showsSuppressionButton)")
     }
 
@@ -256,7 +264,7 @@ extension SelfTest {
               "listed \(listed), after Clear Menu \(afterClear)")
         app.setRecentProjects([folder])
 
-        // "Reopen the projects that were open": the most recent project.
+        // "Resume where I left off": the most recent project.
         app.welcomeController?.window?.close()
         _ = await wait(5) { app.welcomeController?.window?.isVisible != true }
         var reopen = LaunchSettings()
@@ -265,7 +273,7 @@ extension SelfTest {
         let reopenHandled = app.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
         let opened = await wait(5) { app.controllers.map(\.project) == [folder] }
         check(opened && app.welcomeController?.window?.isVisible != true && !reopenHandled,
-              "with Reopen the projects that were open, a Dock click with every window closed opens the most recent project",
+              "with Resume where I left off, a Dock click with every window closed opens the most recent project",
               "windows \(app.controllers.map { $0.project ?? "none" }), AppKit's reopen \(reopenHandled)")
 
         // `nxtrm` with every window closed: its request and the reopen that brings Next Term to the front come in

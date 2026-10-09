@@ -7,8 +7,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # The relaunch harness. The debug binary goes into two app bundles signed ad hoc, under a new private folder: the
-# installed copy and an update at the next version. The installed copy stages the update, quits through "Relaunch Now"
-# and the real install script swaps the two (its `open` is a stub that records the call). Then the swapped app is
+# installed copy and an update at the next version. The installed copy stages the update, quits through the update
+# sheet's "Update Now" and the real install script swaps the two (its `open` is a stub that records the call). Then the swapped app is
 # launched, and checks what the quit and the install left. Everything is in that folder, except the throwaway copy's own
 # defaults domain, removed after.
 relaunch() {
