@@ -231,9 +231,10 @@ extension SelfTest {
                   lineToCaret(tab).debugDescription)
             server.flag("slow", false)
             await clear()
-            // A dropped check: the shell's own Tab.
+            // A dropped check: the shell's own Tab. The slow listings above end first (within their 10 s), then the cache
+            // is cleared: one that ended after it would fill it again, and this Tab would take the name from there.
+            _ = await wait(12) { !(tab.controlPath.map(RemoteCompletion.shared.isListing(on:)) ?? false) }
             RemoteCompletion.shared.forget()
-            _ = await wait(4) { !(tab.controlPath.map(RemoteCompletion.shared.isListing(on:)) ?? false) }
             server.flag("drop", true)
             await type("ls ~/app/li")
             tabKey()
