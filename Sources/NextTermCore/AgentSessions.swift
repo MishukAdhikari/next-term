@@ -150,6 +150,21 @@ public enum AgentSessions {
         return ids
     }
 
+    /// What Claude Code records of the `claude` with process `pid`, from the file `claudeRunning` and
+    /// `claudeSessionID` read: the session it has open, its folder, when the process started (`procStart`) and
+    /// whether it is busy. Read whole, and only when it is the store's own file: not a link, not a hard link, not
+    /// another user's. A key it lacks is a problem, not a guess at its value.
+    public static func claudeProcess(pid: Int32, home: String) -> Result<ClaudeProcessRecord, AgentEvidence.Problem> {
+        claudeProcess(pid: pid, store: (home as NSString).appendingPathComponent(".claude"))
+    }
+
+    /// The same in a store of Claude Code's own (CLAUDE_CONFIG_DIR).
+    static func claudeProcess(pid: Int32, store: String) -> Result<ClaudeProcessRecord, AgentEvidence.Problem> {
+        let path = (store as NSString).appendingPathComponent("sessions/\(pid).json")
+        guard pid > 0, let file = StoreFile.read(path, maxSize: 65_536) else { return .failure(.unreadable) }
+        return AgentEvidence.claudeRecord(file.data)
+    }
+
     static func claudeSession(_ path: String, id: String, running: Bool) -> AgentSession? {
         guard let (head, tail, modified) = headAndTail(path) else { return nil }
         var cwd: String?, created: Date?, branch: String?, firstPrompt: String?, isLoop = false

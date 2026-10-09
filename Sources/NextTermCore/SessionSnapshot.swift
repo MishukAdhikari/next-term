@@ -303,7 +303,8 @@ extension SessionSnapshot {
     /// The agent in a pane, and how its session id is known.
     public struct Evidence: Equatable, Sendable {
         public var agent: Agent
-        /// The session id as the agent's resume takes it: ASCII letters, digits and `._:-` only.
+        /// The session id as the agent's resume takes it: ASCII letters, digits and `._:-_` only (opencode's
+        /// start `ses_`). Each agent's own pattern is narrower (RestoreAgent.isSessionID).
         public var sessionID: String?
         public var source: IDSource
         /// The folder the session recorded.
@@ -327,12 +328,20 @@ extension SessionSnapshot {
         /// The typed line ran as typed: its alias-expanded form was the same line. Compared in memory: the
         /// expanded line is not saved.
         public var ranAsTyped: Bool
+        /// The options an automatic resume carries, as words (`--model`, `opus`): only ones its agent allows, with
+        /// values within their pattern (RestoreAgent.options(in:)).
+        public var flags: [String]
+        /// The names of the options it ran with that a resume leaves off (a permission bypass, a settings file),
+        /// for its note: names only, never a value.
+        public var leftOff: [String]
+        /// Every option it ran with may be carried by an automatic resume: none left off, and none it could not name.
+        public var flagsAllowed: Bool
 
         /// Each fact not known reads as the answer that resumes nothing: nil, or false.
         public init(agent: Agent, sessionID: String? = nil, source: IDSource = .guess, sessionFolder: String? = nil,
                     executable: String? = nil, interpreter: String? = nil, script: String? = nil, startedAt: Date? = nil,
                     sessionDate: Date? = nil, routingMatchesShell: Bool = false, autoContinueOff: Bool = false,
-                    ranAsTyped: Bool = false) {
+                    ranAsTyped: Bool = false, flags: [String] = [], leftOff: [String] = [], flagsAllowed: Bool = false) {
             self.agent = agent
             self.sessionID = sessionID
             self.source = source
@@ -345,6 +354,9 @@ extension SessionSnapshot {
             self.routingMatchesShell = routingMatchesShell
             self.autoContinueOff = autoContinueOff
             self.ranAsTyped = ranAsTyped
+            self.flags = flags
+            self.leftOff = leftOff
+            self.flagsAllowed = flagsAllowed
         }
 
         /// An id from agreeing evidence. Anything less is a guess.
@@ -877,13 +889,26 @@ extension SessionSnapshot.Pane {
 extension SessionSnapshot.Evidence {
     func repaired(limits: SessionSnapshot.Limits) -> Self {
         var fixed = self
-        fixed.sessionID = SnapshotText.token(sessionID, max: 128, extra: "._:-")
+        fixed.sessionID = SnapshotText.token(sessionID, max: 128, extra: "._:_-")
         fixed.sessionFolder = SnapshotText.plainPath(sessionFolder, max: limits.path)
         fixed.executable = SnapshotText.plainPath(executable, max: limits.path)
         fixed.interpreter = SnapshotText.plainPath(interpreter, max: limits.path)
         fixed.script = SnapshotText.plainPath(script, max: limits.path)
+        // A word or a name that breaks its rule drops its whole list: a resume never carries part of what ran.
+        let words = flags.compactMap { SnapshotText.token($0, max: 64, extra: "._:/=-") }
+        if words.count != flags.count || flags.count > Self.mostOptions {
+            fixed.flags = []
+            fixed.flagsAllowed = false
+        }
+        if leftOff.count > Self.mostOptions || !leftOff.allSatisfy(RestoreAgent.isOptionName) {
+            fixed.leftOff = []
+            fixed.flagsAllowed = false
+        }
         return fixed
     }
+
+    /// The most option words, and option names, a record holds.
+    static let mostOptions = 16
 }
 
 /// The string rules: a value that breaks one is dropped, never cut.
@@ -1011,6 +1036,20 @@ extension KeyedDecodingContainer {
             if let budget, !budget.takeEntry() { break }
             guard let entry = try? list.decode(Lossy<T>.self) else { break }
             read.append(entry.value)
+        }
+        return read
+    }
+
+    /// A list of strings read one by one, within the file's budget. Nil when it is not a list, an entry is not a
+    /// string, it holds more than `max`, or the budget runs out.
+    fileprivate func strings(_ key: Key, max: Int, budget: SnapshotBudget?) -> [String]? {
+        guard var list = try? nestedUnkeyedContainer(forKey: key) else { return nil }
+        var read: [String] = []
+        while !list.isAtEnd {
+            guard read.count < max else { return nil }
+            if let budget, !budget.takeEntry() { return nil }
+            guard let text = try? list.decode(String.self) else { return nil }
+            read.append(text)
         }
         return read
     }
@@ -1298,7 +1337,7 @@ extension SessionSnapshot.Command: Codable {
 extension SessionSnapshot.Evidence: Codable {
     private enum Keys: String, CodingKey {
         case agent, sessionID, source, sessionFolder, executable, interpreter, script, startedAt, sessionDate, routingMatchesShell
-        case autoContinueOff, ranAsTyped
+        case autoContinueOff, ranAsTyped, flags, leftOff, flagsAllowed
     }
 
     public init(from decoder: Decoder) throws {
@@ -1314,6 +1353,15 @@ extension SessionSnapshot.Evidence: Codable {
         routingMatchesShell = c.flag(.routingMatchesShell)
         autoContinueOff = c.flag(.autoContinueOff)
         ranAsTyped = c.flag(.ranAsTyped)
+        flagsAllowed = c.flag(.flagsAllowed)
+        // A list that does not read whole is not taken in part, and then a resume could not carry what ran.
+        for key in [Keys.flags, .leftOff] where c.contains(key) {
+            guard let words = c.strings(key, max: Self.mostOptions, budget: decoder.snapshotBudget) else {
+                flagsAllowed = false
+                continue
+            }
+            if key == .flags { flags = words } else { leftOff = words }
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1330,6 +1378,9 @@ extension SessionSnapshot.Evidence: Codable {
         try c.encode(routingMatchesShell, forKey: .routingMatchesShell)
         try c.encode(autoContinueOff, forKey: .autoContinueOff)
         try c.encode(ranAsTyped, forKey: .ranAsTyped)
+        if !flags.isEmpty { try c.encode(flags, forKey: .flags) }
+        if !leftOff.isEmpty { try c.encode(leftOff, forKey: .leftOff) }
+        try c.encode(flagsAllowed, forKey: .flagsAllowed)
     }
 }
 

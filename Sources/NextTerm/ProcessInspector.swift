@@ -1,4 +1,5 @@
 import Darwin
+import Foundation
 import NextTermCore
 
 /// Reads live process facts straight from the kernel: no `ps`, no `lsof`.
@@ -68,25 +69,6 @@ enum ProcessInspector {
         return path.isEmpty ? nil : path
     }
 
-    /// The files a process has open (its descriptors on files, by path).
-    static func openFiles(of pid: pid_t) -> [String] {
-        guard pid > 0 else { return [] }
-        let stride = MemoryLayout<proc_fdinfo>.stride
-        let size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
-        guard size > 0 else { return [] }
-        var fds = [proc_fdinfo](repeating: proc_fdinfo(), count: Int(size) / stride + 8)
-        let filled = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, &fds, Int32(fds.count * stride))
-        guard filled > 0 else { return [] }
-        return fds.prefix(Int(filled) / stride).compactMap { fd -> String? in
-            guard fd.proc_fdtype == UInt32(PROX_FDTYPE_VNODE) else { return nil }
-            var info = vnode_fdinfowithpath()
-            let wanted = Int32(MemoryLayout<vnode_fdinfowithpath>.size)
-            guard proc_pidfdinfo(pid, fd.proc_fd, PROC_PIDFDVNODEPATHINFO, &info, wanted) == wanted else { return nil }
-            let path = withUnsafeBytes(of: &info.pvip.vip_path) { raw in String(decoding: raw.prefix(while: { $0 != 0 }), as: UTF8.self) }
-            return path.isEmpty ? nil : path
-        }
-    }
-
     /// A process and the processes it started, two generations down: an agent run by a wrapper (node
     /// starting Codex's own binary) does its work in a child.
     static func family(of pid: pid_t) -> [pid_t] {
@@ -100,6 +82,140 @@ enum ProcessInspector {
         guard pid > 0 else { return [] }
         let first = children(pid)
         return [pid] + first + first.flatMap(children)
+    }
+
+    // MARK: agent evidence
+
+    /// The evidence of the agent a tab runs (KTD4), read now: on each periodic save, and again at quit before any
+    /// signal reaches the tab. The process leading the tab's foreground group counts only when it descends from the
+    /// tab's shell; copies of the same agent below it (a CLI that runs itself again in a child) are read with it, and
+    /// for Copilot CLI the session its commands are told. The shell's environment as it started is what the agent's
+    /// routing variables are compared with. Nil when the tab runs no agent.
+    static func agentEvidence(ptyFileDescriptor fd: Int32, shellPid: pid_t, status: TabStatus,
+                              home: String = NSHomeDirectory()) -> SessionSnapshot.Evidence? {
+        var capture = AgentEvidence.Capture(status: status, home: home)
+        let routing = Set(RestoreAgent.allCases.flatMap(\.routingVariables))
+        capture.shellEnvironment = arguments(of: shellPid, keeping: routing)?.environment ?? [:]
+        let leaderID = fd >= 0 && shellPid > 0 ? tcgetpgrp(fd) : -1
+        if leaderID > 0, var leader = agentProcess(leaderID) {
+            let agent = RestoreAgent(process: leader)
+            let readsFiles = agent == .codex
+            if readsFiles { leader.openFiles = openFiles(of: leaderID) }
+            capture.leader = leader
+            capture.verified = descends(leaderID, from: shellPid)
+            let family = agent == nil ? [] : descendants(of: leaderID)
+            capture.relaunched = family.compactMap { child -> AgentProcess? in
+                guard var process = agentProcess(child), RestoreAgent(process: process) == agent else { return nil }
+                if readsFiles { process.openFiles = openFiles(of: child) }
+                return process
+            }
+            if agent == .copilot {
+                let key = AgentEvidence.copilotSessionKey
+                capture.childSessionIDs = family.compactMap { arguments(of: $0, keeping: [key])?.environment[key] }
+            }
+        }
+        return AgentEvidence.capture(capture)
+    }
+
+    /// What capture reads of one process: when it started, the file the kernel ran, its whole argv, the variables of
+    /// AgentEvidence.environmentKeys and no others, and its folder.
+    static func agentProcess(_ pid: pid_t) -> AgentProcess? {
+        guard let path = executablePath(of: pid), let read = arguments(of: pid, keeping: AgentEvidence.environmentKeys) else { return nil }
+        return AgentProcess(pid: pid, startedAt: startTime(of: pid), executable: path, arguments: read.arguments,
+                            environment: read.environment, directory: currentDirectory(of: pid))
+    }
+
+    /// When a process started, by the kernel's clock.
+    static func startTime(of pid: pid_t) -> Date? {
+        guard let info = bsdInfo(pid) else { return nil }
+        return Date(timeIntervalSince1970: Double(info.pbi_start_tvsec) + Double(info.pbi_start_tvusec) / 1_000_000)
+    }
+
+    static func parent(of pid: pid_t) -> pid_t? {
+        bsdInfo(pid).map { pid_t(bitPattern: $0.pbi_ppid) }
+    }
+
+    private static func bsdInfo(_ pid: pid_t) -> proc_bsdinfo? {
+        guard pid > 0 else { return nil }
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        return info
+    }
+
+    /// The file the kernel ran for a process (proc_pidpath): its real path, whatever name started it.
+    static func executablePath(of pid: pid_t) -> String? {
+        var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        guard pid > 0, proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    /// A process's whole argv and the variables of `keys` in its environment (KERN_PROCARGS2). Only a process of this
+    /// user's can be read.
+    static func arguments(of pid: pid_t, keeping keys: Set<String>) -> ProcessArguments? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard pid > 0, sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 0 else { return nil }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return nil }
+        return ProcessArguments.parse(Array(buffer.prefix(size)), keeping: keys)
+    }
+
+    /// `pid` is `ancestor`, or below it.
+    static func descends(_ pid: pid_t, from ancestor: pid_t) -> Bool {
+        var current = pid
+        for _ in 0..<64 {
+            if current == ancestor { return true }
+            guard current > 1, let up = parent(of: current), up != current else { return false }
+            current = up
+        }
+        return false
+    }
+
+    /// A process's children.
+    static func children(of pid: pid_t) -> [pid_t] {
+        guard pid > 0 else { return [] }
+        let count = proc_listchildpids(pid, nil, 0)
+        guard count > 0 else { return [] }
+        var pids = [pid_t](repeating: 0, count: Int(count) + 8)
+        let filled = proc_listchildpids(pid, &pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+        guard filled > 0 else { return [] }
+        return pids.prefix(min(Int(filled), pids.count)).filter { $0 > 0 }
+    }
+
+    /// The processes below `pid`, nearest first: `depth` generations, at most `limit` of them.
+    static func descendants(of pid: pid_t, depth: Int = 2, limit: Int = 64) -> [pid_t] {
+        var found: [pid_t] = []
+        var generation = [pid]
+        for _ in 0..<depth where found.count < limit {
+            generation = generation.flatMap(children(of:))
+            found += generation
+        }
+        return Array(found.prefix(limit))
+    }
+
+    /// The paths of the files a process holds open (vnodes), at most `limit`.
+    static func openFiles(of pid: pid_t, limit: Int = 1024) -> [String] {
+        guard pid > 0 else { return [] }
+        let bytes = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
+        guard bytes > 0 else { return [] }
+        let stride = MemoryLayout<proc_fdinfo>.stride
+        var descriptors = [proc_fdinfo](repeating: proc_fdinfo(), count: Int(bytes) / stride + 16)
+        let filled = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, &descriptors, Int32(descriptors.count * stride))
+        guard filled > 0 else { return [] }
+        var paths: [String] = []
+        let vnode = UInt32(PROX_FDTYPE_VNODE)
+        for descriptor in descriptors.prefix(min(Int(filled) / stride, descriptors.count)) where descriptor.proc_fdtype == vnode {
+            var info = vnode_fdinfowithpath()
+            let size = Int32(MemoryLayout<vnode_fdinfowithpath>.size)
+            guard proc_pidfdinfo(pid, descriptor.proc_fd, PROC_PIDFDVNODEPATHINFO, &info, size) == size else { continue }
+            let path = withUnsafeBytes(of: &info.pvip.vip_path) { raw in
+                String(decoding: raw.prefix(while: { $0 != 0 }), as: UTF8.self)
+            }
+            if !path.isEmpty { paths.append(path) }
+            if paths.count >= limit { break }
+        }
+        return paths
     }
 
     /// Helper daemons that prompt frameworks keep as children of the shell; not the user's jobs.
