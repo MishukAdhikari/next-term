@@ -103,20 +103,24 @@ final class CompletionController {
         event.type == .keyDown && event.keyCode == 48 && event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
     }
 
-    /// The keys while a list is open: ↑ ↓ (and ⇧Tab, ^P, ^N) choose, Tab goes into a folder and inserts anything
-    /// else, Return inserts, Esc closes and is never sent; ^C, ^J and → close and go on to the shell; letters and
-    /// Backspace go to the shell, which reports the word for the list to narrow (⌫ right after going into a folder
-    /// goes back up).
+    /// The keys while a list is open: ↑ ↓ (and ⇧Tab, ^P, ^N) choose; Tab and → go into a folder and put anything else
+    /// on the line, and ← goes back up from a folder gone into (CompletionDrill.action); Return inserts; Esc closes and
+    /// is never sent; ^C, ^J, and ← or → with nothing to go to, close and go on to the shell; letters and Backspace go
+    /// to the shell, which reports the word for the list to narrow (⌫ right after going into a folder goes back up).
     private func listKey(_ event: NSEvent, _ session: CompletionSession) -> Bool {
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
         // ^N, ^P, ^C and ^J by the letter, whatever the keyboard layout.
         let letter = flags == [.control] ? event.charactersIgnoringModifiers?.lowercased() : nil
         let rows = session.isShown && shown === session && session.list?.rows.isEmpty == false
+        // The row a key acts on; none while Loading, or before the list shows.
+        let row = rows ? popup.selected : nil
         switch (event.keyCode, flags) {
-        case (48, []): // Tab
-            // While Loading, or before the list shows, there is nothing to go into yet: it waits for the rows.
-            if rows, !session.state.isDrilling { session.tab(on: popup.selected) } else { session.tabBeforeRows() }
-            return true
+        case (48, []): // Tab: with no rows yet it waits for them
+            return session.walk(.tab, row: row)
+        case (124, []): // →: as Tab; with no rows, the cursor moves
+            return session.walk(.right, row: row)
+        case (123, []): // ←: back up; at the top, the cursor moves
+            return session.walk(.left, row: row)
         case (36, []), (76, []): // Return, Enter
             // While a folder is listed it waits for the folder's list; under Loading it does nothing.
             if rows || session.state.isDrilling { session.enter(on: popup.selected) }
@@ -130,9 +134,6 @@ final class CompletionController {
         case (53, []): // Esc
             session.closeList()
             return true
-        case (124, []): // →
-            session.closeList()
-            return false
         default:
             switch letter {
             case "n":

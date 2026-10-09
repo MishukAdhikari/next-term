@@ -13,8 +13,9 @@ import NextTermCore
 /// screen once the keys typed have echoed, its folder is listed over the connection, and what is chosen goes on
 /// the line as keys. Nothing private is ever sent to that shell.
 ///
-/// ⇥ on a folder row goes into it (CompletionDrill): the name and `/` go on the line and the same list shows what is
-/// inside; ⌫ that takes the `/` goes back up. Writes wait while the folder is listed, as they wait for a Tab's answer.
+/// ⇥ or → on a folder row goes into it (CompletionDrill): the name and `/` go on the line and the same list shows what
+/// is inside; ⌫ that takes the `/`, or ←, goes back up. Writes wait while the folder is listed, as they wait for a Tab's
+/// answer, and so do the list's own keys pressed meanwhile, in order.
 final class CompletionSession {
     private(set) weak var tab: TerminalTab?
     private(set) var state = CompletionState()
@@ -73,17 +74,24 @@ final class CompletionSession {
     private var drillFallback: (() -> Void)?
     /// On zsh's path, the list gone from and its row, while zsh lists what is inside (for a refusal, and for ⌫).
     private var drillFrom: (list: CompletionList, row: Int)?
-    /// A Return pressed while a folder is listed: it takes the row chosen once the folder's list shows.
-    private var enterWaiting = false
-    /// The list on screen when a Tab or a Return began to wait while a folder was listed: still the one (it couldn't be
-    /// entered), the key takes the row chosen in it; another (the folder's), its first row.
+    /// The list's keys pressed while a folder is listed (⇥ or →, ↩︎, ←), in order: they act once the folder's list
+    /// shows, until one goes into a folder again.
+    private enum WaitingKey {
+        case tab
+        case enter
+        case left
+    }
+    private var waitingKeys: [WaitingKey] = []
+    /// The list on screen when a key began to wait while a folder was listed: still the one (it couldn't be entered),
+    /// the key takes the row chosen in it; another (the folder's, or the one gone back up to), its own row.
     private weak var keyList: CompletionList?
     /// The single-match rule while what is inside is listed: what goes on the line alone if it isn't in time.
     private var singleInsert: (id: Int, word: String)?
     private var singleKeys: (id: Int, keys: (erase: Int, text: String))?
-    /// A server's screen, after going into a folder: the word the screen shows once the name has echoed, and until when
-    /// what is on the way to it doesn't close the list.
-    private var drillEcho: (word: ScreenWord, until: TimeInterval)?
+    /// A server's screen, after going into a folder (or back up with ←): the word the screen shows once the keys have
+    /// echoed, and until when what is on the way to it is let be. Going in, a word in that folder is it; going up
+    /// (`exact`), only that word.
+    private var drillEcho: (word: ScreenWord, until: TimeInterval, exact: Bool)?
     /// The list VoiceOver was told of already ("In projects, 12 items"), so the popup doesn't say it again.
     private(set) weak var announced: CompletionList?
 
@@ -190,7 +198,7 @@ final class CompletionSession {
         }
         heldPaste = inPaste
         if tabWaiting, !state.holding { followTab() }
-        if enterWaiting, !state.holding { followEnter() }
+        if !waitingKeys.isEmpty, !state.holding { followKeys() }
     }
 
     /// A Tab pressed while another was in flight follows the rule of the state that one left. Still in flight, it
@@ -214,16 +222,30 @@ final class CompletionSession {
         }
     }
 
-    /// A Return pressed while a folder was listed: the row chosen in the folder's list once it shows. Nothing if the
-    /// list closed meanwhile (the name went in alone): a Return in the list never reaches the shell.
-    private func followEnter() {
-        enterWaiting = false
-        guard isListOpen, let list else { return }
-        if state.isDrilling || !state.shown || list.rows.isEmpty {
-            enterWaiting = true
-            return
+    /// A list key pressed while a folder was listed waits, in order with the others.
+    private func wait(_ key: WaitingKey) {
+        if waitingKeys.isEmpty { keyList = list }
+        waitingKeys.append(key)
+    }
+
+    /// The keys that waited for a folder's list, in order, each on the list showing then, until one goes into a folder
+    /// again. None if the list closed meanwhile (the name went in alone): a key in the list never reaches the shell.
+    private func followKeys() {
+        while let key = waitingKeys.first, !state.isDrilling {
+            guard isListOpen else {
+                waitingKeys = []
+                return
+            }
+            guard let list, state.shown, !list.rows.isEmpty else { return } // its rows are still to come
+            waitingKeys.removeFirst()
+            let row = waitingRow(list)
+            switch key {
+            case .tab: tab(on: row)
+            case .enter: accept(row)
+            case .left: if list.parent != nil { goUp() }
+            }
+            keyList = self.list
         }
-        accept(waitingRow(list))
     }
 
     /// The row a key that waited takes (keyList).
@@ -279,12 +301,7 @@ final class CompletionSession {
 
     /// A Tab on an open list whose rows haven't come yet: it waits for them, as one pressed while the Tab was in
     /// flight does (followTab). Under the Loading row it does nothing.
-    func tabBeforeRows() {
-        if state.isDrilling {
-            keyList = list
-            tabWaiting = true
-            return
-        }
+    private func tabBeforeRows() {
         guard isListOpen, let list, !state.shown || list.rows.isEmpty else { return }
         tabWaiting = true
     }
@@ -510,34 +527,49 @@ final class CompletionSession {
 
     // MARK: the list
 
-    /// ⇥ on row `index` of the open list (CompletionController, or a Tab that waited for the rows): into a folder row;
-    /// a beep on a folder that can't be entered; anything else goes on the line as ↩︎ puts it. While a folder is being
-    /// listed it waits, for the folder's list.
+    /// ⇥, → or ← on the open list (CompletionController), with `row` chosen (nil: no rows show yet), as
+    /// CompletionDrill.action has it: into a folder, the name on the line as ↩︎ puts it, a beep on a folder that can't
+    /// be entered, back up from a folder gone into, or a wait (for the rows, or for the folder being listed). False:
+    /// the list closed, and the key goes on to the shell (← at the top, → with no rows: the cursor moves).
+    func walk(_ key: CompletionDrill.Key, row: Int?) -> Bool {
+        guard isListOpen else { return false }
+        let index = row.flatMap { list?.rows.indices.contains($0) == true ? $0 : nil }
+        let target = index.flatMap { list?.tabTarget($0) }
+        let action = CompletionDrill.action(key, on: target, inside: list?.parent != nil, drills: entersFolders, drilling: state.isDrilling)
+        switch action {
+        case .goIn, .putOnLine, .beep: if let index { tab(on: index) }
+        case .backUp: goUp()
+        case .closeAndPass:
+            closeList()
+            return false
+        case .wait:
+            if state.isDrilling { wait(key == .left ? .left : .tab) } else if key == .tab { tabBeforeRows() }
+        }
+        return true
+    }
+
+    /// The shell's hook goes into folders (a server's from before doesn't: ⇥ is ↩︎ there until its shell starts again);
+    /// a server's screen always does.
+    private var entersFolders: Bool { state.path == .screen || state.arm?.drills == true }
+
+    /// ⇥ or → on row `index` of the open list (walk, or a Tab that waited for the rows): into a folder row; a beep on a
+    /// folder that can't be entered; anything else goes on the line as ↩︎ puts it. While a folder is being listed it
+    /// waits, for the folder's list.
     func tab(on index: Int) {
         guard isListOpen, let list, list.rows.indices.contains(index) else { return }
-        if state.isDrilling {
-            keyList = list
-            tabWaiting = true
-            return
-        }
+        if state.isDrilling { return wait(.tab) }
         tabWaiting = false
-        // A server's hook from before going into folders: ⇥ is ↩︎ there until its shell starts again.
-        guard state.path == .screen || state.arm?.drills == true else { return accept(index) }
-        switch list.tabTarget(index) {
-        case .file: accept(index)
-        case .closed: NSSound.beep()
-        case .folder: drill(index, list)
+        switch CompletionDrill.action(.tab, on: list.tabTarget(index), inside: list.parent != nil, drills: entersFolders) {
+        case .goIn: drill(index, list)
+        case .beep: NSSound.beep()
+        default: accept(index)
         }
     }
 
     /// ↩︎ on row `index`: while a folder is listed it waits, then takes the row chosen in the folder's list.
     func enter(on index: Int) {
         guard isListOpen else { return }
-        if state.isDrilling {
-            keyList = list
-            enterWaiting = true
-            return
-        }
+        if state.isDrilling { return wait(.enter) }
         accept(index)
     }
 
@@ -565,7 +597,7 @@ final class CompletionSession {
     /// reporting the line. Keys held while a folder was listed go out.
     func closeList() {
         tabWaiting = false
-        enterWaiting = false
+        waitingKeys = []
         guard state.openID != nil else { return }
         closeKeys()
         state.closed()
@@ -606,7 +638,7 @@ final class CompletionSession {
         drillEcho = nil
         singleInsert = nil
         singleKeys = nil
-        enterWaiting = false
+        waitingKeys = []
         list = nil
         caretRow = nil
         screenWord = nil
@@ -824,7 +856,7 @@ extension CompletionSession {
         screenDeadline?.cancel()
         typeOnScreen(keys)
         list = inside
-        drillEcho = (into, TerminalTab.now + 1)
+        drillEcho = (into, TerminalTab.now + 1, false)
         announce(into: String(into.folder.dropLast().split(separator: "/").last ?? ""), inside)
         screenAnswer(id, .open)
     }
@@ -853,7 +885,9 @@ extension CompletionSession {
         guard let view else { return }
         var bytes = [UInt8](repeating: 0x7F, count: keys.erase)
         let text = Array(keys.text.utf8)
-        if view.getTerminal().bracketedPasteMode {
+        if text.isEmpty {
+            // Only Backspaces (← back up): no empty paste after them.
+        } else if view.getTerminal().bracketedPasteMode {
             bytes += Array("\u{1b}[200~".utf8) + text + Array("\u{1b}[201~".utf8)
         } else {
             bytes += text
@@ -869,11 +903,11 @@ extension CompletionSession {
         guard let left = tab.lineLeftOfCursor() else { return closeList() }
         let read = ScreenWord.read(left)
         if let echo = drillEcho {
-            guard let read, read.before == echo.word.before, read.folder == echo.word.folder else {
-                if TerminalTab.now < echo.until { return }
-                return closeList()
-            }
+            let arrived = read.map { $0.before == echo.word.before && (echo.exact ? $0.word == echo.word.word : $0.folder == echo.word.folder) } ?? false
+            if !arrived, TerminalTab.now < echo.until { return }
             drillEcho = nil
+            // Going in, the name never echoed; going up, the screen moved on past the word: it is read as it is now.
+            if !arrived, !echo.exact { return closeList() }
         }
         if let read, let above = list.backUp(screen: read) { return wentBackUp(above) }
         guard let now = list.screenWord?.next(left), list.update(screen: now) else { return closeList() }
@@ -1079,7 +1113,7 @@ extension CompletionSession {
         inside.drilled(from: from.list, row: from.row)
         typeOnScreen(keys)
         list = inside
-        drillEcho = (into, TerminalTab.now + 1)
+        drillEcho = (into, TerminalTab.now + 1, false)
         state.drilled(.into)
         lastDrill = .into
         announce(into: from.list.rows.indices.contains(from.row) ? from.list.rows[from.row].text : "", inside)
@@ -1113,7 +1147,39 @@ extension CompletionSession {
             write(CompletionProtocol.backUp(id: list.id, to: above.id))
             state.reopened(above.id)
         }
-        self.list = above
+        showUp(above)
+    }
+
+    /// ← in a folder gone into: the word it was gone into from goes back on the line in place of the word now (Next
+    /// Term's take on its own engine, the hook's `u` on zsh's path, keys on a server's screen), and the list it was gone
+    /// into from shows, as it was, with that folder chosen.
+    fileprivate func goUp() {
+        guard let list, list.parent != nil else { return }
+        if state.path == .screen { return screenUp(list, since: TerminalTab.now) }
+        guard let take = list.upTake(), let above = list.goUp() else { return NSSound.beep() }
+        write(take)
+        if state.path == .completionSystem { state.reopened(above.id) }
+        showUp(above)
+    }
+
+    /// ← on a server's screen: once what was typed has echoed (300 ms at most), Backspaces back to the word gone in
+    /// from (and the rest of it, typed). The list that was open meanwhile stays until the screen shows that word.
+    private func screenUp(_ list: CompletionList, since start: TimeInterval) {
+        guard state.openID == list.id, self.list === list, !state.isDrilling, let tab else { return }
+        if !settled(tab), TerminalTab.now - start < 0.3 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.015) { [weak self] in self?.screenUp(list, since: start) }
+            return
+        }
+        guard let left = tab.lineLeftOfCursor(), let now = list.screenWord?.next(left), let keys = list.upKeys(at: now),
+              let above = list.goUp(), let word = above.screenWord else { return NSSound.beep() }
+        typeOnScreen(keys)
+        drillEcho = (word, TerminalTab.now + 1, true)
+        showUp(above)
+    }
+
+    /// The list gone back up to shows, its folder chosen; VoiceOver says so ("Back up, projects, 3 of 5").
+    private func showUp(_ above: CompletionList) {
+        list = above
         backUps += 1
         if let row = above.preferredRow {
             announced = above
