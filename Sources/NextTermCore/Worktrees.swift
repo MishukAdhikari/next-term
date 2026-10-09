@@ -54,6 +54,13 @@ public enum WorktreeTarget: Equatable, Sendable {
         name.split(separator: "/").last.map(String.init) ?? name
     }
 
+    /// The commit `git rev-parse --verify` printed (its last line that is a full object id), so a typed
+    /// revision is checked out as the commit that was found, and never read as an option.
+    public static func commit(in output: String) -> String? {
+        output.split(whereSeparator: \.isNewline).reversed().map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { ($0.count == 40 || $0.count == 64) && $0.allSatisfy(\.isHexDigit) }
+    }
+
     /// `git worktree add`'s arguments for a folder at `path` (absolute, so never read as an option).
     public func addArguments(path: String) -> [String] {
         switch self {

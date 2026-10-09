@@ -354,6 +354,14 @@ public struct BranchModel: Equatable, Sendable {
 /// Branch names as git accepts them (`git check-ref-format` on refs/heads/<name>), and a name made from
 /// whatever was typed.
 public enum BranchName {
+    /// Why a typed tag or revision can't be checked out, or nil if it can be tried: git would read one
+    /// that starts with "-" as an option.
+    public static func revisionProblem(_ revision: String) -> String? {
+        if revision.contains(" ") { return "No spaces in a revision." }
+        if revision.hasPrefix("-") { return "A revision can’t start with “-”." }
+        return nil
+    }
+
     /// Why `name` can't be a new branch, or nil if it can.
     public static func problem(_ name: String, existing: Set<String> = []) -> String? {
         if name.isEmpty { return "A branch needs a name." }

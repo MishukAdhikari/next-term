@@ -26,6 +26,19 @@ import Testing
         #expect(WorktreeTarget.newBranch("feat/x", base: nil, noTrack: false).addArguments(path: path) == ["worktree", "add", "-b", "feat/x", path, "HEAD"])
     }
 
+    @Test func aTypedRevisionIsPinnedToTheCommitGitFound() {
+        let sha = "4f2a9c1d0b7e6a5f4e3d2c1b0a9f8e7d6c5b4a39"
+        #expect(WorktreeTarget.commit(in: sha + "\n") == sha)
+        #expect(WorktreeTarget.commit(in: "warning: refname 'main' is ambiguous.\n" + sha + "\n") == sha)
+        #expect(WorktreeTarget.commit(in: "fatal: bad revision\n") == nil)
+        #expect(WorktreeTarget.commit(in: "") == nil)
+        // What is typed is never read as an option.
+        #expect(BranchName.revisionProblem("v1.2.0") == nil)
+        #expect(BranchName.revisionProblem("main~3") == nil)
+        #expect(BranchName.revisionProblem("-q") == "A revision can’t start with “-”.")
+        #expect(BranchName.revisionProblem("a b") == "No spaces in a revision.")
+    }
+
     @Test func whatTheTargetIsCalled() {
         #expect(WorktreeTarget.branch("fix/7027-sso").shortName == "7027-sso")
         #expect(WorktreeTarget.branch("main").shortName == "main")

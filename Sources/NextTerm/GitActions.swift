@@ -114,7 +114,8 @@ struct GitActions {
                                      buttons: ["OK"], over: window) { _ in }
             }
             let steps = [["switch", "--detach", revision]]
-            let worktree = WorktreeTarget.revision(revision, shown: name)
+            // In a new worktree, the commit that was found: exactly what was checked, never read as an option.
+            let worktree = WorktreeTarget.revision(WorktreeTarget.commit(in: found.output) ?? revision, shown: name)
             confirmAgents(.switching(to: name), worktree: worktree) {
                 run("Checkout \(name)", steps) { result in
                     if result.ok { return toast("At \(name), detached: New Branch… keeps work made here") }
@@ -138,7 +139,7 @@ struct GitActions {
 
     func askRevision() {
         GitPrompt.text("Checkout Tag or Revision", info: "A tag, a commit, or any revision git understands, such as v1.2.0, abc1234 or main~3. You’ll be on it detached.",
-                       placeholder: "v1.2.0", button: "Checkout", over: window, check: { $0.contains(" ") ? "No spaces in a revision." : nil }) { revision in
+                       placeholder: "v1.2.0", button: "Checkout", over: window, check: BranchName.revisionProblem) { revision in
             if let revision { checkoutRevision(revision) }
         }
     }
@@ -288,7 +289,7 @@ struct GitActions {
     func askCheckout(commit sha: String, subject: String) {
         GitPrompt.ask("Check out \(sha.prefix(7))?", info: "“\(Typography.shortened(subject, to: 80))”. You’ll be on it detached: New Branch… keeps work made there.",
                       buttons: ["Checkout", "Cancel"], over: window) { choice in
-            if choice == 0 { checkoutRevision(sha) }
+            if choice == 0 { checkoutRevision(sha, shown: String(sha.prefix(7))) }
         }
     }
 
