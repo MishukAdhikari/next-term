@@ -69,6 +69,9 @@ final class CompletionPopup: NSObject, NSTableViewDataSource, NSTableViewDelegat
         panel.orderOut(nil)
         rows = []
         loading = false
+        // The table's rows go too: a layout still due (Esc right as the Loading row went up) would ask for a row
+        // that isn't there any more.
+        table.reloadData()
     }
 
     /// Moves the selection by `delta` rows, stopping at the ends.
