@@ -452,14 +452,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// A folder from outside (nxtrm, Finder, an agent): its window if it is open, an unused window, or a new one.
-    /// A linked worktree's folder opens as Open in New Window does (openWorktreeWindow).
+    /// A linked worktree's folder is kept out of Recent Projects, as Open in New Window keeps it (openWorktreeWindow).
     @discardableResult
     func openFolder(_ path: String, newWindow: Bool) -> TerminalWindowController {
         let path = canonicalPath(path)
-        if WorktreeWindow.repository(ofLinkedWorktree: path) != nil {
-            return newWindow ? openWindow(directory: path, project: path) : openWorktreeWindow(path)
-        }
-        recent.add(path)
+        if WorktreeWindow.repository(ofLinkedWorktree: path) == nil { recent.add(path) }
         welcome?.close()
         if !newWindow, let open = controllers.first(where: { $0.project == path }) {
             open.window?.makeKeyAndOrderFront(nil)
