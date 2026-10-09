@@ -705,6 +705,79 @@ import Testing
         #expect(plan(remote(5, keep: .off, nil), safeMode: true, world: world()).listLine == "connection closes")
     }
 
+    /// Safe mode comes after two restores that did not finish, and those come back as a crash or quit restore without the
+    /// consent: Try Again resumes nothing then, and the alert does not say it would. Only an update restore whose try was
+    /// not counted is held in safe mode with a resume to apply.
+    @Test func safeModesTryAgainResumesOnlyAfterAnUpdateRestore() {
+        let (evidence, facts) = exactClaude()
+        let panes = [pane(1, typed("claude"), agent: evidence), pane(2, typed("npm run dev"))]
+        let crash = plan(panes, kind: .crash, safeMode: true, world: world(facts: facts))
+        let quit = plan(panes, kind: .quit, safeMode: true, quitConsent: false, world: world(facts: facts))
+        let update = plan(panes, kind: .update, safeMode: true, world: world(facts: facts))
+        #expect(!crash.contains { $0.outcome == .resume } && !quit.contains { $0.outcome == .resume })
+        #expect(update.contains { $0.outcome == .resume })
+        #expect(RestoreAlertText.safeModeText(for: crash) == RestoreAlertText.safeModeText(resumes: false))
+        #expect(RestoreAlertText.safeModeText(for: quit) == RestoreAlertText.safeModeText(resumes: false))
+        #expect(RestoreAlertText.safeModeText(for: update) == RestoreAlertText.safeModeText(resumes: true))
+    }
+
+    // MARK: before the shell is ready
+
+    /// The note as the tab shows it before its shell starts, dates as in `text`.
+    func shown(_ plan: PanePlan) -> String {
+        let start = self.start
+        return plan.note.shownBeforeShell { (date: Date) -> String in "T+\(Int(date.timeIntervalSince(start)))" } ?? ""
+    }
+
+    /// A note is shown before the shell starts, and an action that types waits for the shell: it may never happen, as the
+    /// user typing first drops it. So its note says what happens once the shell is ready, unless the user types first.
+    @Test func beforeItsShellIsReadyATabSaysWhatHappensThenUnlessTheUserTypesFirst() {
+        let (evidence, facts) = exactClaude()
+        var claude = pane(1, typed("claude"), agent: evidence)
+        claude.interrupted = true
+        let resume = plan(claude, world: world(facts: facts))
+        #expect(shown(resume) == "Claude Code session \(s) resumes once the shell is ready, unless you type first. "
+            + "Its last turn was cut off by the update and does not continue.")
+        var typedOnly = evidence
+        typedOnly.source = .typedAndArgv
+        let line = plan(pane(2, typed("claude --resume \(s)"), agent: typedOnly), world: world(facts: facts))
+        #expect(shown(line) == "claude --resume \(s) goes back on the line, not run, once the shell is ready, unless you type first. "
+            + "Press Return to resume Claude Code session \(s), or edit it first.")
+        let gemini = plan(pane(3, typed("gemini"), agent: Evidence(agent: .gemini)), world: world())
+        #expect(shown(gemini) == "gemini goes back on the line, not run, once the shell is ready, unless you type first. "
+            + "No Gemini CLI session could be named, so Return starts a new one.")
+        let dev = plan(pane(4, typed("npm run dev")), world: world())
+        #expect(shown(dev) == "npm run dev goes back on the line, not run, once the shell is ready, unless you type first. "
+            + "Press Return to run it, or edit it first.")
+        // What happened, once it has: the note's own words.
+        #expect(text(dev) == "npm run dev is back on the line, not run. Press Return to run it, or edit it first.")
+        // A note that waits for nothing, and safe mode, which applies nothing until Try Again, read the same either way.
+        let idle = plan(pane(5, typed("make test", running: false, exit: 2)), world: world())
+        #expect(shown(idle) == text(idle))
+        let held = plan(pane(6, typed("npm run dev")), safeMode: true, world: world())
+        #expect(shown(held) == text(held))
+        let kept = plan(remote(7, keep: .off, typed("htop")), world: world())
+        #expect(shown(kept) == text(kept))
+    }
+
+    /// As an automatic resume's turn comes, its session is read again (KTD5): one a process took since is not resumed. Its
+    /// resume command goes on the line instead, unrun, and the tab says why.
+    @Test func aResumeWhoseSessionAProcessTookPutsItsLineBackAndSaysWhy() {
+        let (evidence, facts) = exactClaude()
+        let resume = plan(pane(1, typed("claude"), agent: evidence), world: world(facts: facts))
+        let command = resume.line ?? ""
+        #expect(resume.outcome == .resume && command.hasPrefix("/usr/bin/env "))
+        #expect(RestoreLayout.resumeStart(resume, sessionAvailable: true) == .run(command))
+        let taken = "Claude Code session \(s) did not resume, because another process has it open. "
+            + "claude --resume \(s) is on the line, not run."
+        #expect(resume.note.sessionTakenText == taken)
+        #expect(RestoreLayout.resumeStart(resume, sessionAvailable: false) == .putBack(line: "claude --resume \(s)", note: taken))
+        // Only a resume has that note, and only a resume runs.
+        let dev = plan(pane(2, typed("npm run dev")), world: world())
+        #expect(dev.note.sessionTakenText == nil)
+        #expect(RestoreLayout.resumeStart(dev, sessionAvailable: true) == .putBack(line: nil, note: nil))
+    }
+
     // MARK: every outcome and every note
 
     @Test func everyOutcomeHasAPlanAndEveryNoteIsOnePrintableLine() {
@@ -730,9 +803,10 @@ import Testing
         #expect(Set(plans.map(\.outcome)) == Set(RestoreOutcome.allCases))
         plans += plan(panes, safeMode: true, world: world(facts: facts, exists: exists, hosts: hosts))
         for each in plans {
-            let note = each.note.text() ?? ""
-            #expect(TerminalText.oneLine(note) == note && TerminalTextTests.isPrintable(note), "\(each.outcome)")
-            #expect(!note.unicodeScalars.contains(where: Command.isUnsafe), "\(each.outcome)")
+            for note in [each.note.text() ?? "", each.note.shownBeforeShell() ?? "", each.note.sessionTakenText ?? ""] {
+                #expect(TerminalText.oneLine(note) == note && TerminalTextTests.isPrintable(note), "\(each.outcome)")
+                #expect(!note.unicodeScalars.contains(where: Command.isUnsafe), "\(each.outcome)")
+            }
             #expect(TerminalText.oneLine(each.listLine) == each.listLine, "\(each.outcome)")
             if let line = each.line { #expect(Command.problem(with: line) == nil, "\(each.outcome)") }
         }

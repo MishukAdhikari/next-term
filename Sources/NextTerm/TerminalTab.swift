@@ -20,6 +20,12 @@ final class NextTermView: LocalProcessTerminalView {
     var interceptInput: ((ArraySlice<UInt8>) -> Bool)?
     /// Tab completion's ordered writer (CompletionSession): true, the write waits and goes out later.
     var completionGate: ((ArraySlice<UInt8>) -> Bool)?
+    /// Writes into the shell other than the terminal's own answers: every key, paste and drop, and all text anything types
+    /// into the tab (Insert Path, a suggested command, Send to Agent, MCP, the restore itself). A restored action types
+    /// only onto a line nothing else wrote to (`RestoreLayout.LineWatch`), whether or not what wrote said it was the user.
+    private(set) var inputWrites = 0
+    /// The terminal is answering a program's question (where the cursor is, its colours, focus), which is not input.
+    private var answering = false
 
     /// A key Clear Buffer shares with a command for everywhere (⌘K, Commit… under the JetBrains set) is Clear
     /// Buffer's here, before the menus, while this terminal has the keyboard (KeyboardShortcuts.terminalKeys).
@@ -35,9 +41,16 @@ final class NextTermView: LocalProcessTerminalView {
         onOutput?()
     }
 
+    override func send(source: Terminal, data: ArraySlice<UInt8>) {
+        answering = true
+        defer { answering = false }
+        super.send(source: source, data: data)
+    }
+
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
         if let interceptInput, interceptInput(data) { return }
         guard acceptsInput else { return }
+        if !answering { inputWrites += 1 }
         if let completionGate, completionGate(data) { return }
         onInput?()
         super.send(source: source, data: Self.withoutScreenChecksum(data))
@@ -359,11 +372,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             self?.completion.output()
         }
         view.onInput = { [weak self] in self?.status.input(at: Self.now) }
-        view.onKeyboard = { [weak self] in
-            guard let self else { return }
-            self.touchedByUser = true
-            MCPControl.typedByUser(self)
-        }
+        view.onKeyboard = { [weak self] in self?.userInput() }
         view.onBell = { [weak self] in self?.attention() }
         view.completionGate = { [weak self] data in self?.completion.gate(data) ?? false }
         view.linkBaseDirectory = { [weak self] in self?.liveDirectory ?? NSHomeDirectory() }
@@ -598,9 +607,16 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     var restoredRecord: SessionSnapshot.Pane?
     /// The restore's note for this tab (RestoreNote), shown once, under the restored scrollback, before the shell starts.
     var restoreNote: String?
-    /// The user pressed a key, pasted or dropped something in this tab (`NextTermView.onKeyboard`): an action the restore
-    /// has not applied yet is the user's to drop (KTD6).
+    /// The user put something in this tab (`userInput`): an action the restore has not applied yet is theirs to drop (KTD6).
     private(set) var touchedByUser = false
+
+    /// The user put something in this tab: a key, a paste or a drop (`NextTermView.onKeyboard`), or text Next Term types
+    /// at their word, such as Insert Path or a suggested command. A restored action not applied yet is dropped, and one
+    /// typed that waits for its Return does not run; an agent over MCP no longer drives the tab.
+    func userInput() {
+        touchedByUser = true
+        MCPControl.typedByUser(self)
+    }
 
     /// Nothing has happened in this tab that a caller could lose by reusing it (`nxtrm`, ⌥⌘O, MCP `new_tab`): nothing ran
     /// in it, and it holds nothing restored, such as a put-back line (KTD10).

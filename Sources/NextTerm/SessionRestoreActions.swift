@@ -3,10 +3,14 @@ import NextTermCore
 
 /// Each restored pane's action, applied once (KTD3, KTD6). A note was shown before the shell started, and a tab on a
 /// server connects by itself, so neither waits. A line put back, or an automatic resume, waits until the shell is ready:
-/// its first prompt reported and bracketed paste on, so what is typed is inserted as text and never run. Automatic
-/// resumes start 400 ms apart, the tabs in view first, and only they press Return. The user typing in a tab first (a key,
-/// a paste, a drop) cancels its action; a shell not ready in time gets a note instead. Until each action is applied its
-/// tab's record is saved as it was restored, so a restore that stops part-way loses nothing.
+/// its first prompt reported and bracketed paste on, so what is typed is inserted as text and never run. Its note said so
+/// before the shell started (`RestoreNote.shownBeforeShell`): what happens then, unless the user types first. Automatic
+/// resumes start 400 ms apart, the tabs in view first, and only they press Return. An action types only onto a line
+/// nothing else reached (`RestoreLayout.LineWatch`): the user putting anything in the tab first (`TerminalTab.userInput`:
+/// a key, a paste, a drop, Insert Path, a suggested command), or any text written into its shell, cancels it, and once a
+/// resume is typed, withholds its Return. A shell not ready in time, or a session a process took since, gets a note that
+/// says so. Until each action is applied its tab's record is saved as it was restored, so a restore that stops part-way
+/// loses nothing.
 ///
 /// In safe mode nothing waits for a shell: each tab shows what it held, until Keep As Is drops every action or Try Again
 /// applies them, once.
@@ -17,10 +21,14 @@ final class RestoreActions {
         let plan: PanePlan
         /// When it started to wait, on the uptime clock.
         var since: TimeInterval
+        /// Whether its line is still the restore's.
+        let line: RestoreLayout.LineWatch
     }
 
     /// The panes still waiting, in reading order.
     private var waiting: [Waiting] = []
+    /// Automatic resumes typed whose Return has not gone yet, by tab, each with its line as typed.
+    private var typed: [UUID: RestoreLayout.LineWatch] = [:]
     /// Safe mode holds every action until Keep As Is or Try Again.
     private(set) var held: Bool
     private var queue = RestoreLayout.ResumeQueue()
@@ -39,19 +47,22 @@ final class RestoreActions {
             let action = pane.plan.outcome.action
             let local = pane.tab.remote == nil
             let types = action == .resume || action == .onTheLine || action == .typeIn
+            let line = RestoreLayout.LineWatch(writes: pane.tab.view.inputWrites)
+            let entry = Waiting(tab: pane.tab, plan: pane.plan, since: now, line: line)
             if types && local && pane.plan.line != nil {
-                waiting.append(Waiting(tab: pane.tab, plan: pane.plan, since: now))
+                waiting.append(entry)
             } else if !(safeMode && local) {
                 // Shown, or connecting: done. In safe mode a local tab's note waits with the rest.
                 settle(pane.tab, .applied)
             } else {
-                waiting.append(Waiting(tab: pane.tab, plan: pane.plan, since: now))
+                waiting.append(entry)
             }
         }
     }
 
-    /// Whether any pane's action has not been applied, cancelled or dropped.
-    var isWaiting: Bool { !waiting.isEmpty }
+    /// Whether any pane's action has not been applied, cancelled or dropped: one waiting for its shell, or a resume typed
+    /// whose Return has not gone.
+    var isWaiting: Bool { !waiting.isEmpty || !typed.isEmpty }
 
     /// Starts waiting for the shells; in safe mode, for Keep As Is or Try Again.
     func start() {
@@ -96,14 +107,14 @@ final class RestoreActions {
         for entry in waiting {
             let tab = entry.tab
             let state = RestoreLayout.readiness(integrated: tab.status.integrated, bracketedPaste: tab.view.getTerminal().bracketedPasteMode,
-                                                userTyped: tab.touchedByUser, exited: tab.exited, waited: now - entry.since)
+                                                userTyped: Self.taken(entry.line, in: tab), exited: tab.exited, waited: now - entry.since)
             switch state {
             case .waiting:
                 left.append(entry)
             case .cancelled:
                 settle(tab, .userInput)
             case .timedOut:
-                if !tab.exited { tab.view.feed(text: "\r\n" + RestoreLayout.noteLine(Self.timedOutNote)) }
+                if !tab.exited { Self.note(RestoreLayout.timedOutNote, in: tab) }
                 settle(tab, .dismissed)
             case .ready where entry.plan.outcome == .resume:
                 ready.append(tab.id)
@@ -118,23 +129,49 @@ final class RestoreActions {
         if let next = queue.next(ready: ready, visible: visible, now: now), let index = waiting.firstIndex(where: { $0.tab.id == next }) {
             resume(waiting.remove(at: index))
         }
-        if waiting.isEmpty { finished() }
+        if !isWaiting { finished() }
     }
 
-    /// An automatic resume: the command the gate built, pasted, then Return. A session a process took since goes on the
-    /// line instead, unrun, as its resume command; so does one the user typed over before Return.
+    /// An automatic resume: its session read again (KTD5), then the command the gate built, pasted, and its Return
+    /// `RestoreLayout.returnDelay` later. A session a process took since goes on the line instead, unrun, as its resume
+    /// command, and the tab says why.
     private func resume(_ entry: Waiting) {
         let tab = entry.tab
-        guard let command = entry.plan.line, let evidence = tab.restoredRecord?.agent, sessionAvailable(evidence) else {
-            if let line = entry.plan.note.line { tab.view.typeIn(line) }
-            return settle(tab, .applied)
+        let available = tab.restoredRecord?.agent.map(sessionAvailable) ?? false
+        switch RestoreLayout.resumeStart(entry.plan, sessionAvailable: available) {
+        case .putBack(let line, let note):
+            if let note { Self.note(note, in: tab) }
+            if let line { tab.view.typeIn(line) }
+            settle(tab, .applied)
+        case .run(let command):
+            tab.view.typeIn(command)
+            var line = entry.line
+            line.typed(writes: tab.view.inputWrites)
+            typed[tab.id] = line
+            DispatchQueue.main.asyncAfter(deadline: .now() + RestoreLayout.returnDelay) { [weak self] in
+                MainActor.assumeIsolated { self?.pressReturn(tab) }
+            }
         }
-        tab.view.typeIn(command)
-        settle(tab, .applied)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak tab] in
-            guard let tab, !tab.exited, !tab.touchedByUser else { return }
-            tab.view.send(txt: "\r")
-        }
+    }
+
+    /// A typed resume's Return, onto the line it typed alone: anything put there since leaves the line as it is, the
+    /// command and what came after it, and nothing runs.
+    private func pressReturn(_ tab: TerminalTab) {
+        guard let line = typed.removeValue(forKey: tab.id) else { return }
+        let after = RestoreLayout.afterResumeTyped(lineTaken: Self.taken(line, in: tab), exited: tab.exited)
+        if after == .press { tab.view.send(txt: "\r") }
+        settle(tab, after.event)
+        if !isWaiting { finished() }
+    }
+
+    /// Whether anything but the restore reached the tab's line since `line` was taken.
+    private static func taken(_ line: RestoreLayout.LineWatch, in tab: TerminalTab) -> Bool {
+        line.taken(userTyped: tab.touchedByUser, writes: tab.view.inputWrites)
+    }
+
+    /// A note after the shell started, on a line of its own: what happened is not what the tab said before it started.
+    private static func note(_ text: String, in tab: TerminalTab) {
+        tab.view.feed(text: "\r\n" + RestoreLayout.noteLine(text))
     }
 
     /// The pane's action moves on (applied, cancelled by the user, dropped), and its record with it.
@@ -149,6 +186,4 @@ final class RestoreActions {
         waiting = []
         onSettled?()
     }
-
-    static let timedOutNote = "The shell was not ready in time, so nothing was typed."
 }

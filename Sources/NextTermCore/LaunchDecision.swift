@@ -439,6 +439,12 @@ public struct RestoreDecision: Equatable, Sendable {
     public var didNotInstallNote: Bool
     public var attemptsReset: AttemptsReset
 
+    /// Whether agents may resume by themselves on this quit restore: the consent, and only once its id is on record as
+    /// used (`recorded`, `SessionLaunch.record`), so a launch killed after this one never resumes them again (R30).
+    public func consentHolds(recorded: Bool) -> Bool {
+        quitConsent && recorded
+    }
+
     /// The launch table's `restore` input, once the restore has built what it builds.
     public func launchRestore(openedWindow: Bool) -> LaunchRestoreResult {
         guard kind.restores else { return .notRun }

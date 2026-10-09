@@ -61,7 +61,8 @@ extension SelfTest {
         let snapshot = SessionSnapshot(header: header, windows: windows)
 
         // A crash restore puts the agent's resume command on the line; here it resumes, as after a consented quit, through
-        // the stand-in at its absolute path (a shell function named `claude` cannot stand in for it).
+        // the stand-in at its absolute path. SelfTestRestoreInput runs the planner's own command, past a shell function
+        // named `claude`.
         var planned = RestorePlanning.plan(snapshot, kind: .crash, safeMode: false, quitConsent: false)
         if let index = planned.plans.firstIndex(where: { (plan: PanePlan) -> Bool in plan.pane == agent.id }) {
             planned.plans[index].outcome = .resume

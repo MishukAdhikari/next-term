@@ -265,6 +265,7 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
     }
 
     static func put(_ made: CommandSuggestion.Suggestion, on tab: TerminalTab) {
+        tab.userInput() // on the user's word: a restored action waiting in the tab is dropped, never run after it
         if tab.completion.takesLine {
             tab.completion.takeLine(made.command)
         } else {

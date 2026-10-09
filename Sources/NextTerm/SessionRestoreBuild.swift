@@ -300,7 +300,7 @@ enum RestoreBuild {
             record.pending = plan.pending
             tab.restoredRecord = record
             if let name = pane.scrollback, let text = scrollback[name], let savedAt { tab.restoredScrollback = (text, savedAt) }
-            tab.restoreNote = plan.note.text()
+            tab.restoreNote = plan.note.shownBeforeShell()
             tabs[pane.id] = tab
             panes.append(RestoredPane(tab: tab, plan: plan))
             return tab

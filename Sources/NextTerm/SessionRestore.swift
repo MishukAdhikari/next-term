@@ -88,7 +88,7 @@ final class SessionRestore {
         var opened = false
         switch decision.kind {
         case .restore(let kind):
-            let consent = decision.quitConsent && recorded
+            let consent = decision.consentHolds(recorded: recorded)
             if let snapshot = read.snapshot { opened = restore(snapshot, kind: kind, safeMode: false, consent: consent, scrollback: scrollback) }
         case .safeMode(let kind):
             if let snapshot = read.snapshot { opened = restore(snapshot, kind: kind, safeMode: true, consent: false, scrollback: [:]) }
@@ -130,16 +130,25 @@ final class SessionRestore {
         actions.onSettled = { [weak self] in self?.restoreSettled() }
         phase = safeMode ? .safeMode : .restoringTabs
         actions.start()
-        if safeMode { DispatchQueue.main.async { SessionRestoreAlerts.askAfterSafeMode() } }
+        if safeMode {
+            let text = RestoreAlertText.safeModeText(for: planned.plans)
+            DispatchQueue.main.async { SessionRestoreAlerts.askAfterSafeMode(text: text) }
+        }
         return !built.windows.isEmpty
     }
 
-    /// Safe mode's Try Again (R21): one more try, counted first, applies each pane's action.
-    func tryAgain() {
-        guard phase == .safeMode, let actions, let files else { return }
-        SessionLaunch.count(.tryAgain, in: files)
+    /// Safe mode's Try Again (R21): one more try, counted first, applies each pane's action. A try the folder refuses to
+    /// count runs nothing, as a launch's does (`LaunchDecision.restoring`): if it crashed, the next launch would not know.
+    /// Its actions are then dropped, as Keep As Is drops them. False when it ran nothing.
+    func tryAgain() -> Bool {
+        guard phase == .safeMode, let actions, let files else { return false }
+        guard SessionLaunch.count(.tryAgain, in: files) != nil else {
+            actions.keepAsIs()
+            return false
+        }
         phase = .restoringTabs
         actions.tryAgain()
+        return true
     }
 
     /// Safe mode's Keep As Is: every action dropped, and the tabs stay as they are.

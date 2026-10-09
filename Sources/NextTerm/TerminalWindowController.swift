@@ -1345,6 +1345,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func sidebar(_ sidebar: ProjectSidebarView, insert text: String) {
         guard let tab = activeTab else { return }
+        tab.userInput() // the user's text: a restored action waiting in the tab is dropped, never run after it
         tab.view.typeIn(text)
         window?.makeFirstResponder(tab.view)
     }

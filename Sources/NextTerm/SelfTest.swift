@@ -872,6 +872,7 @@ enum SelfTest {
         terminalTextChecks()
         await scrollbackChecks(proj: proj)
         await restoreBuildChecks(proj: proj)
+        await restoreInputChecks(proj: proj)
 
         await lastTabChecks()
         await dockReopenChecks(c)

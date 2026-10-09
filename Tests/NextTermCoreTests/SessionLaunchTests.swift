@@ -143,6 +143,76 @@ import Testing
         #expect(!SessionLaunch.setAsideName.hasPrefix("state-v"))
     }
 
+    /// Runs `body` while the folder refuses every new file (its mode at 0500), then gives it back its own mode.
+    func refusingWrites(_ files: SessionFiles, _ body: () throws -> Void) rethrows {
+        chmod(files.url.path, 0o500)
+        defer { chmod(files.url.path, 0o700) }
+        try body()
+    }
+
+    /// The quit's state file under "Resume where I left off", with the box checked: clean, two windows, a consent id.
+    func consentedQuit(_ files: SessionFiles) throws {
+        var snapshot = updateSnapshot()
+        snapshot.header = RestoreFixture.header(clean: true, awaiting: nil)
+        snapshot.header.resumeConsent = QuitRestoreTests.consent
+        try files.replace(SessionSnapshot.fileName(), with: try snapshot.encoded())
+    }
+
+    @Test func aQuitConsentHoldsOnlyOnceItsIDIsOnRecordAndOnlyOnce() throws {
+        let (files, parent) = try owned()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        try consentedQuit(files)
+        let found = read(files, resumes: true)
+        let decision = LaunchDecision.restoring(found.facts)
+        #expect(decision.kind == .restore(.quit) && decision.quitConsent)
+        #expect(decision.consumes == [QuitRestoreTests.consent])
+        // The record of used ids cannot be written: a launch killed after this one would find the id unused and resume
+        // the agents again, so this one does not resume them either.
+        refusingWrites(files) {
+            let recorded = SessionLaunch.record(decision, consumed: found.facts.consumed, in: files)
+            #expect(!recorded)
+            #expect(!decision.consentHolds(recorded: recorded))
+        }
+        // Written: it holds, for this launch alone.
+        let recorded = SessionLaunch.record(decision, consumed: found.facts.consumed, in: files)
+        #expect(recorded && decision.consentHolds(recorded: recorded))
+        let next = LaunchDecision.restoring(read(files, resumes: true).facts)
+        #expect(next.kind == .restore(.quit) && !next.quitConsent && !next.consentHolds(recorded: true))
+    }
+
+    @Test func aRecordNotWrittenKeepsTheClaimForTheNextLaunchToUseUp() throws {
+        let (files, parent) = try owned()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        try files.replace(SessionSnapshot.fileName(), with: try updateSnapshot().encoded())
+        try files.replace(UpdateMarker.fileName, with: RestoreFixture.updateMarker.data)
+        let found = read(files)
+        let decision = LaunchDecision.restoring(found.facts)
+        #expect(decision.kind == .restore(.update) && !decision.quitConsent)
+        refusingWrites(files) {
+            #expect(!SessionLaunch.record(decision, consumed: found.facts.consumed, in: files))
+        }
+        let names: [String] = try files.names()
+        #expect(names.contains(UpdateMarker.claimedName) && !names.contains(ConsumedMarkers.fileName))
+        // The next claim uses the one left up: the marker never restores twice.
+        try files.replace(UpdateMarker.fileName, with: RestoreFixture.updateMarker.data)
+        let again = read(files)
+        #expect(again.facts.consumed == ConsumedMarkers().adding(RestoreFixture.marker))
+        #expect(LaunchDecision.check(again.facts) == .consumed)
+    }
+
+    /// Safe mode's Try Again counts its try first, as a launch does; a try the folder refuses to count runs nothing.
+    @Test func aTryTheFolderRefusesIsNotCounted() throws {
+        let (files, parent) = try owned()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        _ = read(files)
+        _ = read(files)
+        refusingWrites(files) {
+            #expect(SessionLaunch.count(.tryAgain, in: files) == nil)
+        }
+        #expect(counter(files) == "2\n")
+        #expect(SessionLaunch.count(.tryAgain, in: files) == RestoreAttempts(count: 3))
+    }
+
     @Test func eventsMoveTheCounterAsWritten() throws {
         let (files, parent) = try owned()
         defer { try? FileManager.default.removeItem(at: parent) }

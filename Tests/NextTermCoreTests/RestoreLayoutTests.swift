@@ -62,6 +62,48 @@ import Testing
         #expect(state(waited: RestoreLayout.readyLimit + 5) == .ready)
     }
 
+    /// The line is the restore's only while nothing else reached it: the user's flag covers what they do in the tab, and
+    /// the count of writes into the shell covers every other way text gets there (Insert Path, a suggested command, Send
+    /// to Agent), whether or not it said it was the user's. The terminal's own answers to a prompt's questions are not
+    /// writes (`NextTermView.inputWrites`).
+    @Test func aLineAnythingElseWroteToIsNoLongerTheRestores() {
+        var line = RestoreLayout.LineWatch(writes: 3)
+        #expect(!line.taken(userTyped: false, writes: 3))
+        // Text typed into the tab without the user's flag: the line is not empty any more.
+        #expect(line.taken(userTyped: false, writes: 4))
+        // A key, a paste or a drop, even one a gate held back from the shell.
+        #expect(line.taken(userTyped: true, writes: 3))
+        // The restore typed its own line: that write is its own, and only a later one takes the line.
+        line.typed(writes: 4)
+        #expect(!line.taken(userTyped: false, writes: 4))
+        #expect(line.taken(userTyped: false, writes: 5))
+        #expect(line.taken(userTyped: true, writes: 4))
+        // Ready, as the action reads it: a line taken before the shell is ready cancels the action.
+        let ready = RestoreLayout.readiness(integrated: true, bracketedPaste: true, userTyped: line.taken(userTyped: false, writes: 5),
+                                            exited: false, waited: 1)
+        #expect(ready == .cancelled)
+    }
+
+    /// An automatic resume's Return goes only onto the line it typed: anything put there since (a key, Insert Path, any
+    /// text typed into the tab) leaves the line as it is, the resume command and what came after it, unrun. That still
+    /// counts as applied: the restore typed its line, as for a line put back, and nothing of its own ran (MCPRestored).
+    @Test func aTypedResumeRunsOnReturnOnlyOnALineNothingElseReached() {
+        typealias After = RestoreLayout.ResumeReturn
+        #expect(RestoreLayout.afterResumeTyped(lineTaken: false, exited: false) == .press)
+        #expect(RestoreLayout.afterResumeTyped(lineTaken: true, exited: false) == .withheld)
+        // The shell ended: there is nothing to run.
+        #expect(RestoreLayout.afterResumeTyped(lineTaken: false, exited: true) == .shellEnded)
+        #expect(RestoreLayout.afterResumeTyped(lineTaken: true, exited: true) == .shellEnded)
+        #expect(After.press.event == .applied && After.withheld.event == .applied && After.shellEnded.event == .dismissed)
+        #expect(RestoreLayout.returnDelay == 0.25)
+    }
+
+    @Test func aShellNotReadyInTimeSaysNothingWasTyped() {
+        #expect(RestoreLayout.timedOutNote == "The shell was not ready in time, so nothing was typed.")
+        let fed = RestoreLayout.noteLine(RestoreLayout.timedOutNote)
+        #expect(fed == "\u{1B}[2m" + RestoreLayout.timedOutNote + "\u{1B}[0m\r\n")
+    }
+
     @Test func automaticResumesStartAPartTheTabsInViewFirst() {
         var queue = RestoreLayout.ResumeQueue()
         let a = UUID(uuidString: "00000000-0000-4000-8000-00000000000a")!
@@ -103,6 +145,20 @@ import Testing
         // Without a name, it was not moved, and the alert does not say it was.
         let kept = RestoreAlertText.setAsideText(folder: folder, name: nil)
         #expect(!kept.contains(SessionLaunch.setAsideName) && kept.contains(folder))
+    }
+
+    /// Try Again resumes agents only when a pane would resume by itself: after an update restore whose try was not
+    /// counted. Two restores that did not finish leave a crash or quit restore, whose agents' lines go back unrun.
+    @Test func safeModePromisesAResumeOnlyWhenTryAgainWouldResume() {
+        let none = RestoreAlertText.safeModeText(resumes: false)
+        #expect(none == "Each tab says what it held. Keep As Is leaves them as they are. Try Again puts back what each tab held, once.")
+        #expect(!none.contains("resume"))
+        let some = RestoreAlertText.safeModeText(resumes: true)
+        #expect(some == "Each tab says what it held. Keep As Is leaves them as they are. Try Again puts back what each tab held, "
+            + "and resumes the agents that may resume by themselves, once.")
+        // A try the sessions folder refuses to count runs nothing, and says so.
+        #expect(RestoreAlertText.notCountedTitle == "Try Again ran nothing")
+        #expect(RestoreAlertText.notCountedText.contains("could not record") && RestoreAlertText.notCountedText.contains("as they are"))
     }
 }
 

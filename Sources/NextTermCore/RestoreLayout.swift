@@ -68,13 +68,86 @@ public enum RestoreLayout {
 
     /// Whether a pane's action may type into its shell now (KTD6). Ready means the shell's first prompt was reported
     /// (`integrated`, its first integration end mark) and its line editor switched bracketed paste on, so what is typed
-    /// is inserted as text and never run. The user typing first, a key, a paste or a drop, cancels it.
+    /// is inserted as text and never run. Anything put on the line first (`userTyped`, as `LineWatch.taken` reads it)
+    /// cancels it.
     public static func readiness(integrated: Bool, bracketedPaste: Bool, userTyped: Bool, exited: Bool,
                                  waited: TimeInterval) -> Readiness {
         if userTyped { return .cancelled }
         if exited { return .timedOut }
         if integrated && bracketedPaste { return .ready }
         return waited >= readyLimit ? .timedOut : .waiting
+    }
+
+    /// Whether a restored tab's line is still the restore's, for its action to type there or press Return on it. Two
+    /// things say it is not: the user's flag (`TerminalTab.userInput`: a key, a paste, a drop, Insert Path, a suggested
+    /// command, even one a gate held back from the shell), and the count of writes into the shell
+    /// (`NextTermView.inputWrites`), which every way text reaches the line moves, whether or not it said it was the
+    /// user's. The terminal's own answers to a prompt's questions are not writes. The count the restore expects is the
+    /// one when its action began waiting, then the one right after it typed its own line.
+    public struct LineWatch: Equatable, Sendable {
+        private var expected: Int
+
+        public init(writes: Int) {
+            expected = writes
+        }
+
+        /// Something other than the restore reached the line: the user's flag is up, or the count moved.
+        public func taken(userTyped: Bool, writes: Int) -> Bool {
+            userTyped || writes != expected
+        }
+
+        /// The restore typed its own line: what the count is now is its own.
+        public mutating func typed(writes: Int) {
+            expected = writes
+        }
+    }
+
+    /// What a tab whose shell was not ready in time says: its action turned into this note.
+    public static let timedOutNote = "The shell was not ready in time, so nothing was typed."
+
+    /// What an automatic resume does as its turn comes.
+    public enum ResumeStart: Equatable, Sendable {
+        /// Its session is still free: the command the gate built is typed, then run.
+        case run(String)
+        /// Its session is not (KTD5): the agent's resume command goes on the line, unrun, and the tab says why.
+        case putBack(line: String?, note: String?)
+    }
+
+    /// An automatic resume as its turn comes: `sessionAvailable` is its session read again now, free in its own store
+    /// with no process holding it.
+    public static func resumeStart(_ plan: PanePlan, sessionAvailable: Bool) -> ResumeStart {
+        guard plan.outcome == .resume, let command = plan.line, sessionAvailable else {
+            return .putBack(line: plan.note.line, note: plan.note.sessionTakenText)
+        }
+        return .run(command)
+    }
+
+    /// How long after an automatic resume's command is typed its Return goes.
+    public static let returnDelay: TimeInterval = 0.25
+
+    /// What an automatic resume's Return does, `returnDelay` after its command was typed.
+    public enum ResumeReturn: Equatable, Sendable {
+        /// Nothing else reached the line: Return runs the command.
+        case press
+        /// Something did (`LineWatch.taken`): no Return, and the line stays as it is, the resume command and what came
+        /// after it, unrun, the user's to run or edit.
+        case withheld
+        /// The shell ended: there is nothing to run.
+        case shellEnded
+
+        /// How the pane's action moves on. A withheld Return still applied the action: it typed its line, as a line put
+        /// back does, and nothing of its own ran, which MCP reads as the agent's resume command on the line
+        /// (MCPRestored.outcome).
+        public var event: SessionSnapshot.PendingAction.Event {
+            self == .shellEnded ? .dismissed : .applied
+        }
+    }
+
+    /// An automatic resume's command is on the line, `returnDelay` after it was typed: Return runs it, unless anything
+    /// reached the line meanwhile (`lineTaken`) or the shell ended.
+    public static func afterResumeTyped(lineTaken: Bool, exited: Bool) -> ResumeReturn {
+        if exited { return .shellEnded }
+        return lineTaken ? .withheld : .press
     }
 
     /// The time between two automatic resumes.
@@ -101,10 +174,27 @@ public enum RestoreLayout {
 /// a third set the snapshot aside, and where.
 public enum RestoreAlertText {
     public static let safeModeTitle = "Next Term restored your windows but ran nothing, because the last two restores did not finish."
-    public static let safeModeText = "Each tab says what it held. Keep As Is leaves them as they are. Try Again puts back what each "
-        + "tab held, and resumes the agents that may resume by themselves, once."
+
+    /// What Keep As Is and Try Again do. Try Again resumes agents only when a pane would resume by itself (`resumes`).
+    public static func safeModeText(resumes: Bool) -> String {
+        let held = "Each tab says what it held. Keep As Is leaves them as they are. Try Again puts back what each tab held"
+        return held + (resumes ? ", and resumes the agents that may resume by themselves, once." : ", once.")
+    }
+
+    /// Safe mode's words for the plans Try Again would apply. Two restores that did not finish come back as a crash or a
+    /// quit restore without the consent, which resume nothing; only an update restore whose try was not counted is held
+    /// with a resume to apply.
+    public static func safeModeText(for plans: [PanePlan]) -> String {
+        safeModeText(resumes: plans.contains { (plan: PanePlan) -> Bool in plan.outcome == .resume })
+    }
+
     public static let keepAsIs = "Keep As Is"
     public static let tryAgain = "Try Again"
+
+    /// Try Again pressed, and its try could not be counted: a try that crashed would not be known, so it ran nothing.
+    public static let notCountedTitle = "Try Again ran nothing"
+    public static let notCountedText = "Next Term could not record the try in its sessions folder, so nothing was put back or run. "
+        + "The tabs stay as they are."
 
     public static let setAsideTitle = "The previous session could not be restored"
 

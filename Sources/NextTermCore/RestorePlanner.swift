@@ -698,13 +698,36 @@ public struct RestoreNote: Equatable, Sendable {
 
     /// The note: one line of printable text, or nil when there is nothing to say. `dates` writes a session's date.
     public func text(dates: (Date) -> String = RestoreNote.dateText) -> String? {
+        render(dates: dates, waiting: false)
+    }
+
+    /// The note as its tab shows it, before the shell starts. An action that types (a resume, a line put back) waits for
+    /// the shell to be ready, and the user typing first drops it, so its note says what happens then, unless the user
+    /// types first; `text` says what happened. Every other note, and safe mode's, reads the same either way.
+    public func shownBeforeShell(dates: (Date) -> String = RestoreNote.dateText) -> String? {
+        render(dates: dates, waiting: true)
+    }
+
+    /// What an automatic resume's tab says when, as its turn came, a process had its session open (KTD5): it did not
+    /// resume, and its resume command is on the line instead, unrun. Nil for any other outcome.
+    public var sessionTakenText: String? {
+        guard outcome == .resume, !safeMode, let line else { return nil }
+        let name = agent?.name ?? "An agent"
+        let why = "\(name) session \(session?.id ?? "") did not resume, because another process has it open."
+        return TerminalText.oneLine(why + " \(line) is on the line, not run.")
+    }
+
+    /// When an action that types happens: once the shell is ready, unless the user types first.
+    static let onceReady = "once the shell is ready, unless you type first"
+
+    private func render(dates: (Date) -> String, waiting: Bool) -> String? {
         var parts: [String] = []
         if reminted { parts.append("This tab has a new id, because another tab had the same one.") }
         if let movedFrom, let openedIn {
             let why = folderNotChecked ? "could not be checked in time" : "is gone"
             parts.append("\(movedFrom) \(why), so this tab opened in \(openedIn).")
         }
-        let main = sentences(dates: dates)
+        let main = sentences(dates: dates, waiting: waiting)
         if safeMode {
             parts.append("Nothing ran, because the last two restores did not finish.")
             if !main.isEmpty { parts.append("This tab held: " + main.joined(separator: " ")) }
@@ -722,26 +745,29 @@ public struct RestoreNote: Equatable, Sendable {
         return formatter.string(from: date)
     }
 
-    /// What the outcome says. In safe mode, an action that did not happen is told as what the tab held.
-    private func sentences(dates: (Date) -> String) -> [String] {
+    /// What the outcome says. In safe mode, an action that did not happen is told as what the tab held. `waiting`: an
+    /// action that types has not happened yet, and says what happens once the shell is ready.
+    private func sentences(dates: (Date) -> String, waiting: Bool) -> [String] {
         let name = agent?.name ?? "An agent"
+        let back = waiting ? "goes back on the line, not run, \(Self.onceReady)." : "is back on the line, not run."
         switch outcome {
         case .resume where !safeMode:
-            var said = ["Resumed \(name) session \(session?.id ?? "")."]
+            let id = session?.id ?? ""
+            var said = [waiting ? "\(name) session \(id) resumes \(Self.onceReady)." : "Resumed \(name) session \(id)."]
             if interrupted {
                 let by = afterQuit ? "the quit" : "the update"
-                said.append("Its last turn was cut off by \(by) and did not continue.")
+                said.append("Its last turn was cut off by \(by) and \(waiting ? "does not continue" : "did not continue").")
             }
             if let session { said += about(session, dates) }
             return said
         case .agentOnTheLine where !safeMode:
             let line = self.line ?? ""
             guard let session else {
-                var said = ["\(line) is back on the line, not run. No \(name) session could be named, so Return starts a new one."]
+                var said = ["\(line) \(back) No \(name) session could be named, so Return starts a new one."]
                 said += leftOffText
                 return said
             }
-            var said = ["\(line) is back on the line, not run. Press Return to resume \(name) session \(session.id), or edit it first."]
+            var said = ["\(line) \(back) Press Return to resume \(name) session \(session.id), or edit it first."]
             said += about(session, dates)
             said += sharedText
             said += leftOffText
@@ -751,7 +777,7 @@ public struct RestoreNote: Equatable, Sendable {
         case .commandOnTheLine:
             let command = self.command ?? "A command"
             if safeMode { return ["\(command) was running."] }
-            return ["\(command) is back on the line, not run. Press Return to run it, or edit it first."]
+            return ["\(command) \(back) Press Return to run it, or edit it first."]
         case .agentHint:
             switch agent {
             case .agy?: return ["agy was running. Type /resume in agy to reopen the conversation."]
