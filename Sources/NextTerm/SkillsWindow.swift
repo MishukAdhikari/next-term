@@ -230,10 +230,7 @@ final class SkillsWindowController: NSWindowController, NSTableViewDataSource, N
         status.textColor = problem ? .systemRed : .secondaryLabelColor
     }
 
-    @objc private func manage() {
-        AppDelegate.shared.showSettings(nil)
-        NSApp.windows.compactMap { $0.windowController as? SettingsWindowController }.first?.showTab("skills")
-    }
+    @objc private func manage() { AppDelegate.shared.showSettings(tab: "skills") }
 }
 
 extension AppDelegate {

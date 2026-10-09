@@ -1,7 +1,7 @@
 import AppKit
 import NextTermCore
 
-/// Suggest a Command (File › Suggest a Command…, ⌃⌘K), on only when the user turned it on in Settings › Terminal.
+/// Suggest a Command (Agents › Suggest a Command…, ⌃⌘K), on only when the user turned it on in Settings › Terminal.
 /// A panel near the caret takes a sentence; the agent the user chose answers with one command (CommandSuggestionRunner),
 /// which goes on the line and is never run. Before anything is sent, the panel says what goes with the sentence: the
 /// folder, the shell and the last command, redacted. Recent output goes only when the user includes it, each time,
@@ -349,7 +349,7 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
     var notesShown: String { notes.isHidden ? "" : notes.stringValue }
 }
 
-/// File › Suggest a Command…: on only when it is on in Settings and the tab in front is at a shell prompt.
+/// Agents › Suggest a Command…: on only when it is on in Settings and the tab in front is at a shell prompt.
 final class CommandSuggestionController: NSObject, NSMenuItemValidation {
     static let shared = CommandSuggestionController()
 

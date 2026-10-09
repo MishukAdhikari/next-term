@@ -42,7 +42,7 @@ extension ProjectSidebarView {
         return menu
     }
 
-    /// Continue Latest for each agent that has a session in this folder, the whole list (File › Resume Agent Session…,
+    /// Continue Latest for each agent that has a session in this folder, the whole list (Agents › Resume Agent Session…,
     /// with its key), Refresh. Continue Latest Session's key is the first agent's: one key can do one of them.
     func sessionsGroupMenu() -> NSMenu {
         let menu = NSMenu(title: "Agent Sessions")

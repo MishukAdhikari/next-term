@@ -184,7 +184,7 @@ extension SelfTest {
         w.show(tab)
         view.selection.setSelection(start: Position(col: 0, row: top), end: Position(col: 11, row: top))
         let sendItem = NSMenuItem(title: "Send to Agent", action: #selector(TerminalWindowController.sendToAgent(_:)), keyEquivalent: "")
-        check(w.validateMenuItem(sendItem), "menus: Edit › Send to Agent is on in a terminal with a selection")
+        check(w.validateMenuItem(sendItem), "menus: Agents › Send to Agent is on in a terminal with a selection")
         view.selectNone()
         check(!w.validateMenuItem(sendItem), "menus: and off without one")
 
