@@ -92,8 +92,30 @@ enum SelfTest {
 
     /// A stand-in agent's line after its `#!/bin/sh`, for one stopped with ^C as a real agent is. /bin/sh is bash 3.2:
     /// a ^C that lands as its child (a `sleep`, a `date`) is exiting by itself is taken as the child's own, and the
-    /// script runs on; under load that is about one ^C in a hundred. A trap stops it every time.
+    /// script runs on; under load that is about one ^C in a hundred. A trap stops it.
     static let stopsOnCtrlC = "trap 'exit 130' INT"
+
+    /// A stand-in's wait between redraws, with no child in the foreground: `sleep` runs in the background and the
+    /// `wait` builtin, which a trapped ^C ends at once, waits for it; the loops print `$SECONDS`, not `$(date)`. With
+    /// the trap alone, the asker still survived a ^C about once in twenty launch runs, drawing nothing more: never
+    /// in 320 runs of it in a loop or 2,200 in a bare pty, so what bash waited on there is not known. Without a
+    /// foreground child, bash's own wait for one, where it reads the ^C, is never entered.
+    static func standInWait(_ seconds: String) -> String { "sleep \(seconds) & wait $!" }
+
+    /// The processes on `tab`'s terminal with their state, for a check whose program didn't stop.
+    static func terminalProcesses(_ tab: TerminalTab) -> String {
+        guard let name = ptsname(tab.view.process.childfd) else { return "" }
+        let ps = Process()
+        ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+        ps.arguments = ["-o", "pid,pgid,stat,wchan,command", "-t", String(cString: name).replacingOccurrences(of: "/dev/", with: "")]
+        let pipe = Pipe()
+        ps.standardOutput = pipe
+        ps.standardError = FileHandle.nullDevice
+        guard (try? ps.run()) != nil else { return "" }
+        let out = pipe.fileHandleForReading.readDataToEndOfFile()
+        ps.waitUntilExit()
+        return String(decoding: out, as: UTF8.self).split(separator: "\n").joined(separator: " | ")
+    }
 
     /// The text of the sheet over `window`: an alert's title and message.
     static func sheetText(_ window: NSWindow) -> String {
@@ -388,7 +410,7 @@ enum SelfTest {
         read answer
         printf '\\033[2J\\033[H\\342\\234\\273 Applying\\342\\200\\246 (esc to interrupt)\\n'; sleep 1.5
         printf '\\033[2J\\033[HDone. Ready for your next prompt.\\n'
-        while true; do printf '\\r  ? for shortcuts  %s' "$(date +%S)"; sleep 0.5; done
+        while true; do printf '\\r  ? for shortcuts  %s' "$SECONDS"; \(standInWait("0.5")); done
         """.write(to: asker, atomically: true, encoding: .utf8)
         chmod(asker.path, 0o755)
         c.select(1)
@@ -408,7 +430,8 @@ enum SelfTest {
         check(await wait(4) { second.status.question == nil && second.status.state == .working }, "answering clears it; working again")
         check(await wait(6) { second.status.state == .done }, "done while its status line keeps redrawing", second.status.state.rawValue)
         second.view.send(txt: "\u{03}")
-        check(await wait(4) { !second.status.running }, "and ^C stops it", second.screenTail(3).joined(separator: " | "))
+        check(await wait(4) { !second.status.running }, "and ^C stops it",
+              second.screenTail(3).joined(separator: " | ") + " || " + terminalProcesses(second))
         c.select(1)
         second.status.setVisible(true)
 
@@ -3692,7 +3715,7 @@ enum SelfTest {
     private static func screenshotAllStates(_ c: TerminalWindowController, dir: URL) async {
         let busyAgent = dir.appendingPathComponent("busy")
         try? FileManager.default.createDirectory(at: busyAgent, withIntermediateDirectories: true)
-        try? "#!/bin/sh\n\(stopsOnCtrlC)\nwhile true; do printf '\\r\\342\\234\\273 Working (esc to interrupt) %s' $(date +%S); sleep 0.3; done\n"
+        try? "#!/bin/sh\n\(stopsOnCtrlC)\nwhile true; do printf '\\r\\342\\234\\273 Working (esc to interrupt) %s' \"$SECONDS\"; \(standInWait("0.3")); done\n"
             .write(to: busyAgent.appendingPathComponent("codex"), atomically: true, encoding: .utf8)
         chmod(busyAgent.appendingPathComponent("codex").path, 0o755)
         let commands = ["sleep 1", "sleep 1; false", "sleep 0.5; printf '\\a'", "PATH=\(busyAgent.path):$PATH codex"]

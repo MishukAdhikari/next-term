@@ -264,7 +264,7 @@ extension SelfTest {
         // An agent working in the stale one: a stand-in claude that keeps printing.
         let bin = base.appendingPathComponent("bin")
         try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
-        try? "#!/bin/sh\n\(stopsOnCtrlC)\nwhile true; do printf '\\r\\342\\234\\273 Working (esc to interrupt) %s' $(date +%S); sleep 0.3; done\n"
+        try? "#!/bin/sh\n\(stopsOnCtrlC)\nwhile true; do printf '\\r\\342\\234\\273 Working (esc to interrupt) %s' \"$SECONDS\"; \(standInWait("0.3")); done\n"
             .write(to: bin.appendingPathComponent("claude"), atomically: true, encoding: .utf8)
         chmod(bin.appendingPathComponent("claude").path, 0o755)
         let tab = c.addTab(directory: stale)

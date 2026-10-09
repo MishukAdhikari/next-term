@@ -45,8 +45,8 @@ extension SelfTest {
         \(stopsOnCtrlC)
         while true; do
           if [ -f "$CTL/dir" ]; then cd "$(cat "$CTL/dir")"; rm -f "$CTL/dir"; fi
-          if [ -f "$CTL/working" ]; then printf '\\r\\342\\234\\273 Working (esc to interrupt) %s' "$(date +%S)"; else printf '\\r\\033[K> %s' "$(date +%S)"; fi
-          sleep 0.3
+          if [ -f "$CTL/working" ]; then printf '\\r\\342\\234\\273 Working (esc to interrupt) %s' "$SECONDS"; else printf '\\r\\033[K> %s' "$SECONDS"; fi
+          \(standInWait("0.3"))
         done
 
         """
