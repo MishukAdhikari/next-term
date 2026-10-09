@@ -12,7 +12,10 @@ final class AllFilesView: NSView, DiffSelectionHost {
         var file: ChangedFile
         /// Nil until read: a large file (left out of the page's read), or one being read.
         var diff: FileDiff?
-        var rows: [UnifiedRow] = []
+        /// The rows shown, and the diff they were made from: what a selection in them is read against. It is
+        /// not `diff` while a newer diff's whole file is read for the folds left open (`readFill`).
+        private(set) var rows: [UnifiedRow] = []
+        private(set) var rowsDiff: FileDiff?
         /// The file's unchanged lines, once a fold asked for them; for `diff` only (dropped when it changes).
         var fill: [Int: DiffLine]?
         var expanded: Set<Int> = []
@@ -26,6 +29,11 @@ final class AllFilesView: NSView, DiffSelectionHost {
         var block: AllFilesBlock?
 
         init(file: ChangedFile) { self.file = file }
+
+        func show(_ rows: [UnifiedRow], of diff: FileDiff?) {
+            self.rows = rows
+            rowsDiff = diff
+        }
     }
 
     enum Body: Equatable {
@@ -100,14 +108,14 @@ final class AllFilesView: NSView, DiffSelectionHost {
                 if reopen {
                     readFill(entry)
                 } else {
-                    entry.rows = Self.waits(fresh, entry) ? [] : made[file.path] ?? UnifiedRows.rows(for: fresh)
+                    entry.show(Self.waits(fresh, entry) ? [] : made[file.path] ?? UnifiedRows.rows(for: fresh), of: fresh)
                     drop(entry)
                 }
             } else if fresh == nil, !isNew, entry.forced, !entry.reading {
                 rereads.append(entry) // shown anyway, and not in the page's read: read again by itself
             } else if fresh == nil, isNew || !entry.forced {
                 entry.diff = nil
-                entry.rows = []
+                entry.show([], of: nil)
                 drop(entry)
             }
             return entry
@@ -291,7 +299,7 @@ final class AllFilesView: NSView, DiffSelectionHost {
     }
 
     private func rebuildRows(_ entry: Entry) {
-        entry.rows = entry.diff.map { UnifiedRows.rows(for: $0, expanded: entry.expanded, fill: entry.fill) } ?? []
+        entry.show(entry.diff.map { UnifiedRows.rows(for: $0, expanded: entry.expanded, fill: entry.fill) } ?? [], of: entry.diff)
         refresh(entry)
     }
 
@@ -516,9 +524,9 @@ final class AllFilesView: NSView, DiffSelectionHost {
     }
 
     /// The lines selected in a file's column, as the agents are told about them: the file on disk is the new
-    /// side, except in a commit's changes.
+    /// side, except in a commit's changes. Read against the diff the rows shown were made from.
     func diffShare() -> DiffShare? {
-        guard let (column, entry) = selected, let diff = entry.diff else { return nil }
+        guard let (column, entry) = selected, let diff = entry.rowsDiff else { return nil }
         let path = (root as NSString).appendingPathComponent(entry.file.path)
         var commit: String?
         if case let .commit(sha) = scope { commit = sha }
