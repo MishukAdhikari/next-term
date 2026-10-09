@@ -71,16 +71,10 @@ extension SelfTest {
 
     /// The caret's line up to the caret, as the shell holds it. A space the shell put there is a drawn cell or a
     /// blank one it moved past, depending on how it redrew the line (zsh's `main ` after a match, a space typed after
-    /// a word): either way it is here, and a cell drawn past the caret (left over from a longer line) is not.
-    static func lineToCaret(_ tab: TerminalTab) -> String {
-        let terminal = tab.view.getTerminal()
-        let caret = terminal.getCursorLocation()
-        guard let line = terminal.getLine(row: caret.y) else { return "" }
-        return line.translateToString(trimRight: false, startCol: 0, endCol: min(caret.x, terminal.cols)) { cell in
-            let character = cell.getCharacter()
-            return character == "\u{0}" ? " " : character
-        }
-    }
+    /// a word): either way it is here, and a cell drawn past the caret (left over from a longer line) is not. Read
+    /// as Tab completion reads it: rows the line wrapped from joined, a wide character's second cell skipped, and ""
+    /// while the view is scrolled back, where the caret's row is not the one on show.
+    static func lineToCaret(_ tab: TerminalTab) -> String { tab.lineLeftOfCursor() ?? "" }
 
     #if DEBUG
     /// A zsh tab in `dir` whose own config is `zshrc` (in a fresh folder under `dir`), at its prompt, with the
