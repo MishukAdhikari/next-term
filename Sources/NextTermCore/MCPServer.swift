@@ -34,7 +34,10 @@ public enum MCPServer {
         ask the user, who reviews and decides in Next Term (nothing changes on your say alone). \
         propose_edit shows a file edit in the editor's diff for the user to accept; write_file, create_file, \
         stage, commit, focus_tab, split_pane, close_pane, zoom_pane, set_layout and settings_set ask the user \
-        on the Mac first, and change nothing when declined or unanswered.
+        on the Mac first, and change nothing when declined or unanswered. \
+        list_secrets lists the user's stored keys by name; no tool returns a key's value. run_with_secrets runs a \
+        command with keys in its environment once the user approves on the Mac with Touch ID. request_secret asks \
+        the user to type a key into Next Term. store_secret saves a key you already hold.
         """
 
     // MARK: tools
@@ -173,7 +176,7 @@ public enum MCPServer {
              description: "Opens a file in Next Term's editor, at a line and column if given (1-based).",
              inputSchema: #"{"type": "object", "properties": {"path": {"type": "string", "description": "Absolute file path."}, "line": {"type": "integer", "minimum": 1}, "column": {"type": "integer", "minimum": 1}}, "required": ["path"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 15),
-    ] + controlTools
+    ] + controlTools + secretTools
 
     public static func tool(named name: String) -> Tool? { tools.first { $0.name == name } }
 

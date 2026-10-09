@@ -76,6 +76,67 @@ import Testing
         #expect(tools.allSatisfy { (($0["_meta"] as? [String: Any])?["anthropic/alwaysLoad"] as? Bool) == true })
     }
 
+    /// Secrets' four tools: names in, status out (KTD16).
+    @Test func secretToolsAreListedAndNoneReturnsAValue() throws {
+        let names = ["list_secrets", "request_secret", "store_secret", "run_with_secrets"]
+        #expect(MCPServer.secretTools.map(\.name) == names)
+        #expect(MCPServer.controlTools.allSatisfy { !names.contains($0.name) })
+        #expect(Array(MCPServer.tools.suffix(4)).map(\.name) == names)
+        #expect(MCPServer.tools.allSatisfy { !$0.name.hasPrefix("get_secret") && !$0.name.contains("secret_value") })
+        let reply = answer(["jsonrpc": "2.0", "id": "s", "method": "tools/list"])
+        let tools = try #require((reply?["result"] as? [String: Any])?["tools"] as? [[String: Any]])
+        for name in names {
+            let tool = try #require(tools.first { $0["name"] as? String == name })
+            let schema = try #require(tool["inputSchema"] as? [String: Any])
+            #expect(schema["additionalProperties"] as? Bool == false, "\(name)")
+            #expect(schema["required"] == nil, "\(name)")
+            let hints = try #require(tool["annotations"] as? [String: Any])
+            #expect(hints["openWorldHint"] as? Bool == false, "\(name)")
+            let meta = tool["_meta"] as? [String: Any] ?? [:]
+            #expect(meta["anthropic/requiresUserInteraction"] == nil, "\(name)")
+            let expected: (Bool, Bool, Bool, TimeInterval, MCPServer.Scope) = name == "list_secrets"
+                ? (true, false, true, 15, .read) : (false, true, false, 60, .write)
+            #expect(hints["readOnlyHint"] as? Bool == expected.0 && hints["destructiveHint"] as? Bool == expected.1
+                    && hints["idempotentHint"] as? Bool == expected.2, "\(name)")
+            #expect(MCPServer.tool(named: name)?.timeout == expected.3 && MCPServer.tool(named: name)?.scope == expected.4, "\(name)")
+            #expect(meta["next-term/scope"] as? String == expected.4.rawValue, "\(name)")
+        }
+        // The schemas' rules: the name pattern, a value's length, 1 to 20 keys, a one-line command of 2,000 characters.
+        func properties(_ name: String) -> [String: Any] {
+            (tools.first { $0["name"] as? String == name }?["inputSchema"] as? [String: Any])?["properties"] as? [String: Any] ?? [:]
+        }
+        #expect((properties("list_secrets")).isEmpty)
+        #expect((properties("request_secret")["name"] as? [String: Any])?["pattern"] as? String == "^[A-Z][A-Z0-9_]{0,63}$")
+        #expect((properties("store_secret")["value"] as? [String: Any])?["maxLength"] as? Int == 16384)
+        let secrets = try #require(properties("run_with_secrets")["secrets"] as? [String: Any])
+        #expect(secrets["minItems"] as? Int == 1 && secrets["maxItems"] as? Int == 20)
+        #expect((secrets["items"] as? [String: Any])?["pattern"] as? String == "^[A-Z][A-Z0-9_]{0,63}(=[A-Z][A-Z0-9_]{0,63})?$")
+        #expect((properties("run_with_secrets")["command"] as? [String: Any])?["maxLength"] as? Int == 2000)
+        for name in ["request_secret", "store_secret", "run_with_secrets"] {
+            #expect(properties(name)["request_id"] != nil && properties(name)["reason"] != nil, "\(name)")
+        }
+        // The instructions say so too.
+        #expect(MCPServer.instructions.contains("no tool returns a key's value"))
+        for name in names { #expect(MCPServer.instructions.contains(name), "\(name)") }
+    }
+
+    /// `secret_run` is the wrapper's socket request, never a tool: a bridge answers a call by that name itself, and
+    /// the call never reaches the app (AE7).
+    @Test func theBridgeRefusesSecretRunItself() {
+        var called = false
+        let reply = MCPServer.respond(to: ["jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                                           "params": ["name": "secret_run", "arguments": ["names": ["GITHUB_TOKEN"]]]],
+                                      version: "1.2.3") { _, _ in
+            called = true
+            return MCPServer.CallResult(text: "reached the app")
+        }
+        let error = reply?["error"] as? [String: Any]
+        #expect(error?["code"] as? Int == -32602)
+        #expect(error?["message"] as? String == "Unknown tool: secret_run")
+        #expect(!called)
+        #expect(MCPServer.tool(named: "secret_run") == nil && MCPServer.scopeTags["secret_run"] == nil)
+    }
+
     @Test func callsGoToTheAppAndUnknownsAreErrors() {
         let reply = answer(["jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": ["name": "read_tab", "arguments": ["tab_id": "x"]]])
         let content = ((reply?["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first

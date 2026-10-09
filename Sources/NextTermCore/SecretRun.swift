@@ -98,6 +98,53 @@ public enum SecretRun {
         return out
     }
 
+    // MARK: the typed line
+
+    /// Shells whose syntax the typed line can't be written in.
+    public static let untypableShells: Set<String> = ["elvish", "xonsh"]
+
+    /// The line Next Term types for a ticket (`<nxtrm> secret run --ticket <id>`), each word quoted for the tab's shell
+    /// (KTD14): single quotes for the sh family, fish and tcsh; `^'…'` for nu's first word; `& '…'` for pwsh. Nil for
+    /// elvish and xonsh, a control character, or a word the shell can't quote. An unknown shell gets the sh family's.
+    public static func typedLine(_ words: [String], shell: String) -> String? {
+        guard let first = words.first, !untypableShells.contains(shell) else { return nil }
+        guard !words.contains(where: { $0.unicodeScalars.contains(where: ShellQuote.isControl) }) else { return nil }
+        var quoted: [String] = []
+        for word in words {
+            guard let text = quote(word, shell: shell) else { return nil }
+            quoted.append(text)
+        }
+        switch shell {
+        case "nu": quoted[0] = "^" + (isPlainWord(first) ? "'\(first)'" : quoted[0])
+        case "pwsh": quoted[0] = "& " + (isPlainWord(first) ? "'\(first)'" : quoted[0])
+        default: break
+        }
+        return quoted.joined(separator: " ")
+    }
+
+    static func isPlainWord(_ word: String) -> Bool {
+        !word.isEmpty && word.unicodeScalars.allSatisfy { scalar in
+            let value = scalar.value
+            return (48...57).contains(value) || (65...90).contains(value) || (97...122).contains(value) || "_./-".unicodeScalars.contains(scalar)
+        }
+    }
+
+    static func quote(_ word: String, shell: String) -> String? {
+        if isPlainWord(word) { return word }
+        switch shell {
+        case "fish":
+            return "'" + word.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'") + "'"
+        case "tcsh", "csh":
+            return "'" + word.replacingOccurrences(of: "'", with: "'\\''").replacingOccurrences(of: "!", with: "\\!") + "'"
+        case "nu":
+            return word.contains("'") ? nil : "'" + word + "'"
+        case "pwsh":
+            return "'" + word.replacingOccurrences(of: "'", with: "''") + "'"
+        default:
+            return "'" + word.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        }
+    }
+
     // MARK: the socket messages
 
     /// The wrapper's one request line: `{"tool": "secret_run", "arguments": {…}}`.

@@ -81,6 +81,21 @@ final class SecretRequests {
         case refused(SecretLimits.Refusal)
         /// The vault can't open, was tampered with, or a key is gone.
         case failed(SecretsStore.Failure)
+        /// request_secret or store_secret saved the key.
+        case saved(name: String, replaced: Bool)
+        /// A ticket's tab did not start nxtrm within 30 seconds.
+        case notStarted
+        /// Nobody answered: the panel or window waited 30 minutes, the Mac locked, or a ticket's wrapper left.
+        case unanswered
+    }
+
+    /// What a request asks for: to use keys (the panel's Allow), to save the agent's value (store_secret's panel), or
+    /// for the user to type a key in (request_secret's window).
+    enum Kind {
+        case use
+        /// The agent's value, held while the panel waits, wiped when the request ends.
+        case store(SecretBytes)
+        case add(SecretRequestWindow.Content)
     }
 
     /// One request, waiting for its panel or in it.
@@ -104,12 +119,15 @@ final class SecretRequests {
         var notice: String?
         /// A title of its own (store_secret's), instead of "… asks to run …".
         var titleOverride: String?
+        var kind: Kind = .use
         let made: ContinuousClock.Instant
         /// A wrapper request whose wrapper stopped waiting: a pending card.
         fileprivate(set) var gone = false
         fileprivate var goneAt: ContinuousClock.Instant?
         fileprivate var replies: [(Decision) -> Void] = []
         fileprivate(set) var panel: SecretApprovalPanel?
+        /// request_secret's window, in place of the panel.
+        fileprivate(set) var requestWindow: SecretRequestWindow?
         fileprivate(set) var isAnswered = false
 
         init(binding: SecretBinding, keys: [Key], command: String, argv: [String], folder: String, warnings: [String],
@@ -130,6 +148,10 @@ final class SecretRequests {
         var asker: String { binding.asker }
         var isWrapper: Bool { binding.source == .wrapper }
         var names: [String] { keys.map(\.name) }
+        var isUse: Bool {
+            if case .use = kind { return true }
+            return false
+        }
     }
 
     /// Waiting requests, the one in the panel first.
@@ -159,7 +181,7 @@ final class SecretRequests {
     func ask(_ request: Request, reply: @escaping (Decision) -> Void) {
         let now = now()
         expire(at: now)
-        if !request.isRemote, let grant = book.take(request.binding, at: now), let values = held[grant.id] {
+        if request.isUse, !request.isRemote, let grant = book.take(request.binding, at: now), let values = held[grant.id] {
             limits.record(.answeredByGrant, asker: request.asker, binding: request.binding, at: now)
             if grant.isExpired(at: now) { drop(grant.id) }
             audit(.use, request, approval: .grant, outcome: "allowed")
@@ -214,10 +236,11 @@ final class SecretRequests {
         changedNow()
     }
 
-    /// A ticket's caller (U6) stopped waiting for a request that is not a wrapper's: it ends unanswered.
+    /// The wrapper of a ticket's request left before the user answered (its 10 minutes ran out, or its tab closed):
+    /// the request ends unanswered, and the tool call hears it was not answered.
     func callerLeft(_ request: Request) {
         guard !request.isAnswered else { return }
-        finish(request, outcome: .unanswered, decision: nil)
+        finish(request, outcome: .unanswered, decision: .unanswered)
     }
 
     /// Drops a pending card after 30 minutes, and a tool request whose panel waited 30 minutes with no answer.
@@ -225,20 +248,26 @@ final class SecretRequests {
         guard !request.isAnswered, queue.contains(where: { $0 === request }) else { return }
         let start = request.goneAt ?? request.made
         guard now() - start >= Self.dropAfter else { return }
-        finish(request, outcome: .unanswered, decision: nil)
+        finish(request, outcome: .unanswered, decision: .unanswered)
     }
 
-    /// A ticket's wrapper redeems it. `run_with_secrets` makes tickets (U6); until then none is known, so every
-    /// ticket has expired.
-    func redeem(ticket: String, peerTab: TerminalTab?, request: SecretRun.Request, reply: @escaping (SecretRun.Answer) -> Void) {
-        reply(SecretRun.Answer(status: .expired, names: request.names))
-    }
-
-    /// The request in the panel now, if any.
-    var showing: Request? { queue.first { $0.panel != nil } }
+    /// The request in the panel or the request window now, if any.
+    var showing: Request? { queue.first { $0.panel != nil || $0.requestWindow != nil } }
 
     private func showNext() {
         guard showing == nil, let next = queue.first(where: { !$0.isAnswered }) else { return }
+        if case .add(let content) = next.kind {
+            let window = SecretRequestWindow(content, onSave: { [weak self, weak next] form in
+                guard let self, let next else { return }
+                self.save(next, form: form)
+            }, onDecline: { [weak self, weak next] stop in
+                guard let self, let next else { return }
+                self.decline(next, stopAsking: stop)
+            })
+            next.requestWindow = window
+            window.present()
+            return
+        }
         let panel = SecretApprovalPanel(content(of: next), onAllow: { [weak self, weak next] how in
             guard let self, let next else { return }
             self.allow(next, how: how)
@@ -263,21 +292,30 @@ final class SecretRequests {
         let keys = request.keys.map { key -> SecretApprovalPanel.Content.KeyRow in
             let entry = store.index?.entry(named: key.name)
             let used = store.lastUse[key.name]
-            return SecretApprovalPanel.Content.KeyRow(name: key.name, envName: key.envName, purpose: entry?.purpose ?? "",
-                                                      purposeByAgent: entry?.purposeBy == .agent, writeOnly: entry?.writeOnly == true,
+            // store_secret for a new name: what it will be for, the agent's reason.
+            let purpose = entry?.purpose ?? (request.isUse ? "" : SecretName.purpose(fromReason: request.agentWords ?? ""))
+            return SecretApprovalPanel.Content.KeyRow(name: key.name, envName: key.envName, purpose: purpose,
+                                                      purposeByAgent: entry.map { $0.purposeBy == .agent } ?? !request.isUse,
+                                                      writeOnly: entry?.writeOnly == true,
                                                       lastUsed: used.map { SecretApprovalPanel.lastUsedText($0) } ?? "Never used")
         }
-        return SecretApprovalPanel.Content(
-            title: SecretApprovalPanel.title(request), keys: keys, command: request.command, runsAsShell: !request.isWrapper,
-            folder: request.folder, warnings: request.warnings, agentWords: request.agentWords, askedBy: request.askedBy,
-            argv: request.argv, isWrapper: request.isWrapper, isRemote: request.isRemote, notice: request.notice,
-            waiting: max(0, queue.count - 1))
+        var content = SecretApprovalPanel.Content(
+            title: SecretApprovalPanel.title(request), keys: keys, command: request.command,
+            runsAsShell: !request.isWrapper && request.isUse, folder: request.folder, warnings: request.warnings,
+            agentWords: request.agentWords, askedBy: request.askedBy, argv: request.argv, isWrapper: request.isWrapper,
+            isRemote: request.isRemote, notice: request.notice, waiting: max(0, queue.count - 1))
+        if !request.isUse {
+            content.offersHowLong = false
+            content.allowTitle = "Save"
+        }
+        return content
     }
 
     // MARK: answers
 
     private func allow(_ request: Request, how: How) {
         guard !request.isAnswered, let panel = request.panel else { return }
+        if case .store(let value) = request.kind { return saveStored(request, value: value, panel: panel) }
         let how: How = request.isRemote ? .once : how
         panel.setBusy(true)
         let reason = SecretReason.use(request.names, program: request.program, folder: request.folder)
@@ -318,6 +356,65 @@ final class SecretRequests {
         finish(request, outcome: .allowed, decision: .allowed(values, how: how.approval))
     }
 
+    /// store_secret's Save: the agent's value, under its name. A new name takes the agent's reason as what it's for;
+    /// a stored one keeps its purpose and write-only flag, and its audit line names the earlier origin.
+    private func saveStored(_ request: Request, value: SecretBytes, panel: SecretApprovalPanel) {
+        guard let name = request.names.first else { return }
+        let store = SecretsStore.shared
+        let stored = store.index?.entry(named: name)
+        let action: SecretsStore.Action
+        if let stored {
+            action = .replace(name: name, value: value, writeOnly: stored.writeOnly, origin: .agent)
+        } else {
+            let purpose = SecretName.purpose(fromReason: request.agentWords ?? "")
+            action = .add(name: name, purpose: purpose, purposeBy: .agent, origin: .agent, writeOnly: false, value: value)
+        }
+        let reason = stored == nil ? SecretReason.save(name) : SecretReason.replaceWithAgentsKey(name)
+        let facts = SecretsStore.Facts(who: Self.who(request))
+        panel.setBusy(true)
+        Task { @MainActor in
+            do {
+                try await store.perform(action, reason: reason, facts: facts)
+                self.finish(request, outcome: .allowed, decision: .saved(name: name, replaced: stored != nil))
+            } catch SecretsStore.Failure.cancelled {
+                panel.setBusy(false)
+                panel.notApproved()
+            } catch {
+                self.finish(request, outcome: .allowed, decision: .failed(error as? SecretsStore.Failure ?? .keyring))
+            }
+        }
+    }
+
+    /// request_secret's Save: the key the user typed. A stored name has its value replaced, and keeps what it's for.
+    private func save(_ request: Request, form: SecretRequestWindow.Form) {
+        guard !request.isAnswered, let window = request.requestWindow else { return }
+        let store = SecretsStore.shared
+        let stored = store.index?.entry(named: form.name)
+        let action: SecretsStore.Action
+        if stored != nil {
+            action = .replace(name: form.name, value: form.value, writeOnly: form.writeOnly, origin: .request)
+        } else {
+            action = .add(name: form.name, purpose: form.purpose, purposeBy: form.purposeBy, origin: .request, writeOnly: form.writeOnly,
+                          value: form.value)
+        }
+        let reason = stored == nil ? SecretReason.save(form.name) : SecretReason.replace(form.name)
+        let pasted = window.pastedAt
+        window.setBusy(true)
+        Task { @MainActor in
+            do {
+                try await store.perform(action, reason: reason, facts: SecretsStore.Facts(who: Self.who(request)))
+                let cleared = SecretClipboard.shared.clearAfterSave(pastedAt: pasted)
+                window.showSaved(form.name, clearedClipboard: cleared)
+                request.requestWindow = nil // it stays open, saying so, until the user closes it
+                self.finish(request, outcome: .allowed, decision: .saved(name: form.name, replaced: stored != nil))
+            } catch SecretsStore.Failure.cancelled {
+                window.notApproved()
+            } catch {
+                window.notApproved((error as? LocalizedError)?.errorDescription ?? "Next Term couldn’t save the key.")
+            }
+        }
+    }
+
     private func decline(_ request: Request, stopAsking: Bool) {
         guard !request.isAnswered else { return }
         if stopAsking { limits.stop(request.asker) }
@@ -349,10 +446,162 @@ final class SecretRequests {
         if let decision { for reply in replies { reply(decision) } }
         request.panel?.finish()
         request.panel = nil
+        request.requestWindow?.finish()
+        request.requestWindow = nil
+        request.kind = .use // store_secret's value goes with its SecretBytes, wiped
         queue.removeAll { $0 === request }
         showNext()
         refreshWaitingLine()
         changedNow()
+    }
+
+    // MARK: tickets
+
+    /// `run_with_secrets`' ticket (KTD14): what the tool call asked, held until the wrapper in its tab redeems it. It
+    /// holds no value and is used once. Its 30 seconds start when its line is typed.
+    final class Ticket {
+        let id = SecretRun.newTicket()
+        let asker: String
+        let keys: [Key]
+        /// The command text, run with `/bin/sh -c`.
+        let command: String
+        let folder: String
+        /// "new", or the tab's id given as `tab_id`.
+        let target: String
+        let tabID: UUID
+        let askedBy: AskedBy
+        let agentWords: String?
+        let program: String
+        let isRemote: Bool
+        let notice: String?
+        fileprivate(set) var typedAt: ContinuousClock.Instant?
+        fileprivate(set) var used = false
+        /// The tool call's side: told the decision once, or `.notStarted`.
+        fileprivate var decided: ((Decision) -> Void)?
+
+        init(asker: String, keys: [Key], command: String, folder: String, target: String, tabID: UUID, askedBy: AskedBy,
+             agentWords: String?, program: String, isRemote: Bool, notice: String?, decided: @escaping (Decision) -> Void) {
+            self.asker = asker
+            self.keys = keys
+            self.command = command
+            self.folder = folder
+            self.target = target
+            self.tabID = tabID
+            self.askedBy = askedBy
+            self.agentWords = agentWords
+            self.program = program
+            self.isRemote = isRemote
+            self.notice = notice
+            self.decided = decided
+        }
+
+        var argv: [String] { ["/bin/sh", "-c", command] }
+        var map: [String: String] { Dictionary(keys.map { ($0.name, $0.envName) }, uniquingKeysWith: { first, _ in first }) }
+        var names: [String] { keys.map(\.name) }
+
+        /// The grant binding: the asker and its program, the keys and ENVNAMEs, the command, the folder, the target, the
+        /// tab's warned variables and the folder's `.env`.
+        func binding(warned: [String: String] = [:], envDigest: String) -> SecretBinding {
+            SecretBinding(source: .tool, asker: asker, program: program, command: [command], keys: map, folder: folder, target: target,
+                          warned: warned, envDigest: envDigest)
+        }
+    }
+
+    /// Tickets not yet redeemed, by id.
+    private(set) var tickets: [String: Ticket] = [:]
+    /// How long a typed ticket line has to start nxtrm.
+    static var ticketWindow: Duration = .seconds(30)
+
+    /// The limits for a tool call before anything opens: the hour pause, a stopped asker, the same request declined
+    /// within 10 minutes (whatever its tab warned about), a reached count, a full queue. Nil to go on.
+    func precheck(asker: String, binding: SecretBinding, names: [String], command: String?, folder: String?) -> SecretLimits.Refusal? {
+        let now = now()
+        let refusal = limits.admitBeforeTab(asker: asker, binding: binding, at: now)
+            ?? (SecretLimits.isBusy(waiting: queue.count) ? .busy : nil)
+        guard let refusal else { return nil }
+        limits.record(.refusedByLimits, asker: asker, binding: binding, at: now)
+        SecretsStore.shared.record(SecretAudit.Line(event: .refused, names: names, command: command, folder: folder,
+                                                    outcome: Self.word(refusal)))
+        return refusal
+    }
+
+    func add(_ ticket: Ticket) {
+        tickets[ticket.id] = ticket
+    }
+
+    /// Its line was typed: it has 30 seconds to be redeemed, or it ends unanswered.
+    func typed(_ ticket: Ticket) {
+        ticket.typedAt = now()
+        let window = Self.ticketWindow
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.seconds(window)) { [weak ticket] in
+            MainActor.assumeIsolated {
+                guard let ticket else { return }
+                SecretRequests.shared.ticketNotStarted(ticket)
+            }
+        }
+    }
+
+    /// A ticket whose line was never typed (its tab could not take it): dropped, counting nothing.
+    func drop(_ ticket: Ticket) {
+        tickets[ticket.id] = nil
+        ticket.decided = nil
+    }
+
+    private func ticketNotStarted(_ ticket: Ticket) {
+        guard !ticket.used, tickets[ticket.id] === ticket else { return }
+        tickets[ticket.id] = nil
+        let binding = ticket.binding(envDigest: SecretRun.envFileDigest(directory: ticket.folder))
+        limits.record(.unanswered, asker: ticket.asker, binding: binding, at: now())
+        SecretsStore.shared.record(SecretAudit.Line(event: .refused, names: ticket.names, command: ticket.command, folder: ticket.folder,
+                                                    outcome: "its tab did not start nxtrm within 30 seconds"))
+        let decided = ticket.decided
+        ticket.decided = nil
+        decided?(.notStarted)
+        changedNow()
+    }
+
+    /// A ticket's wrapper redeems it, from the tab Next Term typed its line in, within 30 seconds of the typing, once.
+    /// The request is built from the ticket's facts, the wrapper's warned variables and the folder's `.env`, so the
+    /// panel shows the tab's real environment before Allow, and a grant checks it too. Returns the request, for the
+    /// socket to notice the wrapper leaving.
+    @discardableResult
+    func redeem(ticket id: String, peerTab: TerminalTab?, request: SecretRun.Request,
+                reply: @escaping (SecretRun.Answer) -> Void) -> Request? {
+        let now = now()
+        guard let ticket = tickets[id], !ticket.used, let typedAt = ticket.typedAt, now - typedAt <= Self.ticketWindow else {
+            reply(SecretRun.Answer(status: .expired, names: request.names))
+            return nil
+        }
+        guard peerTab?.id == ticket.tabID else {
+            // Another tab has the id: refused, and the ticket waits for its own tab.
+            SecretsStore.shared.record(SecretAudit.Line(event: .refused, names: ticket.names, command: ticket.command,
+                                                        folder: ticket.folder, outcome: "a ticket redeemed from another tab"))
+            reply(SecretRun.Answer(status: .refused, names: ticket.names))
+            return nil
+        }
+        ticket.used = true
+        tickets[id] = nil
+        var warnings = request.warn.keys.sorted().map(SecretRun.warningText)
+        warnings += SecretRun.warnings(command: ticket.command)
+        warnings += SecretRun.envFileWarnings(directory: ticket.folder)
+        let binding = ticket.binding(warned: request.warn, envDigest: SecretRun.envFileDigest(directory: ticket.folder))
+        let asking = Request(binding: binding, keys: ticket.keys, command: ticket.command, argv: ticket.argv, folder: ticket.folder,
+                             warnings: warnings, agentWords: ticket.agentWords, askedBy: ticket.askedBy, program: ticket.program,
+                             isRemote: ticket.isRemote)
+        asking.notice = ticket.notice
+        // The wrapper sent no names: its answer is built from the ticket's.
+        var asked = request
+        asked.names = ticket.names
+        asked.map = ticket.map
+        let argv = ticket.argv
+        let folder = ticket.folder
+        let decided = ticket.decided
+        ticket.decided = nil
+        ask(asking) { decision in
+            reply(SecretSocket.answer(for: decision, request: asked, argv: argv, directory: folder))
+            decided?(decision)
+        }
+        return asking
     }
 
     // MARK: grants
@@ -390,7 +639,7 @@ final class SecretRequests {
         case .sessionResigned: end(.sessionResigned)
         case .displaySleep: return
         }
-        for card in queue where card.gone && !card.isAnswered { finish(card, outcome: .unanswered, decision: nil) }
+        for card in queue where card.gone && !card.isAnswered { finish(card, outcome: .unanswered, decision: .unanswered) }
     }
 
     private func expire(at now: ContinuousClock.Instant) {
@@ -441,8 +690,12 @@ final class SecretRequests {
             request.replies.removeAll()
             request.panel?.finish()
             request.panel = nil
+            request.requestWindow?.finish()
+            request.requestWindow = nil
+            request.kind = .use
         }
         queue.removeAll()
+        tickets.removeAll()
         limits = SecretLimits()
         book = SecretGrantBook()
         held.removeAll()
@@ -484,6 +737,22 @@ final class SecretRequests {
         case .limited: return "limited"
         case .declining: return "declining"
         }
+    }
+
+    /// "4:02 PM", for the notes a refusal gives.
+    static func clockText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "h:mm a"
+        return formatter.string(from: date)
+    }
+
+    /// "3 Oct", for when a key was added.
+    static func dayText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "d MMM"
+        return formatter.string(from: date)
     }
 
     static func seconds(_ duration: Duration) -> Double {

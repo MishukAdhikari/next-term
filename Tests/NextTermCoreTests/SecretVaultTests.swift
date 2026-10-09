@@ -322,6 +322,22 @@ private func hex(_ data: Data) -> String { data.map { String(format: "%02x", $0)
         }
     }
 
+    /// An agent's reason as what a key is for: cut at the last space before the 200th character, with "…" (KTD6).
+    @Test func aReasonBecomesWhatAKeyIsFor() {
+        #expect(SecretName.purpose(fromReason: "to run the billing tests") == "to run the billing tests")
+        #expect(SecretName.purpose(fromReason: "two\nlines\there") == "two lines here")
+        let words = String(repeating: "word ", count: 100)
+        let cut = SecretName.purpose(fromReason: words)
+        #expect(cut.count <= 200 && cut.hasSuffix("…") && !cut.contains("wor…") && cut.hasPrefix("word word"))
+        let solid = SecretName.purpose(fromReason: String(repeating: "x", count: 500))
+        #expect(solid.count == 200 && solid.hasSuffix("…"))
+        #expect(SecretName.purpose(fromReason: String(repeating: "y", count: 200)).count == 200)
+        // What it makes is always a purpose the vault takes.
+        for text in [words, String(repeating: "x", count: 500), "a\u{2028}b"] {
+            #expect((try? SecretVault.checkedPurpose(SecretName.purpose(fromReason: text))) != nil)
+        }
+    }
+
     @Test func suggestedNames() {
         #expect(SecretName.suggested(from: "github-token") == "GITHUB_TOKEN")
         #expect(SecretName.suggested(from: "2fa") == "KEY_2FA")

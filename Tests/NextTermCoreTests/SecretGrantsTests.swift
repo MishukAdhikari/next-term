@@ -108,6 +108,27 @@ private func toolBinding(tab: String = "tab-2", target: String = "new") -> Secre
         #expect(limits.admit(asker: "tab-2", binding: declined, at: start) == nil)
     }
 
+    /// run_with_secrets checks the limits before it opens a tab, when the tab's warned variables are not known yet: a
+    /// declined request is paused whatever its tab warned about, and a different command still asks.
+    @Test func aPauseHoldsBeforeTheTabExists() {
+        var limits = SecretLimits()
+        var declined = toolBinding()
+        declined.warned = ["NODE_OPTIONS": "d1"]
+        let at = Date(timeIntervalSince1970: 1_791_547_200)
+        limits.record(.declined, asker: "tab-2", binding: declined, at: start, date: at)
+        #expect(limits.admitBeforeTab(asker: "tab-2", binding: toolBinding(), at: start.advanced(by: .seconds(10)))
+                == .paused(declinedAt: at, until: at.addingTimeInterval(600)))
+        #expect(limits.admit(asker: "tab-2", binding: toolBinding(), at: start.advanced(by: .seconds(10))) == nil)
+        var other = toolBinding()
+        other.command = ["npm run e2e"]
+        #expect(limits.admitBeforeTab(asker: "tab-2", binding: other, at: start.advanced(by: .seconds(10))) == nil)
+        #expect(limits.admitBeforeTab(asker: "tab-2", binding: toolBinding(), at: start.advanced(by: .seconds(601))) == nil)
+        limits.stop("tab-3")
+        #expect(limits.admitBeforeTab(asker: "tab-3", binding: other, at: start) == .stopped)
+        limits.pauseForAnHour(at: start, date: at)
+        #expect(limits.admitBeforeTab(asker: "tab-4", binding: other, at: start) == .declining(until: at.addingTimeInterval(3600)))
+    }
+
     @Test func countsPerAskerAndOverall() {
         var limits = SecretLimits()
         for index in 0..<10 {

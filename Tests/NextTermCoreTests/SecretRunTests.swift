@@ -151,6 +151,31 @@ import Testing
         #expect(SecretRun.envFileDigest(directory: folder.path) != first)
     }
 
+    /// The ticket line, quoted for each tab's shell (KTD14).
+    @Test func theTypedLineForEachShell() {
+        let ticket = "abcdefghijklmnopqrstuvwxyz"
+        let words = ["/Applications/Next Term.app/Contents/Resources/bin/nxtrm", "secret", "run", "--ticket", ticket]
+        let tail = " secret run --ticket \(ticket)"
+        for shell in ["zsh", "bash", "sh", "dash", "ksh", "mksh", "fish", "tcsh", "csh", "unknown"] {
+            #expect(SecretRun.typedLine(words, shell: shell) == "'/Applications/Next Term.app/Contents/Resources/bin/nxtrm'" + tail, "\(shell)")
+        }
+        #expect(SecretRun.typedLine(words, shell: "nu") == "^'/Applications/Next Term.app/Contents/Resources/bin/nxtrm'" + tail)
+        #expect(SecretRun.typedLine(words, shell: "pwsh") == "& '/Applications/Next Term.app/Contents/Resources/bin/nxtrm'" + tail)
+        #expect(SecretRun.typedLine(words, shell: "xonsh") == nil && SecretRun.typedLine(words, shell: "elvish") == nil)
+        // A plain path needs no quotes, but nu and pwsh still mark it as the program to run.
+        #expect(SecretRun.typedLine(["/usr/local/bin/nxtrm", "secret"], shell: "zsh") == "/usr/local/bin/nxtrm secret")
+        #expect(SecretRun.typedLine(["/usr/local/bin/nxtrm", "secret"], shell: "nu") == "^'/usr/local/bin/nxtrm' secret")
+        #expect(SecretRun.typedLine(["/usr/local/bin/nxtrm", "secret"], shell: "pwsh") == "& '/usr/local/bin/nxtrm' secret")
+        // Quotes and history marks inside a path.
+        #expect(SecretRun.typedLine(["/a/it's/x"], shell: "zsh") == #"'/a/it'\''s/x'"#)
+        #expect(SecretRun.typedLine(["/a/it's/x"], shell: "fish") == #"'/a/it\'s/x'"#)
+        #expect(SecretRun.typedLine(["/a/b!c"], shell: "tcsh") == #"'/a/b\!c'"#)
+        #expect(SecretRun.typedLine(["/a/it's/x"], shell: "pwsh") == "& '/a/it''s/x'")
+        #expect(SecretRun.typedLine(["/a/it's/x"], shell: "nu") == nil)
+        // A control character is never typed: it would act at once in the line editor.
+        #expect(SecretRun.typedLine(["/a/b\u{15}c"], shell: "zsh") == nil)
+    }
+
     @Test func theProgramForTheTitle() {
         #expect(SecretRun.programName(ofCommand: "npm test") == "npm")
         #expect(SecretRun.programName(ofCommand: "cd api && FOO=1 npm run e2e") == "npm")

@@ -124,6 +124,24 @@ public enum SecretName {
         refusedEnvNames.contains(name) || refusedEnvPrefixes.contains { name.hasPrefix($0) }
     }
 
+    /// What a key is for, from an agent's reason (KTD6): one line, its line breaks and control characters made spaces,
+    /// and over 200 characters cut at the last space before the 200th character, with "…" added.
+    public static func purpose(fromReason reason: String) -> String {
+        let scalars = reason.unicodeScalars.map { scalar -> Unicode.Scalar in
+            let category = scalar.properties.generalCategory
+            let isBreak = category == .control || category == .lineSeparator || category == .paragraphSeparator
+            return isBreak ? " " : scalar
+        }
+        var view = String.UnicodeScalarView()
+        view.append(contentsOf: scalars)
+        let line = String(view).trimmingCharacters(in: .whitespaces)
+        let limit = SecretVault.maxPurposeLength
+        guard line.count > limit else { return line }
+        let head = line.prefix(limit - 1)
+        let cut = head.lastIndex(of: " ").map { head[..<$0] } ?? head
+        return cut.trimmingCharacters(in: .whitespaces) + "…"
+    }
+
     static func isLetter(_ byte: UInt8) -> Bool { byte >= UInt8(ascii: "A") && byte <= UInt8(ascii: "Z") }
     static func isDigit(_ byte: UInt8) -> Bool { byte >= UInt8(ascii: "0") && byte <= UInt8(ascii: "9") }
 }

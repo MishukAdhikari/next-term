@@ -212,6 +212,7 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
     }
 
     private func commandRows() -> [NSView] {
+        guard !content.command.isEmpty else { return [] } // store_secret runs nothing
         let command = NSTextField(wrappingLabelWithString: Self.sanitized(content.command, limit: 4000))
         command.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         command.preferredMaxLayoutWidth = Self.width - 36
@@ -227,8 +228,9 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
     }
 
     private func folderRows() -> [NSView] {
-        var lines = ["Folder: \(Self.sanitized(content.folder, limit: 1000))"]
+        var lines = content.folder.isEmpty ? [] : ["Folder: \(Self.sanitized(content.folder, limit: 1000))"]
         for key in content.keys where key.envName != key.name { lines.append("\(key.name) → \(key.envName)") }
+        guard !lines.isEmpty else { return [] }
         let label = Self.label(lines.joined(separator: "\n"), size: 12)
         return [label]
     }
@@ -282,9 +284,11 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         if let pid = content.askedBy.pid { lines.append("Process: \(pid)") }
         if let executable = content.askedBy.executable { lines.append("Program: \(Self.sanitized(executable, limit: 1000))") }
         let arguments = content.askedBy.arguments.isEmpty ? content.argv : content.askedBy.arguments
-        lines.append("\(arguments.count) \(arguments.count == 1 ? "argument" : "arguments"):")
-        lines.append(contentsOf: arguments.prefix(200).map { "  " + Self.escaped(Self.masked($0)) })
-        if arguments.count > 200 { lines.append("  … and \(arguments.count - 200) more") }
+        if !arguments.isEmpty {
+            lines.append("\(arguments.count) \(arguments.count == 1 ? "argument" : "arguments"):")
+            lines.append(contentsOf: arguments.prefix(200).map { "  " + Self.escaped(Self.masked($0)) })
+            if arguments.count > 200 { lines.append("  … and \(arguments.count - 200) more") }
+        }
         if content.runsAsShell { lines.append("Runs with /bin/sh -c") }
         let body = NSTextField(wrappingLabelWithString: lines.joined(separator: "\n"))
         body.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
@@ -345,6 +349,8 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         }
         // Only a click allows: never Return, nor Tab then Space with keyboard navigation on.
         allowButton.refusesFirstResponder = true
+        // store_secret's panel has no "How long" and no hour pause: Decline and Stop Asking, Decline, Save.
+        pauseButton.isHidden = !content.offersHowLong
         let row = NSStackView(views: [pauseButton, NSView(), stopButton, declineButton, allowButton])
         row.spacing = 8
         return row

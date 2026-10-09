@@ -117,8 +117,8 @@ enum SecretSocket {
         let tabs = AppDelegate.shared.controllers.flatMap(\.tabs)
         let tab = ClaudeIDEServer.tab(for: pid, among: tabs)
         if let ticket = request.ticket {
-            waiter.asked(nil, ticket: true)
-            return SecretRequests.shared.redeem(ticket: ticket, peerTab: tab, request: request) { waiter.set($0) }
+            let asking = SecretRequests.shared.redeem(ticket: ticket, peerTab: tab, request: request) { waiter.set($0) }
+            return waiter.asked(asking, ticket: true)
         }
         var facts = SecretRequests.AskedBy()
         facts.agent = agent?.name
@@ -179,6 +179,10 @@ enum SecretSocket {
             case .vault(.noSuchKey(let name)): return SecretRun.Answer(status: .unknown, name: name, names: request.names)
             default: return SecretRun.Answer(status: .refused, names: request.names)
             }
+        case .notStarted:
+            return SecretRun.Answer(status: .expired, names: request.names)
+        case .saved, .unanswered:
+            return SecretRun.Answer(status: .refused, names: request.names)
         }
     }
 

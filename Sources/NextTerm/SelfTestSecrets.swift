@@ -18,11 +18,15 @@ extension SelfTest {
         let realFolder = SecretFolder(applicationSupport: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
         let realBefore = secretsFolderDate(realFolder.url)
         let savedMask = SecretMask.current
-        defer { SecretMask.current = savedMask }
+        defer {
+            SecretMask.current = savedMask
+            SecretClipboard.shared.pasteboard.releaseGlobally()
+        }
         await secretsStoreChecks(base)
         await secretsMaskingChecks(c, base: base)
         await secretsPanelChecks(base)
         await secretsWrapperChecks(base)
+        await secretsToolChecks(c, base: base, proj: proj)
         check(secretsFolderDate(realFolder.url) == realBefore, "secrets: the real Secrets.noindex is untouched (unchanged, or not there)",
               "\(String(describing: realBefore)) → \(String(describing: secretsFolderDate(realFolder.url)))")
     }
@@ -656,5 +660,387 @@ extension SelfTest {
         let manyExit = await many.finish()
         check(manyExit == 1 && many.errorText == "nxtrm: Next Term refused this request." && requests.showing == nil,
               "secrets: a wrapper with 4,097 arguments after -- is refused, with no panel", many.errorText)
+    }
+}
+
+extension SelfTest {
+    // MARK: U6, the MCP tools
+
+    /// A secret tool called in-process as a local agent's call, its answer as JSON.
+    static func secretsTool(_ tool: String, _ arguments: [String: Any], pid: pid_t? = nil, approval: MCPApproval = .askOnMac,
+                            requester: String? = nil, connection: String? = nil) async -> [String: Any] {
+        await withCheckedContinuation { continuation in
+            MCPControl.call(tool, arguments, caller: pid, approval: approval, requester: requester, connection: connection) { result in
+                let object = (try? JSONSerialization.jsonObject(with: Data(result.text.utf8))) as? [String: Any]
+                continuation.resume(returning: object ?? ["error": result.text, "isError": result.isError])
+            }
+        }
+    }
+
+    /// A call that waits for the user, started now and awaited later.
+    static func secretsStart(_ tool: String, _ arguments: [String: Any], pid: pid_t? = nil, requester: String? = nil,
+                             connection: String? = nil, approval: MCPApproval = .askOnMac) -> Task<[String: Any], Never> {
+        Task { @MainActor in await secretsTool(tool, arguments, pid: pid, approval: approval, requester: requester, connection: connection) }
+    }
+
+    static func secretsJSON(_ object: [String: Any]) -> String {
+        (try? JSONSerialization.data(withJSONObject: object)).map { String(decoding: $0, as: UTF8.self) } ?? ""
+    }
+
+    static func secretsToolChecks(_ c: TerminalWindowController, base: URL, proj: URL) async {
+        let requests = SecretRequests.shared
+        let store = SecretsStore.shared
+        requests.resetForSelfTest()
+        let savedWithin = SecretsMCP.answerWithin
+        let savedWindow = SecretRequests.ticketWindow
+        defer {
+            requests.resetForSelfTest()
+            SecretsMCP.answerWithin = savedWithin
+            SecretRequests.ticketWindow = savedWindow
+        }
+        let value = secretsValue("tool")
+        _ = try? await store.perform(.add(name: "TOOL_KEY", purpose: "the tool checks", purposeBy: .user, origin: .settings,
+                                          writeOnly: false, value: SecretBytes(utf8: value)))
+        await secretsListChecks(value: value)
+        await secretsRequestChecks()
+        await secretsStoreToolChecks(c, base: base)
+        await secretsRunChecks(c, base: base, proj: proj, value: value)
+        for name in store.index?.names ?? [] { _ = try? await store.perform(.delete(name: name)) }
+    }
+
+    /// list_secrets: names and facts, never a value; a tampered vault lists nothing.
+    static func secretsListChecks(value: String) async {
+        let store = SecretsStore.shared
+        let listed = await secretsTool("list_secrets", [:])
+        let rows = listed["secrets"] as? [[String: Any]] ?? []
+        let row = rows.first { $0["name"] as? String == "TOOL_KEY" }
+        check(listed["vault"] as? String == "ok" && row?["for"] as? String == "the tool checks" && row?["purpose_by"] as? String == "user"
+              && row?["added_by"] as? String == "user" && row?["write_only"] as? Bool == false && listed["protected_by"] as? String == "secure-enclave"
+              && !secretsJSON(listed).contains(value),
+              "secrets: list_secrets gives names, what each is for, who wrote it and added it, and the protection, and no value",
+              secretsJSON(listed))
+
+        // A vault changed by hand: the first use finds it, and list_secrets then names nothing.
+        let vaultPath = store.folder.path(SecretFolder.vaultName)
+        guard let original = FileManager.default.contents(atPath: vaultPath),
+              let planted = secretsTampered(original, { $0["purpose"] = "changed by hand" }) else {
+            return check(false, "secrets: a tampered vault for list_secrets")
+        }
+        try? store.folder.write(SecretFolder.vaultName, data: planted)
+        store.reloadIfChanged()
+        _ = try? await store.perform(.reveal(name: "TOOL_KEY"))
+        let tampered = await secretsTool("list_secrets", [:])
+        check(tampered["vault"] as? String == "tampered" && (tampered["secrets"] as? [Any])?.isEmpty == true,
+              "secrets: with a tampered vault, list_secrets answers tampered and lists no names", secretsJSON(tampered))
+        try? store.folder.write(SecretFolder.vaultName, data: original)
+        await store.load()
+    }
+
+    /// request_secret: the window, the prefilled purpose, Save, and the paste clear on the private pasteboard.
+    static func secretsRequestChecks() async {
+        let requests = SecretRequests.shared
+        let reason = String(repeating: "to run the billing tests ", count: 20)
+        let call = secretsStart("request_secret", ["name": "STRIPE_KEY", "reason": reason])
+        _ = await wait(10) { requests.showing?.requestWindow != nil }
+        guard let window = requests.showing?.requestWindow, let shown = window.window else {
+            return check(false, "secrets: request_secret opens its window")
+        }
+        let purpose = window.purposeField.stringValue
+        check(purpose.count <= 200 && purpose.hasSuffix("…") && shown.title == "An agent outside Next Term's tabs asks you to add STRIPE_KEY",
+              "secrets: request_secret's window prefills what it's for with at most 200 characters, ending in …", "\(purpose.count): \(shown.title)")
+        check(!shown.isKeyWindow && window.saveButton.keyEquivalent.isEmpty && window.declineButton.keyEquivalent.isEmpty
+              && window.stopButton.keyEquivalent.isEmpty && !(shown is NSPanel),
+              "secrets: the request window is an ordinary window that never takes the keyboard on its own and has no default button")
+        let pasteboard = SecretClipboard.shared.pasteboard
+        let general = NSPasteboard.general.changeCount
+        pasteboard.clearContents()
+        pasteboard.setString("sk_test-selftest_pasted_0123456789", forType: .string)
+        window.valueField.stringValue = "sk_test-selftest_pasted_0123456789"
+        window.recordPaste()
+        window.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: window.valueField))
+        window.saveButton.performClick(nil)
+        let answer = await call.value
+        check(answer["status"] as? String == "saved" && answer["name"] as? String == "STRIPE_KEY" && answer["replaced"] as? Bool == false
+              && !secretsJSON(answer).contains("sk_test-selftest_pasted"),
+              "secrets: the agent gets saved and the name, and no value", secretsJSON(answer))
+        check(pasteboard.string(forType: .string) == nil && window.statusLabel.stringValue.contains(SecretClipboard.clearedLine)
+              && NSPasteboard.general.changeCount == general,
+              "secrets: a paste into the value field is cleared on Save, on the self-test's own pasteboard",
+              window.statusLabel.stringValue)
+        window.close()
+
+        // No answer within the wait: pending with a request id, then the answer when it comes.
+        SecretsMCP.answerWithin = 1
+        let first = await secretsTool("request_secret", ["name": "LATER_KEY", "reason": "later"])
+        let id = first["request_id"] as? String ?? ""
+        check(first["status"] as? String == "pending" && !id.isEmpty, "secrets: an unanswered request answers pending with a request id",
+              secretsJSON(first))
+        requests.showing?.requestWindow?.declineButton.performClick(nil)
+        let polled = await secretsTool("request_secret", ["request_id": id])
+        let stranger = await secretsTool("request_secret", ["request_id": "nosuchid"])
+        check(polled["status"] as? String == "declined" && stranger["status"] as? String == "refused" && stranger["note"] as? String == "No such request.",
+              "secrets: asking again with the request id gives the answer; an unknown id is no such request", secretsJSON(polled))
+        SecretsMCP.answerWithin = 50
+    }
+
+    /// store_secret: the panel's lines, Save, masking from then on, and replacing a key the user added.
+    static func secretsStoreToolChecks(_ c: TerminalWindowController, base: URL) async {
+        let requests = SecretRequests.shared
+        let store = SecretsStore.shared
+        let value = secretsValue("deploy")
+        let call = secretsStart("store_secret", ["name": "DEPLOY_TOKEN", "value": value, "reason": "made for the deploy script"])
+        _ = await wait(10) { requests.showing?.panel != nil }
+        guard let panel = requests.showing?.panel, let window = panel.window else { return check(false, "secrets: store_secret shows the panel") }
+        let shown = texts(window.contentView)
+        check(shown.contains("This key is already in the agent's conversation.") && panel.durationChoice.isEmpty && panel.pauseButton.isHidden
+              && panel.allowButton.title == "Save" && window.title == "An agent outside Next Term's tabs asks to save a key it holds"
+              && !shown.contains(value),
+              "secrets: store_secret's panel says the value is in the agent's conversation, has Save and no How long, and never shows the value",
+              shown)
+        panel.allowButton.performClick(nil)
+        let saved = await call.value
+        let entry = store.index?.entry(named: "DEPLOY_TOKEN")
+        check(saved["status"] as? String == "saved" && saved["replaced"] as? Bool == false && entry?.origin == .agent
+              && entry?.purpose == "made for the deploy script" && entry?.purposeBy == .agent,
+              "secrets: Save stores the agent's key, with its reason as what it's for", secretsJSON(saved))
+
+        // A tab that prints it: read_tab shows •••.
+        let file = base.appendingPathComponent("deploy.txt")
+        try? value.write(to: file, atomically: true, encoding: .utf8)
+        let tab = c.addTab(directory: base.path, select: false)
+        defer { c.requestClose(tab) }
+        if await wait(20, { tab.status.integrated }) {
+            tab.view.send(txt: "cat \(ShellQuote.quote(file.path)); echo\r")
+            _ = await wait(10) { tab.screenTail().joined().contains(value) }
+            let read = await secretsTool("read_tab", ["tab_id": tab.id.uuidString.lowercased()])
+            check((read["screen"] as? String).map { $0.contains("•••") && !$0.contains(value) } == true,
+                  "secrets: read_tab of a tab that prints a key store_secret saved shows •••")
+        }
+
+        // Replacing a key the user added: its title and warning, and the audit line's earlier origin.
+        _ = try? await store.perform(.add(name: "USER_KEY", purpose: "mine", purposeBy: .user, origin: .settings, writeOnly: false,
+                                          value: SecretBytes(utf8: secretsValue("user"))))
+        let replace = secretsStart("store_secret", ["name": "USER_KEY", "value": secretsValue("agentsown"), "reason": "rotated"])
+        _ = await wait(10) { requests.showing?.panel != nil }
+        let replacing = requests.showing?.panel
+        let replaceShown = texts(replacing?.window?.contentView)
+        check(replacing?.window?.title == "An agent outside Next Term's tabs asks to replace USER_KEY, a key you added"
+              && replaceShown.contains("This replaces the key you added on") && replaceShown.contains("will get the agent's value"),
+              "secrets: store_secret replacing a key the user added says so in its title and a warning", replaceShown)
+        replacing?.allowButton.performClick(nil)
+        let replaced = await replace.value
+        let line = secretsAudit(store).last
+        check(replaced["replaced"] as? Bool == true && line?.event == .replace && line?.earlierOrigin == "settings"
+              && store.index?.entry(named: "USER_KEY")?.purpose == "mine",
+              "secrets: the replace keeps what the key is for, and its audit line holds the earlier origin",
+              "\(line?.event.rawValue ?? "none") \(line?.earlierOrigin ?? "none")")
+    }
+
+    /// run_with_secrets: the tab, the ticket line, the panel, the run; tab_id; grants and the .env; refusals; tickets.
+    static func secretsRunChecks(_ c: TerminalWindowController, base: URL, proj: URL, value: String) async {
+        let requests = SecretRequests.shared
+        let app = AppDelegate.shared!
+        let folder = proj.appendingPathComponent("secrets-run", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var opened: [TerminalTab] = []
+        defer {
+            for tab in opened { MCPControl.controller(of: tab)?.requestClose(tab) }
+            try? FileManager.default.removeItem(at: folder)
+        }
+        func newTabs(since before: Set<UUID>) -> [TerminalTab] {
+            app.controllers.flatMap(\.tabs).filter { !before.contains($0.id) }
+        }
+        func tabIDs() -> Set<UUID> { Set(app.controllers.flatMap(\.tabs).map(\.id)) }
+        let command = #"printf "%s" "$K" | wc -c | tr -d ' '; echo LEN"#
+        let arguments: [String: Any] = ["secrets": ["TOOL_KEY=K"], "command": command, "directory": folder.path, "reason": "the length"]
+
+        // A new tab, the ticket line in the self-test form, the panel, Allow, the run.
+        let before = tabIDs()
+        let call = secretsStart("run_with_secrets", arguments)
+        _ = await wait(15) { requests.showing?.panel != nil }
+        let tab = newTabs(since: before).first
+        if let tab { opened.append(tab) }
+        let typed = tab.map { $0.screenTail().joined(separator: "\n") } ?? ""
+        check(tab != nil && typed.contains("--self-test-secret-wrapper") && typed.contains("secret run --ticket") && !typed.contains(command),
+              "secrets: run_with_secrets opens a tab and types only the ticket line, in the self-test form", typed.suffix(300).description)
+        check(tab.map { MCPControl.controller(of: $0)?.activeTab !== $0 } == true, "secrets: the new tab does not take the keyboard")
+        let panel = requests.showing?.panel
+        let title = panel?.window?.title ?? ""
+        check(title == "A program outside Next Term's tabs asks to run printf with TOOL_KEY"
+              && texts(panel?.window?.contentView).contains("Runs as a shell command") && panel?.durationChoice[.untilLock] == nil,
+              "secrets: the panel shows the command as a shell command, with no until-the-Mac-locks choice", title)
+        panel?.allowButton.performClick(nil)
+        let started = await call.value
+        let length = String(value.utf8.count)
+        func screen(_ tab: TerminalTab?) -> String { tab.map { $0.screenTail().joined(separator: "\n") } ?? "" }
+        let ran = await wait(15) { screen(tab).contains("\(length)LEN") || screen(tab).contains("\(length)\nLEN") }
+        check(started["status"] as? String == "started" && started["approved"] as? String == "once"
+              && started["tab_id"] as? String == tab?.id.uuidString.lowercased() && ran && !secretsJSON(started).contains(value),
+              "secrets: after Allow the command runs in its tab with the key, and the agent gets started with the tab's id",
+              secretsJSON(started))
+        if let tab {
+            _ = await wait(10) { !tab.status.running }
+            tab.view.send(txt: "if [ -z \"${K+x}\" ]; then echo NO\"\"K; fi; echo HIST$(fc -ln -9 | grep -c 'w[c] -c')\r")
+            let clean = await wait(10) { screen(tab).contains("NOK") && screen(tab).contains("HIST0") }
+            check(clean, "secrets: the tab's shell has no K after the run, and its history holds only the ticket line", String(screen(tab).suffix(200)))
+        }
+        // A used ticket can't be used again.
+        let ticketID = screen(tab).components(separatedBy: "--ticket ").last.map { String($0.prefix(26)) } ?? ""
+        let reuse = SecretsWrapperRun(["--ticket", ticketID])
+        _ = reuse.start()
+        let reuseExit = await reuse.finish()
+        check(SecretRun.isTicket(ticketID) && reuseExit == 1 && reuse.errorText.contains("expired or was used already") && requests.showing == nil,
+              "secrets: a used ticket gets expired", reuse.errorText)
+
+        // "Allow for 15 minutes": the same call starts with no panel, until the folder's .env changes.
+        let again = secretsStart("run_with_secrets", arguments)
+        _ = await wait(15) { requests.showing?.panel != nil }
+        for tab in newTabs(since: before) where !opened.contains(where: { $0 === tab }) { opened.append(tab) }
+        requests.showing?.panel?.durationChoice[.fifteenMinutes]?.performClick(nil)
+        requests.showing?.panel?.allowButton.performClick(nil)
+        _ = await again.value
+        let granted = await secretsTool("run_with_secrets", arguments)
+        for tab in newTabs(since: before) where !opened.contains(where: { $0 === tab }) { opened.append(tab) }
+        check(granted["status"] as? String == "started" && granted["approved"] as? String == "by an earlier approval",
+              "secrets: within 15 minutes the same call starts with no panel", secretsJSON(granted))
+        try? "OPENAI_BASE_URL=https://example.invalid\n".write(to: folder.appendingPathComponent(".env"), atomically: true, encoding: .utf8)
+        let changed = secretsStart("run_with_secrets", arguments)
+        let asked = await wait(15) { requests.showing?.panel != nil }
+        for tab in newTabs(since: before) where !opened.contains(where: { $0 === tab }) { opened.append(tab) }
+        check(asked && texts(requests.showing?.panel?.window?.contentView).contains(".env in this folder sets OPENAI_BASE_URL. The key may go to that address."),
+              "secrets: after the .env changes, the same call shows the panel again, with its warning")
+        requests.showing?.panel?.declineButton.performClick(nil)
+        let declined = await changed.value
+        check(declined["status"] as? String == "declined" && declined["tab_id"] != nil,
+              "secrets: a declined run answers declined and names the tab, which stays open", secretsJSON(declined))
+        try? FileManager.default.removeItem(at: folder.appendingPathComponent(".env"))
+        requests.revokeAll()
+
+        await secretsRunTabChecks(c, folder: folder, base: base, opened: &opened)
+        await secretsRunRefusalChecks(folder: folder, value: value, arguments: arguments, before: tabIDs())
+        await secretsTicketChecks(folder: folder, arguments: arguments, opened: &opened)
+    }
+
+    /// tab_id: the tab's environment warns before Allow, the command runs in directory, and the tabs that are refused.
+    static func secretsRunTabChecks(_ c: TerminalWindowController, folder: URL, base: URL, opened: inout [TerminalTab]) async {
+        let requests = SecretRequests.shared
+        let tab = c.addTab(directory: base.path, select: false)
+        opened.append(tab)
+        guard await wait(20, { tab.status.integrated }) else { return check(false, "secrets: a tab for tab_id") }
+        tab.view.send(txt: "export NODE_OPTIONS=--no-warnings\r")
+        _ = await wait(5) { !tab.status.running }
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        let id = tab.id.uuidString.lowercased()
+        let call = secretsStart("run_with_secrets", ["secrets": ["TOOL_KEY"], "command": "pwd > where", "directory": folder.path, "tab_id": id])
+        _ = await wait(15) { requests.showing?.panel != nil }
+        let shown = texts(requests.showing?.panel?.window?.contentView)
+        check(shown.contains("NODE_OPTIONS is set: it can change what this command runs.") && shown.contains("with that tab's environment"),
+              "secrets: with tab_id, the panel names that tab and warns about its NODE_OPTIONS before Allow", shown)
+        requests.showing?.panel?.allowButton.performClick(nil)
+        _ = await call.value
+        let whereFile = folder.appendingPathComponent("where")
+        let ranThere = await wait(10) { (try? String(contentsOf: whereFile, encoding: .utf8))?.contains(folder.path) == true }
+        check(ranThere, "secrets: with tab_id of a tab in another folder, the command runs in directory")
+
+        // The caller's own tab, a busy tab, a tab that is not there.
+        _ = await wait(10) { !tab.status.running }
+        let own = await secretsTool("run_with_secrets", ["secrets": ["TOOL_KEY"], "command": "true", "directory": folder.path, "tab_id": id],
+                                    pid: tab.view.process.shellPid)
+        check(own["status"] as? String == "refused" && (own["note"] as? String)?.contains("your own tab") == true,
+              "secrets: tab_id of the caller's own tab is refused", secretsJSON(own))
+        tab.view.send(txt: "sleep 20\r")
+        _ = await wait(5) { tab.status.running }
+        let busy = await secretsTool("run_with_secrets", ["secrets": ["TOOL_KEY"], "command": "true", "directory": folder.path, "tab_id": id])
+        check(busy["status"] as? String == "refused" && (busy["note"] as? String)?.contains("running something") == true,
+              "secrets: tab_id of a busy tab is refused", secretsJSON(busy))
+        tab.view.send(txt: "\u{03}")
+        // A remote tab is refused the same way (givenTab): the self-test opens none.
+
+        // fish, when it is installed: the line is quoted for it and runs.
+        let fish = ["/opt/homebrew/bin/fish", "/usr/local/bin/fish"].first { FileManager.default.isExecutableFile(atPath: $0) }
+        guard let fish else { return }
+        let fishTab = c.addTab(directory: base.path, select: false)
+        opened.append(fishTab)
+        guard await wait(20, { fishTab.status.integrated }) else { return }
+        fishTab.view.send(txt: "exec \(fish) --no-config\r")
+        _ = await wait(10) { SecretsMCP.shellName(of: fishTab) == "fish" }
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        let fishCall = secretsStart("run_with_secrets", ["secrets": ["TOOL_KEY"], "command": "true", "directory": folder.path,
+                                                          "tab_id": fishTab.id.uuidString.lowercased()])
+        let fishAsked = await wait(15) { requests.showing?.panel != nil }
+        check(fishAsked, "secrets: in a fish tab the ticket line runs and asks", fishTab.screenTail().suffix(3).joined(separator: " | "))
+        requests.showing?.panel?.declineButton.performClick(nil)
+        _ = await fishCall.value
+    }
+
+    /// Refusals before any tab: a stored value in the command, a reached count, a vault that can't open.
+    static func secretsRunRefusalChecks(folder: URL, value: String, arguments: [String: Any], before: Set<UUID>) async {
+        let requests = SecretRequests.shared
+        let store = SecretsStore.shared
+        func tabCount() -> Int { AppDelegate.shared.controllers.flatMap(\.tabs).count }
+        let count = tabCount()
+        let holding = await secretsTool("run_with_secrets", ["secrets": ["TOOL_KEY"], "command": "echo \(value)", "directory": folder.path])
+        check(holding["status"] as? String == "value_in_command" && tabCount() == count && !secretsJSON(holding).contains(value),
+              "secrets: a command holding a stored value gets value_in_command, and no tab opens", secretsJSON(holding))
+        let unknown = await secretsTool("run_with_secrets", ["secrets": ["NOT_STORED"], "command": "true", "directory": folder.path])
+        check(unknown["status"] as? String == "unknown" && tabCount() == count, "secrets: a name not stored gets unknown, and no tab opens")
+
+        // The asker's count: ten declines, then limited, with no tab.
+        requests.resetForSelfTest()
+        for index in 0..<10 {
+            let request = secretsRequest(asker: "outside", command: ["count \(index)"], source: .tool, names: ["TOOL_KEY"], agent: nil)
+            requests.ask(request) { _ in }
+            request.panel?.declineButton.performClick(nil)
+        }
+        let limited = await secretsTool("run_with_secrets", arguments)
+        check(limited["status"] as? String == "limited" && tabCount() == count,
+              "secrets: with the asker's count reached, run_with_secrets gets limited and opens no tab", secretsJSON(limited))
+        requests.resetForSelfTest()
+
+        // A vault this Mac's keyring can't open.
+        let vaultPath = store.folder.path(SecretFolder.vaultName)
+        let original = FileManager.default.contents(atPath: vaultPath)
+        let other = SoftwareKeyring(kind: .secureEnclave)
+        if let original, let made = try? SecretVault.create(keyring: other),
+           let foreign = try? made.vault.add(name: "TOOL_KEY", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
+                                             value: SecretBytes(utf8: secretsValue("foreign"))) {
+            try? store.folder.write(SecretFolder.vaultName, data: foreign)
+            await store.load()
+            let cant = await secretsTool("run_with_secrets", arguments)
+            check(store.protection == .cantOpen && cant["status"] as? String == "cant_open" && tabCount() == count,
+                  "secrets: with a vault the keyring can't open, run_with_secrets gets cant_open and opens no tab", secretsJSON(cant))
+            try? store.folder.write(SecretFolder.vaultName, data: original)
+            await store.load()
+        }
+    }
+
+    /// Tickets: one redeemed from outside its tab is refused; one not redeemed in time ends.
+    static func secretsTicketChecks(folder: URL, arguments: [String: Any], opened: inout [TerminalTab]) async {
+        let requests = SecretRequests.shared
+        let before = Set(AppDelegate.shared.controllers.flatMap(\.tabs).map(\.id))
+        let call = secretsStart("run_with_secrets", arguments)
+        _ = await wait(10) { requests.tickets.values.first?.typedAt != nil }
+        let id = requests.tickets.keys.first ?? ""
+        // Redeemed from no tab of Next Term's, before the tab's own wrapper starts: refused, and the ticket waits on.
+        var outside: SecretRun.Answer?
+        let asked = SecretRun.Request(names: [], map: [:], argv: [], executable: "", directory: "/", argvFull: [], warn: [:], ticket: id)
+        requests.redeem(ticket: id, peerTab: nil, request: asked) { outside = $0 }
+        check(outside?.status == .refused && requests.tickets[id] != nil,
+              "secrets: a ticket redeemed from outside its tab is refused, and its own tab can still redeem it")
+        _ = await wait(15) { requests.showing?.panel != nil }
+        requests.showing?.panel?.declineButton.performClick(nil)
+        _ = await call.value
+        requests.resetForSelfTest()
+
+        SecretRequests.ticketWindow = .milliseconds(150)
+        let late = await secretsTool("run_with_secrets", ["secrets": ["TOOL_KEY"], "command": "true", "directory": folder.path])
+        check(late["status"] as? String == "refused" && late["note"] as? String == "The tab's shell did not start nxtrm within 30 seconds.",
+              "secrets: a ticket not redeemed in time ends refused", secretsJSON(late))
+        SecretRequests.ticketWindow = .seconds(30)
+        for tab in AppDelegate.shared.controllers.flatMap(\.tabs) where !before.contains(tab.id) { opened.append(tab) }
+        let lateTab = opened.last
+        _ = await wait(10) { lateTab?.screenTail().joined().contains("expired or was used already") == true }
+        check(lateTab?.screenTail().joined().contains("expired or was used already") == true,
+              "secrets: its wrapper, starting late, gets expired")
     }
 }

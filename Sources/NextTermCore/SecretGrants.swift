@@ -262,6 +262,26 @@ public struct SecretLimits: Sendable {
         return nil
     }
 
+    /// As `admit`, for `run_with_secrets` before its tab exists (KTD14): the tab's warned variables are not known yet,
+    /// so a paused request matches whatever they were. A request the limits refuse opens no tab.
+    public func admitBeforeTab(asker: String, binding: SecretBinding, at now: ContinuousClock.Instant) -> Refusal? {
+        if let hourPause, now < hourPause.until { return .declining(until: hourPause.untilDate) }
+        if stopped.contains(asker) { return .stopped }
+        let loose = Self.withoutTab(binding)
+        if let pause = pauses.first(where: { now < $0.value.until && Self.withoutTab($0.key) == loose })?.value {
+            return .paused(declinedAt: pause.declinedAt, until: pause.untilDate)
+        }
+        if counts[asker, default: 0] >= Self.perAsker || total >= Self.overall { return .limited }
+        return nil
+    }
+
+    /// A binding without what only the tab's wrapper knows: its warned variables.
+    static func withoutTab(_ binding: SecretBinding) -> SecretBinding {
+        var loose = binding
+        loose.warned = [:]
+        return loose
+    }
+
     /// Records how a request ended, once, when it ends. A decline also pauses that same request for 10 minutes.
     public mutating func record(_ outcome: Outcome, asker: String, binding: SecretBinding, at now: ContinuousClock.Instant,
                                 date: Date = Date()) {

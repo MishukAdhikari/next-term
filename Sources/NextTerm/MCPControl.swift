@@ -282,6 +282,11 @@ enum MCPControl {
             MainActor.assumeIsolated {
                 SkillsMCP.call(tool, arguments, caller: caller, approval: approval, connection: connection, requester: requester, reply: reply)
             }
+        case "list_secrets", "request_secret", "store_secret", "run_with_secrets":
+            MainActor.assumeIsolated {
+                SecretsMCP.call(tool, arguments, caller: caller, pid: pid, approval: approval, requester: requester, connection: connection,
+                                reply: reply)
+            }
         case _ where MCPServer.isControlTool(tool):
             MainActor.assumeIsolated {
                 MCPWriteControl.call(tool, arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
@@ -469,8 +474,6 @@ enum MCPControl {
         guard let directory = absolute(arguments["directory"]), isFolder(directory) else {
             return reply(fail("Not a folder (give an absolute path): \(arguments["directory"] as? String ?? "")"))
         }
-        // The window of the project that holds the folder; else the folder's project, opened.
-        let owners = app.controllers.filter { $0.project.map { directory == $0 || directory.hasPrefix($0 + "/") } ?? false }
         let tab: TerminalTab
         let controller: TerminalWindowController
         if let besideID = arguments["split_beside"] {
@@ -484,12 +487,10 @@ enum MCPControl {
             }
             controller = owner
             tab = pane
-        } else if let owner = owners.max(by: { ($0.project?.count ?? 0) < ($1.project?.count ?? 0) }) {
-            controller = owner
-            tab = owner.addTab(directory: directory, select: false)
         } else {
-            controller = app.openFolder(ProjectRoot.find(from: directory), newWindow: false)
-            if controller.tabs.count == 1, let first = controller.tabs.first, first.remote == nil, first.status.command.isEmpty,
+            let (owner, opened) = window(for: directory)
+            controller = owner
+            if opened, controller.tabs.count == 1, let first = controller.tabs.first, first.remote == nil, first.status.command.isEmpty,
                canonicalPath(first.directory) == directory {
                 tab = first
             } else {
@@ -507,6 +508,14 @@ enum MCPControl {
             type(command, into: tab, submit: true)
             answer()
         }
+    }
+
+    /// The window a new tab in `directory` opens in (new_tab's rule, which run_with_secrets shares): the window of the
+    /// project that holds the folder, the deepest one; else the folder's project, opened (`opened` is then true).
+    static func window(for directory: String) -> (controller: TerminalWindowController, opened: Bool) {
+        let owners = app.controllers.filter { $0.project.map { directory == $0 || directory.hasPrefix($0 + "/") } ?? false }
+        if let owner = owners.max(by: { ($0.project?.count ?? 0) < ($1.project?.count ?? 0) }) { return (owner, false) }
+        return (app.openFolder(ProjectRoot.find(from: directory), newWindow: false), true)
     }
 
     static func whenReady(_ tab: TerminalTab, until deadline: TimeInterval, _ body: @escaping () -> Void) {
