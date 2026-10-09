@@ -365,8 +365,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
             await SkillsInstaller.checkForUpdates()
             checkButton.title = "Check for Updates"
             checkButton.isEnabled = true
-            let count = SkillsInstaller.updates.values.filter { if case .available = $0 { return true }; return false }.count
-            summary.stringValue += count == 0 ? " · no updates" : " · \(count) update\(count == 1 ? "" : "s")"
+            summary.stringValue += " · " + (SkillUpdates.phrase(SkillUpdates.count(SkillsInstaller.updates)) ?? "no updates")
         }
     }
 

@@ -368,12 +368,8 @@ enum SkillsInstaller {
 
     // MARK: updates
 
-    enum UpdateState: Equatable, Sendable {
-        case current
-        case available(commit: String)
-        /// The repository or the skill's folder is gone, or GitHub refused.
-        case unknown(String)
-    }
+    /// What the last check found for one skill (in the core, where the update count is worked out).
+    typealias UpdateState = SkillUpdateState
 
     /// One installed skill whose source is known: from Next Term's record, or the lock file of `npx skills`.
     struct Tracked: Sendable {

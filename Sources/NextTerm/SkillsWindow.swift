@@ -140,8 +140,7 @@ final class SkillsWindowController: NSWindowController, NSTableViewDataSource, N
             ((try? FileManager.default.contentsOfDirectory(atPath: (home as NSString).appendingPathComponent(folder))) ?? []).filter { !$0.hasPrefix(".") }
         })
         featured.reloadData()
-        let count = SkillsInstaller.updates.values.filter { if case .available = $0 { return true }; return false }.count
-        updatesBanner.stringValue = count == 0 ? "" : count == 1 ? "1 update available" : "\(count) updates available"
+        updatesBanner.stringValue = SkillUpdates.phrase(SkillUpdates.count(SkillsInstaller.updates)).map { $0 + " available" } ?? ""
     }
 
     // MARK: featured
