@@ -1217,6 +1217,14 @@ extension SelfTest {
         check(clipboard.pasteboard.string(forType: .string) == "something else" && NSPasteboard.general.changeCount == general,
               "secrets: what was copied since is kept, and the general pasteboard was never touched")
 
+        // Reveal shows the value in a field that can't be selected: only Copy puts a value on a pasteboard.
+        view.select("SHOWN_KEY")
+        view.revealButton.performClick(nil)
+        _ = await wait(10) { view.revealField != nil }
+        check(view.revealField?.stringValue == shownValue && view.revealField?.isSelectable == false,
+              "secrets: Reveal shows the value after Touch ID, in a field that can't be selected or copied from")
+        view.closeReveal()
+
         // Allowed now lists a grant, and Revoke ends it.
         let request = secretsRequest(asker: "wrapper:selftest-settings", command: ["true"], names: ["SHOWN_KEY"])
         let answers = SecretsAnswers()

@@ -676,12 +676,13 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     // MARK: Reveal
 
     /// The value in a popover by its row, in a window kept out of screen sharing and screenshots. It stays until it is
-    /// closed, the Mac locks, or Settings closes.
+    /// closed, the Mac locks, or Settings closes. It can't be selected: Copy, which marks the pasteboard for this Mac
+    /// only and clears it, is the one way a value reaches the pasteboard.
     private func showReveal(_ value: SecretBytes, for name: String) {
         closeReveal()
         let field = NSTextField(labelWithString: value.utf8String() ?? "")
         field.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        field.isSelectable = true
+        field.isSelectable = false
         field.lineBreakMode = .byCharWrapping
         field.preferredMaxLayoutWidth = 360
         field.setAccessibilityLabel("The value of \(name)")
