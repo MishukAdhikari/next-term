@@ -244,7 +244,7 @@ enum SecretsMCP {
         case .success(let parsed): invocation = parsed
         }
         guard let command = (arguments["command"] as? String)?.trimmingCharacters(in: .whitespaces), !command.isEmpty,
-              command.count <= 2000, !command.contains(where: { $0 == "\n" || $0 == "\r" }) else {
+              command.count <= 2000, SecretRun.isOneLine(command) else {
             return reply(answer(.refused, note: "Give command: one line, at most 2,000 characters."))
         }
         guard let folder = absoluteFolder(arguments["directory"]) else {

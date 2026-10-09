@@ -424,6 +424,15 @@ public enum SecretRun {
         return ("", [])
     }
 
+    /// Whether `run_with_secrets`' command is one line: no control character but a tab, and no line or paragraph
+    /// separator. Checked by scalar, because "\r\n" is one Character, equal to neither "\r" nor "\n", and `/bin/sh`
+    /// runs each line it is given.
+    public static func isOneLine(_ command: String) -> Bool {
+        !command.unicodeScalars.contains { scalar in
+            (ShellQuote.isControl(scalar) && scalar != "\t") || scalar == "\u{2028}" || scalar == "\u{2029}"
+        }
+    }
+
     /// The program for a panel's title and the Touch ID reason: a command's first word, past set-up such as `cd`.
     public static func programName(ofCommand command: String) -> String {
         for segment in CommandClassifier.segments(command) {

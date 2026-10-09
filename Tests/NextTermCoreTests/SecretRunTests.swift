@@ -151,7 +151,7 @@ import Testing
         #expect(SecretRun.envFileDigest(directory: folder.path) != first)
     }
 
-    /// The ticket line, quoted for each tab's shell (KTD14).
+    /// The ticket line, quoted for each tab's shell.
     @Test func theTypedLineForEachShell() {
         let ticket = "abcdefghijklmnopqrstuvwxyz"
         let words = ["/Applications/Next Term.app/Contents/Resources/bin/nxtrm", "secret", "run", "--ticket", ticket]
@@ -174,6 +174,18 @@ import Testing
         #expect(SecretRun.typedLine(["/a/it's/x"], shell: "nu") == nil)
         // A control character is never typed: it would act at once in the line editor.
         #expect(SecretRun.typedLine(["/a/b\u{15}c"], shell: "zsh") == nil)
+    }
+
+    /// run_with_secrets takes one line: a CRLF, a lone CR or LF, another control character or a line separator would
+    /// let `/bin/sh -c` run a second command the panel never named.
+    @Test func aCommandIsOneLine() {
+        for command in ["npm test", "npm test\t--watch", "cd api && npm run e2e", "printf '%s' \"$K\" | wc -c"] {
+            #expect(SecretRun.isOneLine(command), "\(command)")
+        }
+        for command in ["npm test\r\nnpx -y pkg", "npm test\nnpx -y pkg", "npm test\rnpx -y pkg", "a\u{0B}b", "a\u{0C}b", "a\u{85}b",
+                        "a\u{1B}b", "a\u{7F}b", "a\u{2028}b", "a\u{2029}b"] {
+            #expect(!SecretRun.isOneLine(command), "\(command.debugDescription)")
+        }
     }
 
     @Test func theProgramForTheTitle() {

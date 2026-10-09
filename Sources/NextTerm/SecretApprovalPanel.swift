@@ -11,8 +11,8 @@ import NextTermCore
 /// window, floats while it waits, and bounces the Dock icon when Next Term is in the background.
 @MainActor
 final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
-    /// What the panel shows. Text from programs (the agent's words, a tab title, the command) is masked and sanitized
-    /// here before it is shown.
+    /// What the panel shows. Text from programs (the agent's words, a tab title) is masked and sanitized here before it
+    /// is shown; the command is masked, with what would not show as itself escaped.
     struct Content {
         struct KeyRow {
             var name: String
@@ -213,11 +213,12 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
 
     private func commandRows() -> [NSView] {
         guard !content.command.isEmpty else { return [] } // store_secret runs nothing
-        let command = NSTextField(wrappingLabelWithString: Self.sanitized(content.command, limit: 4000))
+        let shown = Self.shownCommand(content.command, limit: 4000)
+        let command = NSTextField(wrappingLabelWithString: shown)
         command.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         command.preferredMaxLayoutWidth = Self.width - 36
         command.isSelectable = true
-        command.setAccessibilityLabel("Command: \(Self.sanitized(content.command, limit: 4000))")
+        command.setAccessibilityLabel("Command: \(shown)")
         var views: [NSView] = [command]
         if content.runsAsShell {
             let shell = Self.label("Runs as a shell command", size: 11)
@@ -543,6 +544,29 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         view.append(contentsOf: scalars)
         let clean = String(view)
         return clean.count > limit ? String(clean.prefix(limit - 1)) + "…" : clean
+    }
+
+    /// The command as the panel shows it: stored keys masked, and each character that would not show as itself (a
+    /// control or format character, a separator, an unassigned one) written as an escape, never taken out or made a
+    /// space. So the text shown is the text that runs.
+    static func shownCommand(_ text: String, limit: Int) -> String {
+        var out = String.UnicodeScalarView()
+        for scalar in masked(text).unicodeScalars {
+            switch scalar {
+            case "\n": out.append(contentsOf: "\\n".unicodeScalars)
+            case "\r": out.append(contentsOf: "\\r".unicodeScalars)
+            case "\t": out.append(contentsOf: "\\t".unicodeScalars)
+            default:
+                switch scalar.properties.generalCategory {
+                case .control, .format, .lineSeparator, .paragraphSeparator, .privateUse, .surrogate, .unassigned:
+                    out.append(contentsOf: ("\\u{" + String(scalar.value, radix: 16) + "}").unicodeScalars)
+                default:
+                    out.append(scalar)
+                }
+            }
+        }
+        let shown = String(out)
+        return shown.count > limit ? String(shown.prefix(limit - 1)) + "…" : shown
     }
 
     /// An argument as Details shows it: as it is, or quoted with its spaces, quotes and control characters escaped.

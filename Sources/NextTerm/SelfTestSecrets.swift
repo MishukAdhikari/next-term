@@ -427,6 +427,8 @@ extension SelfTest {
               "secrets: Details, closed at first, lists every argument escaped, with their count")
         check(shown.contains("Tab title (set by a program): eviltitlex") && !shown.contains("\u{202E}") && !shown.contains("\u{200B}"),
               "secrets: a tab title's control, bidi and zero-width characters are stripped")
+        check(SecretApprovalPanel.shownCommand("npm test\r\nnpx -y x\u{202E}\u{200B}", limit: 200) == "npm test\\r\\nnpx -y x\\u{202e}\\u{200b}",
+              "secrets: the panel's command shows line breaks, bidi and zero-width characters escaped, never as spaces or taken out")
         check(shown.contains("(an agent wrote this)") && shown.contains("Write-only"),
               "secrets: the key's row marks an agent's purpose and the write-only badge")
         check(!window.isKeyWindow && window.collectionBehavior.contains(.canJoinAllSpaces) && window.collectionBehavior.contains(.fullScreenAuxiliary)
@@ -992,6 +994,10 @@ extension SelfTest {
               "secrets: a command holding a stored value gets value_in_command, and no tab opens", secretsJSON(holding))
         let unknown = await secretsTool("run_with_secrets", ["secrets": ["NOT_STORED"], "command": "true", "directory": folder.path])
         check(unknown["status"] as? String == "unknown" && tabCount() == count, "secrets: a name not stored gets unknown, and no tab opens")
+        // "\r\n" is one Character: the one-line check goes by scalar, so /bin/sh never gets a second line.
+        let twoLines = await secretsTool("run_with_secrets", ["secrets": ["TOOL_KEY"], "command": "true\r\necho second", "directory": folder.path])
+        check(twoLines["status"] as? String == "refused" && tabCount() == count,
+              "secrets: a command with a CRLF in it is refused, and no tab opens", secretsJSON(twoLines))
 
         // The asker's count: ten declines, then limited, with no tab.
         requests.resetForSelfTest()
