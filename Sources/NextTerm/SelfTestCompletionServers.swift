@@ -145,7 +145,8 @@ extension SelfTest {
         guard await wait(8, { session.screenReady }) else {
             return check(false, "Tab completion, servers: the tab is ready after two status reports", "\(session.reportsSinceReturn)")
         }
-        guard await focus(c, tab, for: "Tab completion, servers: the server's folders and files") else { return }
+        // The Tab-pressing checks need the window in front; the ones after that only read the server run either way.
+        let keys = await focus(c, tab, for: "Tab completion, servers: the server's folders and files")
         func tabKey() { pressKey(window, "\t", code: 48) }
         /// ^U: the line is cleared without a Return (which would wait for two more reports).
         func clear() async {
@@ -159,94 +160,96 @@ extension SelfTest {
         /// The last write was Next Term's own keys for `text` (as a paste where the shell takes one), not a ^I.
         func typedByNextTerm(_ text: String) -> Bool { String(decoding: session.lastWrite, as: UTF8.self).contains(text) }
 
-        // `cd /va`: the folder goes in, over the connection (AE7's first half). Here `/private` matches too (v, a in
-        // order), so the list may open with var first. Either way Next Term types the rest, not the shell's own Tab.
-        await type("cd /va")
-        tabKey()
-        check(session.lastTab.isListing, "Tab completion, servers: a real Tab lists the server's folder", "\(session.lastTab)")
-        if await wait(3, { popup.isVisible || promptLine(tab).hasSuffix("cd /var/") }), popup.isVisible {
-            check(popup.shownTexts.first == "var", "Tab completion, servers: `/va` lists var first", "\(popup.shownTexts)")
+        if keys {
+            // `cd /va`: the folder goes in, over the connection (AE7's first half). Here `/private` matches too (v, a in
+            // order), so the list may open with var first. Either way Next Term types the rest, not the shell's own Tab.
+            await type("cd /va")
+            tabKey()
+            check(session.lastTab.isListing, "Tab completion, servers: a real Tab lists the server's folder", "\(session.lastTab)")
+            if await wait(3, { popup.isVisible || promptLine(tab).hasSuffix("cd /var/") }), popup.isVisible {
+                check(popup.shownTexts.first == "var", "Tab completion, servers: `/va` lists var first", "\(popup.shownTexts)")
+                pressKey(window, "\r", code: 36)
+            }
+            check(await wait(3) { promptLine(tab).hasSuffix("cd /var/") } && !popup.isVisible && typedByNextTerm("r/"),
+                  "AE7: `cd /va` + Tab gives `cd /var/` on a server, from its listing", "\(promptLine(tab)) \(session.lastWrite)")
+            await clear()
+
+            // `ls ~/app/fo`: the list opens; typing narrows it from the screen; Return puts the name on the line.
+            await type("ls ~/app/fo")
+            tabKey()
+            check(await wait(3) { popup.isVisible && popup.shownTexts == ["foo", "food.txt"] }, "Tab completion, servers: `ls ~/app/fo` lists foo and food.txt",
+                  "\(popup.shownTexts)")
+            check(window.firstResponder === tab.view, "Tab completion, servers: the terminal keeps the keyboard")
+            typeKeys(window, "od")
+            check(await wait(3) { popup.shownTexts == ["food.txt"] }, "Tab completion, servers: typing narrows the list from the screen", "\(popup.shownTexts)")
             pressKey(window, "\r", code: 36)
+            check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/food.txt") } && !popup.isVisible,
+                  "Tab completion, servers: Return types the rest of the name", promptLine(tab))
+            await clear()
+
+            // The shell's own folder (lsof on this Mac's stand-in, /proc on Linux), and a name with a space, quoted.
+            await type("cat My")
+            tabKey()
+            check(await wait(3) { promptLine(tab).hasSuffix("cat My\\ file.txt") }, "Tab completion, servers: a name in the shell's folder goes in quoted",
+                  promptLine(tab))
+            await clear()
+
+            // A word that stops being plain closes the list; a quoted word gets the shell's own Tab.
+            await type("ls ~/app/")
+            tabKey()
+            if await wait(3, { popup.isVisible }) {
+                typeKeys(window, "f")
+                _ = await wait(2) { popup.shownTexts.first == "foo" }
+                pressKey(window, "'", code: 39)
+                check(await wait(3) { !popup.isVisible }, "Tab completion, servers: a word that stops being plain closes the list")
+            } else {
+                check(false, "Tab completion, servers: `ls ~/app/` opens the list")
+            }
+            await clear()
+            await type("ls 'fo")
+            tabKey()
+            check(await wait(2) { session.lastWrite == [0x09] } && !popup.isVisible, "Tab completion, servers: a quoted word gets the shell's own Tab",
+                  "\(session.lastWrite)")
+            await clear()
+
+            // A slow server: the shell's own Tab after the deadline; keys typed while it lists go after that Tab.
+            RemoteCompletion.shared.forget()
+            server.flag("slow", true)
+            await type("ls ~/app/li")
+            tabKey()
+            check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/lib/") } && session.lastWrite == [0x09],
+                  "Tab completion, servers: a listing that takes too long is the shell's own Tab", "\(promptLine(tab)) \(session.lastWrite)")
+            await clear()
+            RemoteCompletion.shared.forget()
+            await type("ls ~/app/li")
+            tabKey()
+            typeKeys(window, "x")
+            check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/lib/x") }, "Tab completion, servers: keys typed while it lists go after the shell's own Tab",
+                  promptLine(tab))
+            server.flag("slow", false)
+            await clear()
+            // A dropped check: the shell's own Tab.
+            RemoteCompletion.shared.forget()
+            _ = await wait(4) { !(tab.controlPath.map(RemoteCompletion.shared.isListing(on:)) ?? false) }
+            server.flag("drop", true)
+            await type("ls ~/app/li")
+            tabKey()
+            check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/lib/") } && session.lastWrite == [0x09],
+                  "Tab completion, servers: a check that drops gives the shell's own Tab", "\(promptLine(tab)) \(session.lastWrite)")
+            server.flag("drop", false)
+            await clear()
+
+            // Right after Return the poll lags: Tab is the shell's own until the second report.
+            tab.view.send(txt: "cd ~/app\r")
+            await pause(0.3)
+            await type("ls fo")
+            let lagging = session.screenReady
+            tabKey()
+            check(!lagging && session.lastTab == .plain, "Tab completion, servers: a Tab right after Return is the shell's own (the poll lags)",
+                  "\(session.reportsSinceReturn) reports")
+            await clear()
+            check(await wait(8) { session.screenReady }, "and Tab completes again after the second report", "\(session.reportsSinceReturn) reports")
         }
-        check(await wait(3) { promptLine(tab).hasSuffix("cd /var/") } && !popup.isVisible && typedByNextTerm("r/"),
-              "AE7: `cd /va` + Tab gives `cd /var/` on a server, from its listing", "\(promptLine(tab)) \(session.lastWrite)")
-        await clear()
-
-        // `ls ~/app/fo`: the list opens; typing narrows it from the screen; Return puts the name on the line.
-        await type("ls ~/app/fo")
-        tabKey()
-        check(await wait(3) { popup.isVisible && popup.shownTexts == ["foo", "food.txt"] }, "Tab completion, servers: `ls ~/app/fo` lists foo and food.txt",
-              "\(popup.shownTexts)")
-        check(window.firstResponder === tab.view, "Tab completion, servers: the terminal keeps the keyboard")
-        typeKeys(window, "od")
-        check(await wait(3) { popup.shownTexts == ["food.txt"] }, "Tab completion, servers: typing narrows the list from the screen", "\(popup.shownTexts)")
-        pressKey(window, "\r", code: 36)
-        check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/food.txt") } && !popup.isVisible,
-              "Tab completion, servers: Return types the rest of the name", promptLine(tab))
-        await clear()
-
-        // The shell's own folder (lsof on this Mac's stand-in, /proc on Linux), and a name with a space, quoted.
-        await type("cat My")
-        tabKey()
-        check(await wait(3) { promptLine(tab).hasSuffix("cat My\\ file.txt") }, "Tab completion, servers: a name in the shell's folder goes in quoted",
-              promptLine(tab))
-        await clear()
-
-        // A word that stops being plain closes the list; a quoted word gets the shell's own Tab.
-        await type("ls ~/app/")
-        tabKey()
-        if await wait(3, { popup.isVisible }) {
-            typeKeys(window, "f")
-            _ = await wait(2) { popup.shownTexts.first == "foo" }
-            pressKey(window, "'", code: 39)
-            check(await wait(3) { !popup.isVisible }, "Tab completion, servers: a word that stops being plain closes the list")
-        } else {
-            check(false, "Tab completion, servers: `ls ~/app/` opens the list")
-        }
-        await clear()
-        await type("ls 'fo")
-        tabKey()
-        check(await wait(2) { session.lastWrite == [0x09] } && !popup.isVisible, "Tab completion, servers: a quoted word gets the shell's own Tab",
-              "\(session.lastWrite)")
-        await clear()
-
-        // A slow server: the shell's own Tab after the deadline; keys typed while it lists go after that Tab.
-        RemoteCompletion.shared.forget()
-        server.flag("slow", true)
-        await type("ls ~/app/li")
-        tabKey()
-        check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/lib/") } && session.lastWrite == [0x09],
-              "Tab completion, servers: a listing that takes too long is the shell's own Tab", "\(promptLine(tab)) \(session.lastWrite)")
-        await clear()
-        RemoteCompletion.shared.forget()
-        await type("ls ~/app/li")
-        tabKey()
-        typeKeys(window, "x")
-        check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/lib/x") }, "Tab completion, servers: keys typed while it lists go after the shell's own Tab",
-              promptLine(tab))
-        server.flag("slow", false)
-        await clear()
-        // A dropped check: the shell's own Tab.
-        RemoteCompletion.shared.forget()
-        _ = await wait(4) { !(tab.controlPath.map(RemoteCompletion.shared.isListing(on:)) ?? false) }
-        server.flag("drop", true)
-        await type("ls ~/app/li")
-        tabKey()
-        check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/lib/") } && session.lastWrite == [0x09],
-              "Tab completion, servers: a check that drops gives the shell's own Tab", "\(promptLine(tab)) \(session.lastWrite)")
-        server.flag("drop", false)
-        await clear()
-
-        // Right after Return the poll lags: Tab is the shell's own until the second report.
-        tab.view.send(txt: "cd ~/app\r")
-        await pause(0.3)
-        await type("ls fo")
-        let lagging = session.screenReady
-        tabKey()
-        check(!lagging && session.lastTab == .plain, "Tab completion, servers: a Tab right after Return is the shell's own (the poll lags)",
-              "\(session.reportsSinceReturn) reports")
-        await clear()
-        check(await wait(8) { session.screenReady }, "and Tab completes again after the second report", "\(session.reportsSinceReturn) reports")
 
         // Off: no prefetch when the folder changes. Only where the status checks report the shell's folder (/proc).
         if session.serverFolderKnown {
@@ -267,15 +270,17 @@ extension SelfTest {
         var others: [TerminalTab] = []
         for _ in 0..<6 { others.append(c.addRemoteTab(RemoteTab(host: host), select: false)) }
         _ = await wait(20) { others.allSatisfy(\.remoteConnected) }
-        _ = await focus(c, tab)
-        let path = tab.controlPath ?? ""
-        let crowded = AppDelegate.shared.controllers.flatMap(\.tabs).filter { $0.controlPath == path && !$0.exited }.count
-        RemoteCompletion.shared.forget()
-        await type("ls ~/app/fo")
-        tabKey()
-        check(crowded >= 7 && session.lastTab == .plain && !RemoteCompletion.shared.isListing(on: path),
-              "Tab completion, servers: on a connection with 7 tabs, Tab is the shell's own and nothing is listed", "\(crowded) tabs, \(session.lastTab)")
-        await clear()
+        if keys {
+            _ = await focus(c, tab)
+            let path = tab.controlPath ?? ""
+            let crowded = AppDelegate.shared.controllers.flatMap(\.tabs).filter { $0.controlPath == path && !$0.exited }.count
+            RemoteCompletion.shared.forget()
+            await type("ls ~/app/fo")
+            tabKey()
+            check(crowded >= 7 && session.lastTab == .plain && !RemoteCompletion.shared.isListing(on: path),
+                  "Tab completion, servers: on a connection with 7 tabs, Tab is the shell's own and nothing is listed", "\(crowded) tabs, \(session.lastTab)")
+            await clear()
+        }
         tab.view.send(txt: "sleep 3\r")
         check(await wait(8) { tab.status.running }, "and the status checks go on")
         _ = await wait(8) { !tab.status.running }
@@ -317,6 +322,7 @@ extension SelfTest {
         }
 
         // A connection that refuses sessions (sshd's MaxSessions): the shell's own Tab. Last: checks pause 30 s.
+        guard keys else { return }
         _ = await focus(c, tab)
         _ = await wait(8) { session.screenReady }
         RemoteCompletion.shared.forget()

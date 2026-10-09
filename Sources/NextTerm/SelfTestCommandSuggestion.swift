@@ -46,19 +46,22 @@ extension SelfTest {
         }
         func logged(_ name: String) -> String { (try? String(contentsOf: log.appendingPathComponent(name), encoding: .utf8)) ?? "" }
 
-        // Off by default: the menu item is off, and Settings offers Off first.
+        // Off by default: Settings offers Off first, and a stored choice it doesn't know is Off. These need no window
+        // in front, so they run when the tab's real keys can't be had.
         CompletionPreferences.suggestion = nil
         CompletionPreferences.mode = .nextTerm
-        guard let tab = await completionTab(c, in: dir, zshrc: plainZshrc, name: "suggest") else { return }
-        defer { c.remove(tab) }
-        let item = NSMenuItem(title: "Suggest a Command…", action: #selector(CommandSuggestionController.suggestCommand(_:)), keyEquivalent: "")
-        let controller = CommandSuggestionController.shared
-        check(!controller.validateMenuItem(item), "Suggest a Command: off by default, its menu item is off")
         let settingsRow = CommandSuggestionSettingsView()
         check(settingsRow.titles.first == "Off" && settingsRow.noteText.contains("nothing is ever sent"),
               "Suggest a Command: Settings offers Off first, and says nothing is sent", "\(settingsRow.titles) \(settingsRow.noteText)")
         UserDefaults.standard.set("some-agent", forKey: CompletionPreferences.suggestionKey)
         check(CompletionPreferences.suggestion == nil, "Suggest a Command: an unknown stored choice is Off")
+        CompletionPreferences.suggestion = nil
+        // And the menu item is off.
+        guard let tab = await completionTab(c, in: dir, zshrc: plainZshrc, name: "suggest") else { return }
+        defer { c.remove(tab) }
+        let item = NSMenuItem(title: "Suggest a Command…", action: #selector(CommandSuggestionController.suggestCommand(_:)), keyEquivalent: "")
+        let controller = CommandSuggestionController.shared
+        check(!controller.validateMenuItem(item), "Suggest a Command: off by default, its menu item is off")
 
         // The last command, with a password in it, is shown masked before anything is sent.
         CompletionPreferences.suggestion = CommandSuggestion.claude.id
