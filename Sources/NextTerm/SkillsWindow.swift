@@ -8,7 +8,8 @@ import NextTermCore
 final class SkillsWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSWindowDelegate {
     static var shared: SkillsWindowController?
 
-    /// Whether opening the window checks installed skills for updates (at most once an hour).
+    /// Whether installed skills are checked for updates: as the window opens (at most once an hour), and quietly once a
+    /// day for Agents › Skills…' count (SkillsUpdateCheck). Settings › Skills' checkbox; the key is the one it always had.
     static var checksOnOpen: Bool {
         get { UserDefaults.standard.object(forKey: "SkillsCheckUpdatesOnOpen") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "SkillsCheckUpdatesOnOpen") }
@@ -140,8 +141,7 @@ final class SkillsWindowController: NSWindowController, NSTableViewDataSource, N
             ((try? FileManager.default.contentsOfDirectory(atPath: (home as NSString).appendingPathComponent(folder))) ?? []).filter { !$0.hasPrefix(".") }
         })
         featured.reloadData()
-        let count = SkillsInstaller.updates.values.filter { if case .available = $0 { return true }; return false }.count
-        updatesBanner.stringValue = count == 0 ? "" : count == 1 ? "1 update available" : "\(count) updates available"
+        updatesBanner.stringValue = SkillUpdates.phrase(SkillUpdates.count(SkillsInstaller.updates)).map { $0 + " available" } ?? ""
     }
 
     // MARK: featured
@@ -231,10 +231,7 @@ final class SkillsWindowController: NSWindowController, NSTableViewDataSource, N
         status.textColor = problem ? .systemRed : .secondaryLabelColor
     }
 
-    @objc private func manage() {
-        AppDelegate.shared.showSettings(nil)
-        NSApp.windows.compactMap { $0.windowController as? SettingsWindowController }.first?.showTab("skills")
-    }
+    @objc private func manage() { AppDelegate.shared.showSettings(tab: "skills") }
 }
 
 extension AppDelegate {

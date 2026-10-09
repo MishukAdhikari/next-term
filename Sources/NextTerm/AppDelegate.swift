@@ -362,6 +362,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         MainActor.assumeIsolated { Updater.shared.start() }
         // An update's disk image and folder that a quit or a crash left mid-staging.
         Updater.removeLeftovers()
+        // Skill updates, once a day, for Agents › Skills…' count.
+        MainActor.assumeIsolated { SkillsUpdateCheck.start() }
         if let command { handle(command) }
         let show = { [self] in
             openAtLaunch(kind: kind)
@@ -491,12 +493,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private var settings: SettingsWindowController?
 
-    @objc func showSettings(_ sender: Any?) {
+    @objc func showSettings(_ sender: Any?) { showSettings(tab: nil) }
+
+    /// Settings, on the tab it was left on, or on `tab` ("skills", SettingsWindowController's identifiers).
+    func showSettings(tab: String?) {
         // The Claude app may have been opened since the last pass: what waits for it to quit, under the setting, is
         // worked out again (nothing is written while it is open).
         MCPRegistration.update(on: agentControl, claudeAppOnly: true)
         if settings == nil { settings = SettingsWindowController() }
         settings?.reload()
+        if let tab { settings?.showTab(tab) }
         settings?.showWindow(nil)
         settings?.window?.makeKeyAndOrderFront(nil)
     }
@@ -1206,10 +1212,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         goToFileAlias.isHidden = true
         goToFileAlias.allowsKeyEquivalentWhenHidden = true
         goToFileAlias.identifier = KeyboardShortcuts.goToFileAlias
-        item(shell, "Resume Agent Session…", #selector(TerminalWindowController.resumeSession(_:)), "o", [.command, .option])
         item(shell, "Open Served URL", #selector(TerminalWindowController.openServedURL(_:)), "")
-        item(shell, "Suggest a Command…", #selector(CommandSuggestionController.suggestCommand(_:)), "k", [.command, .control],
-             target: CommandSuggestionController.shared)
         let recentMenu = NSMenu(title: "Open Recent")
         recentMenu.delegate = self
         shell.addItem(withTitle: "Open Recent", action: nil, keyEquivalent: "").submenu = recentMenu
@@ -1256,7 +1259,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(find, "Find in Files…", #selector(TerminalWindowController.findInFiles(_:)), "f", [.command, .shift])
         item(find, "Replace in Files…", #selector(TerminalWindowController.replaceInFiles(_:)), "r", [.command, .shift])
         edit.addItem(.separator())
-        item(edit, "Send to Agent", #selector(TerminalWindowController.sendToAgent(_:)), "k", [.command, .option])
         item(edit, "Go to Line…", #selector(TerminalWindowController.goToLine(_:)), "l")
         item(edit, "Comment Line", #selector(CodeTextView.toggleComment(_:)), "/")
         item(edit, "Indent", #selector(CodeTextView.indentSelection(_:)), "]")
@@ -1310,6 +1312,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(view, "Actual Size", #selector(resetFontSize(_:)), "0", target: self)
         view.addItem(.separator())
         item(view, "Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control])
+
+        // The agents' own: their skills, their sessions, and what goes to them. Ids are the actions, so keys changed in
+        // Settings before these moved here from File and Edit stay theirs. Window › Skills finds new skills.
+        let agents = submenu(main, "Agents")
+        let skills = item(agents, SkillsMenuItem.title, #selector(showSkillsSettings(_:)), "", target: self)
+        MainActor.assumeIsolated { SkillsMenuItem.follow(skills) } // with the count of skill updates
+        agents.addItem(.separator())
+        item(agents, "Resume Agent Session…", #selector(TerminalWindowController.resumeSession(_:)), "o", [.command, .option])
+        item(agents, "Send to Agent", #selector(TerminalWindowController.sendToAgent(_:)), "k", [.command, .option])
+        item(agents, "Suggest a Command…", #selector(CommandSuggestionController.suggestCommand(_:)), "k", [.command, .control],
+             target: CommandSuggestionController.shared)
 
         let git = submenu(main, "Git")
         item(git, "Branches…", #selector(TerminalWindowController.showBranches(_:)), "b", [.command, .option])

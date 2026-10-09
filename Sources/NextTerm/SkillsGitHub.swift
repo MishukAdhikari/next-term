@@ -1,10 +1,11 @@
 import Foundation
 import NextTermCore
 
-/// The few GitHub requests the Skills library makes, only after the user acts: resolve a link to one
-/// commit (and prove that commit is the named repository's own), list the skills in it, read the
-/// repository's stars and licence, and download that commit's files. Only github.com hosts are
-/// accepted, after redirects too.
+/// The few GitHub requests the Skills library makes, after the user acts, and in the quiet once-a-day
+/// update check for skills installed from GitHub (SkillsUpdateCheck; Settings › Skills' checkbox turns
+/// it off): resolve a link to one commit (and prove that commit is the named repository's own), list
+/// the skills in it, read the repository's stars and licence, and download that commit's files. Only
+/// github.com hosts are accepted, after redirects too.
 enum SkillsGitHub {
     struct Failure: Error, Sendable { let message: String }
 

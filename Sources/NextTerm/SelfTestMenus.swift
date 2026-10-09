@@ -37,6 +37,7 @@ extension SelfTest {
         _ = await wait(3) { !app.controllers.contains { $0 === w } }
         if app.controllers.contains(where: { $0 === w }) { window.close() }
         c.window?.makeKeyAndOrderFront(nil)
+        await agentsMenuChecks(c)
     }
 
     /// The commands the menus share are in the menu bar too, so Settings can give each a key.
@@ -184,7 +185,7 @@ extension SelfTest {
         w.show(tab)
         view.selection.setSelection(start: Position(col: 0, row: top), end: Position(col: 11, row: top))
         let sendItem = NSMenuItem(title: "Send to Agent", action: #selector(TerminalWindowController.sendToAgent(_:)), keyEquivalent: "")
-        check(w.validateMenuItem(sendItem), "menus: Edit › Send to Agent is on in a terminal with a selection")
+        check(w.validateMenuItem(sendItem), "menus: Agents › Send to Agent is on in a terminal with a selection")
         view.selectNone()
         check(!w.validateMenuItem(sendItem), "menus: and off without one")
 

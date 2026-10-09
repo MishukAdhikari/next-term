@@ -265,14 +265,14 @@ final class CommandSuggestionSettingsView: NSStackView {
 
     static func note(_ current: String?) -> String {
         guard let current else {
-            return "Off: nothing is ever sent. On, File › Suggest a Command… turns a sentence into one command, put on the line and never run."
+            return "Off: nothing is ever sent. On, Agents › Suggest a Command… turns a sentence into one command, put on the line and never run."
         }
         if current == CompletionPreferences.onDevice {
-            let model = "Apple’s on-device model answers File › Suggest a Command…; nothing leaves this Mac. The command goes on the line and never runs."
+            let model = "Apple’s on-device model answers Agents › Suggest a Command…; nothing leaves this Mac. The command goes on the line and never runs."
             return OnDeviceSuggestion.unavailable.map { "\($0) " + model } ?? model
         }
         let name = CompletionPreferences.suggestionName(current)
-        return "File › Suggest a Command… asks \(name) only when you submit: your words, the folder, the shell and the last command (secrets masked), and recent output only if you include it. It runs with no tools and no MCP, in an empty folder. The command goes on the line and never runs."
+        return "Agents › Suggest a Command… asks \(name) only when you submit: your words, the folder, the shell and the last command (secrets masked), and recent output only if you include it. It runs with no tools and no MCP, in an empty folder. The command goes on the line and never runs."
     }
 
     @objc private func chosen() {

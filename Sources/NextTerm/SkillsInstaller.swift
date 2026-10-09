@@ -368,12 +368,8 @@ enum SkillsInstaller {
 
     // MARK: updates
 
-    enum UpdateState: Equatable, Sendable {
-        case current
-        case available(commit: String)
-        /// The repository or the skill's folder is gone, or GitHub refused.
-        case unknown(String)
-    }
+    /// What the last check found for one skill (in the core, where the update count is worked out).
+    typealias UpdateState = SkillUpdateState
 
     /// One installed skill whose source is known: from Next Term's record, or the lock file of `npx skills`.
     struct Tracked: Sendable {
@@ -406,15 +402,29 @@ enum SkillsInstaller {
         return result.values.sorted { $0.name < $1.name }
     }
 
-    /// The last check's answers, by skill name (shown in Settings › Skills).
-    static var updates: [String: UpdateState] = [:]
+    /// The last check's answers, by skill name (shown in Settings › Skills, counted on Agents › Skills…). Each change
+    /// is posted (`updatesChanged`), and kept for the next launch (SkillsUpdateCheck).
+    static var updates: [String: UpdateState] = [:] {
+        didSet {
+            SkillsUpdateCheck.keep(updates)
+            NotificationCenter.default.post(name: updatesChanged, object: nil)
+        }
+    }
     static var lastCheck: Date? { UserDefaults.standard.object(forKey: "SkillsLastUpdateCheck") as? Date }
     static let updatesChanged = Notification.Name("NextTermSkillUpdatesChanged")
 
     /// Asks GitHub for the current commit of each source (one repository and branch at a time).
     static func checkForUpdates() async {
+        await checkForUpdates(await tracked())
+    }
+
+    /// The same, for `all` (from `tracked()`). `quietly` is the daily check's way (SkillsUpdateCheck): a skill whose
+    /// source can't be asked (offline, GitHub's hourly limit) keeps its last answer, and when no source can be, nothing
+    /// changes and the check doesn't count: false, to try again later. A check the user starts shows each failure.
+    @discardableResult
+    static func checkForUpdates(_ all: [Tracked], quietly: Bool = false) async -> Bool {
         var answers: [String: UpdateState] = [:]
-        let all = await tracked()
+        var unreached: Set<String> = []
         let groups = Dictionary(grouping: all) { "\($0.source.owner)/\($0.source.repo)@\($0.source.ref ?? "")".lowercased() }
         for (_, group) in groups {
             let first = group[0].source
@@ -430,12 +440,19 @@ enum SkillsInstaller {
                 }
             } catch {
                 let message = (error as? SkillsGitHub.Failure)?.message ?? error.localizedDescription
-                for item in group { answers[item.name] = .unknown(message) }
+                for item in group {
+                    answers[item.name] = .unknown(message)
+                    unreached.insert(item.name)
+                }
             }
         }
-        updates = answers
+        if quietly {
+            guard let kept = SkillUpdates.quietAnswers(answers, unreached: unreached, last: updates) else { return false }
+            answers = kept
+        }
         UserDefaults.standard.set(Date(), forKey: "SkillsLastUpdateCheck")
-        NotificationCenter.default.post(name: updatesChanged, object: nil)
+        updates = answers
+        return true
     }
 
     /// What changed between the installed copy and the downloaded one, as `diff -ruN` prints it. Caches

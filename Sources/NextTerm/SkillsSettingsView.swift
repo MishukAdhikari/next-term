@@ -17,7 +17,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     private let removeButton = NSButton(title: "Remove…", target: nil, action: nil)
     private let checkButton = NSButton(title: "Check for Updates", target: nil, action: nil)
     private let browseButton = NSButton(title: "Browse Skills…", target: nil, action: nil)
-    private let checkOnOpen = NSButton(checkboxWithTitle: "Check for updates when Window › Skills opens", target: nil, action: nil)
+    private let checkOnOpen = NSButton(checkboxWithTitle: "Check for updates once a day, and when Window › Skills opens", target: nil, action: nil)
     private var inventory: SkillInventory?
     private var rows: [SkillRow] = []
     /// The project whose skills are shown, read-only (nil: the personal skills). Kept by path, so a
@@ -365,8 +365,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
             await SkillsInstaller.checkForUpdates()
             checkButton.title = "Check for Updates"
             checkButton.isEnabled = true
-            let count = SkillsInstaller.updates.values.filter { if case .available = $0 { return true }; return false }.count
-            summary.stringValue += count == 0 ? " · no updates" : " · \(count) update\(count == 1 ? "" : "s")"
+            summary.stringValue += " · " + (SkillUpdates.phrase(SkillUpdates.count(SkillsInstaller.updates)) ?? "no updates")
         }
     }
 
@@ -436,8 +435,9 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
                     let (steps, _, _) = await SkillsInstaller.removal(row.name)
                     guard steps == shown else { return Self.tell("“\(row.name)” changed since you looked. Look again before removing it.", in: window) }
                     let check = SkillsStore.removalCheck(row.name, shown: shown)
-                    if case .failure(let failure) = await SkillsStore.apply(steps, title: "Remove \(row.name)", precheck: check) {
-                        Self.tell(failure.message, in: window)
+                    switch await SkillsStore.apply(steps, title: "Remove \(row.name)", precheck: check) {
+                    case .success: SkillsInstaller.updates[row.name] = nil // its update goes with it, and off Agents › Skills…' count
+                    case .failure(let failure): Self.tell(failure.message, in: window)
                     }
                 }
             }

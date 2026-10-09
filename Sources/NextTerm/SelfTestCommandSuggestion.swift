@@ -2,7 +2,7 @@ import AppKit
 import Darwin
 import NextTermCore
 
-/// Suggest a Command (File › Suggest a Command…), with a stand-in agent: a script in place of Claude Code that writes
+/// Suggest a Command (Agents › Suggest a Command…), with a stand-in agent: a script in place of Claude Code that writes
 /// down what it was given (its folder, its environment, its arguments, the prompt) and answers by the request. No
 /// network, and no agent of the user's runs. Apple's on-device model is asked once where this Mac has it.
 extension SelfTest {
