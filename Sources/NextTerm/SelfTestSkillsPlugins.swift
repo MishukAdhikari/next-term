@@ -177,7 +177,7 @@ extension SelfTest {
     /// Claude Code's link for a plugin folder: left out by default, added on request, and never a write to
     /// Claude Code's settings, in the self-test's home or the real one. The user's key set to false (as
     /// /plugin sets it) shows as "off". The real settings file is only stat'ed (realState): never opened,
-    /// and nothing about it is printed or kept.
+    /// and a failed check names what changed (realChanges), never a value.
     static func pluginChoiceChecks(home: String) async {
         let manager = FileManager.default
         let settings = (home as NSString).appendingPathComponent(".claude/settings.json")
@@ -321,8 +321,10 @@ extension SelfTest {
         check(shown.contains(clashText) && fallsBack,
               "skills plugins: a plugin synced from claude.ai with the same name is named, and the folder is left out", shown)
 
-        check(realState(realSettings) == realBefore,
-              "skills plugins: the real ~/.claude/settings.json keeps its size, modification time, mode and inode (stat only, never read)")
+        let realAfter = realState(realSettings)
+        check(realAfter == realBefore,
+              "skills plugins: the real ~/.claude/settings.json keeps its size, modification time, mode and inode (stat only, never read)",
+              "changed: " + realChanges(realBefore, realAfter))
     }
 
     /// The agents besides Codex, Command Code and Claude Code that read ~/.agents/skills, as the review
@@ -446,7 +448,7 @@ extension SelfTest {
     /// default (left out of Claude Code): Link asks first and links only on "Add with Its Programs"; Unify,
     /// keeping it over a hand-made copy in ~/.claude/skills, asks with the same popup (AE14). Neither writes
     /// Claude Code's settings, in the self-test's home or the real one. The real settings file is only
-    /// stat'ed (realState): never opened, and nothing about it is printed or kept.
+    /// stat'ed (realState): never opened, and a failed check names what changed (realChanges), never a value.
     static func settingsPluginChecks(home: String) async {
         let manager = FileManager.default
         let settings = (home as NSString).appendingPathComponent(".claude/settings.json")
@@ -479,8 +481,10 @@ extension SelfTest {
         check(fileState(settings) == before && before?.hasSuffix(" 600") == true && !entryExists(link),
               "skills plugins: Settings › Skills' Link, Unify and their Undo leave Claude Code's settings byte for byte, mode 0600",
               fileState(settings) ?? "none")
-        check(realState(realSettings) == realBefore,
-              "skills plugins: the real ~/.claude/settings.json keeps its size, modification time, mode and inode through the Settings checks (stat only, never read)")
+        let realAfter = realState(realSettings)
+        check(realAfter == realBefore,
+              "skills plugins: the real ~/.claude/settings.json keeps its size, modification time, mode and inode through the Settings checks (stat only, never read)",
+              "changed: " + realChanges(realBefore, realAfter))
     }
 
     /// Link on the installed plugin folder: a question first, with what it starts, "Add with Its Programs"
@@ -523,9 +527,9 @@ extension SelfTest {
         let titles = Set(buttons.map(\.title))
         let lead = "If you add it to Claude Code, it starts the programs below every time Claude Code opens, without asking you."
         let said = words.contains("Add “demo-plugin” to Claude Code?") && words.contains(lead) && words.contains("It would start:")
-        // Return presses the sheet's default button cell. Once the sheet is on screen AppKit keeps Return
-        // there, and the button's own keyEquivalent reads empty (seen with the app in the background), so
-        // the default cell is what is checked.
+        // Return presses the sheet's default button cell. Whenever the sheet is up, AppKit keeps Return
+        // there and the button's own keyEquivalent reads empty, active app or not, so the default cell is
+        // what is checked.
         let returnCell = window.attachedSheet?.defaultButtonCell
         let returnCancels = cancel != nil && returnCell != nil && returnCell === cancel?.cell
         check(shown && said && titles.isSuperset(of: [add, "Cancel"]) && returnCancels,
@@ -644,14 +648,22 @@ extension SelfTest {
         return (SkillHash.fileDigest(path) ?? "unreadable") + " " + String(UInt32(info.st_mode & 0o777), radix: 8)
     }
 
-    /// The user's own file at `path` as stat sees it: size, modification time, mode and inode, or "missing".
-    /// It is never opened: the self-test doesn't read the user's real ~/.claude, only that nothing wrote it.
-    static func realState(_ path: String) -> String {
+    /// The user's own file at `path` as stat sees it, by name: size, modification time, mode and inode, or
+    /// only "file" ("missing", or why stat failed). It is never opened: the self-test doesn't read the
+    /// user's real ~/.claude, only that nothing wrote it.
+    static func realState(_ path: String) -> [String: String] {
         var info = stat()
-        guard stat(path, &info) == 0 else { return errno == ENOENT ? "missing" : "no stat (errno \(errno))" }
+        guard stat(path, &info) == 0 else { return ["file": errno == ENOENT ? "missing" : "no stat (errno \(errno))"] }
         let modified = "\(info.st_mtimespec.tv_sec).\(info.st_mtimespec.tv_nsec)"
         let mode = String(UInt32(info.st_mode & 0o7777), radix: 8)
-        return "size \(info.st_size), modified \(modified), mode \(mode), inode \(info.st_ino)"
+        return ["size": "\(info.st_size)", "modification time": modified, "mode": mode, "inode": "\(info.st_ino)"]
+    }
+
+    /// The names of what differs between two realState readings, such as "modification time, inode", with
+    /// no values: all a failed check says about the user's real file.
+    static func realChanges(_ before: [String: String], _ after: [String: String]) -> String {
+        let names = ["file", "size", "modification time", "mode", "inode"]
+        return names.filter { before[$0] != after[$0] }.joined(separator: ", ")
     }
 
     /// Something is at `path`: a file, a folder, or a link (even to nothing).
