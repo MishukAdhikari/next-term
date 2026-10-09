@@ -90,7 +90,8 @@ extension SelfTest {
         check(await wait(3) { promptLine(tab).hasSuffix("find . -size +100M") } && tab.status.commandsStarted == before && !tab.status.running,
               "AE10: the command is on the line, and nothing ran", promptLine(tab))
         let prompt = logged("prompt")
-        check(prompt.contains("Request: find large files here") && prompt.contains("Folder: \(dir.path)") && prompt.contains("Shell: zsh")
+        // The folder as the tab's shell has it: TMPDIR's /var/folders is /private/var/folders once zsh starts in it.
+        check(prompt.contains("Request: find large files here") && prompt.contains("Folder: \(canonicalPath(dir.path))\n") && prompt.contains("Shell: zsh")
               && !prompt.contains("S3cretPass") && !prompt.contains("sk-live-0123456789abcdefghij") && !prompt.contains("Recent output"),
               "Suggest a Command: the agent gets the sentence, the folder, the shell and the last command masked; no output unasked", prompt)
         let environment = logged("env").split(separator: "\n")
