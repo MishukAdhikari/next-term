@@ -42,6 +42,7 @@ extension SelfTest {
         // shows Claude's working hint while its working file is there.
         let script = """
         #!/bin/sh
+        \(stopsOnCtrlC)
         while true; do
           if [ -f "$CTL/dir" ]; then cd "$(cat "$CTL/dir")"; rm -f "$CTL/dir"; fi
           if [ -f "$CTL/working" ]; then printf '\\r\\342\\234\\273 Working (esc to interrupt) %s' "$(date +%S)"; else printf '\\r\\033[K> %s' "$(date +%S)"; fi
@@ -55,7 +56,7 @@ extension SelfTest {
         var opened: [TerminalTab] = []
         defer {
             for tab in opened { tab.view.send(txt: "\u{03}") }
-            SessionStore.home = NSHomeDirectory()
+            SessionStore.home = sessionsHome
         }
         if !holder.isSidebarVisible { holder.toggleProjectSidebar(nil) }
         func index(_ tab: TerminalTab) -> Int { holder.groups.firstIndex { $0.contains(tab) } ?? -1 }
@@ -72,14 +73,30 @@ extension SelfTest {
         guard let seven = holder.tabs.first else { return check(false, "places: the repository's window has a tab") }
         opened.append(seven)
         await start(seven, control: controlA, named: "seven")
-        check(seven.status.running && seven.status.kind == .agent, "places: a stand-in Claude Code runs in the repository's root", seven.status.command)
-        _ = await wait(5) { canonicalPath(AgentPlaces.shared.agentFolder(of: seven)) == canonicalPath(repo) }
+        // Placed in the root first, by Next Term's own look once a second: a first sight counts at once (an agent
+        // started in a worktree is marked without a wait), and only a move from there waits to hold.
+        func place(_ tab: TerminalTab) -> String? { AgentPlaces.shared.places[tab.id.uuidString].map { canonicalPath($0.checkout.path) } }
+        let placed = await wait(10) { place(seven) == canonicalPath(repo) }
+        check(seven.status.running && seven.status.kind == .agent && placed, "places: a stand-in Claude Code runs in the repository's root",
+              "\(seven.status.command), placed in \(place(seven) ?? "nothing yet")")
+        // The hold is counted from the move, which can't come before the control file that asks for it: no mark
+        // until 3 s after it, watched from then on, however late the app is seen to have the move.
+        let asked = Date()
         try? nested.write(toFile: controlA + "/dir", atomically: true, encoding: .utf8)
-        let moved = await wait(5) { canonicalPath(AgentPlaces.shared.agentFolder(of: seven)) == canonicalPath(nested) }
+        var early: TimeInterval?
+        func watchHold() { if early == nil, marked(seven) { early = Date().timeIntervalSince(asked) } }
+        let moved = await wait(5) {
+            watchHold()
+            return canonicalPath(AgentPlaces.shared.agentFolder(of: seven)) == canonicalPath(nested)
+        }
         check(moved && canonicalPath(seven.liveDirectory) == canonicalPath(repo),
               "places: the agent's folder is its own process's, not its shell's", "agent \(AgentPlaces.shared.agentFolder(of: seven)), shell \(seven.liveDirectory)")
-        await pause(1)
-        check(!marked(seven), "places: a move is not marked before it has held for 3 seconds", tip(seven))
+        while early == nil, Date().timeIntervalSince(asked) < 2.8 {
+            watchHold()
+            await pause(0.05)
+        }
+        check(early == nil, "places: a move is not marked before it has held for 3 seconds",
+              early.map { String(format: "marked %.1f s after the move was asked for: ", $0) + tip(seven) } ?? "")
         check(await wait(12) { marked(seven) }, "places: the tab of an agent in another checkout gets the place mark", tip(seven))
         check(tip(seven).contains("Claude Code works in worktree pr-7050, on fix/7027-sso. This window shows xCloud, on fix/7611-3ds."),
               "places: its tooltip names the agent, its worktree and branch, and what the window shows", tip(seven))

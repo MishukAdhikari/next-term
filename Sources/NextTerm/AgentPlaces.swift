@@ -231,9 +231,10 @@ final class AgentPlaces {
                 sighting.repositories[found.commonDir] = checkouts(of: found.commonDir, git: git, at: now)
             }
         }
+        var sighted: [(probe: Probe, folder: String)] = []
         for probe in probes {
             let folder = agentFolder(probe, home: home)
-            result.folders[probe.key] = (probe.pid, folder, now)
+            sighted.append((probe, folder))
             guard let repository = startRepository(probe, folder: folder, known: sighting.repositories, git: git, at: now) else { continue }
             if sighting.repositories[repository] == nil {
                 sighting.repositories[repository] = checkouts(of: repository, git: git, at: now)
@@ -241,10 +242,14 @@ final class AgentPlaces {
             sighting.agents.append(PlaceSighting.Agent(key: probe.key, title: probe.title, repository: repository, folder: folder,
                                                        working: probe.working, startedAt: probe.startedAt))
         }
+        // Every read of this look is done (git's can take a while under load, between one agent's folder and the
+        // next): what it saw is stamped now, after it was read, so no move or switch holds from before it happened.
+        let seen = Date()
+        for (probe, folder) in sighted { result.folders[probe.key] = (probe.pid, folder, seen) }
         let keys = Set(probes.map(\.key))
         processFolders = processFolders.filter { keys.contains($0.key) }
         startRepositories = startRepositories.filter { keys.contains($0.key) }
-        tracker.update(sighting, at: now) { checkout, from, commit in
+        tracker.update(sighting, at: seen) { checkout, from, commit in
             AgentLocation.change(in: checkout, from: from, commit: commit, git: git)
         }
         result.places = tracker.places

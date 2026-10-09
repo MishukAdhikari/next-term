@@ -534,11 +534,6 @@ extension SelfTest {
 
     // MARK: sheets
 
-    private static func sheetText(_ window: NSWindow) -> String {
-        func fields(_ view: NSView) -> [String] { view.subviews.flatMap { ($0 as? NSTextField).map { [$0.stringValue] } ?? fields($0) } }
-        return window.attachedSheet?.contentView.map(fields)?.joined(separator: " ") ?? ""
-    }
-
     private static func press(_ title: String, inSheetOf window: NSWindow) async -> Bool {
         func buttons(_ view: NSView) -> [NSButton] { view.subviews.flatMap { ($0 as? NSButton).map { [$0] } ?? buttons($0) } }
         guard await wait(5, { window.attachedSheet?.contentView.map(buttons)?.contains { $0.title == title } == true }),

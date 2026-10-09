@@ -148,8 +148,10 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
 
     // MARK: lock file
 
+    /// `~/.claude/ide`, or the self-test's own folder in a self-test run.
     static var lockFolder: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/ide", isDirectory: true)
+        if SelfTest.isRequested { return SelfTest.claudeLockFolder }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/ide", isDirectory: true)
     }
 
     private func writeLock(workspaces: [String]) {

@@ -11,9 +11,17 @@ enum SelfTest {
     nonisolated static var isRequested: Bool { CommandLine.arguments.contains("--self-test") }
     /// The self-test's own MCP socket, so it never answers for (or takes over from) the Next Term you use.
     nonisolated static let mcpSocketPath = (NSTemporaryDirectory() as NSString).appendingPathComponent("nextterm-mcp-\(getpid()).sock")
+    /// The home agents' sessions are read from in a self-test run: a folder never made, so nothing of yours is read
+    /// (your Claude Code records and transcripts) for the sidebar's sessions or the agents in its tabs. The parts
+    /// that list sessions point SessionStore at sessions of their own, and back here after.
+    nonisolated static let sessionsHome = (NSTemporaryDirectory() as NSString).appendingPathComponent("nextterm-selftest-home-\(getpid())")
     /// Where the self-test's Copilot CLI lock goes, so it never writes in your own ~/.copilot.
     nonisolated static let copilotLockFolder = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("nextterm-copilot-ide-\(getpid())", isDirectory: true)
+    /// Where the self-test's Claude Code lock goes, so it never writes in your own ~/.claude/ide (where a `claude` you
+    /// start would find the test run), nor clears a lock there.
+    nonisolated static let claudeLockFolder = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("nextterm-claude-ide-\(getpid())", isDirectory: true)
 
     private static var lines: [String] = []
     private static var failures = 0
@@ -80,6 +88,31 @@ enum SelfTest {
                   notFrontmost(window) + (window.attachedSheet != nil ? ", a sheet is up" : ""))
         }
         return false
+    }
+
+    /// A stand-in agent's line after its `#!/bin/sh`, for one stopped with ^C as a real agent is. /bin/sh is bash 3.2:
+    /// a ^C that lands as its child (a `sleep`, a `date`) is exiting by itself is taken as the child's own, and the
+    /// script runs on; under load that is about one ^C in a hundred. A trap stops it every time.
+    static let stopsOnCtrlC = "trap 'exit 130' INT"
+
+    /// The text of the sheet over `window`: an alert's title and message.
+    static func sheetText(_ window: NSWindow) -> String {
+        func fields(_ view: NSView) -> [String] { view.subviews.flatMap { ($0 as? NSTextField).map { [$0.stringValue] } ?? fields($0) } }
+        return window.attachedSheet?.contentView.map(fields)?.joined(separator: " ") ?? ""
+    }
+
+    /// Ends each sheet over `window` with `code`, and each one queued behind it: AppKit shows a sheet begun while
+    /// another was up a moment after that one has gone. None is left for the checks after, which a sheet would
+    /// fail, or pass on its buttons instead of their own. What the ended sheets said.
+    @discardableResult
+    static func endSheets(over window: NSWindow, with code: NSApplication.ModalResponse = .alertFirstButtonReturn) async -> [String] {
+        var ended: [String] = []
+        while await wait(1, { window.attachedSheet != nil }), let sheet = window.attachedSheet {
+            ended.append(sheetText(window))
+            window.endSheet(sheet, returnCode: code)
+            _ = await wait(2) { window.attachedSheet !== sheet }
+        }
+        return ended
     }
 
     /// Why `bringToFront` could not: for the note of a skipped check.
@@ -345,6 +378,7 @@ enum SelfTest {
         let asker = dir.appendingPathComponent("claude")
         try? """
         #!/bin/sh
+        \(stopsOnCtrlC)
         printf '\\342\\234\\273 Pondering\\342\\200\\246 (2s \\302\\267 esc to interrupt)\\n'; sleep 1.5
         printf 'Do you want to make this edit to a.txt?\\n\\342\\235\\257 1. Yes\\n  2. Yes, and don'"'"'t ask again this session\\n  3. No, and tell Claude what to do differently (esc)\\n'
         read answer
@@ -370,7 +404,7 @@ enum SelfTest {
         check(await wait(4) { second.status.question == nil && second.status.state == .working }, "answering clears it; working again")
         check(await wait(6) { second.status.state == .done }, "done while its status line keeps redrawing", second.status.state.rawValue)
         second.view.send(txt: "\u{03}")
-        _ = await wait(4) { !second.status.running }
+        check(await wait(4) { !second.status.running }, "and ^C stops it", second.screenTail(3).joined(separator: " | "))
         c.select(1)
         second.status.setVisible(true)
 
@@ -381,20 +415,28 @@ enum SelfTest {
         let before = c.tabs.count
         c.select(c.tabs.count - 1)
         c.closeTab(nil)
-        check(c.tabs.count == before - 1 && window.attachedSheet == nil, "closing an idle tab is immediate")
+        check(c.tabs.count == before - 1 && window.attachedSheet == nil, "closing an idle tab is immediate",
+              window.attachedSheet == nil ? "\(c.tabs.count) tabs, \(before) before" : "it asks: " + sheetText(window))
+        // One that asked anyway is closed, not left over the window: the busy tab's sheet would queue behind it.
+        await endSheets(over: window)
 
         // Closing a busy tab asks first, and Cancel keeps it.
         let busy = c.addTab(directory: nil)
         _ = await wait(20) { busy.status.integrated }
         busy.view.send(txt: "sleep 30\r")
-        _ = await wait(3) { busy.status.running }
+        _ = await wait(10) { busy.status.running } // under load it can take its time to start
         let shellPid = busy.view.process.shellPid
         let jobPid = tcgetpgrp(busy.view.process.childfd) // the `sleep 30`
         c.closeTab(nil)
-        check(window.attachedSheet != nil, "closing a busy tab asks first")
-        if let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .alertSecondButtonReturn) }
+        // Its own sheet, not any: Cancel is pressed on it.
+        let asked = sheetText(window)
+        check(asked.contains("sleep 30"), "closing a busy tab asks first", asked.isEmpty ? "no sheet" : asked)
+        if let sheet = window.attachedSheet {
+            window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+            _ = await wait(2) { window.attachedSheet !== sheet }
+        }
         await pause(0.2)
-        check(c.tabs.contains { $0 === busy }, "Cancel keeps the tab")
+        check(asked.contains("sleep 30") && c.tabs.contains { $0 === busy }, "Cancel keeps the tab")
         c.closeTab(nil)
         if let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .alertFirstButtonReturn) }
         check(await wait(2) { !c.tabs.contains { $0 === busy } }, "Close Tab removes it")
@@ -707,11 +749,8 @@ enum SelfTest {
         for tab in extra { _ = await wait(20) { tab.status.integrated } }
         for tab in extra { c.requestClose(tab) }
         check(await wait(3) { extra.allSatisfy { tab in !c.tabs.contains { $0 === tab } } } && window.attachedSheet == nil,
-              "the extra tabs close at once, nothing running in them", window.attachedSheet.map { _ in "a sheet asks" } ?? "\(c.tabs.count) tabs")
-        while let sheet = window.attachedSheet { // not left for the checks after (each busy tab queues its own)
-            window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
-            _ = await wait(2) { window.attachedSheet !== sheet }
-        }
+              "the extra tabs close at once, nothing running in them", window.attachedSheet.map { _ in "a sheet asks: " + sheetText(window) } ?? "\(c.tabs.count) tabs")
+        await endSheets(over: window) // not left for the checks after (each busy tab queues its own)
         window.setFrame(savedFrame, display: true)
         c.tabBar.layoutSubtreeIfNeeded()
         check(!c.tabBar.isOverflowing, "and stops overflowing when they fit again")
@@ -1012,7 +1051,7 @@ enum SelfTest {
         SessionStore.home = home.path
         SessionStore.commandPrefix = "echo "
         defer {
-            SessionStore.home = NSHomeDirectory()
+            SessionStore.home = sessionsHome
             SessionStore.commandPrefix = ""
             try? FileManager.default.removeItem(at: home)
         }
@@ -3625,7 +3664,7 @@ enum SelfTest {
     private static func screenshotAllStates(_ c: TerminalWindowController, dir: URL) async {
         let busyAgent = dir.appendingPathComponent("busy")
         try? FileManager.default.createDirectory(at: busyAgent, withIntermediateDirectories: true)
-        try? "#!/bin/sh\nwhile true; do printf '\\r\\342\\234\\273 Working (esc to interrupt) %s' $(date +%S); sleep 0.3; done\n"
+        try? "#!/bin/sh\n\(stopsOnCtrlC)\nwhile true; do printf '\\r\\342\\234\\273 Working (esc to interrupt) %s' $(date +%S); sleep 0.3; done\n"
             .write(to: busyAgent.appendingPathComponent("codex"), atomically: true, encoding: .utf8)
         chmod(busyAgent.appendingPathComponent("codex").path, 0o755)
         let commands = ["sleep 1", "sleep 1; false", "sleep 0.5; printf '\\a'", "PATH=\(busyAgent.path):$PATH codex"]
@@ -3639,7 +3678,8 @@ enum SelfTest {
             _ = await wait(3) { tab.status.running }
         }
         c.select(0)
-        _ = await wait(6) { made.prefix(3).allSatisfy { !$0.status.running } }
+        // The commands done, and the agent at work: under load it can take its time to start.
+        _ = await wait(10) { made.prefix(3).allSatisfy { !$0.status.running } && made.last?.status.state == .working }
         await pause(0.5)
         c.refresh()
         await screenshot(c, suffix: "")
@@ -3650,6 +3690,12 @@ enum SelfTest {
         }
         _ = await wait(3) { made.allSatisfy { !$0.status.running } }
         for tab in made { c.requestClose(tab) }
+        // One still running (the agent, slow to start or to stop under load) asks: it is closed all the same, and
+        // said, not left as a sheet over the window for the checks after.
+        if let window = c.window {
+            let asked = await endSheets(over: window)
+            if !asked.isEmpty { note("tab states: closed past its sheet: " + asked.joined(separator: "; ")) }
+        }
     }
 
     // MARK: editor
@@ -4802,6 +4848,7 @@ enum SelfTest {
         ClaudeIDEServer.shared.stop() // remove the test run's lock file
         CopilotIDEServer.shared.stop()
         try? FileManager.default.removeItem(at: copilotLockFolder)
+        try? FileManager.default.removeItem(at: claudeLockFolder)
         record(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
         try? reportHandle?.close()
         let report = lines.joined(separator: "\n") + "\n"
