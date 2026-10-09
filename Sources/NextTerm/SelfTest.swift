@@ -91,6 +91,26 @@ enum SelfTest {
     /// script runs on; under load that is about one ^C in a hundred. A trap stops it every time.
     static let stopsOnCtrlC = "trap 'exit 130' INT"
 
+    /// The text of the sheet over `window`: an alert's title and message.
+    static func sheetText(_ window: NSWindow) -> String {
+        func fields(_ view: NSView) -> [String] { view.subviews.flatMap { ($0 as? NSTextField).map { [$0.stringValue] } ?? fields($0) } }
+        return window.attachedSheet?.contentView.map(fields)?.joined(separator: " ") ?? ""
+    }
+
+    /// Ends each sheet over `window` with `code`, and each one queued behind it: AppKit shows a sheet begun while
+    /// another was up a moment after that one has gone. None is left for the checks after, which a sheet would
+    /// fail, or pass on its buttons instead of their own. What the ended sheets said.
+    @discardableResult
+    static func endSheets(over window: NSWindow, with code: NSApplication.ModalResponse = .alertFirstButtonReturn) async -> [String] {
+        var ended: [String] = []
+        while await wait(1, { window.attachedSheet != nil }), let sheet = window.attachedSheet {
+            ended.append(sheetText(window))
+            window.endSheet(sheet, returnCode: code)
+            _ = await wait(2) { window.attachedSheet !== sheet }
+        }
+        return ended
+    }
+
     /// Why `bringToFront` could not: for the note of a skipped check.
     static func notFrontmost(_ window: NSWindow) -> String {
         "the app is not frontmost (active \(NSApp.isActive), key window \(NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "none"), "
@@ -391,7 +411,10 @@ enum SelfTest {
         let before = c.tabs.count
         c.select(c.tabs.count - 1)
         c.closeTab(nil)
-        check(c.tabs.count == before - 1 && window.attachedSheet == nil, "closing an idle tab is immediate")
+        check(c.tabs.count == before - 1 && window.attachedSheet == nil, "closing an idle tab is immediate",
+              window.attachedSheet == nil ? "\(c.tabs.count) tabs, \(before) before" : "it asks: " + sheetText(window))
+        // One that asked anyway is closed, not left over the window: the busy tab's sheet would queue behind it.
+        await endSheets(over: window)
 
         // Closing a busy tab asks first, and Cancel keeps it.
         let busy = c.addTab(directory: nil)
@@ -401,10 +424,15 @@ enum SelfTest {
         let shellPid = busy.view.process.shellPid
         let jobPid = tcgetpgrp(busy.view.process.childfd) // the `sleep 30`
         c.closeTab(nil)
-        check(window.attachedSheet != nil, "closing a busy tab asks first")
-        if let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .alertSecondButtonReturn) }
+        // Its own sheet, not any: Cancel is pressed on it.
+        let asked = sheetText(window)
+        check(asked.contains("sleep 30"), "closing a busy tab asks first", asked.isEmpty ? "no sheet" : asked)
+        if let sheet = window.attachedSheet {
+            window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+            _ = await wait(2) { window.attachedSheet !== sheet }
+        }
         await pause(0.2)
-        check(c.tabs.contains { $0 === busy }, "Cancel keeps the tab")
+        check(asked.contains("sleep 30") && c.tabs.contains { $0 === busy }, "Cancel keeps the tab")
         c.closeTab(nil)
         if let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .alertFirstButtonReturn) }
         check(await wait(2) { !c.tabs.contains { $0 === busy } }, "Close Tab removes it")
@@ -717,11 +745,8 @@ enum SelfTest {
         for tab in extra { _ = await wait(20) { tab.status.integrated } }
         for tab in extra { c.requestClose(tab) }
         check(await wait(3) { extra.allSatisfy { tab in !c.tabs.contains { $0 === tab } } } && window.attachedSheet == nil,
-              "the extra tabs close at once, nothing running in them", window.attachedSheet.map { _ in "a sheet asks" } ?? "\(c.tabs.count) tabs")
-        while let sheet = window.attachedSheet { // not left for the checks after (each busy tab queues its own)
-            window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
-            _ = await wait(2) { window.attachedSheet !== sheet }
-        }
+              "the extra tabs close at once, nothing running in them", window.attachedSheet.map { _ in "a sheet asks: " + sheetText(window) } ?? "\(c.tabs.count) tabs")
+        await endSheets(over: window) // not left for the checks after (each busy tab queues its own)
         window.setFrame(savedFrame, display: true)
         c.tabBar.layoutSubtreeIfNeeded()
         check(!c.tabBar.isOverflowing, "and stops overflowing when they fit again")
