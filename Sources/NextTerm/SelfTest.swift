@@ -3110,8 +3110,9 @@ enum SelfTest {
         check(rail.markButtons[safe: backIndex]?.toolTip == back.title + "\n" + back.stateDescription, "a mark's tooltip is its tab's title and state",
               rail.markButtons[safe: backIndex]?.toolTip ?? "none")
         await screenshot(c, suffix: "-rail")
-        // ⌘W with the keyboard outside the editor (in the sidebar): the tab in front is folded away, so nothing closes.
-        window.makeFirstResponder(c.sidebar.outline)
+        // ⌘W with the keyboard outside the editor and the sidebar (whose ⌘W closes the open file): the tab in front is
+        // folded away, so nothing closes.
+        window.makeFirstResponder(nil)
         let tabCount = c.groups.count
         let closeItem = NSMenuItem(title: "Close Tab", action: #selector(TerminalWindowController.closeTab(_:)), keyEquivalent: "w")
         c.closeTab(nil)
