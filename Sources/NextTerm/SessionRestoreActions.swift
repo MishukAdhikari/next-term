@@ -37,7 +37,8 @@ final class RestoreActions {
     var onSettled: (() -> Void)?
     /// Whether an automatic resume's session may still be resumed, read as it runs (KTD5): no process took it since.
     var sessionAvailable: (SessionSnapshot.Evidence) -> Bool = { (evidence: SessionSnapshot.Evidence) -> Bool in
-        SessionLookup.live().available(evidence, home: NSHomeDirectory())
+        let home = RestorePlanning.agentHome
+        return SessionLookup.live(home: home).available(evidence, home: home)
     }
 
     init(panes: [RestoredPane], safeMode: Bool) {

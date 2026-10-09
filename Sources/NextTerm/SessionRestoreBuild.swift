@@ -20,16 +20,26 @@ enum RestorePlanning {
         func isGone(_ path: String) -> Bool { folders[path] == .gone }
     }
 
+    /// The home whose agent stores capture reads a session in and the restore checks it in: the user's, or in a debug
+    /// build's relaunch harness its own, where its stand-in Claude Code keeps its session (`SelfTestRestore.agentHome`).
+    static var agentHome: String {
+        #if DEBUG
+        if let home = SelfTestRestore.agentHome { return home }
+        #endif
+        return NSHomeDirectory()
+    }
+
     static func plan(_ snapshot: SessionSnapshot, kind: SessionSnapshot.RestoreKind, safeMode: Bool,
                      quitConsent: Bool) -> Planned {
         let home = NSHomeDirectory()
+        let agents = agentHome
         let checks = check(folders(in: snapshot, home: home), within: folderBudget)
         let checkFolder = { (path: String) -> FolderCheck in checks[path] ?? .notChecked }
         let hosts = hostNames()
-        let lookup = SessionLookup.live(home: home)
+        let lookup = SessionLookup.live(home: agents)
         let world = RestorePlanner.World(home: home, checkFolder: checkFolder, resumeFacts: { evidence, folder, projects in
             ResumeFacts.read(for: evidence, projects: projects, tabFolder: folder,
-                             sessionAvailable: lookup.available(evidence, home: home), home: home)
+                             sessionAvailable: lookup.available(evidence, home: agents), home: agents)
         }, sessions: lookup, hostNames: hosts)
         let result = Result()
         let done = DispatchSemaphore(value: 0)

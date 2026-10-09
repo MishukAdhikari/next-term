@@ -6,8 +6,9 @@ import NextTermCore
 /// release key. `scripts/selftest.sh --relaunch` wraps the debug binary in two app bundles signed ad hoc, in a private
 /// folder of its own (`Harness`): the installed copy at a harness version and an update at the next. It launches the
 /// installed copy with `--relaunch-harness <folder> update-quit`, waits for it to quit and for the install script to open
-/// the swapped app (a stub opener records the call), launches the swapped app with `after-update`, and reads the report
-/// both steps wrote.
+/// the swapped app (a stub opener records the call), launches the swapped app with `after-update`, then with each later
+/// step in turn (SelfTestRestoreLaunches: quits with and without the resume box, a request launch, crashes, restores that
+/// do not finish, safe mode and a snapshot set aside), and reads the report every step wrote.
 ///
 /// Each step launches as the app does, its launch hook included (AppDelegate hands it here after the hook, before plan
 /// 005's self-test branch), counts as a
@@ -30,10 +31,34 @@ enum SelfTestRestore {
             case updateQuit = "update-quit"
             /// The swapped app, launched again: checks what the quit and the install left, then quits under Welcome.
             case afterUpdate = "after-update"
+            /// AE19's launch after that quit, then AE17's quit: the stand-in Claude Code runs, and the resume box is checked.
+            case afterWelcomeQuit = "after-welcome-quit"
+            /// AE17's quit restore, whose consent resumes the stand-in, then AE18's quit with "Ask" off.
+            case afterQuitChecked = "after-quit-checked"
+            /// AE18's quit restore, which puts the stand-in's resume command on the line, then a logout.
+            case afterQuitUnasked = "after-quit-unasked"
+            /// AE21's request launch after the logout, then a crash once its restore has settled.
+            case openRequest = "open-request"
+            /// AE6's crash restore, then a crash before it settles: the first restore that does not finish.
+            case afterCrash = "after-crash"
+            /// A crash restore that crashes at once: the first restore that does not finish.
+            case failOnce = "fail-once"
+            /// A crash restore that crashes at once: the second restore that does not finish.
+            case failAgain = "fail-again"
+            /// Safe mode after two, answered "Try Again", then a crash: the third restore that does not finish.
+            case safeModeTryAgain = "safe-mode-try-again"
+            /// The snapshot set aside after three, then the stand-in again and a crash, for two more.
+            case setAside = "set-aside"
+            /// Safe mode again, answered "Keep As Is". The last step.
+            case safeModeKeep = "safe-mode-keep"
         }
 
         let folder: URL
         let step: Step
+        /// The stand-in Claude Code's own folder (`bin/claude`, the runs it notes in `runs`, and the home whose `.claude`
+        /// store capture and the restore read for it), which the driver makes outside the temporary folders and names in
+        /// `agent-folder`: the resume gate keeps an agent's code and store out of those. Nil when there is none.
+        let agent: URL?
 
         /// `--relaunch-harness <folder> <step>`, with the folder a private one of this user's (the driver's `mktemp -d`).
         init?(arguments: [String]) {
@@ -43,6 +68,12 @@ enum SelfTestRestore {
             guard PrivateFolder.isPrivate(path) else { return nil }
             folder = URL(fileURLWithPath: path, isDirectory: true)
             self.step = step
+            let named = (try? String(contentsOf: folder.appendingPathComponent("agent-folder"), encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let agentPath = named.flatMap { (path: String) -> String? in path.hasPrefix("/") ? canonicalPath(path) : nil }
+            agent = agentPath.flatMap { (path: String) -> URL? in
+                PrivateFolder.isPrivate(path) ? URL(fileURLWithPath: path, isDirectory: true) : nil
+            }
         }
 
         /// The installed copy, which the install replaces.
@@ -73,9 +104,20 @@ enum SelfTestRestore {
             let path = folder.path + "/mcp.sock"
             return path.utf8.count < 104 ? path : nil
         }
+        /// The folder the request launch names (AE21).
+        var api: URL { folder.appendingPathComponent("api", isDirectory: true) }
+        /// The stand-in Claude Code: a program named claude that notes each run's arguments in `agentRuns`, then waits.
+        var standIn: URL? { agent?.appendingPathComponent("bin/claude") }
+        var agentRuns: URL? { agent?.appendingPathComponent("runs") }
+        /// The home capture and the restore read agent stores in (`RestorePlanning.agentHome`), and its Claude store.
+        var agentHome: URL? { agent?.appendingPathComponent("home", isDirectory: true) }
+        var claudeStore: URL? { agentHome?.appendingPathComponent(".claude", isDirectory: true) }
     }
 
     nonisolated static let harness = Harness(arguments: CommandLine.arguments)
+    /// Where capture and the restore read agent stores for the harness, in place of the user's home: its stand-in Claude
+    /// Code's session is never in the user's own store (RestorePlanning.agentHome).
+    nonisolated static let agentHome: String? = harness?.agentHome?.path
     /// The harness's own defaults suite: AppDelegate's `launchDefaults`, and where remote tabs are kept.
     nonisolated(unsafe) static let defaults: UserDefaults? = harness.flatMap { UserDefaults(suiteName: $0.defaultsSuite) }
     /// The reason the harness gives its quit; nil: the real one (the update sheet's consent gives `updateRelaunch`). Never
@@ -93,7 +135,7 @@ enum SelfTestRestore {
     /// The defaults key plan 005's relaunch flag used, which the update's marker replaced: no quit or launch writes it.
     private static let oldRelaunchFlag = "updateRelaunchAt"
 
-    private static var failures = 0
+    private(set) static var failures = 0
     /// The canaries the first step typed: a line holding `secret`, and `plain`, which the quit's scrollback keeps.
     private static var canaries: (secret: String, plain: String)?
     /// The buttons to press, in turn, as the app-modal alert holding each shows.
@@ -102,23 +144,47 @@ enum SelfTestRestore {
 
     /// Before the launch opens any tab: the harness's shells read a zsh config of its own (`TerminalTab.testUserZDOTDIR`),
     /// which keeps their history in its folder, so the lines it types, the canaries among them, never reach the user's
-    /// history file.
+    /// history file. `claude` in them is the stand-in, first on their path.
     static func prepareShells() {
         guard let harness else { return }
         try? FileManager.default.createDirectory(at: harness.zdotdir, withIntermediateDirectories: true)
-        let quoted = "'" + harness.history.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
-        let zshrc = "# The relaunch harness's own zsh config: its history stays in its folder.\nHISTFILE=\(quoted)\n"
+        func quote(_ path: String) -> String { "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+        var zshrc = "# The relaunch harness's own zsh config: its history stays in its folder.\nHISTFILE=\(quote(harness.history.path))\n"
+        if let bin = harness.standIn?.deletingLastPathComponent() {
+            zshrc += "# Its stand-in Claude Code comes first.\npath=(\(quote(bin.path)) $path)\n"
+        }
         try? zshrc.write(to: harness.zdotdir.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
         TerminalTab.testUserZDOTDIR = harness.zdotdir.path
     }
 
-    /// Runs this process's step, once the launch has shown what it shows: `restore` is what its launch hook restored.
+    /// Runs this process's step, once the launch has shown what it shows: `restore` is what its launch hook restored. What
+    /// must happen before the launch's restore can type or save anything, or under an alert the launch shows in a turn of
+    /// its own, where the main queue waits, starts here, in the launch's own turn.
     static func run(restore: LaunchRestoreResult) {
         guard let harness else { return }
+        // The stand-in's runs before this launch's restore could start it.
+        let runs = standInRuns(harness)
+        switch harness.step {
+        case .failOnce: failRestore(attempt: 1)
+        case .failAgain: failRestore(attempt: 2)
+        case .safeModeTryAgain: answerSafeMode(harness, with: RestoreAlertText.tryAgain)
+        case .safeModeKeep: answerSafeMode(harness, with: RestoreAlertText.keepAsIs)
+        case .setAside: answerSetAside(harness)
+        default: break
+        }
         Task { @MainActor in
             switch harness.step {
             case .updateQuit: await updateQuit(harness, restore: restore)
             case .afterUpdate: await afterUpdate(harness, restore: restore)
+            case .afterWelcomeQuit: await afterWelcomeQuit(harness, restore: restore)
+            case .afterQuitChecked: await afterQuitChecked(harness, restore: restore, runs: runs)
+            case .afterQuitUnasked: await afterQuitUnasked(harness, restore: restore, runs: runs)
+            case .openRequest: await openRequest(harness, restore: restore, runs: runs)
+            case .afterCrash: await afterCrash(harness, restore: restore, runs: runs)
+            case .safeModeTryAgain: await afterTryAgain(harness, restore: restore, runs: runs)
+            case .setAside: await afterSetAside(harness, restore: restore)
+            case .safeModeKeep: await afterKeepAsIs(harness, restore: restore, runs: runs)
+            case .failOnce, .failAgain: break
             }
         }
     }
@@ -279,7 +345,7 @@ enum SelfTestRestore {
     // MARK: checks
 
     /// The harness counts as a self-test, with its defaults, MCP socket, zsh integration and quit reason its own.
-    private static func isolationChecks(_ harness: Harness) {
+    static func isolationChecks(_ harness: Harness) {
         let app = AppDelegate.shared!
         let ownDefaults = defaults != nil && app.launchDefaults === defaults && SelfTest.keptDefaults === defaults
         let socket = MCPControlServer.shared.path
@@ -297,7 +363,7 @@ enum SelfTestRestore {
 
     /// The harness's sessions folder, as the launch took it (SessionRestore): in its own folder, private, out of backups and
     /// Spotlight, with this copy's path recorded, and held by this process alone. Nil when it can't be used.
-    private static func sessionChecks(_ harness: Harness) -> SessionFiles? {
+    static func sessionChecks(_ harness: Harness) -> SessionFiles? {
         guard let parent = SelfTest.sessionsParent, parent == harness.stateFolder else {
             check(false, "the harness makes its sessions folder in its own folder", SelfTest.sessionsParent?.path ?? "none")
             return nil
@@ -543,8 +609,16 @@ enum SelfTestRestore {
     static func quitSaved() {
         guard let harness else { return }
         switch harness.step {
-        case .updateQuit: quitSaveSearch()
+        case .updateQuit:
+            quitSaveSearch()
+            recordStepEnd()
         case .afterUpdate: welcomeQuitChecks()
+        case .afterWelcomeQuit: checkedQuitSaved(harness)
+        case .afterQuitChecked: unaskedQuitSaved(harness)
+        case .afterQuitUnasked: logoutQuitSaved(harness)
+        case .openRequest, .afterCrash, .failOnce, .failAgain, .safeModeTryAgain, .setAside, .safeModeKeep:
+            check(false, "this step ends without a quit")
+            recordStepEnd()
         }
     }
 
@@ -617,8 +691,7 @@ enum SelfTestRestore {
         } else {
             check(false, "the quit under Welcome holds the sessions folder")
         }
-        let step = harness?.step.rawValue ?? ""
-        record(failures == 0 ? "STEP \(step) PASSED" : "STEP \(step) \(failures) FAILED")
+        recordStepEnd()
         try? FileManager.default.removeItem(at: SelfTest.copilotLockFolder)
     }
 
@@ -649,7 +722,7 @@ enum SelfTestRestore {
 
     /// What only the harness could have put in the user's own state, whoever else runs: a value in the user's Next Term
     /// defaults that names the harness's folder, or a sessions folder for this copy in the user's Application Support.
-    private static func leakChecks(_ harness: Harness) {
+    static func leakChecks(_ harness: Harness) {
         let domain = UserDefaults.standard.persistentDomain(forName: realBundleID) ?? [:]
         // JSON (kept remote tabs) writes each slash as `\/`.
         let paths = [harness.folder.path, harness.folder.path.replacingOccurrences(of: "/", with: "\\/")]
@@ -698,7 +771,7 @@ enum SelfTestRestore {
     /// Presses each button in `titles` in turn, once an app-modal alert, or the update sheet, shows it: a click, as the
     /// user's. Each press is in the report before it happens, since the process may quit right after. Gives up after 60
     /// seconds.
-    private static func press(_ titles: [String]) {
+    static func press(_ titles: [String]) {
         presses = titles
         let started = Date()
         let timer = Timer(timeInterval: 0.1, repeats: true) { _ in
@@ -726,7 +799,7 @@ enum SelfTestRestore {
         button.performClick(nil)
     }
 
-    private static func buttons(in view: NSView) -> [NSButton] {
+    static func buttons(in view: NSView) -> [NSButton] {
         view.subviews.flatMap { ($0 as? NSButton).map { [$0] } ?? buttons(in: $0) }
     }
 
@@ -740,7 +813,7 @@ enum SelfTestRestore {
     }
 
     /// One line, appended to the report as it happens: a step that quits or is stopped still says how far it got.
-    private static func record(_ line: String) {
+    static func record(_ line: String) {
         guard let path = harness?.report.path else { return }
         if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
         guard let handle = FileHandle(forWritingAtPath: path) else { return }
@@ -749,10 +822,15 @@ enum SelfTestRestore {
         handle.write(Data((line + "\n").utf8))
     }
 
-    /// Ends a step that does not quit: its last line, then the servers that leave files behind, then the process.
-    private static func finish() {
+    /// The step's last line, which the driver looks for: whether every check of this process passed.
+    static func recordStepEnd() {
         let step = harness?.step.rawValue ?? ""
         record(failures == 0 ? "STEP \(step) PASSED" : "STEP \(step) \(failures) FAILED")
+    }
+
+    /// Ends a step that does not quit: its last line, then the servers that leave files behind, then the process.
+    static func finish() {
+        recordStepEnd()
         ClaudeIDEServer.shared.stop()
         CopilotIDEServer.shared.stop()
         MCPControlServer.shared.stop()

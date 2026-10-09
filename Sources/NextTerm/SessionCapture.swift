@@ -82,7 +82,8 @@ enum SessionCapture {
             pane.systemZsh = tab.shellPath == "/bin/zsh"
             if status.running && !tab.exited {
                 pane.agent = ProcessInspector.agentEvidence(ptyFileDescriptor: tab.view.process.childfd,
-                                                            shellPid: tab.view.process.shellPid, status: status)
+                                                            shellPid: tab.view.process.shellPid, status: status,
+                                                            home: RestorePlanning.agentHome)
             }
         }
         return pane
