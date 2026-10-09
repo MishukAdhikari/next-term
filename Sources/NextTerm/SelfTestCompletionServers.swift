@@ -50,6 +50,9 @@ extension SelfTest {
         var home: URL { base.appendingPathComponent("home") }
         var bin: URL { base.appendingPathComponent("bin") }
         var project: URL { home.appendingPathComponent("app") }
+        /// tmux's socket folder (TMUX_TMPDIR), made by the tmux check. Not under `base`: a socket's path has room for
+        /// 103 bytes, and `<TMPDIR>/nt-complete-<pid>/server/tmux/tmux-<uid>/nextterm` takes 104 with a 5-digit pid.
+        var tmuxSockets: URL { URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nt-ct-\(getpid())", isDirectory: true) }
 
         /// tmux on this Mac (NEXTTERM_TEST_TMUX, or where Homebrew puts it), for the tmux checks.
         var tmux: String? {
@@ -78,7 +81,6 @@ extension SelfTest {
         }
         try? fm.createDirectory(at: server.bin, withIntermediateDirectories: true)
         // tmux, if there is one, on the fake server's PATH, with a socket folder of its own (TMUX_TMPDIR).
-        try? fm.createDirectory(at: server.base.appendingPathComponent("tmux"), withIntermediateDirectories: true)
         if let tmux = server.tmux { try? fm.createSymbolicLink(atPath: server.bin.appendingPathComponent("tmux").path, withDestinationPath: tmux) }
         for file in ["food.txt", "My file.txt"] { fm.createFile(atPath: server.project.appendingPathComponent(file).path, contents: nil) }
         let script = """
@@ -100,7 +102,7 @@ extension SelfTest {
             if [ -z "$tty" ] && [ -e "$B/refused" ]; then echo 'mux_client_request_session: session request failed: Session open refused by peer' >&2; exit 255; fi
             if [ -z "$tty" ] && [ -e "$B/drop" ]; then exit 255; fi
             if [ -z "$tty" ] && [ -e "$B/slow" ]; then sleep 2; fi
-            export HOME=\(RemoteShell.quote(server.home.path)) SHELL=/bin/zsh PATH=\(RemoteShell.quote(server.bin.path)):/usr/bin:/bin:/usr/sbin:/sbin TMUX_TMPDIR="$B/tmux"
+            export HOME=\(RemoteShell.quote(server.home.path)) SHELL=/bin/zsh PATH=\(RemoteShell.quote(server.bin.path)):/usr/bin:/bin:/usr/sbin:/sbin TMUX_TMPDIR=\(RemoteShell.quote(server.tmuxSockets.path))
             unset ZDOTDIR NEXTTERM_USER_ZDOTDIR
             cd "$HOME"
             exec /bin/zsh -f -c "$cmd"
@@ -293,6 +295,8 @@ extension SelfTest {
         if server.tmux != nil {
             let kept = RemoteHost(name: "complete-tmux", destination: "nt@complete-tmux.invalid", directory: server.project.path, keep: .tmux)
             RemoteHosts.save(kept)
+            try? FileManager.default.createDirectory(at: server.tmuxSockets, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: server.tmuxSockets) }
             let keptMaster = CompletionStandInMaster(path: RemoteConnection.controlPath(kept))
             keptMaster.start()
             let inTmux = c.addRemoteTab(RemoteTab(host: kept))
@@ -307,13 +311,15 @@ extension SelfTest {
                     inTmux.view.send(txt: "\u{15}")
                 }
             } else {
-                check(false, "Tab completion, servers: a tmux tab on the stand-in server is ready", "\(inTmux.completion.reportsSinceReturn)")
+                check(false, "Tab completion, servers: a tmux tab on the stand-in server is ready",
+                      "connected \(inTmux.remoteConnected), ready \(inTmux.remoteReady), \(inTmux.completion.reportsSinceReturn) reports: "
+                        + inTmux.screenTail(4).joined(separator: " | "))
             }
             c.remove(inTmux)
             let kill = Process()
             kill.executableURL = server.bin.appendingPathComponent("tmux")
             kill.arguments = ["-L", "nextterm", "kill-server"]
-            kill.environment = ["TMUX_TMPDIR": server.base.appendingPathComponent("tmux").path, "PATH": "/usr/bin:/bin"]
+            kill.environment = ["TMUX_TMPDIR": server.tmuxSockets.path, "PATH": "/usr/bin:/bin"]
             try? kill.run()
             kill.waitUntilExit()
             keptMaster.stop()
