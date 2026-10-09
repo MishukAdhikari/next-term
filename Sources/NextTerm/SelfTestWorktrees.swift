@@ -46,7 +46,10 @@ extension SelfTest {
         sh(repo, "remote", "add", "origin", origin)
         sh(repo, "push", "-q", "-u", "origin", "fix/7611-3ds-confirm-bypass", "mishuk/assistant-mcp-runner")
         sh(base, "clone", "-q", origin, theirs)
-        sh(theirs, "switch", "-q", "-c", "rakib/new-panel")
+        // From a branch origin has: its HEAD names main, which was never pushed, so the clone checks nothing out, and a
+        // branch made there has no commit to push.
+        sh(theirs, "switch", "-q", "--no-track", "-c", "rakib/new-panel", "origin/fix/7611-3ds-confirm-bypass")
+        sh(theirs, "commit", "-q", "--allow-empty", "-m", "New panel")
         sh(theirs, "push", "-q", "origin", "rakib/new-panel")
         sh(repo, "fetch", "-q", "origin")
         sh(repo, "worktree", "add", "-q", code + "/xcloud-wt-aichat", "mishuk/assistant-mcp-runner")
