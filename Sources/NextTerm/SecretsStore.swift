@@ -10,7 +10,7 @@ import Security
 ///   MCP socket starts, so the first MCP answer is already masked.
 /// - `load()` runs the keyring's load check off the main thread, which needs no Touch ID, and sets `protection`.
 /// - `perform(_:reason:facts:)` asks for presence, then on its own queue takes the vault's lock, unlocks, makes the
-///   change, writes, drops the vault key and writes the audit line. Cancel or failure changes nothing.
+///   change, writes, drops the vault key and writes the audit line. Cancel or failure changes no key.
 /// - In the self-test it works on a temporary folder with a software keyring and a stand-in presence check that
 ///   passes at once and counts its calls. The real vault, `mask.key` and the login keychain are never touched.
 @MainActor
@@ -21,6 +21,8 @@ final class SecretsStore {
     static let locked = Notification.Name("NextTermSecretsLocked")
     /// Posted with `names` when keys were replaced, renamed or deleted: the grants holding them end.
     static let keysChanged = Notification.Name("NextTermSecretsKeysChanged")
+    /// Posted when the vault is gone, by Start Over here or in another copy of Next Term: every grant ends.
+    static let startedOver = Notification.Name("NextTermSecretsStartedOver")
 
     /// `loadMarks()` ran.
     nonisolated(unsafe) static var marksLoaded = false
@@ -212,6 +214,9 @@ final class SecretsStore {
     /// `mask.key`, published as `SecretMask.current`. Sets `marksLoaded`.
     func loadMarks() {
         defer { Self.marksLoaded = true }
+        // The code hash a wrapper must have is read now, at launch, from the program that is running, not at the first
+        // request, when the file at its path may have been replaced.
+        _ = PeerCode.current
         guard folder.exists, let data = try? folder.read(SecretFolder.vaultName, cap: SecretVault.maxFileSize),
               let index = try? SecretVault.index(from: data) else { return }
         self.index = index
@@ -275,6 +280,7 @@ final class SecretsStore {
             index = nil
             protection = .none
             NotificationCenter.default.post(name: Self.changed, object: self)
+            NotificationCenter.default.post(name: Self.startedOver, object: self)
             return
         }
         let data = try? folder.read(SecretFolder.vaultName, cap: SecretVault.maxFileSize)
@@ -357,6 +363,7 @@ final class SecretsStore {
             if let names = action.changedNames { NotificationCenter.default.post(name: Self.keysChanged, object: self, userInfo: ["names": names]) }
             return work.values
         case .failure(let error):
+            reloadIfChanged() // new marks for a mask.key made again stay, even when the action failed
             throw handle(error, action: action, facts: facts)
         }
     }
@@ -426,46 +433,55 @@ final class SecretsStore {
         defer { vault?.wipe() }
         var work = Work()
         try folder.withLock {
-            try folder.update { current in
-                let opened: SecretVault
-                var maskKey: SymmetricKey?
+            var maskKey: SymmetricKey?
+            if let data = try folder.read(SecretFolder.maskKeyName, cap: 64), data.count == SecretVault.maskKeyLength {
+                maskKey = SymmetricKey(data: data)
+            }
+            /// The vault `current` holds: unlocked once, then read again on a retry; or made, for the first add, with a
+            /// new `mask.key`.
+            func opened(_ current: Data?) throws -> SecretVault {
                 if let vault, let current {
                     try vault.reload(current)
-                    opened = vault
-                } else if let current {
+                    return vault
+                }
+                if let current {
                     let index = try SecretVault.index(from: current)
-                    opened = try SecretVault.unlock(current, keyring: keyring(index), context: token)
-                } else {
-                    guard makes else { throw SecretVault.Failure.noSuchKey(firstName ?? "") }
-                    let made: (vault: SecretVault, maskKey: SecretBytes)
-                    do {
-                        made = try SecretVault.create(keyring: newKeyring())
-                    } catch let failure as SecretVault.Failure {
-                        throw failure
-                    } catch {
-                        throw Failure.keyring
-                    }
-                    let maskData = made.maskKey.withUnsafeBytes { Data($0) }
-                    try folder.write(SecretFolder.maskKeyName, data: maskData)
-                    maskKey = SymmetricKey(data: maskData)
-                    opened = made.vault
+                    let unlocked = try SecretVault.unlock(current, keyring: keyring(index), context: token)
+                    vault = unlocked
+                    return unlocked
                 }
-                vault = opened
-                // A missing mask.key is made again here, with new marks for every entry (KTD8).
-                var remarked = false
-                if maskKey == nil {
-                    if let data = try folder.read(SecretFolder.maskKeyName, cap: 64), data.count == SecretVault.maskKeyLength {
-                        maskKey = SymmetricKey(data: data)
-                    } else {
-                        let fresh = SymmetricKey(size: .bits256)
-                        try folder.write(SecretFolder.maskKeyName, data: fresh.withUnsafeBytes { Data($0) })
-                        _ = try opened.remark(maskKey: fresh)
-                        maskKey = fresh
-                        remarked = true
-                    }
+                guard makes else { throw SecretVault.Failure.noSuchKey(firstName ?? "") }
+                let made: (vault: SecretVault, maskKey: SecretBytes)
+                do {
+                    made = try SecretVault.create(keyring: newKeyring())
+                } catch let failure as SecretVault.Failure {
+                    throw failure
+                } catch {
+                    throw Failure.keyring
                 }
-                let written = try change(opened, maskKey)
-                return written ?? (remarked ? opened.file : nil)
+                let maskData = made.maskKey.withUnsafeBytes { Data($0) }
+                try folder.write(SecretFolder.maskKeyName, data: maskData)
+                maskKey = SymmetricKey(data: maskData)
+                vault = made.vault
+                return made.vault
+            }
+            // A missing mask.key is made again, with new marks for every entry, in a write of its own before the action.
+            // The marks are written first, then the key: a failure between them leaves the key missing, so the next
+            // unlock marks them again, and never leaves marks under a key that was lost. An action that fails keeps them.
+            if maskKey == nil {
+                let fresh = SymmetricKey(size: .bits256)
+                let remarked = try folder.update { current in
+                    guard let current else { return nil } // no vault yet: the first add makes the key with it
+                    return try opened(current).remark(maskKey: fresh)
+                }
+                if remarked != nil {
+                    try folder.write(SecretFolder.maskKeyName, data: fresh.withUnsafeBytes { Data($0) })
+                    maskKey = fresh
+                }
+            }
+            _ = try folder.update { current in
+                let open = try opened(current) // the first add sets maskKey here
+                return try change(open, maskKey)
             }
         }
         work.index = vault?.index
@@ -563,6 +579,7 @@ final class SecretsStore {
             publishMarks()
             NotificationCenter.default.post(name: Self.changed, object: self)
         case .failure(let error):
+            reloadIfChanged()
             throw handle(error, action: .use(names: names), facts: Facts())
         }
     }
@@ -662,6 +679,8 @@ final class SecretsStore {
         let line = SecretAudit.Line(event: .startOver, names: [], outcome: kept.map { "kept \($0.lastPathComponent)" })
         try? folder.appendAudit(SecretAudit.encode(line, masking: { SecretMask.current.mask($0) }))
         NotificationCenter.default.post(name: Self.changed, object: self)
+        // Every grant holds values of the old vault: a key added again under its name must ask again.
+        NotificationCenter.default.post(name: Self.startedOver, object: self)
         return kept
     }
 

@@ -102,6 +102,8 @@ public enum SecretGrantEvent: Equatable, Sendable {
     case keyChanged(String)
     /// "Pause Key Requests for 1 Hour…".
     case hourPause
+    /// Start Over: the vault, and every key a grant holds, is gone.
+    case startedOver
     /// MCP or a remote connection typed into this tab (its id, as `MCPWriteControl.asker` gives it): the
     /// `run_with_secrets` grants it asked for end.
     case tabGotInput(String)
@@ -158,7 +160,7 @@ public struct SecretGrant: Identifiable, Sendable {
     /// Whether `event` ends it.
     public func ended(by event: SecretGrantEvent) -> Bool {
         switch event {
-        case .screenLocked, .systemSleep, .sessionResigned, .quit, .revokeAll, .hourPause: return true
+        case .screenLocked, .systemSleep, .sessionResigned, .quit, .revokeAll, .hourPause, .startedOver: return true
         case .displaySleep: return false
         case .revoke(let id): return id == self.id
         case .keyChanged(let name): return binding.keys[name] != nil

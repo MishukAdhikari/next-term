@@ -68,7 +68,7 @@ private func toolBinding(tab: String = "tab-2", target: String = "new") -> Secre
             book.add(SecretGrant(kind: .fifteenMinutes, binding: toolBinding(tab: "tab-4", target: "tab-3"), made: start, id: "tool-4"))
             return book
         }
-        for event in [SecretGrantEvent.screenLocked, .systemSleep, .sessionResigned, .quit, .revokeAll, .hourPause] {
+        for event in [SecretGrantEvent.screenLocked, .systemSleep, .sessionResigned, .quit, .revokeAll, .hourPause, .startedOver] {
             var all = book()
             #expect(all.end(event).count == 4 && all.grants.isEmpty, "\(event)")
         }

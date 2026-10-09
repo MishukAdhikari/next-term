@@ -183,6 +183,9 @@ final class SecretRequests {
             let names = note.userInfo?["names"] as? [String] ?? []
             MainActor.assumeIsolated { for name in names { SecretRequests.shared.end(.keyChanged(name)) } }
         })
+        observers.append(NotificationCenter.default.addObserver(forName: SecretsStore.startedOver, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { SecretRequests.shared.vaultStartedOver() }
+        })
     }
 
     // MARK: asking
@@ -685,6 +688,14 @@ final class SecretRequests {
         }
         for card in queue where card.gone && !card.isAnswered { finish(card, outcome: .unanswered, decision: .unanswered) }
         // Q1's one-use approval ended with the lock: its line is over too.
+        for panel in lingering { panel.finish() }
+        lingering.removeAll()
+    }
+
+    /// Start Over: every grant holds values of the vault that is gone, so each ends, and a key added again under the
+    /// same name asks again. A one-use approval's panel kept up says nothing true any more.
+    private func vaultStartedOver() {
+        end(.startedOver)
         for panel in lingering { panel.finish() }
         lingering.removeAll()
     }

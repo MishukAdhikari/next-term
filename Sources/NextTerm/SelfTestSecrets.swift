@@ -137,6 +137,7 @@ extension SelfTest {
 
         await secretsTamperChecks(base)
         await secretsStartOverChecks(base)
+        await secretsRemarkChecks(base)
         await secretsKeychainChecks(base)
         secretsLockEventChecks(store)
     }
@@ -191,6 +192,28 @@ extension SelfTest {
               "\(first?.lastPathComponent ?? "none"), \(second?.lastPathComponent ?? "none")")
         check(left.allSatisfy { $0.hasPrefix("audit.log") } && store.index == nil && store.protection == .none,
               "secrets: Start Over leaves an empty Secrets, its log saying so", left.joined(separator: ", "))
+    }
+
+    /// A missing mask.key is made again at the next unlock, with new marks for every entry, and they stay when that
+    /// action then fails.
+    static func secretsRemarkChecks(_ base: URL) async {
+        let (store, _) = secretsStore(base, "remark", keyring: SoftwareKeyring(kind: .secureEnclave))
+        defer { SecretsStore.shared.publishMarks() } // the shared store's marks again
+        let value = secretsValue("remark")
+        _ = try? await store.perform(.add(name: "REMARK_KEY", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
+                                          value: SecretBytes(utf8: value)))
+        try? FileManager.default.removeItem(atPath: store.folder.path(SecretFolder.maskKeyName))
+        var failure: SecretsStore.Failure?
+        do { try await store.perform(.delete(name: "NOT_STORED")) } catch { failure = error as? SecretsStore.Failure }
+        let key = try? store.folder.read(SecretFolder.maskKeyName, cap: 64)
+        let file = try? store.folder.read(SecretFolder.vaultName, cap: SecretVault.maxFileSize)
+        var masked = "no mask"
+        if let key, let file, let index = try? SecretVault.index(from: file) {
+            masked = SecretMask(key: SymmetricKey(data: key), index: index).mask("printed \(value) here")
+        }
+        check(failure == .vault(.noSuchKey("NOT_STORED")) && key?.count == 32 && masked.contains("•••") && !masked.contains(value),
+              "secrets: a missing mask.key is made again at the next unlock with new marks, which stay when that action fails",
+              "\(String(describing: failure)), \(key?.count ?? 0) bytes")
     }
 
     /// The keychain keyring's rules over an in-memory store: never the login keychain.
@@ -502,6 +525,17 @@ extension SelfTest {
         requests.ask(restarted) { restartAnswers.take($0) }
         check(secretsAllowed(restartAnswers.last)?.how == .grant && restarted.panel == nil && !requests.grants.contains { $0.kind == .oneUse },
               "secrets: restarted within 2 minutes, it is answered by that one-use approval, once")
+
+        // Start Over ends every grant: a key added again under the same name asks again. (A store of its own starts
+        // over, so the shared one keeps its keys; the grants listen to any.)
+        let kept = secretsRequest(asker: "wrapper:selftest-start-over", command: ["node", "kept.js"], tab: "tab 3")
+        requests.ask(kept) { answers.take($0) }
+        kept.panel?.durationChoice[.fifteenMinutes]?.performClick(nil)
+        kept.panel?.allowButton.performClick(nil)
+        let granted = await wait(10) { requests.grants.contains { $0.binding == kept.binding } }
+        let (scratch, _) = secretsStore(base, "start-over-grants", keyring: SoftwareKeyring(kind: .secureEnclave))
+        _ = try? scratch.startOver()
+        check(granted && requests.grants.isEmpty, "secrets: Start Over ends every grant, so a key added again under its name asks again")
 
         // Decline pauses that request only; Decline and Stop Asking stops the asker.
         let tool = secretsRequest(asker: "selftest-tab-x", command: ["npm test"], source: .tool, agent: "Claude Code")
