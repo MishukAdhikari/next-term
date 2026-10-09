@@ -145,6 +145,7 @@ extension SelfTest {
         check(keys == ["⌥⌘J", "none", "⌥⌘J", "customised"], "agents menu: keys saved for the moved commands are still theirs, in the menu and in Settings",
               keys.joined(separator: " "))
 
+        #if DEBUG // the completion tabs' focus helper is in debug builds only, as the self-test runs
         // Pressed as the keyboard sends it, in a tab of its own at a prompt.
         let tab = c.addTab(directory: NSTemporaryDirectory())
         _ = await wait(20) { tab.status.integrated }
@@ -160,6 +161,7 @@ extension SelfTest {
             panel.close()
         }
         c.remove(tab)
+        #endif
 
         shortcuts.reset("resumeSession:")
         let back = key(#selector(TerminalWindowController.resumeSession(_:)))
