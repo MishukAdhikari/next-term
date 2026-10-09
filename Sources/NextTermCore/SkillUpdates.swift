@@ -36,12 +36,37 @@ public enum SkillUpdates {
     /// The quiet check runs once a day at most.
     public static let interval: TimeInterval = 24 * 60 * 60
 
+    /// After a quiet check no source answered (offline, GitHub's hourly limit), how long before it tries again.
+    public static let retry: TimeInterval = 60 * 60
+
     /// Whether the quiet check is due: never checked, or the last check a day ago or more. A last check more than a day
-    /// ahead of the clock (it was set back) counts as none, so the check never waits longer than two days.
-    public static func isDue(now: Date, lastCheck: Date?) -> Bool {
+    /// ahead of the clock (it was set back) counts as none, so the check never waits longer than two days. A quiet check
+    /// that got no answer doesn't count as the day's: it holds the next try back an hour (`lastFailure`), no more.
+    public static func isDue(now: Date, lastCheck: Date?, lastFailure: Date? = nil) -> Bool {
+        if let lastFailure, (0..<retry).contains(now.timeIntervalSince(lastFailure)) { return false }
         guard let lastCheck else { return true }
         let age = now.timeIntervalSince(lastCheck)
         return age >= interval || age < -interval
+    }
+
+    /// What a quiet check keeps, from its `answers` and the skills whose source couldn't be asked (`unreached`: offline,
+    /// GitHub's hourly limit). Such a skill keeps its `last` answer while there is one, so a failure never hides a count
+    /// already known; with no source answered at all it is nil: nothing changes, and the check didn't happen. A check
+    /// the user starts shows every failure instead.
+    public static func quietAnswers(_ answers: [String: SkillUpdateState], unreached: Set<String>,
+                                    last: [String: SkillUpdateState]) -> [String: SkillUpdateState]? {
+        guard answers.keys.contains(where: { !unreached.contains($0) }) else { return nil }
+        var kept = answers
+        for name in unreached {
+            if let previous = last[name] { kept[name] = previous }
+        }
+        return kept
+    }
+
+    /// The answers for skills still installed from GitHub (`tracked`): one removed outside Next Term (`npx skills remove`
+    /// in a tab) leaves the count, after a relaunch too.
+    public static func pruned(_ answers: [String: SkillUpdateState], tracked: Set<String>) -> [String: SkillUpdateState] {
+        answers.filter { tracked.contains($0.key) }
     }
 
     /// The last check's answers, kept across launches (as JSON) so a relaunch within the day still shows the count.
