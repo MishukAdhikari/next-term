@@ -53,8 +53,11 @@ import Testing
     }
 
     @Test func parsesEachKind() {
-        let arm = message("\(n);arm;1;main;start;1;0;expand-or-complete;builtin;;0")
+        let arm = message("\(n);arm;2;main;start;1;0;expand-or-complete;builtin;;0")
         #expect(arm == .arm(CompletionProtocol.Arm()))
+        // A server's hook from before going into folders says 1: it is sent none of those keys.
+        let older = message("\(n);arm;1;main;start;1;0;expand-or-complete;builtin;;0")
+        #expect(older == .arm(CompletionProtocol.Arm(version: 1)))
         let plugins = message("\(n);arm;1;viins;start;1;1;complete-word;\(percent("completion:.complete-word:_main_complete"));\(percent("autocomplete fzf-tab"));1")
         guard case let .arm(a)? = plugins else { Issue.record("no arm"); return }
         #expect(a.keymap == "viins" && a.completionSystem && a.plugins == ["autocomplete", "fzf-tab"] && a.quieted && a.takesKey)
@@ -68,6 +71,8 @@ import Testing
         #expect(message("\(n);done;000007;inserted") == .done(id: 7, outcome: .inserted))
         #expect(message("\(n);line;000007;0;Sou;Sou") == .line(.init(id: 7, left: false, word: "Sou", unquoted: "Sou")))
         #expect(message("\(n);line;000007;1") == .line(.init(id: 7, left: true)))
+        #expect(message("\(n);sync;000012") == .sync(id: 12))
+        #expect(message("\(n);into;000009") == .into(id: 9))
         let items = "Sources,,,d \(percent("My Fo'lder $x")),\(percent("a folder")),\(percent("local, dirs")),d main,\(percent("main  -- [HEAD]  init")),,"
         let comp = message("\(n);comp;000008;3;1;1;\(percent("My\\ F/"));\(percent("My F/"));\(items)")
         guard case let .comp(chunk)? = comp else { Issue.record("no comp"); return }

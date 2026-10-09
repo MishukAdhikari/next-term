@@ -9,8 +9,10 @@ import Foundation
 ///     arm ; version ; keymap ; context ; bound ; completion system ; ^I widget ; its definition ; plugins ; quieted
 ///     tab ; id ; folder ; LBUFFER ; RBUFFER ; PREBUFFER ; words ; word ; word unquoted ; head ; head resolved
 ///     comp ; id ; total ; chunk ; chunks ; stem ; stem unquoted ; text,description,group,kind …
-///     done ; id ; native | inserted
+///     done ; id ; native | inserted | kept
 ///     line ; id ; left ; word ; word unquoted
+///     sync ; id
+///     into ; id
 ///
 /// App to shell: the private key `prefix`, then a kind letter, a 6-digit id, a 6-digit length and the payload
 /// (`frame`). The payload is ASCII: its fields are split by `;`, and every byte outside `!`…`~`, `\` itself
@@ -24,8 +26,10 @@ public enum CompletionProtocol {
     /// DECRQSS, window reports, kitty keyboard flags), and a key tmux can name with `user-keys`. Fixed once
     /// shipped: a hook on a server may be older than the app.
     public static let prefix = "\u{1b}[6973~"
-    /// The hook's version, reported by `arm`.
-    public static let version = 1
+    /// The hook's version, reported by `arm`. 2: it can go into a folder from the list (CompletionDrill), and only a
+    /// hook at `drillVersion` or later is sent those keys.
+    public static let version = 2
+    public static let drillVersion = 2
     /// How long the hook waits for an answer (seconds), and how long Next Term takes at most to give one.
     public static let shellWait = 0.15
     public static let answerWithin = 0.12
@@ -38,7 +42,7 @@ public enum CompletionProtocol {
     public static let frameWait = 0.5
     static let idWidth = 6
 
-    public static let markKinds: Set<Substring> = ["arm", "tab", "comp", "done", "line"]
+    public static let markKinds: Set<Substring> = ["arm", "tab", "comp", "done", "line", "sync", "into"]
 
     // MARK: shell to app
 
@@ -48,6 +52,11 @@ public enum CompletionProtocol {
         case comp(CompChunk)
         case done(id: Int, outcome: Outcome)
         case line(LineReport)
+        /// The answer to a `sync` key, under its id: every key typed before it is in the `line` reports before this.
+        case sync(id: Int)
+        /// The single-match rule on zsh's path (a Tab key with `d`): one folder went in, and the list that comes next
+        /// under `id` is what is inside it.
+        case into(id: Int)
     }
 
     /// What the shell can take, sent at each new line and keymap change.
@@ -87,6 +96,10 @@ public enum CompletionProtocol {
             other.quieted = quieted
             return other == self
         }
+
+        /// The hook goes into a folder from the list, and back up (CompletionDrill): version 2 and later. An older one
+        /// on a server keeps ⇥ on a folder row as ↩︎ until its shell starts again with the new hook.
+        public var drills: Bool { version >= CompletionProtocol.drillVersion }
 
         /// A line is being edited in emacs or vi insert mode, and the private key is bound there.
         public var takesKey: Bool {
@@ -187,6 +200,8 @@ public enum CompletionProtocol {
     public enum Outcome: String, Sendable {
         case native
         case inserted
+        /// A folder Next Term asked to go into can't be entered: the list open before stays as it was.
+        case kept
     }
 
     /// While a list is open: the word now, or that the cursor left it.
@@ -215,6 +230,9 @@ public enum CompletionProtocol {
             guard fields.count == 2, let id = number(fields[0]), let outcome = Outcome(rawValue: String(fields[1])) else { return nil }
             return .done(id: id, outcome: outcome)
         case "line": return parseLine(fields)
+        case "sync", "into":
+            guard fields.count == 1, let id = number(fields[0]) else { return nil }
+            return kind == "sync" ? .sync(id: id) : .into(id: id)
         default: return nil
         }
     }
@@ -325,13 +343,17 @@ public enum CompletionProtocol {
         case tab = 0x74 // t
         /// The answer to `tab`: native, open, or insert with the new word (Next Term's own engine only).
         case answer = 0x61 // a
-        /// A row chosen, or the list closed; or Suggest a Command's line.
+        /// A row chosen, or the list closed; or Suggest a Command's line. Into a folder (`o`, or a new id), and back up
+        /// (`u`), from version 2 (CompletionDrill).
         case take = 0x6B // k
         /// zsh's own list can't be shown: zsh runs its own Tab.
         case native = 0x6E // n
         /// A plugin choice changed (Settings, the question): zsh-autocomplete's list off (q1) or on (q0) in this
         /// shell. Never sent at a prompt by itself.
         case config = 0x63 // c
+        /// The list's keys that waited for a folder's list come after keys typed meanwhile: the hook reports the word now
+        /// (if it changed), then `sync` under this id, so they act on the list for that word. From version 2.
+        case sync = 0x73 // s
     }
 
     /// The bytes for one private key: the prefix, the kind, the id, the payload's length and the payload.
@@ -372,15 +394,32 @@ public enum CompletionProtocol {
         return String([digits[Int(byte >> 4)], digits[Int(byte & 0x0F)]])
     }
 
-    /// The answers to a `tab` report (Next Term's own engine).
+    /// The answers to a `tab` report (Next Term's own engine). An insert with `open`: one folder went in, and the list
+    /// of what is inside opens for the word now (the single-match rule, CompletionDrill).
     public static func nativeAnswer(id: Int) -> [UInt8] { frame(.answer, id: id, fields: ["n"]) }
     public static func openAnswer(id: Int) -> [UInt8] { frame(.answer, id: id, fields: ["o"]) }
-    public static func insertAnswer(id: Int, word: String) -> [UInt8] { frame(.answer, id: id, fields: ["i", word]) }
+    public static func insertAnswer(id: Int, word: String, open: Bool = false) -> [UInt8] {
+        frame(.answer, id: id, fields: ["i", word] + (open ? ["o"] : []))
+    }
 
-    /// A row of Next Term's own list: the word the shell last reported, and the word that replaces it.
-    public static func takeWord(id: Int, old: String, new: String) -> [UInt8] { frame(.take, id: id, fields: ["w", old, new]) }
-    /// A row of zsh's own list, by its index, with the word the shell last reported.
-    public static func takeMatch(id: Int, old: String, index: Int) -> [UInt8] { frame(.take, id: id, fields: ["m", old, String(index)]) }
+    /// A row of Next Term's own list: the word the shell last reported, and the word that replaces it. `open`: into a
+    /// folder, so the list stays open and the shell reports the word now.
+    public static func takeWord(id: Int, old: String, new: String, open: Bool = false) -> [UInt8] {
+        frame(.take, id: id, fields: ["w", old, new] + (open ? ["o"] : []))
+    }
+    /// A row of zsh's own list, by its index, with the word the shell last reported. `drill`: into that folder, whose
+    /// matches zsh sends under that id (`done … kept` when it can't be entered, `done … inserted` when nothing is inside).
+    public static func takeMatch(id: Int, old: String, index: Int, drill: Int? = nil) -> [UInt8] {
+        frame(.take, id: id, fields: ["m", old, String(index)] + (drill.map { [padded($0 % 1_000_000)] } ?? []))
+    }
+    /// Back up from a folder gone into on zsh's path (list `id`): the hook's list `parent` is open again. ⌫ took the `/`
+    /// already; ← sends the word now (`old`) and the one to put back (`new`), the word that folder was gone into from.
+    public static func backUp(id: Int, to parent: Int, old: String? = nil, new: String? = nil) -> [UInt8] {
+        let words = old.map { [$0, new ?? ""] } ?? []
+        return frame(.take, id: id, fields: ["u", padded(parent % 1_000_000)] + words)
+    }
+    /// Asks the hook for the word now, then `sync` under `id` (Next Term's own count, not a list's).
+    public static func sync(id: Int) -> [UInt8] { frame(.sync, id: id) }
     /// The list closed with nothing chosen: the shell stops reporting the line.
     public static func close(id: Int) -> [UInt8] { frame(.take, id: id, fields: ["c"]) }
     /// Suggest a Command's answer: the whole line, replaced (one line or several). It never runs.
@@ -389,14 +428,16 @@ public enum CompletionProtocol {
     /// 150 to 600 ms. `quiet`: zsh-autocomplete's list as you type off (q1) or on (q0), where the shell's last `arm`
     /// says otherwise (a server's hook starts with it on). Both ride on the Tab, never as a key of their own sent at
     /// each prompt: a program started by a Return typed ahead of that key would read it. The wait comes first, where
-    /// an older hook looks for it.
-    public static func tabKey(id: Int, wait: Double? = nil, quiet: Bool? = nil) -> [UInt8] {
+    /// an older hook looks for it. `drill` (d): on zsh's path one folder that matches goes in and what is inside is
+    /// listed (the single-match rule, CompletionDrill).
+    public static func tabKey(id: Int, wait: Double? = nil, quiet: Bool? = nil, drill: Bool = false) -> [UInt8] {
         var fields: [String] = []
         if let wait {
             let milliseconds = min(600, max(150, Int((wait * 1000).rounded())))
             fields.append("w\(milliseconds)")
         }
         if let quiet { fields.append(quiet ? "q1" : "q0") }
+        if drill { fields.append("d") }
         return frame(.tab, id: id, fields: fields)
     }
 }

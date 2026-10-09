@@ -16,7 +16,7 @@ public enum ZshCompletionScript {
     /// What each placeholder becomes, as zsh source text.
     static let values: [(String, String)] = [
         ("@NT_PREFIX@", #"\e[6973~"#),
-        ("@NT_VERSION@", #"1"#),
+        ("@NT_VERSION@", #"2"#),
         ("@NT_WAIT@", #"0.15"#),
         ("@NT_MAX_LINE@", #"16384"#),
         ("@NT_MAX_MATCHES@", #"2000"#),
@@ -48,11 +48,14 @@ typeset -g __nextterm_cstartq=
 [[ ${__nextterm_cstart-} == q ]] && __nextterm_cstartq=1
 typeset -ga __nextterm_cf __nextterm_cwords
 # zsh's own matches, kept for the open list: each as compadd quoted it, the options to add it again, its
-# IPREFIX, PREFIX, SUFFIX and ISUFFIX; and what the popup shows: the text, the description, the group, the kind.
-typeset -ga __nextterm_cmw __nextterm_cma __nextterm_cmp __nextterm_cmt __nextterm_cmd __nextterm_cmg __nextterm_cmk
+# IPREFIX, PREFIX, SUFFIX and ISUFFIX; and what the popup shows: the text, the description, the group, the kind; and
+# for a folder zsh's file completion added, where it is (what going into it checks).
+typeset -ga __nextterm_cmw __nextterm_cma __nextterm_cmp __nextterm_cmt __nextterm_cmd __nextterm_cmg __nextterm_cmk __nextterm_cmf
 typeset -gA __nextterm_cmseen
 typeset -g __nextterm_cmstem=
 typeset -gi __nextterm_cmi=0
+# Lists gone into a folder from, kept for ⌫ (__nextterm_cpush): how many.
+typeset -gi __nextterm_cdepth=0
 
 # A scratch descriptor (close-on-exec, its file already removed) to read what `bindkey` prints without a
 # subshell.
@@ -204,12 +207,22 @@ __nextterm_ckeywidget() {
   case $__nextterm_ck in
     (t) __nextterm_ctab $__nextterm_cid ;;
     (k) if [[ ${__nextterm_cf[1]-} == l ]]; then __nextterm_ctakeline
+        elif [[ ${__nextterm_cf[1]-} == u ]]; then __nextterm_cup ${__nextterm_cf[2]-}
         elif [[ $__nextterm_cid == $__nextterm_copen ]]; then __nextterm_ctake; fi ;;
     (n) # Next Term can't show zsh's list: zsh's own Tab.
         if [[ $__nextterm_cid == $__nextterm_copen ]]; then __nextterm_cclose; zle -U $'\t'; fi ;;
     (c) __nextterm_cconfig ;;
+    (s) __nextterm_csync $__nextterm_cid ;;
   esac
   return 0
+}
+
+# Next Term's list keys that waited for a folder's list come after keys typed meanwhile: the word now goes first, if it
+# changed (zsh may not have redrawn since), then `sync` with Next Term's id, so they act on the list for that word.
+__nextterm_csync() {
+  emulate -L zsh
+  [[ -n $__nextterm_copen ]] && __nextterm_cline
+  __nextterm_cmark sync $1
 }
 
 # The word before the cursor, as typed: the last of zsh's own words for the command so far ("" after a blank).
@@ -250,14 +263,16 @@ __nextterm_cplain() {
 
 # A real Tab, sent as the private key with Next Term's id. On a server it says how long to wait for Next Term's
 # answer (w<ms>, from the connection's round trip, 150 to 600 ms). Where zsh-autocomplete's list as you type isn't
-# as the user chose, it says that too (q1 or q0): a server's hook starts with it on.
+# as the user chose, it says that too (q1 or q0): a server's hook starts with it on. With d, one folder that matches
+# goes in and what is inside is listed (zsh's path; Next Term's own engine answers so itself).
 __nextterm_ctab() {
   emulate -L zsh -o extendedglob
-  local id=$1 f
+  local id=$1 f drill=
   for f in "${__nextterm_cf[@]}"; do
     case $f in
       (w<150-600>) typeset -gF __nextterm_cwait=$(( ${f#w} / 1000.0 )) ;;
       (q[01]) __nextterm_cquietkey $f ;;
+      (d) drill=1 ;;
     esac
   done
   __nextterm_cclose
@@ -265,7 +280,7 @@ __nextterm_ctab() {
     __nextterm_cdone $id native
     zle -U $'\t'
   elif (( ${+functions[compdef]} && ${+functions[_main_complete]} )); then
-    __nextterm_csystem $id
+    __nextterm_csystem $id $drill
   else
     __nextterm_cengine $id
   fi
@@ -311,7 +326,12 @@ __nextterm_cengine() {
     [[ $__nextterm_ck == a && $__nextterm_cid == $id ]] && break
   done
   case ${__nextterm_cf[1]-} in
-    (i) LBUFFER=${LBUFFER:0:$(( ${#LBUFFER} - ${#__nextterm_cword} ))}${__nextterm_cf[2]-} ;;
+    (i) LBUFFER=${LBUFFER:0:$(( ${#LBUFFER} - ${#__nextterm_cword} ))}${__nextterm_cf[2]-}
+        # With o: one folder went in, and the list of what is inside opens for the word now.
+        if [[ ${__nextterm_cf[3]-} == o ]]; then
+          __nextterm_cwordnow
+          __nextterm_copenlist $id e
+        fi ;;
     (o) __nextterm_copenlist $id e ;;
     (*) zle -U $'\t' ;;
   esac
@@ -335,7 +355,7 @@ __nextterm_ccompadd() {
   local ret=$?
   emulate -L zsh -o extendedglob
   (( ${#hits} )) || return $ret
-  local i dir= suffix= kind word stem=$IPREFIX${hpre[-p]-}
+  local i dir= suffix= kind word place stem=$IPREFIX${hpre[-p]-}
   for (( i = 1; i < ${#opts}; i++ )); do
     [[ $opts[i] == -W ]] && dir=$opts[i+1]
     [[ $opts[i] == -S ]] && suffix=$opts[i+1]
@@ -348,9 +368,10 @@ __nextterm_ccompadd() {
     word=$hits[i]
     (( ${+__nextterm_cmseen[$word]} )) && continue
     __nextterm_cmseen[$word]=1
-    kind=
+    kind= place=
     if [[ $word == */ || $suffix == / ]] || { [[ -n $isfile ]] && (( ${#__nextterm_cmw} < @NT_MAX_MATCHES@ )) && [[ -d $dir${(Q)word} ]]; }; then
       kind=d
+      [[ -n $isfile ]] && place=$dir${(Q)word}
     elif [[ -n $isfile ]]; then
       kind=f
     fi
@@ -361,6 +382,7 @@ __nextterm_ccompadd() {
     __nextterm_cmd+=( "${dscr[i]-}" )
     __nextterm_cmg+=( "${expl[2]-}" )
     __nextterm_cmk+=( "$kind" )
+    __nextterm_cmf+=( "$place" )
   done
   # zsh counts the call as a success, so the completers after it don't run, as with its own Tab.
   builtin compadd -U -qS '' ''
@@ -400,28 +422,138 @@ __nextterm_ctakematch() {
   return 0
 }
 
-# With zsh's completion system loaded: zsh's own matches. None: zsh's own Tab. One: it goes in. More: they go to
-# Next Term in `comp` marks, and the list opens.
-__nextterm_csystem() {
+# zsh's own matches for the word now, in the arrays above.
+__nextterm_ccapturenow() {
   emulate -L zsh
-  local id=$1
   __nextterm_cmw=() __nextterm_cma=() __nextterm_cmp=() __nextterm_cmt=() __nextterm_cmd=() __nextterm_cmg=() __nextterm_cmk=()
-  __nextterm_cmseen=() __nextterm_cmstem=
+  __nextterm_cmf=() __nextterm_cmseen=() __nextterm_cmstem=
   # Defined only now: a completion widget in a shell without zsh's completion system would leave its own Tab
   # with nothing to complete.
   (( ${+widgets[__nextterm_ccapturewidget]} )) || zle -C __nextterm_ccapturewidget complete-word __nextterm_ccapture
   (( ${+widgets[__nextterm_ctakewidget]} )) || zle -C __nextterm_ctakewidget complete-word __nextterm_ctakematch
   zle __nextterm_ccapturewidget
+}
+
+# With zsh's completion system loaded: zsh's own matches. None: zsh's own Tab. One: it goes in; with $2 (the Tab's d),
+# a folder that goes in so has what is inside listed. More: they go to Next Term in `comp` marks, and the list opens.
+__nextterm_csystem() {
+  emulate -L zsh
+  local id=$1 drill=${2-}
+  __nextterm_ccapturenow
   case ${#__nextterm_cmw} in
     (0) __nextterm_cdone $id native
         zle -U $'\t' ;;
     (1) __nextterm_cmi=1
         zle __nextterm_ctakewidget
-        __nextterm_cdone $id inserted ;;
+        if [[ -n $drill && ${__nextterm_cmk[1]-} == d ]] && __nextterm_centers 1; then
+          __nextterm_cinside $id into
+        else
+          __nextterm_cdone $id inserted
+        fi ;;
     (*) __nextterm_ccomp $id
         __nextterm_copenlist $id z ;;
   esac
   return 0
+}
+
+# Match $1 is a folder that can be entered, or one whose place zsh didn't say (zsh lists what it can inside).
+__nextterm_centers() {
+  local place=${__nextterm_cmf[$1]-}
+  [[ -z $place ]] || [[ -d $place && -x $place ]]
+}
+
+# A folder just went in: zsh's matches for what is inside, listed under $1. None: the list closes (done inserted). With
+# $2 (the single-match rule), an `into` mark first says the list is a folder's inside, for VoiceOver.
+__nextterm_cinside() {
+  emulate -L zsh
+  local id=$1
+  __nextterm_cwordnow
+  __nextterm_ccapturenow
+  if (( ${#__nextterm_cmw} )); then
+    [[ -n ${2-} ]] && __nextterm_cmark into $id
+    __nextterm_ccomp $id
+    __nextterm_copenlist $id z
+  else
+    __nextterm_cclose
+    __nextterm_cdone $id inserted
+  fi
+}
+
+# Into folder match $1 of the open list, for Next Term's Tab on its row: what is inside is listed under $2. One that
+# can't be entered (no permission, gone) is refused (done kept), and the list stays as it was. Else the list's
+# matches are kept for ⌫ (__nextterm_cup), and zsh puts the folder in as its own Tab would.
+__nextterm_cdrill() {
+  emulate -L zsh
+  local i=$1 to=$2 from=$__nextterm_copen
+  if [[ ${__nextterm_cmk[i]-} != d ]] || ! __nextterm_centers $i; then
+    __nextterm_cdone $to kept
+    return 0
+  fi
+  __nextterm_cpush $from
+  # No `line` for the list gone from while zsh works.
+  __nextterm_copen= __nextterm_cpath=
+  __nextterm_cmi=$i
+  zle __nextterm_ctakewidget
+  __nextterm_cinside $to
+}
+
+# The open list's matches, kept for going back up: one level for each folder gone into.
+__nextterm_cpush() {
+  emulate -L zsh
+  local n=$(( __nextterm_cdepth + 1 )) a src
+  for a in cmw cma cmp cmt cmd cmg cmk cmf; do
+    src=__nextterm_$a
+    typeset -ga __nextterm_${a}_$n
+    set -A __nextterm_${a}_$n "${(@P)src}"
+  done
+  typeset -g __nextterm_cmstem_$n=$__nextterm_cmstem __nextterm_cmid_$n=$1
+  __nextterm_cdepth=$n
+}
+
+# Back up from a folder gone into (the key comes for the list open now): the list it was gone into from, open again
+# under its own id $1, for the word now. ⌫ took the `/` already; ← sends the word now and the one that folder was gone
+# into from, which goes back in its place, and a line that no longer has that word beeps. Anything else, such as a list
+# that closed meanwhile: Next Term hears that list is gone (`line` … left).
+__nextterm_cup() {
+  emulate -L zsh
+  local to=$1 old=${__nextterm_cf[3]-} n=$__nextterm_cdepth a src=__nextterm_cmid_$__nextterm_cdepth
+  if [[ -z $__nextterm_copen || $__nextterm_cid != $__nextterm_copen ]] || (( n < 1 )) || [[ ${(P)src-} != $to ]]; then
+    [[ $to == <-> ]] && __nextterm_cmark line $to 1
+    [[ -n $__nextterm_copen && $__nextterm_cid == $__nextterm_copen ]] && __nextterm_cclose
+    return 0
+  fi
+  if [[ -n $old ]]; then
+    if [[ $LBUFFER != "$__nextterm_cbase$old" || $RBUFFER != "$__nextterm_crbuf" ]]; then
+      zle beep
+      __nextterm_cmark line $to 1
+      __nextterm_cclose
+      return 0
+    fi
+    LBUFFER=$__nextterm_cbase${__nextterm_cf[4]-}
+  fi
+  for a in cmw cma cmp cmt cmd cmg cmk cmf; do
+    src=__nextterm_${a}_$n
+    set -A __nextterm_$a "${(@P)src}"
+    unset $src
+  done
+  src=__nextterm_cmstem_$n
+  __nextterm_cmstem=${(P)src}
+  unset $src __nextterm_cmid_$n
+  __nextterm_cdepth=$(( n - 1 ))
+  __nextterm_copen= __nextterm_cpath=
+  __nextterm_cwordnow
+  __nextterm_copenlist $to z
+}
+
+# The lists kept for going back up, dropped.
+__nextterm_cforget() {
+  emulate -L zsh
+  local n a
+  for (( n = __nextterm_cdepth; n > 0; n-- )); do
+    for a in cmw cma cmp cmt cmd cmg cmk cmf; do unset __nextterm_${a}_$n; done
+    unset __nextterm_cmstem_$n __nextterm_cmid_$n
+  done
+  __nextterm_cdepth=0
 }
 
 # The matches as `comp` marks: the total, then the first @NT_MAX_MATCHES@ in chunks of under @NT_CHUNK@ bytes.
@@ -462,6 +594,8 @@ __nextterm_copenlist() {
 
 __nextterm_cclose() {
   __nextterm_copen= __nextterm_cpath= __nextterm_cbase= __nextterm_crbuf=
+  (( __nextterm_cdepth )) && __nextterm_cforget
+  return 0
 }
 
 # The word now, and whether the cursor left it. Sent only while a list is open, and only when it changed.
@@ -505,22 +639,40 @@ __nextterm_ctakeline() {
   return 0
 }
 
-# A row was chosen (or the list closed), for the open id.
+# A row was chosen (or the list closed), for the open id. Into a folder: Next Term's own word with o, which keeps the
+# list open for the word now, or zsh's match with the id what is inside is listed under (__nextterm_cdrill). u: back up
+# (__nextterm_cup, from the key's widget). A take that finds another word beeps; one into a folder says the list is gone
+# (`line` … left).
 __nextterm_ctake() {
   emulate -L zsh -o extendedglob
-  local how=${__nextterm_cf[1]-} old=${__nextterm_cf[2]-}
+  local how=${__nextterm_cf[1]-} old=${__nextterm_cf[2]-} id=$__nextterm_copen
   local same=0
   [[ $LBUFFER == "$__nextterm_cbase$old" && $RBUFFER == "$__nextterm_crbuf" ]] && same=1
   case $how in
     (w) # Next Term's own: the new word, quoted by Next Term.
-      if (( same )); then LBUFFER=$__nextterm_cbase${__nextterm_cf[3]-}; else zle beep; fi ;;
+      local into=${__nextterm_cf[4]-}
+      if (( same )); then
+        LBUFFER=$__nextterm_cbase${__nextterm_cf[3]-}
+        if [[ $into == o ]]; then
+          __nextterm_cline force
+          return 0
+        fi
+      else
+        zle beep
+        [[ $into == o ]] && __nextterm_cmark line $id 1
+      fi ;;
     (m) # zsh's own, by its place in the list: zsh adds it again and quotes it.
-      local index=${__nextterm_cf[3]-}
+      local index=${__nextterm_cf[3]-} to=${__nextterm_cf[4]-}
       if (( same )) && [[ $__nextterm_cpath == z && $index == <1-> ]] && (( index <= ${#__nextterm_cmw} )); then
+        if [[ $to == <-> ]]; then
+          __nextterm_cdrill $index $to
+          return 0
+        fi
         __nextterm_cmi=$index
         zle __nextterm_ctakewidget
       else
         zle beep
+        [[ -n $to ]] && __nextterm_cmark line $id 1
       fi ;;
   esac
   __nextterm_cclose

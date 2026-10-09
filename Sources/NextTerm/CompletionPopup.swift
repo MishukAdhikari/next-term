@@ -42,13 +42,15 @@ final class CompletionPopup: NSObject, NSTableViewDataSource, NSTableViewDelegat
     // MARK: showing
 
     /// Shows `rows` (or the Loading row) under the word starting at `anchor`, the screen rectangle of the
-    /// word's first cell, over `parent`. The selection stays on its row while the rows are the same.
-    func show(_ rows: [CompletionList.Row], loading: Bool, footer note: String?, anchor: NSRect, over parent: NSWindow) {
-        let changed = rows != self.rows || loading != self.loading
+    /// word's first cell, over `parent`. The selection stays on its row while the rows are the same; new rows, or a
+    /// `fresh` list (a folder gone into or back up to), start at row `preferred`, or the first.
+    func show(_ rows: [CompletionList.Row], loading: Bool, footer note: String?, anchor: NSRect, over parent: NSWindow,
+              fresh: Bool = false, choosing preferred: Int? = nil) {
+        let changed = fresh || rows != self.rows || loading != self.loading
         self.rows = rows
         self.loading = loading
         if changed {
-            selected = 0
+            selected = rows.isEmpty ? 0 : max(0, min(rows.count - 1, preferred ?? 0))
             table.reloadData()
         }
         footer.stringValue = note ?? ""
@@ -84,7 +86,13 @@ final class CompletionPopup: NSObject, NSTableViewDataSource, NSTableViewDelegat
         selected = row
         table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         table.scrollRowToVisible(row)
-        if announce { Self.announce("\(Self.spoken(rows[row])), \(row + 1) of \(rows.count)") }
+        if announce { announceSelected() }
+    }
+
+    /// The chosen row, as ↓ ↑ say it: "next-term, folder, 2 of 3".
+    func announceSelected() {
+        guard rows.indices.contains(selected) else { return }
+        Self.announce("\(Self.spoken(rows[selected])), \(selected + 1) of \(rows.count)")
     }
 
     /// The panel's size for the rows, and its place: under the word on the caret's row, above it when there
@@ -131,7 +139,15 @@ final class CompletionPopup: NSObject, NSTableViewDataSource, NSTableViewDelegat
         Self.announce("\(rows.count) completion\(rows.count == 1 ? "" : "s"), \(Self.spoken(first))")
     }
 
+    #if DEBUG
+    /// For the self-test: what VoiceOver was told last.
+    nonisolated(unsafe) static var lastAnnouncement = ""
+    #endif
+
     static func announce(_ text: String) {
+        #if DEBUG
+        lastAnnouncement = text
+        #endif
         let element: Any = NSApp.keyWindow ?? NSApp as Any
         NSAccessibility.post(element: element, notification: .announcementRequested,
                              userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])

@@ -76,9 +76,10 @@ extension SelfTest {
     static func makeCompletionServer(in dir: URL) -> CompletionServer {
         let server = CompletionServer(base: dir.appendingPathComponent("server"))
         let fm = FileManager.default
-        for folder in ["foo", "Sources", "lib"] {
+        for folder in ["foo/bar", "Sources", "lib"] {
             try? fm.createDirectory(at: server.project.appendingPathComponent(folder), withIntermediateDirectories: true)
         }
+        fm.createFile(atPath: server.project.appendingPathComponent("foo/x.txt").path, contents: nil)
         try? fm.createDirectory(at: server.bin, withIntermediateDirectories: true)
         // tmux, if there is one, on the fake server's PATH, with a socket folder of its own (TMUX_TMPDIR).
         if let tmux = server.tmux { try? fm.createSymbolicLink(atPath: server.bin.appendingPathComponent("tmux").path, withDestinationPath: tmux) }
@@ -215,6 +216,8 @@ extension SelfTest {
                   "\(session.lastWrite)")
             await clear()
 
+            await completionServerDrillChecks(c, window, tab, server)
+
             // A slow server: the shell's own Tab after the deadline; keys typed while it lists go after that Tab.
             RemoteCompletion.shared.forget()
             server.flag("slow", true)
@@ -348,6 +351,126 @@ extension SelfTest {
         await clear()
     }
 
+    /// Going into folders on a server's screen (no hook there), over the tab's connection: ⇥ or → on a folder types
+    /// `name/` and lists what is inside; ← types it back out to the word gone in from; ⌫ that takes the `/` goes back up
+    /// too; → on a file puts it on the line; an empty folder goes in alone; one listed too slowly goes in alone, never
+    /// a stall.
+    private static func completionServerDrillChecks(_ c: TerminalWindowController, _ window: TerminalWindow, _ tab: TerminalTab,
+                                                    _ server: CompletionServer) async {
+        let session = tab.completion
+        let popup = c.completions.popup
+        let part = "Tab completion, servers: going into folders"
+        func key(_ characters: String, _ code: UInt16, _ flags: NSEvent.ModifierFlags = []) { pressKey(window, characters, code: code, flags: flags) }
+        func right() { key("\u{F703}", 124, [.function, .numericPad]) }
+        func left() { key("\u{F702}", 123, [.function, .numericPad]) }
+        func chosen() -> String? { popup.shownTexts.indices.contains(popup.selected) ? popup.shownTexts[popup.selected] : nil }
+        func choose(_ text: String) -> Bool {
+            guard let index = popup.shownTexts.firstIndex(of: text) else { return false }
+            for _ in 0..<abs(index - popup.selected) { key("", index > popup.selected ? 125 : 126) }
+            return chosen() == text
+        }
+        func clear() async {
+            tab.view.send(txt: "\u{15}")
+            await pause(0.4)
+        }
+        func open(_ line: String) async -> Bool {
+            tab.view.send(txt: line)
+            await pause(0.5)
+            key("\t", 48)
+            return await wait(3) { popup.isVisible && !popup.shownTexts.isEmpty }
+        }
+
+        if await open("ls ~/app/") {
+            check(choose("foo"), "\(part): `ls ~/app/` lists foo", "\(popup.shownTexts)")
+            key("\t", 48)
+            check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/foo/") && popup.shownTexts == ["bar", "x.txt"] && popup.selected == 0 },
+                  "\(part): ⇥ on a folder types `foo/` and lists what is inside, files and folders after ls", "\(promptLine(tab)) \(popup.shownTexts)")
+            check(session.lastDrill == .into, "\(part): it went in", String(describing: session.lastDrill))
+            left()
+            check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/") && popup.shownTexts.contains("food.txt") && chosen() == "foo" && popup.isVisible },
+                  "\(part): ← types it back out, and the list there has foo chosen", "\(promptLine(tab)) \(popup.shownTexts) \(popup.selected)")
+            right()
+            check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/foo/") && popup.shownTexts == ["bar", "x.txt"] }, "\(part): → goes in as ⇥ does",
+                  "\(promptLine(tab)) \(popup.shownTexts)")
+            key("\u{7f}", 51)
+            check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/foo") && popup.shownTexts.contains("food.txt") && chosen() == "foo" },
+                  "\(part): ⌫ that takes the `/` goes back up, with foo chosen", "\(promptLine(tab)) \(popup.shownTexts)")
+            right()
+            _ = await wait(3) { popup.shownTexts == ["bar", "x.txt"] }
+            _ = choose("x.txt")
+            right()
+            check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/foo/x.txt") && !popup.isVisible }, "\(part): → on a file puts it on the line and closes",
+                  promptLine(tab))
+            check(!tab.status.running, "\(part): and nothing runs")
+        } else {
+            check(false, "\(part): `ls ~/app/` opens the list")
+        }
+        await clear()
+
+        // A letter, then ⇥ on a folder listed a moment ago, at once: its listing is at hand before the letter has echoed,
+        // so ⇥ waits for the echo before it reads the word. The line ends in `foo/`, not `ffoo/`.
+        if await open("ls ~/app/") {
+            _ = choose("foo")
+            key("\t", 48)
+            _ = await wait(3) { promptLine(tab).hasSuffix("ls ~/app/foo/") && popup.shownTexts == ["bar", "x.txt"] }
+            left()
+            _ = await wait(3) { promptLine(tab).hasSuffix("ls ~/app/") && chosen() == "foo" }
+            typeKeys(window, "f")
+            key("\t", 48)
+            check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/foo/") && popup.shownTexts == ["bar", "x.txt"] } && !promptLine(tab).contains("ffoo"),
+                  "\(part): a letter and ⇥ on a folder listed a moment ago, at once: the name goes on after the letter's echo",
+                  "\(promptLine(tab)) \(popup.shownTexts)")
+        }
+        await clear()
+
+        // Keys pressed while a folder is listed wait, in order: → ↓ ↩︎ puts the second row inside on the line; → b ⇥
+        // goes into foo, b narrows it, and ⇥ goes into bar (empty, so it goes in alone).
+        if await open("ls ~/app/") {
+            _ = choose("foo")
+            right()
+            key("", 125)
+            key("\r", 36)
+            check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/foo/x.txt") && !popup.isVisible },
+                  "\(part): → ↓ ↩︎ at once: the second row inside goes on the line", promptLine(tab))
+        }
+        await clear()
+        if await open("ls ~/app/") {
+            _ = choose("foo")
+            right()
+            typeKeys(window, "b")
+            key("\t", 48)
+            check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/foo/bar/") && !popup.isVisible },
+                  "\(part): → b ⇥ at once: into foo, b, then into bar", promptLine(tab))
+        }
+        await clear()
+
+        // After cd, folders only: lib is empty, so it goes in alone and the list closes.
+        if await open("cd ~/app/") {
+            check(!popup.shownTexts.contains("food.txt") && choose("lib"), "\(part): `cd ~/app/` lists only folders", "\(popup.shownTexts)")
+            key("\t", 48)
+            check(await wait(3) { promptLine(tab).hasSuffix("cd ~/app/lib/") && !popup.isVisible }, "\(part): an empty folder goes in alone, and the list closes",
+                  promptLine(tab))
+        }
+        await clear()
+
+        // A folder listed too slowly: the name goes in alone and the list closes, within the listing's deadline.
+        if await open("ls ~/app/") {
+            _ = choose("foo")
+            RemoteCompletion.shared.forget()
+            server.flag("slow", true)
+            let pressed = Date()
+            key("\t", 48)
+            check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/foo/") && !popup.isVisible } && Date().timeIntervalSince(pressed) < 1.6,
+                  "\(part): a folder listed too slowly goes in alone and the list closes, never a stall",
+                  String(format: "%@ after %.1f s", promptLine(tab), Date().timeIntervalSince(pressed)))
+            server.flag("slow", false)
+            // The slow check still holds the connection's one listing: let it end.
+            _ = await wait(4) { !(tab.controlPath.map(RemoteCompletion.shared.isListing(on:)) ?? false) }
+        }
+        await clear()
+        RemoteCompletion.shared.forget()
+    }
+
     /// Step 3, U12 and U13: the hook on a stand-in server, only after the question; zsh's own completions there
     /// (AE7's second half, for zsh: bash's hook waits for the owner's word); a hook deleted on the server, Turn On
     /// Again, Remove leaving the files as they were, and a home that can't be written.
@@ -465,6 +588,37 @@ extension SelfTest {
                 pressKey(window, "\r", code: 36)
                 check(await wait(3) { lineToCaret(tab).hasSuffix("git checkout main ") }, "and Return puts it on the line, zsh's way",
                       lineToCaret(tab).debugDescription)
+            }
+            tab.view.send(txt: "\u{3}")
+            _ = await wait(3) { session.state.isArmed }
+        }
+        // Going into folders through the server's hook, with zsh's completions there: → on a folder goes in, and zsh
+        // lists what is inside; ← puts back the word gone in from, its list again with that folder chosen.
+        if armed, session.state.arm?.drills == true, await focus(c, tab, for: "Tab completion, the server hook: going into folders") {
+            func shown() -> [String] { popup.shownTexts.map { $0.hasSuffix("/") ? String($0.dropLast()) : $0 } }
+            tab.view.send(txt: "cd ~/app/")
+            await pause(0.5)
+            pressKey(window, "\t", code: 48)
+            if await wait(5, { popup.isVisible && !popup.loading && shown().contains("foo") }), let foo = shown().firstIndex(of: "foo") {
+                for _ in 0..<foo { pressKey(window, "", code: 125) }
+                pressKey(window, "\u{F703}", code: 124, flags: [.function, .numericPad])
+                check(await wait(5) { promptLine(tab).hasSuffix("cd ~/app/foo/") && shown() == ["bar"] },
+                      "Tab completion, the server hook: → on a folder goes into it, and zsh there lists what is inside",
+                      "\(promptLine(tab)) \(popup.shownTexts)")
+                pressKey(window, "\u{F702}", code: 123, flags: [.function, .numericPad])
+                check(await wait(5) { promptLine(tab).hasSuffix("cd ~/app/") && shown().contains("lib") && shown().firstIndex(of: "foo") == popup.selected },
+                      "Tab completion, the server hook: ← puts back the word gone in from, with that folder chosen",
+                      "\(promptLine(tab)) \(popup.shownTexts) \(popup.selected)")
+                // → then b and ⇥ at once: into foo; b goes to the shell once zsh has listed it; ⇥ waits for the hook's
+                // word with b (its `sync`), then goes into bar, which is empty, so it goes in alone.
+                pressKey(window, "\u{F703}", code: 124, flags: [.function, .numericPad])
+                typeKeys(window, "b")
+                pressKey(window, "\t", code: 48)
+                check(await wait(5) { promptLine(tab).hasSuffix("cd ~/app/foo/bar/") && !popup.isVisible },
+                      "Tab completion, the server hook: → b ⇥ at once go into foo, then bar, in that order", promptLine(tab))
+                pressKey(window, "\u{1b}", code: 53)
+            } else {
+                check(false, "Tab completion, the server hook: `cd ~/app/` lists the server's folders through the hook", "\(popup.shownTexts)")
             }
             tab.view.send(txt: "\u{3}")
             _ = await wait(3) { session.state.isArmed }

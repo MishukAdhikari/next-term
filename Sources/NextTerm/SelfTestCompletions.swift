@@ -26,6 +26,7 @@ extension SelfTest {
         await completionKeyChecks(c, dir: dir)
         await completionPopupChecks(c, dir: dir)
         await completionZshChecks(c, dir: dir)
+        await completionDrillChecks(c, dir: dir)
         await completionSettingChecks(c, dir: dir)
         await completionOwnerChecks(c, dir: dir)
         await completionQuietChecks(c, dir: dir)
@@ -367,8 +368,10 @@ extension SelfTest {
             await clearLine(tab)
         }
         if await open("cd ") {
-            key("", 124)
-            check(await wait(2) { !popup.isVisible } && session.state.isArmed, "Tab completion: → closes the list")
+            // The first row is `many`, which holds only files: after cd, → goes in alone and the list closes.
+            key("\u{F703}", 124, [.function, .numericPad])
+            check(await wait(2) { !popup.isVisible && promptLine(tab).hasSuffix("cd many/") } && session.state.isArmed,
+                  "Tab completion: → on a folder with no folders inside puts it on the line, and the list closes", promptLine(tab))
             await clearLine(tab)
         }
 
@@ -546,6 +549,235 @@ extension SelfTest {
         check(!popup.isVisible && lineToCaret(tab).hasSuffix("$ ntslow ") && session.state.isArmed, "and the line stays as it was",
               "\(popup.isVisible ? "the list shows; " : "")\(lineToCaret(tab).debugDescription) \(session.state.phase)")
         await clearLine(tab)
+    }
+
+    /// Walking down a path with Tab (CompletionDrill), on Next Term's own engine and on zsh's own completions: ⇥ or →
+    /// on a folder goes into it and lists what is inside; ↩︎, a click, and → on a file put the name on the line; ⌫ or ←
+    /// in a folder gone into goes back up; ← at the top moves the cursor; an empty folder goes in alone, a closed one
+    /// beeps; one folder that matches goes in and lists what is inside; keys pressed meanwhile keep their order; and
+    /// nothing runs.
+    private static func completionDrillChecks(_ c: TerminalWindowController, dir: URL) async {
+        let started = Date()
+        defer { note("Tab completion, going into folders: \(String(format: "%.1f", Date().timeIntervalSince(started))) s (budget 150 s)") }
+        guard let window = c.window as? TerminalWindow else { return }
+        let walk = dir.appendingPathComponent("walk")
+        let fm = FileManager.default
+        for folder in ["projects/next-term/Sources", "projects/cv", "Pictures", "empty", "locked", "Sp ace/inner", "many"] {
+            try? fm.createDirectory(at: walk.appendingPathComponent(folder), withIntermediateDirectories: true)
+        }
+        for file in ["notes.txt", "projects/todo.txt", "projects/next-term/README.md"] {
+            fm.createFile(atPath: walk.appendingPathComponent(file).path, contents: nil)
+        }
+        for i in 0..<2500 { fm.createFile(atPath: walk.appendingPathComponent("many/file-\(i)").path, contents: nil) }
+        let locked = walk.appendingPathComponent("locked").path
+        chmod(locked, 0)
+        defer { chmod(locked, 0o755) }
+        CompletionPreferences.mode = .nextTerm
+        await drillKeyChecks(c, window, in: walk, zshrc: plainZshrc, label: "Next Term's engine")
+        await drillKeyChecks(c, window, in: walk, zshrc: plainZshrc + "autoload -Uz compinit && compinit -u -D\n", label: "zsh's completions")
+    }
+
+    /// The checks of completionDrillChecks in one tab: Next Term's own engine with plain zsh, zsh's own completions with
+    /// compinit (where zsh's rows may end in `/`).
+    private static func drillKeyChecks(_ c: TerminalWindowController, _ window: TerminalWindow, in walk: URL, zshrc: String, label: String) async {
+        let zsh = zshrc.contains("compinit")
+        guard let tab = await completionTab(c, in: walk, zshrc: zshrc, name: zsh ? "drill-zsh" : "drill") else { return }
+        defer { c.remove(tab) }
+        let session = tab.completion
+        let popup = c.completions.popup
+        let part = "Tab completion, going into folders (\(label))"
+        func key(_ characters: String, _ code: UInt16, _ flags: NSEvent.ModifierFlags = []) { pressKey(window, characters, code: code, flags: flags) }
+        func tabKey() { key("\t", 48) }
+        // ← and → as the keyboard sends them, so a key that goes on to the shell moves its cursor.
+        func left() { key("\u{F702}", 123, [.function, .numericPad]) }
+        func right() { key("\u{F703}", 124, [.function, .numericPad]) }
+        /// The rows as shown, without the `/` zsh may end a folder with.
+        func shown() -> [String] { popup.shownTexts.map { $0.hasSuffix("/") ? String($0.dropLast()) : $0 } }
+        func chosen() -> String? { shown().indices.contains(popup.selected) ? shown()[popup.selected] : nil }
+        /// The line ends with `text` (the screen keeps no blank at its end).
+        func line(_ text: String) -> Bool { promptLine(tab).hasSuffix(text.trimmingCharacters(in: .whitespaces)) }
+        /// ↓ or ↑ until the row `text` is chosen.
+        func choose(_ text: String) -> Bool {
+            guard let index = shown().firstIndex(of: text) else { return false }
+            for _ in 0..<abs(index - popup.selected) { key("", index > popup.selected ? 125 : 126) }
+            return chosen() == text
+        }
+        /// Types `typed` and presses Tab; true once the list shows its rows.
+        func open(_ typed: String) async -> Bool {
+            tab.view.send(txt: typed)
+            await pause(0.3)
+            tabKey()
+            return await wait(5) { popup.isVisible && !popup.loading && !popup.shownTexts.isEmpty }
+        }
+
+        // ⇥ on a folder: `projects/` on the line, and the same list shows what is inside (folders only after cd), its
+        // first row chosen; VoiceOver says where it went. ⇥ again goes deeper; ⌫ that takes the `/` goes back up with
+        // that folder chosen; ↩︎ still puts the name on the line and closes; nothing runs.
+        if await open("cd ") {
+            let drills = session.drills
+            check(choose("projects"), "\(part): `cd ` lists projects, and ↓ chooses it", "\(popup.shownTexts)")
+            tabKey()
+            check(await wait(3) { line("cd projects/") && shown().sorted() == ["cv", "next-term"] } && popup.isVisible && popup.selected == 0,
+                  "\(part): ⇥ on a folder puts it on the line and lists what is inside, folders only after cd, the first row chosen",
+                  "\(promptLine(tab)) \(popup.shownTexts) \(popup.selected)")
+            check(session.drills == drills + 1 && session.lastDrill == .into, "\(part): it went in once", "\(session.drills - drills) \(String(describing: session.lastDrill))")
+            #if DEBUG
+            check(CompletionPopup.lastAnnouncement == "In projects, 2 items", "\(part): VoiceOver says the folder gone into", CompletionPopup.lastAnnouncement)
+            #endif
+            _ = choose("next-term")
+            tabKey()
+            check(await wait(3) { line("cd projects/next-term/") && shown() == ["Sources"] }, "\(part): ⇥ again goes a folder deeper",
+                  "\(promptLine(tab)) \(popup.shownTexts)")
+            let backUps = session.backUps
+            key("\u{7f}", 51)
+            check(await wait(3) { line("cd projects/next-term") && shown().sorted() == ["cv", "next-term"] && chosen() == "next-term" },
+                  "\(part): ⌫ that takes the `/` goes back up, with that folder chosen", "\(promptLine(tab)) \(popup.shownTexts) \(popup.selected)")
+            check(session.backUps == backUps + 1, "\(part): and it went back up once", "\(session.backUps - backUps)")
+            #if DEBUG
+            check(CompletionPopup.lastAnnouncement.hasPrefix("Back up, next-term"), "\(part): VoiceOver says so", CompletionPopup.lastAnnouncement)
+            #endif
+            key("\r", 36)
+            check(await wait(3) { line("cd projects/next-term/") && !popup.isVisible }, "\(part): ↩︎ puts the chosen name on the line and closes the list",
+                  promptLine(tab))
+            await pause(0.4)
+            check(!tab.status.running && session.state.isArmed, "\(part): and nothing runs")
+        } else {
+            check(false, "\(part): `cd ` + Tab opens the list")
+        }
+        await clearLine(tab)
+
+        // → on a folder goes in as ⇥ does; typing narrows inside; ← puts back the word it was gone into from, and the list
+        // there with that folder chosen; ← at the top closes the list and moves the cursor, as it always did.
+        if await open("cd ") {
+            _ = choose("projects")
+            right()
+            check(await wait(3) { line("cd projects/") && shown().sorted() == ["cv", "next-term"] }, "\(part): → on a folder goes into it as ⇥ does",
+                  "\(promptLine(tab)) \(popup.shownTexts)")
+            typeKeys(window, "n")
+            check(await wait(3) { line("cd projects/n") && shown() == ["next-term"] }, "\(part): typing inside narrows the folder's list", "\(popup.shownTexts)")
+            left()
+            check(await wait(3) { line("cd") && !promptLine(tab).contains("projects") && shown().contains("Pictures") && chosen() == "projects" && popup.isVisible },
+                  "\(part): ← goes back up: the word gone in from on the line, and its list with that folder chosen",
+                  "\(promptLine(tab)) \(popup.shownTexts) \(popup.selected)")
+            right()
+            _ = await wait(3) { line("cd projects/") }
+            _ = choose("next-term")
+            right()
+            _ = await wait(3) { line("cd projects/next-term/") && shown() == ["Sources"] }
+            left()
+            _ = await wait(3) { line("cd projects/") && chosen() == "next-term" }
+            left()
+            check(await wait(3) { line("cd") && !promptLine(tab).contains("projects") && chosen() == "projects" },
+                  "\(part): two folders down, ← twice goes back to the top", "\(promptLine(tab)) \(popup.shownTexts) \(popup.selected)")
+            let written = session.lastWrite
+            left()
+            check(await wait(2) { !popup.isVisible } && session.lastWrite != written, "\(part): ← at the top closes the list and goes on to the shell",
+                  "\(session.lastWrite)")
+            typeKeys(window, "x")
+            check(await wait(3) { promptLine(tab).contains("cdx") }, "\(part): where it moves the cursor", promptLine(tab))
+        } else {
+            check(false, "\(part): `cd ` + Tab opens the list for the arrows")
+        }
+        await clearLine(tab)
+
+        // → on a file: the name on the line, and the list closes, as ↩︎ puts it.
+        if await open("ls ") {
+            check(choose("notes.txt"), "\(part): `ls ` lists files too", "\(popup.shownTexts)")
+            right()
+            check(await wait(3) { line("ls notes.txt") && !popup.isVisible }, "\(part): → on a file puts it on the line and closes the list", promptLine(tab))
+        }
+        await clearLine(tab)
+
+        // Inside after `ls`: files and folders; the 2,000-row cap and its note hold there too.
+        if await open("ls ") {
+            _ = choose("many")
+            tabKey()
+            check(await wait(5) { line("ls many/") && popup.shownTexts.count == 2000 && popup.footerText.contains("2,500") },
+                  "\(part): a folder of 2,500 files lists 2,000 inside, with the note", "\(popup.shownTexts.count) \(popup.footerText)")
+            key("\u{1b}", 53)
+        }
+        await clearLine(tab)
+
+        // An empty folder goes in alone, and the list closes; one that can't be entered beeps, and the list stays.
+        if await open("cd ") {
+            _ = choose("empty")
+            tabKey()
+            check(await wait(3) { line("cd empty/") && !popup.isVisible }, "\(part): ⇥ on an empty folder puts it on the line, and the list closes",
+                  promptLine(tab))
+        }
+        await clearLine(tab)
+        if await open("cd ") {
+            _ = choose("locked")
+            tabKey()
+            await pause(0.6)
+            check(popup.isVisible && !promptLine(tab).contains("locked") && chosen() == "locked",
+                  "\(part): ⇥ on a folder that can't be entered beeps, and the list stays as it was", "\(promptLine(tab)) \(popup.shownTexts)")
+            key("\u{1b}", 53)
+        }
+        await clearLine(tab)
+
+        // A name that needs quoting goes in quoted, as ↩︎ puts it, and what is inside is listed: here by the single-match
+        // rule, which lists the one folder's inside at once (zsh's automatic `/`, then a second Tab).
+        tab.view.send(txt: "cd Sp")
+        await pause(0.3)
+        tabKey()
+        check(await wait(3) { line("cd Sp\\ ace/") && popup.isVisible && shown() == ["inner"] },
+              "\(part): one folder that matches goes in, quoted, and what is inside is listed", "\(promptLine(tab)) \(popup.shownTexts)")
+        #if DEBUG
+        check(CompletionPopup.lastAnnouncement == "In Sp ace, 1 item", "\(part): VoiceOver says the folder the one match went into",
+              CompletionPopup.lastAnnouncement)
+        #endif
+        key("\u{1b}", 53)
+        await clearLine(tab)
+        tab.view.send(txt: "cd Pic")
+        await pause(0.3)
+        tabKey()
+        check(await wait(3) { line("cd Pictures/") } && !popup.isVisible, "\(part): one empty folder that matches goes in alone, with no list",
+              promptLine(tab))
+        await clearLine(tab)
+
+        // Keys pressed while a folder is listed wait for its list and keep their order: → then ↩︎ puts the folder's first
+        // row on the line; → then ← comes back to where it started.
+        if await open("cd ") {
+            _ = choose("projects")
+            right()
+            key("\r", 36)
+            check(await wait(3) { line("cd projects/cv/") && !popup.isVisible }, "\(part): → then ↩︎ at once: the first row inside goes on the line",
+                  promptLine(tab))
+        }
+        await clearLine(tab)
+        if await open("cd ") {
+            _ = choose("projects")
+            right()
+            left()
+            check(await wait(3) { line("cd") && !promptLine(tab).contains("projects") && popup.isVisible && chosen() == "projects" },
+                  "\(part): → then ← at once: back where it started", "\(promptLine(tab)) \(popup.shownTexts)")
+            key("\u{1b}", 53)
+        }
+        await clearLine(tab)
+        // ↓ waits too: → ↓ ↩︎ at once puts the second row inside on the line.
+        if await open("cd ") {
+            _ = choose("projects")
+            right()
+            key("", 125)
+            key("\r", 36)
+            check(await wait(3) { line("cd projects/next-term/") && !popup.isVisible }, "\(part): → ↓ ↩︎ at once: the second row inside goes on the line",
+                  promptLine(tab))
+        }
+        await clearLine(tab)
+        // A letter typed meanwhile keeps its place: → n ⇥ at once goes into projects, n narrows it, and ⇥ goes into
+        // next-term, the row n chose (after the hook's `sync`).
+        if await open("cd ") {
+            _ = choose("projects")
+            right()
+            typeKeys(window, "n")
+            tabKey()
+            check(await wait(3) { line("cd projects/next-term/") && shown() == ["Sources"] && popup.isVisible },
+                  "\(part): → n ⇥ at once: into projects, n, then into next-term", "\(promptLine(tab)) \(popup.shownTexts)")
+            key("\u{1b}", 53)
+        }
+        await clearLine(tab)
+        check(!tab.status.running, "\(part): nothing ran")
     }
 
     /// The setting: Off gives the shell's Tab, Auto brings the list back, the tooltip says who answers, an

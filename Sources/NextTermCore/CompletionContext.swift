@@ -105,7 +105,6 @@ public struct CompletionContext: Equatable, Sendable {
     /// name in the same folder (a `/` typed, a quote closed): the list closes.
     public func with(word now: String) -> CompletionContext? {
         var rest = now
-        let optionKeep = keep.hasPrefix("--") ? String(keep[...(keep.firstIndex(of: "=") ?? keep.startIndex)]) : ""
         if !optionKeep.isEmpty {
             guard rest.hasPrefix(optionKeep) else { return nil }
             rest = String(rest.dropFirst(optionKeep.count))
@@ -115,6 +114,25 @@ public struct CompletionContext: Equatable, Sendable {
         next.typed = split.typed
         next.word = now
         return next
+    }
+
+    /// The completion inside folder `name` (one of this folder's): the word once Tab has gone into it, as `replacement`
+    /// puts it on the line (what was kept, the name quoted, and `/`), with nothing typed after it. nil for a name that
+    /// isn't UTF-8 (no folder path to list) or goes in as `$'…'` (no word to go on from).
+    public func drilled(into name: [UInt8]) -> CompletionContext? {
+        guard let text = String(bytes: name, encoding: .utf8), let now = replacement(name: name, folder: true), now.hasPrefix(optionKeep),
+              let split = Self.split(String(now.dropFirst(optionKeep.count)), head: head), split.typed.isEmpty, split.quote == quote else { return nil }
+        var next = self
+        next.keep = optionKeep + split.keep
+        next.folder = (folder as NSString).appendingPathComponent(text)
+        next.typed = ""
+        next.word = now
+        return next
+    }
+
+    /// `--file=` before the name, as typed.
+    private var optionKeep: String {
+        keep.hasPrefix("--") ? String(keep[...(keep.firstIndex(of: "=") ?? keep.startIndex)]) : ""
     }
 
     /// The replacement for the word: what was kept, the name quoted for where it goes, and `/` or a space.
