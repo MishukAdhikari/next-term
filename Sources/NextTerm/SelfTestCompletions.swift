@@ -630,8 +630,13 @@ extension SelfTest {
         CompletionPreferences.choose(nil, for: owner)
         CompletionPreferences.mode = .auto
         let zshrc = plainZshrc + "nt-own-tab() { zle expand-or-complete }\nzle -N nt-own-tab\nbindkey '^I' nt-own-tab\n"
-        let zdotdir = dir.appendingPathComponent(".zdot-owner")
-        guard let tab = await completionTab(c, in: dir, zshrc: zshrc, name: "owner") else { return }
+        // A folder of its own with two folders in it, so `cd ` + Tab opens a list whichever parts ran before.
+        let home = dir.appendingPathComponent("owner")
+        for folder in ["app", "docs"] {
+            try? FileManager.default.createDirectory(at: home.appendingPathComponent(folder), withIntermediateDirectories: true)
+        }
+        let zdotdir = home.appendingPathComponent(".zdot-owner")
+        guard let tab = await completionTab(c, in: home, zshrc: zshrc, name: "owner") else { return }
         defer { c.remove(tab) }
         let session = tab.completion
         let popup = c.completions.popup
