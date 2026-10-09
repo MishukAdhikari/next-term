@@ -418,9 +418,13 @@ enum SkillsInstaller {
         await checkForUpdates(await tracked())
     }
 
-    /// The same, for `all` (from `tracked()`).
-    static func checkForUpdates(_ all: [Tracked]) async {
+    /// The same, for `all` (from `tracked()`). `quietly` is the daily check's way (SkillsUpdateCheck): a skill whose
+    /// source can't be asked (offline, GitHub's hourly limit) keeps its last answer, and when no source can be, nothing
+    /// changes and the check doesn't count: false, to try again later. A check the user starts shows each failure.
+    @discardableResult
+    static func checkForUpdates(_ all: [Tracked], quietly: Bool = false) async -> Bool {
         var answers: [String: UpdateState] = [:]
+        var unreached: Set<String> = []
         let groups = Dictionary(grouping: all) { "\($0.source.owner)/\($0.source.repo)@\($0.source.ref ?? "")".lowercased() }
         for (_, group) in groups {
             let first = group[0].source
@@ -436,11 +440,19 @@ enum SkillsInstaller {
                 }
             } catch {
                 let message = (error as? SkillsGitHub.Failure)?.message ?? error.localizedDescription
-                for item in group { answers[item.name] = .unknown(message) }
+                for item in group {
+                    answers[item.name] = .unknown(message)
+                    unreached.insert(item.name)
+                }
             }
+        }
+        if quietly {
+            guard let kept = SkillUpdates.quietAnswers(answers, unreached: unreached, last: updates) else { return false }
+            answers = kept
         }
         UserDefaults.standard.set(Date(), forKey: "SkillsLastUpdateCheck")
         updates = answers
+        return true
     }
 
     /// What changed between the installed copy and the downloaded one, as `diff -ruN` prints it. Caches

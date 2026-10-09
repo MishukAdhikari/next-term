@@ -108,6 +108,20 @@ extension SelfTest {
         // As it was: the tab it was on, and closed unless it was open.
         settings()?.showTab(previousTab)
         if !wasOpen { settings()?.window?.close() }
+
+        // A skill removed outside Next Term (`npx skills remove pdf` in a tab) leaves the count: only release-notes is
+        // still in this home's lock file.
+        let lock = SkillLock.path(home: home, environment: [:])
+        try? FileManager.default.createDirectory(atPath: (lock as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        let lockText = "{\n  \"version\": 3,\n  \"skills\": {\n    \"release-notes\": { \"source\": \"example-org/skills\", "
+            + "\"skillPath\": \"release-notes/SKILL.md\", \"skillFolderHash\": \"abc\" }\n  }\n}\n"
+        try? lockText.write(toFile: lock, atomically: true, encoding: .utf8)
+        SkillsInstaller.updates = ["release-notes": .available(commit: "a1"), "pdf": .available(commit: "b2")]
+        SkillsUpdateCheck.prune(to: await SkillsInstaller.tracked())
+        let left = SkillsInstaller.updates.keys.sorted()
+        check(left == ["release-notes"] && UserDefaults.standard.data(forKey: SkillsUpdateCheck.answersKey) == kept,
+              "agents menu: a skill removed outside Next Term leaves Skills…' count", left.joined(separator: ", "))
+        check(await wait(2) { shows(1) }, "agents menu: and the count says so", shown())
     }
 
     /// A key you saved for a moved command (saved by its action, as before it moved) is still its key, in the menu and in
