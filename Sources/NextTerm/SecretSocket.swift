@@ -2,7 +2,7 @@ import AppKit
 import Darwin
 import NextTermCore
 
-/// `secret_run` on the app's MCP socket (KTD13): the `nxtrm secret run` wrapper's one request, answered on its own
+/// `secret_run` on the app's MCP socket: the `nxtrm secret run` wrapper's one request, answered on its own
 /// connection. It is not an MCP tool: `MCPServer.respond` never sees it, and an agent's `nxtrm mcp` bridge answers a
 /// tool call by that name itself with "Unknown tool".
 ///

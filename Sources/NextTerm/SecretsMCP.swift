@@ -2,7 +2,7 @@ import AppKit
 import CryptoKit
 import NextTermCore
 
-/// Secrets' MCP tools (KTD14, KTD16, KTD20): `list_secrets`, `request_secret`, `store_secret` and `run_with_secrets`.
+/// Secrets' MCP tools: `list_secrets`, `request_secret`, `store_secret` and `run_with_secrets`.
 /// Names in, status out: no answer holds a stored key's value, and a request id only reports status.
 ///
 /// - `list_secrets` reads the index; it needs no Touch ID.
@@ -44,10 +44,10 @@ enum SecretsMCP {
     static let listNote = "Values are never returned. Use run_with_secrets, or nxtrm secret run in an MCP server's config."
     static let atTheMacNote = "Only someone at the Mac can add keys."
 
-    /// A call through plan 004's remote door: one with a `requester`, or a `connection`.
+    /// A call through the remote door: one with a `requester`, or a `connection`.
     static func isRemote(requester: String?, connection: String?) -> Bool { requester != nil || connection != nil }
 
-    /// The remote rules (KTD20) hold whatever `approval` says: a connection's "Ask on this Mac before changes" being off
+    /// The remote rules hold whatever `approval` says: a connection's "Ask on this Mac before changes" being off
     /// (`.preApprovedByGrant`) never lets `run_with_secrets` skip its panel and Touch ID, so `approval` is not read here.
     /// A remote `run_with_secrets` shows the panel with the connection's name and only "Allow once", and never makes or
     /// uses a grant (`SecretRequests`). Remote `request_secret` and `store_secret` are refused. `list_secrets` is the

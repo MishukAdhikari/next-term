@@ -1,10 +1,10 @@
 import AppKit
 import NextTermCore
 
-/// `request_secret`'s window (KTD16, U6): an agent asks the user to type or paste a key into Next Term. The agent gets
+/// `request_secret`'s window: an agent asks the user to type or paste a key into Next Term. The agent gets
 /// back only the status and the name.
 ///
-/// It is an ordinary window, listed in the Window menu and in the ⌘` cycle (KTD23), but it never takes the keyboard on
+/// It is an ordinary window, listed in the Window menu and in the ⌘` cycle, but it never takes the keyboard on
 /// its own: it opens in front without becoming key, and clicking a field makes it key. It has no default button, even
 /// once it is key, so a Return meant for something else never saves. Closing it declines.
 @MainActor

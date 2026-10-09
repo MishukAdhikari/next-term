@@ -13,7 +13,7 @@ protocol PresenceCheck: AnyObject {
     func finish(_ token: AnyObject)
 }
 
-/// Touch ID or the Mac password, through LocalAuthentication, for Secrets alone (KTD4). The Mac password is the
+/// Touch ID or the Mac password, through LocalAuthentication, for Secrets alone. The Mac password is the
 /// fallback macOS offers; there is no app PIN.
 ///
 /// - One evaluation runs at a time: a second caller waits its turn.
@@ -93,7 +93,7 @@ final class UserPresence: PresenceCheck {
     }
 }
 
-/// What the Touch ID or password sheet says after "“Next Term” is trying to" (KTD4). Names and the program, never a
+/// What the Touch ID or password sheet says after "“Next Term” is trying to". Names and the program, never a
 /// value.
 enum SecretReason {
     /// "use OPENAI_API_KEY for npm in api": the program is the command's first word, the folder its name.

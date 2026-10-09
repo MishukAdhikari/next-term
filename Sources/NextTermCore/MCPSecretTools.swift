@@ -1,6 +1,6 @@
 import Foundation
 
-/// Secrets' four MCP tools (KTD16): names in, status out. No tool returns a stored key's value, and there is no tool
+/// Secrets' four MCP tools: names in, status out. No tool returns a stored key's value, and there is no tool
 /// that gets one. They are never in `controlTools`; `MCPServer.tools` ends `controlTools + secretTools`. The app's
 /// `SecretsMCP` runs them, and checks every argument itself: the three tools that ask have no `required` array, since
 /// a poll sends only `request_id`.

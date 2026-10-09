@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// Masks the exact values of stored keys in text Next Term gives agents and saves (KTD8). It holds marks, never values,
+/// Masks the exact values of stored keys in text Next Term gives agents and saves. It holds marks, never values,
 /// so it works while the vault is locked, from launch: `SecretsStore.loadMarks()` builds it from `vault.json` and
 /// `mask.key` with no crypto beyond two HKDFs.
 ///

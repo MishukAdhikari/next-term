@@ -1,9 +1,9 @@
 import AppKit
 import NextTermCore
 
-/// Add…, Edit… and Replace… in Settings › Secrets and Window › Secrets (U7). Save asks for Touch ID or the Mac
-/// password once (KTD4); cancelling it leaves the sheet as it was. A paste into the value field is cleared from the
-/// clipboard on Save, when nothing was copied since (KTD24).
+/// Add…, Edit… and Replace… in Settings › Secrets and Window › Secrets. Save asks for Touch ID or the Mac
+/// password once; cancelling it leaves the sheet as it was. A paste into the value field is cleared from the
+/// clipboard on Save, when nothing was copied since.
 @MainActor
 final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
     enum Mode {

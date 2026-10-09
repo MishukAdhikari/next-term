@@ -1,7 +1,7 @@
 import AppKit
 import NextTermCore
 
-/// Import from MCP Configs… (KTD15, U8): the keys found in plain text in the MCP configs Next Term knows, one row per
+/// Import from MCP Configs…: the keys found in plain text in the MCP configs Next Term knows, one row per
 /// key, every row unticked. Move Selected asks once, names every file it changes and how its servers start afterwards,
 /// then one Touch ID saves the keys and seals what each backup keeps, and each file is rewritten. Core's
 /// `SecretImport` plans and writes; this sheet only asks.

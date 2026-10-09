@@ -4,7 +4,7 @@ import Foundation
 import Darwin
 #endif
 
-/// Import from MCP Configs… (KTD15): plaintext keys move out of the MCP configs Next Term knows, one ticked row at a
+/// Import from MCP Configs…: plaintext keys move out of the MCP configs Next Term knows, one ticked row at a
 /// time, into Secrets, and each server entry is rewritten to start its server through `nxtrm secret run`.
 ///
 /// Core plans and writes; the app asks. Only this file touches `MCPRegistrar`'s internal `JSONC`, `TOMLOutline`,
@@ -86,7 +86,7 @@ public enum SecretImport {
         public var isClaudeConfig: Bool { client == .claudeCode && containers == nil }
     }
 
-    /// The files the import reads (KTD15, Appendix A): the agents' own settings, Claude Code's `~/.claude.json`, VS
+    /// The files the import reads: the agents' own settings, Claude Code's `~/.claude.json`, VS
     /// Code's user `mcp.json`, and in each open project its `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`,
     /// `.gemini/settings.json` and `.codex/config.toml`. A file is listed once, by its real path.
     public static func sources(home: String = NSHomeDirectory(), projects: [String]) -> [Source] {
@@ -777,7 +777,7 @@ public enum SecretImport {
         }
     }
 
-    /// One entry's backup (KTD15): the entry as it was, its detected values replaced by markers, and the SHA-256 of
+    /// One entry's backup: the entry as it was, its detected values replaced by markers, and the SHA-256 of
     /// what Next Term wrote. The values left in place are sealed by the app (`keptBox`); `keptValues` is in memory only.
     public struct EntryBackup: Codable, Sendable {
         public let id: String

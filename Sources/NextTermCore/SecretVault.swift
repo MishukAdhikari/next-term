@@ -124,7 +124,7 @@ public enum SecretName {
         refusedEnvNames.contains(name) || refusedEnvPrefixes.contains { name.hasPrefix($0) }
     }
 
-    /// What a key is for, from an agent's reason (KTD6): one line, its line breaks and control characters made spaces,
+    /// What a key is for, from an agent's reason: one line, its line breaks and control characters made spaces,
     /// and over 200 characters cut at the last space before the 200th character, with "…" added.
     public static func purpose(fromReason reason: String) -> String {
         let scalars = reason.unicodeScalars.map { scalar -> Unicode.Scalar in
@@ -242,7 +242,7 @@ public final class SecretVault {
     public static let maxFileSize = 8 * 1024 * 1024
     /// The length of `mask.key`.
     public static let maskKeyLength = 32
-    /// The length of F-a's recovery key.
+    /// The length of the recovery key, for a copy of the vault key in the login keychain.
     public static let recoveryKeyLength = 32
 
     static let wrapSalt = Data("NextTerm Secrets wrap 1".utf8)
@@ -310,7 +310,7 @@ public final class SecretVault {
         case user, agent
     }
 
-    /// One form of a value as masking finds it, with no value in it (KTD8): its length, a 16-bit head and a 16-byte tag.
+    /// One form of a value as masking finds it, with no value in it: its length, a 16-bit head and a 16-byte tag.
     public struct Mark: Codable, Equatable, Hashable, Sendable {
         public let length: Int
         public let head: UInt16
@@ -360,7 +360,7 @@ public final class SecretVault {
         var recovery: Recovery?
         public internal(set) var entries: [Entry]
 
-        /// Whether F-a's second wrap, under the login keychain's recovery key, is there.
+        /// Whether the second wrap, under the login keychain's recovery key, is there.
         public var hasRecovery: Bool { recovery != nil }
 
         public func entry(named name: String) -> Entry? { entries.first { $0.name == name } }
@@ -431,7 +431,7 @@ public final class SecretVault {
         return SecretVault(index: index, file: data, vaultKey: vaultKey)
     }
 
-    /// F-a: the vault, unlocked with the login keychain's recovery key alone (after the app's presence check), when
+    /// The vault, unlocked with the login keychain's recovery key alone (after the app's presence check), when
     /// the Secure Enclave key no longer opens. Throws `cantOpen` for a vault with no second wrap or another key.
     public static func unlock(_ data: Data, recovery: SecretBytes) throws -> SecretVault {
         let (file, index) = try decode(data)
@@ -541,7 +541,7 @@ public final class SecretVault {
         return try written(key)
     }
 
-    /// Gives every entry new marks under `maskKey`: after a missing `mask.key` was made again (KTD8).
+    /// Gives every entry new marks under `maskKey`: after a missing `mask.key` was made again.
     public func remark(maskKey: SymmetricKey) throws -> Data {
         let key = try unlockedKey()
         for position in index.entries.indices {
@@ -569,7 +569,7 @@ public final class SecretVault {
 
     // MARK: the import's kept values
 
-    /// Seals the values the import detected but did not move, for one backup record (KTD15), under a key derived from
+    /// Seals the values the import detected but did not move, for one backup record, under a key derived from
     /// the vault key and the record's id.
     public func sealBackup(_ values: [SecretBytes], id: String) throws -> Data {
         let key = try unlockedKey()
@@ -603,9 +603,9 @@ public final class SecretVault {
         return values
     }
 
-    // MARK: F-a, the second wrap
+    // MARK: the second wrap, under the login keychain's recovery key
 
-    /// Also wraps the vault key under a 32-byte recovery key, which the app keeps in the login keychain (F-a).
+    /// Also wraps the vault key under a 32-byte recovery key, which the app keeps in the login keychain.
     public func addRecovery(key recovery: SecretBytes) throws -> Data {
         let key = try unlockedKey()
         guard recovery.count == Self.recoveryKeyLength else { throw Failure.cantOpen }
@@ -616,7 +616,8 @@ public final class SecretVault {
         return try written(key)
     }
 
-    /// Wraps the vault key under a new keyring: F-a's rescue, after the old Secure Enclave key stopped opening.
+    /// Wraps the vault key under a new keyring: the rescue with the recovery key, after the old Secure Enclave key
+    /// stopped opening.
     public func rewrap(under keyring: VaultKeyring) throws -> Data {
         let key = try unlockedKey()
         let publicKey = try keyring.publicKey()

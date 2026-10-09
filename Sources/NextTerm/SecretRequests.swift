@@ -1,7 +1,7 @@
 import AppKit
 import NextTermCore
 
-/// Every use of a stored key goes through here (KTD9-KTD11): one queue for tool calls, tickets and wrapper requests,
+/// Every use of a stored key goes through here: one queue for tool calls, tickets and wrapper requests,
 /// one panel at a time, the limits, and the grants with their own values.
 ///
 /// - A request a grant answers starts with no panel, from the grant's own values. A remote request never makes or
@@ -164,7 +164,7 @@ final class SecretRequests {
 
     /// Waiting requests, the one in the panel first.
     private(set) var queue: [Request] = []
-    /// Panels kept on screen after their request ended (Q1's line), until the user closes them.
+    /// Panels kept on screen after their wrapper left during Touch ID, saying so, until the user closes them.
     private var lingering: [SecretApprovalPanel] = []
     private(set) var limits = SecretLimits()
     private(set) var book = SecretGrantBook()
@@ -367,7 +367,7 @@ final class SecretRequests {
     private func allowed(_ request: Request, how: How, values: [String: SecretBytes]) {
         let now = now()
         var kind = how.grantKind
-        // Q1: the wrapper left while the user was in the Touch ID sheet after "Allow once": a one-use grant for 2 minutes.
+        // The wrapper left while the user was in the Touch ID sheet after "Allow once": a one-use grant for 2 minutes.
         let stoppedDuringApproval = request.isWrapper && request.gone && how == .once
         if stoppedDuringApproval { kind = .oneUse }
         if let kind, !request.isRemote {
@@ -505,7 +505,7 @@ final class SecretRequests {
 
     // MARK: tickets
 
-    /// `run_with_secrets`' ticket (KTD14): what the tool call asked, held until the wrapper in its tab redeems it. It
+    /// `run_with_secrets`' ticket: what the tool call asked, held until the wrapper in its tab redeems it. It
     /// holds no value and is used once. Its 30 seconds start when its line is typed.
     final class Ticket {
         let id = SecretRun.newTicket()
@@ -687,7 +687,7 @@ final class SecretRequests {
         case .displaySleep: return
         }
         for card in queue where card.gone && !card.isAnswered { finish(card, outcome: .unanswered, decision: .unanswered) }
-        // Q1's one-use approval ended with the lock: its line is over too.
+        // A one-use approval ended with the lock: its panel's line is over too.
         for panel in lingering { panel.finish() }
         lingering.removeAll()
     }

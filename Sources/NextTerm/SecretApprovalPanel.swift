@@ -1,7 +1,7 @@
 import AppKit
 import NextTermCore
 
-/// Next Term's own panel before a stored key is used (KTD9): who asks, which keys and what each is for, the full
+/// Next Term's own panel before a stored key is used: who asks, which keys and what each is for, the full
 /// command, the folder, the warnings, the agent's words as its own, and how long an approval lasts. After Allow comes
 /// the Touch ID or Mac password sheet.
 ///
@@ -415,7 +415,7 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         durationChoice[.once]?.isEnabled = !isBusy
     }
 
-    /// Q1: the wrapper left during Touch ID after "Allow once": a one-use approval waits 2 minutes.
+    /// The wrapper left during Touch ID after "Allow once": a one-use approval waits 2 minutes.
     func showStoppedDuringApproval() {
         answered = true
         window?.level = .normal // nothing waits on it any more
@@ -512,7 +512,7 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
 
     // MARK: text
 
-    /// The panel's title (KTD9): who asks to run or start which program with which keys.
+    /// The panel's title: who asks to run or start which program with which keys.
     static func title(_ request: SecretRequests.Request) -> String {
         if let title = request.titleOverride { return title }
         let keys = SecretReason.keys(request.names)

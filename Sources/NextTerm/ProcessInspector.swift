@@ -57,7 +57,7 @@ enum ProcessInspector {
     }
 
     /// Every argument of a process owned by this user, with its executable path: `commandLine(of:)` without its
-    /// 16-argument limit, for Secrets' peer check (KTD13). Its own caps: nil past 4,096 arguments or 256 KB in all.
+    /// 16-argument limit, for Secrets' peer check. Its own caps: nil past 4,096 arguments or 256 KB in all.
     static func fullCommandLine(of pid: pid_t, maxArguments: Int = 4096, maxBytes: Int = 256 * 1024) -> (path: String, arguments: [String])? {
         var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
         var size = 0

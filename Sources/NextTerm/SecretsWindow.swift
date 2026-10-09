@@ -1,7 +1,7 @@
 import AppKit
 import NextTermCore
 
-/// Window › Secrets: the same list as Settings › Secrets, in a window of its own (U7). It has no default key, as
+/// Window › Secrets: the same list as Settings › Secrets, in a window of its own. It has no default key, as
 /// Window › Skills has none; Settings › Keyboard Shortcuts can give it one.
 @MainActor
 final class SecretsWindowController: NSWindowController, NSWindowDelegate {

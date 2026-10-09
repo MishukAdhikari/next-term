@@ -1,7 +1,7 @@
 import AppKit
 import NextTermCore
 
-/// The clipboard for Secrets (KTD24), on an injected pasteboard (KTD21): the app passes `.general`, the self-test a
+/// The clipboard for Secrets, on an injected pasteboard: the app passes `.general`, the self-test a
 /// private named one, so the user's clipboard is never read or cleared by a check.
 ///
 /// - **Copy** prepares the pasteboard for this Mac only (`.currentHostOnly`), then writes the value with the

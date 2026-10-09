@@ -48,7 +48,7 @@ private func toolBinding(tab: String = "tab-2", target: String = "new") -> Secre
         #expect(!grant.matches(wrapperBinding(), at: start.advanced(by: .seconds(901))))
         let untilLock = SecretGrant(kind: .untilLock, binding: wrapperBinding(), made: start)
         #expect(untilLock.matches(wrapperBinding(), at: start.advanced(by: .seconds(86_400))))
-        // Q1's one use, for 2 minutes.
+        // One use, within 2 minutes.
         var book = SecretGrantBook()
         book.add(SecretGrant(kind: .oneUse, binding: wrapperBinding(), made: start))
         #expect(book.take(wrapperBinding(), at: start.advanced(by: .seconds(30))) != nil)

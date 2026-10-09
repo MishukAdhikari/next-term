@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 import NextTermCore
 
-/// `nxtrm secret run NAME[=ENVNAME]... -- <command> [arguments...]` (KTD12, KTD13), run as the app binary in its
+/// `nxtrm secret run NAME[=ENVNAME]... -- <command> [arguments...]`, run as the app binary in its
 /// command line mode. It asks the running Next Term over its socket at the fixed path, checks that the socket's owner is
 /// this same program before it sends anything, waits for the user's answer, and on `allowed` execs the command with
 /// the approved keys set and every other stored key's name removed.

@@ -4,7 +4,7 @@ import LocalAuthentication
 import NextTermCore
 import Security
 
-// The keyrings that guard Secrets' vault key (KTD5). The vault's format and crypto are in Core (SecretVault.swift);
+// The keyrings that guard Secrets' vault key. The vault's format and crypto are in Core (SecretVault.swift);
 // these hold the private keys.
 
 /// A P256 key in this Mac's Secure Enclave, made with user presence: every key agreement needs Touch ID or the Mac
@@ -16,7 +16,7 @@ final class SecureEnclaveKeyring: VaultKeyring {
     /// Known for a key made here; read from the blob otherwise.
     private var knownPublicKey: Data?
 
-    /// Whether the load check opens the blob at launch. H-a's probe records whether opening it with interaction
+    /// Whether the load check opens the blob at launch. A hand check records whether opening it with interaction
     /// not allowed raises a prompt; if it does, this turns off and the first use finds a key that can't open.
     static let loadCheckOpensBlob = true
 
@@ -48,8 +48,9 @@ final class SecureEnclaveKeyring: VaultKeyring {
         return key.publicKey.x963Representation
     }
 
-    /// KTD5's load check: the key opened from its blob with no interaction allowed, its public key compared with the
-    /// vault's. Making the key object and reading its public key need no presence; only the agreement is gated.
+    /// The load check, with no Touch ID: the key opened from its blob with no interaction allowed, its public key
+    /// compared with the vault's. Making the key object and reading its public key need no presence; only the agreement
+    /// is gated.
     func check(publicKey: Data) -> Bool {
         guard Self.loadCheckOpensBlob else { return true }
         guard let key = try? open(context: Self.quietContext()) else { return false }
@@ -89,8 +90,9 @@ final class SecureEnclaveKeyring: VaultKeyring {
 
 // MARK: the login keychain
 
-/// One generic password item: the keychain keyring's private key (and F-a's recovery key, if it ships). The
-/// self-test passes an in-memory store, so the keyring's rules are tested without the login keychain.
+/// One generic password item: the keychain keyring's private key, or the recovery key a copy of the vault key in the
+/// login keychain would be wrapped under. The self-test passes an in-memory store, so the keyring's rules are tested
+/// without the login keychain.
 protocol PasswordStore: AnyObject {
     /// The item's data. Called only after a presence check: macOS may ask for the login password first.
     func read() throws -> Data?

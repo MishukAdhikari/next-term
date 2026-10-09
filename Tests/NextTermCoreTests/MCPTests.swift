@@ -76,7 +76,7 @@ import Testing
         #expect(tools.allSatisfy { (($0["_meta"] as? [String: Any])?["anthropic/alwaysLoad"] as? Bool) == true })
     }
 
-    /// Secrets' four tools: names in, status out (KTD16).
+    /// Secrets' four tools: names in, status out.
     @Test func secretToolsAreListedAndNoneReturnsAValue() throws {
         let names = ["list_secrets", "request_secret", "store_secret", "run_with_secrets"]
         #expect(MCPServer.secretTools.map(\.name) == names)

@@ -4,7 +4,7 @@ import Security
 import Darwin
 #endif
 
-/// Whether the process at the other end of a socket is this program (KTD13): Next Term's app checks the
+/// Whether the process at the other end of a socket is this program: Next Term's app checks the
 /// `nxtrm secret run` wrapper with it, and the wrapper checks the app the same way, before anything is sent.
 ///
 /// - **The requirement.** At launch it reads the code hash of each slice of its own executable
@@ -16,11 +16,11 @@ import Darwin
 ///   runs, not a file on disk. Its effective user must be this one.
 /// - **What it rests on.** The hardened runtime with no exceptions, as the released app is signed: no library
 ///   injection and no debugger attach could make another program pass as this one.
-/// - **The fallback** (`usesPathFallback`, set only if hand check H-l finds the code hash can't be read on the ad-hoc
+/// - **The fallback** (`usesPathFallback`, set only if a hand check finds the code hash can't be read on the ad-hoc
 ///   build): the token's pid runs this program's resolved path, the file there has one of this program's slice
 ///   hashes, and the pid version is unchanged when the answer goes out.
 public struct PeerCode: Sendable {
-    /// H-l's switch: check by path and hash instead of the running code's hash.
+    /// The hand check's switch: check by path and hash instead of the running code's hash.
     nonisolated(unsafe) public static var usesPathFallback = false
 
     /// This program's: its executable's slices.

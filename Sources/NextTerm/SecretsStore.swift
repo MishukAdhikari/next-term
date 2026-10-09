@@ -4,7 +4,7 @@ import NextTermCore
 import Security
 
 /// Secrets' vault in the app: the marks at launch, the load check, and every use and change, each after one presence
-/// check (KTD2, KTD4, KTD5, KTD21). The format and crypto are Core's `SecretVault`; the folder is `SecretFolder`.
+/// check. The format and crypto are Core's `SecretVault`; the folder is `SecretFolder`.
 ///
 /// - `loadMarks()` reads `vault.json` and `mask.key` synchronously, with no crypto and no keychain read, before the
 ///   MCP socket starts, so the first MCP answer is already masked.
@@ -36,7 +36,7 @@ final class SecretsStore {
         /// No vault yet.
         case none
         case secureEnclave
-        /// F-a: with a copy of the vault key in the login keychain.
+        /// With a copy of the vault key in the login keychain, so updates keep working.
         case secureEnclaveWithRecovery
         /// The keychain keyring.
         case lessProtected
@@ -84,7 +84,7 @@ final class SecretsStore {
             }
         }
 
-        /// The sheet's reason when the caller gives none (KTD4).
+        /// The sheet's reason when the caller gives none.
         var reason: String {
             switch self {
             case .add(let name, _, _, _, _, _): return SecretReason.save(name)
@@ -191,7 +191,8 @@ final class SecretsStore {
     }
 
     /// The keyring a new vault gets: the Secure Enclave where there is one, else the login keychain. A debug build
-    /// alone reads `NEXTTERM_SECRETS_KEYRING=keychain`, to make a "less protected" vault where a Secure Enclave is (H-d).
+    /// alone reads `NEXTTERM_SECRETS_KEYRING=keychain`, to make a "less protected" vault where a Secure Enclave is, for
+    /// a hand check.
     nonisolated static func makeKeyring() throws -> VaultKeyring {
         let keychain = { try KeychainKeyring.make(store: LoginKeychain(account: LoginKeychain.vaultKeyAccount)) }
         #if DEBUG

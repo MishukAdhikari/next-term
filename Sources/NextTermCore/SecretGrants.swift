@@ -3,7 +3,7 @@ import Foundation
 import Darwin
 #endif
 
-// Secrets' approvals that outlive one request (KTD10) and the limits on asking (KTD11): the pure rules, with the
+// Secrets' approvals that outlive one request and the limits on asking: the pure rules, with the
 // clock injected. The app holds a grant's values; nothing here holds one. `ContinuousClock` serves grants, pauses,
 // tickets and cards, so sleep counts; `Date` is only for what Settings and the notes show.
 
@@ -33,7 +33,7 @@ public struct SecretFileIdentity: Hashable, Codable, Sendable {
     }
 }
 
-/// What a grant is bound to: a request it answers must be identical in every field (KTD10).
+/// What a grant is bound to: a request it answers must be identical in every field.
 public struct SecretBinding: Hashable, Sendable {
     public enum Source: String, Hashable, Sendable {
         /// `run_with_secrets`.
@@ -109,8 +109,8 @@ public enum SecretGrantEvent: Equatable, Sendable {
     case tabGotInput(String)
 }
 
-/// "Allow for 15 minutes", "Allow this command until the Mac locks", or Q1's one use for 2 minutes: the same request
-/// again, and only that, starts with no panel.
+/// "Allow for 15 minutes", "Allow this command until the Mac locks", or one use within 2 minutes, for a wrapper that
+/// left during Touch ID: the same request again, and only that, starts with no panel.
 public struct SecretGrant: Identifiable, Sendable {
     public enum Kind: String, Sendable {
         case fifteenMinutes, untilLock, oneUse
@@ -207,7 +207,7 @@ public struct SecretGrantBook: Sendable {
     }
 }
 
-/// The limits on asking (KTD11), which spare normal use: only declined and unanswered requests count.
+/// The limits on asking, which spare normal use: only declined and unanswered requests count.
 public struct SecretLimits: Sendable {
     /// One panel shows; up to 5 wait; more get `busy`.
     public static let queueSize = 5
@@ -264,7 +264,7 @@ public struct SecretLimits: Sendable {
         return nil
     }
 
-    /// As `admit`, for `run_with_secrets` before its tab exists (KTD14): the tab's warned variables are not known yet,
+    /// As `admit`, for `run_with_secrets` before its tab exists: the tab's warned variables are not known yet,
     /// so a paused request matches whatever they were. A request the limits refuse opens no tab.
     public func admitBeforeTab(asker: String, binding: SecretBinding, at now: ContinuousClock.Instant) -> Refusal? {
         if let hourPause, now < hourPause.until { return .declining(until: hourPause.untilDate) }

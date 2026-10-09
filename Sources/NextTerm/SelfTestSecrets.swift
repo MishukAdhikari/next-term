@@ -1387,11 +1387,11 @@ extension SelfTest {
 }
 
 extension SelfTest {
-    // MARK: U9, remote hooks for plan 004
+    // MARK: U9, remote hooks
 
-    /// A remote connection, as plan 004's door will call: run_with_secrets still shows the panel, with only "Allow once",
-    /// and asks Touch ID even when the connection's changes are pre-approved; the same call asks again; request_secret
-    /// and store_secret are refused; list_secrets holds no value.
+    /// A remote connection, as the remote door will call: run_with_secrets still shows the panel, with only "Allow
+    /// once", and asks Touch ID even when the connection's changes are pre-approved; the same call asks again;
+    /// request_secret and store_secret are refused; list_secrets holds no value.
     static func secretsRemoteChecks(proj: URL) async {
         let requests = SecretRequests.shared
         let store = SecretsStore.shared

@@ -1,9 +1,9 @@
 import AppKit
 import NextTermCore
 
-/// The list of stored keys, shared by Settings › Secrets and Window › Secrets (U7): what guards them, each key with what
+/// The list of stored keys, shared by Settings › Secrets and Window › Secrets: what guards them, each key with what
 /// it's for, its write-only badge and its last use; the key buttons; the approvals in force; what is paused; and the
-/// limits, said plainly. Each change asks for Touch ID or the Mac password once (KTD4).
+/// limits, said plainly. Each change asks for Touch ID or the Mac password once.
 @MainActor
 final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
     /// Whether "Let agents control Next Term" is on (the self-test sets its own, so the socket stays up).
@@ -63,7 +63,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     private(set) var revokeAllButton = NSButton(title: "Revoke All", target: nil, action: nil)
     private let pausedBox = NSStackView()
     private(set) var pausedRows: [(text: String, resume: NSButton)] = []
-    /// Recent imports (U8 fills it).
+    /// Recent imports.
     let importsBox = NSStackView()
     private var resumeActions: [ObjectIdentifier: () -> Void] = [:]
 

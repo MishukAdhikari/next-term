@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// `nxtrm secret run NAME[=ENVNAME]... -- <command> [arguments...]` (KTD12, KTD13): the rules both ends share. The
+/// `nxtrm secret run NAME[=ENVNAME]... -- <command> [arguments...]`: the rules both ends share. The
 /// wrapper asks the app over its socket; after approval it sets the keys in its environment, removes every other
 /// stored key's name, and execs the command. Nothing here holds a value but `Answer.environment`, which travels only
 /// in an `allowed` answer, only to a verified wrapper.
@@ -103,8 +103,8 @@ public enum SecretRun {
     /// Shells whose syntax the typed line can't be written in.
     public static let untypableShells: Set<String> = ["elvish", "xonsh"]
 
-    /// The line Next Term types for a ticket (`<nxtrm> secret run --ticket <id>`), each word quoted for the tab's shell
-    /// (KTD14): single quotes for the sh family, fish and tcsh; `^'…'` for nu's first word; `& '…'` for pwsh. Nil for
+    /// The line Next Term types for a ticket (`<nxtrm> secret run --ticket <id>`), each word quoted for the tab's
+    /// shell: single quotes for the sh family, fish and tcsh; `^'…'` for nu's first word; `& '…'` for pwsh. Nil for
     /// elvish and xonsh, a control character, or a word the shell can't quote. An unknown shell gets the sh family's.
     public static func typedLine(_ words: [String], shell: String) -> String? {
         guard let first = words.first, !untypableShells.contains(shell) else { return nil }
@@ -266,7 +266,7 @@ public enum SecretRun {
         case cantRun(String)
     }
 
-    /// The wrapper's one line on standard error, and its exit code (KTD13's table). `names` and `program` fill the
+    /// The wrapper's one line on standard error, and its exit code. `names` and `program` fill the
     /// lines that name them.
     public static func ending(_ ending: Ending, names: [String], program: String, now: Date = Date(),
                               timeZone: TimeZone = .current) -> (line: String, exit: Int32) {
@@ -362,7 +362,7 @@ public enum SecretRun {
         "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS", "NODE_TLS_REJECT_UNAUTHORIZED",
     ]
 
-    /// Whether the panel names this variable when it is set (KTD12).
+    /// Whether the panel names this variable when it is set.
     public static func isWarned(_ name: String) -> Bool {
         runChangers.contains(name) || proxies.contains(name) || trustChangers.contains(name)
             || name.hasPrefix("DYLD_") || name.hasSuffix("_BASE_URL")
@@ -560,7 +560,7 @@ public enum SecretRun {
 
     // MARK: the binding
 
-    /// What a wrapper's grant is bound to (KTD10): the agent's executable and its file, its script under an
+    /// What a wrapper's grant is bound to: the agent's executable and its file, its script under an
     /// interpreter, the resolved executable and its file, the argv, the keys, the folder, the warned variables and
     /// the `.env`.
     public static func binding(request: Request, agentPath: String?, agentScript: String?, program: String,

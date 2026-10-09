@@ -221,7 +221,7 @@ private func hex(_ data: Data) -> String { data.map { String(format: "%02x", $0)
             body["recovery"] = recoveryBox
         }
         #expect(throws: SecretVault.Failure.tampered) { _ = try f.unlock(changed) }
-        // A new keyring takes over: F-a's rescue.
+        // A new keyring takes over: the recovery key's rescue.
         let newKeyring = SoftwareKeyring(kind: .secureEnclave)
         let rewrapped = try rescued.rewrap(under: newKeyring)
         let reopened = try SecretVault.unlock(rewrapped, keyring: newKeyring, context: nil)
@@ -322,7 +322,7 @@ private func hex(_ data: Data) -> String { data.map { String(format: "%02x", $0)
         }
     }
 
-    /// An agent's reason as what a key is for: cut at the last space before the 200th character, with "…" (KTD6).
+    /// An agent's reason as what a key is for: cut at the last space before the 200th character, with "…".
     @Test func aReasonBecomesWhatAKeyIsFor() {
         #expect(SecretName.purpose(fromReason: "to run the billing tests") == "to run the billing tests")
         #expect(SecretName.purpose(fromReason: "two\nlines\there") == "two lines here")
