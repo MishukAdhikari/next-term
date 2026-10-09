@@ -37,6 +37,7 @@ extension SelfTest {
         _ = await wait(3) { !app.controllers.contains { $0 === w } }
         if app.controllers.contains(where: { $0 === w }) { window.close() }
         c.window?.makeKeyAndOrderFront(nil)
+        await agentsMenuChecks(c)
     }
 
     /// The commands the menus share are in the menu bar too, so Settings can give each a key.
