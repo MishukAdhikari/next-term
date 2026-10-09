@@ -6,7 +6,7 @@ import NextTermCore
 /// it away, Open File and Show Side by Side), then its rows, long unchanged runs folded into rows that open
 /// on a click. Read-only. Laid out as it scrolls: a file's rows are made only when they come near the view,
 /// so a large change stays quick, and a file with a very large diff waits for "Show anyway".
-final class AllFilesView: NSView {
+final class AllFilesView: NSView, DiffSelectionHost {
     /// One file on the page: its diff, its rows, and how it is shown (kept by path from one read to the next).
     final class Entry {
         var file: ChangedFile
@@ -56,6 +56,14 @@ final class AllFilesView: NSView {
     var onSideBySide: ((ChangedFile) -> Void)?
     /// Reads one file's diff with `lines` of context; called off the main thread.
     var reader: ((ChangedFile, Int) -> FileDiff?)?
+    /// What the page compares (All changes on the base itself is Uncommitted), and the files git doesn't track
+    /// yet: which lines are not committed, and whether the file on disk is the new side.
+    var scope: ChangeScope = .all
+    var untracked: Set<String> = []
+    /// The header's free space, where "⌥⌘K Ask Claude Code" shows while lines are selected.
+    let askRoom = AskAgentRoom()
+    /// The file whose lines were selected last (each file's column keeps its selection drawn).
+    private weak var selectedColumn: UnifiedColumn?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -293,8 +301,11 @@ final class AllFilesView: NSView {
     }
 
     private func drop(_ entry: Entry) {
+        let held = entry.block?.column
+        if let held { NotificationCenter.default.removeObserver(self, name: NSTextView.didChangeSelectionNotification, object: held.textView) }
         entry.block?.removeFromSuperview()
         entry.block = nil
+        if let held, held === selectedColumn { selectionMayHaveChanged() } // its selection went with it
     }
 
     // MARK: layout
@@ -384,15 +395,22 @@ final class AllFilesView: NSView {
                 guard let self, let entry else { return }
                 self.open(fold, in: entry)
             }
-            column.menuForRow = { [weak self, weak entry, weak column] _ in
+            column.menuForRow = { [weak self, weak entry, weak column] row in
                 guard let self, let file = entry?.file else { return nil }
+                if let column, !column.selectedRows().contains(row) { column.select(row: row) }
                 let menu = NSMenu()
                 menu.addBlock("Open File", enabled: file.status != .deleted) { [weak self] in self?.onOpenFile?(file) }
                 menu.addBlock("Show Side by Side") { [weak self] in self?.onSideBySide?(file) }
                 menu.addItem(.separator())
+                menu.addBlock("Send to Agent") { [weak self] in
+                    guard let self else { return }
+                    (self.window?.windowController as? TerminalWindowController)?.askAgent(from: self)
+                }
                 menu.addBlock("Copy") { column?.textView.copy(nil) }
                 return menu
             }
+            NotificationCenter.default.addObserver(self, selector: #selector(columnSelectionChanged(_:)), name: NSTextView.didChangeSelectionNotification,
+                                                   object: column.textView)
             block.column = column
         case let .note(text, action):
             let note = AllFilesNote(frame: NSRect(x: 0, y: Self.headerHeight, width: block.bounds.width, height: Self.noteHeight))
@@ -418,7 +436,7 @@ final class AllFilesView: NSView {
         foldAll.target = self
         foldAll.action = #selector(foldAllClicked)
         foldAll.toolTip = "Fold every file away, or open them all"
-        header.setViews([titleLabel, counts, NSView(), foldAll], in: .leading)
+        header.setViews([titleLabel, counts, askRoom, foldAll], in: .leading)
         header.spacing = 10
         header.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
         header.wantsLayer = true
@@ -442,6 +460,7 @@ final class AllFilesView: NSView {
             header.leadingAnchor.constraint(equalTo: leadingAnchor),
             header.trailingAnchor.constraint(equalTo: trailingAnchor),
             header.heightAnchor.constraint(equalToConstant: 34),
+            askRoom.heightAnchor.constraint(equalTo: header.heightAnchor),
             scroll.topAnchor.constraint(equalTo: header.bottomAnchor),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -451,7 +470,54 @@ final class AllFilesView: NSView {
             message.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -40),
         ])
         setAccessibilityLabel("All files")
+        askRoom.hint.onClick = { [weak self] in
+            guard let self else { return }
+            (self.window?.windowController as? TerminalWindowController)?.askAgent(from: self)
+        }
     }
+
+    // MARK: the selection, for agents
+
+    @objc private func columnSelectionChanged(_ notification: Notification) {
+        guard let view = notification.object as? UnifiedTextView, let column = view.column else { return }
+        if view.selectedRange().length > 0 { selectedColumn = column }
+        selectionMayHaveChanged()
+    }
+
+    /// The file's column with the keyboard, else the one selected last; and its file.
+    private var selected: (column: UnifiedColumn, entry: Entry)? {
+        let focused = (window?.firstResponder as? UnifiedTextView)?.column
+        for column in [focused, selectedColumn].compactMap({ $0 }) {
+            if let entry = entries.first(where: { $0.block?.column === column }) { return (column, entry) }
+        }
+        return nil
+    }
+
+    private func isUncommitted(_ path: String) -> Bool { scope == .uncommitted || untracked.contains(path) }
+
+    /// The lines selected in a file's column, as the agents are told about them: the file on disk is the new
+    /// side, except in a commit's changes.
+    func diffShare() -> DiffShare? {
+        guard let (column, entry) = selected, let diff = entry.diff else { return nil }
+        let path = (root as NSString).appendingPathComponent(entry.file.path)
+        var commit: String?
+        if case let .commit(sha) = scope { commit = sha }
+        let today: DiffToday = commit == nil && FileManager.default.fileExists(atPath: path) ? .new : .neither
+        guard let selection = DiffSelections.make(column.selectedDiffRows(), in: diff, today: today) else { return nil }
+        let old = entry.file.oldPath.map { (root as NSString).appendingPathComponent($0) }
+        let version: DiffShare.Version = commit.map { .commit($0) } ?? .workingTree
+        return DiffShare(path: path, selection: selection, holdsSecrets: DiffShare.holdsSecrets([path, old]),
+                         isUncommitted: commit == nil && isUncommitted(entry.file.path), version: version,
+                         language: EditorLanguage.id(forFileName: (entry.file.path as NSString).lastPathComponent) ?? "text")
+    }
+
+    var hasUncommittedSelection: Bool {
+        guard let (column, entry) = selected, isUncommitted(entry.file.path) else { return false }
+        return column.hasSelectedLines
+    }
+
+    /// Send to Agent: the selected lines (nil with none: the page is many files).
+    func contextItem() -> ContextItem? { diffShare()?.contextItem() }
 }
 
 /// The page the files are laid on, top to bottom.

@@ -291,6 +291,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         sidebar.onHeadChange = { [weak self] in self?.editorArea.headMoved() }
         // The collapse button's tooltip names ⌘J, or the key Settings gives it instead.
         NotificationCenter.default.addObserver(self, selector: #selector(shortcutsChanged), name: KeyboardShortcuts.changed, object: nil)
+        // Lines selected in a diff go to the agents, as the editor's selection does.
+        NotificationCenter.default.addObserver(self, selector: #selector(diffSelectionChanged(_:)), name: DiffShare.changed, object: nil)
         applyLayout() // the editor area starts hidden: nothing is open
         setSidebarVisible(AppDelegate.shared.sidebarVisible)
 
@@ -745,6 +747,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                               shorterTitles: tab.shorterTitles.map { $0 + others }, editableTitle: tab.editableTitle)
         }
         tabBar.update(items: placeMarked(items), selectedIndex: activeIndex)
+        // An agent started or stopped, or another one is the one Send to Agent types into: the Ask hints follow.
+        let asked = agentTab.map { "\(ObjectIdentifier($0).hashValue) \(Self.agentName(of: $0)) \($0.title)" }
+        if asked != askedAgent {
+            askedAgent = asked
+            updateAskHints()
+        }
         refreshPaneHeaders()
         sidebar.showRemote(activeTab?.remoteMark) // the pane with the keyboard: the tree follows it
         updateRailMarks(items)
@@ -903,7 +911,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         // On when the keyboard is where ⌥⌘K sends from, with something to send, even with no agent running:
         // sending then says that none is.
         if item.action == #selector(sendToAgent(_:)) {
-            let sendable = editorArea.activePath != nil && editorArea.activeDiff?.proposal == nil
+            let page = editorArea.activeGitDiff?.allFiles
+            let sendable = (editorArea.activePath != nil && editorArea.activeDiff?.proposal == nil) || (page?.isHidden == false && page?.diffShare() != nil)
             let fromSidebar = window?.firstResponder === sidebar.outline && !sidebar.selection.isEmpty
             return (isEditorFocused && sendable) || fromSidebar || terminalSelectionToSend != nil
         }
@@ -1125,7 +1134,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return view.isDescendant(of: terminalPane)
     }
 
-    @objc private func shortcutsChanged() { updateCollapseButton() }
+    @objc private func shortcutsChanged() {
+        updateCollapseButton()
+        updateAskHints() // "⌥⌘K Ask Claude Code" names Send to Agent's key
+    }
 
     /// The arrow points where a click moves the tab bar: to the window's edge to collapse, back to expand.
     private func updateCollapseButton() {
@@ -1443,14 +1455,36 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     // MARK: Claude Code sees the selection
 
     private var selectionShare: DispatchWorkItem?
+    /// The agent the diffs' Ask hints name, as last shown (refresh() runs four times a second).
+    private var askedAgent: String?
 
     func editorAreaSelectionChanged(_ area: EditorArea) {
         followActiveFile()
+        scheduleSelectionShare()
+    }
+
+    /// Lines were selected in a diff in this window, or its selection went: the agents hear it, as they hear
+    /// the editor's, and the diff's Ask hint follows.
+    @objc private func diffSelectionChanged(_ notification: Notification) {
+        guard let view = notification.object as? NSView, view.isDescendant(of: editorArea) else { return }
+        updateAskHints()
+        scheduleSelectionShare()
+    }
+
+    private func scheduleSelectionShare() {
         guard ClaudeIDEServer.shared.isRunning || GeminiIDEServer.shared.isRunning || CopilotIDEServer.shared.isRunning else { return }
         selectionShare?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.shareSelectionWithClaude() }
         selectionShare = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work) // while dragging, once it settles
+    }
+
+    /// The lines selected in the diff in front (a diff tab, the Git Diff tab's file or its All files page): what
+    /// the agents are told instead of the editor's selection while there are any.
+    var activeDiffShare: DiffShare? {
+        if let diff = editorArea.activeDiff { return diff.diffShare() }
+        if let page = editorArea.activeGitDiff?.allFiles, !page.isHidden { return page.diffShare() }
+        return nil
     }
 
     /// Tells the `claude` sessions in this window's tabs what the editor shows: the selected lines, or the
@@ -1464,8 +1498,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     /// Gemini CLI and Qwen Code: up to 10 files by recency, the active one first with its caret and
-    /// selection, 1-based. Secret-holding files (.env) are left out.
+    /// selection, 1-based. Secret-holding files (.env) are left out. Lines selected in a diff in front make
+    /// its file the active one.
     func openFilesForGemini() -> [[String: Any]] {
+        let share = activeDiffShare
+        if let share, let file = share.geminiFile {
+            let others = editorArea.documents.filter { !$0.holdsSecrets && $0.path != share.path }.sorted { $0.lastFocused > $1.lastFocused }
+            return [file] + others.prefix(9).map { ["path": $0.path, "timestamp": Int($0.lastFocused.timeIntervalSince1970 * 1000)] }
+        }
         let active = editorArea.activeEditor
         let documents = editorArea.documents.filter { !$0.holdsSecrets }
             .sorted { ($0 === active?.document ? 1 : 0, $0.lastFocused) > ($1 === active?.document ? 1 : 0, $1.lastFocused) }
@@ -1486,6 +1526,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func currentSelectionForClaude() -> [String: Any] {
+        // Lines selected in a diff: the file's lines now, or the old side's text with a caret where it was.
+        if let share = activeDiffShare { return share.claudeParams }
         guard let editor = editorArea.activeEditor else {
             return ClaudeIDEServer.selectionParams(path: nil, text: "", start: (0, 0), end: (0, 0))
         }
@@ -1575,10 +1617,41 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         } else if let data = editorArea.activeData {
             send([data.contextItem()]) // the file, at the selected rows' lines
         } else if let diff = editorArea.activeDiff {
-            // The file, at the new side's selected lines; never into an agent's prompt while it waits on its proposal.
+            // The file at the new side's selected lines, or the old side's text; never into an agent's prompt while
+            // it waits on its proposal.
             guard let item = diff.contextItem() else { return NSSound.beep() }
             send([item])
+        } else if let page = editorArea.activeGitDiff?.allFiles, !page.isHidden {
+            guard let item = page.contextItem() else { return NSSound.beep() }
+            send([item])
         }
+    }
+
+    /// The Ask hint in a diff's toolbar (or its menu's Send to Agent): what ⌥⌘K sends from there.
+    func askAgent(from host: DiffSelectionHost) {
+        let item = (host as? DiffPane)?.contextItem() ?? (host as? AllFilesView)?.contextItem()
+        guard let item else { return NSSound.beep() }
+        send([item])
+    }
+
+    /// "⌥⌘K Ask Claude Code" in a diff's toolbar, while lines of changes not committed yet are selected there and
+    /// an agent runs in a tab here (the one Send to Agent types into); hidden otherwise.
+    func updateAskHints() {
+        let hosts: [DiffSelectionHost] = editorArea.diffs + editorArea.gitDiffs.compactMap(\.allFiles)
+        guard !hosts.isEmpty else { return }
+        let tab = agentTab
+        let agent = tab.map { (name: Self.agentName(of: $0), tab: $0.title) }
+        let key = KeyboardShortcuts.shared.key(for: #selector(sendToAgent(_:)))?.display
+        for host in hosts {
+            host.askRoom.show(agent: agent != nil && host.hasUncommittedSelection ? agent : nil, key: key)
+        }
+    }
+
+    /// The agent in a tab, as Next Term names it (Claude Code, Codex, Gemini CLI…), else its program.
+    static func agentName(of tab: TerminalTab) -> String {
+        let status = tab.status
+        let kind = AgentKind(program: status.program) ?? AgentKind(program: CommandClassifier.programName(status.expandedCommand))
+        return kind?.name ?? status.program
     }
 
     func sidebar(_ sidebar: ProjectSidebarView, sendToAgent urls: [(url: URL, isFolder: Bool)]) {

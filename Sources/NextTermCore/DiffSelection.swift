@@ -86,7 +86,21 @@ public enum DiffSelections {
     /// The rows `range` touches, in a text of rows that start at `starts` (each ends in a line break) and is
     /// `length` long. A selection ending at the start of a row does not touch that row.
     public static func spans(of range: NSRange, starts: [Int], length: Int) -> [DiffRowSpan] {
-        guard range.length > 0, !starts.isEmpty else { return [] }
+        guard let touched = rows(of: range, starts: starts) else { return [] }
+        let end = NSMaxRange(range), first = touched.lowerBound
+        return touched.map { index in
+            let start = starts[index]
+            let next = index + 1 < starts.count ? starts[index + 1] : length
+            let textLength = max(0, next - start - 1)
+            let from = index == first ? min(textLength, max(0, range.location - start)) : 0
+            let to: Int? = end - start <= textLength ? end - start : nil
+            return DiffRowSpan(row: index, from: from, to: to)
+        }
+    }
+
+    /// The first to the last row `range` touches (by binary search: a view asks often); nil for no selection.
+    public static func rows(of range: NSRange, starts: [Int]) -> ClosedRange<Int>? {
+        guard range.length > 0, !starts.isEmpty else { return nil }
         func row(at offset: Int) -> Int {
             var low = 0, high = starts.count - 1
             while low < high {
@@ -95,16 +109,8 @@ public enum DiffSelections {
             }
             return low
         }
-        let end = NSMaxRange(range)
-        let first = row(at: range.location), last = row(at: max(range.location, end - 1))
-        return (first...max(first, last)).map { index in
-            let start = starts[index]
-            let next = index + 1 < starts.count ? starts[index + 1] : length
-            let textLength = max(0, next - start - 1)
-            let from = index == first ? min(textLength, max(0, range.location - start)) : 0
-            let to: Int? = end - start <= textLength ? end - start : nil
-            return DiffRowSpan(row: index, from: from, to: to)
-        }
+        let first = row(at: range.location), last = row(at: max(range.location, NSMaxRange(range) - 1))
+        return first...max(first, last)
     }
 
     /// What `rows` (in order, as the view shows them) select in `file`'s diff, with `today` the version that

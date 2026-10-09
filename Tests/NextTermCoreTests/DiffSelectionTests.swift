@@ -75,6 +75,9 @@ import Testing
         // Within one row.
         #expect(DiffSelections.spans(of: NSRange(location: 7, length: 1), starts: starts, length: 9) == [DiffRowSpan(row: 2, from: 1, to: 2)])
         #expect(DiffSelections.spans(of: NSRange(location: 4, length: 0), starts: starts, length: 9).isEmpty)
+        #expect(DiffSelections.rows(of: NSRange(location: 1, length: 4), starts: starts) == 0...1)
+        #expect(DiffSelections.rows(of: NSRange(location: 3, length: 3), starts: starts) == 1...1)
+        #expect(DiffSelections.rows(of: NSRange(location: 3, length: 0), starts: starts) == nil)
         #expect(DiffSelections.spans(of: NSRange(location: 0, length: 3), starts: [], length: 0).isEmpty)
     }
 
