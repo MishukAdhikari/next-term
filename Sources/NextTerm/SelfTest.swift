@@ -887,6 +887,7 @@ enum SelfTest {
         await notificationChecks(c)
         await skillsChecks()
         await mcpWriteChecks(c, proj: proj)
+        await restoreMCPChecks(proj: proj)
         await completionChecks(c)
 
         try? FileManager.default.removeItem(at: dir)

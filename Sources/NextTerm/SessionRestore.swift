@@ -139,6 +139,7 @@ final class SessionRestore {
             }
         }
         let actions = RestoreActions(panes: built.panes, safeMode: safeMode)
+        MCPRestoredTabs.restored(built.panes)
         self.actions = actions
         actions.onSettled = { [weak self] in self?.restoreSettled() }
         phase = safeMode ? .safeMode : .restoringTabs

@@ -203,13 +203,18 @@ public struct AgentMenuError: Error, Equatable, Sendable {
 }
 
 extension AgentScreen {
+    /// New for each launch of Next Term: question ids hash it (`questionID`).
+    public static let launchNonce = UUID().uuidString.lowercased()
+
     /// The id of the question a tab's agent is asking (MCP's answer_agent takes it back): it changes
     /// whenever the tab asks a new question, even in the same words (`serial` is
     /// TabStatus.questionSerial), so an answer meant for one question never lands on the next. Not a
-    /// secret, only a guard against stale answers.
-    public static func questionID(tab: String, serial: Int, question: String) -> String {
+    /// secret, only a guard against stale answers. It hashes `nonce` too, new for each launch, so an id
+    /// from before a restart never matches, though a restored tab keeps its id and its serial and
+    /// question can come out the same (KTD17).
+    public static func questionID(tab: String, serial: Int, question: String, nonce: String = launchNonce) -> String {
         var hash: UInt64 = 0xcbf2_9ce4_8422_2325 // FNV-1a
-        for byte in "\(tab.lowercased())\n\(serial)\n\(question)".utf8 {
+        for byte in "\(nonce)\n\(tab.lowercased())\n\(serial)\n\(question)".utf8 {
             hash = (hash ^ UInt64(byte)) &* 0x0000_0100_0000_01b3
         }
         let hex = String(hash, radix: 16)

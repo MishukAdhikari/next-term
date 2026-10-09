@@ -761,7 +761,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        MCPControlServer.shared.stop()
+        // Each MCP call in flight hears that Next Term quits, or that it restarts for the update (KTD17).
+        var restart: UpdateConsent?
+        if (terminatingFor ?? quitReason) == .updateRelaunch {
+            restart = terminatingUpdate ?? MainActor.assumeIsolated { Updater.shared.validConsent }
+        }
+        MCPRestoredTabs.drainAtQuit(update: restart)
         ClaudeIDEServer.shared.stop() // removes the lock file
         GeminiIDEServer.shared.stop()
         CopilotIDEServer.shared.stop()

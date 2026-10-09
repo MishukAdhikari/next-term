@@ -185,6 +185,8 @@ enum SelfTestRestore {
             }
             try? FileManager.default.removeItem(at: SelfTest.copilotLockFolder)
         }
+        // An MCP client asks before the quit, and leaves a wait for the running command in flight across it.
+        await mcpBeforeUpdateQuit(harness, busy: tab)
         press([UpdateButton.updateNow.title])
         record("STEP update-quit: quitting")
         Updater.shared.showAvailable()
@@ -234,6 +236,7 @@ enum SelfTestRestore {
               "the relaunch after the update brings back the project that was open, and no Welcome window",
               "\(restore), projects \(projects), Welcome \(welcome)")
         await restoreChecks(harness, restore: restore)
+        await mcpAfterUpdate(harness)
         let saved: [String] = defaults?.stringArray(forKey: "sessionProjects") ?? []
         let remote = defaults?.data(forKey: "remoteTabs").map { String(decoding: $0, as: UTF8.self) } ?? "none"
         let noFlag = defaults?.object(forKey: oldRelaunchFlag) == nil
