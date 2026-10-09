@@ -547,8 +547,10 @@ struct GitActions {
         guard !remotes.isEmpty else {
             return GitPrompt.ask("This repository has no remote", info: "Add one first, in a terminal: git remote add origin <url>.", buttons: ["OK"], over: window) { _ in }
         }
-        let remote = ref.upstream.flatMap { $0.split(separator: "/").first.map(String.init) }.flatMap { remotes.contains($0) ? $0 : nil }
-            ?? (remotes.contains("origin") ? "origin" : remotes[0])
+        // Split for the type checker: the remote of what it tracks, if that remote is here, else origin, else the first.
+        let tracked: String? = ref.upstream.flatMap { upstream in upstream.split(separator: "/").first.map(String.init) }
+        let fallback = remotes.contains("origin") ? "origin" : remotes[0]
+        let remote: String = tracked.flatMap { remotes.contains($0) ? $0 : nil } ?? fallback
         let upstreamName = ref.upstream.map { String($0.dropFirst(remote.count + 1)) }
         let go = { (target: String) in
             let publishing = ref.upstream == nil || ref.upstreamGone || target != upstreamName
