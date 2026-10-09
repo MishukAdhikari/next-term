@@ -113,8 +113,9 @@ extension SelfTest {
         popup.query = "v9.8.7"
         check(popup.rowTitles.contains("tag v9.8.7") && !popup.rowTitles.contains("revision v9.8.7"), "a tag typed in full is its own row, not a revision",
               popup.rowTitles.joined(separator: " | "))
-        check(menuTitles("tag v9.8.7").starts(with: ["Checkout “v9.8.7” (detached)", "New Branch from “v9.8.7”…", "Show History"]),
-              "a tag's menu checks it out, branches from it and shows its history", menuTitles("tag v9.8.7").joined(separator: " | "))
+        // Open in New Worktree… sits under Checkout in the menus of branches and tags (the worktree plan, step 7 and D5).
+        check(menuTitles("tag v9.8.7").starts(with: ["Checkout “v9.8.7” (detached)", "Open in New Worktree…", "New Branch from “v9.8.7”…", "Show History"]),
+              "a tag's menu checks it out, opens it in a new worktree, branches from it and shows its history", menuTitles("tag v9.8.7").joined(separator: " | "))
         if let index = row("tag v9.8.7") { popup.activate(row: index) }
         check(await wait(10) { run(repo, "rev-parse", "--abbrev-ref", "HEAD") == "HEAD" && run(repo, "rev-parse", "HEAD") == run(repo, "rev-parse", "v9.8.7^{commit}") },
               "↩ on a tag checks it out, detached", GitToast.text ?? run(repo, "status", "-sb"))
@@ -196,7 +197,7 @@ extension SelfTest {
         run(repo, "fetch", "-q", "origin")
         c.showBranches(at: repo, query: "behind")
         _ = await wait(15) { !popup.isReading && popup.model?.local("feat/behind")?.behind == 1 }
-        check(menuTitles("feat/behind").starts(with: ["Checkout", "Checkout and Update"]) && menuTitles("feat/behind").contains("Update “feat/behind” from origin/feat/behind"),
+        check(menuTitles("feat/behind").starts(with: ["Checkout", "Open in New Worktree…", "Checkout and Update"]) && menuTitles("feat/behind").contains("Update “feat/behind” from origin/feat/behind"),
               "a branch behind its upstream has Checkout and Update, and Update", menuTitles("feat/behind").joined(separator: " | "))
         popup.close()
         if let actions = await actions(), let behind = c.branchPopup.model?.local("feat/behind") {
