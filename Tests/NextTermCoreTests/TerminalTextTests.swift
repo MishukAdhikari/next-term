@@ -225,6 +225,17 @@ import Testing
         #expect(ScrollbackText.saved(zsh) == "% mysql -u root \\\r\n> -h db \\\r\n> -p••• app\r\n% echo ••• |\r\npipe> sudo -S ls")
     }
 
+    @Test func aHereDocumentFedToAPasswordReaderIsMaskedOnItsPS2Row() {
+        #expect(ScrollbackText.holdsSecret(typed: "docker login -u sam --password-stdin <<EOF\nS3cretPw\nEOF"))
+        let zsh = [Row("% docker login -u sam --password-stdin <<EOF"), Row("heredoc> S3cretPw"), Row("heredoc> EOF"),
+                   Row("Login Succeeded")]
+        #expect(ScrollbackText.saved(zsh) == "% docker login -u sam --password-stdin <<EOF\r\nheredoc> •••\r\nheredoc> EOF\r\nLogin Succeeded")
+        // bash's PS2 names nothing: a line that ends in a here-document's word goes on, as one that ends in a pipe does.
+        let bash = [Row("$ sudo -S whoami <<'END'"), Row("> S3cretPw"), Row("> END"), Row("root")]
+        #expect(ScrollbackText.saved(bash) == "$ sudo -S whoami <<'END'\r\n> •••\r\n> END\r\nroot")
+        #expect(ScrollbackText.saved([Row("$ cat <<EOF"), Row("> hello"), Row("> EOF")]) == "$ cat <<EOF\r\n> hello\r\n> EOF")
+    }
+
     @Test func aQuotedLineIsNotAContinuation() {
         // A bare `> ` row continues only a line that goes on (a backslash, a pipe, && or ||): not a quote in output.
         let (saved, masked) = savedAndMasked([Row("$ cat notes.md"), Row("> s3cret here"), Row("> --password")])

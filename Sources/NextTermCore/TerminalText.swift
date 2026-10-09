@@ -359,10 +359,16 @@ public enum ScrollbackText {
         return named ? (prompt, true) : nil
     }
 
-    /// Whether a line goes on to a continuation row: it ends in a backslash, a pipe or `&&` (`||` ends in a pipe).
+    /// Whether a line goes on to a continuation row: it ends in a backslash, a pipe or `&&` (`||` ends in a pipe), or in
+    /// a here-document's word (`<<EOF`), whose lines follow.
     static func goesOn(_ line: String) -> Bool {
-        line.hasSuffix("\\") || line.hasSuffix("|") || line.hasSuffix("&&")
+        if line.hasSuffix("\\") || line.hasSuffix("|") || line.hasSuffix("&&") { return true }
+        guard line.contains("<<") else { return false }
+        return line.range(of: hereDocumentAtEnd, options: .regularExpression) != nil
     }
+
+    /// A here-document's operator and word, ending a line.
+    static let hereDocumentAtEnd = #"(?<!<)<<-?[ \t]*['"\\]?[A-Za-z0-9_.\-]+['"]?$"#
 
     /// The PS2 prompt of each line that continues the one before it: a row with zsh's PS2, which names what it continues,
     /// or a bare `> ` after a line that goes on (`goesOn`); a line quoted with `> ` in other output continues nothing. A

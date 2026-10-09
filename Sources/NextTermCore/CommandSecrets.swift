@@ -216,6 +216,17 @@ public enum CommandSecrets {
         return rule(#"\#(start)(?:\#(sudo)|\#(reader))<<<\#(gap)*+(\#(word))"#)
     }()
 
+    /// `docker login --password-stdin <<EOF`, `sudo -S … <<'END'`: the first line of the here-document, after the line
+    /// break, or after a backslash and a newline as typed lines and continuation rows are joined.
+    static let hereDocument: Rule = {
+        let sudo = #"sudo(?=\#(gap))(?>\#(after("sudo"))\#(sudoStdin))\#(after("sudo"))"#
+        let reader = #"\#(stdinFlag)\#(after(stdinOption))"#
+        let delimiter = #"(?<!<)<<(?!<)-?[ \t]*+['"\\]?[A-Za-z0-9_.\-]++['"]?"#
+        let restOfLine = #"(?:[^\n\\]|\\(?!\r?\n))*+"#
+        let firstLine = #"((?:[^\n\\ \t]|\\(?!\r?\n))\#(restOfLine))"#
+        return rule(#"\#(start)(?:\#(sudo)|\#(reader))\#(delimiter)\#(restOfLine)\\?\r?\n[ \t]*+\#(firstLine)"#)
+    }()
+
     /// `git -c http.extraHeader=…`, `git config http.<url>.extraheader …`: the whole header.
     static let extraHeader = rule(#"\#(start)http\.(?:[^\s=]*\.)?extraheader(?:=|\#(gap)++)\#(value)"#,
                                   ignoringCase: true, masking: .headerWord)
@@ -236,7 +247,7 @@ public enum CommandSecrets {
     static let rules: [Rule] = [
         assignment, flag, mysql, sshpass, redis, registryLogin, curlUser, curlCookie, opensslPass, opensslKey,
         mongo, zip, sevenZip, keychain, ghSecret, vault, htpasswd, urlPassword, urlToken, echoed, hereString,
-        extraHeader, header,
+        hereDocument, extraHeader, header,
     ]
 
     static func apply(_ rule: Rule, to text: inout String, complete: inout Bool) {
