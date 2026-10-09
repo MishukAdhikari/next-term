@@ -388,11 +388,11 @@ public struct SkillReview: Sendable {
     static func commandFlags(_ lower: String, file: String, quotedJSON: Bool = true) -> [Flag] {
         var flags: [Flag] = []
         var patterns: [(String, String)] = [
-            (#"(curl|wget)[^\n|]*\|\s*(sudo\s+)?(sh|bash|zsh|python3?)\b"#, "Downloads a script and runs it (curl … | sh)."),
+            (downloadAndRun, "Downloads a script and runs it (curl … | sh)."),
             (unpinnedNPX, "Runs an npm package without a pinned version (npx)."),
             (unpinnedPython, "Runs a Python package without a pinned version."),
             (#"\bpip3?\s+install\s+(?!-r)[a-z0-9_.-]+(\s|$)"#, "Installs a Python package without a pinned version."),
-            (#"base64\s+(-d|--decode)[^\n]*\|\s*(sh|bash|eval)"#, "Decodes hidden text and runs it."),
+            (decodeAndRun, "Decodes hidden text and runs it."),
             (#"\beval\s*\(?\s*\$?\(?\s*(atob|base64)"#, "Decodes hidden text and runs it."),
             (#"(~|\$home)/\.(ssh|aws|gnupg|config/gh|netrc|docker/config)"#, "Mentions a folder that holds credentials."),
             // A .env file, not code's `process.env`.
@@ -598,6 +598,11 @@ extension SkillReview {
     // from each part, in time that grew with the square of its length.
     /// A slash command has no word boundary before it.
     static let pluginInstall = #"(?:(?<!\w)(?:claude\s+plugins?\s+install|gemini\s+extensions?\s+install|codex\s+plugins?\s+add)|/plugin\s+install)\b"#
+    /// `curl … | sh`, `wget -qO- … | sudo bash`: read from the last `curl` or `wget` before the pipe. Read on
+    /// past the next one, a line of many took time that grew with the square of its length (40 s for 100 KB).
+    static let downloadAndRun = #"(?:curl|wget)(?:(?!curl|wget)[^\n|])*+\|\s*+(?:sudo\s+)?(?:sh|bash|zsh|python3?)\b"#
+    /// `base64 -d … | sh`: read from the last `base64 -d` before the pipe, for the same reason.
+    static let decodeAndRun = #"base64\s+(?:-d|--decode)(?:(?!base64\s+(?:-d|--decode))[^\n])*\|\s*(?:sh|bash|eval)"#
     /// `codex mcp add`, `claude mcp add-json`, `gemini mcp add`, …: a program's name, up to 40 characters of
     /// it, before `mcp`.
     static let mcpAdd = #"mcp(?<=[a-z][a-z0-9_-]{0,40}\s{1,20}mcp)\s+add(?:-json)?\b"#
