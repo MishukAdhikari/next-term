@@ -364,15 +364,14 @@ enum SkillsMCP {
             let why = candidate.refusal ?? flag ?? "it did not pass the review's checks"
             return resolve(request, ["status": "failed", "note": "\(candidate.name) can't be installed: \(why)"])
         }
-        let claudeHere = FileManager.default.fileExists(atPath: (SkillsStore.home as NSString).appendingPathComponent(".claude"))
-        let link = claudeHere && fetched.inventory.root(.claude) != nil
-        let plan = SkillsInstaller.plan(candidate, fetched: fetched, linkForClaude: link)
+        // Claude Code gets the review's default link: none without ~/.claude, none for a plugin folder that runs something.
+        let plan = SkillsInstaller.plan(candidate, fetched: fetched, claude: SkillsInstaller.defaultClaudeLink(candidate, fetched: fetched))
         let replaces = plan.existing == .conflict || fetched.editedSinceInstall.contains(candidate.name)
         guard !replaces else {
             fetched.discard()
             return resolve(request, ["status": "failed", "note": "Installing would replace the user's own “\(candidate.name)” (made elsewhere, or changed since it was installed), which only they decide. Ask them to install it from Window › Skills."])
         }
-        switch await SkillsInstaller.install([candidate], fetched: fetched, linkForClaude: link) {
+        switch await SkillsInstaller.install([candidate], fetched: fetched) {
         case .success(let note):
             var answer: [String: Any] = ["status": "installed", "skills": [candidate.name], "approved": approved]
             if !note.isEmpty { answer["note"] = note }

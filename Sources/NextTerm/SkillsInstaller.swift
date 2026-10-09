@@ -329,24 +329,6 @@ enum SkillsInstaller {
         return .success(notes.joined(separator: " "))
     }
 
-    // MARK: SkillsMCP's grant install
-
-    // SkillsMCP.swift (not edited here) still calls these Bool forms for a pre-approved install. They give
-    // each skill the review's default (true) or leave Claude Code out (false), so a plugin folder that runs
-    // something is never linked through them. They go once that call passes `claude:` instead:
-    // `plan(candidate, fetched: fetched, claude: defaultClaudeLink(candidate, fetched: fetched))` and
-    // `install([candidate], fetched: fetched)`.
-
-    static func plan(_ candidate: Candidate, fetched: Fetched, linkForClaude: Bool) -> SkillInstallPlan {
-        plan(candidate, fetched: fetched, claude: linkForClaude ? defaultClaudeLink(candidate, fetched: fetched) : .skip)
-    }
-
-    static func install(_ chosen: [Candidate], fetched: Fetched, linkForClaude: Bool) async -> Result<String, SkillsStore.Failure> {
-        var leftOut: [String: SkillInstall.ClaudeLink] = [:]
-        for candidate in chosen { leftOut[candidate.name] = .skip }
-        return await install(chosen, fetched: fetched, claude: linkForClaude ? nil : leftOut)
-    }
-
     // MARK: removing
 
     /// Whether Next Term or `npx skills` installed a skill of that name (its record or lock entry), as
