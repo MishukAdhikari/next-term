@@ -49,6 +49,9 @@ public enum PathCompletion {
         public var allSeen: Bool
         /// False: the folder couldn't be read, or not in time. No candidates then.
         public var readable: Bool
+        /// It wasn't read in time (as against not at all): going into it puts its name on the line alone
+        /// (CompletionDrill).
+        public var late = false
 
         public init(folder: String, entries: [Entry], complete: Bool = true, allSeen: Bool = true, readable: Bool = true) {
             self.folder = folder
@@ -127,7 +130,9 @@ public enum PathCompletion {
             return true
         }
         if !readable || (late && listing.entries.count < limit) {
-            return Listing(folder: folder, entries: [], complete: false, allSeen: false, readable: false)
+            var unread = Listing(folder: folder, entries: [], complete: false, allSeen: false, readable: false)
+            unread.late = readable
+            return unread
         }
         listing.allSeen = !late
         listing.complete = !late && listing.entries.count < limit

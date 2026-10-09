@@ -4,6 +4,8 @@ import Foundation
 ///
 ///     Disarmed --arm--> Armed --real Tab--> Pending --answer, comp, line--> Open --accept, Esc, left--> Armed
 ///                                              \--native, timeout, done native--> SteppedBack --typing, arm--> Armed
+///     Open --Tab on a folder--> Drilling --listed--> Open (the folder's) | --kept, refused--> Open (as it was)
+///                                        \--nothing inside, too slow, Esc--> Armed
 ///
 /// Unknown always means Disarmed, and Disarmed sends a plain ^I. The latest `arm` mark says which path a Tab
 /// takes: Next Term's own engine, or zsh's completion system. A server tab whose shell has no hook takes a third:
@@ -23,6 +25,10 @@ public struct CompletionState: Sendable {
         case pending(id: Int, path: Path)
         /// A list for `id`, shown or about to be.
         case open(id: Int, path: Path)
+        /// Tab on a folder row of the open list `id`: the list goes into that folder (CompletionDrill). Next Term lists it
+        /// on its own engine and a server's screen, and the list stays `id` (`to` is `id`); on zsh's path the hook
+        /// lists it under `to`. The list stays open meanwhile.
+        case drilling(id: Int, to: Int, path: Path)
         /// The shell's own Tab ran: plain Tabs until the line changes.
         case steppedBack
     }
@@ -53,15 +59,26 @@ public struct CompletionState: Sendable {
         return nil
     }
 
+    /// The open list's id, while it goes into a folder too.
     public var openID: Int? {
-        if case let .open(id, _) = phase { return id }
+        switch phase {
+        case let .open(id, _), let .drilling(id, _, _): return id
+        default: return nil
+        }
+    }
+
+    /// The id the folder being gone into is listed under.
+    public var drillID: Int? {
+        if case let .drilling(_, to, _) = phase { return to }
         return nil
     }
+
+    public var isDrilling: Bool { drillID != nil }
 
     /// The path of the Tab in flight or the list open.
     public var path: Path? {
         switch phase {
-        case let .pending(_, path), let .open(_, path): return path
+        case let .pending(_, path), let .open(_, path), let .drilling(_, _, path): return path
         default: return nil
         }
     }
@@ -141,8 +158,12 @@ public struct CompletionState: Sendable {
     }
 
     /// 120 ms since the private Tab key. Next Term's own engine: no answer yet, so "native" goes out (true).
-    /// zsh's path: the held writes go out, and the Tab stays in flight.
+    /// zsh's path: the held writes go out, and the Tab stays in flight. So does a folder zsh is listing.
     public mutating func holdExpired(_ id: Int) -> Bool {
+        if drillID == id {
+            holding = false
+            return false
+        }
         guard pendingID == id else { return false }
         holding = false
         guard path == .engine else { return false }
@@ -157,17 +178,23 @@ public struct CompletionState: Sendable {
         shown = true
     }
 
-    /// zsh's whole list for `id` arrived.
+    /// zsh's whole list for `id` arrived (for a folder gone into, too).
     public mutating func listed(_ id: Int) {
-        guard pendingID == id || openID == id, path == .completionSystem else { return }
+        guard pendingID == id || openID == id || drillID == id, path == .completionSystem else { return }
         phase = .open(id: id, path: .completionSystem)
         holding = false
         shown = true
     }
 
-    /// The shell finished the Tab itself (`done`): its own Tab ran, or one match went in.
+    /// The shell finished the Tab itself (`done`): its own Tab ran, or one match went in. For a folder gone into:
+    /// nothing inside (inserted), or it can't be entered and the list stays as it was (kept).
     public mutating func done(_ id: Int, _ outcome: CompletionProtocol.Outcome) {
-        guard pendingID == id || openID == id else { return }
+        if case let .drilling(open, to, path) = phase, to == id, outcome == .kept {
+            phase = .open(id: open, path: path)
+            holding = false
+            return
+        }
+        guard pendingID == id || openID == id || drillID == id else { return }
         reset(to: outcome == .native ? .steppedBack : .armed)
     }
 
@@ -191,6 +218,46 @@ public struct CompletionState: Sendable {
     public mutating func closed() {
         guard openID != nil else { return }
         reset(to: .armed)
+    }
+
+    // MARK: going into a folder
+
+    /// Tab on a folder row of the open list: the id the folder's list comes under. The open list's own on Next Term's
+    /// engine and a server's screen; a new one on zsh's path, whose hook lists it. Writes wait meanwhile. nil with no
+    /// list open, or while one is going into a folder already.
+    public mutating func startDrill() -> Int? {
+        guard case let .open(id, path) = phase else { return nil }
+        var to = id
+        if path == .completionSystem {
+            lastID = lastID % 999_999 + 1
+            to = lastID
+        }
+        phase = .drilling(id: id, to: to, path: path)
+        holding = true
+        return to
+    }
+
+    /// Next Term listed the folder (its own engine, a server's screen): the list is the folder's now, it closed with
+    /// the name on the line, or it stays as it was.
+    public mutating func drilled(_ step: CompletionDrill.Step) {
+        guard case let .drilling(id, to, path) = phase else { return }
+        switch step {
+        case .into:
+            phase = .open(id: to, path: path)
+            holding = false
+        case .wentIn:
+            reset(to: .armed)
+        case .refused:
+            phase = .open(id: id, path: path)
+            holding = false
+        }
+    }
+
+    /// ⌫ took the `/` after a folder gone into on zsh's path: the list it was gone into from is open again, under its
+    /// own id.
+    public mutating func reopened(_ id: Int) {
+        guard case let .open(_, path) = phase else { return }
+        phase = .open(id: id, path: path)
     }
 }
 

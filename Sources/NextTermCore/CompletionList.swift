@@ -92,6 +92,7 @@ public final class CompletionList: @unchecked Sendable {
     /// The screen's word now (a key echoed). False when the list no longer fits it: the list closes.
     public func update(screen now: ScreenWord) -> Bool {
         guard case var .screen(screen) = source, now.before == screen.word.before, now.folder == screen.word.folder else { return false }
+        if keepsRows(for: now.word) { return true }
         if now.typed.hasPrefix(".") != screen.prepared.hidden {
             screen.prepared = PathCompletion.Prepared(screen.listing, foldersOnly: now.kind == .folders, hidden: now.typed.hasPrefix("."),
                                                       disk: screen.prepared.disk)
@@ -153,6 +154,11 @@ public final class CompletionList: @unchecked Sendable {
     /// A `line` report: the word now. False when the list no longer fits it (another folder, a quote closed,
     /// the stem gone): the list closes.
     public func update(word now: String, unquoted: String) -> Bool {
+        if case .screen = source { return false }
+        if keepsRows(for: now) {
+            word = now
+            return true
+        }
         switch source {
         case let .engine(context, listing, prepared, _):
             guard let next = context.with(word: now) else { return false }
@@ -201,6 +207,123 @@ public final class CompletionList: @unchecked Sendable {
         case .screen:
             return nil // keys typed as text: screenInsertion
         }
+    }
+
+    // MARK: going into a folder (CompletionDrill)
+
+    /// The list this one went into a folder from, which ⌫ goes back to, and that folder's row as it was shown there; nil
+    /// for the list Tab opened.
+    public private(set) var parent: CompletionList?
+    public private(set) var drilledName: String?
+    /// The word right after going in: ⌫ that takes its `/` goes back up.
+    private var drillWord: String?
+    /// Gone back up to: the rows as they were, and the folder chosen, while the word is the one it came back for.
+    private var frozenWord: String?
+    private var preferredText: String?
+
+    /// The row to choose as the list shows: the folder gone back up from.
+    public var preferredRow: Int? {
+        guard let preferredText else { return nil }
+        return rows.firstIndex { $0.text == preferredText }
+    }
+
+    /// What ⇥ does on row `index`: into a folder that can be entered and whose name the line can go on from; a beep on
+    /// one that can't be entered; anything else goes on the line as ↩︎ puts it. zsh's matches go in where zsh calls them
+    /// folders, and its hook checks they can be entered.
+    public func tabTarget(_ index: Int) -> CompletionDrill.Target {
+        guard rows.indices.contains(index) else { return .file }
+        let row = rows[index]
+        switch source {
+        case let .engine(context, _, _, candidates):
+            let candidate = candidates[row.source]
+            guard candidate.isFolder else { return .file }
+            guard candidate.enterable else { return .closed }
+            return context.drilled(into: candidate.name) == nil ? .file : .folder
+        case .zsh:
+            return row.isFolder ? .folder : .file
+        case let .screen(screen):
+            let candidate = screen.candidates[row.source]
+            guard candidate.isFolder else { return .file }
+            guard candidate.enterable else { return .closed }
+            return drillScreen(index) == nil ? .file : .folder
+        }
+    }
+
+    /// Next Term's own engine: the completion inside row `index`'s folder (CompletionContext.drilled).
+    public func drillContext(_ index: Int) -> CompletionContext? {
+        guard rows.indices.contains(index), case let .engine(context, _, _, candidates) = source else { return nil }
+        let candidate = candidates[rows[index].source]
+        return candidate.isFolder ? context.drilled(into: candidate.name) : nil
+    }
+
+    /// The private key that goes into row `index`'s folder: on Next Term's own engine its name and `/`, with the list
+    /// kept open; on zsh's path the match by its place, and `to`, the id zsh lists what is inside under.
+    public func drillTake(_ index: Int, to: Int? = nil) -> [UInt8]? {
+        guard rows.indices.contains(index) else { return nil }
+        switch source {
+        case .engine:
+            guard let into = drillContext(index) else { return nil }
+            return CompletionProtocol.takeWord(id: id, old: word, new: into.word, open: true)
+        case .zsh:
+            guard let to, rows[index].isFolder else { return nil }
+            return CompletionProtocol.takeMatch(id: id, old: word, index: rows[index].source, drill: to)
+        case .screen:
+            return nil // keys typed as text: screenInsertion
+        }
+    }
+
+    /// A server's screen: the word once row `index`'s folder has gone in, its name typed as it is and `/`. nil for a name
+    /// the screen can't read back as typed (one that needs quoting): ⇥ puts it on the line as ↩︎ does.
+    public func drillScreen(_ index: Int) -> ScreenWord? {
+        guard case let .screen(screen) = source, let candidate = screenCandidate(index), candidate.isFolder,
+              let name = String(bytes: candidate.name, encoding: .utf8), RemoteListing.typable(candidate.name, shell: screen.shell) == name else { return nil }
+        let word = screen.word.folder + name + "/"
+        guard ScreenWord.isPlain(word) else { return nil }
+        return ScreenWord(kind: screen.word.kind, before: screen.word.before, word: word, folder: word, typed: "")
+    }
+
+    /// This list is what is inside row `index`'s folder of `parent`: ⌫ that takes the `/` after it goes back there.
+    public func drilled(from parent: CompletionList, row index: Int) {
+        self.parent = parent
+        drilledName = parent.rows.indices.contains(index) ? parent.rows[index].text : nil
+        drillWord = word
+    }
+
+    /// ⌫ took the `/` after the folder this list is inside (`now`: the word as the shell reports it): the list it went in
+    /// from, its rows as they were, for the word now, with that folder chosen. nil for any other word.
+    public func backUp(word now: String) -> CompletionList? {
+        guard let parent, let drillWord, CompletionDrill.goesBackUp(now, from: drillWord) else { return nil }
+        parent.restore(word: now, choosing: drilledName)
+        return parent
+    }
+
+    /// The same on a server's screen, for the word read there.
+    public func backUp(screen now: ScreenWord) -> CompletionList? {
+        guard let parent, let drillWord, case let .screen(screen) = source, now.before == screen.word.before,
+              CompletionDrill.goesBackUp(now.word, from: drillWord), case var .screen(above) = parent.source else { return nil }
+        above.word = now
+        parent.source = .screen(above)
+        parent.restore(word: now.word, choosing: drilledName)
+        return parent
+    }
+
+    private func restore(word now: String, choosing name: String?) {
+        if case let .engine(context, listing, prepared, candidates) = source {
+            var kept = context
+            kept.word = now
+            source = .engine(kept, listing, prepared, candidates)
+        }
+        word = now
+        frozenWord = now
+        preferredText = name
+    }
+
+    /// The word the list came back up for keeps its rows; any other narrows as usual, and the folder is chosen no more.
+    private func keepsRows(for now: String) -> Bool {
+        if let frozenWord, frozenWord == now { return true }
+        frozenWord = nil
+        preferredText = nil
+        return false
     }
 
     private func show(_ result: PathCompletion.Result) {

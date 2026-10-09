@@ -394,6 +394,49 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     check("Resources/" not in sh.screen(start), f"[{label}] a take for a word the line no longer has does nothing")
     sh.send("\x03", 0.4)
 
+    # Into a folder (hook version 2): an `insert` with o puts the folder in and opens the list for the word now.
+    start = len(sh.buf)
+    sh.send("cd Te", 0.3)
+    tab_key(sh, 50, 0.05)
+    if sh.wait_mark("tab", start, 1):
+        sh.send(frame("a", 50, ["i", "Tests/", "o"]), 0.4)
+    lines = [f for _, k, f in sh.marks(start) if k == "line"]
+    check(drawn(sh, start, "cd Tests/") and lines == [["000050", "0", "Tests/", "Tests/"]],
+          f"[{label}] an `insert` with o puts the folder in and opens the list for the word now", f"{sh.line(start)!r} {lines}")
+    sh.send(frame("k", 50, ["c"]), 0.2)
+    sh.send("\x03", 0.4)
+
+    # A take with o goes into the folder and keeps the list open: the word now, then what is typed, is reported. ⌫ is
+    # reported too (Next Term goes back up by itself here), and a take from there replaces the word now.
+    start = len(sh.buf)
+    sh.send("cd So", 0.3)
+    tab_key(sh, 51, 0.05)
+    if sh.wait_mark("tab", start, 1):
+        sh.send(frame("a", 51, ["o"]), 0.3)
+    sh.send(frame("k", 51, ["w", "So", "Sources/", "o"]), 0.4)
+    sh.send("i", 0.3)
+    lines = [f for _, k, f in sh.marks(start) if k == "line"]
+    check(drawn(sh, start, "cd Sources/i") and lines[-2:] == [["000051", "0", "Sources/", "Sources/"], ["000051", "0", "Sources/i", "Sources/i"]],
+          f"[{label}] a take with o goes into the folder, and the list stays open", f"{sh.line(start)!r} {lines}")
+    sh.send("\x7f\x7f", 0.4)
+    lines = [f for _, k, f in sh.marks(start) if k == "line"]
+    check(lines[-1:] == [["000051", "0", "Sources", "Sources"]], f"[{label}] ⌫ that takes the `/` is reported", str(lines[-2:]))
+    sh.send(frame("k", 51, ["w", "Sources", "Resources/"]), 0.4)
+    check(drawn(sh, start, "cd Resources/"), f"[{label}] and a take from the list there replaces the word now", repr(sh.line(start)))
+    sh.send("\x03", 0.4)
+
+    # A take with o for a word the line no longer has: nothing changes, and the list is reported gone.
+    start = len(sh.buf)
+    sh.send("ls Re", 0.3)
+    tab_key(sh, 52, 0.05)
+    if sh.wait_mark("tab", start, 1):
+        sh.send(frame("a", 52, ["o"]), 0.3)
+    sh.send(frame("k", 52, ["w", "Rx", "Resources/", "o"]), 0.3)
+    lines = [f for _, k, f in sh.marks(start) if k == "line"]
+    check("Resources/" not in sh.screen(start) and lines[-1:] == [["000052", "1"]],
+          f"[{label}] a take with o for another word: nothing changes, and the list is gone", str(lines))
+    sh.send("\x03", 0.4)
+
     # The close key: no more reports.
     start = len(sh.buf)
     sh.send("ls Te", 0.3)
@@ -706,6 +749,123 @@ for i in range(3000):
 compsys_checks("zsh's completion system")
 compsys_checks("zsh's completion system, hostile options", "setopt nounset ksh_arrays err_return\n")
 shutil.rmtree(many, ignore_errors=True)
+
+# 7a. Going into folders on zsh's path (hook version 2): a take with a new id, ⌫'s u key, a folder that can't be
+# entered, an empty one, and the single-match rule (the Tab key's d).
+def drill_checks(label, rc_extra=""):
+    walk = tempfile.mkdtemp()
+    for d in ("projects/next-term/Sources", "projects/cv", "locked", "Pictures"):
+        os.makedirs(os.path.join(walk, d))
+    open(os.path.join(walk, "projects", "notes.txt"), "w").close()
+    os.chmod(os.path.join(walk, "locked"), 0)
+    dot = tempfile.mkdtemp()
+    open(os.path.join(dot, ".zshrc"), "w").write(rc_extra + "PS1='$ '\nautoload -Uz compinit && compinit -u -D\n")
+    sh = Shell(label, dot, cwd=walk)
+    def place(items, name):
+        return next((i + 1 for i, (t, _, _) in enumerate(items) if t.rstrip("/") == name), 0)
+    def dones(since):
+        return [f for _, k, f in sh.marks(since) if k == "done"]
+    def lines(since):
+        return [f for _, k, f in sh.marks(since) if k == "line"]
+
+    # `cd ` lists the folders; a take with a new id goes into projects, and zsh lists what is inside under that id.
+    start = len(sh.buf)
+    sh.send("cd ", 0.3)
+    tab_key(sh, 61, 0.6)
+    _, top, _, _ = comp_list(sh, start, 61)
+    mark = len(sh.buf)
+    sh.send(frame("k", 61, ["m", "", str(place(top, "projects")), "000062"]), 0.8)
+    _, inner, stem, _ = comp_list(sh, mark, 62)
+    check(drawn(sh, start, "cd projects/") and sorted(t.rstrip("/") for t, _, _ in inner) == ["cv", "next-term"] and stem and stem[0] == "projects/",
+          f"[{label}] into a folder: zsh puts it in and lists what is inside, folders only, under the new id", f"{sh.line(start)!r} {inner} {stem}")
+    check(lines(mark)[-1:] == [["000062", "0", "projects/", "projects/"]] and not dones(mark),
+          f"[{label}] and that list is open for the word now", str(lines(mark)))
+    # ⌫ takes the `/`; the u key opens the list gone in from again, under its own id, for the word now.
+    sh.send("\x7f", 0.3)
+    check(lines(mark)[-1:] == [["000062", "0", "projects", "projects"]], f"[{label}] ⌫ is reported for the folder's list", str(lines(mark)[-2:]))
+    mark = len(sh.buf)
+    sh.send(frame("k", 62, ["u", "000061"]), 0.4)
+    check(lines(mark) == [["000061", "0", "projects", "projects"]], f"[{label}] the u key: the list gone in from is open again", str(lines(mark)))
+    sh.send(frame("k", 61, ["m", "projects", str(place(top, "Pictures"))]), 0.5)
+    check(drawn(sh, start, "cd Pictures/"), f"[{label}] and a take from it, by its place there, replaces the word now", repr(sh.line(start)))
+    sh.send("\x03", 0.4)
+
+    # A take into a folder for a word the line no longer has: nothing changes, and the list is reported gone.
+    start = len(sh.buf)
+    sh.send("cd ", 0.3)
+    tab_key(sh, 71, 0.6)
+    _, items, _, _ = comp_list(sh, start, 71)
+    mark = len(sh.buf)
+    sh.send(frame("k", 71, ["m", "zz", str(place(items, "projects")), "000072"]), 0.5)
+    check("projects" not in sh.line(start) and lines(mark) == [["000071", "1"]] and not dones(mark),
+          f"[{label}] into a folder for another word: nothing changes, and the list is gone", f"{sh.line(start)!r} {lines(mark)}")
+    sh.send("\x03", 0.4)
+
+    # A u key for a list that isn't open: Next Term hears the list it asked for is gone.
+    start = len(sh.buf)
+    sh.send(frame("k", 70, ["u", "000069"]), 0.3)
+    check(lines(start) == [["000069", "1"]], f"[{label}] a u key for a list that isn't open: that list is gone", str(lines(start)))
+
+    # Into an empty folder: the name goes in and the list closes (done inserted); typing reports nothing more.
+    start = len(sh.buf)
+    sh.send("cd projects/", 0.3)
+    tab_key(sh, 63, 0.6)
+    _, items, _, _ = comp_list(sh, start, 63)
+    mark = len(sh.buf)
+    sh.send(frame("k", 63, ["m", "projects/", str(place(items, "cv")), "000064"]), 0.6)
+    check(["000064", "inserted"] in dones(mark) and drawn(sh, start, "cd projects/cv/") and not comp_list(sh, mark, 64)[1],
+          f"[{label}] into an empty folder: the name goes in and the list closes", f"{sh.line(start)!r} {dones(mark)}")
+    mark = len(sh.buf)
+    sh.send("x", 0.3)
+    check(not lines(mark), f"[{label}] and typing then reports nothing", str(lines(mark)))
+    sh.send("\x03", 0.4)
+
+    # A folder that can't be entered: done kept, the line as it was, and the list still open.
+    start = len(sh.buf)
+    sh.send("cd ", 0.3)
+    tab_key(sh, 65, 0.6)
+    _, items, _, _ = comp_list(sh, start, 65)
+    mark = len(sh.buf)
+    sh.send(frame("k", 65, ["m", "", str(place(items, "locked")), "000066"]), 0.5)
+    sh.send("P", 0.3)
+    check(["000066", "kept"] in dones(mark) and "locked" not in sh.line(start) and lines(mark)[-1:] == [["000065", "0", "P", "P"]],
+          f"[{label}] a folder that can't be entered: kept, and the list stays open", f"{sh.line(start)!r} {dones(mark)} {lines(mark)}")
+    sh.send(frame("k", 65, ["c"]), 0.2)
+    sh.send("\x03", 0.4)
+
+    # The single-match rule: with d, one folder goes in and what is inside is listed under the Tab's own id.
+    start = len(sh.buf)
+    sh.send("cd pro", 0.3)
+    tab_key(sh, 67, 0.8, fields=["d"])
+    _, items, _, _ = comp_list(sh, start, 67)
+    check(drawn(sh, start, "cd projects/") and sorted(t.rstrip("/") for t, _, _ in items) == ["cv", "next-term"] and not dones(start),
+          f"[{label}] one folder with d: it goes in and what is inside is listed", f"{sh.line(start)!r} {items} {dones(start)}")
+    sh.send(frame("k", 67, ["c"]), 0.2)
+    sh.send("\x03", 0.4)
+    start = len(sh.buf)
+    sh.send("cd pro", 0.3)
+    tab_key(sh, 68, 0.6)
+    check(["000068", "inserted"] in dones(start) and drawn(sh, start, "cd projects/") and not comp_list(sh, start, 68)[1],
+          f"[{label}] without d, as before: it goes in alone", f"{sh.line(start)!r} {dones(start)}")
+    sh.send("\x03", 0.4)
+    start = len(sh.buf)
+    sh.send("cd projects/c", 0.3)
+    tab_key(sh, 69, 0.6, fields=["d"])
+    check(["000069", "inserted"] in dones(start) and drawn(sh, start, "cd projects/cv/") and not comp_list(sh, start, 69)[1],
+          f"[{label}] with d, an empty folder goes in alone", f"{sh.line(start)!r} {dones(start)}")
+    sh.send("\x03", 0.4)
+
+    errors = sh.errors()
+    for l in errors:
+        print("  hook error:", l.strip()[:200])
+    check(not errors, f"[{label}] no errors from the completion hook")
+    check("6973" not in sh.screen(), f"[{label}] no junk on the line")
+    sh.close()
+    os.chmod(os.path.join(walk, "locked"), 0o755)
+    shutil.rmtree(walk, ignore_errors=True)
+
+drill_checks("going into folders")
+drill_checks("going into folders, hostile options", "setopt nounset ksh_arrays err_return\n")
 
 # 7b. The `config` key quiets and restores zsh-autocomplete's list as you type, in that shell only: a stand-in
 # with its redraw hook (the real plugin runs in the matrix below).

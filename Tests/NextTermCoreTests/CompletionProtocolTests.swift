@@ -53,8 +53,11 @@ import Testing
     }
 
     @Test func parsesEachKind() {
-        let arm = message("\(n);arm;1;main;start;1;0;expand-or-complete;builtin;;0")
+        let arm = message("\(n);arm;2;main;start;1;0;expand-or-complete;builtin;;0")
         #expect(arm == .arm(CompletionProtocol.Arm()))
+        // A server's hook from before going into folders says 1: it is sent none of those keys.
+        let older = message("\(n);arm;1;main;start;1;0;expand-or-complete;builtin;;0")
+        #expect(older == .arm(CompletionProtocol.Arm(version: 1)))
         let plugins = message("\(n);arm;1;viins;start;1;1;complete-word;\(percent("completion:.complete-word:_main_complete"));\(percent("autocomplete fzf-tab"));1")
         guard case let .arm(a)? = plugins else { Issue.record("no arm"); return }
         #expect(a.keymap == "viins" && a.completionSystem && a.plugins == ["autocomplete", "fzf-tab"] && a.quieted && a.takesKey)
