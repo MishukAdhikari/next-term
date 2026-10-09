@@ -98,6 +98,7 @@ public struct MCPProjects: Sendable {
             return .failure(.init("Give the path without “..”."))
         }
         let real = Self.realPath(lexical)
+        if let reason = Self.vaultReason(real) { return .failure(Self.refusal(text, reason, writing: writing)) }
         guard let root = root(holding: real) else {
             return .failure(.init("\(text) is outside the projects open in Next Term (\(listed)); only files inside them are \(writing ? "written" : "read")."))
         }
@@ -156,6 +157,17 @@ public struct MCPProjects: Sendable {
             return "is a credentials file"
         }
         return nil
+    }
+
+    /// Why a real path is never read or written: it is in Next Term's Secrets folder, `Secrets.noindex`, or an old one
+    /// Start Over kept (`Secrets-<date>.old.noindex`). It runs on the real path, so a project opened at the folder, or at
+    /// `Next Term/`, is refused too.
+    public static func vaultReason(_ realPath: String) -> String? {
+        let parts = realPath.split(separator: "/")
+        guard let index = parts.lastIndex(where: { $0.lowercased().hasPrefix("secrets") && $0.lowercased().hasSuffix(".noindex") }) else {
+            return nil
+        }
+        return index == parts.count - 1 ? "is Next Term’s Secrets folder" : "is in Next Term’s Secrets folder"
     }
 
     // MARK: paths
@@ -317,11 +329,12 @@ public enum MCPProjectTools {
             var secret = 0
             let files = ProjectSearch.files(in: folder, git: git).filter { path in
                 let full = (folder as NSString).appendingPathComponent(path)
-                guard MCPProjects.secretReason(path) == nil else { secret += 1; return false }
+                guard MCPProjects.secretReason(path) == nil, MCPProjects.vaultReason(full) == nil else { secret += 1; return false }
                 guard MCPProjects.isLink(full) else { return true }
                 // A link is followed only to a file inside an open project, and not to a secret one.
                 let real = MCPProjects.realPath(full)
-                guard let root = projects.root(holding: real), MCPProjects.secretReason(ProjectFile(root: root, path: real).relative) == nil else {
+                guard let root = projects.root(holding: real), MCPProjects.secretReason(ProjectFile(root: root, path: real).relative) == nil,
+                      MCPProjects.vaultReason(real) == nil else {
                     return false
                 }
                 return true
@@ -483,7 +496,9 @@ public enum MCPProjectTools {
             diffs.removeAll { $0.hunks.isEmpty && !$0.isBinary && !$0.isRename && $0.header.allSatisfy { $0.hasPrefix("diff --git") || $0.hasPrefix("index ") } }
             for diff in diffs {
                 let name = scope.relative(diff.path) ?? diff.path
-                if let reason = [diff.newPath, diff.oldPath].compactMap({ $0 }).lazy.compactMap(MCPProjects.secretReason).first {
+                let paths = [diff.newPath, diff.oldPath].compactMap { $0 }
+                let vault = paths.lazy.compactMap { MCPProjects.vaultReason(scope.gitRoot + "/" + $0) }.first
+                if let reason = paths.lazy.compactMap(MCPProjects.secretReason).first ?? vault {
                     leftOut.append(["path": name, "reason": reason])
                     continue
                 }
