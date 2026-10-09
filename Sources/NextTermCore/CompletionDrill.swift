@@ -2,8 +2,9 @@ import Foundation
 
 /// Walking down a path with Tab: on a folder row of the open list, ⇥ (or →) puts `name/` on the line and the same list
 /// shows what is inside, its first row chosen; ↩︎ and a click put the name on the line and close, as before; ⌫ that
-/// takes the `/` right after, or ←, goes back up. CompletionSession runs it on each of the list's paths (Next Term's
-/// own engine, zsh's own completions through the hook, a server's screen); the decisions are here.
+/// takes the `/` after the folder's name (whenever the word is back to it), or ←, goes back up. CompletionSession runs it
+/// on each of the list's paths (Next Term's own engine, zsh's own completions through the hook, a server's screen); the
+/// decisions are here, and the keys pressed meanwhile wait in CompletionKeyQueue.
 public enum CompletionDrill {
     /// What ⇥ does on a row.
     public enum Target: Equatable, Sendable {

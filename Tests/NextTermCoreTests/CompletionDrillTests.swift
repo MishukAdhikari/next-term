@@ -97,6 +97,7 @@ import Testing
         // The hook reports the word now: it narrows inside the folder.
         #expect(child.update(word: "Sources/", unquoted: "Sources/") && child.rows.map(\.text) == ["inner"])
         #expect(child.update(word: "Sources/i", unquoted: "Sources/i") && child.backUp(word: "Sources/") == nil)
+        // Typed inside and erased again: the ⌫ that takes the `/` still goes back up, rather than close the list.
         #expect(child.update(word: "Sources/", unquoted: "Sources/"))
         // ⌫ that takes the `/`: the parent's list as it was, with that folder chosen, for the word now.
         let back = try #require(child.backUp(word: "Sources"))

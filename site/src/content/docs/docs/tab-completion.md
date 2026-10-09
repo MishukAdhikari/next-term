@@ -31,7 +31,7 @@ While the list is open, the terminal keeps the keyboard: letters and <kbd>⌫</k
 | <kbd>↓</kbd> <kbd>↑</kbd>, <kbd>⌃N</kbd> <kbd>⌃P</kbd>, <kbd>⇧⇥</kbd> | Choose a row |
 | <kbd>→</kbd> or <kbd>⇥</kbd> on a folder | Go into it: `name/` goes on the line, and the list shows what is inside |
 | <kbd>→</kbd> or <kbd>⇥</kbd> on a file, <kbd>↩︎</kbd>, or a click | Put the chosen name on the line, and close the list |
-| <kbd>←</kbd>, or <kbd>⌫</kbd> right after going in | Back up: the list you went in from, with that folder chosen |
+| <kbd>←</kbd>, or <kbd>⌫</kbd> that takes the folder’s `/` | Back up: the list you went in from, with that folder chosen |
 | <kbd>←</kbd> at the top | Close the list, and the cursor moves |
 | <kbd>⎋</kbd> | Close the list. Nothing is sent to the shell. |
 | <kbd>⌃C</kbd>, <kbd>⌃J</kbd>, any <kbd>⌘</kbd> shortcut | Close the list, and the key does what it always does |
@@ -42,12 +42,12 @@ A second <kbd>⇥</kbd> pressed before the list shows waits for it, then does on
 
 <kbd>⇥</kbd> or <kbd>→</kbd> on a folder puts its name and a `/` on the line, quoted as <kbd>↩︎</kbd> would, and the same list shows what is inside, its first row chosen: folders only after `cd` and the other commands that take a folder, files and folders where the list showed both. Type to narrow it, and press <kbd>⇥</kbd> again to go deeper. <kbd>↩︎</kbd> and a click still put the chosen name on the line and close the list.
 
-<kbd>⌫</kbd> right after going in takes the `/` and goes back up: the list you went in from, with that folder chosen. <kbd>←</kbd> goes back up from anywhere inside, and puts back the word you had before going in, so what you typed inside goes too. At the list you started from, <kbd>←</kbd> closes it and moves the cursor, as it always did.
+<kbd>⌫</kbd> that takes the `/` after the folder’s name goes back up: the list you went in from, with that folder chosen. That is the first <kbd>⌫</kbd> after going in, or the one after you erase what you typed inside. <kbd>←</kbd> goes back up from anywhere inside, and puts back the word you had before going in, so what you typed inside goes too. At the list you started from, <kbd>←</kbd> closes it and moves the cursor, as it always did.
 
 - An empty folder, or one with no folders inside after `cd`, goes in and the list closes.
 - A folder that can’t be entered (no permission, or gone) beeps, and the list stays as it was.
 - A folder that isn’t read in time (a tenth of a second on your Mac, 0.8 seconds on a server) goes in and the list closes, so it never stalls. zsh’s own completions show **Loading…** until zsh is done, as for <kbd>⇥</kbd>.
-- Keys you press while a folder is being listed wait for it, and act in the order you pressed them.
+- Keys you press while a folder is being listed wait for it, and act in the order you pressed them, the arrow keys too. A letter among them narrows the folder’s list before the keys after it act: <kbd>→</kbd> <kbd>n</kbd> <kbd>⇥</kbd> goes into the folder, then into the first one there that starts with n.
 - With zsh’s own completions, a match zsh calls a folder is one; Next Term’s hook checks it can be entered, and zsh lists what is inside.
 - In a remote tab without the hook, a folder whose name needs quoting goes on the line as <kbd>↩︎</kbd> puts it. With a hook from an earlier Next Term, still loaded in a shell started before, <kbd>⇥</kbd> puts the name on the line until that shell starts again.
 
