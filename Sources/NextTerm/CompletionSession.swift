@@ -12,6 +12,9 @@ import NextTermCore
 /// A server tab whose shell has no hook takes a path of its own (RemoteCompletion): the word is read off the
 /// screen once the keys typed have echoed, its folder is listed over the connection, and what is chosen goes on
 /// the line as keys. Nothing private is ever sent to that shell.
+///
+/// ⇥ on a folder row goes into it (CompletionDrill): the name and `/` go on the line and the same list shows what is
+/// inside; ⌫ that takes the `/` goes back up. Writes wait while the folder is listed, as they wait for a Tab's answer.
 final class CompletionSession {
     private(set) weak var tab: TerminalTab?
     private(set) var state = CompletionState()
@@ -19,6 +22,8 @@ final class CompletionSession {
     private(set) var list: CompletionList?
     /// The window's controller redraws the popup when the list or the state changes.
     var onChange: ((CompletionSession) -> Void)?
+    /// The row the popup has chosen (the window's controller).
+    var selection: (() -> Int)?
 
     /// Writes waiting for the answer, in order; a Tab pressed meanwhile waits among them.
     private enum Held {
@@ -58,6 +63,29 @@ final class CompletionSession {
     private(set) var lastTab = TabOutcome.none
     /// Writes to the shell so far: a question answered after one came lets its Tab go.
     private(set) var writes = 0
+    /// For the self-test: folders gone into, what the last one came to, and lists gone back up to.
+    private(set) var drills = 0
+    private(set) var lastDrill: CompletionDrill.Step?
+    private(set) var backUps = 0
+
+    /// Going into a folder: its deadline, and what then puts the name on the line alone.
+    private var drillTimer: DispatchWorkItem?
+    private var drillFallback: (() -> Void)?
+    /// On zsh's path, the list gone from and its row, while zsh lists what is inside (for a refusal, and for ⌫).
+    private var drillFrom: (list: CompletionList, row: Int)?
+    /// A Return pressed while a folder is listed: it takes the row chosen once the folder's list shows.
+    private var enterWaiting = false
+    /// The list on screen when a Tab or a Return began to wait while a folder was listed: still the one (it couldn't be
+    /// entered), the key takes the row chosen in it; another (the folder's), its first row.
+    private weak var keyList: CompletionList?
+    /// The single-match rule while what is inside is listed: what goes on the line alone if it isn't in time.
+    private var singleInsert: (id: Int, word: String)?
+    private var singleKeys: (id: Int, keys: (erase: Int, text: String))?
+    /// A server's screen, after going into a folder: the word the screen shows once the name has echoed, and until when
+    /// what is on the way to it doesn't close the list.
+    private var drillEcho: (word: ScreenWord, until: TimeInterval)?
+    /// The list VoiceOver was told of already ("In projects, 12 items"), so the popup doesn't say it again.
+    private(set) weak var announced: CompletionList?
 
     /// A server tab with no hook: the word its Tab is for, read off the screen, and the Tab's deadline.
     private var screenWord: ScreenWord?
@@ -101,15 +129,24 @@ final class CompletionSession {
             return false
         }
         held.append(.bytes(data))
-        // Keys typed while a server's folder is listed: the shell's own Tab goes first, then they do, and the
-        // listing is dropped. A Tab is never sent late.
+        // Keys typed while a server's folder is listed: the shell's own Tab goes first (or the one folder, alone),
+        // then they do, and the listing is dropped. A Tab is never sent late.
         if state.path == .screen, let id = state.pendingID {
-            screenAnswer(id, .native)
+            screenGiveUp(id)
             return true
         }
-        // Return and the like end the Tab at once: zsh's own Tab, then the keys, in order.
+        // Return and the like end the Tab at once: zsh's own Tab (or the one folder, alone), then the keys, in order.
         if InputScan.scan(data, inPaste: &heldPaste).disarms, let id = state.pendingID {
-            if state.path == .engine { answer(id, .native) } else { state.disarm() }
+            if state.path == .engine {
+                if let single = singleInsert, single.id == id {
+                    singleInsert = nil
+                    answer(id, .insert, word: single.word)
+                } else {
+                    answer(id, .native)
+                }
+            } else {
+                state.disarm()
+            }
             release()
             changed()
         }
@@ -137,8 +174,8 @@ final class CompletionSession {
         view?.sendPastGate(ArraySlice(bytes))
     }
 
-    /// The held writes go out in order, up to a Tab that starts holding again; then a Tab that waits follows the
-    /// state it now finds.
+    /// The held writes go out in order, up to a Tab that starts holding again; then a Tab or a Return that waits
+    /// follows the state it now finds.
     private func release() {
         while !state.holding, !held.isEmpty {
             switch held.removeFirst() {
@@ -153,6 +190,7 @@ final class CompletionSession {
         }
         heldPaste = inPaste
         if tabWaiting, !state.holding { followTab() }
+        if enterWaiting, !state.holding { followEnter() }
     }
 
     /// A Tab pressed while another was in flight follows the rule of the state that one left. Still in flight, it
@@ -162,18 +200,36 @@ final class CompletionSession {
     /// never reaches zsh as ^I beside a list of Next Term's.
     private func followTab() {
         tabWaiting = false
-        if state.pendingID != nil {
+        if state.pendingID != nil || state.isDrilling {
             tabWaiting = true
         } else if isListOpen {
             guard let list else { return } // Loading
             if !state.shown || list.rows.isEmpty {
                 tabWaiting = true
             } else {
-                accept(0)
+                tab(on: waitingRow(list))
             }
         } else if !realTab() {
             pass([0x09])
         }
+    }
+
+    /// A Return pressed while a folder was listed: the row chosen in the folder's list once it shows. Nothing if the
+    /// list closed meanwhile (the name went in alone): a Return in the list never reaches the shell.
+    private func followEnter() {
+        enterWaiting = false
+        guard isListOpen, let list else { return }
+        if state.isDrilling || !state.shown || list.rows.isEmpty {
+            enterWaiting = true
+            return
+        }
+        accept(waitingRow(list))
+    }
+
+    /// The row a key that waited takes (keyList).
+    private func waitingRow(_ list: CompletionList) -> Int {
+        let row = list === keyList ? selection?() ?? 0 : list.preferredRow ?? 0
+        return list.rows.indices.contains(row) ? row : 0
     }
 
     private func pass(_ bytes: [UInt8]) {
@@ -205,7 +261,9 @@ final class CompletionSession {
         heldPaste = inPaste
         list = nil
         assembler.reset()
-        write(CompletionProtocol.tabKey(id: id, wait: serverWait, quiet: quietWanted))
+        // On zsh's path the hook puts one folder in and lists what is inside by itself (the single-match rule).
+        let drill = state.path == .completionSystem && state.arm?.drills == true
+        write(CompletionProtocol.tabKey(id: id, wait: serverWait, quiet: quietWanted, drill: drill))
         let hold = DispatchWorkItem { [weak self] in self?.holdExpired(id) }
         holdTimer?.cancel()
         holdTimer = hold
@@ -222,6 +280,11 @@ final class CompletionSession {
     /// A Tab on an open list whose rows haven't come yet: it waits for them, as one pressed while the Tab was in
     /// flight does (followTab). Under the Loading row it does nothing.
     func tabBeforeRows() {
+        if state.isDrilling {
+            keyList = list
+            tabWaiting = true
+            return
+        }
         guard isListOpen, let list, !state.shown || list.rows.isEmpty else { return }
         tabWaiting = true
     }
@@ -239,9 +302,15 @@ final class CompletionSession {
         view?.send(txt: "\t")
     }
 
-    /// 120 ms: on Next Term's own path the answer is "native" now; either way the held writes go out.
+    /// 120 ms: on Next Term's own path the answer is "native" now, or the one folder alone when what is inside wasn't
+    /// listed in time; either way the held writes go out.
     private func holdExpired(_ id: Int) {
-        if state.holdExpired(id) { write(CompletionProtocol.nativeAnswer(id: id)) }
+        if let single = singleInsert, single.id == id, state.pendingID == id {
+            singleInsert = nil
+            answer(id, .insert, word: single.word)
+        } else if state.holdExpired(id) {
+            write(CompletionProtocol.nativeAnswer(id: id))
+        }
         release()
         changed()
     }
@@ -292,6 +361,9 @@ final class CompletionSession {
         case .native:
             answer(id, .native)
         case .insert(let word):
+            // The single-match rule: one folder that can be entered goes in, with what is inside listed.
+            if state.arm?.drills == true, let only = CompletionDrill.single(result), let into = context.drilled(into: only.name),
+               singleDrill(id, word: word, name: only.display, into: into) { return }
             answer(id, .insert, word: word)
         case .open:
             list = CompletionList(id: id, context: context, listing: listing, prepared: prepared, result: result)
@@ -311,7 +383,7 @@ final class CompletionSession {
                 state.update(arm)
             } else {
                 // A new line or keymap: a list still open on the shell's side is over, and a Tab that waits with it.
-                if let id = state.openID, state.path != .screen { write(CompletionProtocol.close(id: id)) }
+                closeKeys()
                 tabWaiting = false
                 state.armed(arm)
                 listClosed()
@@ -324,9 +396,13 @@ final class CompletionSession {
             comp(chunk)
         case .done(let id, let outcome):
             lastDone = (id, outcome)
-            let mine = state.pendingID == id || state.openID == id
-            state.done(id, outcome)
-            if mine { listClosed() }
+            if state.drillID == id, state.path == .completionSystem {
+                zshDrillDone(id, outcome)
+            } else {
+                let mine = state.pendingID == id || state.openID == id
+                state.done(id, outcome)
+                if mine { listClosed() }
+            }
         case .line(let report):
             line(report)
         }
@@ -336,10 +412,19 @@ final class CompletionSession {
 
     /// zsh's matches: the list once every chunk is in.
     private func comp(_ chunk: CompletionProtocol.CompChunk) {
-        guard state.pendingID == chunk.id || state.openID == chunk.id, state.path == .completionSystem else { return }
+        guard state.pendingID == chunk.id || state.openID == chunk.id || state.drillID == chunk.id, state.path == .completionSystem else { return }
         guard let matches = assembler.add(chunk) else { return }
         loadingTimer?.cancel()
-        list = CompletionList(id: chunk.id, matches: matches, total: chunk.total, stem: chunk.stem, stemUnquoted: chunk.stemUnquoted)
+        let made = CompletionList(id: chunk.id, matches: matches, total: chunk.total, stem: chunk.stem, stemUnquoted: chunk.stemUnquoted)
+        if state.drillID == chunk.id, let from = drillFrom {
+            // What is inside the folder gone into: the list gone from is kept for ⌫.
+            holdTimer?.cancel()
+            drillFrom = nil
+            made.drilled(from: from.list, row: from.row)
+            lastDrill = .into
+            announce(into: made.drilledName ?? "", made)
+        }
+        list = made
         state.listed(chunk.id)
     }
 
@@ -350,7 +435,11 @@ final class CompletionSession {
             return listClosed()
         }
         lineInOutput = true
+        // Going into a folder: the row was taken as the list stood when ⇥ was pressed.
+        if state.isDrilling { return state.line(report) }
         if let list {
+            // ⌫ took the `/` after a folder gone into: back up.
+            if let above = list.backUp(word: report.word) { return wentBackUp(above) }
             // The word no longer fits the list (another folder, a closed quote): it closes.
             if !list.update(word: report.word, unquoted: report.unquoted) { return closeList() }
         } else if state.path == .completionSystem, assembler.isIncomplete(report.id) {
@@ -421,6 +510,37 @@ final class CompletionSession {
 
     // MARK: the list
 
+    /// ⇥ on row `index` of the open list (CompletionController, or a Tab that waited for the rows): into a folder row;
+    /// a beep on a folder that can't be entered; anything else goes on the line as ↩︎ puts it. While a folder is being
+    /// listed it waits, for the folder's list.
+    func tab(on index: Int) {
+        guard isListOpen, let list, list.rows.indices.contains(index) else { return }
+        if state.isDrilling {
+            keyList = list
+            tabWaiting = true
+            return
+        }
+        tabWaiting = false
+        // A server's hook from before going into folders: ⇥ is ↩︎ there until its shell starts again.
+        guard state.path == .screen || state.arm?.drills == true else { return accept(index) }
+        switch list.tabTarget(index) {
+        case .file: accept(index)
+        case .closed: NSSound.beep()
+        case .folder: drill(index, list)
+        }
+    }
+
+    /// ↩︎ on row `index`: while a folder is listed it waits, then takes the row chosen in the folder's list.
+    func enter(on index: Int) {
+        guard isListOpen else { return }
+        if state.isDrilling {
+            keyList = list
+            enterWaiting = true
+            return
+        }
+        accept(index)
+    }
+
     /// Puts row `index` on the line, and closes the list.
     func accept(_ index: Int) {
         guard isListOpen, let list else { return }
@@ -442,20 +562,31 @@ final class CompletionSession {
     }
 
     /// Closes the list with nothing chosen (Esc, a click elsewhere, the window going): the shell stops
-    /// reporting the line.
+    /// reporting the line. Keys held while a folder was listed go out.
     func closeList() {
         tabWaiting = false
-        guard let id = state.openID else { return }
-        if state.path != .screen { write(CompletionProtocol.close(id: id)) }
+        enterWaiting = false
+        guard state.openID != nil else { return }
+        closeKeys()
         state.closed()
         listClosed()
+        release()
         changed()
+    }
+
+    /// The close keys for the lists open on the shell's side: the open one, and the one zsh is making for a folder gone
+    /// into.
+    private func closeKeys() {
+        guard let id = state.openID, state.path != .screen else { return }
+        write(CompletionProtocol.close(id: id))
+        if let to = state.drillID, to != id { write(CompletionProtocol.close(id: to)) }
     }
 
     /// The list can't be shown (its window isn't in front): on zsh's path zsh lists as it would by itself;
     /// Next Term's own list just closes.
     func cannotShow() {
         tabWaiting = false
+        if state.isDrilling { return closeList() }
         guard let id = state.openID ?? state.pendingID else { return }
         if state.path == .completionSystem {
             write(CompletionProtocol.frame(.native, id: id))
@@ -469,6 +600,13 @@ final class CompletionSession {
 
     private func listClosed() {
         loadingTimer?.cancel()
+        drillTimer?.cancel()
+        drillFallback = nil
+        drillFrom = nil
+        drillEcho = nil
+        singleInsert = nil
+        singleKeys = nil
+        enterWaiting = false
         list = nil
         caretRow = nil
         screenWord = nil
@@ -599,7 +737,7 @@ extension CompletionSession {
     fileprivate func screenTab() -> Bool {
         if state.holding, state.path == .screen, let id = state.pendingID {
             held.append(.tab)
-            screenAnswer(id, .native)
+            screenGiveUp(id)
             return true
         }
         guard screenReady, let id = state.startScreenTab() else {
@@ -609,7 +747,7 @@ extension CompletionSession {
         lastTab = .listing(id)
         heldPaste = inPaste
         list = nil
-        let deadline = DispatchWorkItem { [weak self] in self?.screenAnswer(id, .native) }
+        let deadline = DispatchWorkItem { [weak self] in self?.screenGiveUp(id) }
         screenDeadline?.cancel()
         screenDeadline = deadline
         DispatchQueue.main.asyncAfter(deadline: .now() + RemoteCompletion.deadline, execute: deadline)
@@ -645,11 +783,50 @@ extension CompletionSession {
         case .native:
             screenAnswer(id, .native)
         case .insert:
-            screenAnswer(id, .insert, keys: made.screenCandidate(0).flatMap { made.screenInsertion($0, at: word) })
+            let keys = made.screenCandidate(0).flatMap { made.screenInsertion($0, at: word) }
+            // The single-match rule: one folder that can be entered goes in, with what is inside listed.
+            if let keys, made.tabTarget(0) == .folder, let into = made.drillScreen(0), screenSingle(id, keys: keys, into: into) { return }
+            screenAnswer(id, .insert, keys: keys)
         case .open:
             list = made
             screenAnswer(id, .open)
         }
+    }
+
+    /// The Tab can't wait any more for what it listed (its deadline, a key typed, another Tab): the shell's own Tab, or
+    /// the one folder whose inside was being listed, alone.
+    private func screenGiveUp(_ id: Int) {
+        if let single = singleKeys, single.id == id {
+            singleKeys = nil
+            return screenAnswer(id, .insert, keys: single.keys)
+        }
+        screenAnswer(id, .native)
+    }
+
+    /// One folder goes in on a server's screen: what is inside is listed within the Tab's deadline. False: it can't be
+    /// listed now, so the name goes in alone.
+    private func screenSingle(_ id: Int, keys: (erase: Int, text: String), into: ScreenWord) -> Bool {
+        guard let tab, let request = RemoteCompletion.shared.request(typed: into.folder, in: tab) else { return false }
+        singleKeys = (id, keys)
+        let listing = RemoteCompletion.shared.list(request, for: tab) { [weak self] result in
+            self?.screenSingleListed(id, keys: keys, into: into, result)
+        }
+        if !listing { singleKeys = nil }
+        return listing
+    }
+
+    private func screenSingleListed(_ id: Int, keys: (erase: Int, text: String), into: ScreenWord, _ result: RemoteListing.Result?) {
+        guard state.pendingID == id, state.path == .screen, singleKeys?.id == id else { return }
+        singleKeys = nil
+        guard let result else { return screenAnswer(id, .insert, keys: keys) }
+        let inside = CompletionList(id: id, screen: into, listing: result.listing, disk: result.disk, shell: result.quoting)
+        guard !inside.rows.isEmpty else { return screenAnswer(id, .insert, keys: keys) }
+        screenDeadline?.cancel()
+        typeOnScreen(keys)
+        list = inside
+        drillEcho = (into, TerminalTab.now + 1)
+        announce(into: String(into.folder.dropLast().split(separator: "/").last ?? ""), inside)
+        screenAnswer(id, .open)
     }
 
     /// The answer to a Tab on a server's screen: the shell's own Tab (a plain ^I), a name put on the line as keys,
@@ -685,10 +862,21 @@ extension CompletionSession {
     }
 
     /// Output in a server tab with its list shown: a key echoed, so the list narrows to the word on screen, or the
-    /// line changed around it, and it closes.
+    /// line changed around it, and it closes. Right after going into a folder, the name and `/` are still echoing: what
+    /// is on the way doesn't close it (a second at most). ⌫ that took the `/` goes back up.
     fileprivate func screenOutput() {
-        guard isShown, let list, let tab else { return }
-        guard let left = tab.lineLeftOfCursor(), let now = list.screenWord?.next(left), list.update(screen: now) else { return closeList() }
+        guard isShown, let list, let tab, !state.isDrilling else { return }
+        guard let left = tab.lineLeftOfCursor() else { return closeList() }
+        let read = ScreenWord.read(left)
+        if let echo = drillEcho {
+            guard let read, read.before == echo.word.before, read.folder == echo.word.folder else {
+                if TerminalTab.now < echo.until { return }
+                return closeList()
+            }
+            drillEcho = nil
+        }
+        if let read, let above = list.backUp(screen: read) { return wentBackUp(above) }
+        guard let now = list.screenWord?.next(left), list.update(screen: now) else { return closeList() }
         changed()
     }
 
@@ -709,6 +897,286 @@ extension CompletionSession {
         typeOnScreen(keys)
         changed()
         CompletionPopup.announce("Inserted \(text)")
+    }
+}
+
+// MARK: going into a folder (CompletionDrill)
+
+extension CompletionSession {
+    /// ⇥ on a folder row: on each of the list's paths, the folder is listed, then its name and `/` go on the line and the
+    /// list shows what is inside. Nothing inside: the name goes in alone and the list closes; it can't be entered: a beep,
+    /// and the list stays; not listed in time: the name goes in alone.
+    fileprivate func drill(_ index: Int, _ list: CompletionList) {
+        switch state.path {
+        case .engine?: engineDrill(index, list)
+        case .completionSystem?: zshDrill(index, list)
+        case .screen?: screenDrill(index, list)
+        case nil: break
+        }
+    }
+
+    /// The deadline for a folder Next Term lists: past it, `fallback` puts the name on the line alone.
+    private func startDrill(_ to: Int, within seconds: TimeInterval, fallback: @escaping () -> Void) {
+        drills += 1
+        drillFallback = fallback
+        let deadline = DispatchWorkItem { [weak self] in
+            guard let self, self.state.drillID == to, let fallback = self.drillFallback else { return }
+            self.lastDrill = .wentIn
+            fallback()
+        }
+        drillTimer?.cancel()
+        drillTimer = deadline
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: deadline)
+    }
+
+    /// Next Term's own engine: the folder listed on this Mac (0.1 s at most) or on a hooked server (its listing's
+    /// deadline), and the take that keeps the list open.
+    private func engineDrill(_ index: Int, _ list: CompletionList) {
+        guard let into = list.drillContext(index), let take = list.drillTake(index) else { return accept(index) }
+        guard let to = state.startDrill() else { return }
+        let name = list.rows[index].text
+        let wentIn = { [weak self] in self?.drillWentIn(index, list) ?? () }
+        let finish: (PathCompletion.Listing, PathCompletion.Prepared, PathCompletion.Result) -> Void = { [weak self] listing, prepared, result in
+            self?.engineDrilled(to, name: name, take: take, from: (list, index), into: into, listing, prepared, result)
+        }
+        if let tab, tab.remote != nil {
+            startDrill(to, within: RemoteCompletion.deadline, fallback: wentIn)
+            guard let request = RemoteCompletion.shared.request(absolute: into.folder, in: tab) else { return wentIn() }
+            let listing = RemoteCompletion.shared.list(request, for: tab) { result in
+                guard let result else {
+                    let unread = PathCompletion.Listing(folder: into.folder, entries: [], complete: false, allSeen: false, readable: false)
+                    return finish(unread, PathCompletion.Prepared(unread, foldersOnly: true, hidden: false), PathCompletion.Result())
+                }
+                let prepared = PathCompletion.Prepared(result.listing, foldersOnly: into.kind == .folders, hidden: into.showsHidden, disk: result.disk)
+                finish(result.listing, prepared, prepared.candidates(into.typed))
+            }
+            if !listing { wentIn() }
+            return
+        }
+        startDrill(to, within: CompletionProtocol.answerWithin, fallback: wentIn)
+        let started = lister.start(into.folder) { listing in
+            let prepared = PathCompletion.Prepared(listing, foldersOnly: into.kind == .folders, hidden: into.showsHidden)
+            let result = listing.readable ? prepared.candidates(into.typed) : PathCompletion.Result()
+            DispatchQueue.main.async { finish(listing, prepared, result) }
+        }
+        // A listing still stuck (a hung volume): the name goes in alone.
+        if !started { wentIn() }
+    }
+
+    private func engineDrilled(_ to: Int, name: String, take: [UInt8], from: (list: CompletionList, row: Int), into: CompletionContext,
+                               _ listing: PathCompletion.Listing, _ prepared: PathCompletion.Prepared, _ result: PathCompletion.Result) {
+        guard state.drillID == to, state.path == .engine || state.path == .completionSystem, list === from.list else { return }
+        drillTimer?.cancel()
+        let step = CompletionDrill.step(listing, shown: result.candidates.count)
+        lastDrill = step
+        switch step {
+        case .wentIn:
+            return drillWentIn(from.row, from.list)
+        case .refused:
+            NSSound.beep()
+            state.drilled(.refused)
+        case .into:
+            let inside = CompletionList(id: from.list.id, context: into, listing: listing, prepared: prepared, result: result)
+            inside.drilled(from: from.list, row: from.row)
+            write(take)
+            list = inside
+            state.drilled(.into)
+            announce(into: name, inside)
+        }
+        drillFallback = nil
+        release()
+        changed()
+    }
+
+    /// The name goes on the line alone and the list closes, as ↩︎ puts it; then the keys held meanwhile.
+    private func drillWentIn(_ index: Int, _ list: CompletionList) {
+        guard state.isDrilling else { return }
+        drillTimer?.cancel()
+        drillFallback = nil
+        lastDrill = .wentIn
+        accept(index)
+        release()
+    }
+
+    /// zsh's path: the hook puts the folder in as zsh's own Tab would and sends what is inside under a new id (comp), or
+    /// says nothing is inside (done inserted) or it can't be entered (done kept). Writes wait 120 ms, as for a Tab; a
+    /// Loading row shows past 150 ms.
+    private func zshDrill(_ index: Int, _ list: CompletionList) {
+        guard let to = state.startDrill() else { return }
+        guard let key = list.drillTake(index, to: to) else {
+            state.drilled(.refused)
+            return accept(index)
+        }
+        drills += 1
+        drillFrom = (list, index)
+        assembler.reset()
+        write(key)
+        let hold = DispatchWorkItem { [weak self] in self?.holdExpired(to) }
+        holdTimer?.cancel()
+        holdTimer = hold
+        DispatchQueue.main.asyncAfter(deadline: .now() + answerWithin, execute: hold)
+        let loading = DispatchWorkItem { [weak self] in
+            guard let self, self.state.drillID == to else { return }
+            self.list = nil
+            self.changed()
+        }
+        loadingTimer?.cancel()
+        loadingTimer = loading
+        DispatchQueue.main.asyncAfter(deadline: .now() + CompletionProtocol.shellWait, execute: loading)
+    }
+
+    /// zsh's word on a folder gone into: nothing inside (the name went in, the list closes), or it can't be entered
+    /// (a beep; the list as it was).
+    fileprivate func zshDrillDone(_ id: Int, _ outcome: CompletionProtocol.Outcome) {
+        holdTimer?.cancel()
+        loadingTimer?.cancel()
+        let from = drillFrom
+        drillFrom = nil
+        state.done(id, outcome)
+        if outcome == .kept {
+            lastDrill = .refused
+            NSSound.beep()
+            if list == nil { list = from?.list }
+        } else {
+            lastDrill = .wentIn
+            listClosed()
+            if let from, from.list.rows.indices.contains(from.row) { CompletionPopup.announce("Inserted \(from.list.rows[from.row].text)") }
+        }
+    }
+
+    /// A server's screen: the folder listed over the connection within the listing's deadline, then the name's keys.
+    private func screenDrill(_ index: Int, _ list: CompletionList) {
+        guard let tab, let candidate = list.screenCandidate(index), let into = list.drillScreen(index),
+              let request = RemoteCompletion.shared.request(typed: into.folder, in: tab) else { return accept(index) }
+        guard let to = state.startDrill() else { return }
+        let wentIn = { [weak self] in self?.screenDrillWentIn(candidate, list) ?? () }
+        startDrill(to, within: RemoteCompletion.deadline, fallback: wentIn)
+        let listing = RemoteCompletion.shared.list(request, for: tab) { [weak self] result in
+            self?.screenDrilled(to, from: (list, index), candidate: candidate, into: into, result)
+        }
+        if !listing { wentIn() }
+    }
+
+    private func screenDrilled(_ to: Int, from: (list: CompletionList, row: Int), candidate: PathCompletion.Candidate, into: ScreenWord,
+                               _ result: RemoteListing.Result?) {
+        guard state.drillID == to, state.path == .screen, list === from.list, let tab else { return }
+        drillTimer?.cancel()
+        drillFallback = nil
+        guard let result else {
+            lastDrill = .refused
+            NSSound.beep()
+            state.drilled(.refused)
+            release()
+            return changed()
+        }
+        let inside = CompletionList(id: from.list.id, screen: into, listing: result.listing, disk: result.disk, shell: result.quoting)
+        guard !inside.rows.isEmpty else { return screenDrillWentIn(candidate, from.list) }
+        guard let left = tab.lineLeftOfCursor(), let now = from.list.screenWord?.next(left),
+              let keys = from.list.screenInsertion(candidate, at: now) else {
+            NSSound.beep()
+            return closeList()
+        }
+        inside.drilled(from: from.list, row: from.row)
+        typeOnScreen(keys)
+        list = inside
+        drillEcho = (into, TerminalTab.now + 1)
+        state.drilled(.into)
+        lastDrill = .into
+        announce(into: from.list.rows.indices.contains(from.row) ? from.list.rows[from.row].text : "", inside)
+        release()
+        changed()
+    }
+
+    /// On a server's screen: the name's keys alone, and the list closes; then the keys held meanwhile.
+    private func screenDrillWentIn(_ candidate: PathCompletion.Candidate, _ list: CompletionList) {
+        guard state.isDrilling, let tab else { return }
+        drillTimer?.cancel()
+        drillFallback = nil
+        lastDrill = .wentIn
+        guard let left = tab.lineLeftOfCursor(), let now = list.screenWord?.next(left), let keys = list.screenInsertion(candidate, at: now) else {
+            NSSound.beep()
+            return closeList()
+        }
+        state.drilled(.wentIn)
+        listClosed()
+        typeOnScreen(keys)
+        release()
+        changed()
+        CompletionPopup.announce("Inserted \(String(decoding: candidate.name, as: UTF8.self))/")
+    }
+
+    /// ⌫ took the `/` after a folder gone into: the list it was gone into from, as it was, with that folder chosen. On
+    /// zsh's path the hook opens that list again too.
+    fileprivate func wentBackUp(_ above: CompletionList) {
+        guard let list else { return }
+        if state.path == .completionSystem {
+            write(CompletionProtocol.backUp(id: list.id, to: above.id))
+            state.reopened(above.id)
+        }
+        self.list = above
+        backUps += 1
+        if let row = above.preferredRow {
+            announced = above
+            CompletionPopup.announce(CompletionDrill.backUpAnnouncement(above.rows[row].text, row: row, of: above.rows.count))
+        }
+        changed()
+    }
+
+    /// The single-match rule on Next Term's own engine: the one folder's inside, listed within the Tab's answer time.
+    /// Past it (holdExpired), or with nothing inside, the name goes in alone. False: it can't be listed now.
+    fileprivate func singleDrill(_ id: Int, word: String, name: String, into: CompletionContext) -> Bool {
+        let finish: (PathCompletion.Listing, PathCompletion.Prepared, PathCompletion.Result) -> Void = { [weak self] listing, prepared, result in
+            self?.singleListed(id, word: word, name: name, into: into, listing, prepared, result)
+        }
+        singleInsert = (id, word)
+        var started: Bool
+        if let tab, tab.remote != nil {
+            guard let request = RemoteCompletion.shared.request(absolute: into.folder, in: tab) else {
+                singleInsert = nil
+                return false
+            }
+            started = RemoteCompletion.shared.list(request, for: tab) { result in
+                guard let result else {
+                    let unread = PathCompletion.Listing(folder: into.folder, entries: [], complete: false, allSeen: false, readable: false)
+                    return finish(unread, PathCompletion.Prepared(unread, foldersOnly: true, hidden: false), PathCompletion.Result())
+                }
+                let prepared = PathCompletion.Prepared(result.listing, foldersOnly: into.kind == .folders, hidden: into.showsHidden, disk: result.disk)
+                finish(result.listing, prepared, prepared.candidates(into.typed))
+            }
+        } else {
+            started = lister.start(into.folder) { listing in
+                let prepared = PathCompletion.Prepared(listing, foldersOnly: into.kind == .folders, hidden: into.showsHidden)
+                let result = listing.readable ? prepared.candidates(into.typed) : PathCompletion.Result()
+                DispatchQueue.main.async { finish(listing, prepared, result) }
+            }
+        }
+        if !started, singleInsert?.id == id { singleInsert = nil }
+        return started
+    }
+
+    private func singleListed(_ id: Int, word: String, name: String, into: CompletionContext, _ listing: PathCompletion.Listing,
+                              _ prepared: PathCompletion.Prepared, _ result: PathCompletion.Result) {
+        guard state.pendingID == id, singleInsert?.id == id else { return }
+        singleInsert = nil
+        if CompletionDrill.step(listing, shown: result.candidates.count) == .into {
+            holdTimer?.cancel()
+            let inside = CompletionList(id: id, context: into, listing: listing, prepared: prepared, result: result)
+            list = inside
+            write(CompletionProtocol.insertAnswer(id: id, word: word, open: true))
+            state.answered(id, .open)
+            announce(into: name, inside)
+        } else {
+            answer(id, .insert, word: word)
+        }
+        release()
+        changed()
+    }
+
+    /// VoiceOver, on going into a folder: "In projects, 12 items".
+    fileprivate func announce(into name: String, _ inside: CompletionList) {
+        announced = inside
+        let folder = name.hasSuffix("/") ? String(name.dropLast()) : name
+        CompletionPopup.announce(CompletionDrill.announcement(into: folder, total: inside.total, exact: inside.exact))
     }
 }
 

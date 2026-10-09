@@ -10,11 +10,16 @@ final class CompletionController {
     private weak var owner: TerminalWindowController?
     private(set) lazy var popup: CompletionPopup = {
         let popup = CompletionPopup()
-        popup.onPick = { [weak self] row in self?.shown?.accept(row) }
+        // A click puts the row on the line; not while a folder is being listed, whose rows are about to change.
+        popup.onPick = { [weak self] row in
+            guard let session = self?.shown, !session.state.isDrilling else { return }
+            session.accept(row)
+        }
         return popup
     }()
-    /// The session whose list the popup shows.
+    /// The session whose list the popup shows, and the list it showed last: another list starts at its own row.
     private weak var shown: CompletionSession?
+    private weak var shownList: CompletionList?
     private var monitors: [Any] = []
     private var observers: [NSObjectProtocol] = []
 
@@ -98,21 +103,23 @@ final class CompletionController {
         event.type == .keyDown && event.keyCode == 48 && event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
     }
 
-    /// The keys while a list is open: ↑ ↓ (and ⇧Tab, ^P, ^N) choose, Tab and Return insert, Esc closes and is
-    /// never sent; ^C, ^J and → close and go on to the shell; letters and Backspace go to the shell, which
-    /// reports the word for the list to narrow.
+    /// The keys while a list is open: ↑ ↓ (and ⇧Tab, ^P, ^N) choose, Tab goes into a folder and inserts anything
+    /// else, Return inserts, Esc closes and is never sent; ^C, ^J and → close and go on to the shell; letters and
+    /// Backspace go to the shell, which reports the word for the list to narrow (⌫ right after going into a folder
+    /// goes back up).
     private func listKey(_ event: NSEvent, _ session: CompletionSession) -> Bool {
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
         // ^N, ^P, ^C and ^J by the letter, whatever the keyboard layout.
         let letter = flags == [.control] ? event.charactersIgnoringModifiers?.lowercased() : nil
+        let rows = session.isShown && shown === session && session.list?.rows.isEmpty == false
         switch (event.keyCode, flags) {
-        case (48, []), (36, []), (76, []): // Tab, Return, Enter
-            // While Loading, or before the list shows, there is nothing to insert yet; a Tab waits for the rows.
-            if session.isShown, shown === session, session.list?.rows.isEmpty == false {
-                session.accept(popup.selected)
-            } else if event.keyCode == 48 {
-                session.tabBeforeRows()
-            }
+        case (48, []): // Tab
+            // While Loading, or before the list shows, there is nothing to go into yet: it waits for the rows.
+            if rows, !session.state.isDrilling { session.tab(on: popup.selected) } else { session.tabBeforeRows() }
+            return true
+        case (36, []), (76, []): // Return, Enter
+            // While a folder is listed it waits for the folder's list; under Loading it does nothing.
+            if rows || session.state.isDrilling { session.enter(on: popup.selected) }
             return true
         case (125, []): // ↓
             popup.move(by: 1)
@@ -148,6 +155,7 @@ final class CompletionController {
 
     private func watch(_ session: CompletionSession) {
         session.onChange = { [weak self] session in self?.refresh(session) }
+        session.selection = { [weak self] in self?.popup.selected ?? 0 }
     }
 
     /// Shows the session's list at its caret, or hides it. A list that can't be shown (the window isn't in
@@ -166,11 +174,14 @@ final class CompletionController {
         let rows = session.list?.rows ?? []
         let loading = session.list == nil || (session.list?.isZsh == true && rows.isEmpty)
         if !loading, rows.isEmpty { return session.closeList() } // nothing matches what was typed
-        // Said when it opens, and when the Loading row gives way to the list.
-        let announce = !popup.isVisible || (popup.loading && !loading)
+        // Said when it opens, and when the Loading row gives way to the list, unless the session said where it went.
+        let announce = (!popup.isVisible || (popup.loading && !loading)) && (session.list == nil || session.announced !== session.list)
+        // A list gone into or back up to starts at its own row: the first, or the folder gone back up from.
+        let fresh = shownList !== session.list
         popup.show(rows, loading: loading, footer: Self.footer(session.list), anchor: anchor(tab, word: session.list?.word ?? ""),
-                   over: window)
+                   over: window, fresh: fresh, choosing: session.list?.preferredRow)
         shown = session
+        shownList = session.list
         addMonitors()
         if announce { popup.announceOpen() }
     }
