@@ -136,7 +136,7 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   version opens a window with what's new (Install, Remind Me Later or Skip This Version), and a blue
   Update button at the top right brings it back. It downloads, is checked against its checksum signed
   with the Next Term release key, and replaces the app when you relaunch.
-- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 16 MB to download, 43 MB
+- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 20 MB to download, 43 MB
   installed. macOS 13 or later.
 
 ## Install
