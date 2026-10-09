@@ -200,3 +200,114 @@ public enum DiffSelections {
         return anchors
     }
 }
+
+/// Lines selected in one file's diff, with what is known of the file: what the editor link tells the agents in
+/// the window of them (Claude Code's and opencode's selection_changed, Gemini CLI's and Qwen Code's open files,
+/// Copilot CLI's selection) and what Send to Agent types for them. The app speaks each agent's protocol.
+public struct DiffShare: Equatable, Sendable {
+    /// What the diff compares the lines with, for what Send to Agent says about them.
+    public enum Version: Equatable, Sendable {
+        /// The working tree against HEAD, the index or a commit: the new side is the file on disk.
+        case workingTree
+        case staged
+        case commit(String)
+        case branch(String)
+        case proposal
+    }
+
+    /// What the editor link says is selected: the file, the text, and where it is in the file now (a caret
+    /// where it was when the file no longer has it; none when no place in the file is true).
+    public struct Linked: Equatable, Sendable {
+        public let path: String
+        public let text: String
+        public let start: DiffPosition?
+        public let end: DiffPosition?
+
+        public init(path: String, text: String, start: DiffPosition?, end: DiffPosition?) {
+            self.path = path
+            self.text = text
+            self.start = start
+            self.end = end
+        }
+    }
+
+    /// The file in the working tree.
+    public let path: String
+    public let selection: DiffSelection
+    /// The file tends to hold secrets (.env, keys), by its name, its link's or its old name: the link shares it
+    /// as no file, as it shares such a file open in the editor.
+    public let holdsSecrets: Bool
+    /// The lines are changes not committed yet (the working tree's or the index's).
+    public let isUncommitted: Bool
+    public let version: Version
+    /// The code fence's language.
+    public let language: String
+
+    public init(path: String, selection: DiffSelection, holdsSecrets: Bool, isUncommitted: Bool, version: Version, language: String) {
+        self.path = path
+        self.selection = selection
+        self.holdsSecrets = holdsSecrets
+        self.isUncommitted = isUncommitted
+        self.version = version
+        self.language = language
+    }
+
+    /// Whether any of a diff's names for its file (its path, a link's target, the name it had before a rename)
+    /// is one that holds secrets.
+    public static func holdsSecrets(_ paths: [String?]) -> Bool {
+        paths.compactMap { $0 }.contains { IDELink.isSensitive($0) || IDELink.isSensitive(canonicalPath($0)) }
+    }
+
+    /// What the editor link is told: nil for a file that holds secrets, which is no file at all to it.
+    public var linked: Linked? {
+        guard !holdsSecrets else { return nil }
+        return Linked(path: path, text: selection.text, start: selection.start, end: selection.end)
+    }
+
+    /// Whether the diff's toolbar offers "⌥⌘K Ask <Agent>" for what is selected: lines of changes not committed
+    /// yet, in a file that may be shared. It never invites typing a secret file's lines into a prompt; ⌥⌘K,
+    /// asked for, types them as it types an editor's selection.
+    public static func offersAsk(hasLines: Bool, isUncommitted: Bool, holdsSecrets: Bool) -> Bool {
+        hasLines && isUncommitted && !holdsSecrets
+    }
+
+    /// Send to Agent: the file at the lines selected, as `@path#L2-3`, when they are its lines on disk; a
+    /// staged, committed or branch version's lines go along as code, said to be that; the old side's text,
+    /// which the file no longer has, goes as code with the file's path and no lines. Nil for an agent's
+    /// proposal (that agent waits for your answer in its terminal) and for old text too long to type.
+    public func contextItem(exists: Bool) -> ContextItem? {
+        guard version != .proposal else { return nil }
+        var item = ContextItem(path: path)
+        let code = selection.linesText
+        if selection.side == .old {
+            guard !code.isEmpty, !AgentPrompt.isTooLargeToInline(code) else { return nil }
+            item.code = code
+            item.language = language
+            item.note = oldNote(exists: exists)
+            return item
+        }
+        item.lines = selection.lines
+        switch version {
+        case let .commit(sha): item.note = "as of commit \(sha.prefix(7))"
+        case let .branch(name): item.note = "as on \(name)"
+        case .staged: item.note = "as staged"
+        case .workingTree, .proposal: item.note = exists ? nil : "deleted"
+        }
+        if !selection.isInFile, !AgentPrompt.isTooLargeToInline(code) {
+            item.code = code
+            item.language = language
+        }
+        return item
+    }
+
+    /// What the old side's lines are: removed (in a commit, on a branch), or the version before the change
+    /// when unchanged lines are among them.
+    private func oldNote(exists: Bool) -> String {
+        let removed = selection.changedOnly
+        switch version {
+        case let .commit(sha): return removed ? "lines removed in commit \(sha.prefix(7))" : "before commit \(sha.prefix(7))"
+        case let .branch(name): return removed ? "lines removed on \(name)" : "before \(name) changed it"
+        case .workingTree, .staged, .proposal: return exists ? (removed ? "lines removed" : "before the change") : "deleted"
+        }
+    }
+}

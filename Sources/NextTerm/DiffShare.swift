@@ -3,98 +3,35 @@ import NextTermCore
 
 /// Lines selected in a diff (a diff tab, the Git Diff tab's file or All files page, a commit's diff, an
 /// agent's proposal), as the agents in the window's tabs are told about them, the way they are told about
-/// the editor's selection: Claude Code's and opencode's selection_changed, Gemini CLI's and Qwen Code's
-/// open files, Copilot CLI's selection; and what Send to Agent types for them (DiffSelection in Core).
-struct DiffShare {
+/// the editor's selection, and what Send to Agent types for them: what DiffShare in Core decides, in each
+/// agent's protocol.
+extension DiffShare {
     /// Posted by a diff (any view in it) when what is selected in it may have changed.
     static let changed = Notification.Name("NextTermDiffSelectionChanged")
 
-    /// What the diff compares the lines with, for what Send to Agent says about them.
-    enum Version: Equatable {
-        /// The working tree against HEAD, the index or a commit: the new side is the file on disk.
-        case workingTree
-        case staged
-        case commit(String)
-        case branch(String)
-        case proposal
-    }
-
-    /// The file in the working tree.
-    let path: String
-    let selection: DiffSelection
-    /// The file tends to hold secrets (.env, keys), by its name, its link's or its old name: shared as no
-    /// file, as the editor shares such a file.
-    let holdsSecrets: Bool
-    /// The lines are changes not committed yet (the working tree's or the index's).
-    let isUncommitted: Bool
-    let version: Version
-    /// The code fence's language.
-    let language: String
-
-    /// Whether any of a diff's names for its file is one that holds secrets.
-    static func holdsSecrets(_ paths: [String?]) -> Bool {
-        paths.compactMap { $0 }.contains { IDELink.isSensitive($0) || IDELink.isSensitive(canonicalPath($0)) }
-    }
-
     /// Claude Code's selection_changed: the lines in the file now, or a caret where they were with their text;
-    /// a version no place in the file matches starts at its top, the caret that says no line.
+    /// a version no place in the file matches starts at its top, the caret that says no line. A file that
+    /// holds secrets is no file.
     var claudeParams: [String: Any] {
-        let start = selection.start ?? DiffPosition(line: 0, character: 0)
-        let end = selection.end ?? start
-        return ClaudeIDEServer.selectionParams(path: holdsSecrets ? nil : path, text: selection.text,
-                                               start: (start.line, start.character), end: (end.line, end.character))
+        guard let linked else { return ClaudeIDEServer.selectionParams(path: nil, text: "", start: (0, 0), end: (0, 0)) }
+        let start = linked.start ?? DiffPosition(line: 0, character: 0)
+        let end = linked.end ?? start
+        return ClaudeIDEServer.selectionParams(path: linked.path, text: linked.text, start: (start.line, start.character),
+                                               end: (end.line, end.character))
     }
 
     /// Gemini CLI's and Qwen Code's active file: its path, the caret where the lines are or were (1-based, none
     /// when no place is true) and their text. Nil for a file that holds secrets.
     var geminiFile: [String: Any]? {
-        guard !holdsSecrets else { return nil }
-        var file: [String: Any] = ["path": path, "timestamp": Int(Date().timeIntervalSince1970 * 1000), "isActive": true]
-        if let start = selection.start { file["cursor"] = ["line": start.line + 1, "character": start.character + 1] }
-        file["selectedText"] = String(selection.text.prefix(16_384))
+        guard let linked else { return nil }
+        var file: [String: Any] = ["path": linked.path, "timestamp": Int(Date().timeIntervalSince1970 * 1000), "isActive": true]
+        if let start = linked.start { file["cursor"] = ["line": start.line + 1, "character": start.character + 1] }
+        file["selectedText"] = String(linked.text.prefix(16_384))
         return file
     }
 
-    /// Send to Agent: the file at the lines selected, as `@path#L2-3`, when they are its lines on disk; a staged,
-    /// committed or branch version's lines go along as code, said to be that; the old side's text, which the
-    /// file no longer has, goes as code with the file's path and no lines. Nil for an agent's proposal (that
-    /// agent waits for your answer in its terminal) and for old text too long to paste.
-    func contextItem() -> ContextItem? {
-        guard version != .proposal else { return nil }
-        var item = ContextItem(path: path)
-        let exists = FileManager.default.fileExists(atPath: path)
-        let code = selection.linesText
-        if selection.side == .old {
-            guard !code.isEmpty, !AgentPrompt.isTooLargeToInline(code) else { return nil }
-            item.code = code
-            item.language = language
-            item.note = oldNote(exists: exists)
-            return item
-        }
-        item.lines = selection.lines
-        switch version {
-        case let .commit(sha): item.note = "as of commit \(sha.prefix(7))"
-        case let .branch(name): item.note = "as on \(name)"
-        case .staged: item.note = "as staged"
-        case .workingTree, .proposal: item.note = exists ? nil : "deleted"
-        }
-        if !selection.isInFile, !AgentPrompt.isTooLargeToInline(code) {
-            item.code = code
-            item.language = language
-        }
-        return item
-    }
-
-    /// What the old side's lines are: removed (in a commit, on a branch), or the version before the change when
-    /// unchanged lines are among them.
-    private func oldNote(exists: Bool) -> String {
-        let removed = selection.changedOnly
-        switch version {
-        case let .commit(sha): return removed ? "lines removed in commit \(sha.prefix(7))" : "before commit \(sha.prefix(7))"
-        case let .branch(name): return removed ? "lines removed on \(name)" : "before \(name) changed it"
-        case .workingTree, .staged, .proposal: return exists ? (removed ? "lines removed" : "before the change") : "deleted"
-        }
-    }
+    /// Send to Agent, for the file as it is on disk now.
+    func contextItem() -> ContextItem? { contextItem(exists: FileManager.default.fileExists(atPath: path)) }
 }
 
 /// A diff whose selected lines can go to an agent: a diff tab (the Git Diff tab's file too) and the All files page.

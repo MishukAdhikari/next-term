@@ -220,4 +220,38 @@ import Testing
         let same = try #require(DiffSelections.make(pick(.new, ["line 26"]), in: file, today: .old))
         #expect(same.isInFile && same.lines == 26...26)
     }
+
+    @Test func aProposalInUnifiedSharesYourLinesAmongItsOwn() throws {
+        // Your "line 5", the agent's "line five" and the unchanged "line 6": your file's lines 5–6.
+        let mixed = try #require(DiffSelections.make(pickUnified(["line 5", "line five", "line 6"]), in: file, today: .old))
+        #expect(mixed.side == .old && mixed.isInFile && mixed.lines == 5...6 && mixed.text == "line 5\nline 6\n")
+        #expect(mixed.start == DiffPosition(line: 4, character: 0) && mixed.end == DiffPosition(line: 6, character: 0))
+        // The agent's line alone: its text, a caret where it would go.
+        let proposed = try #require(DiffSelections.make(pickUnified(["added after 25"]), in: file, today: .old))
+        #expect(proposed.side == .new && !proposed.isInFile && proposed.start == DiffPosition(line: 25, character: 0))
+    }
+
+    @Test func aProposedInsertionPointsAfterTheLineItFollows() throws {
+        // The agent adds two lines after your line 3.
+        let insertion = UnifiedDiff.parse("""
+        diff --git a/c.txt b/c.txt
+        --- a/c.txt
+        +++ b/c.txt
+        @@ -3,0 +4,2 @@
+        +new one
+        +new two
+
+        """)[0]
+        let rows = insertion.hunks[0].lines.map { DiffSelectedRow(line: $0, side: .new, from: 0, to: nil) }
+        let selection = try #require(DiffSelections.make(rows, in: insertion, today: .old))
+        #expect(!selection.isInFile && selection.text == "new one\nnew two\n")
+        #expect(selection.start == DiffPosition(line: 3, character: 0) && selection.end == selection.start)
+    }
+
+    @Test func theOldSideOfACommitIsTextWithNoPlace() throws {
+        let selection = try #require(DiffSelections.make(pick(.old, ["line 15", "line 16"]), in: file, today: .neither))
+        #expect(selection.side == .old && !selection.isInFile && selection.changedOnly)
+        #expect(selection.lines == 15...16 && selection.text == "line 15\nline 16\n")
+        #expect(selection.start == nil && selection.end == nil)
+    }
 }
