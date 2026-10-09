@@ -1,14 +1,16 @@
 import AppKit
 import NextTermCore
 
-/// The sessions folder this launch holds, and its one writer (KTD1, KTD18). At launch it takes the folder, when no other
-/// Next Term holds it, and reads what the last quit or crash left. From then on it saves the session every 2 seconds
-/// when anything saved changed (`SessionWriter`), once the save gate opens: when the launch's windows are built, or 10
-/// seconds on. At every quit that holds the folder, `finishAtQuit` writes the quit's last save, in order: the state file,
-/// scrollback, the update's marker; then Updater spawns the install script, and the tabs are terminated.
+/// The sessions folder this launch holds, and its one writer (KTD1, KTD18). At launch (`launch`, the launch hook) it
+/// takes the folder, when no other Next Term holds it, reads what the last update, quit or crash left, and brings it back
+/// as the restore step decides (LaunchDecision.restoring): every window, tab and split built in one turn
+/// (SessionRestoreBuild), then each pane's action applied once its shell is ready (RestoreActions). From then on it saves
+/// the session every 2 seconds when anything saved changed (`SessionWriter`), once the save gate opens: when the launch's
+/// windows are built. At every quit that holds the folder, `finishAtQuit` writes the quit's last save, in order: the
+/// state file, scrollback, the update's marker; then Updater spawns the install script, and the tabs are terminated.
 ///
-/// A copy of Next Term that cannot take the folder saves nothing. Neither does the plain self-test; the relaunch harness
-/// saves in its own folder (`SelfTest.sessionsParent`).
+/// A copy of Next Term that cannot take the folder restores and saves nothing. Neither does the plain self-test; the
+/// relaunch harness restores and saves in its own folder (`SelfTest.sessionsParent`).
 @MainActor
 final class SessionRestore {
     static let shared = SessionRestore()
@@ -27,12 +29,15 @@ final class SessionRestore {
 
     private(set) var phase = Phase.normal
 
-    /// What the launch found in the sessions folder before it wrote anything.
+    /// What the launch found in the sessions folder before it wrote anything, and what it decided.
     struct Found {
         /// The snapshot the last quit or crash left, else its previous file; nil when neither reads.
         var snapshot: SessionSnapshot?
         /// Every name in the folder.
         var names: [String]
+        /// The install script's result, taken from the folder.
+        var installResult: InstallResult?
+        var decision: RestoreDecision
     }
 
     private(set) var found: Found?
@@ -43,6 +48,8 @@ final class SessionRestore {
     private var timer: Timer?
     /// A periodic save is on the queue: the next tick waits for it.
     private var saving = false
+    /// The restored panes' actions, while any waits (or safe mode holds them).
+    private(set) var actions: RestoreActions?
     /// The quit consent (R30): the user let this quit go ahead with the resume box checked, on the dialog that carried it.
     /// Set by that press; cleared as each quit starts asking and when it is cancelled (AppDelegate), so none outlives its
     /// quit. Only a user's quit reads it. No quit dialog carries the box yet, so no quit has it.
@@ -53,18 +60,141 @@ final class SessionRestore {
 
     // MARK: the launch
 
-    /// Takes the sessions folder for this launch and starts the periodic saves, which wait for `openGate`. What the folder
-    /// held is read first (`found`). No launch restores from it yet, so the scrollback a quit saved is removed unread
-    /// (KTD9), with any temporary file a cut-off save left.
-    func start() {
+    /// The launch hook (KTD14), after the zsh integration is written and before the self-test branch and
+    /// `--open-request`: a request launch restores too, so the quit's session is not lost to its first save (R32).
+    ///
+    /// It takes the sessions folder, raises the restore attempts counter, claims the update's marker and reads the
+    /// snapshot (SessionLaunch), and the restore step decides. What the decision uses up (the marker, a quit consent id) is
+    /// recorded before anything is restored. Scrollback is read for an update or quit restore, and removed unread
+    /// otherwise. Remote saving is held while the windows are built, synchronously, so no MCP call runs meanwhile; each
+    /// pane's action then waits for its shell. Safe mode builds the layout alone and asks Keep As Is or Try Again; a
+    /// snapshot set aside is said once. Then saving starts. Returns the launch table's restore input: windows built, or
+    /// none, and plan 005's rows apply.
+    func launch(settings: LaunchSettings) -> LaunchRestoreResult {
         guard files == nil, let parent = SelfTest.sessionsParent,
-              let files = try? SessionFiles.open(in: parent, bundlePath: Bundle.main.bundlePath), files.lock() else { return }
+              let files = try? SessionFiles.open(in: parent, bundlePath: Bundle.main.bundlePath), files.lock() else { return .notRun }
         self.files = files
-        let snapshot = SessionWriter.load(from: files)
-        found = Found(snapshot: snapshot, names: (try? files.names()) ?? [])
+        let names: [String] = (try? files.names()) ?? []
+        let version = Updater.shared.current?.description ?? ""
+        let read = SessionLaunch.read(files, version: version, resumesAtLaunch: settings.opens == .lastProjects)
+        let decision = LaunchDecision.restoring(read.facts)
+        found = Found(snapshot: read.snapshot, names: names, installResult: read.facts.installResult, decision: decision)
+        // A quit consent lets agents resume once: only when its id is on record as used before the restore runs.
+        let recorded = SessionLaunch.record(decision, consumed: read.facts.consumed, in: files)
         _ = try? files.sweep()
-        ScrollbackText.removeAll(from: files)
-        writer = SessionWriter(files: files, after: snapshot?.header.generation ?? 0, bootSession: UpdateMarker.currentBootSession())
+        let scrollback = takeScrollback(decision, snapshot: read.snapshot, files: files)
+        writer = SessionWriter(files: files, after: read.snapshot?.header.generation ?? 0, bootSession: UpdateMarker.currentBootSession())
+        startSaving()
+        var opened = false
+        switch decision.kind {
+        case .restore(let kind):
+            let consent = decision.quitConsent && recorded
+            if let snapshot = read.snapshot { opened = restore(snapshot, kind: kind, safeMode: false, consent: consent, scrollback: scrollback) }
+        case .safeMode(let kind):
+            if let snapshot = read.snapshot { opened = restore(snapshot, kind: kind, safeMode: true, consent: false, scrollback: [:]) }
+        case .quarantine:
+            setAside(files)
+        case .normal:
+            break
+        }
+        openGate()
+        if decision.attemptsReset == .afterLaunch { settle(after: RestoreAttempts.settleTime) }
+        return decision.launchRestore(openedWindow: opened)
+    }
+
+    /// The scrollback an update or quit restore reads, by the name its panes give it: each file removed once read, and
+    /// every other removed unread (KTD9).
+    private func takeScrollback(_ decision: RestoreDecision, snapshot: SessionSnapshot?, files: SessionFiles) -> [UUID: String] {
+        guard decision.scrollback == .read, let snapshot else {
+            ScrollbackText.removeAll(from: files)
+            return [:]
+        }
+        let ids = Set(snapshot.panes.compactMap(\.scrollback))
+        return ScrollbackText.take(ids, quit: decision.scrollbackQuit, from: files)
+    }
+
+    /// Builds the snapshot's windows in this turn (KTD10) and hands each pane's action to `RestoreActions`. Windows a
+    /// request opened before the launch finished stay in front of them (R32), unless the restore brings their project back
+    /// and nothing happened in them yet. True when a window was built.
+    private func restore(_ snapshot: SessionSnapshot, kind: SessionSnapshot.RestoreKind, safeMode: Bool, consent: Bool,
+                         scrollback: [UUID: String]) -> Bool {
+        let early: [TerminalWindowController] = AppDelegate.shared.controllers
+        RemoteConnection.holdRestore()
+        let planned = RestorePlanning.plan(snapshot, kind: kind, safeMode: safeMode, quitConsent: consent)
+        let savedAt: ScrollbackText.SavedAt? = kind == .update ? .update : kind == .quit ? .quit : nil
+        let built = RestoreBuild.build(snapshot, planned: planned, scrollback: scrollback, savedAt: savedAt)
+        RemoteConnection.releaseRestore(kept: built.keptRemote)
+        RemoteConnection.tellSkipped(built.skipped, kept: false)
+        for controller in early {
+            let untouched = controller.tabs.allSatisfy(\.isUntouched) && controller.editorArea.isEmpty
+            let same = controller.project.flatMap { (project: String) -> TerminalWindowController? in
+                built.windows.first { $0.project == project }
+            }
+            if let same, untouched {
+                // The request named a project the restore brought back: its restored window is the one it opens.
+                controller.window?.close()
+                same.window?.makeKeyAndOrderFront(nil)
+            } else {
+                controller.window?.makeKeyAndOrderFront(nil)
+            }
+        }
+        let actions = RestoreActions(panes: built.panes, safeMode: safeMode)
+        self.actions = actions
+        actions.onSettled = { [weak self] in self?.restoreSettled() }
+        phase = safeMode ? .safeMode : .restoringTabs
+        actions.start()
+        if safeMode { DispatchQueue.main.async { SessionRestoreAlerts.askAfterSafeMode() } }
+        return !built.windows.isEmpty
+    }
+
+    /// Safe mode's Try Again (R21): one more try, counted first, applies each pane's action.
+    func tryAgain() {
+        guard phase == .safeMode, let actions, let files else { return }
+        SessionLaunch.count(.tryAgain, in: files)
+        phase = .restoringTabs
+        actions.tryAgain()
+    }
+
+    /// Safe mode's Keep As Is: every action dropped, and the tabs stay as they are.
+    func keepAsIs() {
+        guard phase == .safeMode, let actions else { return }
+        actions.keepAsIs()
+    }
+
+    /// Every restored pane's action ran, was cancelled by the user, or was dropped: the restore is done, and the counter
+    /// resets a minute on (KTD13).
+    private func restoreSettled() {
+        phase = .done
+        actions = nil
+        settle(after: RestoreAttempts.settleTime)
+    }
+
+    /// Three restores did not finish: the snapshot is set aside, its tries start over, and one alert says where it went.
+    private func setAside(_ files: SessionFiles) {
+        let name = SessionLaunch.setAside(in: files)
+        if name != nil {
+            SessionLaunch.count(.setAside, in: files)
+        } else {
+            settle(after: RestoreAttempts.settleTime)
+        }
+        let folder = files.url.path
+        DispatchQueue.main.async { SessionRestoreAlerts.tellSetAside(folder: folder, name: name) }
+    }
+
+    /// Resets the restore attempts counter `delay` from now, unless Next Term quits first (a quit resets it itself).
+    private func settle(after delay: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            MainActor.assumeIsolated {
+                let sessions = SessionRestore.shared
+                guard let files = sessions.files, !AppDelegate.shared.isTerminating, sessions.phase != .safeMode,
+                      sessions.actions == nil else { return }
+                SessionLaunch.count(.settled, in: files)
+            }
+        }
+    }
+
+    /// The periodic saves, which wait for `openGate`.
+    private func startSaving() {
         let timer = Timer(timeInterval: SessionWriter.interval, repeats: true) { _ in
             MainActor.assumeIsolated { SessionRestore.shared.tick() }
         }

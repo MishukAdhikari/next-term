@@ -480,7 +480,8 @@ enum MCPControl {
             tab = owner.addTab(directory: directory, select: false)
         } else {
             controller = app.openFolder(ProjectRoot.find(from: directory), newWindow: false)
-            if controller.tabs.count == 1, let first = controller.tabs.first, first.remote == nil, first.status.command.isEmpty,
+            // Never a restored tab: it may hold a put-back line (KTD10).
+            if controller.tabs.count == 1, let first = controller.tabs.first, first.remote == nil, first.isUntouched,
                canonicalPath(first.directory) == directory {
                 tab = first
             } else {

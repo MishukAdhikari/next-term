@@ -9,12 +9,15 @@ import NextTermCore
 /// the swapped app (a stub opener records the call), launches the swapped app with `after-update`, and reads the report
 /// both steps wrote.
 ///
-/// Each step launches as the app does (AppDelegate hands it here before plan 005's self-test branch), counts as a
+/// Each step launches as the app does, its launch hook included (AppDelegate hands it here after the hook, before plan
+/// 005's self-test branch), counts as a
 /// self-test for every guard but those pointed at the harness's folder: its defaults suite (the projects open at quit,
 /// kept remote tabs, Settings › General), its sessions folder (the session the app saves, and its quit's last save) and
 /// its MCP socket. Its shells read a zsh config of its own, which keeps their history in its folder. Its quits ask the
 /// real questions, answered through their buttons, and its update is staged by the stand-in in `Updater`, installed by
-/// the real script against paths in its folder. The after-update step ends with a quit of its own, under Welcome.
+/// the real script against paths in its folder. "Relaunch Now" asks no resume question, so under "Resume where I left
+/// off" the after-update launch is a quit restore without the quit consent: its windows, tabs, split and scrollback come
+/// back, and the command running at the quit waits on the prompt line. It ends with a quit of its own, under Welcome.
 @MainActor
 enum SelfTestRestore {
     /// Where a run keeps everything, and which step this process is.
@@ -86,6 +89,8 @@ enum SelfTestRestore {
     }
     /// Written by the first step in its sessions folder, read back by the second.
     private static let probeName = "harness-probe"
+    /// The defaults key plan 005's relaunch flag used, which the update's marker replaced: no quit or launch writes it.
+    private static let oldRelaunchFlag = "updateRelaunchAt"
 
     private static var failures = 0
     /// The canaries the first step typed: a line holding `secret`, and `plain`, which the quit's scrollback keeps.
@@ -106,26 +111,26 @@ enum SelfTestRestore {
         TerminalTab.testUserZDOTDIR = harness.zdotdir.path
     }
 
-    /// Runs this process's step, once the launch has shown what it shows.
-    static func run(launchKind: LaunchKind) {
+    /// Runs this process's step, once the launch has shown what it shows: `restore` is what its launch hook restored.
+    static func run(restore: LaunchRestoreResult) {
         guard let harness else { return }
         Task { @MainActor in
             switch harness.step {
-            case .updateQuit: await updateQuit(harness, launchKind: launchKind)
-            case .afterUpdate: await afterUpdate(harness, launchKind: launchKind)
+            case .updateQuit: await updateQuit(harness, restore: restore)
+            case .afterUpdate: await afterUpdate(harness, restore: restore)
             }
         }
     }
 
     // MARK: the steps
 
-    private static func updateQuit(_ harness: Harness, launchKind: LaunchKind) async {
+    private static func updateQuit(_ harness: Harness, restore: LaunchRestoreResult) async {
         record("STEP update-quit, version \(Updater.shared.current?.description ?? "none")")
         try? JSONEncoder().encode(realState()).write(to: harness.realState)
         let app = AppDelegate.shared!
         let installed = Bundle.main.bundleURL.path == harness.install.path
-        check(installed && launchKind == .normal, "the harness launches the installed copy as a normal launch",
-              "\(Bundle.main.bundleURL.path), \(launchKind)")
+        check(installed && restore == .notRun, "the harness launches the installed copy, with nothing to restore in its new folder",
+              "\(Bundle.main.bundleURL.path), \(restore)")
         isolationChecks(harness)
         guard let files = sessionChecks(harness) else { return finish() }
         do {
@@ -187,7 +192,7 @@ enum SelfTestRestore {
         finish()
     }
 
-    private static func afterUpdate(_ harness: Harness, launchKind: LaunchKind) async {
+    private static func afterUpdate(_ harness: Harness, restore: LaunchRestoreResult) async {
         record("STEP after-update, version \(Updater.shared.current?.description ?? "none")")
         let app = AppDelegate.shared!
         isolationChecks(harness)
@@ -213,18 +218,19 @@ enum SelfTestRestore {
         check(pressedRelaunch && pressedQuit, "the update quit asked “Quitting stops…”, and both presses were the buttons'",
               "Relaunch Now \(pressedRelaunch), Quit \(pressedQuit)")
 
-        // The relaunch, a normal launch under "Resume where I left off": the projects open at quit, from the harness's
-        // defaults; their window and no Welcome.
+        // The relaunch under "Resume where I left off": the quit restore brings the project's window back, with the other
+        // one, and no Welcome window.
         let windows = await SelfTest.wait(10) { !app.controllers.isEmpty }
         let welcome = app.welcomeController?.window?.isVisible == true
         let projects: [String] = app.controllers.compactMap(\.project)
         let reopened: Bool = projects == [harness.project.path]
-        check(launchKind == .normal && windows && reopened && !welcome,
-              "the relaunch after the update opens the project that was open, and no Welcome window",
-              "\(launchKind), projects \(projects), Welcome \(welcome)")
+        check(restore == .openedWindows && windows && reopened && !welcome,
+              "the relaunch after the update brings back the project that was open, and no Welcome window",
+              "\(restore), projects \(projects), Welcome \(welcome)")
+        await restoreChecks(harness, restore: restore)
         let saved: [String] = defaults?.stringArray(forKey: "sessionProjects") ?? []
         let remote = defaults?.data(forKey: "remoteTabs").map { String(decoding: $0, as: UTF8.self) } ?? "none"
-        let noFlag = defaults?.object(forKey: Updater.relaunchFlagKey) == nil
+        let noFlag = defaults?.object(forKey: oldRelaunchFlag) == nil
         let suiteFile = FileManager.default.fileExists(atPath: harness.defaultsSuite + ".plist")
         check(saved == [harness.project.path] && remote == "[]" && noFlag && suiteFile,
               "the projects open at quit and the kept remote tabs are in the harness's defaults, and no quit wrote the relaunch flag",
@@ -304,12 +310,17 @@ enum SelfTestRestore {
         return locked ? files : nil
     }
 
-    /// The periodic saves (KTD1): two windows, one with a split, reach the state file within 3 seconds, and once it is
-    /// steady a status-dot change alone writes nothing. Returns the split pane and the second window.
+    /// The periodic saves (KTD1): two windows, one with a split at 0.3, reach the state file within 3 seconds, and once it
+    /// is steady a status-dot change alone writes nothing. Returns the split pane and the second window.
     private static func saveChecks(_ harness: Harness, files: SessionFiles, controller: TerminalWindowController,
                                    tab: TerminalTab) async -> (split: TerminalTab?, other: TerminalWindowController) {
         let other = AppDelegate.shared.openWindow(directory: harness.project.path)
         let pane = controller.split(vertical: true, from: tab, focus: false)
+        // Its divider where a hand left it, for the restore to put back.
+        if let group = controller.group(of: tab), case .split(let split) = group.root {
+            split.dividers = [0.3]
+            group.layout()
+        }
         let split = { (window: SessionSnapshot.Window) -> Bool in
             window.groups.contains { (group: SessionSnapshot.Group) -> Bool in group.panes.count == 2 }
         }
@@ -393,9 +404,9 @@ enum SelfTestRestore {
 
     /// What the update quit left, as this launch found it before it wrote anything: under "Resume where I left off", with no
     /// quit consent ("Relaunch Now" asks nothing that could give it), the whole session marked clean with no consent id
-    /// and no marker, nothing left behind, the scrollback named for its session and removed unread by this launch, which
-    /// restores nothing, and the install's result. The secret typed before the quit is in no file the install left or the
-    /// sessions folder holds now, in the harness's defaults, in the unified log or in the report; the quit's own files,
+    /// and no marker, nothing left behind, the scrollback named for its session, read by this launch's quit restore and
+    /// removed, and the install's result, taken once. The secret typed before the quit is in no file the install left or
+    /// the sessions folder holds now, in the harness's defaults, in the unified log or in the report; the quit's own files,
     /// its scrollback among them, were searched as it wrote them (`quitSaved`).
     private static func quitSaveChecks(_ harness: Harness, files: SessionFiles) async {
         let found = SessionRestore.shared.found
@@ -414,12 +425,13 @@ enum SelfTestRestore {
         let quitScrollback = names.filter { (name: String) -> Bool in ScrollbackText.parseFileName(name)?.quit == launch }
         let left = ((try? files.names()) ?? []).filter { (name: String) -> Bool in name.hasPrefix(ScrollbackText.filePrefix) }
         check(!quitScrollback.isEmpty && left.isEmpty,
-              "the quit saved scrollback named for its session, and this launch, which restores nothing, removed it unread",
+              "the quit saved scrollback named for its session, and this launch's quit restore read it and removed it",
               "saved \(quitScrollback.count), left \(left)")
-        let data = (try? files.read(InstallResult.fileName, maxSize: InstallResult.maxSize)) ?? nil
-        let result = data.flatMap(InstallResult.parse)
-        check(result == InstallResult(outcome: .installed, marker: nil), "the install left its result in the sessions folder, naming no marker",
-              result.map { "\($0.outcome.rawValue), marker \($0.marker?.uuidString ?? "none")" } ?? "none")
+        let result = found?.installResult
+        let resultLeft = ((try? files.names()) ?? []).contains(InstallResult.fileName)
+        check(result == InstallResult(outcome: .installed, marker: nil) && !resultLeft,
+              "the install left its result in the sessions folder, naming no marker, and the launch took it once",
+              result.map { "\($0.outcome.rawValue), marker \($0.marker?.uuidString ?? "none"), left \(resultLeft)" } ?? "none")
 
         guard let secret = try? String(contentsOf: harness.canary, encoding: .utf8), !secret.isEmpty else {
             return check(false, "the first step typed its secret canary")
@@ -434,6 +446,51 @@ enum SelfTestRestore {
         check(holding.isEmpty,
               "the secret typed before the quit is in no session file, in the harness's defaults, in the unified log or in the report",
               "\(holding)")
+    }
+
+    /// The quit restore (plan 003's U10), as the after-update launch built it: a quit restore with no consent, every tab with
+    /// the id it had, both windows, the split at 0.3, the scrollback above its divider, `sleep 600` (running at the quit)
+    /// back on the prompt line and not run, the split pane whose line held a secret saying it was not kept and showing no
+    /// part of it, no restored tab taken for reuse, and the restore done once each action ran.
+    private static func restoreChecks(_ harness: Harness, restore: LaunchRestoreResult) async {
+        let app = AppDelegate.shared!
+        let sessions = SessionRestore.shared
+        let decision = sessions.found?.decision
+        let quit = decision?.kind == .restore(.quit) && decision?.quitConsent == false
+        check(quit && restore == .openedWindows,
+              "the launch after an update quit under Resume is a quit restore without the quit consent: Relaunch Now asks no resume question",
+              "\(String(describing: decision?.kind)), consent \(decision?.quitConsent ?? false), \(restore)")
+        let saved = Set(sessions.found?.snapshot?.panes.map(\.id) ?? [])
+        let open = Set(app.controllers.flatMap(\.tabs).map(\.id))
+        check(!saved.isEmpty && saved == open, "every restored tab keeps the id it had", "saved \(saved.count), open \(open.count)")
+        let window = app.controllers.first { $0.project == harness.project.path }
+        let group = window?.groups.first
+        var fractions: [CGFloat] = []
+        if let group, case .split(let split) = group.root { fractions = split.dividers }
+        let split = fractions.count == 1 && abs((fractions.first ?? 0) - 0.3) < 0.01
+        check(app.controllers.count == 2 && split, "both windows come back, and a split left at 0.3 comes back at 0.3",
+              "windows \(app.controllers.count), dividers \(fractions)")
+        guard let first = group?.panes.first, let second = group?.panes.dropFirst().first else {
+            return check(false, "the project window's split tab comes back with both panes")
+        }
+        let applied = await SelfTest.wait(20) { first.restoredRecord?.pending?.state == .applied }
+        let line = first.liveTail(6).last { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? ""
+        check(applied && line.contains("sleep 600") && !first.status.running,
+              "sleep 600, running at the quit, waits on the prompt line and does not run", "applied \(applied), line “\(line)”")
+        let shown = first.screenTail(400).joined(separator: "\n")
+        check(first.restoreDivider != nil && shown.contains(ScrollbackText.SavedAt.quit.divider),
+              "the project tab shows the scrollback saved at the quit, above its divider")
+        let secret = (try? String(contentsOf: harness.canary, encoding: .utf8)) ?? ""
+        let noted = second.screenTail(40).joined(separator: "\n")
+        let screens = app.controllers.flatMap(\.tabs).map { (tab: TerminalTab) -> String in tab.screenTail(400).joined(separator: "\n") }
+        let leaked = !secret.isEmpty && screens.contains { (screen: String) -> Bool in screen.contains(secret) }
+        check(noted.contains("was not kept") && !secret.isEmpty && !leaked,
+              "the split pane whose last line held a secret says it was not kept, and no tab shows the secret", "leaked \(leaked)")
+        let tabs: [TerminalTab] = app.controllers.flatMap(\.tabs)
+        let reusable = tabs.contains(where: \.isUntouched) || app.controllers.contains(where: \.isPristine)
+        check(!reusable, "no restored tab is taken for reuse by nxtrm, ⌥⌘O or MCP new_tab")
+        let done = await SelfTest.wait(30) { sessions.phase == .done }
+        check(done, "every restored tab's action ran, or was dropped, and the restore is done", "\(sessions.phase)")
     }
 
     /// Of `places`, the names of those whose bytes hold `text`.
@@ -546,7 +603,7 @@ enum SelfTestRestore {
     /// folder in Application Support: its MCP socket, its zsh integration and the rest.
     private static func realState() -> RealState {
         var items: [String: String] = [:]
-        let keys = ["sessionProjects", "remoteTabs", Updater.relaunchFlagKey] + LaunchSettings.Key.all
+        let keys = ["sessionProjects", "remoteTabs", oldRelaunchFlag] + LaunchSettings.Key.all
         for key in keys {
             items["defaults " + key] = describe(CFPreferencesCopyAppValue(key as CFString, realBundleID as CFString))
         }

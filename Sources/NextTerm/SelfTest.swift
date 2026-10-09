@@ -28,8 +28,7 @@ enum SelfTest {
     nonisolated static var isRequested: Bool { mode != .app }
 
     /// Where the records one launch leaves the next are kept (the projects open at quit, kept remote tabs, Settings ›
-    /// General, the relaunch flag): the user's defaults, the relaunch harness's own suite, or none for the plain self-test,
-    /// which keeps none.
+    /// General): the user's defaults, the relaunch harness's own suite, or none for the plain self-test, which keeps none.
     nonisolated static var keptDefaults: UserDefaults? {
         switch mode {
         case .app: return .standard
@@ -871,6 +870,7 @@ enum SelfTest {
         await agentEvidenceChecks(proj: proj)
         terminalTextChecks()
         await scrollbackChecks(proj: proj)
+        await restoreBuildChecks(proj: proj)
 
         await lastTabChecks()
         await dockReopenChecks(c)

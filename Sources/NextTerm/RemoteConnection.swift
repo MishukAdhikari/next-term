@@ -362,17 +362,23 @@ enum RemoteConnection {
 
     private static let recordsKey = "remoteTabs"
 
+    /// The kept records were read this launch: from here on a save writes what is open and what still waits.
     private static var restored = false
-    /// Records not yet reopened: saving waits until they are (it would forget them).
+    /// A launch's restore holds saving while it builds its windows (`holdRestore`): a save then would forget the records
+    /// it has not brought back yet.
     private static var restoring = false
+    /// Kept records waiting to reattach, each for its own project's window (KeptRemoteQueue).
+    private static var queue = KeptRemoteQueue()
+    /// ssh's environment (the login shell's PATH and agent) was read off the main thread: a tab may start on a server.
+    private static var shellRead = false
 
-    /// Saves the open remote tabs that something keeps on their host (tmux, herdr), to reattach next
-    /// time. Called as they change (by the poller) and at quit, so a crash loses nothing. Not before the
-    /// last launch's tabs were restored, which would forget them. In the user's defaults, or the relaunch
-    /// harness's own suite; never in the plain self-test (`SelfTest.keptDefaults`).
+    /// Saves the open remote tabs that something keeps on their host (tmux, herdr), to reattach next time, with those
+    /// still waiting for their window. Called as they change (by the poller) and at quit, so a crash loses nothing. Not
+    /// before the last launch's records were read, or while a restore holds them, which would forget them. In the
+    /// user's defaults, or the relaunch harness's own suite; never in the plain self-test (`SelfTest.keptDefaults`).
     static func saveTabs(_ controllers: [TerminalWindowController]) {
         guard restored, !restoring, let defaults = SelfTest.keptDefaults else { return }
-        let records = controllers.flatMap { controller in
+        let open = controllers.flatMap { controller in
             controller.groups.flatMap(\.panes).compactMap { tab -> RemoteTabRecord? in
                 guard let remote = tab.remote, !tab.exited, remote.keep != .off, !tab.fellBack else { return nil }
                 return RemoteTabRecord(hostID: remote.host.id, destination: remote.host.destination, port: remote.host.port,
@@ -380,14 +386,37 @@ enum RemoteConnection {
                                        session: remote.session, keep: remote.keep, project: controller.project, title: tab.userTitle)
             }
         }
+        let records = queue.saved(with: open)
         guard let data = try? JSONEncoder().encode(records), data != defaults.data(forKey: recordsKey) else { return }
         defaults.set(data, forKey: recordsKey)
     }
 
-    /// Reattaches the tabs kept last time, in the window of the project they were in, in their order
-    /// (split panes come back as tabs of their own). Once per launch, once the launch has its window: not
-    /// under the first-launch folder chooser. A host re-pointed since (another destination or port) is
-    /// not followed: its tabs are left out, and the user is told.
+    /// The records the last launch kept, as saved.
+    private static var savedRecords: [RemoteTabRecord] {
+        guard let data = SelfTest.keptDefaults?.data(forKey: recordsKey),
+              let records = try? JSONDecoder().decode([RemoteTabRecord].self, from: data) else { return [] }
+        return records
+    }
+
+    /// A launch's restore is about to build its windows: saving waits until `releaseRestore` (KTD11).
+    static func holdRestore() {
+        restoring = true
+    }
+
+    /// The restore built every remote pane: `kept` are the kept ones it brought back, in their saved windows and places.
+    /// The other kept records wait for their own windows, as after any launch, and saving goes on with them.
+    static func releaseRestore(kept: [RemoteTabRecord]) {
+        var waiting = KeptRemoteQueue(savedRecords)
+        waiting.remove(restored: kept)
+        queue = waiting
+        restoring = false
+        restored = true
+        whenShellRead { reattachWaiting() }
+    }
+
+    /// Reads the tabs kept last time, once per launch, once the launch has its window: not under the first-launch folder
+    /// chooser. They reattach in their own project's window when it opens (`projectsChanged`), and those with no project
+    /// in the first window. A launch whose restore read them already does nothing here.
     static func restoreTabs(attempt: Int = 0) {
         guard !restored, !restoring else { return }
         let app: AppDelegate = AppDelegate.shared
@@ -396,48 +425,86 @@ enum RemoteConnection {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { restoreTabs(attempt: attempt + 1) }
             return
         }
-        guard let data = SelfTest.keptDefaults?.data(forKey: recordsKey),
-              let records = try? JSONDecoder().decode([RemoteTabRecord].self, from: data), !records.isEmpty else {
-            restored = true
-            return
-        }
-        restoring = true
-        // ssh needs the login shell's PATH and agent: read them off the main thread first.
+        queue = KeptRemoteQueue(savedRecords)
+        restored = true
+        guard !queue.waiting.isEmpty else { return }
+        whenShellRead { reattachWaiting() }
+    }
+
+    /// The open windows changed: a record waiting for a project whose window opened reattaches there.
+    static func projectsChanged() {
+        guard restored, !restoring, shellRead, !queue.waiting.isEmpty else { return }
+        // A turn later: a window opening is still being built.
+        DispatchQueue.main.async { reattachWaiting() }
+    }
+
+    /// Runs `body` once ssh's environment (the login shell's PATH and agent) is read, which happens off the main thread,
+    /// once: a tab on a server starts then.
+    static func whenShellRead(_ body: @escaping () -> Void) {
+        if shellRead { return body() }
         DispatchQueue.global(qos: .userInitiated).async {
             _ = LoginShell.path
             DispatchQueue.main.async {
-                reopen(records)
-                restoring = false
-                restored = true
+                shellRead = true
+                body()
             }
         }
     }
 
-    private static func reopen(_ records: [RemoteTabRecord]) {
+    /// Reattaches the waiting records whose window is open, in their order: in their project's window, or the first one.
+    /// Not while a dialog is up. A host removed or re-pointed since (another destination or port) is not followed: its
+    /// tab is left out, and the user is told.
+    private static func reattachWaiting() {
+        guard restored, !restoring, !queue.waiting.isEmpty else { return }
+        if NSApp.modalWindow != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { reattachWaiting() }
+            return
+        }
         let app: AppDelegate = AppDelegate.shared
+        let open: [String?] = app.controllers.map(\.project)
+        let taken = queue.take(openProjects: open)
         var skipped: [String] = []
-        for record in records {
-            guard let host = RemoteHosts.all.first(where: { $0.id == record.hostID }) else {
-                skipped.append("a tab on a host that was removed (\(record.destination ?? "?"))")
+        for (record, project) in taken {
+            let found = host(of: record)
+            guard let host = found.host else {
+                if let problem = found.problem { skipped.append(problem) }
                 continue
             }
-            if let destination = record.destination, destination != host.destination || record.port != host.port {
-                skipped.append("“\(host.name)”, which now points to \(host.destination) instead of \(destination)")
-                continue
-            }
-            guard RemoteHost.directoryProblem(record.directory) == nil else { continue }
-            let controller = app.controllers.first { $0.project == record.project && record.project != nil }
-                ?? app.controllers.first ?? app.openWindow(directory: nil)
+            let target = project.flatMap { (path: String) -> TerminalWindowController? in
+                app.controllers.first { $0.project == path }
+            } ?? app.controllers.first
+            guard let controller = target else { continue }
             let tab = controller.addRemoteTab(RemoteTab(host: host, directory: record.directory, session: record.session, keep: record.keep),
                                               select: false, atEnd: true)
             if let title = record.title { tab.userTitle = title }
             controller.refresh()
         }
+        tellSkipped(skipped)
+    }
+
+    /// The host a kept or saved record names, by its exact id, at the destination and port it had: a host removed, or
+    /// re-pointed since, is not followed, and `problem` says so; a folder that is no folder on a host is left out quietly.
+    static func host(of record: RemoteTabRecord) -> (host: RemoteHost?, problem: String?) {
+        guard let host = RemoteHosts.all.first(where: { $0.id == record.hostID }) else {
+            return (nil, "a tab on a host that was removed (\(record.destination ?? "?"))")
+        }
+        if let destination = record.destination, destination != host.destination || record.port != host.port {
+            return (nil, "“\(host.name)”, which now points to \(host.destination) instead of \(destination)")
+        }
+        guard RemoteHost.directoryProblem(record.directory) == nil else { return (nil, nil) }
+        return (host, nil)
+    }
+
+    /// One alert, over the first window, for the remote tabs not reopened: kept ones (tmux, herdr), whose sessions keep
+    /// running on their host, or plain connections a restore would have opened afresh.
+    static func tellSkipped(_ skipped: [String], kept: Bool = true) {
+        let app: AppDelegate = AppDelegate.shared
         guard !skipped.isEmpty, let window = app.controllers.first?.window else { return }
         let alert = NSAlert()
-        alert.messageText = skipped.count == 1 ? "A kept remote tab was not reopened" : "\(skipped.count) kept remote tabs were not reopened"
+        let what = kept ? "kept remote tab" : "remote tab"
+        alert.messageText = skipped.count == 1 ? "A \(what) was not reopened" : "\(skipped.count) \(what)s were not reopened"
         alert.informativeText = "Next Term does not follow a host that changed since: " + Set(skipped).sorted().joined(separator: "; ")
-            + ". Their sessions keep running there; New Remote Tab lists them once you connect to the host."
+            + (kept ? ". Their sessions keep running there; New Remote Tab lists them once you connect to the host." : ".")
         alert.beginSheetModal(for: window)
     }
 }

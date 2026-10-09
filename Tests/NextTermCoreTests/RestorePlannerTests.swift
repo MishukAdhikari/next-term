@@ -133,16 +133,17 @@ import Testing
         return (evidence, facts)
     }
 
-    func plan(_ panes: [Pane], kind: SessionSnapshot.RestoreKind = .update, safeMode: Bool = false,
+    func plan(_ panes: [Pane], kind: SessionSnapshot.RestoreKind = .update, safeMode: Bool = false, quitConsent: Bool = false,
               world: RestorePlanner.World) -> [PanePlan] {
         let groups: [SessionSnapshot.Group] = panes.map { SessionSnapshot.Group(root: .pane($0), focused: $0.id) }
         let header = SessionSnapshot.Header(launchID: id(900), generation: 1, clean: false, savedAt: start)
         let snapshot = SessionSnapshot(header: header, windows: [SessionSnapshot.Window(project: folder, groups: groups)])
-        return RestorePlanner.plan(snapshot, kind: kind, safeMode: safeMode, world: world)
+        return RestorePlanner.plan(snapshot, kind: kind, safeMode: safeMode, quitConsent: quitConsent, world: world)
     }
 
-    func plan(_ pane: Pane, kind: SessionSnapshot.RestoreKind = .update, safeMode: Bool = false, world: RestorePlanner.World) -> PanePlan {
-        plan([pane], kind: kind, safeMode: safeMode, world: world)[0]
+    func plan(_ pane: Pane, kind: SessionSnapshot.RestoreKind = .update, safeMode: Bool = false, quitConsent: Bool = false,
+              world: RestorePlanner.World) -> PanePlan {
+        plan([pane], kind: kind, safeMode: safeMode, quitConsent: quitConsent, world: world)[0]
     }
 
     // MARK: agents that resume by themselves
@@ -180,11 +181,51 @@ import Testing
         let (evidence, facts) = exactClaude()
         let claude = pane(1, typed("claude"), agent: evidence)
         for kind in [SessionSnapshot.RestoreKind.crash, .unknown, .safeMode] {
-            let result = plan(claude, kind: kind, world: world(facts: facts))
-            #expect(result.outcome == .agentOnTheLine && result.line == "claude --resume \(s)", "\(kind)")
-            #expect(result.pending.action == .onTheLine)
+            // A quit consent counts on a quit restore only.
+            for consent in [false, true] {
+                let result = plan(claude, kind: kind, quitConsent: consent, world: world(facts: facts))
+                #expect(result.outcome == .agentOnTheLine && result.line == "claude --resume \(s)", "\(kind), \(consent)")
+                #expect(result.pending.action == .onTheLine)
+            }
         }
         #expect(plan(claude, kind: .crash, world: world(facts: facts)).reason == .crash)
+    }
+
+    /// AE17 and AE18: after a quit under "Resume where I left off", Claude Code resumes by itself only when the user let
+    /// that quit go ahead with the box checked. Without it, its resume command waits on the line, as after a crash.
+    @Test func aQuitRestoreResumesOnlyWithTheQuitConsent() {
+        let (evidence, facts) = exactClaude()
+        var claude = pane(1, typed("claude"), agent: evidence)
+        claude.interrupted = true
+        let consented = plan(claude, kind: .quit, quitConsent: true, world: world(facts: facts))
+        guard case .resume(let command) = evidence.gate(facts) else {
+            Issue.record("the gate did not pass")
+            return
+        }
+        #expect(consented.outcome == .resume && consented.line == command)
+        #expect(consented.reason == .quit && consented.pending == PendingAction(action: .resume, reason: .quit))
+        #expect(text(consented) == "Resumed Claude Code session \(s). Its last turn was cut off by the quit and did not continue.")
+        let without = plan(claude, kind: .quit, world: world(facts: facts))
+        #expect(without.outcome == .agentOnTheLine && without.line == "claude --resume \(s)")
+        #expect(without.reason == .quit && without.pending == PendingAction(action: .onTheLine, reason: .quit))
+        // The gate still decides: a failed check puts it on the line with the consent too.
+        var failing = facts
+        failing.sessionAvailable = false
+        #expect(plan(claude, kind: .quit, quitConsent: true, world: world(facts: failing)).outcome == .agentOnTheLine)
+        // Safe mode after a quit runs nothing until Try Again.
+        let safe = plan(claude, kind: .quit, safeMode: true, quitConsent: true, world: world(facts: facts))
+        #expect(safe.reason == .safeMode && safe.note.safeMode)
+    }
+
+    /// Commands and idle tabs come back after a quit as after an update.
+    @Test func aQuitRestorePutsCommandsBackAsAnUpdateRestoreDoes() {
+        let dev = pane(1, typed("npm run dev"))
+        let idle = pane(2, typed("ls", running: false, exit: 0))
+        for consent in [false, true] {
+            let plans = plan([dev, idle], kind: .quit, quitConsent: consent, world: world())
+            expectOutcomes(plans, .commandOnTheLine, .idle)
+            expectLines(plans, "npm run dev", "")
+        }
     }
 
     @Test func aBypassFlagPutsTheResumeOnTheLineWithoutIt() {
@@ -760,5 +801,40 @@ import Testing
         #expect(found?.id == g && found?.naming == .newest && found?.date != nil)
         #expect(RestorePlanner.guess(.claude, in: project, after: started, excluding: [g], lookup: lookup) == nil)
         #expect(RestorePlanner.guess(.gemini, in: project, after: started, excluding: [], lookup: lookup) == nil)
+    }
+
+    /// The gate's session check (KTD5), as the restore reads it when the action runs: the session is in the store the
+    /// agent used, the one this Mac's home keeps for it, and no live process holds it.
+    @Test func aSessionIsAvailableOnlyInItsOwnStoreWithNoProcessHoldingIt() throws {
+        let home = canonicalPath(FileManager.default.temporaryDirectory.path) + "/nt-available-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let project = "/Users/x/app"
+        let dir = home + "/.claude/projects/" + AgentSessions.claudeFolderName(project)
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: home + "/.claude/sessions", withIntermediateDirectories: true)
+        for id in [g, g2] {
+            let line: [String: Any] = ["type": "user", "cwd": project, "timestamp": "2026-10-09T10:00:00Z", "message": ["content": "task"]]
+            try JSONSerialization.data(withJSONObject: line).write(to: URL(fileURLWithPath: dir + "/\(id).jsonl"))
+        }
+        // This test's own process holds g2, as a live claude would.
+        let record = try JSONSerialization.data(withJSONObject: ["sessionId": g2])
+        try record.write(to: URL(fileURLWithPath: home + "/.claude/sessions/\(getpid()).json"))
+        let lookup = SessionLookup.live(home: home)
+        func evidence(_ id: String, store: String? = nil, folder: String? = "/Users/x/app") -> Evidence {
+            Evidence(agent: .claude, sessionID: id, source: .sessionFile, sessionFolder: folder, store: store ?? home + "/.claude")
+        }
+        #expect(lookup.available(evidence(g), home: home))
+        #expect(lookup.available(evidence(g.uppercased()), home: home))
+        #expect(!lookup.available(evidence(g2), home: home))
+        #expect(!lookup.available(evidence(Self.s), home: home))
+        #expect(!lookup.available(evidence(g, store: home + "/claude-work"), home: home))
+        #expect(!lookup.available(evidence(g, folder: nil), home: home))
+        #expect(!lookup.available(evidence(g, folder: "/Users/x/web"), home: home))
+        var noID = evidence(g)
+        noID.sessionID = nil
+        #expect(!lookup.available(noID, home: home))
+        var gemini = evidence(g)
+        gemini.agent = .gemini
+        #expect(!lookup.available(gemini, home: home))
     }
 }

@@ -562,22 +562,11 @@ final class Updater {
         relaunching = false // the quit was cancelled: only then does `terminate` return
     }
 
-    /// Where the flag "Relaunch Now" leaves is kept in the defaults.
-    nonisolated static let relaunchFlagKey = "updateRelaunchAt"
-
-    /// Marks the next launch as the relaunch after "Relaunch Now", which reopens the projects that were open whatever
-    /// Settings › General says. The next launch takes the flag (`AppDelegate.takeLaunchKind`); one more than 15
-    /// minutes old counts for nothing. No quit leaves it any more: the update's marker in the sessions folder replaced it,
-    /// and only the self-test's launch check still writes it.
-    nonisolated static func flagRelaunch(in defaults: UserDefaults, now: Date) {
-        defaults.set(now, forKey: relaunchFlagKey)
-    }
-
     /// Called as Next Term quits, once the quit's last save is written (SessionRestore.finishAtQuit): if an update is
     /// staged, a small script (see `InstallScript`) waits for this process to end, checks the new app's signature again,
     /// swaps the apps (putting the old one back if anything fails) and starts the new one. It leaves its result in the
     /// sessions folder, naming the marker the saved session waits for (even one whose write failed), and opens an old app
-    /// it could not put back from its backup with the folder's key. The marker replaces the flag `flagRelaunch` left.
+    /// it could not put back from its backup with the folder's key. The marker replaced plan 005's relaunch flag.
     func installStagedUpdateOnQuit(sessions: SessionRestore.Finished) {
         guard let staged else { return }
         let staging = staged.newApp.deletingLastPathComponent()

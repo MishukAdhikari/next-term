@@ -229,11 +229,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         claudeTabs.first { $0.value.value === tab }?.key
     }
 
-    /// The open projects, so a `claude` started in another terminal inside one finds Next Term too.
+    /// The open projects, so a `claude` started in another terminal inside one finds Next Term too, and a kept remote
+    /// tab waiting for its project's window reattaches once it opens.
     func projectsChanged() {
         ClaudeIDEServer.shared.updateWorkspaces(controllers.compactMap(\.project))
         GeminiIDEServer.shared.updateWorkspaces(agentWorkspaces)
         updateCopilotFolders()
+        RemoteConnection.projectsChanged()
     }
 
     /// Brand icons on configuration folders (.github, .claude, .idea); off: they stay plain and quiet.
@@ -335,8 +337,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     // MARK: lifecycle
 
-    /// Where a launch reads Settings › General and the flag "Relaunch Now" leaves, and where the projects open at quit are
-    /// kept: the user's defaults, or the relaunch harness's own suite (`SelfTest.keptDefaults`).
+    /// Where a launch reads Settings › General, and where the projects open at quit are kept: the user's defaults, or the
+    /// relaunch harness's own suite (`SelfTest.keptDefaults`).
     let launchDefaults = SelfTest.keptDefaults ?? .standard
     /// Kept remote tabs (tmux, herdr) wait for the first terminal window: they never open one of their own while the
     /// Welcome window is up.
@@ -362,12 +364,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         BackgroundFetcher.shared.start()
         // Write the shell integration before the first shell starts. Without it tabs fall back to process polling.
         if AppSupport.zshIntegrationDirectory == nil { NSLog("Next Term: could not install zsh integration") }
-        // The sessions folder, unless another Next Term holds it: the session is saved there from now on, and at the quit.
-        // No launch restores windows from it yet, so saving may start at once.
-        MainActor.assumeIsolated {
-            SessionRestore.shared.start()
-            SessionRestore.shared.openGate()
-        }
+        #if DEBUG
+        // The relaunch harness's shells read its own zsh config, from the first tab the restore opens.
+        if SelfTest.mode == .relaunchHarness { SelfTestRestore.prepareShells() }
+        #endif
+        // The launch hook (KTD14): the sessions folder taken, unless another Next Term holds it, and what the last update,
+        // quit or crash left brought back, as Settings › General and the restore step say. Its windows are built by the
+        // time it returns, before the self-test branch and `--open-request`, so a request launch keeps the quit's session
+        // too and opens in front of it (R32). From here on the session is saved, and at the quit.
+        let restore = MainActor.assumeIsolated { SessionRestore.shared.launch(settings: LaunchSettings(defaults: launchDefaults)) }
         NSApp.activate(ignoringOtherApps: true)
         // `nxtrm` in a terminal, while Next Term runs.
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(commandLineRequest(_:)),
@@ -377,26 +382,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // A step of the relaunch harness: a launch as the app's own, in the harness's folder and defaults, with no update
         // check, no `nxtrm` link and no clean-up in Application Support. SelfTestRestore drives the rest.
         if SelfTest.mode == .relaunchHarness {
-            SelfTestRestore.prepareShells()
-            let kind = Self.takeLaunchKind(request: false, defaults: launchDefaults, now: Date())
-            openAtLaunch(kind: kind, settings: LaunchSettings(defaults: launchDefaults), mayOfferImport: false)
+            openAtLaunch(kind: .normal, restore: restore, settings: LaunchSettings(defaults: launchDefaults), mayOfferImport: false)
             restoreRemoteTabsOnceAWindowOpens()
-            return SelfTestRestore.run(launchKind: kind)
+            return SelfTestRestore.run(restore: restore)
         }
         #endif
         if SelfTest.isRequested {
             // A normal launch, with the Welcome window whatever is saved and no import offer. The self-test's first
             // check opens the window the others use.
-            openAtLaunch(kind: .normal, settings: LaunchSettings(), mayOfferImport: false)
+            openAtLaunch(kind: .normal, restore: .notRun, settings: LaunchSettings(), mayOfferImport: false)
             restoreRemoteTabsOnceAWindowOpens()
             SelfTest.run()
             return
         }
-        // `nxtrm` started us: what it asked for opens, and the launch shows nothing more. A folder dropped on the app,
-        // `open -a "Next Term" dir` and Finder's Open With usually arrive before this and open themselves.
+        // `nxtrm` started us: what it asked for opens, in front of what the restore brought back, and the launch shows
+        // nothing more. A folder dropped on the app, `open -a "Next Term" dir` and Finder's Open With usually arrive before
+        // this and open themselves.
         let command = Self.openRequest(in: CommandLine.arguments)
-        // First, so the flag "Relaunch Now" leaves never outlives the launch after it.
-        let kind = Self.takeLaunchKind(request: command != nil || openedAtLaunch, defaults: launchDefaults, now: Date())
+        let kind: LaunchKind = command != nil || openedAtLaunch ? .request : .normal
         // `nxtrm` in other terminals: linked where that needs no password, else offered once with one.
         CommandLineTool.registerQuietly()
         MainActor.assumeIsolated { Updater.shared.start() }
@@ -406,7 +409,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         MainActor.assumeIsolated { SkillsUpdateCheck.start() }
         if let command { handle(command) }
         let show = { [self] in
-            openAtLaunch(kind: kind)
+            openAtLaunch(kind: kind, restore: restore)
             restoreRemoteTabsOnceAWindowOpens()
         }
         // A launch to open a document can get it just after this: a turn later, its window is open, and the launch
@@ -421,28 +424,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return try? JSONDecoder().decode(OpenCommand.self, from: Data(arguments[flag + 1].utf8))
     }
 
-    /// The relaunch after "Relaunch Now" (the flag `Updater.flagRelaunch` left, 0 to 15 minutes old), else a launch
-    /// that named a folder or file, else a normal one. The flag is taken either way. Until the update that keeps
-    /// sessions, whose launch hook tells its relaunch.
-    static func takeLaunchKind(request: Bool, defaults: UserDefaults, now: Date) -> LaunchKind {
-        let flagged = defaults.object(forKey: Updater.relaunchFlagKey) as? Date
-        defaults.removeObject(forKey: Updater.relaunchFlagKey)
-        if LaunchDecision.isUpdateRelaunch(flaggedAt: flagged, now: now) { return .updateRelaunch }
-        return request ? .request : .normal
-    }
-
     /// What a launch shows, and a Dock click with no window (LaunchDecision): the projects to reopen, the Welcome
     /// window, or on the first run "Coming from another app?" and then the Welcome window. Nothing more once a
-    /// terminal window is open. Settings › General is read each time, so a change applies from the next one.
-    private func openAtLaunch(kind: LaunchKind) {
+    /// terminal window is open: one the launch hook restored, or one a request opened. Settings › General is read each
+    /// time, so a change applies from the next one.
+    private func openAtLaunch(kind: LaunchKind, restore: LaunchRestoreResult = .notRun) {
         let settings = LaunchSettings(defaults: launchDefaults)
         let offered = UserDefaults.standard.bool(forKey: "importOffered")
-        openAtLaunch(kind: kind, settings: settings, mayOfferImport: !offered && recentProjects.isEmpty)
+        openAtLaunch(kind: kind, restore: restore, settings: settings, mayOfferImport: !offered && recentProjects.isEmpty)
     }
 
-    private func openAtLaunch(kind: LaunchKind, settings: LaunchSettings, mayOfferImport: Bool) {
-        // Nothing restores yet: the update that keeps sessions fills in `restore`.
-        let input = LaunchInput(kind: kind, restore: .notRun, terminalWindowOpen: !controllers.isEmpty, settings: settings,
+    private func openAtLaunch(kind: LaunchKind, restore: LaunchRestoreResult, settings: LaunchSettings, mayOfferImport: Bool) {
+        let input = LaunchInput(kind: kind, restore: restore, terminalWindowOpen: !controllers.isEmpty, settings: settings,
                                 sessionProjects: sessionProjects, recentProjects: recent.paths, mayOfferImport: mayOfferImport)
         switch LaunchDecision.opening(input, exists: isFolder) {
         case .nothing: break
@@ -461,8 +454,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func restoreRemoteTabs() {
         remoteRestorePending = false
         // A turn later: the window may have closed by then, and the Welcome window come back, so the tabs wait for the
-        // next one rather than open a window of their own. Closed while the restore reads the login shell, in the first
-        // seconds after launch, they still open one, until the update that keeps sessions holds them.
+        // next one rather than open a window of their own. Each waits for its own project's window (RemoteConnection).
         DispatchQueue.main.async { [self] in
             if controllers.isEmpty { remoteRestorePending = true } else { RemoteConnection.restoreTabs() }
         }
@@ -560,9 +552,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         CommandLineTool.install(from: NSApp.keyWindow)
     }
 
-    /// The project windows open when Next Term last quit: a launch reopens them when Settings › General says so, and
-    /// the relaunch after "Relaunch Now" does whatever it says. Written at every quit, so changing the setting later
-    /// works.
+    /// The project windows open when Next Term last quit: a launch whose restore built no window reopens them when
+    /// Settings › General says so, each with one fresh shell. Written at every quit, so changing the setting later works.
     private var sessionProjects: [String] {
         get { launchDefaults.stringArray(forKey: "sessionProjects") ?? [] }
         set { launchDefaults.set(newValue, forKey: "sessionProjects") }
@@ -776,18 +767,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     @discardableResult
     func openWindow(directory: String?, project: String? = nil) -> TerminalWindowController {
         let controller = TerminalWindowController(directory: directory, project: project)
-        controller.onClose = { [weak self] closed, welcome in
-            // Defer: the window is still mid-close in this call.
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.controllers.removeAll { $0 === closed }
-                self.updateBadge()
-                self.projectsChanged()
-                // Closing the last project (or the last window's last tab) leaves the Welcome window, with
-                // recent projects, like an IDE.
-                if welcome && self.controllers.isEmpty && !self.isTerminating { self.showWelcome(nil) }
-            }
-        }
+        controller.onClose = { [weak self] closed, welcome in self?.windowClosed(closed, welcome: welcome) }
         welcome?.close()
         // Cascade from the terminal window in front (not the About panel or a sheet), at its size unless it
         // is in full screen, and never below the minimum.
@@ -807,6 +787,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
         return controller
+    }
+
+    /// A window the restore built, placed and filled (SessionRestore): shown as it is, with no cascade and no first tab.
+    func openWindow(restored controller: TerminalWindowController) {
+        controller.onClose = { [weak self] closed, welcome in self?.windowClosed(closed, welcome: welcome) }
+        welcome?.close()
+        controllers.append(controller)
+        if remoteRestorePending { restoreRemoteTabs() } // the launch's first terminal window
+        projectsChanged()
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// A terminal window closed.
+    private func windowClosed(_ closed: TerminalWindowController, welcome: Bool) {
+        // Defer: the window is still mid-close in this call.
+        DispatchQueue.main.async { [self] in
+            controllers.removeAll { $0 === closed }
+            updateBadge()
+            projectsChanged()
+            // Closing the last project (or the last window's last tab) leaves the Welcome window, with
+            // recent projects, like an IDE.
+            if welcome && controllers.isEmpty && !isTerminating { showWelcome(nil) }
+        }
     }
 
     @objc func newWindow(_ sender: Any?) {

@@ -146,22 +146,9 @@ import Testing
         }
     }
 
-    @Test func theRelaunchAfterRelaunchNowReopensTheSavedProjectsWhateverTheSetting() {
-        // AE10.
-        #expect(decide(input(.updateRelaunch, .welcome)) == .reopen([app, api]))
-        #expect(decide(input(.updateRelaunch, .lastProjects)) == .reopen([app, api]))
-        #expect(decide(input(.updateRelaunch, .welcome), existing: [api]) == .reopen([api]))
-        // None left: the setting decides, as for a normal launch.
-        #expect(decide(input(.updateRelaunch, .welcome), existing: [web]) == .welcome)
-        #expect(decide(input(.updateRelaunch, .lastProjects), existing: [web]) == .welcome)
-        var first = input(.updateRelaunch)
-        first.mayOfferImport = true
-        #expect(decide(first, existing: []) == .welcome)
-    }
-
     @Test func aRestoreThatLeftNoTerminalWindowFallsBackToTheSetting() {
         // Rows 6 to 8, for every kind but the Dock click, and whatever the restore said.
-        let kinds: [LaunchKind] = [.normal, .request, .updateRelaunch]
+        let kinds: [LaunchKind] = [.normal, .request]
         let restores: [LaunchRestoreResult] = [.openedNoWindow, .openedWindows]
         for kind in kinds {
             for restore in restores {
@@ -173,16 +160,6 @@ import Testing
                 #expect(decide(launch, existing: []) == .welcome, "\(kind), \(restore)")
             }
         }
-    }
-
-    @Test func theRelaunchFlagCountsForFifteenMinutes() {
-        let now = Date(timeIntervalSince1970: 1_790_000_000)
-        #expect(!LaunchDecision.isUpdateRelaunch(flaggedAt: nil, now: now))
-        #expect(!LaunchDecision.isUpdateRelaunch(flaggedAt: now.addingTimeInterval(1), now: now)) // from the future
-        #expect(!LaunchDecision.isUpdateRelaunch(flaggedAt: now.addingTimeInterval(-(15 * 60 + 1)), now: now))
-        #expect(LaunchDecision.isUpdateRelaunch(flaggedAt: now, now: now))
-        #expect(LaunchDecision.isUpdateRelaunch(flaggedAt: now.addingTimeInterval(-14 * 60), now: now))
-        #expect(LaunchDecision.isUpdateRelaunch(flaggedAt: now.addingTimeInterval(-15 * 60), now: now))
     }
 }
 
@@ -777,6 +754,125 @@ enum RestoreFixture {
     }
 }
 
+/// The quit restore (R3, R30, R32): the launch after a quit under "Resume where I left off" brings the session back, and
+/// lets agents resume by themselves only with the quit consent's one-time id, used once.
+@Suite struct QuitRestoreTests {
+    static let consent = UUID(uuidString: "5a4b3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d")!
+
+    func decide(_ facts: RestoreFacts) -> RestoreDecision { LaunchDecision.restoring(facts) }
+
+    /// The launch after a quit under Resume: no marker, the quit's clean snapshot with two windows, and its consent id
+    /// when the user let that quit go ahead with the box checked. `resumes`: "At launch" reads Resume now.
+    func quit(consent: UUID? = nil, resumes: Bool = true) -> RestoreFacts {
+        var facts = RestoreFixture.crash()
+        var header = RestoreFixture.header(clean: true, awaiting: nil, launchID: RestoreFixture.other)
+        header.resumeConsent = consent
+        facts.header = header
+        facts.resumesAtLaunch = resumes
+        return facts
+    }
+
+    @Test func aCleanSnapshotWithWindowsUnderResumeIsAQuitRestoreThatReadsItsScrollback() {
+        let decision = decide(quit())
+        #expect(decision.kind == .restore(.quit))
+        #expect(decision.marker == .missing)
+        #expect(!decision.quitConsent)
+        #expect(decision.consumes.isEmpty)
+        // Its scrollback is named for the snapshot's launch, which saved it at the quit.
+        #expect(decision.scrollback == .read)
+        #expect(decision.scrollbackQuit == RestoreFixture.other)
+        #expect(decision.attemptsReset == .afterRestore)
+        #expect(!decision.didNotInstallNote)
+        #expect(decision.launchRestore(openedWindow: true) == .openedWindows)
+        #expect(decision.launchRestore(openedWindow: false) == .openedNoWindow)
+    }
+
+    @Test func underWelcomeNothingComesBackAndItsScrollbackIsDeletedUnread() {
+        // AE19: the user unchecked the box, or changed the setting since.
+        let decision = decide(quit(consent: Self.consent, resumes: false))
+        #expect(decision.kind == .normal)
+        #expect(!decision.quitConsent)
+        #expect(decision.scrollback == .deleteUnread)
+        #expect(decision.scrollbackQuit == nil)
+        #expect(decision.attemptsReset == .afterLaunch)
+        #expect(decision.launchRestore(openedWindow: false) == .notRun)
+        // The tombstone, under either setting.
+        var tombstone = quit()
+        tombstone.windows = 0
+        #expect(decide(tombstone).kind == .normal)
+    }
+
+    @Test func anUnusedConsentIDGivesTheConsentAndIsListedToConsumeFirst() {
+        // AE17: the launch records the id as used before it restores, so it lets agents resume once.
+        let decision = decide(quit(consent: Self.consent))
+        #expect(decision.kind == .restore(.quit))
+        #expect(decision.quitConsent)
+        #expect(decision.consumes == [Self.consent])
+    }
+
+    @Test func aConsumedOrMissingIDGivesAQuitRestoreWithoutTheConsent() {
+        // AE18: Ask off, a logout, Don't ask again: no id. Each agent's resume command waits on the line.
+        #expect(!decide(quit()).quitConsent)
+        var used = quit(consent: Self.consent)
+        used.consumed = ConsumedMarkers().adding(Self.consent)
+        let again = decide(used)
+        #expect(again.kind == .restore(.quit))
+        #expect(!again.quitConsent)
+        // A record that does not read cannot say the id is unused.
+        var unread = quit(consent: Self.consent)
+        unread.consumed = nil
+        #expect(decide(unread).kind == .restore(.quit))
+        #expect(!decide(unread).quitConsent)
+    }
+
+    @Test func onlyACleanSnapshotThatWaitsForNoMarkerIsAQuitRestore() {
+        // An unclean snapshot is a crash's, whatever the setting, and its consent id is no consent.
+        var crash = quit(consent: Self.consent)
+        crash.header?.clean = false
+        let crashed = decide(crash)
+        #expect(crashed.kind == .restore(.crash))
+        #expect(!crashed.quitConsent)
+        #expect(crashed.scrollback == .deleteUnread)
+        // One waiting for an update's marker that never came is no quit's.
+        var awaiting = quit()
+        awaiting.header?.awaitingMarker = RestoreFixture.marker
+        #expect(decide(awaiting).kind == .normal)
+        // An update restore stays one under Resume, with no quit consent.
+        var update = RestoreFixture.update()
+        update.resumesAtLaunch = true
+        update.header?.resumeConsent = Self.consent
+        let updated = decide(update)
+        #expect(updated.kind == .restore(.update))
+        #expect(!updated.quitConsent)
+        #expect(updated.scrollbackQuit == RestoreFixture.marker)
+        // Without the lock nothing is read.
+        var locked = quit(consent: Self.consent)
+        locked.lockTaken = false
+        #expect(decide(locked).kind == .normal)
+        #expect(!decide(locked).quitConsent)
+        #expect(decide(locked).consumes.isEmpty)
+    }
+
+    @Test func aQuitRestoreThatFailsTwiceGivesSafeModeAndAThirdSetsItAside() {
+        var facts = quit(consent: Self.consent)
+        facts.attempts = RestoreAttempts(count: 3)
+        let safe = decide(facts)
+        #expect(safe.kind == .safeMode(.quit))
+        // Nothing resumes by itself out of safe mode, and the id is used up all the same.
+        #expect(!safe.quitConsent)
+        #expect(safe.consumes == [Self.consent])
+        #expect(safe.scrollback == .deleteUnread)
+        #expect(safe.scrollbackQuit == nil)
+        facts.attempts = RestoreAttempts(count: 4)
+        #expect(decide(facts).kind == .quarantine)
+        // A counter that was not written runs nothing either.
+        facts.attempts = RestoreAttempts(count: 1)
+        facts.attemptsWritten = false
+        #expect(decide(facts).kind == .safeMode(.quit))
+        #expect(!decide(facts).quitConsent)
+    }
+}
+
 /// The counter across launches: a sessions folder moved as the app moves it, through the real restore step.
 @Suite struct RestoreSequenceTests {
     struct Folder {
@@ -788,6 +884,8 @@ enum RestoreFixture {
         var consumed = ConsumedMarkers()
         var uptime: TimeInterval = 5000
         var generation = 0
+        /// "At launch" reads "Resume where I left off".
+        var resumes = false
 
         /// A launch: the counter rises before anything is read, the marker is claimed, and the restore step decides.
         /// A quarantine sets the snapshot aside, and the counter starts over.
@@ -796,9 +894,10 @@ enum RestoreFixture {
             uptime += 5
             let claimed = marker
             marker = nil
-            let facts = RestoreFacts(lockTaken: true, marker: claimed, header: header, windows: windows,
+            var facts = RestoreFacts(lockTaken: true, marker: claimed, header: header, windows: windows,
                                      consumed: consumed, attempts: attempts, attemptsWritten: true, uptime: uptime,
                                      bootSession: RestoreFixture.boot, version: RestoreFixture.to)
+            facts.resumesAtLaunch = resumes
             let decision = LaunchDecision.restoring(facts)
             consumed = decision.consumes.reduce(consumed) { $0.adding($1) }
             if decision.kind == .quarantine {
@@ -832,6 +931,15 @@ enum RestoreFixture {
             attempts = attempts.after(.cleanQuit)
         }
 
+        /// ⌘Q under "Resume where I left off": the whole session, clean, with a fresh consent id when the box was checked.
+        mutating func quitUnderResume(consent: UUID?) {
+            save()
+            header?.clean = true
+            header?.resumeConsent = consent
+            resumes = true
+            attempts = attempts.after(.cleanQuit)
+        }
+
         /// The update quit: the final save waits for the marker, written last.
         mutating func updateQuit() {
             save()
@@ -861,6 +969,29 @@ enum RestoreFixture {
         folder.save()
         #expect(folder.launch().kind == .restore(.crash))
         #expect(folder.attempts.count == 1)
+    }
+
+    /// A launch after a quit-restore launch that was killed before it saved anything: the same snapshot, its consent id
+    /// used up, so its agents' resume commands go on the line; never a second automatic resume.
+    @Test func aQuitConsentIsUsedOnceAcrossARestoreThatCrashed() {
+        var folder = Folder()
+        _ = folder.launch()
+        folder.quitUnderResume(consent: QuitRestoreTests.consent)
+        let first = folder.launch()
+        #expect(first.kind == .restore(.quit))
+        #expect(first.quitConsent)
+        // It crashed while it built: the snapshot is as the quit left it.
+        let second = folder.launch()
+        #expect(second.kind == .restore(.quit))
+        #expect(!second.quitConsent)
+        #expect(folder.attempts.count == 2)
+        #expect(folder.launch().kind == .safeMode(.quit))
+        // A quit without the box checked: a quit restore again, with no consent.
+        var unchecked = Folder()
+        _ = unchecked.launch()
+        unchecked.quitUnderResume(consent: nil)
+        #expect(unchecked.launch().kind == .restore(.quit))
+        #expect(!unchecked.launch().quitConsent)
     }
 
     @Test func aCleanQuitResetsIt() {

@@ -109,6 +109,7 @@ final class NextTermView: LocalProcessTerminalView {
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let paths = droppedPaths(sender)
         guard !paths.isEmpty else { return false }
+        onKeyboard?() // a drop is the user's input, as a key or a paste is
         typeIn(paths.map(ShellQuote.quote).joined(separator: " ") + " ")
         window?.makeFirstResponder(self)
         return true
@@ -274,7 +275,8 @@ protocol TerminalTabDelegate: AnyObject {
 /// One tab: a shell in a pty, its terminal view and its status. A remote tab runs ssh in the pty instead,
 /// to a shell, a tmux session or herdr on a server (see RemoteConnection).
 final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
-    let id = UUID()
+    /// What MCP clients know the tab by: a restored tab keeps the one it had (SessionRestore).
+    let id: UUID
     /// Set for a tab on a server.
     let remote: RemoteTab?
     /// The connection to the host dropped; the tab waits to reconnect.
@@ -338,8 +340,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private(set) lazy var completion = CompletionSession(tab: self)
     private var shellName: String { (shellPath as NSString).lastPathComponent }
 
-    init(directory: String?, fontSize: CGFloat, remote: RemoteTab? = nil) {
+    init(directory: String?, fontSize: CGFloat, remote: RemoteTab? = nil, id: UUID = UUID()) {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
+        self.id = id
         self.remote = remote
         self.directory = remote?.directory ?? (Self.isDirectory(directory) ? directory! : home)
         self.shellPath = remote == nil ? Self.loginShell() : RemoteConnection.sshPath
@@ -356,7 +359,11 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             self?.completion.output()
         }
         view.onInput = { [weak self] in self?.status.input(at: Self.now) }
-        view.onKeyboard = { [weak self] in if let self { MCPControl.typedByUser(self) } }
+        view.onKeyboard = { [weak self] in
+            guard let self else { return }
+            self.touchedByUser = true
+            MCPControl.typedByUser(self)
+        }
         view.onBell = { [weak self] in self?.attention() }
         view.completionGate = { [weak self] data in self?.completion.gate(data) ?? false }
         view.linkBaseDirectory = { [weak self] in self?.liveDirectory ?? NSHomeDirectory() }
@@ -589,6 +596,15 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// The record this tab was restored from, at launch. While its action waits, every save writes it as it was
     /// (SessionCapture), so a restore that stops part-way loses nothing (KTD3).
     var restoredRecord: SessionSnapshot.Pane?
+    /// The restore's note for this tab (RestoreNote), shown once, under the restored scrollback, before the shell starts.
+    var restoreNote: String?
+    /// The user pressed a key, pasted or dropped something in this tab (`NextTermView.onKeyboard`): an action the restore
+    /// has not applied yet is the user's to drop (KTD6).
+    private(set) var touchedByUser = false
+
+    /// Nothing has happened in this tab that a caller could lose by reusing it (`nxtrm`, ⌥⌘O, MCP `new_tab`): nothing ran
+    /// in it, and it holds nothing restored, such as a put-back line (KTD10).
+    var isUntouched: Bool { restoredRecord == nil && status.command.isEmpty && !status.running }
 
     /// Notes where the command now starting showed, as the integration reports it.
     private func noteEcho(_ typed: String, expanded: String?) {
@@ -602,12 +618,18 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     /// Feeds the restored scrollback and its divider, once, before the shell has printed anything: nothing it prints can
     /// be inside them, and they are sanitized again, as their file was read as untrusted. Notes the divider's last row.
+    /// The restore's note follows, below the divider, just before the prompt.
     func showRestoredScrollback() {
-        guard let restored = restoredScrollback else { return }
+        let restored = restoredScrollback
+        let note = restoreNote
         restoredScrollback = nil
+        restoreNote = nil
         guard !started else { return }
-        view.feed(text: ScrollbackText.preface(restored.text, savedAt: restored.savedAt))
-        restoreDivider = (restored.savedAt.divider, lastTextRow(), view.getTerminal().cols)
+        if let restored {
+            view.feed(text: ScrollbackText.preface(restored.text, savedAt: restored.savedAt))
+            restoreDivider = (restored.savedAt.divider, lastTextRow(), view.getTerminal().cols)
+        }
+        if let note { view.feed(text: RestoreLayout.noteLine(note)) }
     }
 
     /// The screen's last `count` lines that are live: below a restore's divider, so a question or a refusal replayed above

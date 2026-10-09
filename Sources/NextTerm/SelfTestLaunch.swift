@@ -2,8 +2,8 @@ import AppKit
 import NextTermCore
 
 /// What a launch shows, and a Dock click with every window closed: the Welcome window, or the projects Settings ›
-/// General says to reopen (LaunchDecision). Kept remote tabs wait for the first terminal window, and the relaunch
-/// after "Relaunch Now" is told by the flag the quit before it leaves. And what a quit asks about reopening.
+/// General says to reopen (LaunchDecision). Kept remote tabs wait for the first terminal window. And what a quit asks
+/// about reopening.
 extension SelfTest {
     /// First of all: the self-test launches as a normal launch does, with the Welcome window whatever is saved, and
     /// then opens its window as New Terminal does, for every check after this one. Settings › General is checked here
@@ -14,7 +14,6 @@ extension SelfTest {
         check(welcome && app.controllers.isEmpty, "a launch that names nothing shows the Welcome window, and no terminal window",
               "Welcome \(welcome), terminal windows \(app.controllers.count)")
         check(app.remoteRestorePending, "kept remote tabs wait for the first terminal window, rather than opening one under the Welcome window")
-        relaunchFlagChecks()
         app.newWindow(nil)
         let closed = await wait(5) { app.welcomeController?.window?.isVisible != true }
         check(closed && app.controllers.count == 1 && !app.remoteRestorePending,
@@ -219,28 +218,6 @@ extension SelfTest {
         check(shutdown == .systemSession && logout == .systemSession && plain == .user && none == .user && other == .user,
               "a quit event with a logout, restart or shutdown reason is the system session's, either way it is sent; any other quit is the user's",
               "shutdown \(shutdown), logout \(logout), no reason \(plain), no event \(none), not a quit event \(other)")
-    }
-
-    /// The flag's two ends meet: the quit that installs an update after "Relaunch Now" writes it, and the next launch
-    /// takes it, once. On a throwaway defaults suite.
-    private static func relaunchFlagChecks() {
-        let name = "nextterm-selftest-relaunch-\(getpid())"
-        guard let defaults = UserDefaults(suiteName: name) else { return check(false, "a defaults suite for the relaunch flag") }
-        defer { defaults.removePersistentDomain(forName: name) }
-        let key = Updater.relaunchFlagKey
-        let now = Date()
-        Updater.flagRelaunch(in: defaults, now: now)
-        let relaunch: LaunchKind = AppDelegate.takeLaunchKind(request: false, defaults: defaults, now: now.addingTimeInterval(5))
-        let taken = defaults.object(forKey: key) == nil
-        check(relaunch == .updateRelaunch && taken, "the launch after Relaunch Now takes its flag as the update relaunch, once",
-              "\(relaunch), flag left \(!taken)")
-        Updater.flagRelaunch(in: defaults, now: now.addingTimeInterval(-16 * 60))
-        let stale: LaunchKind = AppDelegate.takeLaunchKind(request: false, defaults: defaults, now: now)
-        let staleTaken = defaults.object(forKey: key) == nil
-        let request: LaunchKind = AppDelegate.takeLaunchKind(request: true, defaults: defaults, now: now)
-        check(stale == .normal && staleTaken && request == .request,
-              "a flag 16 minutes old is a normal launch, and is taken too; with no flag, a launch that names a folder is a request",
-              "\(stale), flag left \(!staleTaken), request \(request)")
     }
 
     /// Last of all, after the Welcome window's own Dock check: with every window closed, the Welcome window too, a

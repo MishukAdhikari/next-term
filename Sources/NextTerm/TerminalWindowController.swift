@@ -226,7 +226,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     var activeTab: TerminalTab? { activeGroup?.focused }
     func group(of tab: TerminalTab) -> PaneGroup? { groups.first { $0.contains(tab) } }
 
-    init(directory: String?, project: String? = nil) {
+    /// `firstTab` false: a window the restore fills (`insertRestored`), with no tab of its own.
+    init(directory: String?, project: String? = nil, firstTab: Bool = true) {
         self.project = project.map(canonicalPath)
         projectTitle = Self.title(ofProject: self.project)
         let window = TerminalWindow(
@@ -313,7 +314,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         RunLoop.main.add(ticker, forMode: .common)
         self.ticker = ticker
 
-        addTab(directory: self.project ?? directory)
+        if firstTab { addTab(directory: self.project ?? directory) }
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -360,8 +361,34 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return tab
     }
 
-    private func makeTab(directory: String?, remote: RemoteTab? = nil) -> TerminalTab {
-        let tab = TerminalTab(directory: directory, fontSize: AppDelegate.shared.terminalFontSize, remote: remote)
+    /// A tab the restore puts back, with the id it had (SessionRestore). Not in the window until `insertRestored`.
+    func restoredTab(directory: String?, remote: RemoteTab?, id: UUID) -> TerminalTab {
+        makeTab(directory: directory, remote: remote, id: id)
+    }
+
+    /// A tab the restore built, with its panes, laid out at its real size before any shell starts, after the tabs here.
+    /// `starting`: the panes whose shells start now; the restore starts the others (on a server) itself. Hidden until
+    /// `select` brings it forward.
+    func insertRestored(_ group: PaneGroup, starting: [TerminalTab]) {
+        let view = group.view
+        view.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.topAnchor.constraint(equalTo: container.topAnchor),
+            view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        groups.append(group)
+        window?.contentView?.layoutSubtreeIfNeeded() // the window's real size, set before any tab, reaches the tab
+        group.layout()
+        container.layoutSubtreeIfNeeded() // each pane's real size before its shell starts, so it draws once
+        for tab in starting { tab.start() }
+        view.isHidden = groups.count - 1 != activeIndex
+    }
+
+    private func makeTab(directory: String?, remote: RemoteTab? = nil, id: UUID = UUID()) -> TerminalTab {
+        let tab = TerminalTab(directory: directory, fontSize: AppDelegate.shared.terminalFontSize, remote: remote, id: id)
         tab.delegate = self
         // ⌘-click on "src/a.ts:42" in the output opens the editor there.
         tab.view.openFile = { [weak self] url, line, column in self?.openFile(url, line: line, column: column) }
@@ -880,11 +907,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     // MARK: projects
 
-    /// A window nobody has used yet: no project, one tab, nothing run in it.
+    /// A window nobody has used yet: no project, one tab, nothing run in it, and nothing restored into it.
     var isPristine: Bool {
         // A remote tab is never unused: commands there are seen only now and then, and its session matters.
         guard project == nil, groups.count == 1, tabs.count == 1, let tab = tabs.first, tab.remote == nil else { return false }
-        return tab.status.command.isEmpty && !tab.status.running && tab.closeWarning == nil
+        return tab.isUntouched && tab.closeWarning == nil
     }
 
     /// Turns this window into `path`'s project: a fresh tab in the project, the old tabs closed.
@@ -1377,12 +1404,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     /// A tab in `directory` running `command` once its shell is at the prompt. An untouched first tab in
-    /// the same folder is used rather than a second one.
+    /// the same folder is used rather than a second one; never a restored one, which may hold a put-back line.
     @discardableResult
     func runInNewTab(directory: String, command: String, title: String?) -> TerminalTab {
         let folder = canonicalPath(directory)
         let tab: TerminalTab
-        if groups.count == 1, tabs.count == 1, let only = tabs.first, only.remote == nil, only.status.command.isEmpty, !only.status.running,
+        if groups.count == 1, tabs.count == 1, let only = tabs.first, only.remote == nil, only.isUntouched,
            canonicalPath(only.directory) == folder {
             tab = only
         } else {

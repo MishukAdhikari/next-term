@@ -11,9 +11,6 @@ public enum LaunchKind: CaseIterable, Sendable {
     /// A reopen while Next Term runs with no window visible: a click on the Dock icon, or Finder,
     /// Spotlight or `open -a` with no path.
     case dockReopen
-    /// The relaunch after "Relaunch Now", told by a flag `Updater` leaves (`isUpdateRelaunch`). Until
-    /// the update that keeps sessions, whose restore takes its place.
-    case updateRelaunch
 }
 
 /// What a restore did before the launch asks the table: the restore step's result
@@ -65,14 +62,13 @@ public enum LaunchOpening: Equatable, Sendable {
 }
 
 /// The one table that says what a launch, or a reopen with no window, shows. The app gathers the inputs
-/// and acts on the answer.
+/// and acts on the answer. The restore step (`restoring`) runs first: an update, quit or crash restore that built
+/// windows meets the first row, and shows nothing more.
 public enum LaunchDecision {
-    /// How long the flag "Relaunch Now" leaves marks the next launch as its relaunch.
-    public static let relaunchFlagLifetime: TimeInterval = 15 * 60
-
     /// The rows in order; the first that matches wins. `exists` says whether a project's folder is still
     /// there.
     public static func opening(_ input: LaunchInput, exists: (String) -> Bool) -> LaunchOpening {
+        // Row 1, and row 9: a restore built its windows, or a request opened its window.
         if input.terminalWindowOpen { return .nothing }
         let reopens = input.settings.opens == .lastProjects
         if input.kind == .dockReopen {
@@ -80,19 +76,12 @@ public enum LaunchDecision {
             guard reopens, let recent = input.recentProjects.first(where: exists) else { return .welcome }
             return .reopen([recent])
         }
+        // Rows 6 to 8: no restore built a window. Under Resume, the projects open at the last quit, each with one
+        // fresh shell.
         let saved = existing(input.sessionProjects, exists: exists)
-        let relaunch = input.kind == .updateRelaunch && input.restore == .notRun
-        if (relaunch || reopens) && !saved.isEmpty { return .reopen(saved) }
+        if reopens && !saved.isEmpty { return .reopen(saved) }
         // Nothing to reopen: no fallback to the most recent project.
         return input.kind == .normal && input.mayOfferImport ? .importThenWelcome : .welcome
-    }
-
-    /// Whether a launch flagged at `flaggedAt` is the relaunch after "Relaunch Now": a flag from 0 to 15
-    /// minutes old. One from the future is not.
-    public static func isUpdateRelaunch(flaggedAt: Date?, now: Date) -> Bool {
-        guard let flaggedAt else { return false }
-        let age = now.timeIntervalSince(flaggedAt)
-        return age >= 0 && age <= relaunchFlagLifetime
     }
 
     /// `paths` in order, without the missing folders and repeats.
@@ -105,9 +94,11 @@ public enum LaunchDecision {
 // MARK: - The restore step
 
 // Before the table, a launch that holds the sessions folder decides what it restores: the update's sessions, the
-// layout after a crash, the layout alone after restores that did not finish, or nothing. Every file it reads there is
-// untrusted input. A marker alone runs nothing and skips no question: it only picks the update restore, and only for a
-// snapshot that names it, in a folder sandboxed processes cannot write. Each pane still passes the resume gate.
+// session a quit under "Resume where I left off" saved, the layout after a crash, the layout alone after restores that
+// did not finish, or nothing. Every file it reads there is untrusted input. A marker alone runs nothing and skips no
+// question: it only picks the update restore, and only for a snapshot that names it, in a folder sandboxed processes
+// cannot write. A quit consent id lets agents resume once, and only from the quit's own clean snapshot. Each pane still
+// passes the resume gate.
 
 /// Written last at an update quit, beside the snapshot that waits for it (`Header.awaitingMarker`): the next launch is
 /// the update's relaunch. It is claimed by an exclusive rename, and its id is then recorded as consumed, so it is
@@ -241,7 +232,8 @@ extension UpdateMarker {
     }
 }
 
-/// The markers launches have claimed, newest last, so a marker put back is refused.
+/// The markers launches have claimed, and the quit consent ids they used, newest last, so a marker put back is refused
+/// and a consent lets agents resume once.
 public struct ConsumedMarkers: Equatable, Sendable {
     public static let fileName = "consumed-markers.json"
     public static let maxSize = 4096
@@ -348,7 +340,7 @@ public struct RestoreFacts: Sendable {
     public var header: SessionSnapshot.Header?
     /// The windows in the snapshot.
     public var windows: Int
-    /// The markers claimed before; nil when the record is there but does not read.
+    /// The markers claimed before, and the quit consent ids used; nil when the record is there but does not read.
     public var consumed: ConsumedMarkers?
     /// The counter, raised for this launch.
     public var attempts: RestoreAttempts
@@ -363,10 +355,13 @@ public struct RestoreFacts: Sendable {
     public var version: String
     /// The install script's result, read once and removed.
     public var installResult: InstallResult?
+    /// Settings › General's "At launch" reads "Resume where I left off": a clean snapshot with windows comes back.
+    public var resumesAtLaunch: Bool
 
     public init(lockTaken: Bool, marker: UpdateMarker? = nil, header: SessionSnapshot.Header? = nil, windows: Int = 0,
                 consumed: ConsumedMarkers? = ConsumedMarkers(), attempts: RestoreAttempts, attemptsWritten: Bool,
-                uptime: TimeInterval, bootSession: String?, version: String, installResult: InstallResult? = nil) {
+                uptime: TimeInterval, bootSession: String?, version: String, installResult: InstallResult? = nil,
+                resumesAtLaunch: Bool = false) {
         self.lockTaken = lockTaken
         self.marker = marker
         self.header = header
@@ -378,6 +373,7 @@ public struct RestoreFacts: Sendable {
         self.bootSession = bootSession
         self.version = version
         self.installResult = installResult
+        self.resumesAtLaunch = resumesAtLaunch
     }
 }
 
@@ -385,7 +381,7 @@ public struct RestoreFacts: Sendable {
 public enum LaunchRestoreKind: Equatable, Sendable {
     /// Nothing: the launch table decides what shows.
     case normal
-    /// The windows come back, each pane planned as this kind (`.update` or `.crash`).
+    /// The windows come back, each pane planned as this kind (`.update`, `.quit` or `.crash`).
     case restore(SessionSnapshot.RestoreKind)
     /// Two restores did not finish: the layout comes back with nothing typed or run, planned as this kind for "Try
     /// Again", with one alert offering "Keep As Is" and "Try Again".
@@ -398,7 +394,7 @@ public enum LaunchRestoreKind: Equatable, Sendable {
 public struct RestoreDecision: Equatable, Sendable {
     /// What happens to the scrollback files.
     public enum Scrollback: Equatable, Sendable {
-        /// An update restore reads those named for its marker, deleting each once read.
+        /// An update or quit restore reads those named for its quit (`scrollbackQuit`), deleting each once read.
         case read
         /// Every other launch that holds the folder deletes them unread.
         case deleteUnread
@@ -425,9 +421,16 @@ public struct RestoreDecision: Equatable, Sendable {
     /// The launch keeps the snapshot current: it holds the folder.
     public var saves: Bool
     /// The markers to record as consumed, before the claimed file is removed: any marker claimed, whatever it came to,
-    /// and the one the snapshot waits for, as this launch deals with that update quit now.
+    /// and the one the snapshot waits for, as this launch deals with that update quit now. Then the snapshot's quit
+    /// consent id, whatever restores: it lets agents resume once, so it is recorded before the restore runs.
     public var consumes: [UUID]
+    /// A quit restore whose quit consent id no launch has used (R30): Claude Code, Codex and Qwen Code may resume by
+    /// themselves, as on an update restore. Without it, every agent's resume command goes on the line.
+    public var quitConsent: Bool
     public var scrollback: Scrollback
+    /// The quit the scrollback read is named for: the marker's id after an update quit, the snapshot's launch id after a
+    /// quit under Resume. Nil when none is read.
+    public var scrollbackQuit: UUID?
     /// The install script's failed outcome: one alert says the update did not install, whatever restores.
     public var installAlert: InstallResult.Outcome?
     /// The note that the update did not install, shown once with what restores: the snapshot was saved at an update
@@ -458,6 +461,8 @@ extension LaunchDecision {
     /// - without the lock, nothing, and nothing is saved;
     /// - a marker that holds (`check`) restores the update's snapshot;
     /// - otherwise an unclean snapshot restores as after a crash;
+    /// - otherwise, under "Resume where I left off", a quit's clean snapshot restores as a quit restore, with the quit
+    ///   consent when its id is unused (R3, R30); under "Show the Welcome window" it is none;
     /// - a snapshot with no windows is none;
     /// - at a raised counter of 3, or one that was not written, the restore is safe mode; at 4 or more, the snapshot is
     ///   set aside.
@@ -465,16 +470,19 @@ extension LaunchDecision {
     /// note once, with what restores.
     public static func restoring(_ facts: RestoreFacts) -> RestoreDecision {
         guard facts.lockTaken else {
-            return RestoreDecision(kind: .normal, marker: .missing, saves: false, consumes: [], scrollback: .leave,
-                                   installAlert: nil, didNotInstallNote: false, attemptsReset: .never)
+            return RestoreDecision(kind: .normal, marker: .missing, saves: false, consumes: [], quitConsent: false,
+                                   scrollback: .leave, scrollbackQuit: nil, installAlert: nil, didNotInstallNote: false,
+                                   attemptsReset: .never)
         }
         let check = check(facts)
         let kind = held(found(facts, marker: check), attempts: facts.attempts, counted: facts.attemptsWritten)
         let alert = failure(facts.installResult)
         let note = alert == nil && kind.restores && didNotInstall(facts, marker: check)
-        let scrollback: RestoreDecision.Scrollback = kind == .restore(.update) ? .read : .deleteUnread
-        return RestoreDecision(kind: kind, marker: check, saves: true, consumes: used(facts), scrollback: scrollback,
-                               installAlert: alert, didNotInstallNote: note, attemptsReset: reset(after: kind))
+        let quit = scrollbackQuit(kind, facts: facts)
+        let scrollback: RestoreDecision.Scrollback = quit == nil ? .deleteUnread : .read
+        return RestoreDecision(kind: kind, marker: check, saves: true, consumes: used(facts), quitConsent: consented(kind, facts),
+                               scrollback: scrollback, scrollbackQuit: quit, installAlert: alert, didNotInstallNote: note,
+                               attemptsReset: reset(after: kind))
     }
 
     /// Whether the claimed marker makes this launch the update's relaunch: the snapshot waits for it and was written by
@@ -507,11 +515,31 @@ extension LaunchDecision {
         return result.marker == awaitingMarker
     }
 
-    /// The kind of restore the snapshot asks for, before the counter: none without windows.
+    /// The kind of restore the snapshot asks for, before the counter: none without windows. A clean snapshot is a
+    /// quit's: it comes back as a quit restore under "Resume where I left off", unless it waits for an update's marker
+    /// that never came.
     private static func found(_ facts: RestoreFacts, marker check: UpdateMarker.Check) -> SessionSnapshot.RestoreKind? {
         guard let header = facts.header, facts.windows > 0 else { return nil }
         if check == .valid { return .update }
-        return header.clean ? nil : .crash
+        guard header.clean else { return .crash }
+        return facts.resumesAtLaunch && header.awaitingMarker == nil ? .quit : nil
+    }
+
+    /// Whether a quit restore may let agents resume by themselves: its snapshot holds a consent id that no launch has
+    /// used. Never out of safe mode, and never when the record of used ids does not read.
+    private static func consented(_ kind: LaunchRestoreKind, _ facts: RestoreFacts) -> Bool {
+        guard kind == .restore(.quit), let id = facts.header?.resumeConsent, let consumed = facts.consumed else { return false }
+        return !consumed.contains(id)
+    }
+
+    /// The quit whose scrollback a restore reads: an update restore's marker, a quit restore's snapshot launch. Safe mode
+    /// reads none.
+    private static func scrollbackQuit(_ kind: LaunchRestoreKind, facts: RestoreFacts) -> UUID? {
+        switch kind {
+        case .restore(.update): return facts.marker?.id
+        case .restore(.quit): return facts.header?.launchID
+        default: return nil
+        }
     }
 
     /// The restore, held back by the restores that did not finish before it. One whose try was not `counted` runs
@@ -542,11 +570,13 @@ extension LaunchDecision {
         return installing != facts.version
     }
 
-    /// The markers the launch uses up: the one it claimed, then the one the snapshot waits for.
+    /// The ids the launch uses up: the marker it claimed, the one the snapshot waits for, then its quit consent id.
     private static func used(_ facts: RestoreFacts) -> [UUID] {
-        let claimed: [UUID] = facts.marker.map { [$0.id] } ?? []
-        guard let awaited = facts.header?.awaitingMarker, !claimed.contains(awaited) else { return claimed }
-        return claimed + [awaited]
+        var ids: [UUID] = facts.marker.map { [$0.id] } ?? []
+        for id in [facts.header?.awaitingMarker, facts.header?.resumeConsent].compactMap({ $0 }) where !ids.contains(id) {
+            ids.append(id)
+        }
+        return ids
     }
 
     /// When the counter resets after a launch that holds the folder.
