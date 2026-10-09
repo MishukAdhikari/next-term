@@ -170,6 +170,8 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     }
 
     private func show(_ inventory: SkillInventory) {
+        // The skill selected stays selected by its name: the rows can come back in another order, or fewer.
+        let kept = selectedRow?.name
         self.inventory = inventory
         pendingReload = false
         let needsAttention = filter.indexOfSelectedItem == 1
@@ -183,6 +185,9 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
             summary.toolTip = nil
         }
         table.reloadData()
+        if let kept, let index = rows.firstIndex(where: { $0.name == kept }) {
+            table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+        }
         updateButtons()
     }
 
@@ -312,6 +317,17 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         guard let index = rows.firstIndex(where: { $0.name == name }) else { return }
         table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
         updateButtons()
+    }
+
+    /// For the self-test: each condition Link waits for, by name.
+    var linkStateForTest: String {
+        let row = selectedRow
+        let claudeHasIt = row?.copies.contains { $0.root.kind == .claude } != false
+        let parts: [String] = ["row \(row?.name ?? "none")", "running \(SkillsStore.running)", "pendingReload \(pendingReload)",
+                               "linking \(linking)", "personal \(showsPersonal)", "shared \(sharedCopy != nil)",
+                               "claudeRoot \(inventory?.root(.claude) != nil)", "claudeHasIt \(claudeHasIt)",
+                               "selected \(table.selectedRow) of \(rows.count)", "window \(window != nil)"]
+        return parts.joined(separator: ", ")
     }
 
     private func updateButtons() {

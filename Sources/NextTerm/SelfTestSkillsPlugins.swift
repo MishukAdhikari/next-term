@@ -512,7 +512,7 @@ extension SelfTest {
         func state() -> String {
             let sheet = window.attachedSheet == nil ? "no sheet" : "sheet: " + pluginSheetText(window)
             return "Link offered \(view.linkButton.isEnabled), \(sheet), link made \(entryExists(link)), "
-                + "last change \(SkillsStore.lastChange?.title ?? "none")"
+                + "last change \(SkillsStore.lastChange?.title ?? "none") | " + view.linkStateForTest
         }
         await pause(0.5) // its first read of the folders
         view.selectForTest("demo-plugin", in: SkillsStore.inventory())
