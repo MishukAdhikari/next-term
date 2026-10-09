@@ -96,27 +96,85 @@ public enum WorktreeFolder {
         }
     }
 
-    /// The repository's main checkout, from its common git folder: the folder that holds `.git`; a bare
-    /// repository's own folder.
-    public static func mainCheckout(commonDir: String) -> String {
-        let common = (commonDir as NSString).standardizingPath
-        return (common as NSString).lastPathComponent == ".git" ? (common as NSString).deletingLastPathComponent : common
+    /// The repository's main checkout, from git's own files (no git run): the folder that holds `.git`; the
+    /// folder core.worktree names (a submodule, whose git folder is in the superproject's .git/modules); a
+    /// bare repository's own folder; else `root` when its own git folder is the common one (a checkout whose
+    /// git folder was moved out with --separate-git-dir). nil when it can't be told: a linked worktree of
+    /// such a repository. git itself names the main worktree by its git folder in all but the first case.
+    public static func mainCheckout(commonDir: String, gitDir: String, root: String) -> String? {
+        let config = (try? String(contentsOfFile: commonDir + "/config", encoding: .utf8)) ?? ""
+        return mainCheckout(commonDir: commonDir, gitDir: gitDir, root: root, config: config)
     }
 
-    /// "xCloud" for ~/Code/xCloud, "app" for a bare ~/Code/app.git.
+    static func mainCheckout(commonDir: String, gitDir: String, root: String, config: String) -> String? {
+        let common = URL(fileURLWithPath: commonDir).standardized.path
+        if (common as NSString).lastPathComponent == ".git" { return (common as NSString).deletingLastPathComponent }
+        let core = coreSettings(config)
+        if let worktree = core.worktree, !worktree.isEmpty {
+            let path = worktree.hasPrefix("/") ? worktree : common + "/" + worktree
+            return URL(fileURLWithPath: path).standardized.path
+        }
+        if core.bare { return common }
+        if canonicalPath(gitDir) == canonicalPath(commonDir) { return URL(fileURLWithPath: root).standardized.path }
+        return nil
+    }
+
+    /// core.worktree and core.bare in a git config file, as git writes them.
+    static func coreSettings(_ config: String) -> (worktree: String?, bare: Bool) {
+        var inCore = false, worktree: String?, bare = false
+        for raw in config.split(whereSeparator: \.isNewline) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("[") {
+                let header = String(line.dropFirst().prefix { $0 != "]" }).trimmingCharacters(in: .whitespaces)
+                inCore = header.lowercased() == "core"
+                continue
+            }
+            guard inCore, !line.isEmpty, !line.hasPrefix("#"), !line.hasPrefix(";") else { continue }
+            let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard let key = parts.first?.lowercased() else { continue }
+            let value = parts.count > 1 ? unquoted(parts[1]) : "true"
+            if key == "worktree" { worktree = value }
+            if key == "bare" { bare = ["true", "yes", "on", "1"].contains(value.lowercased()) }
+        }
+        return (worktree, bare)
+    }
+
+    private static func unquoted(_ value: String) -> String {
+        guard value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") else { return value }
+        return String(value.dropFirst().dropLast()).replacingOccurrences(of: "\\\"", with: "\"").replacingOccurrences(of: "\\\\", with: "\\")
+    }
+
+    /// The outermost checkout holding `checkout`: itself, or for a submodule its superproject's, up to the top.
+    public static func outermostCheckout(_ checkout: String, git: String) -> String {
+        var current = checkout
+        for _ in 0..<8 {
+            guard let data = GitRunner.run(git, ["-C", current, "rev-parse", "--show-superproject-working-tree"], timeout: 10) else { break }
+            let up = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !up.isEmpty, canonicalPath(up) != canonicalPath(current) else { break }
+            current = up
+        }
+        return current
+    }
+
+    /// "xCloud" for ~/Code/xCloud, "app" for a bare ~/Code/app.git, and for a bare repository kept as
+    /// ~/Code/app/.bare, its folder's name.
     public static func repositoryName(mainCheckout: String) -> String {
         let name = (mainCheckout as NSString).lastPathComponent
+        if name.hasPrefix("."), name.count > 1 { return repositoryName(mainCheckout: (mainCheckout as NSString).deletingLastPathComponent) }
         return name.hasSuffix(".git") && name.count > 4 ? String(name.dropLast(4)) : name
     }
 
     /// Beside the main checkout (never beside a linked worktree the window shows), named `<repo>-wt-<name>`;
-    /// inside it under `.claude/worktrees` when Settings asks and the repository ignores that folder.
-    public static func place(mainCheckout: String, location: WorktreeLocation, claudeWorktreesIgnored: Bool) -> Place {
+    /// for a submodule, beside its outermost superproject's checkout (`outermost`), so the folder is in no
+    /// repository's files. Inside it under `.claude/worktrees` when Settings asks and the repository ignores
+    /// that folder.
+    public static func place(mainCheckout: String, outermost: String? = nil, location: WorktreeLocation, claudeWorktreesIgnored: Bool) -> Place {
         let bare = (mainCheckout as NSString).lastPathComponent.hasSuffix(".git")
         if location == .claudeWorktrees, claudeWorktreesIgnored, !bare {
             return Place(folder: mainCheckout + "/.claude/worktrees", prefix: "")
         }
-        return Place(folder: (mainCheckout as NSString).deletingLastPathComponent, prefix: repositoryName(mainCheckout: mainCheckout) + "-wt-")
+        let beside = outermost ?? mainCheckout
+        return Place(folder: (beside as NSString).deletingLastPathComponent, prefix: repositoryName(mainCheckout: mainCheckout) + "-wt-")
     }
 
     /// Whether the repository ignores `.claude/worktrees/` (its .gitignore, info/exclude or your global
@@ -226,13 +284,17 @@ public enum WorktreeWindow {
 
     /// The repository of the linked worktree whose top folder is `path`; nil for a main checkout or a folder
     /// outside a repository. Reads `.git` and git's own files, no git run.
+    /// A checkout whose own git folder is the common one is a main checkout, though its `.git` is a file (a
+    /// submodule, a git folder moved out). `mainCheckout` is the repository's git folder when that can't be told.
     public static func repository(ofLinkedWorktree path: String) -> Repository? {
         var isFolder: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path + "/.git", isDirectory: &isFolder), !isFolder.boolValue,
-              let common = GitRunner.commonGitDir(root: path) else { return nil }
-        let main = WorktreeFolder.mainCheckout(commonDir: common)
-        guard canonicalPath(main) != canonicalPath(path), FileManager.default.fileExists(atPath: common + "/worktrees") else { return nil }
-        return Repository(name: WorktreeFolder.repositoryName(mainCheckout: main), mainCheckout: canonicalPath(main))
+              let gitDir = AgentLocation.gitDir(ofCheckout: path), let common = GitRunner.commonGitDir(root: path),
+              canonicalPath(gitDir) != canonicalPath(common) else { return nil }
+        let main = WorktreeFolder.mainCheckout(commonDir: common, gitDir: gitDir, root: path)
+        guard main.map({ canonicalPath($0) != canonicalPath(path) }) ?? true, FileManager.default.fileExists(atPath: common + "/worktrees") else { return nil }
+        let named = main ?? common
+        return Repository(name: WorktreeFolder.repositoryName(mainCheckout: named), mainCheckout: canonicalPath(named))
     }
 }
 

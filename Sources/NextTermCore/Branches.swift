@@ -111,6 +111,8 @@ public struct BranchModel: Equatable, Sendable {
     /// The remotes as `git remote` lists them: a remote's name may hold a "/" ("my/fork").
     public var configuredRemotes: [String] = []
     public var inProgress: GitInProgress?
+    /// The repository's main checkout (WorktreeFolder.mainCheckout); nil when it can't be told.
+    public var mainCheckout: String?
 
     public init(root: String, gitDir: String, commonDir: String) {
         self.root = root
@@ -154,6 +156,29 @@ public struct BranchModel: Equatable, Sendable {
         return remoteAndBranch(of: upstream)
     }
 
+    /// Whether `worktree` is the repository's main checkout: git lists it first.
+    public func isMainCheckout(_ worktree: Worktree) -> Bool {
+        worktrees.first.map { canonicalPath($0.path) == canonicalPath(worktree.path) } ?? false
+    }
+
+    /// git names a main checkout by its git folder when that isn't `<checkout>/.git` (a submodule's is in the
+    /// superproject's .git/modules): the worktrees and the branches checked out there get the checkout instead,
+    /// so its row opens it, and its branch isn't taken for one held by another worktree.
+    mutating func placeMainCheckout() {
+        guard (commonDir as NSString).lastPathComponent != ".git", let main = mainCheckout else { return }
+        let gitFolder = canonicalPath(commonDir)
+        guard canonicalPath(main) != gitFolder else { return }
+        func placed(_ path: String) -> String { canonicalPath(path) == gitFolder ? main : path }
+        worktrees = worktrees.map { w in
+            Worktree(path: placed(w.path), head: w.head, branch: w.branch, isBare: w.isBare, lockReason: w.lockReason, isPrunable: w.isPrunable)
+        }
+        locals = locals.map { b in
+            guard let path = b.worktree, canonicalPath(path) == gitFolder else { return b }
+            return BranchRef(name: b.name, isRemote: b.isRemote, sha: b.sha, date: b.date, upstream: b.upstream, ahead: b.ahead, behind: b.behind,
+                             upstreamGone: b.upstreamGone, isHead: b.isHead, worktree: main)
+        }
+    }
+
     /// The worktree a folder is in: the longest worktree path that holds it, as worktrees nest
     /// (`<repo>/.claude/worktrees/x` is inside `<repo>`).
     public func worktree(containing folder: String) -> Worktree? {
@@ -194,6 +219,8 @@ public struct BranchModel: Equatable, Sendable {
             .map { String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) }
         model.defaultBranch = defaultBranch(originHead: originHead, locals: Set(model.locals.map(\.name)))
         model.inProgress = inProgress(gitDir: model.gitDir)
+        model.mainCheckout = WorktreeFolder.mainCheckout(commonDir: model.commonDir, gitDir: model.gitDir, root: model.root)
+        model.placeMainCheckout()
         return model
     }
 

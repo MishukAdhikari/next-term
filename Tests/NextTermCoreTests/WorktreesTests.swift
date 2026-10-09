@@ -60,10 +60,31 @@ import Testing
     // MARK: where it goes
 
     @Test func theMainCheckoutAndTheRepositorysName() {
-        #expect(WorktreeFolder.mainCheckout(commonDir: "/Users/me/Code/xCloud/.git") == "/Users/me/Code/xCloud")
-        #expect(WorktreeFolder.mainCheckout(commonDir: "/Users/me/Code/app.git") == "/Users/me/Code/app.git") // bare
-        #expect(WorktreeFolder.repositoryName(mainCheckout: "/Users/me/Code/xCloud") == "xCloud")
-        #expect(WorktreeFolder.repositoryName(mainCheckout: "/Users/me/Code/app.git") == "app")
+        let code = "/Users/me/Code"
+        func main(_ common: String, gitDir: String? = nil, root: String = "/Users/me/Code/xCloud-wt-x", config: String = "") -> String? {
+            WorktreeFolder.mainCheckout(commonDir: common, gitDir: gitDir ?? common + "/worktrees/x", root: root, config: config)
+        }
+        #expect(main(code + "/xCloud/.git") == code + "/xCloud")
+        #expect(main(code + "/xCloud/.git", gitDir: code + "/xCloud/.git", root: code + "/xCloud") == code + "/xCloud")
+        // A submodule's git folder is in the superproject's .git/modules: its core.worktree names the checkout.
+        let modules = code + "/xCloud/.git/modules/vendor/lib"
+        let submodule = "[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = ../../../../vendor/lib\n[remote \"origin\"]\n\turl = ../lib\n"
+        #expect(main(modules, config: submodule) == code + "/xCloud/vendor/lib")
+        #expect(main(modules, gitDir: modules, root: code + "/xCloud/vendor/lib", config: submodule) == code + "/xCloud/vendor/lib")
+        #expect(main("/srv/lib", config: "[core]\n\tworktree = \"/Users/me/Code/lib\"\n") == code + "/lib")
+        // Bare: its own folder.
+        #expect(main(code + "/app.git", config: "[core]\n\tbare = true\n") == code + "/app.git")
+        // A git folder moved out with --separate-git-dir: the checkout whose own git folder it is; from a linked
+        // worktree of it, nothing can tell.
+        #expect(main(code + "/sep.git", gitDir: code + "/sep.git", root: code + "/repo", config: "[core]\n\tbare = false\n") == code + "/repo")
+        #expect(main(code + "/sep.git", config: "[core]\n\tbare = false\n") == nil)
+        // Only [core]'s keys count.
+        #expect(main(code + "/sep.git", config: "[remote \"origin\"]\n\tworktree = /x\n[Core]\n\tBare\n") == code + "/sep.git")
+        #expect(WorktreeFolder.coreSettings("[core]\n=\n;c\n#c\n\n").worktree == nil)
+
+        #expect(WorktreeFolder.repositoryName(mainCheckout: code + "/xCloud") == "xCloud")
+        #expect(WorktreeFolder.repositoryName(mainCheckout: code + "/app.git") == "app")
+        #expect(WorktreeFolder.repositoryName(mainCheckout: code + "/app/.bare") == "app") // a bare repository kept in its project's folder
     }
 
     @Test func theLocationRule() {
@@ -76,6 +97,11 @@ import Testing
         #expect(WorktreeFolder.place(mainCheckout: main, location: .claudeWorktrees, claudeWorktreesIgnored: false) == .init(folder: "/Users/me/Code", prefix: "xCloud-wt-"))
         // A bare repository has no checkout to nest in.
         #expect(WorktreeFolder.place(mainCheckout: "/srv/app.git", location: .claudeWorktrees, claudeWorktreesIgnored: true) == .init(folder: "/srv", prefix: "app-wt-"))
+        // A submodule's go beside its outermost superproject's checkout, in no repository's files.
+        #expect(WorktreeFolder.place(mainCheckout: main + "/vendor/lib", outermost: main, location: .beside, claudeWorktreesIgnored: false)
+            == .init(folder: "/Users/me/Code", prefix: "lib-wt-"))
+        #expect(WorktreeFolder.place(mainCheckout: main + "/vendor/lib", outermost: main, location: .claudeWorktrees, claudeWorktreesIgnored: true)
+            == .init(folder: main + "/vendor/lib/.claude/worktrees", prefix: ""))
         #expect(WorktreeLocation(rawValue: "beside") == .beside && WorktreeLocation(rawValue: "claudeWorktrees") == .claudeWorktrees)
     }
 
@@ -176,6 +202,48 @@ import Testing
         #expect(WorktreeWindow.repository(ofLinkedWorktree: nested)?.name == "xCloud")
         #expect(WorktreeWindow.repository(ofLinkedWorktree: repo.path) == nil) // the main checkout
         #expect(WorktreeWindow.repository(ofLinkedWorktree: repo.base) == nil) // no repository
+    }
+
+    @Test func aSubmodulesMainCheckoutIsItsFolderNotItsGitFolder() throws {
+        guard let git = GitRunner.locateGit() else { return }
+        let repo = try TemporaryRepository(git: git), lib = try TemporaryRepository(git: git)
+        defer { repo.remove(); lib.remove() }
+        repo.run(["-c", "protocol.file.allow=always", "submodule", "add", "-q", lib.path, "vendor/lib"])
+        let checkout = repo.path + "/vendor/lib", linked = repo.base + "/lib-wt-feat"
+        repo.run(["-C", checkout, "worktree", "add", "-q", "-b", "feat", linked])
+        // git names its main worktree by its git folder, .git/modules/vendor/lib: the model says the checkout.
+        let model = try #require(BranchModel.read(at: checkout, git: git))
+        #expect(model.mainCheckout.map(canonicalPath) == checkout)
+        #expect(model.worktrees.first.map { canonicalPath($0.path) } == checkout)
+        #expect(model.worktrees.first.map(model.isMainCheckout) == true)
+        #expect(model.local("main").flatMap(model.otherWorktree) == nil) // checked out here, not elsewhere
+        let fromLinked = try #require(BranchModel.read(at: linked, git: git))
+        #expect(fromLinked.mainCheckout.map(canonicalPath) == checkout)
+        #expect(fromLinked.local("main").flatMap(fromLinked.otherWorktree).map(canonicalPath) == checkout)
+        #expect(fromLinked.worktrees.last.map(fromLinked.isMainCheckout) == false)
+        // New worktrees go beside the superproject, not into its files or its .git.
+        #expect(canonicalPath(WorktreeFolder.outermostCheckout(checkout, git: git)) == repo.path)
+        #expect(WorktreeFolder.outermostCheckout(repo.path, git: git) == repo.path)
+        // Its window: the submodule's checkout is a main checkout, though its .git is a file.
+        #expect(WorktreeWindow.repository(ofLinkedWorktree: checkout) == nil)
+        #expect(WorktreeWindow.repository(ofLinkedWorktree: linked) == .init(name: "lib", mainCheckout: checkout))
+    }
+
+    @Test func aGitFolderMovedOutOfItsCheckout() throws {
+        guard let git = GitRunner.locateGit() else { return }
+        let repo = try TemporaryRepository(git: git)
+        defer { repo.remove() }
+        let checkout = repo.base + "/repo", linked = repo.base + "/repo-wt-y"
+        repo.run(["-C", repo.base, "init", "-q", "--separate-git-dir=" + repo.base + "/sep.git", checkout])
+        repo.run(["-C", checkout, "commit", "-q", "--allow-empty", "-m", "One"])
+        repo.run(["-C", checkout, "worktree", "add", "-q", "-b", "y", linked])
+        let model = try #require(BranchModel.read(at: checkout, git: git))
+        #expect(model.mainCheckout.map(canonicalPath) == checkout)
+        #expect(model.worktrees.first.map { canonicalPath($0.path) } == checkout)
+        // From the linked worktree nothing says where the checkout is: none is made up.
+        #expect(try #require(BranchModel.read(at: linked, git: git)).mainCheckout == nil)
+        #expect(WorktreeWindow.repository(ofLinkedWorktree: checkout) == nil)
+        #expect(WorktreeWindow.repository(ofLinkedWorktree: linked)?.name == "sep")
     }
 
     // MARK: the guard

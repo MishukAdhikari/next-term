@@ -10,15 +10,23 @@ extension GitActions {
     /// and the new folder's window in front. `update`: then forward to its upstream there (Checkout and Update).
     func openInNewWorktree(_ target: WorktreeTarget, update: Bool = false) {
         guard let model, let git = GitWriter.git else { return NSSound.beep() }
+        // A linked worktree of a repository whose git folder was moved out (--separate-git-dir): git can't say
+        // where its main checkout is, and new worktrees go beside that.
+        guard let main = model.mainCheckout else {
+            let info = "Its git folder is kept apart from its files, and this window shows a linked worktree of it. "
+                + "Open in New Worktree… works from the main checkout’s window."
+            return GitPrompt.ask("Next Term can’t tell where this repository’s main checkout is", info: info, buttons: ["OK"], over: window) { _ in }
+        }
         let root = self.root
-        let main = WorktreeFolder.mainCheckout(commonDir: model.commonDir)
         let location = AppDelegate.shared.worktreeLocation
         let listed = model.worktrees.map(\.path)
         DispatchQueue.global(qos: .userInitiated).async {
             let ignored = location == .claudeWorktrees && WorktreeFolder.ignoresClaudeWorktrees(mainCheckout: main, git: git)
+            // A submodule's go beside its superproject, in no repository's files.
+            let outermost = WorktreeFolder.outermostCheckout(main, git: git)
             let includes = WorktreeInclude.exists(in: root)
             DispatchQueue.main.async {
-                let place = WorktreeFolder.place(mainCheckout: main, location: location, claudeWorktreesIgnored: ignored)
+                let place = WorktreeFolder.place(mainCheckout: main, outermost: outermost, location: location, claudeWorktreesIgnored: ignored)
                 askWorktreeName(target, place: place, listed: listed, includes: includes, update: update)
             }
         }
@@ -121,8 +129,7 @@ extension GitActions {
     func removeWorktree(_ row: BranchPopupController.WorktreeRow) {
         guard let model, let git = GitWriter.git else { return NSSound.beep() }
         let w = row.worktree
-        let main = WorktreeFolder.mainCheckout(commonDir: model.commonDir)
-        var known = WorktreeRemoval.Facts(isMain: canonicalPath(w.path) == canonicalPath(main), isMissing: w.isPrunable,
+        var known = WorktreeRemoval.Facts(isMain: model.isMainCheckout(w), isMissing: w.isPrunable,
                                           lockReason: w.lockReason, holder: row.holder, holderAlive: row.holderAlive)
         let inside = Self.inside(w, of: model)
         let local = AppDelegate.shared.controllers.flatMap { c in c.tabs.filter { $0.remote == nil }.map { (c, $0) } }
