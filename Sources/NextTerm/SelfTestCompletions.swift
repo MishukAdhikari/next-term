@@ -77,6 +77,13 @@ extension SelfTest {
     /// while the view is scrolled back, where the caret's row is not the one on show.
     static func lineToCaret(_ tab: TerminalTab) -> String { tab.lineLeftOfCursor() ?? "" }
 
+    /// The line up to the caret ends with `text` (lineToCaret: a file's name with the space after it that ↩︎ puts
+    /// there), and nothing else is drawn on it: the blanks zsh writes over the end of a longer word it replaced, in
+    /// place of erasing it, are no text.
+    static func lineEnds(_ tab: TerminalTab, with text: String) -> Bool {
+        lineToCaret(tab).hasSuffix(text) && promptLine(tab).trimmingCharacters(in: .whitespaces).hasSuffix(text.trimmingCharacters(in: .whitespaces))
+    }
+
     #if DEBUG
     /// A zsh tab in `dir` whose own config is `zshrc` (in a fresh folder under `dir`), at its prompt, with the
     /// keyboard. nil when its hook never armed (a failed check), or when the app can't come in front for the real
@@ -588,14 +595,18 @@ extension SelfTest {
         let part = "Tab completion, going into folders (\(label))"
         func key(_ characters: String, _ code: UInt16, _ flags: NSEvent.ModifierFlags = []) { pressKey(window, characters, code: code, flags: flags) }
         func tabKey() { key("\t", 48) }
+        /// Esc for a list still showing, before the line is cleared. Not for one that closed: Esc goes to the shell then,
+        /// a meta prefix that the ^C after it can leave pending, to take the next key typed (`cd` ran as `d`).
+        func closeShown() { if popup.isVisible { key("\u{1b}", 53) } }
         // ← and → as the keyboard sends them, so a key that goes on to the shell moves its cursor.
         func left() { key("\u{F702}", 123, [.function, .numericPad]) }
         func right() { key("\u{F703}", 124, [.function, .numericPad]) }
         /// The rows as shown, without the `/` zsh may end a folder with.
         func shown() -> [String] { popup.shownTexts.map { $0.hasSuffix("/") ? String($0.dropLast()) : $0 } }
         func chosen() -> String? { shown().indices.contains(popup.selected) ? shown()[popup.selected] : nil }
-        /// The line ends with `text` (the screen keeps no blank at its end).
-        func line(_ text: String) -> Bool { promptLine(tab).hasSuffix(text.trimmingCharacters(in: .whitespaces)) }
+        func line(_ text: String) -> Bool { lineEnds(tab, with: text) }
+        /// The line and the list, for a check that failed.
+        func seen() -> String { "\(lineToCaret(tab).debugDescription) \(popup.shownTexts) \(popup.selected) \(session.state.phase)" }
         /// ↓ or ↑ until the row `text` is chosen.
         func choose(_ text: String) -> Bool {
             guard let index = shown().firstIndex(of: text) else { return false }
@@ -631,7 +642,7 @@ extension SelfTest {
             let backUps = session.backUps
             key("\u{7f}", 51)
             check(await wait(3) { line("cd projects/next-term") && shown().sorted() == ["cv", "next-term"] && chosen() == "next-term" },
-                  "\(part): ⌫ that takes the `/` goes back up, with that folder chosen", "\(promptLine(tab)) \(popup.shownTexts) \(popup.selected)")
+                  "\(part): ⌫ that takes the `/` goes back up, with that folder chosen", seen())
             check(session.backUps == backUps + 1, "\(part): and it went back up once", "\(session.backUps - backUps)")
             #if DEBUG
             check(CompletionPopup.lastAnnouncement.hasPrefix("Back up, next-term"), "\(part): VoiceOver says so", CompletionPopup.lastAnnouncement)
@@ -656,9 +667,8 @@ extension SelfTest {
             typeKeys(window, "n")
             check(await wait(3) { line("cd projects/n") && shown() == ["next-term"] }, "\(part): typing inside narrows the folder's list", "\(popup.shownTexts)")
             left()
-            check(await wait(3) { line("cd") && !promptLine(tab).contains("projects") && shown().contains("Pictures") && chosen() == "projects" && popup.isVisible },
-                  "\(part): ← goes back up: the word gone in from on the line, and its list with that folder chosen",
-                  "\(promptLine(tab)) \(popup.shownTexts) \(popup.selected)")
+            check(await wait(3) { line("$ cd ") && !promptLine(tab).contains("projects") && shown().contains("Pictures") && chosen() == "projects" && popup.isVisible },
+                  "\(part): ← goes back up: the word gone in from on the line, and its list with that folder chosen", seen())
             right()
             _ = await wait(3) { line("cd projects/") }
             _ = choose("next-term")
@@ -667,8 +677,8 @@ extension SelfTest {
             left()
             _ = await wait(3) { line("cd projects/") && chosen() == "next-term" }
             left()
-            check(await wait(3) { line("cd") && !promptLine(tab).contains("projects") && chosen() == "projects" },
-                  "\(part): two folders down, ← twice goes back to the top", "\(promptLine(tab)) \(popup.shownTexts) \(popup.selected)")
+            check(await wait(3) { line("$ cd ") && !promptLine(tab).contains("projects") && chosen() == "projects" },
+                  "\(part): two folders down, ← twice goes back to the top", seen())
             let written = session.lastWrite
             left()
             check(await wait(2) { !popup.isVisible } && session.lastWrite != written, "\(part): ← at the top closes the list and goes on to the shell",
@@ -684,7 +694,8 @@ extension SelfTest {
         if await open("ls ") {
             check(choose("notes.txt"), "\(part): `ls ` lists files too", "\(popup.shownTexts)")
             right()
-            check(await wait(3) { line("ls notes.txt") && !popup.isVisible }, "\(part): → on a file puts it on the line and closes the list", promptLine(tab))
+            // The name, and the space after it that ↩︎ puts there too.
+            check(await wait(3) { line("ls notes.txt ") && !popup.isVisible }, "\(part): → on a file puts it on the line and closes the list", seen())
         }
         await clearLine(tab)
 
@@ -694,7 +705,7 @@ extension SelfTest {
             tabKey()
             check(await wait(5) { line("ls many/") && popup.shownTexts.count == 2000 && popup.footerText.contains("2,500") },
                   "\(part): a folder of 2,500 files lists 2,000 inside, with the note", "\(popup.shownTexts.count) \(popup.footerText)")
-            key("\u{1b}", 53)
+            closeShown()
         }
         await clearLine(tab)
 
@@ -712,7 +723,7 @@ extension SelfTest {
             await pause(0.6)
             check(popup.isVisible && !promptLine(tab).contains("locked") && chosen() == "locked",
                   "\(part): ⇥ on a folder that can't be entered beeps, and the list stays as it was", "\(promptLine(tab)) \(popup.shownTexts)")
-            key("\u{1b}", 53)
+            closeShown()
         }
         await clearLine(tab)
 
@@ -727,7 +738,7 @@ extension SelfTest {
         check(CompletionPopup.lastAnnouncement == "In Sp ace, 1 item", "\(part): VoiceOver says the folder the one match went into",
               CompletionPopup.lastAnnouncement)
         #endif
-        key("\u{1b}", 53)
+        closeShown()
         await clearLine(tab)
         tab.view.send(txt: "cd Pic")
         await pause(0.3)
@@ -750,9 +761,9 @@ extension SelfTest {
             _ = choose("projects")
             right()
             left()
-            check(await wait(3) { line("cd") && !promptLine(tab).contains("projects") && popup.isVisible && chosen() == "projects" },
-                  "\(part): → then ← at once: back where it started", "\(promptLine(tab)) \(popup.shownTexts)")
-            key("\u{1b}", 53)
+            check(await wait(3) { line("$ cd ") && !promptLine(tab).contains("projects") && popup.isVisible && chosen() == "projects" },
+                  "\(part): → then ← at once: back where it started", seen())
+            closeShown()
         }
         await clearLine(tab)
         // ↓ waits too: → ↓ ↩︎ at once puts the second row inside on the line.
@@ -774,7 +785,7 @@ extension SelfTest {
             tabKey()
             check(await wait(3) { line("cd projects/next-term/") && shown() == ["Sources"] && popup.isVisible },
                   "\(part): → n ⇥ at once: into projects, n, then into next-term", "\(promptLine(tab)) \(popup.shownTexts)")
-            key("\u{1b}", 53)
+            closeShown()
         }
         await clearLine(tab)
         check(!tab.status.running, "\(part): nothing ran")
