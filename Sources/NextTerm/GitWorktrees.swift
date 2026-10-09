@@ -1,9 +1,9 @@
 import AppKit
 import NextTermCore
 
-/// Open in New Worktree…: a branch, tag or commit checked out in a folder of its own, opened in its own
-/// window, so the checkout an agent works in keeps its HEAD, its files and its changes. The rules are in
-/// Core (Worktrees.swift).
+/// Open in New Worktree… and Remove Worktree…: a branch, tag or commit checked out in a folder of its own,
+/// opened in its own window, so the checkout an agent works in keeps its HEAD, its files and its changes;
+/// and that folder removed again, never forced. The rules are in Core (Worktrees.swift).
 /// Plan: claudedocs/2026-10-09-worktree-from-switch-guard-plan.md.
 extension GitActions {
     /// The sheet for `target`'s folder name, then `git worktree add`, the ignored files `.worktreeinclude` lists,
@@ -104,6 +104,82 @@ extension GitActions {
             opened.sidebar.git.refresh()
             guard result.ok else { return failed("Could not bring “\(branch)” up to date", result, retry: BranchCommand.fastForward, over: opened.window) }
             GitToast.show(notice + (result.failure == .nothingToDo ? ", up to date" : ", updated"), in: opened.window)
+        }
+    }
+
+    // MARK: Remove Worktree…
+
+    /// Remove Worktree… on a worktree's row: refused while an agent, a window or a tab is in it, while a lock
+    /// holds it, or while it has changes; a folder deleted by hand is forgotten, after asking.
+    func removeWorktree(_ row: BranchPopupController.WorktreeRow) {
+        guard let model, let git = GitWriter.git else { return NSSound.beep() }
+        let w = row.worktree
+        let main = WorktreeFolder.mainCheckout(commonDir: model.commonDir)
+        var known = WorktreeRemoval.Facts(isMain: canonicalPath(w.path) == canonicalPath(main), isMissing: w.isPrunable,
+                                          lockReason: w.lockReason, holder: row.holder, holderAlive: row.holderAlive)
+        let inside = Self.inside(w, of: model)
+        let local = AppDelegate.shared.controllers.flatMap { c in c.tabs.filter { $0.remote == nil }.map { (c, $0) } }
+        let agents = local.filter { $0.1.status.running && $0.1.status.kind == .agent && inside(AgentPlaces.shared.agentFolder(of: $0.1)) }
+        let windows = AppDelegate.shared.controllers.filter { $0.project.map(inside) ?? false }
+        let tabs = local.filter { inside($0.1.liveDirectory) }
+        known.agents = agents.map { AgentGuard.Agent(program: $0.1.status.program, tab: $0.1.title) }
+        known.windows = windows.map(\.projectTitle)
+        known.tabWindows = tabs.map { $0.0.projectTitle }
+        let goTo: () -> Void = {
+            if let place = agents.first ?? (windows.isEmpty ? tabs.first : nil) {
+                place.0.show(place.1)
+                place.0.window?.makeKeyAndOrderFront(nil)
+            } else {
+                windows.first?.window?.makeKeyAndOrderFront(nil)
+            }
+        }
+        let facts = known
+        DispatchQueue.global(qos: .userInitiated).async {
+            var counted = facts
+            if !w.isPrunable { counted.changedFiles = WorktreeRemoval.changedFiles(at: w.path, git: git) ?? 0 }
+            let decided = WorktreeRemoval.verdict(counted)
+            DispatchQueue.main.async { removal(decided, of: row, goTo: goTo) }
+        }
+    }
+
+    /// Whether a folder is in `worktree` itself, not in a worktree nested inside it.
+    private static func inside(_ worktree: Worktree, of model: BranchModel) -> (String) -> Bool {
+        let path = canonicalPath(worktree.path)
+        return { folder in model.worktree(containing: folder).map { canonicalPath($0.path) == path } ?? false }
+    }
+
+    private func removal(_ verdict: WorktreeRemoval.Verdict, of row: BranchPopupController.WorktreeRow, goTo: @escaping () -> Void) {
+        let w = row.worktree, folder = row.folder
+        switch verdict {
+        case .remove:
+            let keeps = w.branch.map { "The branch \($0) stays, with its commits." }
+                ?? "It is detached at \(String((w.head ?? "").prefix(7))): a commit made there that no branch has is left to git’s reflog."
+            GitPrompt.ask("Remove “\(folder)”?", info: "Its folder is deleted, with the ignored files in it. \(keeps)",
+                          buttons: ["Remove", "Cancel"], destructive: 0, over: window) { choice in
+                if choice == 0 { runRemoval(w, folder: folder, done: "Removed \(folder)" + (w.branch.map { "; \($0) stays" } ?? "")) }
+            }
+        case .forget:
+            GitPrompt.ask("Forget “\(folder)”?", info: "Its folder is gone, but git still lists it\(w.branch.map { ", and keeps \($0) checked out there" } ?? ""). Forgetting it changes nothing on disk.",
+                          buttons: ["Forget", "Cancel"], over: window) { choice in
+                if choice == 0 { runRemoval(w, folder: folder, done: "Forgot \(folder)") }
+            }
+        case let .refuse(reason, there):
+            let advice = there ? "\n\nClose it there first, then remove the worktree." : reason.hasPrefix("It has") ? "\n\nCommit or discard them there first: Remove Worktree never deletes changes." : ""
+            GitPrompt.ask("“\(folder)” can’t be removed now", info: reason + advice, buttons: there ? ["Go There", "OK"] : ["OK"], over: window) { choice in
+                if there, choice == 0 { goTo() }
+            }
+        case let .unlockFirst(reason):
+            GitPrompt.ask("“\(folder)” is locked", info: reason + "\n\nA lock keeps git from removing a worktree. Unlock it first if whatever locked it is done with it, then remove it.",
+                          buttons: [row.isStale ? "Unlock" : "Unlock…", "Cancel"], over: window) { choice in
+                if choice == 0 { unlock(w, stale: row.isStale) }
+            }
+        }
+    }
+
+    private func runRemoval(_ w: Worktree, folder: String, done: String) {
+        let args = WorktreeRemoval.arguments(path: w.path)
+        run("Remove worktree \(folder)", [args]) { result in
+            result.ok ? toast(done) : failed("Could not remove “\(folder)”", result, retry: args)
         }
     }
 }

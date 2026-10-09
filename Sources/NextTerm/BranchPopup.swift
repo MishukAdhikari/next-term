@@ -714,13 +714,20 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             add("Open in New Window", enabled: !w.isPrunable) { AppDelegate.shared.openWorktreeWindow(w.path) }
             add("Reveal in Finder", enabled: !w.isPrunable) { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: w.path)]) }
             add("Copy Path") { self.copy(w.path) }
+            let isMain = canonicalPath(w.path) == canonicalPath(WorktreeFolder.mainCheckout(commonDir: model.commonDir))
+            if w.lockReason != nil || !isMain { menu.addItem(.separator()) }
             if w.lockReason != nil {
-                menu.addItem(.separator())
                 let live = row.holder.map { "\(AgentName.of(program: $0.program)) (pid \($0.pid)) still holds it." }
                 if row.holder != nil, row.holderAlive {
                     add("Unlock", enabled: false, tip: live) {}
                 } else {
                     add(row.isStale ? "Unlock" : "Unlock…") { actions.unlock(w, stale: row.isStale) }
+                }
+            }
+            // Not the repository's main checkout (listed when this window shows a linked worktree).
+            if !isMain {
+                add("Remove Worktree…", tip: "Deletes its folder and keeps its branch. Refused while a tab or an agent is in it, or it has changes.") {
+                    actions.removeWorktree(row)
                 }
             }
         default:
