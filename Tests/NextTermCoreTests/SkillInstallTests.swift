@@ -764,6 +764,44 @@ import Testing
         #expect(added.contains(.link(at: claude, to: home + "/.agents/skills/writing-helper")))
     }
 
+    /// The Settings › Skills checks in their order: the plugin folder installed (left out of Claude Code),
+    /// linked by Link as a change of its own, then Undo. Undo takes back the last change only: after the Link,
+    /// the link goes and the folder stays, so Unify finds it and a hand-made copy in ~/.claude/skills, and
+    /// asks. With no Link on top, the same Undo takes the install back, and Unify finds no plugin folder.
+    @Test func undoOfLinkLeavesThePluginFolderForUnify() throws {
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("nt-plugin-undo-\(UUID().uuidString)").path
+        let engine = SkillChanges(undoFile: scratch + "/undo.json", trash: SkillChanges.folderTrash(scratch + "/trash"))
+        try skill("download", [".mcp.json": Self.server, "hooks/hooks.json": Self.hooks])
+        let shared = home + "/.agents/skills/writing-helper"
+        let claude = home + "/.claude/skills/writing-helper"
+        let install: [SkillStep] = [.copy(from: home + "/download/writing-helper", to: scratch + "/ready/writing-helper"),
+                                    .move(from: scratch + "/ready/writing-helper", to: shared)]
+        func applied(_ result: Result<Void, SkillChanges.Failure>) -> Bool {
+            if case .failure(let failure) = result { Issue.record("\(failure.message)"); return false }
+            return true
+        }
+
+        // No Link on top: Undo takes the install back.
+        #expect(applied(engine.apply(install, title: "Install writing-helper")) && applied(engine.undo()))
+        #expect(!SkillChanges.exists(shared) && SkillInventory.scan(home: home).rows.first { $0.name == "writing-helper" } == nil)
+
+        // Link on top: Undo takes only the link back.
+        #expect(applied(engine.apply(install, title: "Install writing-helper")))
+        #expect(applied(engine.apply([.link(at: claude, to: shared)], title: "Link writing-helper for Claude Code")))
+        #expect(engine.lastChange?.title == "Link writing-helper for Claude Code" && applied(engine.undo()))
+        #expect(!SkillChanges.exists(claude) && SkillChanges.exists(shared + "/.claude-plugin/plugin.json"))
+
+        try skill(".claude/skills", plugin: nil, body: "hand-made")
+        let inventory = SkillInventory.scan(home: home)
+        let row = try row(inventory)
+        let kept = try #require(row.copies.first { $0.root.kind == .shared })
+        let mine = try #require(row.copies.first { $0.root.kind == .claude })
+        #expect(!mine.isLink && kept.path == shared)
+        let read = SkillInstall.pluginFacts(row.distinctCopies, home: home)
+        let asked = try #require(SkillUnify.pluginLink(row, winner: kept, in: inventory, read: read))
+        #expect(asked.asks && asked.preset == .skip)
+    }
+
     /// Claude Code already loads the same plugin with the same parts: Unify keeps it there by default, as an
     /// update keeps its link. Another plugin name (another key) or new parts are not the same.
     @Test func unifyKeepsClaudeCodeOnTheSamePlugin() throws {

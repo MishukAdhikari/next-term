@@ -483,6 +483,9 @@ extension SelfTest {
 
     /// Link on the installed plugin folder: a question first, with what it starts, "Add with Its Programs"
     /// and Cancel (on Return). Cancel links nothing; Add links it, as one change that Undo takes back.
+    /// Each press waits for its own sheet, and for Link to be offered again: after a change, even one that
+    /// was refused, Settings › Skills holds Link until it has read the folders again, which takes seconds on
+    /// a loaded Mac, and a sheet begun while another one goes shows a moment after it.
     static func settingsLinkChecks(link: String) async {
         let view = SkillsSettingsView(frame: NSRect(x: 0, y: 0, width: 620, height: 480))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 520), styleMask: [.titled], backing: .buffered, defer: false)
@@ -494,46 +497,70 @@ extension SelfTest {
             window.orderOut(nil)
             window.contentView = NSView()
         }
+        let add = "Add with Its Programs"
+        // The question is the sheet up, not an alert before it that is still going.
+        func asked() async -> Bool { await wait(30) { pluginSheetButtons(window).contains { $0.title == add } } }
+        // Link is offered again: no sheet up, and the folders read again since the last change.
+        func offered() async -> Bool { await wait(30) { window.attachedSheet == nil && view.linkButton.isEnabled } }
+        func press(_ title: String) { pluginSheetButtons(window).first { $0.title == title }?.performClick(nil) }
+        func state() -> String {
+            let sheet = window.attachedSheet == nil ? "no sheet" : "sheet: " + pluginSheetText(window)
+            return "Link offered \(view.linkButton.isEnabled), \(sheet), link made \(entryExists(link)), "
+                + "last change \(SkillsStore.lastChange?.title ?? "none")"
+        }
         await pause(0.5) // its first read of the folders
         view.selectForTest("demo-plugin", in: SkillsStore.inventory())
-        guard await wait(5, { view.linkButton.isEnabled }) else {
-            return check(false, "skills plugins: Settings › Skills offers Link for a plugin folder left out of Claude Code")
+        guard await offered() else {
+            return check(false, "skills plugins: Settings › Skills offers Link for a plugin folder left out of Claude Code", state())
         }
         view.linkButton.performClick(nil)
-        let asked = await wait(5) { window.attachedSheet != nil }
+        let shown = await asked()
         let words = pluginSheetText(window)
         let buttons = pluginSheetButtons(window)
         let cancel = buttons.first { $0.title == "Cancel" }
         let titles = Set(buttons.map(\.title))
         let lead = "If you add it to Claude Code, it starts the programs below every time Claude Code opens, without asking you."
         let said = words.contains("Add “demo-plugin” to Claude Code?") && words.contains(lead) && words.contains("It would start:")
-        check(asked && said && titles.isSuperset(of: ["Add with Its Programs", "Cancel"]) && cancel?.keyEquivalent == "\r",
+        // Return presses the sheet's default button cell. Once the sheet is on screen AppKit keeps Return
+        // there, and the button's own keyEquivalent reads empty (seen with the app in the background), so
+        // the default cell is what is checked.
+        let returnCell = window.attachedSheet?.defaultButtonCell
+        let returnCancels = cancel != nil && returnCell != nil && returnCell === cancel?.cell
+        check(shown && said && titles.isSuperset(of: [add, "Cancel"]) && returnCancels,
               "skills plugins: Settings › Skills' Link asks first about a plugin folder that starts programs, with what it starts, and Return cancels",
-              words + " | " + titles.sorted().joined(separator: ", "))
-        cancel?.performClick(nil)
-        _ = await wait(5) { window.attachedSheet == nil && view.linkButton.isEnabled }
-        check(!entryExists(link), "skills plugins: Cancel on Link's question links nothing")
+              words + " | " + titles.sorted().joined(separator: ", ") + " | Return: " + (returnCell?.title ?? "no default button"))
+        press("Cancel")
+        let cancelled = await offered()
+        check(cancelled && !entryExists(link), "skills plugins: Cancel on Link's question links nothing", state())
 
         // The folder gains a part between the question and the answer: Link reads it again and links nothing.
         let lsp = (SkillsStore.home as NSString).appendingPathComponent(".agents/skills/demo-plugin/.lsp.json")
         view.linkButton.performClick(nil)
-        _ = await wait(5) { window.attachedSheet != nil }
+        let askedAgain = await asked()
         FileManager.default.createFile(atPath: lsp, contents: Data(#"{"go": {"command": "gopls"}}"#.utf8))
-        pluginSheetButtons(window).first { $0.title == "Add with Its Programs" }?.performClick(nil)
+        press(add)
         let changed = "“demo-plugin” changed since you looked. Look again before linking it."
-        let refused = await wait(10) { pluginSheetText(window).contains(changed) }
-        check(refused && !entryExists(link), "skills plugins: a plugin folder that changed after Link's question is not linked, and Link says why",
-              pluginSheetText(window))
-        if let alert = window.attachedSheet { window.endSheet(alert) }
+        let refused = await wait(30) { pluginSheetText(window).contains(changed) }
+        check(askedAgain && refused && !entryExists(link),
+              "skills plugins: a plugin folder that changed after Link's question is not linked, and Link says why", state())
+        // The refusal's alert, and anything queued behind it, go; Cancel for a question left over.
+        await endSheets(over: window, with: .alertSecondButtonReturn)
         try? FileManager.default.removeItem(atPath: lsp)
-        _ = await wait(5) { window.attachedSheet == nil && view.linkButton.isEnabled }
 
+        let again = await offered()
         view.linkButton.performClick(nil)
-        _ = await wait(5) { window.attachedSheet != nil }
-        pluginSheetButtons(window).first { $0.title == "Add with Its Programs" }?.performClick(nil)
-        let linked = await wait(10) { entryExists(link) && SkillsStore.running == 0 }
-        check(linked && SkillsStore.lastChange?.title == "Link demo-plugin for Claude Code",
-              "skills plugins: “Add with Its Programs” links it, as one change for Undo", SkillsStore.lastChange?.title ?? "none")
+        let askedLast = await asked()
+        press(add)
+        let linked = await wait(30) { entryExists(link) && SkillsStore.running == 0 }
+        let title = "Link demo-plugin for Claude Code"
+        check(again && askedLast && linked && SkillsStore.lastChange?.title == title,
+              "skills plugins: “Add with Its Programs” links it, as one change for Undo", state())
+        // Undo reverses the last change: without the Link on top it would take the install away, and the
+        // Unify checks after need it. (The failure is the check above.)
+        guard SkillsStore.lastChange?.title == title else {
+            await endSheets(over: window, with: .alertSecondButtonReturn)
+            return note("skills plugins: Undo of Link skipped, there is no Link to undo; the install stays for the Unify checks")
+        }
         if case .failure(let failure) = await SkillsStore.undo() { check(false, "skills plugins: Undo of Link applies", failure.message) }
         check(!entryExists(link), "skills plugins: Undo of Link removes the link")
     }
@@ -548,10 +575,13 @@ extension SelfTest {
         try? "---\nname: demo-plugin\ndescription: Mine.\n---\nhand-made\n".write(toFile: link + "/SKILL.md", atomically: true, encoding: .utf8)
         defer { try? manager.removeItem(atPath: link) }
         let inventory = SkillsStore.inventory()
-        guard let row = inventory.rows.first(where: { $0.name == "demo-plugin" }),
+        let found = inventory.rows.first { $0.name == "demo-plugin" }
+        guard let row = found,
               let shared = row.copies.first(where: { $0.root.kind == .shared }),
               let mine = row.copies.first(where: { $0.root.kind == .claude }) else {
-            return check(false, "skills plugins: Unify finds the plugin folder and the hand-made copy")
+            let copies = found?.copies.map { SkillStep.short($0.path) + ($0.isLink ? " (a link)" : "") } ?? []
+            return check(false, "skills plugins: Unify finds the plugin folder and the hand-made copy",
+                         copies.isEmpty ? "no demo-plugin in the inventory" : "copies: " + copies.joined(separator: ", "))
         }
         let sheet = SkillsUnifySheet(row: row, inventory: inventory, plugins: SkillInstall.pluginFacts(row.distinctCopies, home: home))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 520), styleMask: [.titled], backing: .buffered, defer: false)
