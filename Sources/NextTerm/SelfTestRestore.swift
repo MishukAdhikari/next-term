@@ -187,13 +187,15 @@ enum SelfTestRestore {
         }
         // An MCP client asks before the quit, and leaves a wait for the running command in flight across it.
         await mcpBeforeUpdateQuit(harness, busy: tab)
-        press([UpdateButton.updateNow.title])
-        record("STEP update-quit: quitting")
         Updater.shared.showAvailable()
         let sheet = UpdateKeepSessions.shared.flow
         let busy = sheet?.state == .busy && sheet?.keep == true && sheet?.waitSet == [tab.id]
         check(busy, "the update sheet shows the running command as busy and waited for, with the box checked",
               "\(String(describing: sheet?.state)), keep \(sheet?.keep ?? false), waited \(sheet?.waitSet.count ?? 0)")
+        // AE13: every MCP tool once while the sheet is open, before its Update Now.
+        await mcpWithUpdateSheet(harness)
+        press([UpdateButton.updateNow.title])
+        record("STEP update-quit: quitting")
         // The press quits the app; reached only when the quit did not go ahead.
         await SelfTest.pause(60)
         check(false, "the update quit goes ahead")
@@ -565,14 +567,32 @@ enum SelfTestRestore {
 
     /// The last quit, the user's own: the plain quit dialog's box, checked under Resume, unchecked, then its "Quit", sets
     /// "Show the Welcome window", and the quit's last save, which reads the setting once the answer is saved, is the
-    /// tombstone (`welcomeQuitChecks`).
+    /// tombstone (`welcomeQuitChecks`). First, with the dialog open, every MCP tool once (AE13); should those calls not
+    /// get to run under the dialog, the answer goes after two minutes all the same, and their check fails.
     private static func welcomeQuit() {
-        press([QuitPolicy.checkboxTitle, QuitPromptButton.quit.title])
         record("STEP after-update: quitting under Welcome")
+        Task { @MainActor in
+            if let harness { await mcpWithQuitDialog(harness) }
+            answerQuit()
+        }
+        let fallback = Timer(timeInterval: 120, repeats: false) { _ in
+            MainActor.assumeIsolated { answerQuit() }
+        }
+        RunLoop.main.add(fallback, forMode: .common)
         NSApp.terminate(nil)
         // Reached only when the quit was cancelled.
         check(false, "the quit under Welcome goes ahead")
         finish()
+    }
+
+    /// The quit dialog's answer is queued.
+    private static var quitAnswered = false
+
+    /// The user's answer to the plain quit dialog, once: the box unchecked, then "Quit".
+    private static func answerQuit() {
+        guard !quitAnswered else { return }
+        quitAnswered = true
+        press([QuitPolicy.checkboxTitle, QuitPromptButton.quit.title])
     }
 
     /// What the quit under Welcome left: the answer saved, and in the sessions folder the tombstone alone, clean, with no

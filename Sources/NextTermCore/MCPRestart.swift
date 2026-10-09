@@ -68,9 +68,10 @@ extension MCPServer {
                 + "Try again in a moment, or open Next Term."
         } else if failure == .endedWithoutAnswer {
             text = "Next Term closed the connection without answering: it is restarting, perhaps for an update. Whether \(tool) took "
-                + "effect is not known: once it is back, list_tabs shows the tabs, by the same ids."
+                + "effect is not known: once it is back, list_tabs shows the tabs it brought back, by the same ids."
         } else {
-            text = "Next Term is restarting, perhaps for an update, so nothing was sent. Tab ids stay the same: try again in a few seconds."
+            text = "Next Term is restarting, perhaps for an update, so nothing was sent. Try again in a few seconds: the tabs it "
+                + "brings back keep their ids."
         }
         return CallResult(text: text, isError: true)
     }
@@ -109,32 +110,57 @@ extension MCPServer {
         return planned
     }
 
+    /// What an update's quit tells the calls in flight: whether its relaunch brings the tabs back, as the sheet's box and
+    /// its plan said, and each tab's planned outcome by its id.
+    public struct UpdateRestart: Equatable, Sendable {
+        /// The relaunch restores the session, every tab by its id. With the box unchecked only kept remote tabs come back,
+        /// as they reattach.
+        public var bringsTabsBack: Bool
+        public var planned: [String: PlannedTab]
+
+        public init(_ consent: UpdateConsent) {
+            bringsTabsBack = consent.keep && consent.covered.refusal == nil
+            planned = MCPServer.planned(consent)
+        }
+    }
+
     static let restartingText = "Next Term is restarting for an update"
+    static let comesBackText = "This tab comes back with the same id: call wait_for_tab again in a few seconds; list_tabs then shows "
+        + "what the restart did to it."
+    static let nothingBackText = "This update brings no tab back but kept remote tabs: once Next Term is back, list_tabs shows "
+        + "what is open."
 
     /// The quit's answer to a call it was serving (R26): definite, never a timeout. `tool` and `arguments` are the call's,
     /// nil when its request had not been read; `started` when the tool had begun, so what it did stays done. An update's
-    /// quit says Next Term restarts, and a wait_for_tab hears what the update does to its tab (`planned`, by tab id). Any
-    /// other quit says Next Term quit.
-    public static func quitAnswer(tool: String?, arguments: [String: Any], started: Bool, update: Bool,
-                                  planned: [String: PlannedTab]) -> CallResult {
-        guard update else {
+    /// quit (`update`) says Next Term restarts, and a wait_for_tab hears what the update does to its tab; only a tab the
+    /// relaunch brings back is said to keep its id. Any other quit says Next Term quit.
+    public static func quitAnswer(tool: String?, arguments: [String: Any], started: Bool, update: UpdateRestart?) -> CallResult {
+        guard let update else {
             let what = started ? "before this call finished" : "before this call ran"
             return CallResult(text: "Next Term quit \(what). When it opens again, its tabs keep their ids if it brings them back.", isError: true)
         }
         if tool == "wait_for_tab", let id = (arguments["tab_id"] as? String)?.lowercased() {
-            var fields: [String: Any] = [
-                "id": id,
-                "state": "restarting",
-                "note": restartingText + ". This tab keeps its id: call wait_for_tab again in a few seconds; list_tabs shows what the restart did to it.",
-            ]
-            if let plan = planned[id] {
+            var fields: [String: Any] = ["id": id, "state": "restarting"]
+            let plan = update.planned[id]
+            if let plan {
                 fields["planned"] = plan.words
                 if let outcome = plan.outcome { fields["planned_outcome"] = MCPRestored.word(outcome) }
             }
+            let after: String
+            if let plan, plan.outcome == nil {
+                after = "This tab does not come back after the update, so its id ends: once Next Term is back, list_tabs shows "
+                    + "what is open."
+            } else if plan?.outcome != nil || update.bringsTabsBack {
+                after = comesBackText
+            } else {
+                after = nothingBackText
+            }
+            fields["note"] = restartingText + ". " + after
             return CallResult(text: json(fields))
         }
         let ran = started ? "before this call finished; what it did so far stays done" : ", so this call was not run"
-        let text = restartingText + (started ? " " : "") + ran + ". Tab ids stay the same: try again in a few seconds."
+        let after = update.bringsTabsBack ? "Try again in a few seconds: the tabs it brings back keep their ids." : nothingBackText
+        let text = restartingText + (started ? " " : "") + ran + ". " + after
         return CallResult(text: text, isError: true)
     }
 }
@@ -170,11 +196,50 @@ public struct MCPRestored: Equatable, Sendable {
         self.lineHeld = lineHeld
     }
 
-    /// Whether they still show, with `commandsRun` commands started in the tab since its shell started. An automatic
-    /// resume that ran is the restore's own command, so the next one is the first after it.
-    public func shows(commandsRun: Int) -> Bool {
+    /// What has happened in a restored tab since the restore, as its details read it.
+    public struct Since: Equatable, Sendable {
+        /// Commands started at its prompt (TabStatus.commandsAtPrompt): what was already running in front as a remote tab
+        /// reattached is none of them.
+        public var commands: Int
+        /// How many of them had started when the user first put something in the tab (a key, a paste, a drop); nil while
+        /// they have not.
+        public var beforeInput: Int?
+
+        public init(commands: Int, beforeInput: Int?) {
+            self.commands = commands
+            self.beforeInput = beforeInput
+        }
+    }
+
+    /// A restored tab's details now, from its plan, the record it was restored from (its pending action, its state before
+    /// and whether its work was cut off) and what has happened in it since; nil once they have ended.
+    public init?(plan: PanePlan, record: SessionSnapshot.Pane, since: Since) {
+        guard let pending = record.pending else { return nil }
+        let outcome = Self.outcome(planned: plan.outcome, action: pending.state, since: since)
+        var note = plan.note
+        note.outcome = outcome
+        let typed = since.beforeInput != nil
+        let held = record.remote == nil
+            && Self.lineHeld(action: pending.action, state: pending.state, userTyped: typed, commandsRun: since.commands)
+        self.init(reason: plan.reason, outcome: outcome, action: pending.state, stateBefore: record.stateBefore,
+                  interrupted: record.interrupted, note: pending.state == .pending ? nil : note.text(), lineHeld: held)
+        guard shows(commands: since.commands) else { return nil }
+    }
+
+    /// What the restore did, as it turned out. An automatic resume whose action was applied ran only when a command started
+    /// at the tab's prompt before the user put anything there: nothing else can start one sooner, as input over MCP is
+    /// refused while the line is the restore's. Otherwise its session was taken by another process since, or the user
+    /// typed over it before its Return, and the agent's resume command is on the line instead, unrun.
+    public static func outcome(planned: RestoreOutcome, action: SessionSnapshot.ActionState, since: Since) -> RestoreOutcome {
+        guard planned == .resume, action == .applied else { return planned }
+        return (since.beforeInput ?? since.commands) >= 1 ? .resume : .agentOnTheLine
+    }
+
+    /// Whether they still show, with `commands` started at the tab's prompt since it started. An automatic resume that ran
+    /// is the restore's own command, so the next one is the first after it.
+    public func shows(commands: Int) -> Bool {
         let own = outcome == .resume && action == .applied ? 1 : 0
-        return commandsRun <= own
+        return commands <= own
     }
 
     /// Whether the line an applied action typed is still the restore's, not the user's (R25): the action typed a line, and
@@ -247,6 +312,15 @@ public enum MCPRestoreGate {
         guard let waited else { return nil }
         if waitedInput.contains(tool), let id = tabID?.lowercased(), waited.contains(id) { return nil }
         return "update_pending: Next Term waits for busy tabs to finish before it updates, so it takes no new work now. Reading, and "
-            + "input into the tabs it waits for, still work, and this works again once the wait ends. Tab ids stay the same after the update."
+            + "input into the tabs it waits for, still work (list_tabs marks them update_wait: waits_for_this_tab), and this works "
+            + "again once the wait ends. The tabs the update brings back keep their ids."
+    }
+
+    /// What a tab says while an update waits for busy tabs (KTD16): `waits_for_this_tab` on a tab it waits for, where input
+    /// still works, and `update_pending` on every other, where new work is refused until the wait ends. Nothing when no
+    /// update waits.
+    public static func waitFields(tabID: String, waitingFor waited: Set<String>?) -> [String: Any] {
+        guard let waited else { return [:] }
+        return ["update_wait": waited.contains(tabID.lowercased()) ? "waits_for_this_tab" : "update_pending"]
     }
 }

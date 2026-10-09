@@ -7,12 +7,14 @@ import NextTermCore
 /// tab, whose resume then runs once; open_project then gives the restored window, not a second one; each tab says why it
 /// came back ("quit"), what the restore did, its state before and whether its work was cut off, through the shell's first
 /// prompt and the resume, until the first command after them; a put-back line refuses send_to_tab and press_keys until the
-/// user presses a key there (AE11); while an update waits, input into the waited tab works and new work elsewhere is
-/// update_pending until Stop Waiting; with the update sheet open every tool is called once, and no consent is set, the box
-/// stays and nothing quits (AE13); and at the update quit a wait in flight hears "restarting" with its tab's plan, a call
-/// posted that never ran hears it was not run, and `nxtrm mcp` fails a tool that changes things at once and tries one
-/// that reads again until the socket listens again. The relaunch harness checks the rest across a real update quit
-/// (SelfTestRestore).
+/// user presses a key there (AE11); a resume whose session was taken says its line is on the prompt, and the user's first
+/// command ends its details; while an update waits, input into the waited tab works, new work elsewhere is update_pending
+/// until Stop Waiting, and list_tabs marks the wait; with the update sheet open every tool is called once on real tabs,
+/// and no consent is set, the box and the sheet stay and nothing quits (AE13); and at the update quit a wait in flight
+/// hears "restarting" with its tab's plan, a call posted that never ran hears it was not run, and `nxtrm mcp` fails a
+/// tool that changes things at once and tries one that reads again until the socket listens again; at any other quit a
+/// request still being read hears at once that Next Term quit. The relaunch harness checks the rest across a real update
+/// quit (SelfTestRestore), the plain quit dialog's AE13 among them.
 extension SelfTest {
     static func restoreMCPChecks(proj: URL) async {
         guard let app = AppDelegate.shared else { return }
@@ -150,8 +152,59 @@ extension SelfTest {
               && restored(later, backTab) == nil,
               "MCP restore: the first command after the restore, the user's or MCP's, ends a tab's details", later.text)
 
+        await takenSessionChecks(project: project, standIn: standIn, resumed: resumed)
         await updateWaitMCPChecks(controller: controller, project: project, idle: idleTab)
         await drainChecks(controller: controller)
+    }
+
+    /// R24 on an update restore whose automatic resume did not run: another process had its session open as its turn came,
+    /// so the agent's resume command went on the line instead. list_tabs says so (on the line, held, and not "Resumed"),
+    /// nothing ran, and the user's first command there ends its details.
+    private static func takenSessionChecks(project: String, standIn: String, resumed: String) async {
+        let session = UUID().uuidString.lowercased()
+        let command = SessionSnapshot.Command(line: "claude", check: .kept, source: .integration, running: true)
+        var pane = SessionSnapshot.Pane(id: UUID(), folder: project, command: command, stateBefore: .working, interrupted: true)
+        pane.systemZsh = true
+        pane.agent = SessionSnapshot.Evidence(agent: .claude, sessionID: session, source: .sessionFile, sessionFolder: project)
+        let group = SessionSnapshot.Group(root: .pane(pane), focused: pane.id)
+        let header = SessionSnapshot.Header(launchID: UUID(), generation: 1, clean: false, savedAt: Date())
+        let snapshot = SessionSnapshot(header: header, windows: [SessionSnapshot.Window(project: project, groups: [group])])
+        var planned = RestorePlanning.plan(snapshot, kind: .update, safeMode: false, quitConsent: false)
+        if let index = planned.plans.firstIndex(where: { (plan: PanePlan) -> Bool in plan.pane == pane.id }) {
+            planned.plans[index].outcome = .resume
+            planned.plans[index].line = ShellQuote.quote(standIn) + " --resume " + session
+        }
+        let built = RestoreBuild.build(snapshot, planned: planned, scrollback: [:], savedAt: nil)
+        MCPRestoredTabs.restored(built.panes)
+        defer { for controller in built.windows { controller.window?.close() } }
+        guard let controller = built.windows.first, let window = controller.window, let tab = built.panes.first?.tab else {
+            return check(false, "MCP restore: the update restore with a taken session builds its window")
+        }
+        let actions = RestoreActions(panes: built.panes, safeMode: false)
+        actions.sessionAvailable = { (_: SessionSnapshot.Evidence) -> Bool in false }
+        actions.start()
+        let settled = await wait(30) { !actions.isWaiting }
+        await pause(0.5)
+        let now = await mcpTool("list_tabs", [:])
+        let details = listed(now, tab)?["restored"] as? [String: Any]
+        let note = details?["note"] as? String ?? ""
+        let runs = ((try? String(contentsOfFile: resumed, encoding: .utf8)) ?? "").components(separatedBy: "\n")
+        let ran = runs.contains { (line: String) -> Bool in line.contains(session) }
+        let onTheLine = details?["outcome"] as? String == "agent_on_the_line" && details?["line_held"] as? Bool == true
+        check(settled && onTheLine && details?["reason"] as? String == "update" && !note.contains("Resumed") && !ran,
+              "MCP restore: a resume whose session was taken says its line is on the prompt, held, and that nothing resumed",
+              "\(details ?? [:]), ran \(ran)")
+
+        // The user's key, then their first command: it ends the details, as the restore ran nothing of its own.
+        controller.select(0)
+        window.makeFirstResponder(tab.view)
+        pressKey(window, String(Character(UnicodeScalar(NSRightArrowFunctionKey)!)), code: 124)
+        let cleared = await mcpTool("press_keys", ["tab_id": tab.id.uuidString, "keys": ["ctrl+c"]])
+        let sent = await mcpTool("send_to_tab", ["tab_id": tab.id.uuidString, "text": "true"])
+        _ = await wait(10) { tab.status.commandsRun >= 1 && !tab.status.running }
+        let after = await mcpTool("list_tabs", [:])
+        check(!cleared.isError && !sent.isError && listed(after, tab) != nil && listed(after, tab)?["restored"] == nil,
+              "MCP restore: after a resume that did not run, the user's first command ends the details", after.text)
     }
 
     /// A tool called in this process, as the socket calls it.
@@ -188,39 +241,118 @@ extension SelfTest {
         check(!input.isError && elsewhere.text.hasPrefix("update_pending") && newTab.text.hasPrefix("update_pending") && !reading.isError,
               "MCP restore: while an update waits, input into the waited tab works, new work elsewhere is update_pending, and reading works",
               input.text + " / " + elsewhere.text)
+        // KTD16: list_tabs reports the wait, on each tab.
+        let waitedMark = listed(reading, busy)?["update_wait"] as? String
+        let heldMark = listed(reading, idle)?["update_wait"] as? String
+        check(waitedMark == "waits_for_this_tab" && heldMark == "update_pending",
+              "MCP restore: while an update waits, list_tabs marks the tab it waits for and holds new work in the others",
+              "\(waitedMark ?? "none"), \(heldMark ?? "none")")
         sessions.pressed(.stopWaiting)
         let lifted = await mcpTool("send_to_tab", ["tab_id": idle.id.uuidString, "text": "true"])
-        check(!sessions.isWaiting && !lifted.isError, "MCP restore: Stop Waiting lifts update_pending", lifted.text)
+        let after = await mcpTool("list_tabs", [:])
+        check(!sessions.isWaiting && !lifted.isError && listed(after, busy)?["update_wait"] == nil,
+              "MCP restore: Stop Waiting lifts update_pending, and list_tabs no longer reports a wait", lifted.text)
 
-        // AE13: the sheet open, every tool once; no consent, the box as it was, nothing quits.
+        // AE13: the sheet open, every tool once with real tabs; no consent, the box and the sheet as they were, nothing quits.
         sessions.show(version: version, from: .updateButton)
         guard let sheet = sessions.sheet, let mcp = MCPTestClient(socket: MCPControlServer.shared.path) else {
             if sessions.flow != nil { sessions.pressed(.cancel) }
             return check(false, "MCP restore: the update sheet opens, and `nxtrm mcp` starts")
         }
         defer { mcp.close() }
+        let parent = AppDelegate.shared.controllers.first { $0.window != nil && $0.window === sheet.window?.parent }
+        let shown = parent?.activeTab ?? busy
         let box = sheet.keepBox.state
+        let state = sessions.flow?.state
         _ = await mcp.call(1, "initialize", ["protocolVersion": "2025-06-18", "capabilities": [:], "clientInfo": ["name": "selftest", "version": "1"]])
-        // A tool that asks on the Mac is declined, as a close is.
+        let calls = await everyToolOnce(mcp, project: project, shown: shown, firstID: 10)
+        let consent = Updater.shared.validConsent == nil && !SessionRestore.shared.quitConsent
+        let shownStill = sessions.sheet === sheet && sheet.window?.isVisible == true
+        let sheetUp = shownStill && sessions.flow?.state == state && !sessions.isWaiting
+        check(calls.complete && consent && sheet.keepBox.state == box && sheetUp && !AppDelegate.shared.isTerminating,
+              "MCP restore: with the update sheet open, every tool once on real tabs sets no consent, leaves the box and the sheet, "
+                  + "and quits nothing", calls.detail)
+        sessions.pressed(.cancel)
+        busy.view.send(txt: "\u{03}")
+    }
+
+    /// The tab's entry in a list_tabs answer.
+    private static func listed(_ answer: MCPServer.CallResult, _ tab: TerminalTab) -> [String: Any]? {
+        let windows = mcpJSON(answer.text)?["windows"] as? [[String: Any]] ?? []
+        let tabs: [[String: Any]] = windows.flatMap { (window: [String: Any]) -> [[String: Any]] in window["tabs"] as? [[String: Any]] ?? [] }
+        return tabs.first { ($0["id"] as? String) == tab.id.uuidString.lowercased() }
+    }
+
+    /// What calling every tool once left (AE13).
+    struct EveryTool {
+        var called = 0
+        var answered = 0
+        /// The id of the tab new_tab opened, which close_tab closed last.
+        var opened: String?
+        /// Every tool was called, each answered, and new_tab's tab took the calls that act on a tab.
+        var complete: Bool { called == MCPServer.tools.count && answered == called && opened != nil }
+        var detail: String { "answered \(answered) of \(called), of \(MCPServer.tools.count) tools, new tab \(opened ?? "none")" }
+    }
+
+    /// AE13: every tool in MCPServer.tools called once through `nxtrm mcp` (`mcp`, initialized), with real arguments where
+    /// it takes a tab or a project. Return, Enter and Space go into a tab new_tab opens in `project`; `shown`, a tab of the
+    /// window the update sheet sits over or behind the quit dialog, is read, shown and asked to take the keyboard; the new
+    /// tab is split, closed, zoomed and laid out, and closed last. A tool that asks on the Mac is declined, as closing its
+    /// window does; settings_set asks for "At launch", which no tool may change; hosts and skills get no arguments, so
+    /// nothing outside the app changes.
+    static func everyToolOnce(_ mcp: MCPTestClient, project: String, shown: TerminalTab, firstID: Int) async -> EveryTool {
         let decline = Task { @MainActor in
             while !Task.isCancelled {
                 MCPWriteControl.pending?.window?.close()
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
         }
-        var answered = 0
-        for (index, entry) in MCPServer.tools.enumerated() {
-            let reply = await mcp.call(10 + index, "tools/call", ["name": entry.name, "arguments": [String: Any]()], timeout: 40)
-            if reply?["result"] != nil { answered += 1 }
+        defer { decline.cancel() }
+        var result = EveryTool()
+        let showing = shown.id.uuidString.lowercased()
+        let file = project + "/nt-ae13.txt"
+        func arguments(_ tool: String, opened tab: String) -> [String: Any] {
+            switch tool {
+            case "read_tab", "show_tab", "focus_tab": return ["tab_id": showing]
+            case "wait_for_tab": return ["tab_id": showing, "timeout_seconds": 1]
+            case "read_file", "propose_edit": return ["project": project, "path": file]
+            case "find_in_files": return ["project": project, "query": "nt-ae13"]
+            case "git_status", "get_diff", "set_layout": return ["project": project]
+            case "open_project": return ["path": project]
+            case "new_tab": return ["directory": project]
+            case "send_to_tab": return ["tab_id": tab, "text": "", "submit": true]
+            case "press_keys": return ["tab_id": tab, "keys": ["enter", "space", "enter"]]
+            case "answer_agent": return ["tab_id": tab, "question_id": "q_0000000000000000", "choice": 1]
+            case "close_tab", "close_pane", "zoom_pane": return ["tab_id": tab]
+            case "split_pane": return ["tab_id": tab, "direction": "right"]
+            case "write_file", "create_file": return ["project": project, "path": file, "content": "AE13"]
+            case "stage": return ["project": project, "paths": [file]]
+            case "commit": return ["project": project, "message": "AE13", "paths": [file]]
+            case "open_in_editor": return ["path": file]
+            case "settings_set": return ["values": ["at_launch": "welcome"]]
+            default: return [:]
+            }
         }
-        decline.cancel()
-        let consent = Updater.shared.validConsent == nil && !SessionRestore.shared.quitConsent
-        check(answered == MCPServer.tools.count && consent && sheet.keepBox.state == box && !AppDelegate.shared.isTerminating
-              && sessions.sheet === sheet,
-              "MCP restore: with the update sheet open, every tool once sets no consent, leaves the box, and quits nothing",
-              "answered \(answered) of \(MCPServer.tools.count)")
-        sessions.pressed(.cancel)
-        busy.view.send(txt: "\u{03}")
+        // close_tab last, on the tab new_tab opened; with none opened, on no tab at all.
+        let tools: [String] = MCPServer.tools.map(\.name).filter { $0 != "close_tab" } + ["close_tab"]
+        for (index, tool) in tools.enumerated() {
+            let call: [String: Any] = ["name": tool, "arguments": arguments(tool, opened: result.opened ?? UUID().uuidString)]
+            let reply = await mcp.call(firstID + index, "tools/call", call, timeout: 40)
+            result.called += 1
+            guard let answer = reply?["result"] as? [String: Any] else { continue }
+            result.answered += 1
+            if tool == "new_tab", answer["isError"] as? Bool != true {
+                let text = (answer["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
+                result.opened = mcpJSON(text)?["id"] as? String
+            }
+        }
+        // Closed already, unless close_tab could not: then here, so the windows are as they were.
+        if let opened = result.opened {
+            for controller in AppDelegate.shared.controllers {
+                if let tab = controller.tabs.first(where: { $0.id.uuidString.lowercased() == opened }) { controller.remove(tab) }
+            }
+        }
+        return result
     }
 
     /// The update quit's drain, then `nxtrm mcp` across the restart of the socket.
@@ -245,7 +377,9 @@ extension SelfTest {
         }
         await pause(1)
 
-        let posted = postAndDrain(path, consent: UpdateConsent(version: "99.0.0", keep: true, covered: UpdatePlanning.plan()))
+        let request = MCPServer.request(tool: "list_tabs", arguments: [:]) ?? Data()
+        let consent = UpdateConsent(version: "99.0.0", keep: true, covered: UpdatePlanning.plan())
+        let posted = sendAndDrain(path, request: request, consent: consent).answer
         check(posted?.isError == true && posted?.text.contains("restarting for an update") == true && posted?.text.contains("not run") == true,
               "MCP restore: a call posted as the update quit starts hears Next Term restarts, and that it was not run",
               posted?.text ?? "no answer")
@@ -272,31 +406,44 @@ extension SelfTest {
         check(server.isRunning && result?["isError"] as? Bool == false && Date().timeIntervalSince(started) > 1.5,
               "MCP restore: a tool that reads is tried again until Next Term listens again, and answers",
               "\(listed ?? [:])")
+
+        // Any other quit: a request still being read hears at once that Next Term quit, not after its read's 10 seconds,
+        // and the socket file goes.
+        let half = Data("{\"tool\": \"list_".utf8)
+        let unread = sendAndDrain(path, request: half, consent: nil)
+        let gone = !FileManager.default.fileExists(atPath: path)
+        check(unread.answer?.text.contains("Next Term quit") == true && unread.took < 3 && gone,
+              "MCP restore: at a quit that is not an update's, a request still being read hears at once that Next Term quit, "
+                  + "and the socket file goes", "\(unread.answer?.text ?? "no answer") in \(unread.took) s, file gone \(gone)")
+        server.start(path: path)
         busy.view.send(txt: "\u{03}")
     }
 }
 
 extension SelfTest {
-    /// A call posted to the main thread as the update quit starts: the main thread is held while the call is read and
-    /// posted, and the drain comes first, so it never runs. The call's answer, read off the socket.
-    private static func postAndDrain(_ path: String, consent: UpdateConsent) -> MCPServer.CallResult? {
+    /// A call in flight as the quit starts, and its answer, read off the socket with how long it took from the drain.
+    /// A whole `request` is read and posted to the main thread, which is held meanwhile, so the drain comes first and it
+    /// never runs; half of one is still being read. `consent`: the update's quit, or nil for any other.
+    private static func sendAndDrain(_ path: String, request: Data, consent: UpdateConsent?) -> (answer: MCPServer.CallResult?, took: TimeInterval) {
         let fd = MCPControlServer.connectSocket(path)
         guard fd >= 0 else {
             MCPRestoredTabs.drainAtQuit(update: consent)
-            return nil
+            return (nil, 0)
         }
         defer { close(fd) }
-        if let request = MCPServer.request(tool: "list_tabs", arguments: [:]) {
+        if !request.isEmpty {
             _ = request.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Int in write(fd, raw.baseAddress!, raw.count) }
-            Thread.sleep(forTimeInterval: 0.3)
         }
+        Thread.sleep(forTimeInterval: 0.3)
+        let started = Date()
         MCPRestoredTabs.drainAtQuit(update: consent)
         var timeout = timeval(tv_sec: 5, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         var buffer = [UInt8](repeating: 0, count: 65536)
         let count = read(fd, &buffer, buffer.count)
-        guard count > 0, let end = buffer[0..<count].firstIndex(of: 0x0A) else { return nil }
-        return MCPServer.decodeAnswer(Data(buffer[0..<end]))
+        let took = Date().timeIntervalSince(started)
+        guard count > 0, let end = buffer[0..<count].firstIndex(of: 0x0A) else { return (nil, took) }
+        return (MCPServer.decodeAnswer(Data(buffer[0..<end])), took)
     }
 }
 
@@ -309,8 +456,16 @@ extension SelfTestRestore {
 
     private static func acrossFile(_ harness: Harness) -> URL { harness.folder.appendingPathComponent("mcp-across.jsonl") }
 
-    /// Before the update quit: list_tabs, and a wait_for_tab on the running command, left in flight.
+    /// The name the user gives the running command's tab before the update quit, which comes back with its id (AE10).
+    static let workerTitle = "worker"
+
+    /// Before the update quit: the running command's tab named as the user names it, then list_tabs, and a wait_for_tab on
+    /// that tab, left in flight.
     static func mcpBeforeUpdateQuit(_ harness: Harness, busy tab: TerminalTab) async {
+        let owner = AppDelegate.shared.controllers.first { (controller: TerminalWindowController) -> Bool in
+            controller.tabs.contains { $0 === tab }
+        }
+        owner?.renamePane(tab, to: workerTitle)
         let file = acrossFile(harness)
         guard let socket = harness.mcpSocket, FileManager.default.createFile(atPath: file.path, contents: nil),
               let output = try? FileHandle(forWritingTo: file) else { return check(false, "MCP across the update: its client's file is made") }
@@ -357,22 +512,30 @@ extension SelfTestRestore {
         ((answer?["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
     }
 
-    /// Each tab's id, whether it is a split pane, and its place in the tab bar, from list_tabs.
-    private static func layout(_ listed: String) -> [String] {
+    /// Every tab in a list_tabs answer.
+    private static func tabs(_ listed: String) -> [[String: Any]] {
         let object = (try? JSONSerialization.jsonObject(with: Data(listed.utf8))) as? [String: Any]
         let windows = object?["windows"] as? [[String: Any]] ?? []
-        var rows: [String] = []
-        for window in windows {
-            for tab in window["tabs"] as? [[String: Any]] ?? [] {
-                let split = tab["split"] as? Bool ?? false
-                rows.append("\(tab["id"] as? String ?? "") \(split) \(tab["tab_bar_position"] as? Int ?? 0)")
-            }
+        return windows.flatMap { (window: [String: Any]) -> [[String: Any]] in window["tabs"] as? [[String: Any]] ?? [] }
+    }
+
+    /// Each tab's id, whether it is a split pane, and its place in the tab bar, from list_tabs.
+    private static func layout(_ listed: String) -> [String] {
+        let rows: [String] = tabs(listed).map { (tab: [String: Any]) -> String in
+            let split = tab["split"] as? Bool ?? false
+            return "\(tab["id"] as? String ?? "") \(split) \(tab["tab_bar_position"] as? Int ?? 0)"
         }
         return rows.sorted()
     }
 
-    /// After the relaunch: the wait in flight heard "restarting" with its tab's plan (AE14); list_tabs gives the same ids
-    /// and splits (AE10), and the running command's tab its restored details, with its put-back line refusing input (AE11).
+    /// The title list_tabs gives the tab with `id`.
+    private static func title(_ id: String, in listed: String) -> String? {
+        tabs(listed).first { (tab: [String: Any]) -> Bool in tab["id"] as? String == id }?["title"] as? String
+    }
+
+    /// After the relaunch: the wait in flight heard "restarting" with its tab's plan (AE14); list_tabs gives the same ids,
+    /// splits and user-set title (AE10), and the running command's tab its restored details, with its put-back line
+    /// refusing input (AE11).
     static func mcpAfterUpdate(_ harness: Harness) async {
         let before = answers(harness)
         let waited = (try? JSONSerialization.jsonObject(with: Data(text(before[3]).utf8))) as? [String: Any]
@@ -390,17 +553,89 @@ extension SelfTestRestore {
         check(same && !layout(nowText).isEmpty, "MCP across the update: list_tabs gives the same tab ids and splits as before the quit",
               "before \(layout(text(before[2]))), now \(layout(nowText))")
         guard let id = waited?["id"] as? String else { return }
-        let object = (try? JSONSerialization.jsonObject(with: Data(nowText.utf8))) as? [String: Any]
-        let tabs = (object?["windows"] as? [[String: Any]] ?? []).flatMap { $0["tabs"] as? [[String: Any]] ?? [] }
-        let details = tabs.first { $0["id"] as? String == id }?["restored"] as? [String: Any]
+        let titled = title(id, in: text(before[2]))
+        let titledNow = title(id, in: nowText)
+        check(titled == workerTitle && titledNow == workerTitle,
+              "MCP across the update: the title the user gave a tab comes back with its id",
+              "before \(titled ?? "none"), now \(titledNow ?? "none")")
+        let details = tabs(nowText).first { (tab: [String: Any]) -> Bool in tab["id"] as? String == id }?["restored"] as? [String: Any]
         check(details?["reason"] as? String == "update" && details?["state_before"] as? String == "running"
               && details?["interrupted"] as? Bool == true && details?["outcome"] as? String == "command_on_the_line",
               "MCP across the update: the running command's tab says it came back from the update, running before and cut off",
               "\(details ?? [:])")
-        _ = await SelfTest.wait(10) { tabs.isEmpty || AppDelegate.shared.controllers.flatMap(\.tabs).contains { $0.id.uuidString.lowercased() == id && $0.restoredRecord?.pending?.state == .applied } }
+        let restored = AppDelegate.shared.controllers.flatMap(\.tabs).first { (tab: TerminalTab) -> Bool in
+            tab.id.uuidString.lowercased() == id
+        }
+        _ = await SelfTest.wait(10) { restored?.restoredRecord?.pending?.state == .applied }
         let refused = await mcp.call(3, "tools/call", ["name": "send_to_tab", "arguments": ["tab_id": id, "text": "", "submit": true]])
         check(text(refused).contains("put back"), "MCP across the update: send_to_tab with Return into the put-back tab is refused",
               text(refused))
+    }
+
+    // MARK: AE13 across the real quits
+
+    /// With the update sheet open over the staged update, before its Update Now: every tool once on real tabs sets neither
+    /// consent, leaves the sheet's box and state, and quits nothing, and the tabs are as they were for the update quit.
+    static func mcpWithUpdateSheet(_ harness: Harness) async {
+        let app = AppDelegate.shared!
+        let sessions = UpdateKeepSessions.shared
+        guard let socket = harness.mcpSocket, let sheet = sessions.sheet, let mcp = MCPTestClient(socket: socket) else {
+            return check(false, "MCP with the update sheet open: the sheet shows, and `nxtrm mcp` starts")
+        }
+        defer { mcp.close() }
+        let parent = app.controllers.first { (controller: TerminalWindowController) -> Bool in
+            controller.window != nil && controller.window === sheet.window?.parent
+        }
+        guard let shown = (parent ?? app.controllers.first)?.activeTab else {
+            return check(false, "MCP with the update sheet open: the window under it has a tab")
+        }
+        let open: [UUID] = app.controllers.flatMap(\.tabs).map(\.id)
+        let box = sheet.keepBox.state
+        let state = sessions.flow?.state
+        _ = await mcp.call(1, "initialize", ["protocolVersion": "2025-06-18", "capabilities": [:], "clientInfo": ["name": "harness", "version": "1"]])
+        let calls = await SelfTest.everyToolOnce(mcp, project: harness.project.path, shown: shown, firstID: 10)
+        let consent = Updater.shared.validConsent == nil && !SessionRestore.shared.quitConsent
+        let shownStill = sessions.sheet === sheet && sheet.window?.isVisible == true
+        let sheetUp = shownStill && sessions.flow?.state == state && !sessions.isWaiting
+        let same = app.controllers.flatMap(\.tabs).map(\.id) == open
+        check(calls.complete && consent && sheet.keepBox.state == box && sheetUp && same && !app.isTerminating,
+              "MCP with the update sheet open: every tool once on real tabs sets no consent, leaves the box and the sheet, and quits nothing",
+              calls.detail + ", consent none \(consent), sheet up \(sheetUp), tabs as they were \(same)")
+    }
+
+    /// With the plain quit dialog of the user's ⌘Q open: every tool once on real tabs sets no consent, leaves the dialog's
+    /// box and the dialog itself, and quits nothing. The quit then goes on as the user answers it.
+    static func mcpWithQuitDialog(_ harness: Harness) async {
+        let app = AppDelegate.shared!
+        let shows = await SelfTest.wait(20) { resumeBox() != nil }
+        guard shows, let dialog = NSApp.modalWindow, let box = resumeBox(), let socket = harness.mcpSocket,
+              let mcp = MCPTestClient(socket: socket) else {
+            return check(false, "MCP with the quit dialog open: the plain quit dialog shows, and `nxtrm mcp` starts")
+        }
+        defer { mcp.close() }
+        let window = app.controllers.first { (controller: TerminalWindowController) -> Bool in controller.project == harness.project.path }
+        guard let shown = (window ?? app.controllers.first)?.activeTab else {
+            return check(false, "MCP with the quit dialog open: a window behind it has a tab")
+        }
+        let checked = box.state
+        _ = await mcp.call(1, "initialize", ["protocolVersion": "2025-06-18", "capabilities": [:], "clientInfo": ["name": "harness", "version": "1"]])
+        let calls = await SelfTest.everyToolOnce(mcp, project: harness.project.path, shown: shown, firstID: 10)
+        let consent = !SessionRestore.shared.quitConsent && Updater.shared.validConsent == nil
+        let dialogUp = NSApp.modalWindow === dialog && dialog.isVisible
+        let still = dialogUp && box.state == checked && !app.isTerminating
+        check(calls.complete && consent && still,
+              "MCP with the quit dialog open: every tool once on real tabs sets no consent, leaves its box, and quits nothing",
+              calls.detail + ", consent none \(consent), dialog and box as they were \(still)")
+    }
+
+    /// The resume checkbox of the app-modal dialog showing, if any.
+    private static func resumeBox() -> NSButton? {
+        guard let content = NSApp.modalWindow?.contentView else { return nil }
+        return checkboxes(in: content).first { (button: NSButton) -> Bool in button.title == QuitPolicy.checkboxTitle }
+    }
+
+    private static func checkboxes(in view: NSView) -> [NSButton] {
+        view.subviews.flatMap { (subview: NSView) -> [NSButton] in (subview as? NSButton).map { [$0] } ?? checkboxes(in: subview) }
     }
 }
 #endif

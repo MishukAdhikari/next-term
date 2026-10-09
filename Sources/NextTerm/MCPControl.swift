@@ -207,7 +207,10 @@ enum MCPControl {
     static func isDriven(_ tab: TerminalTab) -> Bool { driven.contains(tab.id) }
 
     /// You pressed a key in the tab, or pasted into it: what happens there is yours again.
-    static func typedByUser(_ tab: TerminalTab) { driven.remove(tab.id) }
+    static func typedByUser(_ tab: TerminalTab) {
+        driven.remove(tab.id)
+        MCPRestoredTabs.typedByUser(tab) // a restored tab's details count your commands from here (U13)
+    }
 
     /// The tab closed.
     static func forget(_ tab: TerminalTab) {
