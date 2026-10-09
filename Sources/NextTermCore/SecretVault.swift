@@ -444,10 +444,10 @@ public final class SecretVault {
     // MARK: changes
 
     /// Adds a key. The value is trimmed of white space at both ends; one holding NUL, CR or LF is refused, and so is
-    /// one over 16 KB. `marks` are the value's masking marks (`SecretMask.marks(for:key:)`), made by the caller with
-    /// the value at hand.
+    /// one over 16 KB. With `maskKey` (`mask.key`), the entry gets the value's masking marks, made here with the value
+    /// at hand (`SecretMask.marks(for:key:)`).
     public func add(name: String, purpose: String, purposeBy: PurposeBy, origin: Origin, writeOnly: Bool,
-                    value: SecretBytes, marks: [Mark] = [], now: Date = Date()) throws -> Data {
+                    value: SecretBytes, maskKey: SymmetricKey? = nil, now: Date = Date()) throws -> Data {
         let key = try unlockedKey()
         guard SecretName.isValid(name) else { throw Failure.badName }
         guard index.entry(named: name) == nil else { throw Failure.nameTaken(name) }
@@ -457,6 +457,7 @@ public final class SecretVault {
         let id = UUID().uuidString.lowercased()
         let box = try Self.seal(value, key: key, id: id, name: name, writeOnly: writeOnly, origin: origin)
         let date = Self.whole(now)
+        let marks = maskKey.map { SecretMask.marks(for: value, key: $0) } ?? []
         let entry = Entry(id: id, name: name, purpose: purpose, purposeBy: purposeBy, origin: origin, writeOnly: writeOnly,
                           created: date, changed: date, box: box, marks: marks)
         index.entries.append(entry)
@@ -486,7 +487,7 @@ public final class SecretVault {
 
     /// A new value for a key, write-only or not. `origin`, when given, is who replaced it (`agent` for an agent's
     /// `store_secret`); the key's purpose stays.
-    public func replace(_ name: String, value: SecretBytes, writeOnly: Bool, origin: Origin? = nil, marks: [Mark] = [],
+    public func replace(_ name: String, value: SecretBytes, writeOnly: Bool, origin: Origin? = nil, maskKey: SymmetricKey? = nil,
                         now: Date = Date()) throws -> Data {
         let key = try unlockedKey()
         var (position, entry) = try find(name)
@@ -495,7 +496,7 @@ public final class SecretVault {
         entry.box = try Self.seal(value, key: key, id: entry.id, name: name, writeOnly: writeOnly, origin: origin)
         entry.origin = origin
         entry.writeOnly = writeOnly
-        entry.marks = marks
+        entry.marks = maskKey.map { SecretMask.marks(for: value, key: $0) } ?? []
         entry.changed = Self.whole(now)
         index.entries[position] = entry
         return try written(key)
@@ -521,12 +522,12 @@ public final class SecretVault {
         return try written(key)
     }
 
-    /// Gives every entry new marks: after a missing `mask.key` was made again (KTD8). `marks` makes them from a value.
-    public func remark(_ marks: (SecretBytes) -> [Mark]) throws -> Data {
+    /// Gives every entry new marks under `maskKey`: after a missing `mask.key` was made again (KTD8).
+    public func remark(maskKey: SymmetricKey) throws -> Data {
         let key = try unlockedKey()
         for position in index.entries.indices {
             let value = try Self.open(index.entries[position], key: key)
-            index.entries[position].marks = marks(value)
+            index.entries[position].marks = SecretMask.marks(for: value, key: maskKey)
         }
         return try written(key)
     }

@@ -409,7 +409,7 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
             return ["selection": ["start": ["line": 0, "character": 0], "end": ["line": 0, "character": 0], "isEmpty": true]]
         }
         return [
-            "text": text,
+            "text": SecretMask.current.mask(text),
             "filePath": path,
             "fileUrl": URL(fileURLWithPath: path).absoluteString,
             "selection": ["start": ["line": start.line, "character": start.character],

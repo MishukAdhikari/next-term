@@ -1127,6 +1127,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     var testNotifications: [UNNotificationRequest] = []
 
     private func deliver(_ request: UNNotificationRequest) {
+        // A tab's title, a question or a command can hold a stored key's value: masked, in a copy.
+        var request = request
+        let mask = SecretMask.current
+        if !mask.isEmpty, let content = request.content.mutableCopy() as? UNMutableNotificationContent {
+            content.title = mask.mask(content.title)
+            content.subtitle = mask.mask(content.subtitle)
+            content.body = mask.mask(content.body)
+            request = UNNotificationRequest(identifier: request.identifier, content: content, trigger: request.trigger)
+        }
         if SelfTest.isRequested { return testNotifications.append(request) }
         notificationCenter?.add(request)
     }

@@ -11,18 +11,28 @@ public enum CommandSecrets {
     /// keeping a line out of history), and no line break, as a line that goes on to another is never put
     /// back the way it was typed.
     public static func mayKeep(_ line: String) -> Bool {
+        mayKeep(line, mask: .current)
+    }
+
+    /// As `mayKeep(_:)`, with the stored keys' exact values from `secrets`: for the tests.
+    static func mayKeep(_ line: String, mask secrets: SecretMask) -> Bool {
         if line.hasPrefix(" ") || line.hasPrefix("\t") { return false }
         if line.unicodeScalars.contains(where: { (scalar: Unicode.Scalar) -> Bool in scalar == "\n" || scalar == "\r" }) {
             return false
         }
-        return mask(line) == line
+        return mask(line, mask: secrets) == line
     }
 
     /// `text` with each secret replaced by •••, wherever it is in a line. A command continued with a
     /// backslash is read across its lines; scrollback rows a shell continued (its PS2 prompt) are best
     /// joined before they are masked, as a continuation row alone has no tool name to go by.
     public static func mask(_ text: String) -> String {
-        mask(text, reading: masked)
+        mask(text, reading: { masked($0) })
+    }
+
+    /// As `mask(_:)`, with the stored keys' exact values from `secrets` instead of `SecretMask.current`: for the tests.
+    static func mask(_ text: String, mask secrets: SecretMask) -> String {
+        mask(text, reading: { masked($0, mask: secrets) })
     }
 
     /// As `mask(_:)`, with `read` masking a text, or giving nil when ICU gave up partway (on a run of a
@@ -38,15 +48,15 @@ public enum CommandSecrets {
         return lines.map { (line: String) -> String in read(line) ?? whole(line) }.joined(separator: "\n")
     }
 
-    /// `text` masked, or nil if ICU gave up partway through it.
-    static func masked(_ text: String) -> String? {
-        var result = text
+    /// `text` masked, or nil if ICU gave up partway through it. The exact values of keys stored in Secrets go first.
+    static func masked(_ text: String, mask secrets: SecretMask = .current) -> String? {
+        var result = secrets.mask(text)
         var complete = true
         for rule in rules {
             apply(rule, to: &result, complete: &complete)
             if !complete { return nil }
         }
-        let redacted = MCPRedaction.redact(result, maskingRun: maskedRun)
+        let redacted = MCPRedaction.redact(result, maskingRun: maskedRun, mask: .empty)
         return redacted.complete ? redacted.text : nil
     }
 

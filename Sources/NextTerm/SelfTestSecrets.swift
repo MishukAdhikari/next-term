@@ -1,5 +1,7 @@
 import AppKit
+import CryptoKit
 import NextTermCore
+import UserNotifications
 
 /// Secrets on temporary vaults only: the store, masking, the panel and grants, the wrapper. The self-test's store works
 /// on a temporary folder with a software keyring and a presence check that passes and counts; the real
@@ -15,7 +17,10 @@ extension SelfTest {
         }
         let realFolder = SecretFolder(applicationSupport: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
         let realBefore = secretsFolderDate(realFolder.url)
+        let savedMask = SecretMask.current
+        defer { SecretMask.current = savedMask }
         await secretsStoreChecks(base)
+        await secretsMaskingChecks(c, base: base)
         check(secretsFolderDate(realFolder.url) == realBefore, "secrets: the real Secrets.noindex is untouched (unchanged, or not there)",
               "\(String(describing: realBefore)) → \(String(describing: secretsFolderDate(realFolder.url)))")
     }
@@ -219,5 +224,122 @@ extension SelfTest {
         check(posted == [.screenLocked, .systemSleep, .sessionResigned] && distributed == 0,
               "secrets: a lock, a sleep and the session resigning post locked; the display sleeping doesn't, and nothing is posted to other apps",
               "\(posted), \(distributed) distributed")
+    }
+}
+
+/// An agent's `nxtrm mcp` bridge, for the Secrets checks: a tool's answer text and whether it is an error.
+final class SecretsMCPClient {
+    let mcp: MCPTestClient
+    private var next = 700
+
+    init?(socket: String) {
+        guard let mcp = MCPTestClient(socket: socket) else { return nil }
+        self.mcp = mcp
+    }
+
+    @MainActor
+    func start() async {
+        _ = await mcp.call(next, "initialize", ["protocolVersion": "2025-06-18", "capabilities": [:], "clientInfo": ["name": "selftest", "version": "1"]])
+    }
+
+    @MainActor
+    func call(_ name: String, _ arguments: [String: Any] = [:], timeout: Double = 30) async -> (text: String, isError: Bool) {
+        next += 1
+        let reply = await mcp.call(next, "tools/call", ["name": name, "arguments": arguments], timeout: timeout)
+        let result = reply?["result"] as? [String: Any]
+        let error = (reply?["error"] as? [String: Any])?["message"] as? String
+        let text = ((result?["content"] as? [[String: Any]])?.first?["text"] as? String) ?? error ?? "(no answer)"
+        return (text, result?["isError"] as? Bool ?? true)
+    }
+
+    func close() { mcp.close() }
+}
+
+extension SelfTest {
+    // MARK: U3, masking
+
+    /// A random value for a check, never typed: written to a file the tab reads with `K=$(cat …)`.
+    static func secretsValue(_ prefix: String) -> String {
+        prefix + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() + "Q7"
+    }
+
+    /// Stored keys are masked in what agents read and in notifications, from the marks alone, with no unlock.
+    static func secretsMaskingChecks(_ c: TerminalWindowController, base: URL) async {
+        let app = AppDelegate.shared!
+        check(SecretsStore.marksLoadedBeforeSocket, "secrets: the marks were loaded before the MCP socket started")
+        defer { MCPControl.fieldMasks = true }
+
+        // A vault with one value, made with a software keyring, and its mask.key, in a folder of its own; then the
+        // marks alone, as at launch.
+        let value = secretsValue("ntmask")
+        let keyring = SoftwareKeyring(kind: .secureEnclave)
+        let (store, presence) = secretsStore(base, "marks", keyring: keyring)
+        guard let made = try? SecretVault.create(keyring: keyring) else { return check(false, "secrets: a vault for the masking checks") }
+        let maskData = made.maskKey.withUnsafeBytes { Data($0) }
+        let file = try? made.vault.add(name: "MASK_PROBE", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
+                                       value: SecretBytes(utf8: value), maskKey: SymmetricKey(data: maskData))
+        made.vault.wipe()
+        try? store.folder.ensure()
+        try? store.folder.write(SecretFolder.maskKeyName, data: maskData)
+        if let file { try? store.folder.write(SecretFolder.vaultName, data: file) }
+        let agreements = keyring.agreementCount
+        store.loadMarks()
+        check(!SecretMask.current.isEmpty && presence.calls == 0 && keyring.agreementCount == agreements,
+              "secrets: the marks load with no unlock and no presence check", "\(SecretMask.current.marks.count) marks, \(presence.calls) checks")
+
+        let valueFile = base.appendingPathComponent("value.txt")
+        try? value.write(to: valueFile, atomically: true, encoding: .utf8)
+        let tab = c.addTab(directory: base.path, select: false)
+        defer { c.requestClose(tab) }
+        guard await wait(20, { tab.status.integrated }),
+              let client = SecretsMCPClient(socket: MCPControlServer.shared.path) else {
+            return check(false, "secrets: a tab and an MCP bridge for the masking checks")
+        }
+        defer { client.close() }
+        await client.start()
+        let id = tab.id.uuidString.lowercased()
+        tab.view.send(txt: "K=$(cat \(ShellQuote.quote(valueFile.path))); printf '%s\\n' \"$K\"\r")
+        let printed = await wait(10) { tab.screenTail().joined().contains(value) }
+        let read = await client.call("read_tab", ["tab_id": id])
+        let waited = await client.call("wait_for_tab", ["tab_id": id, "timeout_seconds": 5])
+        check(printed && read.text.contains("•••") && !read.text.contains(value) && !waited.text.contains(value) && waited.text.contains("•••"),
+              "secrets: read_tab and wait_for_tab show ••• where a tab printed a stored key", String(read.text.suffix(200)))
+
+        // A program sets the tab's title to the value (OSC 0), while its command runs.
+        tab.view.send(txt: "printf '\\e]0;%s\\a' \"$K\"; sleep 6\r")
+        let titled = await wait(10) { tab.title.contains(value) }
+        let listed = await client.call("list_tabs")
+        check(titled && listed.text.contains("•••") && !listed.text.contains(value),
+              "secrets: list_tabs shows ••• in a title a program set to a stored key", titled ? "" : "the title never held it")
+        let restore = defaultNotificationSettings()
+        let before = app.testNotifications.count
+        app.post(TabNotice(state: .attention, command: "sleep", program: "sleep", kind: .agent, stillRunning: true,
+                           question: "Use \(value) for the deploy?"), tab: tab, in: c, appActive: false)
+        restore()
+        let note = app.testNotifications.dropFirst(before).last { $0.identifier == tab.id.uuidString }
+        check(note.map { $0.content.subtitle.contains("•••") && !$0.content.subtitle.contains(value) } == true,
+              "secrets: a decision notification for that tab has ••• in its subtitle", note?.content.subtitle ?? "no notification")
+        check(note.map { $0.content.body.contains("•••") && !$0.content.body.contains(value) } == true,
+              "secrets: a notification built from a question holding a stored key shows ••• in its body", note?.content.body ?? "")
+        MCPControl.fieldMasks = false
+        let unmaskedFields = await client.call("list_tabs")
+        MCPControl.fieldMasks = true
+        check(titled && unmaskedFields.text.contains("•••") && !unmaskedFields.text.contains(value),
+              "secrets: with the field masks off, the last pass over each answer still masks the title")
+        _ = await wait(10) { !tab.status.running }
+
+        // A title report (CSI 21 t) never types the title back.
+        tab.view.send(txt: "printf '\\e]0;%s\\a' \"$K\"; printf '\\e[21t'; IFS= read -rs -t 1 -d '\\' reply; "
+                      + "case \"$reply\" in *\"$K\"*) echo L\"\"EAK;; *) echo NO\"\"LEAK;; esac\r")
+        func row(_ word: String) -> Bool { tab.screenTail().contains { $0.trimmingCharacters(in: .whitespaces) == word } }
+        let answered = await wait(10) { row("NOLEAK") || row("LEAK") }
+        check(answered && row("NOLEAK") && !row("LEAK"),
+              "secrets: a title report gives an empty title, so a title holding a key never comes back as input",
+              tab.screenTail().suffix(3).joined(separator: " | "))
+
+        // The selection sent to IDE clients.
+        let params = ClaudeIDEServer.selectionParams(path: base.appendingPathComponent("notes.txt").path, text: "copy \(value) here",
+                                                     start: (0, 0), end: (0, 10))
+        check(params["text"] as? String == "copy ••• here", "secrets: the selection sent to IDE clients is masked", "\(params["text"] ?? "")")
     }
 }

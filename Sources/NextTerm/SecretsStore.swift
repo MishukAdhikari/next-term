@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import NextTermCore
 import Security
 
@@ -195,13 +196,24 @@ final class SecretsStore {
     // MARK: launch
 
     /// The marks, read synchronously at launch with no crypto and no keychain read: `vault.json`'s index and
-    /// `mask.key`. Masking publishes them (U3). Sets `marksLoaded`.
+    /// `mask.key`, published as `SecretMask.current`. Sets `marksLoaded`.
     func loadMarks() {
         defer { Self.marksLoaded = true }
         guard folder.exists, let data = try? folder.read(SecretFolder.vaultName, cap: SecretVault.maxFileSize),
               let index = try? SecretVault.index(from: data) else { return }
         self.index = index
         indexDate = folder.modificationDate(of: SecretFolder.vaultName)
+        publishMarks()
+    }
+
+    /// `SecretMask.current` from the index and `mask.key`. A missing `mask.key` turns masking off until the next
+    /// unlock, which makes a new one and new marks for every entry.
+    func publishMarks() {
+        guard let index, let data = try? folder.read(SecretFolder.maskKeyName, cap: 64), data.count == SecretVault.maskKeyLength else {
+            SecretMask.current = .empty
+            return
+        }
+        SecretMask.current = SecretMask(key: SymmetricKey(data: data), index: index)
     }
 
     /// The index and the load check, off the main thread: the keyring's `check()` needs no Touch ID. A key that is not
@@ -227,6 +239,7 @@ final class SecretsStore {
         protection = found.1
         lastUse = SecretAudit.lastUse(in: found.2)
         indexDate = folder.modificationDate(of: SecretFolder.vaultName)
+        publishMarks()
         if !SelfTest.isRequested { startObserving() }
         NotificationCenter.default.post(name: Self.changed, object: self)
     }
@@ -258,6 +271,7 @@ final class SecretsStore {
         } else {
             protection = .tampered
         }
+        publishMarks()
         NotificationCenter.default.post(name: Self.changed, object: self)
     }
 
@@ -325,6 +339,7 @@ final class SecretsStore {
             if protection == .none, let index { protection = Self.protection(of: index) }
             indexDate = folder.modificationDate(of: SecretFolder.vaultName)
             if action.event == .use, let line = work.line { for name in action.names { lastUse[name] = line } }
+            publishMarks()
             NotificationCenter.default.post(name: Self.changed, object: self)
             return work.values
         case .failure(let error):
@@ -346,7 +361,7 @@ final class SecretsStore {
             protection = .tampered
             let line = SecretAudit.Line(event: .tamper, names: action.names, who: facts.who, command: facts.command,
                                         folder: facts.folder, outcome: "refused")
-            try? folder.appendAudit(SecretAudit.encode(line))
+            try? folder.appendAudit(SecretAudit.encode(line, masking: { SecretMask.current.mask($0) }))
             NotificationCenter.default.post(name: Self.changed, object: self)
         } else if failure == .vault(.cantOpen) {
             protection = .cantOpen
@@ -379,6 +394,7 @@ final class SecretsStore {
         try folder.withLock {
             try folder.update { current in
                 let opened: SecretVault
+                var maskKey: SymmetricKey?
                 if let vault, let current {
                     try vault.reload(current)
                     opened = vault
@@ -395,34 +411,50 @@ final class SecretsStore {
                     } catch {
                         throw Failure.keyring
                     }
-                    let maskKey = made.maskKey.withUnsafeBytes { Data($0) }
-                    try folder.write(SecretFolder.maskKeyName, data: maskKey)
+                    let maskData = made.maskKey.withUnsafeBytes { Data($0) }
+                    try folder.write(SecretFolder.maskKeyName, data: maskData)
+                    maskKey = SymmetricKey(data: maskData)
                     opened = made.vault
                 }
                 vault = opened
-                return try apply(action, to: opened, values: &work.values, earlier: &earlier)
+                // A missing mask.key is made again here, with new marks for every entry (KTD8).
+                var remarked = false
+                if maskKey == nil {
+                    if let data = try folder.read(SecretFolder.maskKeyName, cap: 64), data.count == SecretVault.maskKeyLength {
+                        maskKey = SymmetricKey(data: data)
+                    } else {
+                        let fresh = SymmetricKey(size: .bits256)
+                        try folder.write(SecretFolder.maskKeyName, data: fresh.withUnsafeBytes { Data($0) })
+                        _ = try opened.remark(maskKey: fresh)
+                        maskKey = fresh
+                        remarked = true
+                    }
+                }
+                let written = try apply(action, to: opened, maskKey: maskKey, values: &work.values, earlier: &earlier)
+                return written ?? (remarked ? opened.file : nil)
             }
         }
         work.index = vault?.index
         let line = SecretAudit.Line(event: action.event, names: action.names, who: facts.who, command: facts.command,
                                     folder: facts.folder, approval: facts.approval, outcome: "done",
                                     earlierOrigin: earlier?.rawValue)
-        try? folder.appendAudit(SecretAudit.encode(line))
+        try? folder.appendAudit(SecretAudit.encode(line, masking: { SecretMask.current.mask($0) }))
         work.line = line
         return work
     }
 
     /// The action on an unlocked vault: the new file's bytes, or nil when nothing is written (reveal, copy, use).
-    nonisolated private static func apply(_ action: Action, to vault: SecretVault, values: inout [String: SecretBytes],
-                                          earlier: inout SecretVault.Origin?) throws -> Data? {
+    nonisolated private static func apply(_ action: Action, to vault: SecretVault, maskKey: SymmetricKey?,
+                                          values: inout [String: SecretBytes], earlier: inout SecretVault.Origin?) throws -> Data? {
         switch action {
         case .add(let name, let purpose, let purposeBy, let origin, let writeOnly, let value):
-            return try vault.add(name: name, purpose: purpose, purposeBy: purposeBy, origin: origin, writeOnly: writeOnly, value: value)
+            return try vault.add(name: name, purpose: purpose, purposeBy: purposeBy, origin: origin, writeOnly: writeOnly, value: value,
+                                 maskKey: maskKey)
         case .edit(let name, let newName, let purpose, let purposeBy):
             return try vault.edit(name, newName: newName, purpose: purpose, purposeBy: purposeBy)
         case .replace(let name, let value, let writeOnly, let origin):
             earlier = vault.index.entry(named: name)?.origin
-            return try vault.replace(name, value: value, writeOnly: writeOnly, origin: origin)
+            return try vault.replace(name, value: value, writeOnly: writeOnly, origin: origin, maskKey: maskKey)
         case .makeWriteOnly(let name):
             return try vault.makeWriteOnly(name)
         case .delete(let name):
@@ -448,8 +480,9 @@ final class SecretsStore {
         protection = .none
         lastUse = [:]
         indexDate = nil
+        publishMarks()
         let line = SecretAudit.Line(event: .startOver, names: [], outcome: kept.map { "kept \($0.lastPathComponent)" })
-        try? folder.appendAudit(SecretAudit.encode(line))
+        try? folder.appendAudit(SecretAudit.encode(line, masking: { SecretMask.current.mask($0) }))
         NotificationCenter.default.post(name: Self.changed, object: self)
         return kept
     }

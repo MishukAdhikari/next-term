@@ -39,18 +39,21 @@ public enum MCPRedaction {
     /// A run long enough to be a key; masked only if it looks random (see `looksRandom`).
     static let longRun = try! NSRegularExpression(pattern: #"[A-Za-z0-9+/_\-]{32,}={0,2}"#)
 
-    /// The text with credentials masked, and how many were.
-    public static func redact(_ text: String) -> (text: String, count: Int) {
-        let redacted = redact(text, maskingRun: { (run: String) -> String? in looksRandom(run) ? mask : nil })
+    /// The text with credentials masked, and how many were. The exact values of keys stored in Secrets go
+    /// first (`secrets`, `SecretMask.current` unless a test gives its own).
+    public static func redact(_ text: String, mask secrets: SecretMask = .current) -> (text: String, count: Int) {
+        let redacted = redact(text, maskingRun: { (run: String) -> String? in looksRandom(run) ? mask : nil }, mask: secrets)
         return (redacted.text, redacted.count)
     }
 
     /// As `redact(_:)`, with `maskingRun` deciding what a long run becomes (nil keeps it), and whether
     /// every pattern read the whole text (see `replace`). Command lines pass one that spares paths
     /// (CommandSecrets).
-    static func redact(_ text: String, maskingRun: (String) -> String?) -> (text: String, count: Int, complete: Bool) {
-        var result = text
-        var count = 0
+    static func redact(_ text: String, maskingRun: (String) -> String?,
+                       mask secrets: SecretMask = .current) -> (text: String, count: Int, complete: Bool) {
+        let exact = secrets.masked(text)
+        var result = exact.text
+        var count = exact.count
         var complete = true
         // Line by line inside a key block, so line numbers around it stay right.
         count += replace(privateKey, in: &result, complete: &complete) { match, ns in

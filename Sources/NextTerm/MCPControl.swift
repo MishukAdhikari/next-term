@@ -161,9 +161,11 @@ final class MCPControlServer: @unchecked Sendable {
         send(MCPServer.CallResult(text: text, isError: true), on: fd)
     }
 
-    /// Writes the answer line and closes the connection.
+    /// Writes the answer line and closes the connection. Stored keys' values are masked in it one last time, whatever
+    /// tool made it (RemoteMCP, MCPWriteControl, SkillsMCP included).
     private func send(_ answer: MCPServer.CallResult, on fd: Int32) {
-        let data = MCPServer.encodeAnswer(answer)
+        let masked = MCPServer.CallResult(text: SecretMask.current.mask(answer.text), isError: answer.isError)
+        let data = MCPServer.encodeAnswer(masked)
         data.withUnsafeBytes { raw in
             var offset = 0
             while offset < raw.count {
@@ -232,6 +234,13 @@ enum MCPControl {
 
     private static var app: AppDelegate { AppDelegate.shared }
     private static var allTabs: [TerminalTab] { app.controllers.flatMap(\.tabs) }
+
+    /// A tab's text an agent reads (title, command, screen, question, choices, served URL, selected text), with stored
+    /// keys' exact values masked. Pattern masking is not added here: it would change what agents read today. The
+    /// self-test turns this off to check the last pass in `send`.
+    static var fieldMasks = true
+    static func field(_ text: String) -> String { fieldMasks ? SecretMask.current.mask(text) : text }
+    static func fieldRows(_ rows: [String]) -> [String] { fieldMasks ? SecretMask.current.mask(rows: rows) : rows }
 
     static func fail(_ text: String) -> MCPServer.CallResult { MCPServer.CallResult(text: text, isError: true) }
     static func ok(_ value: Any) -> MCPServer.CallResult { MCPServer.CallResult(text: MCPServer.json(value)) }
@@ -306,7 +315,7 @@ enum MCPControl {
     static func describe(_ tab: TerminalTab, in controller: TerminalWindowController, caller: TerminalTab?) -> [String: Any] {
         var info: [String: Any] = [
             "id": tab.id.uuidString.lowercased(),
-            "title": tab.title,
+            "title": field(tab.title),
             "directory": tab.directory,
             "state": state(tab),
             "front": controller.activeTab === tab,
@@ -319,12 +328,12 @@ enum MCPControl {
         if tab.status.running {
             info["program"] = tab.status.program
             info["agent"] = tab.status.kind == .agent
-            info["command"] = String(tab.status.command.prefix(300))
+            info["command"] = String(field(tab.status.command).prefix(300))
         }
         info.merge(questionInfo(tab)) { $1 }
         if let code = tab.status.exitCode, tab.status.state == .failed { info["exit_code"] = Int(code) }
         if tab === caller { info["you"] = true }
-        if let url = tab.servedURL { info["served_url"] = url.absoluteString } // a dev server's local address
+        if let url = tab.servedURL { info["served_url"] = field(url.absoluteString) } // a dev server's local address
         info.merge(AgentPlaces.shared.fields(of: tab, in: controller)) { $1 } // where its agent works, against the window
         if let remote = tab.remote {
             if tab.loginPrompt { info["login_prompt"] = true } // ssh asks the user something in that tab
@@ -368,7 +377,7 @@ enum MCPControl {
     private static func readTab(_ tab: TerminalTab, lines: Int) -> MCPServer.CallResult {
         var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab)]
         info.merge(questionInfo(tab)) { $1 }
-        info["screen"] = tab.screenTail(min(2000, max(1, lines))).joined(separator: "\n")
+        info["screen"] = fieldRows(tab.screenTail(min(2000, max(1, lines)))).joined(separator: "\n")
         return ok(info)
     }
 
@@ -382,7 +391,7 @@ enum MCPControl {
         if tab.exited || (!busy && !starting) || now >= deadline || controller(of: tab) == nil {
             var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab), "timed_out": busy || starting]
             info.merge(questionInfo(tab)) { $1 }
-            info["screen"] = tab.screenTail(40).joined(separator: "\n")
+            info["screen"] = fieldRows(tab.screenTail(40)).joined(separator: "\n")
             return reply(ok(info))
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { waitFor(tab, until: deadline, sawWork: saw, reply: reply) }
@@ -412,7 +421,7 @@ enum MCPControl {
         if secret != nil || document.holdsSecrets {
             if range.length > 0 { info["withheld"] = "The selection is in a file that usually holds secrets, so its text isn't shared." }
         } else if range.length > 0 {
-            let selected = text.substring(with: range)
+            let selected = field(text.substring(with: range))
             info["text"] = selected.count > 200_000 ? String(selected.prefix(200_000)) + "\n… (cut at 200,000 characters)" : selected
         }
         return ok(info)
@@ -594,8 +603,8 @@ enum MCPControl {
     /// The question, its choices as the screen lists them, and the id answer_agent takes back.
     static func questionInfo(_ tab: TerminalTab) -> [String: Any] {
         guard let question = tab.status.question, let id = questionID(tab) else { return [:] }
-        var info: [String: Any] = ["question": question, "question_id": id]
-        if let menu = AgentScreen.menu(screenLines: tab.screenTail()), menu.question == question { info["choices"] = menu.choices }
+        var info: [String: Any] = ["question": field(question), "question_id": id]
+        if let menu = AgentScreen.menu(screenLines: tab.screenTail()), menu.question == question { info["choices"] = menu.choices.map(field) }
         return info
     }
 
@@ -619,10 +628,10 @@ enum MCPControl {
             return reply(fail("That tab is not asking anything now (state: \(state(tab))); nothing was typed. read_tab shows its screen."))
         }
         guard given == current else {
-            return reply(fail("That question is gone; nothing was typed. The tab now asks “\(question)” (question_id \(current)): answer that one only if you mean to."))
+            return reply(fail("That question is gone; nothing was typed. The tab now asks “\(field(question))” (question_id \(current)): answer that one only if you mean to."))
         }
         guard let menu = AgentScreen.menu(screenLines: tab.screenTail()), menu.question == question else {
-            return reply(fail("The choices for “\(question)” cannot be read on that screen; nothing was typed. read_tab shows it, and press_keys can answer."))
+            return reply(fail("The choices for “\(field(question))” cannot be read on that screen; nothing was typed. read_tab shows it, and press_keys can answer."))
         }
         let index: Int
         switch menu.index(choice: choice as? Int, answer: answer as? String) {
@@ -630,10 +639,10 @@ enum MCPControl {
         case .success(let found): index = found
         }
         guard let keys = menu.keys(toPick: index) else {
-            return reply(fail("That screen does not show which choice is selected, so the way to “\(menu.choices[index])” is unknown; nothing was typed. press_keys can answer."))
+            return reply(fail("That screen does not show which choice is selected, so the way to “\(field(menu.choices[index]))” is unknown; nothing was typed. press_keys can answer."))
         }
         let id = tab.id.uuidString.lowercased()
-        let label = menu.choices[index]
+        let label = field(menu.choices[index])
         // Still the same question, and (in a list) the cursor on the choice.
         func ready() -> Bool {
             tab.pollAgentScreen()
@@ -666,7 +675,7 @@ enum MCPControl {
                 if after == current {
                     info["note"] = "The question is still on screen; read_tab shows what the agent did with the answer."
                 } else {
-                    info["question_after"] = tab.status.question
+                    info["question_after"] = tab.status.question.map(field)
                     info["question_id_after"] = after
                 }
             }
