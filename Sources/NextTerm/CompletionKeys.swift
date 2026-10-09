@@ -67,9 +67,9 @@ final class CompletionController {
         return session.realTab()
     }
 
-    /// The question, over the window; the Tab that raised it waits for the answer. If the shell moved on
-    /// meanwhile (an agent typed, a command started), that Tab goes nowhere. False: another sheet is up, so
-    /// the Tab is the plugin's this time.
+    /// The question, over the window; the Tab that raised it waits for the answer, and goes once the sheet has gone.
+    /// If the shell moved on meanwhile (an agent typed, a command started), that Tab goes nowhere. False: another
+    /// sheet is up, so the Tab is the plugin's this time.
     private func ask(_ plugin: CompletionOwner.Plugin, _ session: CompletionSession, _ tab: TerminalTab) -> Bool {
         guard let window = owner?.window, window.attachedSheet == nil else { return false }
         let writes = session.writes
@@ -81,13 +81,18 @@ final class CompletionController {
             case .notNow: CompletionPreferences.dismissed(plugin)
             }
             CompletionSession.syncAll()
-            let unchanged = session.state.isArmed && session.state.arm?.sameLine(as: arm) == true && session.writes == writes
-            guard unchanged, tab.view.window === window, window.makeFirstResponder(tab.view) else { return }
-            if answer == .nextTerm {
-                self?.watch(session)
-                if !session.realTab() { session.sendPlainTab() }
-            } else {
-                session.sendPlainTab()
+            // Not from here: AppKit slides the sheet away on the main thread after this returns (a quarter of a second,
+            // with no output read meanwhile), and zsh waits 150 ms for Next Term's answer to the Tab before it runs
+            // its own. On the main queue, the Tab goes once the sheet is gone.
+            DispatchQueue.main.async {
+                let unchanged = session.state.isArmed && session.state.arm?.sameLine(as: arm) == true && session.writes == writes
+                guard unchanged, tab.view.window === window, window.makeFirstResponder(tab.view) else { return }
+                if answer == .nextTerm {
+                    self?.watch(session)
+                    if !session.realTab() { session.sendPlainTab() }
+                } else {
+                    session.sendPlainTab()
+                }
             }
         }
         return true
