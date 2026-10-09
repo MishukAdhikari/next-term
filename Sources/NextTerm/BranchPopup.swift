@@ -655,6 +655,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             } else {
                 add("Checkout") { actions.checkout(ref) }
             }
+            if let target = actions.worktreeTarget(ref) { add(AgentGuard.openInNewWorktree) { actions.openInNewWorktree(target) } }
             if canCheckoutAndUpdate(ref, in: model), let tracking {
                 add("Checkout and Update", tip: "Switches to it, then brings it up to \(tracking.remote)/\(tracking.branch) (↓\(ref.behind)). ⌥↩") {
                     actions.checkoutAndUpdate(ref)
@@ -682,6 +683,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             add("Copy Name") { self.copy(ref.name) }
         case let .branch(ref, _, _, _):
             add("Checkout") { actions.checkout(ref) }
+            if let target = actions.worktreeTarget(ref) { add(AgentGuard.openInNewWorktree) { actions.openInNewWorktree(target) } }
             add("New Branch from “\(ref.name)”…") { actions.newBranch(from: ref) }
             add("Show History") { self.showHistory(of: ref) }
             menu.addItem(.separator())
@@ -700,6 +702,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             add("Copy Name") { self.copy(ref.name) }
         case let .tag(name, _):
             add("Checkout “\(name)” (detached)") { actions.checkoutTag(name) }
+            add(AgentGuard.openInNewWorktree) { actions.openInNewWorktree(.revision("refs/tags/" + name, shown: name)) }
             add("New Branch from “\(name)”…") { actions.newBranch(fromTag: name) }
             add("Show History") { self.showHistory(of: "refs/tags/" + name) }
             menu.addItem(.separator())

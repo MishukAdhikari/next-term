@@ -194,10 +194,10 @@ extension SelfTest {
             actions.checkout(target)
             func buttons(_ view: NSView) -> [NSButton] { view.subviews.flatMap { ($0 as? NSButton).map { [$0] } ?? buttons($0) } }
             func fields(_ view: NSView) -> [NSTextField] { view.subviews.flatMap { ($0 as? NSTextField).map { [$0] } ?? fields($0) } }
-            let asked = await wait(8) { window.attachedSheet.flatMap { $0.contentView.map(buttons) }?.contains { $0.title == "Switching Anyway" } == true }
+            let asked = await wait(8) { window.attachedSheet.flatMap { $0.contentView.map(buttons) }?.contains { $0.title == "Switch Anyway" } == true }
             let text = window.attachedSheet?.contentView.map(fields)?.map(\.stringValue).joined(separator: " ") ?? ""
             check(asked && text.contains("“five”") && !text.contains("“seven”"), "places: the guard asks about the agent in the main checkout, not the one in the worktree", text)
-            window.attachedSheet?.contentView.map(buttons)?.first { $0.title == "Switching Anyway" }?.performClick(nil)
+            window.attachedSheet?.contentView.map(buttons)?.first { $0.title == "Switch Anyway" }?.performClick(nil)
             _ = await wait(10) { sh("rev-parse", "--abbrev-ref", "HEAD") == "fix/7611-3ds" }
         }
         GitToast.dismiss()

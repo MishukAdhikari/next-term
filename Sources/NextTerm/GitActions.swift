@@ -9,12 +9,12 @@ struct GitActions {
     let popup: BranchPopupController
     init(_ popup: BranchPopupController) { self.popup = popup }
 
-    private var controller: TerminalWindowController? { popup.window }
-    private var window: NSWindow? { controller?.window }
-    private var model: BranchModel? { popup.model }
-    private var root: String { model?.root ?? "" }
+    var controller: TerminalWindowController? { popup.window }
+    var window: NSWindow? { controller?.window }
+    var model: BranchModel? { popup.model }
+    var root: String { model?.root ?? "" }
 
-    private func run(_ title: String, _ steps: [[String]], activity: GitWriter.Activity? = nil, then: @escaping (GitWriter.Result) -> Void) {
+    func run(_ title: String, _ steps: [[String]], activity: GitWriter.Activity? = nil, then: @escaping (GitWriter.Result) -> Void) {
         let popup = self.popup
         let controller = self.controller
         let root = self.root
@@ -27,7 +27,7 @@ struct GitActions {
         }
     }
 
-    private func toast(_ text: String) { GitToast.show(text, in: window) }
+    func toast(_ text: String) { GitToast.show(text, in: window) }
 
     // MARK: agents
 
@@ -44,31 +44,63 @@ struct GitActions {
         }
     }
 
-    /// Asks first when an agent works here: switching or updating changes the files under it.
-    private func confirmAgents(_ doing: String, then go: @escaping () -> Void) {
-        guard let tab = agentsHere().first else { return go() }
-        let agent = tab.status.program.isEmpty ? "An agent" : tab.status.program
-        GitPrompt.ask("\(agent) is working in this folder", info: "In the tab “\(tab.title)”. \(doing) changes the files under it.",
-                      buttons: ["\(doing.components(separatedBy: " ").first ?? "Continue") Anyway", "Cancel"], style: .warning, over: window) { choice in
-            if choice == 0 { go() }
+    /// Asks first when agents work here: switching or updating changes the files under them. A switch to
+    /// `worktree` offers it in a new worktree first (Return), which leaves this folder as it is; `update`: then
+    /// brought up to its upstream there (Checkout and Update).
+    private func confirmAgents(_ action: AgentGuard.Action, worktree: WorktreeTarget? = nil, update: Bool = false, then go: @escaping () -> Void) {
+        let tabs = agentsHere()
+        guard !tabs.isEmpty else { return go() }
+        let agents = tabs.map { AgentGuard.Agent(program: $0.status.program, tab: $0.title) }
+        let buttons = AgentGuard.buttons(action, worktree: worktree != nil)
+        GitPrompt.ask(AgentGuard.title(agents), info: AgentGuard.info(agents, action), buttons: buttons, style: .warning, over: window) { choice in
+            guard buttons.first == AgentGuard.openInNewWorktree, let worktree else {
+                if choice == 0 { go() }
+                return
+            }
+            if choice == 0 { openInNewWorktree(worktree, update: update) }
+            if choice == 1 { go() }
         }
+    }
+
+    /// The target of a switch to `ref`, in a new worktree: nil for the branch checked out here, or one
+    /// checked out in another worktree (git checks a branch out once).
+    func worktreeTarget(_ ref: BranchRef) -> WorktreeTarget? {
+        guard let model, !ref.isHead else { return nil }
+        guard ref.isRemote else { return model.otherWorktree(of: ref) == nil ? .branch(ref.name) : nil }
+        guard let parts = model.remoteAndBranch(of: ref.name) else { return nil }
+        let local = model.local(parts.branch)
+        if let local, local.isHead || model.otherWorktree(of: local) != nil { return nil }
+        return .remoteBranch(remote: parts.remote, branch: parts.branch, localExists: local != nil)
     }
 
     // MARK: switching
 
     func checkout(_ ref: BranchRef) {
-        let target = ref.isRemote ? ref.shortName : ref.name
+        // A remote's name may hold a "/" ("my/fork"): split by the remotes, not at the first "/".
+        let target = ref.isRemote ? (model?.remoteAndBranch(of: ref.name)?.branch ?? ref.shortName) : ref.name
+        // Checked out in another worktree: git can't switch to it here, so nothing would touch an agent. Open it there.
+        let local = ref.isRemote ? model?.local(target) : ref
+        if let local, let elsewhere = model?.otherWorktree(of: local) { return held(target, at: elsewhere) }
         let steps: [[String]]
         if ref.isRemote {
             steps = model?.local(target) != nil ? [["switch", target]] : [["switch", "-c", target, "--track", ref.name]]
         } else {
             steps = [["switch", target]]
         }
-        confirmAgents("Switching branches") {
+        let worktree = worktreeTarget(ref)
+        confirmAgents(.switching(to: target), worktree: worktree) {
             run("Checkout \(target)", steps) { result in
                 if result.ok { return toast("Switched to \(target)") }
-                switchFailed(result, to: target, steps: steps)
+                switchFailed(result, to: target, steps: steps, worktree: worktree)
             }
+        }
+    }
+
+    /// "“x” is checked out in another worktree", with Open Worktree.
+    private func held(_ target: String, at path: String?) {
+        GitPrompt.ask("“\(target)” is checked out in another worktree", info: path.map { RecentProjects.abbreviate($0) } ?? "",
+                      buttons: ["Open Worktree", "Cancel"], over: window) { choice in
+            if choice == 0, let path { openWorktree(path) }
         }
     }
 
@@ -82,10 +114,11 @@ struct GitActions {
                                      buttons: ["OK"], over: window) { _ in }
             }
             let steps = [["switch", "--detach", revision]]
-            confirmAgents("Switching") {
+            let worktree = WorktreeTarget.revision(revision, shown: name)
+            confirmAgents(.switching(to: name), worktree: worktree) {
                 run("Checkout \(name)", steps) { result in
                     if result.ok { return toast("At \(name), detached: New Branch… keeps work made here") }
-                    switchFailed(result, to: name, steps: steps)
+                    switchFailed(result, to: name, steps: steps, worktree: worktree)
                 }
             }
         }
@@ -111,23 +144,25 @@ struct GitActions {
     }
 
     /// `then` runs once the switch is made after a stash (Checkout and Update brings the branch forward).
-    private func switchFailed(_ result: GitWriter.Result, to target: String, steps: [[String]], then: (() -> Void)? = nil) {
+    /// `worktree`: the target in a new worktree, the way out when an agent's changes are in the way.
+    private func switchFailed(_ result: GitWriter.Result, to target: String, steps: [[String]], worktree: WorktreeTarget? = nil,
+                              update: Bool = false, then: (() -> Void)? = nil) {
         switch result.failure {
         case let .localChanges(files)?:
             let list = files.prefix(8).joined(separator: "\n") + (files.count > 8 ? "\n…and \(files.count - 8) more" : "")
             guard agentsHere().isEmpty else {
-                return GitPrompt.ask("Your changes would be overwritten", info: "\(list)\n\nAn agent is working in this folder, so Next Term won’t move its changes aside. Commit them, or let the agent finish first.",
-                                     buttons: ["OK"], over: window) { _ in }
+                let way = worktree == nil ? "Commit them, or let the agent finish first." : "Open “\(target)” in a new worktree, which leaves this folder as it is, or let the agent finish first."
+                return GitPrompt.ask("Your changes would be overwritten", info: "\(list)\n\nAn agent is working in this folder, so Next Term won’t move its changes aside. " + way,
+                                     buttons: worktree == nil ? ["OK"] : [AgentGuard.openInNewWorktree, "Cancel"], over: window) { choice in
+                    if choice == 0, let worktree { openInNewWorktree(worktree, update: update) }
+                }
             }
             GitPrompt.ask("Switching to “\(target)” would overwrite your changes", info: "\(list)\n\nNext Term can put them in a stash, switch, and put them back. If they don’t fit there, they stay safe in the stash.",
                           buttons: ["Stash, Switch and Reapply", "Cancel"], over: window) { choice in
                 if choice == 0 { stashSwitch(to: target, steps: steps, then: then) }
             }
         case let .heldByWorktree(path)?:
-            GitPrompt.ask("“\(target)” is checked out in another worktree", info: path.map { RecentProjects.abbreviate($0) } ?? "",
-                          buttons: ["Open Worktree", "Cancel"], over: window) { choice in
-                if choice == 0, let path { openWorktree(path) }
-            }
+            held(target, at: path)
         default:
             failed("Could not switch to “\(target)”", result, retry: steps.last)
         }
@@ -270,7 +305,8 @@ struct GitActions {
             }
         }
         // From where we are, nothing changes on disk; from elsewhere, the files do.
-        if switching, base != nil, base?.isHead != true { confirmAgents("Switching branches", then: go) } else { go() }
+        guard switching, let base, !base.isHead else { return go() }
+        confirmAgents(.switching(to: name), worktree: .newBranch(name, base: base.name, noTrack: noTrack), then: go)
     }
 
     func rename(_ ref: BranchRef) {
@@ -386,7 +422,7 @@ struct GitActions {
             popup.reload {
                 guard let fresh = popup.model?.currentRef else { return }
                 guard fresh.behind > 0 else { return toast("Already up to date") }
-                confirmAgents("Updating") { bringUp(fresh) }
+                confirmAgents(.updating) { bringUp(fresh) }
             }
         }
     }
@@ -416,9 +452,10 @@ struct GitActions {
                 bringUp(fresh)
             }
         }
-        confirmAgents("Switching branches") {
+        let worktree = worktreeTarget(ref)
+        confirmAgents(.switching(to: ref.name), worktree: worktree, update: true) {
             run("Checkout \(ref.name)", steps) { result in
-                guard result.ok else { return switchFailed(result, to: ref.name, steps: steps, then: update) }
+                guard result.ok else { return switchFailed(result, to: ref.name, steps: steps, worktree: worktree, update: true, then: update) }
                 update()
             }
         }
@@ -456,11 +493,11 @@ struct GitActions {
     }
 
     func merge(_ branch: String) {
-        confirmAgents("Merging") { integrate("Merge \(branch)", ["merge", "--no-edit", "--autostash", branch]) }
+        confirmAgents(.merging) { integrate("Merge \(branch)", ["merge", "--no-edit", "--autostash", branch]) }
     }
 
     func rebase(onto branch: String) {
-        confirmAgents("Rebasing") { integrate("Rebase onto \(branch)", ["rebase", "--autostash", branch]) }
+        confirmAgents(.rebasing) { integrate("Rebase onto \(branch)", ["rebase", "--autostash", branch]) }
     }
 
     /// A merge, rebase or fast-forward: on conflicts, says so and offers an agent or a terminal.
@@ -492,7 +529,8 @@ struct GitActions {
         case .bisect: command = ["bisect", "reset"]
         }
         let doing = option == ["--abort"] ? "Abort" : option == ["--skip"] ? "Skip" : "Continue"
-        confirmAgents("\(doing)ing") {
+        let action: AgentGuard.Action = option == ["--abort"] ? .aborting : option == ["--skip"] ? .skipping : .continuing
+        confirmAgents(action) {
             run("\(progress.title): \(doing)", [command]) { result in
                 if result.ok, popup.model?.inProgress == nil { return toast("\(progress.title.components(separatedBy: " ").first ?? "Done"): done") }
                 if result.ok { return toast("Next step: resolve, then Continue") }
@@ -715,12 +753,13 @@ struct GitActions {
         }
     }
 
-    private static func tail(_ output: String, lines: Int = 12) -> String {
+    static func tail(_ output: String, lines: Int = 12) -> String {
         output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\n", omittingEmptySubsequences: false).suffix(lines).joined(separator: "\n")
     }
 
-    /// Says what went wrong in plain words, with git's own last lines, and what can be done now.
-    private func failed(_ title: String, _ result: GitWriter.Result, retry: [String]?) {
+    /// Says what went wrong in plain words, with git's own last lines, and what can be done now; over
+    /// `other` when given (a worktree's new window), else this window.
+    func failed(_ title: String, _ result: GitWriter.Result, retry: [String]?, over other: NSWindow? = nil) {
         var info = Self.tail(result.output)
         var person = false
         switch result.failure {
@@ -737,6 +776,9 @@ struct GitActions {
             info = "Another git command is running in this repository, or one that stopped left its lock file\(path.map { " (\($0))" } ?? ""). Try again in a moment."
         case .network?:
             info = "The remote couldn’t be reached.\n\n" + info
+        case let .pathExists(path)?:
+            let folder = path.map { "“\(RecentProjects.abbreviate($0))”" } ?? "That folder"
+            info = "\(folder) is already there, and git makes a worktree only in a new or empty folder. Choose another name.\n\n" + info
         case .nothingToDo?:
             return toast(Self.tail(result.output, lines: 1))
         default:
@@ -744,7 +786,7 @@ struct GitActions {
         }
         var buttons = ["OK", "Show Git Commands"]
         if person, retry != nil { buttons.append("Open Terminal") }
-        GitPrompt.ask(title, info: info, buttons: buttons, style: .warning, over: window) { choice in
+        GitPrompt.ask(title, info: info, buttons: buttons, style: .warning, over: other ?? window) { choice in
             if choice == 1 { GitCommandsWindowController.shared.present() }
             if choice == 2, let retry { runInTerminal(retry) }
         }
