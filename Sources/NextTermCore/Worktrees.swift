@@ -152,9 +152,26 @@ public enum WorktreeFolder {
             return bad == ":" ? "A folder name can’t contain “:”." : "A folder name can’t contain control characters."
         }
         if name.utf8.count > 255 || (folder + "/" + name).utf8.count >= 1024 { return "That name is too long for a folder." }
-        if isRegistered(name) { return "Git still lists a worktree there, whose folder is gone: forget it from its row’s menu first." }
+        if isRegistered(name) { return "Git still lists a worktree there whose folder is gone: choose Remove Worktree… on its row first." }
         if isTaken(name) { return "Already exists in " + RecentProjects.abbreviate(folder, home: home) }
         return nil
+    }
+
+    /// Makes the new worktree's folder, empty, before git runs (git takes an empty folder), so a folder that
+    /// appeared since the sheet checked its name is never taken for the new worktree: git would fail on it
+    /// after making the branch. The reason it can't, or nil once it is made.
+    public static func claim(_ path: String, home: String = NSHomeDirectory()) -> String? {
+        let parent = (path as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: parent, withIntermediateDirectories: true)
+        guard mkdir(path, 0o755) != 0 else { return nil }
+        let code = errno
+        if code == EEXIST { return "Already exists in " + RecentProjects.abbreviate(parent, home: home) }
+        return "Can’t make the folder: " + String(cString: strerror(code)) + "."
+    }
+
+    /// Removes a claimed folder git didn't make a worktree in: only while it is empty.
+    public static func release(_ path: String) {
+        rmdir(path)
     }
 
     /// Something is at `path`: a folder, a file, or a link (a broken one too).

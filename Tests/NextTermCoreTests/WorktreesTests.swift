@@ -90,7 +90,7 @@ import Testing
         #expect(problem("") == "The folder needs a name.")
         #expect(problem("   ") == "The folder needs a name.")
         #expect(problem("xCloud-wt-7027-sso") == "Already exists in ~/Code")
-        #expect(problem("xCloud-wt-gone") == "Git still lists a worktree there, whose folder is gone: forget it from its row’s menu first.")
+        #expect(problem("xCloud-wt-gone") == "Git still lists a worktree there whose folder is gone: choose Remove Worktree… on its row first.")
         #expect(problem(".hidden") == "A folder name can’t start with “.”.")
         #expect(problem("..") == "A folder name can’t start with “.”.")
         #expect(problem("-x") == "A folder name can’t start with “-”.")
@@ -109,6 +109,24 @@ import Testing
         #expect(WorktreeFolder.sheetInfo(checkout: "next-term", includes: true)
             == "next-term and its changes stay as they are. The new folder gets committed files, and copies of the ignored files .worktreeinclude lists.")
         #expect(WorktreeFolder.pathLine(folder: "/Users/me/Code", name: "xCloud-wt-7027-sso", home: "/Users/me") == "~/Code/xCloud-wt-7027-sso")
+    }
+
+    /// The folder is made before git runs, so one that appeared since the sheet checked is never taken for
+    /// the new worktree (git leaves a branch behind when it finds the folder there).
+    @Test func theFolderIsClaimedBeforeGitRuns() throws {
+        let base = canonicalPath(FileManager.default.temporaryDirectory.path) + "/nt-claim-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: base) }
+        let path = base + "/.claude/worktrees/7027-sso"
+        #expect(WorktreeFolder.claim(path, home: "/nowhere") == nil)
+        #expect((try? FileManager.default.contentsOfDirectory(atPath: path)) == [])
+        #expect(WorktreeFolder.claim(path, home: "/nowhere") == "Already exists in \(base)/.claude/worktrees")
+        WorktreeFolder.release(path)
+        #expect(!WorktreeFolder.exists(path))
+        // Only an empty folder goes: never one git (or anyone) has put something in.
+        #expect(WorktreeFolder.claim(path, home: "/nowhere") == nil)
+        try "x".write(toFile: path + "/a.txt", atomically: true, encoding: .utf8)
+        WorktreeFolder.release(path)
+        #expect(FileManager.default.fileExists(atPath: path + "/a.txt"))
     }
 
     @Test func whetherTheRepositoryIgnoresClaudeWorktrees() throws {

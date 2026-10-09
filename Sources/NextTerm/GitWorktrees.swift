@@ -45,9 +45,11 @@ extension GitActions {
     }
 
     /// One `git worktree add` through GitWriter (logged in Git Commands), while the sheet says "Creating…".
-    /// A worktree that is there after git failed (a post-checkout hook, LFS) opens anyway, with the error
-    /// over its window; nothing is rolled back.
+    /// The folder is made first, empty, so one that appeared since the sheet checked the name is never taken
+    /// for the new worktree; it goes again when git makes nothing in it. A worktree that is there after git
+    /// failed (a post-checkout hook, LFS) opens anyway, with the error over its window; nothing is rolled back.
     private func createWorktree(_ target: WorktreeTarget, at path: String, update: Bool, sheet: WorktreeSheet) {
+        if let problem = WorktreeFolder.claim(path) { return sheet.refused(problem) }
         let args = target.addArguments(path: path)
         let folder = (path as NSString).lastPathComponent
         let root = self.root
@@ -55,6 +57,7 @@ extension GitActions {
         run("New worktree \(folder)", [args]) { result in
             let made = result.ok || Self.isWorktree(path, of: commonDir)
             guard made else {
+                WorktreeFolder.release(path)
                 sheet.finish()
                 return failed("Could not create “\(folder)”", result, retry: args)
             }
@@ -204,6 +207,8 @@ final class WorktreeSheet: NSObject, NSTextFieldDelegate {
     private let prefix: String
     private let check: (String) -> String?
     private var onCreate: ((String, WorktreeSheet) -> Void)?
+    /// Create was pressed and git runs: a second press does nothing.
+    private var creating = false
     private weak var parent: NSWindow?
 
     init(title: String, folder: String, prefill: String, prefix: String, footnote: String, check: @escaping (String) -> String?) {
@@ -287,8 +292,8 @@ final class WorktreeSheet: NSObject, NSTextFieldDelegate {
         let done: (NSApplication.ModalResponse) -> Void = { _ in
             if Self.current === self { Self.current = nil }
         }
+        // initialFirstResponder puts the keyboard in the field, its short part selected (PrefixField).
         alert.beginSheetModal(for: window, completionHandler: done)
-        DispatchQueue.main.async { [self] in alert.window.makeFirstResponder(field) }
     }
 
     /// Ends the sheet: after git, either way.
@@ -298,7 +303,21 @@ final class WorktreeSheet: NSObject, NSTextFieldDelegate {
         if Self.current === self { Self.current = nil }
     }
 
+    /// The folder can't be made after all (it appeared since the name was checked): the sheet is the
+    /// sheet again, with the reason under the field.
+    func refused(_ reason: String) {
+        creating = false
+        spinner.stopAnimation(nil)
+        create.title = "Create"
+        cancel.isEnabled = true
+        field.isEnabled = true
+        changed()
+        if problem.stringValue.isEmpty { problem.stringValue = reason }
+        alert.window.makeFirstResponder(field)
+    }
+
     func controlTextDidChange(_ note: Notification) {
+        field.untouched = false
         // A "/" typed by habit becomes "-", where it was typed.
         let typed = field.stringValue
         let normalized = WorktreeFolder.normalized(typed)
@@ -318,8 +337,8 @@ final class WorktreeSheet: NSObject, NSTextFieldDelegate {
     }
 
     @objc private func createPressed() {
-        guard check(field.stringValue) == nil, let onCreate else { return NSSound.beep() }
-        self.onCreate = nil
+        guard !creating, check(field.stringValue) == nil, let onCreate else { return NSSound.beep() }
+        creating = true
         field.isEnabled = false
         create.title = "Creating…"
         create.isEnabled = false
@@ -353,16 +372,17 @@ final class WorktreeSheet: NSObject, NSTextFieldDelegate {
     func pressCancel() { cancel.performClick(nil) }
 }
 
-/// A field that, the first time it takes the keyboard, selects what follows its first `kept` characters
-/// rather than all of it: the folder's short part after "xCloud-wt-".
+/// A field that, each time it takes the keyboard until its text is changed, selects what follows its first
+/// `kept` characters rather than all of it: the folder's short part after "xCloud-wt-". Each time, since
+/// AppKit may start editing it more than once as the sheet comes up, selecting all again.
 private final class PrefixField: NSTextField {
     var kept = 0
-    private var selectedOnce = false
+    /// Its text is still the prefill.
+    var untouched = true
 
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()
-        if became, !selectedOnce, let editor = currentEditor() {
-            selectedOnce = true
+        if became, untouched, let editor = currentEditor() {
             let length = (stringValue as NSString).length, start = min(kept, length)
             editor.selectedRange = NSRange(location: start, length: length - start)
         }
