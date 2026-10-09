@@ -479,7 +479,8 @@ extension SessionSnapshot {
     public enum Action: String, CaseIterable, Sendable {
         /// The agent's own resume, once the shell is ready.
         case resume
-        /// An agent's original command on the prompt line, unrun.
+        /// An agent's resume command on the prompt line, unrun: its resume form with the session id, or its program
+        /// alone, with no prompt words, options or environment prefix (KTD7). Never rebuilt from the line that started it.
         case onTheLine
         /// Any other command on the prompt line, unrun.
         case typeIn
