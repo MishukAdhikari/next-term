@@ -20,6 +20,11 @@ jobs:
       - name: Toolchain
         run: swift --version
 
+      - name: No website in this repository
+        run: |
+          # The website and its notes live in a private repository; only the installer (scripts/install.sh) is here.
+          if [[ -n "$(git ls-files site claudedocs)" ]]; then echo "::error::site/ or claudedocs/ is tracked again"; git ls-files site claudedocs | head; exit 1; fi
+
       - name: Unit tests
         timeout-minutes: 15
         run: |

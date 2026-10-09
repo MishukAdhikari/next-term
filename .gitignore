@@ -6,3 +6,7 @@ xcuserdata/
 DerivedData/
 .DS_Store
 .claude/worktrees/
+# The website lives in a private repository (next-term-site); keep its leftovers and notes out of this one.
+/site/
+claudedocs/
+.playwright-mcp/

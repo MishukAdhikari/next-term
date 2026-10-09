@@ -1,2 +1,0 @@
-# The website (site/) is documentation for the app, not the app: keep it out of GitHub's language bar.
-site/** linguist-documentation

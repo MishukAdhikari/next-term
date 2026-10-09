@@ -3,7 +3,7 @@
 #
 #     scripts/sign-release.sh v0.8.0
 #
-# The installer (site/src/install.sh) and the app's updater install only a disk image whose checksum
+# The installer (scripts/install.sh) and the app's updater install only a disk image whose checksum
 # this key signed, and the signed text names the versioned file (NextTerm-0.8.0.dmg), so a signature
 # can't be moved to another release. The private key never goes to CI or the repository: it lives on the maintainer's
 # Mac, in ~/.config/next-term/release-signing-key (override with NEXTTERM_RELEASE_KEY).
@@ -47,3 +47,4 @@ for pair in "${ids[@]}"; do
 done
 gh release upload "$tag" "$work/$sum.sig" --clobber
 echo "Signed ${sum}: ${actual}"
+echo "Next: set VERSION and the sizes on the website, build, check and deploy it."

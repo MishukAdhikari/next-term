@@ -1,7 +1,7 @@
 import Foundation
 
 /// The check made before an update is installed, by the app's updater and by the installer
-/// (site/src/install.sh) alike. scripts/sign-release.sh signs each release's `NextTerm-1.2.3.dmg.sha256`
+/// (scripts/install.sh) alike. scripts/sign-release.sh signs each release's `NextTerm-1.2.3.dmg.sha256`
 /// with the Next Term release key, whose private half never leaves the maintainer's Mac, so a release
 /// changed on GitHub is refused. The signed text names the versioned file, so a signature can't be
 /// moved to another release, or to the unversioned `NextTerm.dmg`.

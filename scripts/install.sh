@@ -14,7 +14,7 @@
 #     NEXTTERM_VERSION=0.7.0    a particular version instead of the latest
 #     NEXTTERM_DIR=~/Apps       another folder
 #
-# Source: https://github.com/MishukAdhikari/next-term/blob/main/site/src/install.sh
+# Source: https://github.com/MishukAdhikari/next-term/blob/main/scripts/install.sh
 
 # What the exit trap cleans up. Not local to main: the trap also runs after main has returned.
 nt_work=""

@@ -5,7 +5,7 @@ import NextTermCore
 /// Updates from GitHub Releases: checks once a day at 11:00 or later, in the Mac's time zone (and on demand). A new version opens the
 /// update window with its release notes (Skip This Version, Remind Me Later, Install and Relaunch), and
 /// a blue Update button stays at the top right of each window until it is installed or skipped. One
-/// click downloads the new DMG, checks it as the installer (site/src/install.sh) does (the release's
+/// click downloads the new DMG, checks it as the installer (scripts/install.sh) does (the release's
 /// SHA-256 signed with the Next Term release key, and the download matching it), puts the new app in
 /// place of this one when Next Term quits, and starts it again.
 ///

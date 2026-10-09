@@ -8,7 +8,7 @@ import Testing
     /// The app and the installer trust one key: the one in install.sh, which the site serves.
     @Test func theKeyIsTheInstallers() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let script = try String(contentsOf: root.appendingPathComponent("site/src/install.sh"), encoding: .utf8)
+        let script = try String(contentsOf: root.appendingPathComponent("scripts/install.sh"), encoding: .utf8)
         func value(_ name: String) -> String? {
             guard let range = script.range(of: "local \(name)=\"[^\"]*\"", options: .regularExpression) else { return nil }
             return script[range].split(separator: "\"").dropFirst().first.map(String.init)
