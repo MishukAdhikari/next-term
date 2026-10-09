@@ -18,6 +18,10 @@ enum SelfTest {
     /// Where the self-test's Copilot CLI lock goes, so it never writes in your own ~/.copilot.
     nonisolated static let copilotLockFolder = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("nextterm-copilot-ide-\(getpid())", isDirectory: true)
+    /// Where the self-test's Claude Code lock goes, so it never writes in your own ~/.claude/ide (where a `claude` you
+    /// start would find the test run), nor clears a lock there.
+    nonisolated static let claudeLockFolder = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("nextterm-claude-ide-\(getpid())", isDirectory: true)
 
     private static var lines: [String] = []
     private static var failures = 0
@@ -4838,6 +4842,7 @@ enum SelfTest {
         ClaudeIDEServer.shared.stop() // remove the test run's lock file
         CopilotIDEServer.shared.stop()
         try? FileManager.default.removeItem(at: copilotLockFolder)
+        try? FileManager.default.removeItem(at: claudeLockFolder)
         record(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
         try? reportHandle?.close()
         let report = lines.joined(separator: "\n") + "\n"
