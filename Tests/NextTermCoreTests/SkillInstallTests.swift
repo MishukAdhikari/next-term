@@ -212,6 +212,31 @@ import Testing
         #expect(trash < move && !left.agents.contains(.claudeCode) && !makesLink(left))
     }
 
+    /// AE6 as the self-test reviews it: the same folder again over its linked install. The link stays by
+    /// default, the popup offers to remove it, and the line beside the popup says it stays linked and what it
+    /// starts, opening with ⚠︎ since it starts programs by itself. Left out, the line says the link goes.
+    @Test func anUpdateWithTheSamePartsKeepsItsLinkAndOffersToRemoveIt() throws {
+        let files = [".mcp.json": Self.server, "hooks/hooks.json": Self.hooks]
+        let installed = try install(files)
+        let package = try stage(files)
+        let plugin = try #require(package?.claude)
+        let shown = plan(.skip, package)
+        let preset = SkillInstall.defaultClaudeLink(shown, package: package, installed: installed, facts: .init())
+        #expect(shown.keptLink != nil && shown.clashes.isEmpty && preset == .link)
+        let items = SkillReviewText.choiceItems(count: 1, removesLink: shown.keptLink != nil)
+        #expect(items == ["Remove it from Claude Code", "Add it to Claude Code as a plugin"])
+        let start = plugin.start(key: nil)
+        let warns = SkillReviewText.choiceWarns(plugin, start: start, clashes: shown.clashes)
+        func summary(_ choice: SkillInstall.ClaudeLink) -> String {
+            let clause = SkillReviewText.choiceLine(skill: "writing-helper", plugin: plugin, choice: choice, start: start,
+                                                    keptLink: true, clashes: shown.clashes)
+            return SkillReviewText.choiceSummary([clause], choice: choice, warns: warns)
+        }
+        #expect(warns && summary(.link) == "⚠︎ writing-helper: stays linked. It starts what its review lists every time Claude Code opens, "
+            + "without asking you: 1 MCP server and 1 hook.")
+        #expect(summary(.skip).hasPrefix("writing-helper: its link is removed, so nothing in it starts in Claude Code."))
+    }
+
     /// A changed hook command, a new key outside the allowlist or a new program in bin/ are new parts.
     @Test(arguments: [
         ["hooks/hooks.json": #"{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "./other.sh"}]}]}}"#],
@@ -737,6 +762,44 @@ import Testing
         #expect(left.contains(.trash(claude)) && !makesLink(left))
         let added = SkillUnify.plan(row, winner: shared, in: inventory, claude: .link)
         #expect(added.contains(.link(at: claude, to: home + "/.agents/skills/writing-helper")))
+    }
+
+    /// The Settings › Skills checks in their order: the plugin folder installed (left out of Claude Code),
+    /// linked by Link as a change of its own, then Undo. Undo takes back the last change only: after the Link,
+    /// the link goes and the folder stays, so Unify finds it and a hand-made copy in ~/.claude/skills, and
+    /// asks. With no Link on top, the same Undo takes the install back, and Unify finds no plugin folder.
+    @Test func undoOfLinkLeavesThePluginFolderForUnify() throws {
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("nt-plugin-undo-\(UUID().uuidString)").path
+        let engine = SkillChanges(undoFile: scratch + "/undo.json", trash: SkillChanges.folderTrash(scratch + "/trash"))
+        try skill("download", [".mcp.json": Self.server, "hooks/hooks.json": Self.hooks])
+        let shared = home + "/.agents/skills/writing-helper"
+        let claude = home + "/.claude/skills/writing-helper"
+        let install: [SkillStep] = [.copy(from: home + "/download/writing-helper", to: scratch + "/ready/writing-helper"),
+                                    .move(from: scratch + "/ready/writing-helper", to: shared)]
+        func applied(_ result: Result<Void, SkillChanges.Failure>) -> Bool {
+            if case .failure(let failure) = result { Issue.record("\(failure.message)"); return false }
+            return true
+        }
+
+        // No Link on top: Undo takes the install back.
+        #expect(applied(engine.apply(install, title: "Install writing-helper")) && applied(engine.undo()))
+        #expect(!SkillChanges.exists(shared) && SkillInventory.scan(home: home).rows.first { $0.name == "writing-helper" } == nil)
+
+        // Link on top: Undo takes only the link back.
+        #expect(applied(engine.apply(install, title: "Install writing-helper")))
+        #expect(applied(engine.apply([.link(at: claude, to: shared)], title: "Link writing-helper for Claude Code")))
+        #expect(engine.lastChange?.title == "Link writing-helper for Claude Code" && applied(engine.undo()))
+        #expect(!SkillChanges.exists(claude) && SkillChanges.exists(shared + "/.claude-plugin/plugin.json"))
+
+        try skill(".claude/skills", plugin: nil, body: "hand-made")
+        let inventory = SkillInventory.scan(home: home)
+        let row = try row(inventory)
+        let kept = try #require(row.copies.first { $0.root.kind == .shared })
+        let mine = try #require(row.copies.first { $0.root.kind == .claude })
+        #expect(!mine.isLink && kept.path == shared)
+        let read = SkillInstall.pluginFacts(row.distinctCopies, home: home)
+        let asked = try #require(SkillUnify.pluginLink(row, winner: kept, in: inventory, read: read))
+        #expect(asked.asks && asked.preset == .skip)
     }
 
     /// Claude Code already loads the same plugin with the same parts: Unify keeps it there by default, as an

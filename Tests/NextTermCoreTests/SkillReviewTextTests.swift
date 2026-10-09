@@ -272,6 +272,23 @@ import Testing
         #expect(SkillReviewText.choiceSummary([], choice: .skip).isEmpty)
     }
 
+    /// R6: the line opens with ⚠︎ when a folder linked this way starts programs by itself, and only then.
+    @Test func theChoiceLineWarnsOnlyForAPluginThatStartsPrograms() throws {
+        let plugin = try #require(try SkillReviewTextPluginTests.writingHelper().package?.claude)
+        #expect(SkillReviewText.choiceWarns(plugin, start: .on, clashes: []))
+        #expect(SkillReviewText.choiceWarns(plugin, start: .offByManifest, clashes: []))
+        #expect(!SkillReviewText.choiceWarns(plugin, start: .offByKey, clashes: []))
+        let installed = SkillInstall.Clash(kind: .installed, name: "writing-helper", text: "")
+        #expect(!SkillReviewText.choiceWarns(plugin, start: .on, clashes: [installed]))
+        let quiet = try #require(try SkillFixture("writing-helper").claudeManifest("writing-helper").package?.claude)
+        #expect(!SkillReviewText.choiceWarns(quiet, start: .on, clashes: []))
+        let shell = try #require(try SkillFixture("writing-helper").claudeManifest("writing-helper")
+            .write("bin/tidy", "#!/bin/sh\n", executable: true).package?.claude)
+        #expect(shell.programsOnly && !SkillReviewText.choiceWarns(shell, start: .on, clashes: []))
+        #expect(SkillReviewText.choiceSummary(["a: linked."], choice: .link, warns: true) == "⚠︎ a: linked.")
+        #expect(SkillReviewText.choiceSummary(["a: left out."], choice: .skip, warns: true).hasPrefix("a: left out."))
+    }
+
     /// R10: Settings › Skills' Link asks with the lead line, which names the skill, and lists what the
     /// plugin would start under it.
     @Test func theLinkQuestionSaysWhatItStarts() throws {

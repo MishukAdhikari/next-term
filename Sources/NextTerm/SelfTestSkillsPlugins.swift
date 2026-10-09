@@ -176,8 +176,8 @@ extension SelfTest {
 extension SelfTest {
     /// Claude Code's link for a plugin folder: left out by default, added on request, and never a write to
     /// Claude Code's settings, in the self-test's home or the real one. The user's key set to false (as
-    /// /plugin sets it) shows as "off". Only digests and modes of the real settings file are compared;
-    /// nothing from it is printed or kept.
+    /// /plugin sets it) shows as "off". The real settings file is only stat'ed (realState): never opened,
+    /// and a failed check names what changed (realChanges), never a value.
     static func pluginChoiceChecks(home: String) async {
         let manager = FileManager.default
         let settings = (home as NSString).appendingPathComponent(".claude/settings.json")
@@ -195,7 +195,7 @@ extension SelfTest {
             chmod(settings, 0o600)
         }
         let realSettings = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/settings.json")
-        let realBefore = fileState(realSettings)
+        let realBefore = realState(realSettings)
         writeSettings("{\n  \"model\": \"self-test\"\n}\n")
         let before = fileState(settings)
 
@@ -259,11 +259,14 @@ extension SelfTest {
                                      + "Amp, Cursor, opencode and goose also find it through the Claude Code link."),
               "skills plugins: an update that keeps the link names Claude Code and the agents that find it through the link", linkedDetails)
         // AE6: the same parts as the installed copy keep the link by default; leaving it out would remove it.
+        // The line beside the popup opens with ⚠︎, since the plugin it keeps linked starts programs (R6).
         let linkedPopup = linkedSheet.choice.popup
         let keeps = linkedPopup.itemTitles == ["Remove it from Claude Code", "Add it to Claude Code as a plugin"] && linkedPopup.indexOfSelectedItem == 1
-        check(keeps && linkedSheet.choice.line.stringValue.hasPrefix("demo-plugin: stays linked."),
+        let staysLinked = "⚠︎ demo-plugin: stays linked. It starts what its review lists every time Claude Code opens, without asking you: "
+            + "1 MCP server and 1 hook."
+        check(keeps && linkedSheet.choice.line.stringValue == staysLinked,
               "skills plugins: an update with the same parts keeps its link, and the popup offers to remove it",
-              "\(linkedPopup.itemTitles) \(linkedSheet.choice.line.stringValue)")
+              "\(linkedPopup.itemTitles) \(linkedPopup.indexOfSelectedItem) \(linkedSheet.choice.line.stringValue)")
 
         // Removal names what may stay, and changes no other app's file: a Codex server with the skill's
         // address (as Codex would have added it), the plugin's parts and Amp's servers in open sessions.
@@ -318,7 +321,10 @@ extension SelfTest {
         check(shown.contains(clashText) && fallsBack,
               "skills plugins: a plugin synced from claude.ai with the same name is named, and the folder is left out", shown)
 
-        check(fileState(realSettings) == realBefore, "skills plugins: the real ~/.claude/settings.json keeps its bytes and mode")
+        let realAfter = realState(realSettings)
+        check(realAfter == realBefore,
+              "skills plugins: the real ~/.claude/settings.json keeps its size, modification time, mode and inode (stat only, never read)",
+              "changed: " + realChanges(realBefore, realAfter))
     }
 
     /// The agents besides Codex, Command Code and Claude Code that read ~/.agents/skills, as the review
@@ -441,8 +447,8 @@ extension SelfTest {
     /// Settings › Skills for a skill folder that is also a Claude Code plugin, installed with the review's
     /// default (left out of Claude Code): Link asks first and links only on "Add with Its Programs"; Unify,
     /// keeping it over a hand-made copy in ~/.claude/skills, asks with the same popup (AE14). Neither writes
-    /// Claude Code's settings, in the self-test's home or the real one. Only digests and modes of the real
-    /// settings file are compared; nothing from it is printed or kept.
+    /// Claude Code's settings, in the self-test's home or the real one. The real settings file is only
+    /// stat'ed (realState): never opened, and a failed check names what changed (realChanges), never a value.
     static func settingsPluginChecks(home: String) async {
         let manager = FileManager.default
         let settings = (home as NSString).appendingPathComponent(".claude/settings.json")
@@ -452,7 +458,7 @@ extension SelfTest {
         chmod(settings, 0o600)
         let before = fileState(settings)
         let realSettings = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/settings.json")
-        let realBefore = fileState(realSettings)
+        let realBefore = realState(realSettings)
         let readers = "Amp, Cursor, opencode and goose also read ~/.claude/skills."
         check(SkillsSettingsView.introText.hasSuffix(readers) && SkillsSettingsView.introTip.contains("Junie and goose"),
               "skills plugins: Settings › Skills' intro names the agents that read ~/.claude/skills, and its tooltip every reader of the shared one",
@@ -475,11 +481,17 @@ extension SelfTest {
         check(fileState(settings) == before && before?.hasSuffix(" 600") == true && !entryExists(link),
               "skills plugins: Settings › Skills' Link, Unify and their Undo leave Claude Code's settings byte for byte, mode 0600",
               fileState(settings) ?? "none")
-        check(fileState(realSettings) == realBefore, "skills plugins: the real ~/.claude/settings.json keeps its bytes and mode through the Settings checks")
+        let realAfter = realState(realSettings)
+        check(realAfter == realBefore,
+              "skills plugins: the real ~/.claude/settings.json keeps its size, modification time, mode and inode through the Settings checks (stat only, never read)",
+              "changed: " + realChanges(realBefore, realAfter))
     }
 
     /// Link on the installed plugin folder: a question first, with what it starts, "Add with Its Programs"
     /// and Cancel (on Return). Cancel links nothing; Add links it, as one change that Undo takes back.
+    /// Each press waits for its own sheet, and for Link to be offered again: after a change, even one that
+    /// was refused, Settings › Skills holds Link until it has read the folders again, which takes seconds on
+    /// a loaded Mac, and a sheet begun while another one goes shows a moment after it.
     static func settingsLinkChecks(link: String) async {
         let view = SkillsSettingsView(frame: NSRect(x: 0, y: 0, width: 620, height: 480))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 520), styleMask: [.titled], backing: .buffered, defer: false)
@@ -491,46 +503,70 @@ extension SelfTest {
             window.orderOut(nil)
             window.contentView = NSView()
         }
+        let add = "Add with Its Programs"
+        // The question is the sheet up, not an alert before it that is still going.
+        func asked() async -> Bool { await wait(30) { pluginSheetButtons(window).contains { $0.title == add } } }
+        // Link is offered again: no sheet up, and the folders read again since the last change.
+        func offered() async -> Bool { await wait(30) { window.attachedSheet == nil && view.linkButton.isEnabled } }
+        func press(_ title: String) { pluginSheetButtons(window).first { $0.title == title }?.performClick(nil) }
+        func state() -> String {
+            let sheet = window.attachedSheet == nil ? "no sheet" : "sheet: " + pluginSheetText(window)
+            return "Link offered \(view.linkButton.isEnabled), \(sheet), link made \(entryExists(link)), "
+                + "last change \(SkillsStore.lastChange?.title ?? "none")"
+        }
         await pause(0.5) // its first read of the folders
         view.selectForTest("demo-plugin", in: SkillsStore.inventory())
-        guard await wait(5, { view.linkButton.isEnabled }) else {
-            return check(false, "skills plugins: Settings › Skills offers Link for a plugin folder left out of Claude Code")
+        guard await offered() else {
+            return check(false, "skills plugins: Settings › Skills offers Link for a plugin folder left out of Claude Code", state())
         }
         view.linkButton.performClick(nil)
-        let asked = await wait(5) { window.attachedSheet != nil }
+        let shown = await asked()
         let words = pluginSheetText(window)
         let buttons = pluginSheetButtons(window)
         let cancel = buttons.first { $0.title == "Cancel" }
         let titles = Set(buttons.map(\.title))
         let lead = "If you add it to Claude Code, it starts the programs below every time Claude Code opens, without asking you."
         let said = words.contains("Add “demo-plugin” to Claude Code?") && words.contains(lead) && words.contains("It would start:")
-        check(asked && said && titles.isSuperset(of: ["Add with Its Programs", "Cancel"]) && cancel?.keyEquivalent == "\r",
+        // Return presses the sheet's default button cell. Whenever the sheet is up, AppKit keeps Return
+        // there and the button's own keyEquivalent reads empty, active app or not, so the default cell is
+        // what is checked.
+        let returnCell = window.attachedSheet?.defaultButtonCell
+        let returnCancels = cancel != nil && returnCell != nil && returnCell === cancel?.cell
+        check(shown && said && titles.isSuperset(of: [add, "Cancel"]) && returnCancels,
               "skills plugins: Settings › Skills' Link asks first about a plugin folder that starts programs, with what it starts, and Return cancels",
-              words + " | " + titles.sorted().joined(separator: ", "))
-        cancel?.performClick(nil)
-        _ = await wait(5) { window.attachedSheet == nil && view.linkButton.isEnabled }
-        check(!entryExists(link), "skills plugins: Cancel on Link's question links nothing")
+              words + " | " + titles.sorted().joined(separator: ", ") + " | Return: " + (returnCell?.title ?? "no default button"))
+        press("Cancel")
+        let cancelled = await offered()
+        check(cancelled && !entryExists(link), "skills plugins: Cancel on Link's question links nothing", state())
 
         // The folder gains a part between the question and the answer: Link reads it again and links nothing.
         let lsp = (SkillsStore.home as NSString).appendingPathComponent(".agents/skills/demo-plugin/.lsp.json")
         view.linkButton.performClick(nil)
-        _ = await wait(5) { window.attachedSheet != nil }
+        let askedAgain = await asked()
         FileManager.default.createFile(atPath: lsp, contents: Data(#"{"go": {"command": "gopls"}}"#.utf8))
-        pluginSheetButtons(window).first { $0.title == "Add with Its Programs" }?.performClick(nil)
+        press(add)
         let changed = "“demo-plugin” changed since you looked. Look again before linking it."
-        let refused = await wait(10) { pluginSheetText(window).contains(changed) }
-        check(refused && !entryExists(link), "skills plugins: a plugin folder that changed after Link's question is not linked, and Link says why",
-              pluginSheetText(window))
-        if let alert = window.attachedSheet { window.endSheet(alert) }
+        let refused = await wait(30) { pluginSheetText(window).contains(changed) }
+        check(askedAgain && refused && !entryExists(link),
+              "skills plugins: a plugin folder that changed after Link's question is not linked, and Link says why", state())
+        // The refusal's alert, and anything queued behind it, go; Cancel for a question left over.
+        await endSheets(over: window, with: .alertSecondButtonReturn)
         try? FileManager.default.removeItem(atPath: lsp)
-        _ = await wait(5) { window.attachedSheet == nil && view.linkButton.isEnabled }
 
+        let again = await offered()
         view.linkButton.performClick(nil)
-        _ = await wait(5) { window.attachedSheet != nil }
-        pluginSheetButtons(window).first { $0.title == "Add with Its Programs" }?.performClick(nil)
-        let linked = await wait(10) { entryExists(link) && SkillsStore.running == 0 }
-        check(linked && SkillsStore.lastChange?.title == "Link demo-plugin for Claude Code",
-              "skills plugins: “Add with Its Programs” links it, as one change for Undo", SkillsStore.lastChange?.title ?? "none")
+        let askedLast = await asked()
+        press(add)
+        let linked = await wait(30) { entryExists(link) && SkillsStore.running == 0 }
+        let title = "Link demo-plugin for Claude Code"
+        check(again && askedLast && linked && SkillsStore.lastChange?.title == title,
+              "skills plugins: “Add with Its Programs” links it, as one change for Undo", state())
+        // Undo reverses the last change: without the Link on top it would take the install away, and the
+        // Unify checks after need it. (The failure is the check above.)
+        guard SkillsStore.lastChange?.title == title else {
+            await endSheets(over: window, with: .alertSecondButtonReturn)
+            return note("skills plugins: Undo of Link skipped, there is no Link to undo; the install stays for the Unify checks")
+        }
         if case .failure(let failure) = await SkillsStore.undo() { check(false, "skills plugins: Undo of Link applies", failure.message) }
         check(!entryExists(link), "skills plugins: Undo of Link removes the link")
     }
@@ -545,10 +581,13 @@ extension SelfTest {
         try? "---\nname: demo-plugin\ndescription: Mine.\n---\nhand-made\n".write(toFile: link + "/SKILL.md", atomically: true, encoding: .utf8)
         defer { try? manager.removeItem(atPath: link) }
         let inventory = SkillsStore.inventory()
-        guard let row = inventory.rows.first(where: { $0.name == "demo-plugin" }),
+        let found = inventory.rows.first { $0.name == "demo-plugin" }
+        guard let row = found,
               let shared = row.copies.first(where: { $0.root.kind == .shared }),
               let mine = row.copies.first(where: { $0.root.kind == .claude }) else {
-            return check(false, "skills plugins: Unify finds the plugin folder and the hand-made copy")
+            let copies = found?.copies.map { SkillStep.short($0.path) + ($0.isLink ? " (a link)" : "") } ?? []
+            return check(false, "skills plugins: Unify finds the plugin folder and the hand-made copy",
+                         copies.isEmpty ? "no demo-plugin in the inventory" : "copies: " + copies.joined(separator: ", "))
         }
         let sheet = SkillsUnifySheet(row: row, inventory: inventory, plugins: SkillInstall.pluginFacts(row.distinctCopies, home: home))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 520), styleMask: [.titled], backing: .buffered, defer: false)
@@ -601,11 +640,30 @@ extension SelfTest {
         check(back, "skills plugins: Undo of Unify puts the hand-made copy back")
     }
 
-    /// A file's digest and mode, or nil when it is not there.
+    /// A file's digest and mode, or nil when it is not there. Only for the self-test home's own files: the
+    /// user's real ones are only stat'ed (realState).
     static func fileState(_ path: String) -> String? {
         var info = stat()
         guard stat(path, &info) == 0 else { return nil }
         return (SkillHash.fileDigest(path) ?? "unreadable") + " " + String(UInt32(info.st_mode & 0o777), radix: 8)
+    }
+
+    /// The user's own file at `path` as stat sees it, by name: size, modification time, mode and inode, or
+    /// only "file" ("missing", or why stat failed). It is never opened: the self-test doesn't read the
+    /// user's real ~/.claude, only that nothing wrote it.
+    static func realState(_ path: String) -> [String: String] {
+        var info = stat()
+        guard stat(path, &info) == 0 else { return ["file": errno == ENOENT ? "missing" : "no stat (errno \(errno))"] }
+        let modified = "\(info.st_mtimespec.tv_sec).\(info.st_mtimespec.tv_nsec)"
+        let mode = String(UInt32(info.st_mode & 0o7777), radix: 8)
+        return ["size": "\(info.st_size)", "modification time": modified, "mode": mode, "inode": "\(info.st_ino)"]
+    }
+
+    /// The names of what differs between two realState readings, such as "modification time, inode", with
+    /// no values: all a failed check says about the user's real file.
+    static func realChanges(_ before: [String: String], _ after: [String: String]) -> String {
+        let names = ["file", "size", "modification time", "mode", "inode"]
+        return names.filter { before[$0] != after[$0] }.joined(separator: ", ")
     }
 
     /// Something is at `path`: a file, a folder, or a link (even to nothing).
