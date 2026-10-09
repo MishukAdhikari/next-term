@@ -377,6 +377,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // A step of the relaunch harness: a launch as the app's own, in the harness's folder and defaults, with no update
         // check, no `nxtrm` link and no clean-up in Application Support. SelfTestRestore drives the rest.
         if SelfTest.mode == .relaunchHarness {
+            SelfTestRestore.prepareShells()
             let kind = Self.takeLaunchKind(request: false, defaults: launchDefaults, now: Date())
             openAtLaunch(kind: kind, settings: LaunchSettings(defaults: launchDefaults), mayOfferImport: false)
             restoreRemoteTabsOnceAWindowOpens()
@@ -622,10 +623,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var terminatingFor: QuitReason?
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // A second quit while the first asks: cancelled, and the first's answers, its quit consent among them, stay its own.
         guard !askingToQuit else { return .terminateCancel }
         askingToQuit = true
         defer { askingToQuit = false }
-        guard askBeforeQuitting() else { return .terminateCancel }
+        // The quit consent comes only from a press in this quit's questions (R30): none is left from a quit cancelled
+        // before, and a cancel clears what this one gave.
+        MainActor.assumeIsolated { SessionRestore.shared.quitConsent = false }
+        guard askBeforeQuitting() else {
+            MainActor.assumeIsolated { SessionRestore.shared.quitConsent = false }
+            return .terminateCancel
+        }
         isTerminating = true
         terminatingFor = quitReason
         // A skill change part-way finishes, and records its Undo, before Next Term quits.
@@ -742,8 +750,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             if let intent = QuitIntent.ordinary(reason: reason, settings: settings, consent: sessions.quitConsent) {
                 finished = sessions.finishAtQuit(intent, keepScrollback: true)
             }
+            #if DEBUG
+            // The relaunch harness reads the quit's last save as it left the sessions folder, before the install.
+            if SelfTest.mode == .relaunchHarness { SelfTestRestore.quitSaved() }
+            #endif
             // A logout, restart or shutdown installs nothing: it could end the install part-way. It waits for the next quit.
-            if reason != .systemSession { Updater.shared.installStagedUpdateOnQuit(sessions: finished) }
+            if reason.installsStagedUpdate { Updater.shared.installStagedUpdateOnQuit(sessions: finished) }
         }
         if SelfTest.mode != .plain { sessionProjects = controllers.compactMap(\.project) }
         RemoteConnection.saveTabs(controllers)

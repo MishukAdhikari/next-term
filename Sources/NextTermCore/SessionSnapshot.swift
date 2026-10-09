@@ -49,7 +49,7 @@ extension SessionSnapshot {
         public var schema: Int
         /// The launch that wrote it.
         public var launchID: UUID
-        /// Rises with every save, across launches.
+        /// Rises with every save, across launches, up to `maxGeneration`.
         public var generation: Int
         /// Only a normal quit writes it clean; the first save of each launch does not, so a crash leaves it unclean.
         public var clean: Bool
@@ -64,6 +64,10 @@ extension SessionSnapshot {
         /// resume box checked writes a fresh one (R30). The launch after records it as used before it restores, so it
         /// lets agents resume once. Its only form on disk; never in a file a crash or another quit left.
         public var resumeConsent: UUID?
+
+        /// The highest generation: no save reaches it (one every 2 seconds would take half a billion years), and every JSON
+        /// reader holds it exactly. Only a planted or damaged file holds more, and decoding refuses it.
+        public static let maxGeneration = 9_007_199_254_740_991
 
         public init(schema: Int = SessionSnapshot.schema, launchID: UUID, generation: Int, clean: Bool, bootSession: String? = nil,
                     awaitingMarker: UUID? = nil, pendingToVersion: String? = nil, savedAt: Date, resumeConsent: UUID? = nil) {
@@ -200,7 +204,8 @@ extension SessionSnapshot {
         public var lastSelected: Date
         /// The agent it ran, and how its session is known.
         public var agent: Evidence?
-        /// The name of its saved scrollback file: a UUID, resolved only inside the sessions folder.
+        /// The name of its saved scrollback file: a UUID, resolved only inside the sessions folder. The quit names it
+        /// before it writes the file, which its time budget can drop: a name with no file reads as no scrollback.
         public var scrollback: UUID?
         /// What the restore does to it. Until that is applied, every save writes this record unchanged.
         public var pending: PendingAction?
@@ -710,7 +715,7 @@ extension SessionSnapshot {
 extension SessionSnapshot.Header {
     func repaired() -> Self {
         var fixed = self
-        fixed.generation = max(0, generation)
+        fixed.generation = min(max(0, generation), Self.maxGeneration)
         fixed.bootSession = SnapshotText.token(bootSession, max: 64, extra: "-")
         fixed.pendingToVersion = SnapshotText.token(pendingToVersion, max: 64, extra: ".+-")
         return fixed
@@ -1115,7 +1120,7 @@ extension SessionSnapshot.Header: Codable {
         let c = try decoder.container(keyedBy: Keys.self)
         guard let launchID = c.uuid(.launchID) else { throw SessionSnapshot.DecodeError.badHeader }
         let generation = try c.decode(Int.self, forKey: .generation)
-        guard generation >= 0 else { throw SessionSnapshot.DecodeError.badHeader }
+        guard generation >= 0, generation <= Self.maxGeneration else { throw SessionSnapshot.DecodeError.badHeader }
         let schema = try c.decode(Int.self, forKey: .schema)
         let clean = try c.decode(Bool.self, forKey: .clean)
         let savedAt = Millis.date(try c.decode(Int64.self, forKey: .savedAt))

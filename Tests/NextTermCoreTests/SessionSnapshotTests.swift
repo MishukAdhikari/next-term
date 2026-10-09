@@ -377,6 +377,22 @@ import Testing
         #expect(throws: Snapshot.DecodeError.unreadable) { try decode("{\"header\": ") }
     }
 
+    /// A generation no save reaches, which only a planted or damaged file holds, refuses the file: the writer that
+    /// counts on from it would overflow at its first save.
+    @Test func aGenerationPastItsCapRefusesTheFile() throws {
+        let launch = id(1).uuidString
+        let atCap = Snapshot.Header.maxGeneration
+        let header = { (generation: String) -> String in
+            #"{"header":{"schema":1,"launchID":"\#(launch)","generation":\#(generation),"clean":false,"savedAt":0}}"#
+        }
+        #expect(try decode(header(String(atCap))).header.generation == atCap)
+        #expect(throws: Snapshot.DecodeError.badHeader) { try decode(header(String(atCap + 1))) }
+        #expect(throws: Snapshot.DecodeError.badHeader) { try decode(header(String(Int.max))) }
+        // Written past it, a header is held at the cap, so it reads back.
+        let written = Snapshot(header: Snapshot.Header(launchID: id(1), generation: Int.max, clean: true, savedAt: Date(timeIntervalSince1970: 0)))
+        #expect(try Snapshot.decode(written.encoded()).header.generation == atCap)
+    }
+
     // MARK: caps
 
     @Test func aFiftyMegabyteFileIsRefusedBeforeItIsRead() {

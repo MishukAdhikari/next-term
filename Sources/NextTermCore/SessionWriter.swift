@@ -9,9 +9,9 @@ import Darwin
 // then scrollback, then the update's marker. Nothing is written until the save gate opens, so the windows a restore
 // builds from the snapshot are on screen before the snapshot is replaced; the gate opens by itself after 10 seconds.
 //
-// Saves are serial: one runs at a time, each with a higher generation than the one before it, across launches too, and
-// once the quit's save has run nothing is saved again. A periodic save in flight at the quit finishes first, so the
-// final file is the one the marker names.
+// Saves are serial: one runs at a time, each with a higher generation than the one before it (up to a cap no save
+// reaches), across launches too, and once the quit's save has run nothing is saved again. A periodic save in flight at
+// the quit finishes first, so the final file is the one the marker names.
 
 /// How Next Term quits, as the sessions folder sees it: what the quit's last save writes.
 public enum QuitIntent: Equatable, Sendable {
@@ -43,6 +43,12 @@ public enum QuitIntent: Equatable, Sendable {
     }
 }
 
+extension QuitReason {
+    /// Whether the quit spawns a staged update's install script. Not at a logout, restart or shutdown, which could end
+    /// the install part-way: it waits for the next quit.
+    public var installsStagedUpdate: Bool { self != .systemSession }
+}
+
 /// A pane's scrollback for the quit's save: the id its record names it by, and its text, worked out (masked) only when
 /// it is written.
 public struct QuitScrollback: Sendable {
@@ -65,6 +71,16 @@ public final class SessionWriter: @unchecked Sendable {
     /// state file and the marker are written whatever it takes.
     public static func quitBudget(tabs: Int) -> TimeInterval {
         min(4, 1 + 0.1 * Double(max(tabs, 0)))
+    }
+
+    /// The order the quit reads tabs' scrollback in, so a time budget that runs out drops the last: the tabs in view,
+    /// then each window's tab in front, then the rest, each in the order given.
+    public static func scrollbackOrder<Tab>(_ tabs: [Tab], visible: (Tab) -> Bool, inFront: (Tab) -> Bool) -> [Tab] {
+        let shown: [Tab] = tabs.filter(visible)
+        let rest: [Tab] = tabs.filter { (tab: Tab) -> Bool in !visible(tab) }
+        let fronts: [Tab] = rest.filter(inFront)
+        let behind: [Tab] = rest.filter { (tab: Tab) -> Bool in !inFront(tab) }
+        return shown + fronts + behind
     }
 
     /// What a save wrote.
@@ -138,23 +154,35 @@ public final class SessionWriter: @unchecked Sendable {
     /// What the last save wrote, as compared (`persisted`); nil before the launch's first save.
     private var lastWritten: [SessionSnapshot.Window]?
 
-    /// `generation` is the snapshot's the launch read, so every save of this launch comes after it. `startedAt` starts the
-    /// gate's deadline.
+    /// `generation` is the snapshot's the launch read, so every save of this launch comes after it, up to the cap
+    /// (`Header.maxGeneration`), where they stay. `startedAt` starts the gate's deadline.
     public init(files: SessionFiles, launchID: UUID = UUID(), after generation: Int, bootSession: String?, startedAt: Date = Date(),
                 limits: SessionSnapshot.Limits = .standard) {
         self.files = files
         self.launchID = launchID
-        self.generation = max(generation, 0)
+        self.generation = min(max(generation, 0), SessionSnapshot.Header.maxGeneration)
         self.bootSession = bootSession
         self.limits = limits
         gateDeadline = startedAt.addingTimeInterval(Self.gateDeadline)
     }
 
-    /// The snapshot in the folder, else its previous file (`SessionFiles.load`), repaired; nil when neither reads.
+    /// The snapshot in the folder, repaired; nil when it does not read, and neither does its previous file.
+    ///
+    /// A previous file is read only when a save after it was cut off or damaged: a launch ran past it, and did not quit
+    /// as it should. So it reads as a crash left it, unclean, with no resume consent: a clean quit's file kept by the
+    /// next launch's first save never lets agents resume by themselves after a crash (R30).
     public static func load(from files: SessionFiles, limits: SessionSnapshot.Limits = .standard) -> SessionSnapshot? {
-        files.load(SessionSnapshot.fileName(), maxSize: limits.bytes) { (data: Data) -> SessionSnapshot? in
-            try? SessionSnapshot.decode(data, limits: limits)
-        }
+        let name = SessionSnapshot.fileName()
+        if let current = read(name, from: files, limits: limits) { return current }
+        guard var previous = read(name + SessionFiles.previousSuffix, from: files, limits: limits) else { return nil }
+        previous.header.clean = false
+        previous.header.resumeConsent = nil
+        return previous
+    }
+
+    private static func read(_ name: String, from files: SessionFiles, limits: SessionSnapshot.Limits) -> SessionSnapshot? {
+        guard let data = (try? files.read(name, maxSize: limits.bytes)) ?? nil else { return nil }
+        return try? SessionSnapshot.decode(data, limits: limits)
     }
 
     // MARK: the gate
@@ -205,7 +233,8 @@ public final class SessionWriter: @unchecked Sendable {
     /// nothing: the windows the restore builds are not all there, and the snapshot it reads from stays.
     /// - The whole session (`QuitIntent.savesSession`): at an update quit, unclean, waiting for a fresh marker id, with the
     ///   version it installs; at a quit under Resume, clean, with a fresh resume consent id when the quit carried the
-    ///   consent. Else the tombstone.
+    ///   consent. Else the tombstone; when it cannot be written, the state file and the one before are removed, so the
+    ///   layout the user turned down does not come back as after a crash.
     /// - Once the state file is on disk, the previous file and any temporary file a cut-off save left are removed.
     /// - Then each pane's scrollback, in the order given, until `clock` passes `deadline`: what is left is dropped. Named
     ///   for the marker id at an update quit, for this launch's id at a quit under Resume. None with the tombstone.
@@ -231,7 +260,10 @@ public final class SessionWriter: @unchecked Sendable {
             break
         }
         let snapshot = SessionSnapshot(header: header, windows: intent.savesSession ? windows : [])
-        guard write(snapshot, keepingPrevious: false).succeeded else { return QuitSave() }
+        guard write(snapshot, keepingPrevious: false).succeeded else {
+            if !intent.savesSession { removeSession() }
+            return QuitSave()
+        }
         var quit = QuitSave(stateWritten: true, awaitedMarker: header.awaitingMarker, resumeConsent: header.resumeConsent)
         removeLeftovers()
         if intent.savesSession {
@@ -281,8 +313,9 @@ public final class SessionWriter: @unchecked Sendable {
         return true
     }
 
+    /// One more than the last, held at the cap: never past what decoding takes, never an overflow.
     private func nextGeneration() -> Int {
-        generation += 1
+        generation = min(generation + 1, SessionSnapshot.Header.maxGeneration)
         return generation
     }
 
@@ -305,6 +338,13 @@ public final class SessionWriter: @unchecked Sendable {
         saved = result
         state.unlock()
         return result
+    }
+
+    /// The state file and the one before, when the tombstone could not take their place (a full disk, where removing
+    /// still works): the layout the user turned down never comes back as after a crash.
+    private func removeSession() {
+        try? files.remove(SessionSnapshot.fileName())
+        try? files.remove(SessionSnapshot.fileName() + SessionFiles.previousSuffix)
     }
 
     /// The previous state file and what cut-off saves left: once the quit's file is on disk, nothing lingers.

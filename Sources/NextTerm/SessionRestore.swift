@@ -44,8 +44,8 @@ final class SessionRestore {
     /// A periodic save is on the queue: the next tick waits for it.
     private var saving = false
     /// The quit consent (R30): the user let this quit go ahead with the resume box checked, on the dialog that carried it.
-    /// Set by that press and cleared when the quit is cancelled; only a user's quit reads it. No quit dialog carries the
-    /// box yet, so no quit has it.
+    /// Set by that press; cleared as each quit starts asking and when it is cancelled (AppDelegate), so none outlives its
+    /// quit. Only a user's quit reads it. No quit dialog carries the box yet, so no quit has it.
     var quitConsent = false
 
     /// The last save's result: whether it was written, and the panes the file leaves out, which nothing may promise back.
@@ -101,8 +101,9 @@ final class SessionRestore {
 
     /// The quit's last save (KTD18), on every quit that holds the folder: the periodic saves stop, the windows are captured
     /// (each agent's evidence read again, before any signal reaches its tab), each tab's scrollback too when the quit saves
-    /// the whole session and `keepScrollback` is on, the visible tab first, until the quit's time budget runs out. Then the
-    /// writer saves the state file, the scrollback and the marker, after any save in flight.
+    /// the whole session and `keepScrollback` is on, the tabs in view first (`SessionWriter.scrollbackOrder`), until the
+    /// quit's time budget runs out. Then the writer saves the state file, the scrollback and the marker, after any save in
+    /// flight.
     func finishAtQuit(_ intent: QuitIntent, keepScrollback: Bool) -> Finished {
         guard let writer, let files else { return Finished() }
         timer?.invalidate()
@@ -113,7 +114,10 @@ final class SessionRestore {
         var captures: [SessionScrollback.Capture] = []
         var named: [UUID: UUID] = [:]
         if intent.savesSession && keepScrollback {
-            for tab in Self.scrollbackOrder(tabs) {
+            let fronts: [TerminalTab] = controllers.compactMap(\.activeTab)
+            let ordered = SessionWriter.scrollbackOrder(tabs, visible: { (tab: TerminalTab) -> Bool in tab.status.visible },
+                                                        inFront: { (tab: TerminalTab) -> Bool in fronts.contains { $0 === tab } })
+            for tab in ordered {
                 guard Date() < deadline else { break }
                 let capture = SessionScrollback.capture(tab)
                 captures.append(capture)
@@ -126,22 +130,5 @@ final class SessionRestore {
         }
         let saved = writer.finish(intent, windows: windows, scrollback: scrollback, deadline: deadline)
         return Finished(folder: files.url.path, marker: saved.awaitedMarker, folderKey: files.key)
-    }
-
-    /// The tabs whose scrollback is read first: the one the user is looking at, then each window's tab in front, then the
-    /// rest, in window order. A budget that runs out drops the last.
-    private static func scrollbackOrder(_ tabs: [TerminalTab]) -> [TerminalTab] {
-        let fronts: [TerminalTab] = AppDelegate.shared.controllers.compactMap(\.activeTab)
-        func rank(_ tab: TerminalTab) -> Int {
-            if tab.status.visible { return 0 }
-            return fronts.contains { $0 === tab } ? 1 : 2
-        }
-        let ranked: [(offset: Int, element: TerminalTab)] = Array(tabs.enumerated())
-        let sorted = ranked.sorted { (a: (offset: Int, element: TerminalTab), b: (offset: Int, element: TerminalTab)) -> Bool in
-            let left = rank(a.element)
-            let right = rank(b.element)
-            return left != right ? left < right : a.offset < b.offset
-        }
-        return sorted.map(\.element)
     }
 }

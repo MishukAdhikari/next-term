@@ -158,6 +158,19 @@ import Testing
         #expect(replaced.windows == session)
     }
 
+    @Test func aGenerationAtItsCapStaysThereAndNeverOverflows() throws {
+        let parent = try makeParent()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let files = try owned(in: parent)
+        let cap = Snapshot.Header.maxGeneration
+        // As if read from a file past the cap, which decoding refuses.
+        let writer = writer(files, after: Int.max)
+        #expect(writtenGeneration(writer.save(windows([[1]]))) == cap)
+        #expect(writtenGeneration(writer.save(windows([[1, 2]]))) == cap)
+        #expect(writer.finish(.quit(resume: true, consent: false), windows: windows([[1]])).stateWritten)
+        #expect(try state(files)?.header.generation == cap)
+    }
+
     @Test func anUnchangedSessionWritesNothing() throws {
         let parent = try makeParent()
         defer { try? FileManager.default.removeItem(at: parent) }
@@ -228,8 +241,9 @@ import Testing
         #expect(result.succeeded)
         #expect(result.panesLeftOut == ids(4, 5))
         #expect(writer.lastSave?.panesLeftOut == ids(4, 5))
-        let ids: [UUID] = try #require(try state(files)).panes.map { (pane: Pane) -> UUID in pane.id }
-        #expect(ids == self.ids(1, 2, 3))
+        let saved: [UUID] = try #require(try state(files)).panes.map { (pane: Pane) -> UUID in pane.id }
+        let expected: [UUID] = ids(1, 2, 3)
+        #expect(saved == expected)
     }
 
     @Test func aFailedSaveIsReportedAndTriedAgain() throws {
@@ -279,6 +293,27 @@ import Testing
         let expected: [String] = [SessionFiles.appPathName, SessionFiles.lockName, RestoreAttempts.fileName, stateName].sorted()
         #expect(try names(files) == expected)
         #expect(try attempts(files) == RestoreAttempts())
+    }
+
+    @Test func aTombstoneThatFailsToWriteTakesTheLayoutWithIt() throws {
+        let intents: [QuitIntent] = [.quit(resume: false, consent: true), .update(keep: false, from: "0.11.0", to: "0.11.1")]
+        for intent in intents {
+            let parent = try makeParent()
+            defer { try? FileManager.default.removeItem(at: parent) }
+            let files = try owned(in: parent)
+            let writer = writer(files)
+            _ = writer.save(windows([[1]]))
+            _ = writer.save(windows([[1, 2]]))
+            failWrites(files)
+            let quit = writer.finish(intent, windows: windows([[1, 2]]))
+            files.calls = SessionFiles.Calls()
+            #expect(quit == SessionWriter.QuitSave(), "\(intent)")
+            // The user turned the layout down: nothing is left that the next launch would bring it back from as after a
+            // crash, so it opens as after a quit under Welcome.
+            #expect(SessionWriter.load(from: files) == nil, "\(intent)")
+            let left: [String] = try names(files).filter { (name: String) -> Bool in name.hasPrefix(stateName) }
+            #expect(left.isEmpty, "\(intent): \(left)")
+        }
     }
 
     @Test func anUpdateQuitWithTheBoxUncheckedLeavesTheTombstoneAndNoMarker() throws {
@@ -450,6 +485,13 @@ import Testing
         #expect(quit.awaitedMarker != nil && quit.awaitedMarker == saved.header.awaitingMarker)
         #expect(try marker(files) == nil)
         #expect(try attempts(files) == RestoreAttempts(count: 2))
+        // The relaunch, its first try, finds no marker: a crash restore, which deletes the scrollback unread.
+        let facts = RestoreFacts(lockTaken: true, header: saved.header, windows: saved.windows.count, attempts: RestoreAttempts(count: 1),
+                                 attemptsWritten: true, uptime: 100, bootSession: Self.boot, version: "0.11.1")
+        let decision = LaunchDecision.restoring(facts)
+        #expect(decision.marker == .missing)
+        #expect(decision.kind == .restore(.crash))
+        #expect(decision.scrollback == .deleteUnread)
     }
 
     @Test func noMarkerIsWrittenWithoutABootSessionOrWithVersionsItCouldNotName() throws {
@@ -480,6 +522,29 @@ import Testing
         #expect(quit.stateWritten && quit.markerWritten)
         #expect(quit.scrollback == ids(701))
         #expect(try scrollbackNames(files).count == 1)
+    }
+
+    @Test func scrollbackTheBudgetDropsIsNamedButReadsAsNone() throws {
+        let parent = try makeParent()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let files = try owned(in: parent)
+        let writer = writer(files)
+        let panes: [Pane] = [1, 2].map { (n: Int) -> Pane in
+            var named = pane(n)
+            named.scrollback = id(700 + n)
+            return named
+        }
+        let groups: [Group] = panes.map { (pane: Pane) -> Group in Group(root: .pane(pane), focused: pane.id) }
+        let deadline = Self.start.addingTimeInterval(3)
+        let clock = Clock(times: [Self.start.addingTimeInterval(1), deadline])
+        let quit = writer.finish(.quit(resume: true, consent: false), windows: [Window(groups: groups)], scrollback: scrollback([1, 2]),
+                                 deadline: deadline, clock: clock.now)
+        #expect(quit.scrollback == ids(701))
+        // The state file, written first, names both; the one past the budget was never written, and reads as none.
+        let named: [UUID] = try #require(try state(files)).panes.compactMap(\.scrollback)
+        #expect(named == ids(701, 702))
+        let taken = ScrollbackText.take(Set(ids(701, 702)), quit: id(900), from: files)
+        #expect(taken == [id(701): "pane 1 said hello\r\n"])
     }
 
     /// Hands out the times given, then the last one again.
@@ -597,6 +662,133 @@ import Testing
         let fallback = try #require(SessionWriter.load(from: files))
         #expect(fallback.header.generation == 5)
         #expect(fallback.panes.count == 1)
+    }
+
+    @Test func aSnapshotReadFromThePreviousFileIsUncleanAndHoldsNoConsent() throws {
+        let parent = try makeParent()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let files = try owned(in: parent)
+        let session = windows([[1, 2]])
+        let quit = writer(files).finish(.quit(resume: true, consent: true), windows: session)
+        let consent = try #require(quit.resumeConsent)
+        let current = try #require(SessionWriter.load(from: files))
+        #expect(current.header.clean && current.header.resumeConsent == consent)
+
+        // The next launch's first save keeps the quit's file as the previous one, consent and all.
+        let next = writer(files, after: 1, launch: 901)
+        _ = next.save(windows([[3]]))
+        let kept = try #require(try state(files, name: stateName + SessionFiles.previousSuffix))
+        #expect(kept.header.clean && kept.header.resumeConsent == consent)
+
+        // That launch is killed between its save's two renames, or its file is damaged: the launch after reads the quit's
+        // layout as a crash left it, and no agent resumes by itself.
+        for damage in ["cut off", "damaged"] {
+            if damage == "cut off" {
+                try files.remove(stateName)
+            } else {
+                try files.replace(stateName, with: Data("{\"header\":".utf8))
+            }
+            let read = try #require(SessionWriter.load(from: files), "\(damage)")
+            #expect(read.header.launchID == id(900) && read.windows == session, "\(damage)")
+            #expect(!read.header.clean, "\(damage)")
+            #expect(read.header.resumeConsent == nil, "\(damage)")
+            let facts = RestoreFacts(lockTaken: true, header: read.header, windows: read.windows.count, attempts: RestoreAttempts(count: 1),
+                                     attemptsWritten: true, uptime: 100, bootSession: Self.boot, version: "0.11.0")
+            #expect(LaunchDecision.restoring(facts).kind == .restore(.crash), "\(damage)")
+        }
+    }
+
+    /// A save killed part-way (SIGKILL) leaves the folder as it was at that moment: at any write or flush of the save,
+    /// between its two renames, or after. The launch after reads a state file from each: the one before, or the new one.
+    @Test func aSaveKilledAtAnyPointLeavesAStateThatDecodes() throws {
+        let parent = try makeParent()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let files = try owned(in: parent)
+        let writer = writer(files)
+        _ = writer.save(windows([[1]]))
+        let moments = Moments(folder: files.url)
+        files.calls.write = { descriptor, bytes, count in
+            moments.take()
+            return Darwin.write(descriptor, bytes, count)
+        }
+        files.calls.fcntl = { descriptor, command in
+            moments.take()
+            return Darwin.fcntl(descriptor, command)
+        }
+        _ = writer.save(windows([[1, 2]]))
+        files.calls = SessionFiles.Calls()
+        moments.take()
+        var seen = moments.all
+        #expect(seen.count >= 3)
+        // Between the renames: the file before moved aside, the new one not yet in its place.
+        if let flushed = seen.last(where: { (files: [String: Data]) -> Bool in files.keys.contains { $0.hasPrefix(".") } }),
+           let before = flushed[stateName] {
+            var between = flushed
+            between[stateName] = nil
+            between[stateName + SessionFiles.previousSuffix] = before
+            seen.append(between)
+        } else {
+            Issue.record("no moment held the save's temporary file")
+        }
+        for (index, moment) in seen.enumerated() {
+            let copy = try makeParent()
+            defer { try? FileManager.default.removeItem(at: copy) }
+            let restored = try owned(in: copy)
+            for (name, data) in moment {
+                let path = restored.url.appendingPathComponent(name).path
+                #expect(FileManager.default.createFile(atPath: path, contents: data, attributes: [.posixPermissions: 0o600]))
+            }
+            let read = SessionWriter.load(from: restored)
+            let count = read?.panes.count ?? 0
+            #expect(count == 1 || count == 2, "moment \(index): \(moment.keys.sorted())")
+        }
+    }
+
+    /// The files in a folder, by name, each time `take` is called: as a kill then would leave them.
+    final class Moments: @unchecked Sendable {
+        private let folder: URL
+        private let lock = NSLock()
+        private var taken: [[String: Data]] = []
+
+        init(folder: URL) { self.folder = folder }
+
+        var all: [[String: Data]] {
+            lock.lock()
+            defer { lock.unlock() }
+            return taken
+        }
+
+        func take() {
+            let skipped: Set<String> = [SessionFiles.lockName, SessionFiles.appPathName]
+            let names: [String] = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+            var files: [String: Data] = [:]
+            for name in names where !skipped.contains(name) {
+                files[name] = FileManager.default.contents(atPath: folder.appendingPathComponent(name).path)
+            }
+            lock.lock()
+            taken.append(files)
+            lock.unlock()
+        }
+    }
+
+    @Test func theQuitReadsTheScrollbackOfTheTabInViewFirstThenEachWindowsTabInFront() {
+        // Tabs 1-6: 4 is in view, 2 and 5 are their windows' tabs in front (5 in view too).
+        let tabs: [Int] = [1, 2, 3, 4, 5, 6]
+        let visible: Set<Int> = [4, 5]
+        let fronts: Set<Int> = [2, 5]
+        let order: [Int] = SessionWriter.scrollbackOrder(tabs, visible: { (tab: Int) -> Bool in visible.contains(tab) },
+                                                         inFront: { (tab: Int) -> Bool in fronts.contains(tab) })
+        let expected: [Int] = [4, 5, 2, 1, 3, 6]
+        #expect(order == expected)
+        let none = SessionWriter.scrollbackOrder(tabs, visible: { (_: Int) -> Bool in false }, inFront: { (_: Int) -> Bool in false })
+        #expect(none == tabs)
+    }
+
+    @Test func aLogoutRestartOrShutdownStartsNoInstall() {
+        #expect(!QuitReason.systemSession.installsStagedUpdate)
+        let others: [QuitReason] = QuitReason.allCases.filter { (reason: QuitReason) -> Bool in reason != .systemSession }
+        let installs: Bool = others.allSatisfy { (reason: QuitReason) -> Bool in reason.installsStagedUpdate }
+        #expect(installs)
     }
 
     @Test func aQuitsIntentFollowsAtLaunchAndOnlyAUsersQuitCarriesTheConsent() {
