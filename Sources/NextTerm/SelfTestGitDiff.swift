@@ -74,7 +74,7 @@ extension SelfTest {
         // No agent runs in this window yet: lines selected in the diff offer no Ask hint (with one: diffSelectionChecks).
         if c.agentTab == nil, let side = diff.focusView as? NSTextView {
             side.setSelectedRange((side.string as NSString).range(of: "line two"))
-            check(diff.hasUncommittedSelection && !diff.askRoom.wanted && diff.askRoom.shownTitle == nil,
+            check(diff.offersAsk && !diff.askRoom.wanted && diff.askRoom.shownTitle == nil,
                   "with no agent running, lines selected in an uncommitted diff offer no Ask hint", diff.askRoom.shownTitle ?? "hidden")
             side.setSelectedRange(NSRange(location: 0, length: 0))
         }

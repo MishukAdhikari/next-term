@@ -493,7 +493,18 @@ final class AllFilesView: NSView, DiffSelectionHost {
         return nil
     }
 
-    private func isUncommitted(_ path: String) -> Bool { scope == .uncommitted || untracked.contains(path) }
+    /// The file's changes are not committed yet: the page shows Uncommitted, or git doesn't track the file.
+    private func isUncommitted(_ path: String) -> Bool {
+        if case .commit = scope { return false }
+        return scope == .uncommitted || untracked.contains(path)
+    }
+
+    /// Any of the file's names holds secrets (.env, keys): the agents' link is told of no file, and the Ask hint
+    /// is not offered.
+    private func holdsSecrets(_ entry: Entry) -> Bool {
+        let old = entry.file.oldPath.map { (root as NSString).appendingPathComponent($0) }
+        return DiffShare.holdsSecrets([(root as NSString).appendingPathComponent(entry.file.path), old])
+    }
 
     /// The lines selected in a file's column, as the agents are told about them: the file on disk is the new
     /// side, except in a commit's changes.
@@ -504,16 +515,14 @@ final class AllFilesView: NSView, DiffSelectionHost {
         if case let .commit(sha) = scope { commit = sha }
         let today: DiffToday = commit == nil && FileManager.default.fileExists(atPath: path) ? .new : .neither
         guard let selection = DiffSelections.make(column.selectedDiffRows(), in: diff, today: today) else { return nil }
-        let old = entry.file.oldPath.map { (root as NSString).appendingPathComponent($0) }
         let version: DiffShare.Version = commit.map { .commit($0) } ?? .workingTree
-        return DiffShare(path: path, selection: selection, holdsSecrets: DiffShare.holdsSecrets([path, old]),
-                         isUncommitted: commit == nil && isUncommitted(entry.file.path), version: version,
+        return DiffShare(path: path, selection: selection, holdsSecrets: holdsSecrets(entry), isUncommitted: isUncommitted(entry.file.path), version: version,
                          language: EditorLanguage.id(forFileName: (entry.file.path as NSString).lastPathComponent) ?? "text")
     }
 
-    var hasUncommittedSelection: Bool {
-        guard let (column, entry) = selected, isUncommitted(entry.file.path) else { return false }
-        return column.hasSelectedLines
+    var offersAsk: Bool {
+        guard let (column, entry) = selected else { return false }
+        return DiffShare.offersAsk(hasLines: column.hasSelectedLines, isUncommitted: isUncommitted(entry.file.path), holdsSecrets: holdsSecrets(entry))
     }
 
     /// Send to Agent: the selected lines (nil with none: the page is many files).

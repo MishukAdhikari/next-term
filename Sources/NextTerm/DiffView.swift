@@ -581,9 +581,7 @@ final class DiffPane: NSView, DiffSelectionHost {
         } else {
             version = base == .staged ? .staged : .workingTree
         }
-        return DiffShare(path: absolutePath, selection: selection,
-                         holdsSecrets: DiffShare.holdsSecrets([absolutePath, renamedFrom, commit?.oldPath, branchChange?.oldPath]),
-                         isUncommitted: isUncommitted, version: version,
+        return DiffShare(path: absolutePath, selection: selection, holdsSecrets: holdsSecrets, isUncommitted: isUncommitted, version: version,
                          language: EditorLanguage.id(forFileName: (path as NSString).lastPathComponent) ?? "text")
     }
 
@@ -591,10 +589,15 @@ final class DiffPane: NSView, DiffSelectionHost {
     /// tab, Git Diff's Uncommitted); not a commit's, a branch's, an agent's proposal, or All changes since a base.
     var isUncommitted: Bool { proposal == nil && commit == nil && branchChange == nil && workingTreeBranch == nil }
 
-    var hasUncommittedSelection: Bool {
-        guard isUncommitted, message.isHidden else { return false }
-        return unified.isOn ? unified.column.hasSelectedLines : (selectedSide == .old ? left : right).hasSelectedLines
+    var offersAsk: Bool {
+        guard message.isHidden else { return false }
+        let lines = unified.isOn ? unified.column.hasSelectedLines : (selectedSide == .old ? left : right).hasSelectedLines
+        return DiffShare.offersAsk(hasLines: lines, isUncommitted: isUncommitted, holdsSecrets: holdsSecrets)
     }
+
+    /// Any of the diff's names for its file holds secrets (.env, keys): the agents' link is told of no file, and
+    /// the Ask hint is not offered.
+    private var holdsSecrets: Bool { DiffShare.holdsSecrets([absolutePath, renamedFrom, commit?.oldPath, branchChange?.oldPath]) }
 
     /// Which version is the file as it is now: the new side for the working tree's changes, your file for an
     /// agent's proposal, neither for a commit's, a branch's or the index's version, or a file that is gone.

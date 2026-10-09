@@ -267,8 +267,8 @@ public struct DiffShare: Equatable, Sendable {
     /// Whether the diff's toolbar offers "⌥⌘K Ask <Agent>" for what is selected: lines of changes not committed
     /// yet, in a file that may be shared. It never invites typing a secret file's lines into a prompt; ⌥⌘K,
     /// asked for, types them as it types an editor's selection.
-    public static func offersAsk(hasLines: Bool, isUncommitted: Bool, holdsSecrets: Bool) -> Bool {
-        hasLines && isUncommitted && !holdsSecrets
+    public static func offersAsk(hasLines: Bool, isUncommitted: Bool, holdsSecrets: @autoclosure () -> Bool) -> Bool {
+        hasLines && isUncommitted && !holdsSecrets() // the names looked at last: asked as a selection is dragged
     }
 
     /// Send to Agent: the file at the lines selected, as `@path#L2-3`, when they are its lines on disk; a

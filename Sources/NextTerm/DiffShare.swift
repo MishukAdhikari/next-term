@@ -38,8 +38,9 @@ extension DiffShare {
 protocol DiffSelectionHost: AnyObject {
     /// The selected lines, nil when none are.
     func diffShare() -> DiffShare?
-    /// Lines are selected, in a diff of changes not committed yet (what the Ask hint is for).
-    var hasUncommittedSelection: Bool { get }
+    /// The Ask hint is for what is selected: lines of changes not committed yet, in a file that may be shared
+    /// (DiffShare.offersAsk).
+    var offersAsk: Bool { get }
     /// The toolbar's free space, with the Ask hint in it.
     var askRoom: AskAgentRoom { get }
 }

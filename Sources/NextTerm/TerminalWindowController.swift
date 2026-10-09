@@ -1634,8 +1634,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         send([item])
     }
 
-    /// "⌥⌘K Ask Claude Code" in a diff's toolbar, while lines of changes not committed yet are selected there and
-    /// an agent runs in a tab here (the one Send to Agent types into); hidden otherwise.
+    /// "⌥⌘K Ask Claude Code" in a diff's toolbar, while lines of changes not committed yet are selected there (not
+    /// a secret file's) and an agent runs in a tab here (the one Send to Agent types into); hidden otherwise.
     func updateAskHints() {
         let hosts: [DiffSelectionHost] = editorArea.diffs + editorArea.gitDiffs.compactMap(\.allFiles)
         guard !hosts.isEmpty else { return }
@@ -1643,7 +1643,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let agent = tab.map { (name: Self.agentName(of: $0), tab: $0.title) }
         let key = KeyboardShortcuts.shared.key(for: #selector(sendToAgent(_:)))?.display
         for host in hosts {
-            host.askRoom.show(agent: agent != nil && host.hasUncommittedSelection ? agent : nil, key: key)
+            host.askRoom.show(agent: agent != nil && host.offersAsk ? agent : nil, key: key)
         }
     }
 
