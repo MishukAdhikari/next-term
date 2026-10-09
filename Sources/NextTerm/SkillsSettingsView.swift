@@ -17,7 +17,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     private let removeButton = NSButton(title: "Remove…", target: nil, action: nil)
     private let checkButton = NSButton(title: "Check for Updates", target: nil, action: nil)
     private let browseButton = NSButton(title: "Browse Skills…", target: nil, action: nil)
-    private let checkOnOpen = NSButton(checkboxWithTitle: "Check for updates when Window › Skills opens", target: nil, action: nil)
+    private let checkOnOpen = NSButton(checkboxWithTitle: "Check for updates once a day, and when Window › Skills opens", target: nil, action: nil)
     private var inventory: SkillInventory?
     private var rows: [SkillRow] = []
     /// The project whose skills are shown, read-only (nil: the personal skills). Kept by path, so a

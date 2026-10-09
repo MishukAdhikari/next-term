@@ -403,17 +403,24 @@ enum SkillsInstaller {
     }
 
     /// The last check's answers, by skill name (shown in Settings › Skills, counted on Agents › Skills…). Each change
-    /// is posted (`updatesChanged`).
+    /// is posted (`updatesChanged`), and kept for the next launch (SkillsUpdateCheck).
     static var updates: [String: UpdateState] = [:] {
-        didSet { NotificationCenter.default.post(name: updatesChanged, object: nil) }
+        didSet {
+            SkillsUpdateCheck.keep(updates)
+            NotificationCenter.default.post(name: updatesChanged, object: nil)
+        }
     }
     static var lastCheck: Date? { UserDefaults.standard.object(forKey: "SkillsLastUpdateCheck") as? Date }
     static let updatesChanged = Notification.Name("NextTermSkillUpdatesChanged")
 
     /// Asks GitHub for the current commit of each source (one repository and branch at a time).
     static func checkForUpdates() async {
+        await checkForUpdates(await tracked())
+    }
+
+    /// The same, for `all` (from `tracked()`).
+    static func checkForUpdates(_ all: [Tracked]) async {
         var answers: [String: UpdateState] = [:]
-        let all = await tracked()
         let groups = Dictionary(grouping: all) { "\($0.source.owner)/\($0.source.repo)@\($0.source.ref ?? "")".lowercased() }
         for (_, group) in groups {
             let first = group[0].source

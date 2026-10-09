@@ -39,3 +39,69 @@ enum SkillsMenuItem {
         }
     }
 }
+
+/// A quiet check for skill updates, so the Agents menu's count means something without opening a window: once a day at
+/// most (SkillUpdates.isDue), looked at a little after launch and after waking, and every hour. Only with skills from
+/// GitHub installed and Settings › Skills' update check on; off the main thread (GitHub is asked as Check for Updates asks
+/// it); never in the self-test. A failure says nothing here: Settings › Skills shows each skill's answer, as after its own
+/// check. The answers are kept with the time of the check, so a relaunch within the day shows the same count.
+@MainActor
+enum SkillsUpdateCheck {
+    static let answersKey = "SkillsUpdateAnswers"
+    private static var observers: [NSObjectProtocol] = []
+    private static var timer: Timer?
+    private static var checking = false
+
+    /// Whether it was started (never in the self-test, which checks so).
+    static var started: Bool { timer != nil }
+
+    static func start() {
+        guard observers.isEmpty, !SelfTest.isRequested else { return }
+        restore()
+        let workspace = NSWorkspace.shared.notificationCenter
+        observers.append(workspace.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { soon() }
+        })
+        // A Mac that never sleeps still checks once a day.
+        let hourly = Timer(timeInterval: 60 * 60, repeats: true) { _ in
+            MainActor.assumeIsolated { checkIfDue() }
+        }
+        hourly.tolerance = 10 * 60
+        RunLoop.main.add(hourly, forMode: .common)
+        timer = hourly
+        soon()
+    }
+
+    /// Half a minute on: the first window, or the network after waking, comes first.
+    private static func soon() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { checkIfDue() }
+    }
+
+    private static func checkIfDue() {
+        guard SkillsWindowController.checksOnOpen, !checking, SkillsStore.home == NSHomeDirectory() else { return }
+        // Due a day after the last check (Window › Skills' and Check for Updates count), or with no answers kept yet.
+        let kept = UserDefaults.standard.data(forKey: answersKey) != nil
+        guard !kept || SkillUpdates.isDue(now: Date(), lastCheck: SkillsInstaller.lastCheck) else { return }
+        checking = true
+        Task {
+            defer { checking = false }
+            let tracked = await SkillsInstaller.tracked()
+            guard !tracked.isEmpty else { return }
+            await SkillsInstaller.checkForUpdates(tracked)
+        }
+    }
+
+    /// Keeps the answers of the user's own skills for the next launch (`SkillsInstaller.updates` calls it).
+    static func keep(_ answers: [String: SkillUpdateState]) {
+        guard !SelfTest.isRequested, SkillsStore.home == NSHomeDirectory() else { return }
+        UserDefaults.standard.set(SkillUpdates.encode(answers), forKey: answersKey)
+    }
+
+    /// The answers kept from a check within the day; older ones are left for the next check to replace.
+    private static func restore() {
+        guard !SkillUpdates.isDue(now: Date(), lastCheck: SkillsInstaller.lastCheck),
+              let data = UserDefaults.standard.data(forKey: answersKey) else { return }
+        let answers = SkillUpdates.decode(data)
+        if !answers.isEmpty { SkillsInstaller.updates = answers }
+    }
+}

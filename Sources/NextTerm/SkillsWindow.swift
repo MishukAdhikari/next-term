@@ -8,7 +8,8 @@ import NextTermCore
 final class SkillsWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSWindowDelegate {
     static var shared: SkillsWindowController?
 
-    /// Whether opening the window checks installed skills for updates (at most once an hour).
+    /// Whether installed skills are checked for updates: as the window opens (at most once an hour), and quietly once a
+    /// day for Agents › Skills…' count (SkillsUpdateCheck). Settings › Skills' checkbox; the key is the one it always had.
     static var checksOnOpen: Bool {
         get { UserDefaults.standard.object(forKey: "SkillsCheckUpdatesOnOpen") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "SkillsCheckUpdatesOnOpen") }
