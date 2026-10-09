@@ -60,9 +60,13 @@ extension SessionSnapshot {
         /// The version an update was installing when it was written.
         public var pendingToVersion: String?
         public var savedAt: Date
+        /// The quit consent, as a one-time id: a quit under "Resume where I left off" that the user let go ahead with the
+        /// resume box checked writes a fresh one (R30). The launch after records it as used before it restores, so it
+        /// lets agents resume once. Its only form on disk; never in a file a crash or another quit left.
+        public var resumeConsent: UUID?
 
         public init(schema: Int = SessionSnapshot.schema, launchID: UUID, generation: Int, clean: Bool, bootSession: String? = nil,
-                    awaitingMarker: UUID? = nil, pendingToVersion: String? = nil, savedAt: Date) {
+                    awaitingMarker: UUID? = nil, pendingToVersion: String? = nil, savedAt: Date, resumeConsent: UUID? = nil) {
             self.schema = schema
             self.launchID = launchID
             self.generation = generation
@@ -71,6 +75,7 @@ extension SessionSnapshot {
             self.awaitingMarker = awaitingMarker
             self.pendingToVersion = pendingToVersion
             self.savedAt = savedAt
+            self.resumeConsent = resumeConsent
         }
     }
 
@@ -498,7 +503,15 @@ extension SessionSnapshot {
     }
 
     public enum RestoreKind: String, CaseIterable, Sendable {
-        case update, crash, safeMode, unknown
+        /// After an update quit the user agreed to with the box checked.
+        case update
+        /// After a crash or a force quit: the last periodic save.
+        case crash
+        /// Layout only, after two restores that did not finish.
+        case safeMode
+        /// After a quit under "Resume where I left off".
+        case quit
+        case unknown
     }
 
     public enum NoteReason: String, CaseIterable, Sendable {
@@ -1095,7 +1108,7 @@ extension SessionSnapshot: Codable {
 
 extension SessionSnapshot.Header: Codable {
     private enum Keys: String, CodingKey {
-        case schema, launchID, generation, clean, bootSession, awaitingMarker, pendingToVersion, savedAt
+        case schema, launchID, generation, clean, bootSession, awaitingMarker, pendingToVersion, savedAt, resumeConsent
     }
 
     public init(from decoder: Decoder) throws {
@@ -1110,6 +1123,7 @@ extension SessionSnapshot.Header: Codable {
         bootSession = c.optional(String.self, .bootSession)
         awaitingMarker = c.uuid(.awaitingMarker)
         pendingToVersion = c.optional(String.self, .pendingToVersion)
+        resumeConsent = c.uuid(.resumeConsent)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1122,6 +1136,7 @@ extension SessionSnapshot.Header: Codable {
         try c.encodeIfPresent(awaitingMarker?.lowercased, forKey: .awaitingMarker)
         try c.encodeIfPresent(pendingToVersion, forKey: .pendingToVersion)
         try c.encode(Millis.of(savedAt), forKey: .savedAt)
+        try c.encodeIfPresent(resumeConsent?.lowercased, forKey: .resumeConsent)
     }
 }
 

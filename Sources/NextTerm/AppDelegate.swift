@@ -362,6 +362,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         BackgroundFetcher.shared.start()
         // Write the shell integration before the first shell starts. Without it tabs fall back to process polling.
         if AppSupport.zshIntegrationDirectory == nil { NSLog("Next Term: could not install zsh integration") }
+        // The sessions folder, unless another Next Term holds it: the session is saved there from now on, and at the quit.
+        // No launch restores windows from it yet, so saving may start at once.
+        MainActor.assumeIsolated {
+            SessionRestore.shared.start()
+            SessionRestore.shared.openGate()
+        }
         NSApp.activate(ignoringOtherApps: true)
         // `nxtrm` in a terminal, while Next Term runs.
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(commandLineRequest(_:)),
@@ -612,6 +618,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Set while a quit asks its questions. They are app-modal, and main-queue work still runs under them (a download
     /// that ends, an MCP call): a second quit then is cancelled, and "Relaunch Now" is not offered (`Updater`).
     var askingToQuit = false
+    /// Why the quit that went ahead happens, read as it went ahead: the quit's last save and the install go by it.
+    private var terminatingFor: QuitReason?
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !askingToQuit else { return .terminateCancel }
@@ -619,6 +627,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         defer { askingToQuit = false }
         guard askBeforeQuitting() else { return .terminateCancel }
         isTerminating = true
+        terminatingFor = quitReason
         // A skill change part-way finishes, and records its Undo, before Next Term quits.
         SkillsStore.waitForChanges()
         return .terminateNow
@@ -723,7 +732,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         ClaudeIDEServer.shared.stop() // removes the lock file
         GeminiIDEServer.shared.stop()
         CopilotIDEServer.shared.stop()
-        MainActor.assumeIsolated { Updater.shared.installStagedUpdateOnQuit() }
+        // The quit's last save (KTD18): what Settings › General says now, with the quit's answer saved. Settings › General
+        // has no "Keep scrollback" yet: it is on, its default.
+        let reason = terminatingFor ?? quitReason
+        let settings = LaunchSettings(defaults: launchDefaults)
+        MainActor.assumeIsolated {
+            let sessions = SessionRestore.shared
+            var finished = SessionRestore.Finished()
+            if let intent = QuitIntent.ordinary(reason: reason, settings: settings, consent: sessions.quitConsent) {
+                finished = sessions.finishAtQuit(intent, keepScrollback: true)
+            }
+            // A logout, restart or shutdown installs nothing: it could end the install part-way. It waits for the next quit.
+            if reason != .systemSession { Updater.shared.installStagedUpdateOnQuit(sessions: finished) }
+        }
         if SelfTest.mode != .plain { sessionProjects = controllers.compactMap(\.project) }
         RemoteConnection.saveTabs(controllers)
         for controller in controllers { for tab in controller.tabs { tab.terminate() } }

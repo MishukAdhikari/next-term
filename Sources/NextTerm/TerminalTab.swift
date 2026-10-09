@@ -586,6 +586,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private(set) var restoreDivider: (text: String, row: Int?, columns: Int)?
     /// `start()` has run: anything fed now would land among what the shell printed.
     private var started = false
+    /// The record this tab was restored from, at launch. While its action waits, every save writes it as it was
+    /// (SessionCapture), so a restore that stops part-way loses nothing (KTD3).
+    var restoredRecord: SessionSnapshot.Pane?
 
     /// Notes where the command now starting showed, as the integration reports it.
     private func noteEcho(_ typed: String, expanded: String?) {

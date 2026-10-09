@@ -550,11 +550,12 @@ final class Updater {
     }
 
     /// "Relaunch Now" is quitting: the quit asks nothing about reopening (unsaved files and running work are still
-    /// asked about), and the install flags the relaunch. Until the update that keeps sessions.
+    /// asked about). It is no consent to keep sessions: the quit saves what Settings › General says, as any quit that
+    /// asked nothing does. Until the update sheet.
     private(set) var relaunching = false
 
-    /// Quits so the update goes in, and the new version reopens the projects open now. "When I Quit" never comes
-    /// here: that quit is the user's own, and the launch after it follows Settings › General.
+    /// Quits so the update goes in, and the new version opens what Settings › General says. "When I Quit" never comes
+    /// here: that quit is the user's own, and the launch after it follows Settings › General too.
     private func relaunchNow() {
         relaunching = true
         NSApp.terminate(nil)
@@ -566,23 +567,28 @@ final class Updater {
 
     /// Marks the next launch as the relaunch after "Relaunch Now", which reopens the projects that were open whatever
     /// Settings › General says. The next launch takes the flag (`AppDelegate.takeLaunchKind`); one more than 15
-    /// minutes old counts for nothing.
+    /// minutes old counts for nothing. No quit leaves it any more: the update's marker in the sessions folder replaced it,
+    /// and only the self-test's launch check still writes it.
     nonisolated static func flagRelaunch(in defaults: UserDefaults, now: Date) {
         defaults.set(now, forKey: relaunchFlagKey)
     }
 
-    /// Called as Next Term quits: if an update is staged, a small script (see `InstallScript`) waits for
-    /// this process to end, checks the new app's signature again, swaps the apps (putting the old one back
-    /// if anything fails) and starts the new one.
-    func installStagedUpdateOnQuit() {
+    /// Called as Next Term quits, once the quit's last save is written (SessionRestore.finishAtQuit): if an update is
+    /// staged, a small script (see `InstallScript`) waits for this process to end, checks the new app's signature again,
+    /// swaps the apps (putting the old one back if anything fails) and starts the new one. It leaves its result in the
+    /// sessions folder, naming the marker the saved session waits for (even one whose write failed), and opens an old app
+    /// it could not put back from its backup with the folder's key. The marker replaces the flag `flagRelaunch` left.
+    func installStagedUpdateOnQuit(sessions: SessionRestore.Finished) {
         guard let staged else { return }
-        if relaunching { Self.flagRelaunch(in: AppDelegate.shared.launchDefaults, now: Date()) }
         let staging = staged.newApp.deletingLastPathComponent()
         let target = installTarget
         var script = InstallScript(pid: ProcessInfo.processInfo.processIdentifier, app: target.app,
                                    newApp: staged.newApp.path, staging: staging.path, requirement: staged.requirement,
                                    oldRequirement: staged.oldRequirement, relaunch: true)
         script.open = target.open
+        script.sessions = sessions.folder
+        script.marker = sessions.marker
+        script.folderKey = sessions.folderKey
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.arguments = ["-c", script.text]

@@ -281,6 +281,31 @@ import Testing
         #expect(secret.command?.check == .secret)
         #expect(secret.command?.line == nil)
         #expect(secret.note?.reason == .notKept)
+        // Written before a quit could carry a consent: none.
+        #expect(snapshot.header.resumeConsent == nil)
+    }
+
+    @Test func aQuitsResumeConsentIDRoundTripsInTheHeader() throws {
+        var consented = header(clean: true)
+        consented.awaitingMarker = nil
+        consented.pendingToVersion = nil
+        consented.resumeConsent = id(902)
+        let snapshot = Snapshot(header: consented, windows: [Window(groups: [Group(root: .pane(pane(1)), focused: id(1))])])
+        let text = String(decoding: try snapshot.encoded(), as: UTF8.self)
+        #expect(text.contains(#""resumeConsent":"\#(id(902).uuidString.lowercased())""#))
+        #expect(try Snapshot.decode(Data(text.utf8)).header.resumeConsent == id(902))
+        // One that is not an id reads as none.
+        let bad = text.replacingOccurrences(of: id(902).uuidString.lowercased(), with: "not-an-id")
+        #expect(try Snapshot.decode(Data(bad.utf8)).header.resumeConsent == nil)
+        #expect(!String(decoding: try Snapshot(header: header()).encoded(), as: UTF8.self).contains("resumeConsent"))
+    }
+
+    @Test func aPaneRestoredFromAQuitSavesItsPendingActionsReason() throws {
+        var restored = pane(1)
+        restored.pending = Snapshot.PendingAction(action: .onTheLine, state: .pending, reason: .quit)
+        let snapshot = Snapshot(header: header(), windows: [Window(groups: [Group(root: .pane(restored), focused: id(1))])])
+        let read = try Snapshot.decode(try snapshot.encoded())
+        #expect(read.panes.first?.pending == Snapshot.PendingAction(action: .onTheLine, state: .pending, reason: .quit))
     }
 
     // MARK: tolerant decoding

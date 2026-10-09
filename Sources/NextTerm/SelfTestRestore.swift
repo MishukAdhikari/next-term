@@ -11,9 +11,9 @@ import NextTermCore
 ///
 /// Each step launches as the app does (AppDelegate hands it here before plan 005's self-test branch), counts as a
 /// self-test for every guard but those pointed at the harness's folder: its defaults suite (the projects open at quit,
-/// kept remote tabs, Settings › General, the relaunch flag), its sessions folder and its MCP socket. Its quit asks the
-/// real questions, answered through their buttons, and its update is staged by the stand-in in `Updater`, installed by
-/// the real script against paths in its folder.
+/// kept remote tabs, Settings › General), its sessions folder (the session the app saves, and its quit's last save) and
+/// its MCP socket. Its quit asks the real questions, answered through their buttons, and its update is staged by the
+/// stand-in in `Updater`, installed by the real script against paths in its folder.
 @MainActor
 enum SelfTestRestore {
     /// Where a run keeps everything, and which step this process is.
@@ -54,6 +54,8 @@ enum SelfTestRestore {
         var report: URL { folder.appendingPathComponent("report.txt") }
         /// What the first step read of the user's own state, for the second to compare.
         var realState: URL { folder.appendingPathComponent("real-state.json") }
+        /// The secret the first step typed, for the second to look for: never in the report, which is searched for it too.
+        var canary: URL { folder.appendingPathComponent("canary") }
         /// The defaults suite, a file in the folder (`defaults.plist`).
         var defaultsSuite: String { folder.path + "/defaults" }
         /// Where the sessions folder is made: the harness's Application Support/Next Term.
@@ -82,8 +84,6 @@ enum SelfTestRestore {
     private static let probeName = "harness-probe"
 
     private static var failures = 0
-    /// The harness's sessions folder, held while the process runs, as the app holds its own.
-    private static var sessions: SessionFiles?
     /// The buttons to press, in turn, as the app-modal alert holding each shows.
     private static var presses: [String] = []
     private static var pressTimer: Timer?
@@ -116,12 +116,22 @@ enum SelfTestRestore {
             check(false, "the sessions folder takes a file", "\(error)")
         }
 
+        // "Resume where I left off": the quit, which asks nothing about it, saves the whole session, and the relaunch
+        // reopens the project.
+        if let defaults {
+            var settings = LaunchSettings(defaults: defaults)
+            settings.opens = .lastProjects
+            settings.save(to: defaults)
+        }
+
         // A project window with a command running, so the quit has a question to ask.
         let controller = app.openFolder(harness.project.path, newWindow: false)
         guard let tab = controller.tabs.first, await SelfTest.wait(20, { tab.status.integrated }) else {
             check(false, "the project window's shell starts")
             return finish()
         }
+        await saveChecks(harness, files: files, controller: controller, tab: tab)
+        await canaryChecks(harness, tab: tab)
         tab.view.send(txt: "sleep 600\r")
         check(await SelfTest.wait(5) { tab.status.running }, "a command runs in the project window")
 
@@ -184,27 +194,30 @@ enum SelfTestRestore {
         check(pressedRelaunch && pressedQuit, "the update quit asked “Quitting stops…”, and both presses were the buttons'",
               "Relaunch Now \(pressedRelaunch), Quit \(pressedQuit)")
 
-        // The relaunch: its flag and the projects open at quit, from the harness's defaults; its window and no Welcome.
+        // The relaunch, a normal launch under "Resume where I left off": the projects open at quit, from the harness's
+        // defaults; their window and no Welcome.
         let windows = await SelfTest.wait(10) { !app.controllers.isEmpty }
         let welcome = app.welcomeController?.window?.isVisible == true
         let projects: [String] = app.controllers.compactMap(\.project)
         let reopened: Bool = projects == [harness.project.path]
-        check(launchKind == .updateRelaunch && windows && reopened && !welcome,
+        check(launchKind == .normal && windows && reopened && !welcome,
               "the relaunch after the update opens the project that was open, and no Welcome window",
               "\(launchKind), projects \(projects), Welcome \(welcome)")
         let saved: [String] = defaults?.stringArray(forKey: "sessionProjects") ?? []
         let remote = defaults?.data(forKey: "remoteTabs").map { String(decoding: $0, as: UTF8.self) } ?? "none"
-        let flagTaken = defaults?.object(forKey: Updater.relaunchFlagKey) == nil
+        let noFlag = defaults?.object(forKey: Updater.relaunchFlagKey) == nil
         let suiteFile = FileManager.default.fileExists(atPath: harness.defaultsSuite + ".plist")
-        check(saved == [harness.project.path] && remote == "[]" && flagTaken && suiteFile,
-              "the projects open at quit and the kept remote tabs are in the harness's defaults, and the relaunch took its flag",
-              "projects \(saved), remote tabs \(remote), flag taken \(flagTaken), suite file \(suiteFile)")
+        check(saved == [harness.project.path] && remote == "[]" && noFlag && suiteFile,
+              "the projects open at quit and the kept remote tabs are in the harness's defaults, and no quit wrote the relaunch flag",
+              "projects \(saved), remote tabs \(remote), no flag \(noFlag), suite file \(suiteFile)")
 
-        // The sessions folder: the first step's lock went with its process, and its file reads back.
+        // The sessions folder: the first step's lock went with its process, its file reads back, and its quit's last save
+        // is what this launch found.
         if let files = sessionChecks(harness) {
             let probe = (try? files.read(probeName, maxSize: 1024)).flatMap { $0 }.map { String(decoding: $0, as: UTF8.self) }
             check(probe?.hasPrefix("update-quit ") == true, "the file the first step wrote in the sessions folder reads back",
                   probe ?? "none")
+            quitSaveChecks(harness, files: files)
         }
 
         // Nothing outside the harness's folder changed: what only the harness could have put there, whoever else runs,
@@ -244,21 +257,18 @@ enum SelfTestRestore {
               "defaults \(ownDefaults), socket \(socket), zsh integration \(zsh)")
     }
 
-    /// The harness's sessions folder: in its own folder, private, out of backups and Spotlight, with this copy's path
-    /// recorded, and held by this process alone. Nil when it can't be used.
+    /// The harness's sessions folder, as the launch took it (SessionRestore): in its own folder, private, out of backups and
+    /// Spotlight, with this copy's path recorded, and held by this process alone. Nil when it can't be used.
     private static func sessionChecks(_ harness: Harness) -> SessionFiles? {
         guard let parent = SelfTest.sessionsParent, parent == harness.stateFolder else {
             check(false, "the harness makes its sessions folder in its own folder", SelfTest.sessionsParent?.path ?? "none")
             return nil
         }
-        let files: SessionFiles
-        do {
-            files = try SessionFiles.open(in: parent, bundlePath: Bundle.main.bundlePath)
-        } catch {
-            check(false, "the harness's sessions folder opens", "\(error)")
+        guard let files = SessionRestore.shared.files else {
+            check(false, "the launch holds the harness's sessions folder")
             return nil
         }
-        let locked = files.lock()
+        let locked = files.isOwner
         let second = try? SessionFiles.open(in: parent, bundlePath: Bundle.main.bundlePath)
         let alone = second?.lock() == false
         let inside = files.url.path.hasPrefix(harness.folder.path + "/") && files.url.pathExtension == "noindex"
@@ -270,8 +280,101 @@ enum SelfTestRestore {
         check(inside && isPrivate && excluded && recorded,
               "the sessions folder is in the harness's folder, private, out of backups and Spotlight, with this copy's path",
               "\(files.url.path), private \(isPrivate), excluded \(excluded), recorded \(recorded)")
-        sessions = files
         return locked ? files : nil
+    }
+
+    /// The periodic saves (KTD1): two windows, one with a split, reach the state file within 3 seconds, and once it is
+    /// steady a status-dot change alone writes nothing.
+    private static func saveChecks(_ harness: Harness, files: SessionFiles, controller: TerminalWindowController,
+                                   tab: TerminalTab) async {
+        AppDelegate.shared.openWindow(directory: harness.project.path)
+        controller.split(vertical: true, from: tab, focus: false)
+        let split = { (window: SessionSnapshot.Window) -> Bool in
+            window.groups.contains { (group: SessionSnapshot.Group) -> Bool in group.panes.count == 2 }
+        }
+        let saved = await SelfTest.wait(3) {
+            guard let windows = SessionWriter.load(from: files)?.windows else { return false }
+            return windows.count == 2 && windows.contains(where: split)
+        }
+        let found = SessionWriter.load(from: files)
+        check(saved && found?.header.clean == false, "two windows, one with a split, are in the state file within 3 seconds, unclean",
+              "windows \(found?.windows.count ?? 0), clean \(found?.header.clean ?? true)")
+
+        // Steady: no save for a whole tick and more, the new pane's shell started.
+        var generation = found?.header.generation
+        for _ in 0..<5 {
+            await SelfTest.pause(2.5)
+            let now = SessionWriter.load(from: files)?.header.generation
+            if now == generation { break }
+            generation = now
+        }
+        tab.status.needsAttention()
+        await SelfTest.pause(3)
+        let after = SessionWriter.load(from: files)?.header.generation
+        check(generation != nil && after == generation, "a status-dot change alone writes nothing",
+              "generation \(generation ?? -1), then \(after ?? -1)")
+        check(SessionRestore.shared.lastSave?.succeeded == true && SessionRestore.shared.lastSave?.panesLeftOut.isEmpty == true,
+              "the last save was written and leaves no pane out")
+    }
+
+    /// The canaries: a line holding a secret, whose echo the scrollback a quit saves blanks, and a plain one it keeps. The
+    /// secret goes in the harness's own file, never in the report, for the relaunch to look for everywhere else.
+    private static func canaryChecks(_ harness: Harness, tab: TerminalTab) async {
+        let secret = "nt-canary-" + UUID().uuidString.lowercased()
+        let plain = "nt-plain-" + UUID().uuidString.lowercased()
+        try? Data(secret.utf8).write(to: harness.canary)
+        for line in ["PGPASSWORD=\(secret) true", "echo \(plain)"] {
+            tab.view.send(txt: line + "\r")
+            _ = await SelfTest.wait(5) { tab.status.command == line && !tab.status.running }
+        }
+        let text = SessionScrollback.capture(tab).text()
+        let line = SessionCapture.command(tab)
+        check(text.contains(plain) && !text.contains(secret), "the scrollback a quit saves keeps a plain line and blanks a secret one")
+        check(line?.line == "echo \(plain)", "the last line is kept when it holds no secret", line?.line ?? "none")
+    }
+
+    /// What the update quit left, as this launch found it before it wrote anything: under "Resume where I left off", with no
+    /// quit consent ("Relaunch Now" asks nothing that could give it), the whole session marked clean with no consent id
+    /// and no marker, nothing left behind, the scrollback named for its session and removed unread by this launch, which
+    /// restores nothing, and the install's result. The secret typed before the quit is in no file it left, in the
+    /// harness's defaults or in the report.
+    private static func quitSaveChecks(_ harness: Harness, files: SessionFiles) {
+        let found = SessionRestore.shared.found
+        let snapshot = found?.snapshot
+        let names: [String] = found?.names ?? []
+        let header = snapshot?.header
+        let clean = header?.clean == true && header?.resumeConsent == nil && header?.awaitingMarker == nil
+        let windows = snapshot?.windows.count ?? 0
+        check(clean && windows == 2, "the update quit under Resume saved both windows, clean, with no consent id and no marker",
+              "clean \(header?.clean ?? false), consent \(header?.resumeConsent != nil), windows \(windows)")
+        let lingering: [String] = names.filter { (name: String) -> Bool in
+            name.hasPrefix(".") || name.hasSuffix(SessionFiles.previousSuffix) || name == UpdateMarker.fileName
+        }
+        check(lingering.isEmpty, "the quit left no previous file, temporary file or marker", "\(lingering)")
+        let launch = header?.launchID
+        let quitScrollback = names.filter { (name: String) -> Bool in ScrollbackText.parseFileName(name)?.quit == launch }
+        let left = ((try? files.names()) ?? []).filter { (name: String) -> Bool in name.hasPrefix(ScrollbackText.filePrefix) }
+        check(!quitScrollback.isEmpty && left.isEmpty,
+              "the quit saved scrollback named for its session, and this launch, which restores nothing, removed it unread",
+              "saved \(quitScrollback.count), left \(left)")
+        let data = (try? files.read(InstallResult.fileName, maxSize: InstallResult.maxSize)) ?? nil
+        let result = data.flatMap(InstallResult.parse)
+        check(result == InstallResult(outcome: .installed, marker: nil), "the install left its result in the sessions folder, naming no marker",
+              result.map { "\($0.outcome.rawValue), marker \($0.marker?.uuidString ?? "none")" } ?? "none")
+
+        guard let secret = try? String(contentsOf: harness.canary, encoding: .utf8), !secret.isEmpty else {
+            return check(false, "the first step typed its secret canary")
+        }
+        let folder = files.url
+        var holders: [String] = []
+        let places: [URL] = ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).map(folder.appendingPathComponent)
+            + [URL(fileURLWithPath: harness.defaultsSuite + ".plist"), harness.report]
+        for place in places {
+            guard let contents = FileManager.default.contents(atPath: place.path) else { continue }
+            if contents.range(of: Data(secret.utf8)) != nil { holders.append(place.lastPathComponent) }
+        }
+        check(holders.isEmpty, "the secret typed before the quit is in no session file, in the harness's defaults or in the report",
+              "\(holders)")
     }
 
     /// What the harness must leave as it is outside its folder, as one step found it.
