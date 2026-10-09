@@ -131,6 +131,10 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// Bumped by every scan, so one that finishes after a newer one started is dropped.
     private(set) var databaseScanToken = 0
     private var databaseScanQueued = false
+    #if DEBUG
+    /// For the self-test, when the Databases group is late: how this tree's scans went.
+    private(set) var databaseScanStats = DatabaseScanStats()
+    #endif
     /// Projects whose Databases group you closed: it stays closed for them.
     private var collapsedDatabaseRoots: Set<String> = []
     private var expandDatabasesWithRoot = false
@@ -285,16 +289,71 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         let path = root.path
         databaseScanToken += 1
         let token = databaseScanToken
+        let queued = Date()
+        noteDatabaseScan(.started(queued))
         DispatchQueue.global(qos: .utility).async {
+            let began = Date()
             let scan = Databases.scan(root: path)
+            let read = DatabaseScanStats.Event.read(waited: began.timeIntervalSince(queued), took: Date().timeIntervalSince(began))
             DispatchQueue.main.async { [weak self] in
-                guard let self, token == self.databaseScanToken, self.root?.path == path else { return }
+                self?.noteDatabaseScan(read)
+                guard let self, token == self.databaseScanToken, self.root?.path == path else {
+                    self?.noteDatabaseScan(.dropped)
+                    return
+                }
+                if self.isRenaming { self.noteDatabaseScan(.held) }
                 self.whenNotRenaming("databases") { [weak self] in
                     guard let self, self.root?.path == path else { return }
                     self.showDatabases(scan)
                 }
             }
         }
+    }
+
+    /// How a tree's Databases scans went, for the self-test when the group is late (noted in debug builds only): a
+    /// starved background queue shows as a long wait for a thread, a slow disk as a long read, a scan a newer one
+    /// replaced as dropped, and a result kept back while a name is edited as held.
+    struct DatabaseScanStats: CustomStringConvertible {
+        enum Event {
+            case started(Date)
+            case read(waited: TimeInterval, took: TimeInterval)
+            case dropped
+            case held
+        }
+
+        var started = 0, read = 0, dropped = 0, held = 0
+        var lastStart: Date?
+        var longestWait: TimeInterval = 0, longestRead: TimeInterval = 0
+
+        mutating func note(_ event: Event) {
+            switch event {
+            case .started(let at):
+                started += 1
+                lastStart = at
+            case let .read(waited, took):
+                read += 1
+                longestWait = max(longestWait, waited)
+                longestRead = max(longestRead, took)
+            case .dropped:
+                dropped += 1
+            case .held:
+                held += 1
+            }
+        }
+
+        var description: String {
+            let last = lastStart.map { String(format: "the last %.1f s ago", Date().timeIntervalSince($0)) } ?? "none"
+            let wait = String(format: "%.2f s", longestWait)
+            let took = String(format: "%.2f s", longestRead)
+            let reads = "\(read) read (longest wait for a thread \(wait), longest read \(took))"
+            return "\(started) started (\(last)), \(reads), \(dropped) dropped, \(held) held for a name being edited"
+        }
+    }
+
+    private func noteDatabaseScan(_ event: DatabaseScanStats.Event) {
+        #if DEBUG
+        databaseScanStats.note(event)
+        #endif
     }
 
     /// Something changed near the top of the project (an env file, a config, a SQLite file): scan again

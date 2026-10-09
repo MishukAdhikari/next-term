@@ -39,7 +39,10 @@ extension SelfTest {
         // In a repository: the git status refreshes after every change, and the .env makes a Databases group.
         if let (w, sidebar) = await newFileWindow(repo, "in a repository") {
             if gitPath == nil { note("new file: git not found, so no git status refreshes in the repository") }
-            check(await wait(10) { !sidebar.databasesGroup.items.isEmpty }, "new file: the repository has a Databases group")
+            let shown = Date()
+            let databases = await wait(10) { !sidebar.databasesGroup.items.isEmpty }
+            let late = await lateDatabases(sidebar, came: databases, since: shown)
+            check(databases, "new file: the repository has a Databases group", late)
             let tmp = repo.appendingPathComponent("tmp"), src = repo.appendingPathComponent("src")
             sidebar.reveal(tmp.appendingPathComponent("new.env").path)
             sidebar.reveal(src.appendingPathComponent("a.txt").path)
@@ -145,6 +148,21 @@ extension SelfTest {
             return nil
         }
         return (window, w.sidebar)
+    }
+
+    /// For a Databases group not there in time (debug builds): still a failure, but waited for 30 s more with nothing
+    /// renamed (a name being edited keeps the scan's result back), to tell a slow scan from one that never came, and how
+    /// the tree's scans went (a long wait for a thread, a long read, one dropped or held). "" when it came in time.
+    private static func lateDatabases(_ sidebar: ProjectSidebarView, came: Bool, since shown: Date) async -> String {
+        #if DEBUG
+        guard !came else { return "" }
+        let later = await wait(30) { !sidebar.databasesGroup.items.isEmpty }
+        let after = Date().timeIntervalSince(shown)
+        let when = later ? String(format: "it showed %.1f s after the tree did", after) : "it never showed in 40 s"
+        return "\(when); scans: \(sidebar.databaseScanStats)"
+        #else
+        return ""
+        #endif
     }
 
     private static func closeNewFileWindow(_ window: NSWindow, _ c: TerminalWindowController) async {
