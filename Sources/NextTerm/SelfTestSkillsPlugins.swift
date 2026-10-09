@@ -176,8 +176,8 @@ extension SelfTest {
 extension SelfTest {
     /// Claude Code's link for a plugin folder: left out by default, added on request, and never a write to
     /// Claude Code's settings, in the self-test's home or the real one. The user's key set to false (as
-    /// /plugin sets it) shows as "off". Only digests and modes of the real settings file are compared;
-    /// nothing from it is printed or kept.
+    /// /plugin sets it) shows as "off". The real settings file is only stat'ed (realState): never opened,
+    /// and nothing about it is printed or kept.
     static func pluginChoiceChecks(home: String) async {
         let manager = FileManager.default
         let settings = (home as NSString).appendingPathComponent(".claude/settings.json")
@@ -195,7 +195,7 @@ extension SelfTest {
             chmod(settings, 0o600)
         }
         let realSettings = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/settings.json")
-        let realBefore = fileState(realSettings)
+        let realBefore = realState(realSettings)
         writeSettings("{\n  \"model\": \"self-test\"\n}\n")
         let before = fileState(settings)
 
@@ -321,7 +321,8 @@ extension SelfTest {
         check(shown.contains(clashText) && fallsBack,
               "skills plugins: a plugin synced from claude.ai with the same name is named, and the folder is left out", shown)
 
-        check(fileState(realSettings) == realBefore, "skills plugins: the real ~/.claude/settings.json keeps its bytes and mode")
+        check(realState(realSettings) == realBefore,
+              "skills plugins: the real ~/.claude/settings.json keeps its size, modification time, mode and inode (stat only, never read)")
     }
 
     /// The agents besides Codex, Command Code and Claude Code that read ~/.agents/skills, as the review
@@ -444,8 +445,8 @@ extension SelfTest {
     /// Settings › Skills for a skill folder that is also a Claude Code plugin, installed with the review's
     /// default (left out of Claude Code): Link asks first and links only on "Add with Its Programs"; Unify,
     /// keeping it over a hand-made copy in ~/.claude/skills, asks with the same popup (AE14). Neither writes
-    /// Claude Code's settings, in the self-test's home or the real one. Only digests and modes of the real
-    /// settings file are compared; nothing from it is printed or kept.
+    /// Claude Code's settings, in the self-test's home or the real one. The real settings file is only
+    /// stat'ed (realState): never opened, and nothing about it is printed or kept.
     static func settingsPluginChecks(home: String) async {
         let manager = FileManager.default
         let settings = (home as NSString).appendingPathComponent(".claude/settings.json")
@@ -455,7 +456,7 @@ extension SelfTest {
         chmod(settings, 0o600)
         let before = fileState(settings)
         let realSettings = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/settings.json")
-        let realBefore = fileState(realSettings)
+        let realBefore = realState(realSettings)
         let readers = "Amp, Cursor, opencode and goose also read ~/.claude/skills."
         check(SkillsSettingsView.introText.hasSuffix(readers) && SkillsSettingsView.introTip.contains("Junie and goose"),
               "skills plugins: Settings › Skills' intro names the agents that read ~/.claude/skills, and its tooltip every reader of the shared one",
@@ -478,7 +479,8 @@ extension SelfTest {
         check(fileState(settings) == before && before?.hasSuffix(" 600") == true && !entryExists(link),
               "skills plugins: Settings › Skills' Link, Unify and their Undo leave Claude Code's settings byte for byte, mode 0600",
               fileState(settings) ?? "none")
-        check(fileState(realSettings) == realBefore, "skills plugins: the real ~/.claude/settings.json keeps its bytes and mode through the Settings checks")
+        check(realState(realSettings) == realBefore,
+              "skills plugins: the real ~/.claude/settings.json keeps its size, modification time, mode and inode through the Settings checks (stat only, never read)")
     }
 
     /// Link on the installed plugin folder: a question first, with what it starts, "Add with Its Programs"
@@ -634,11 +636,22 @@ extension SelfTest {
         check(back, "skills plugins: Undo of Unify puts the hand-made copy back")
     }
 
-    /// A file's digest and mode, or nil when it is not there.
+    /// A file's digest and mode, or nil when it is not there. Only for the self-test home's own files: the
+    /// user's real ones are only stat'ed (realState).
     static func fileState(_ path: String) -> String? {
         var info = stat()
         guard stat(path, &info) == 0 else { return nil }
         return (SkillHash.fileDigest(path) ?? "unreadable") + " " + String(UInt32(info.st_mode & 0o777), radix: 8)
+    }
+
+    /// The user's own file at `path` as stat sees it: size, modification time, mode and inode, or "missing".
+    /// It is never opened: the self-test doesn't read the user's real ~/.claude, only that nothing wrote it.
+    static func realState(_ path: String) -> String {
+        var info = stat()
+        guard stat(path, &info) == 0 else { return errno == ENOENT ? "missing" : "no stat (errno \(errno))" }
+        let modified = "\(info.st_mtimespec.tv_sec).\(info.st_mtimespec.tv_nsec)"
+        let mode = String(UInt32(info.st_mode & 0o7777), radix: 8)
+        return "size \(info.st_size), modified \(modified), mode \(mode), inode \(info.st_ino)"
     }
 
     /// Something is at `path`: a file, a folder, or a link (even to nothing).
