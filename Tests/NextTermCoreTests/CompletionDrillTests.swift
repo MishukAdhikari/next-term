@@ -456,6 +456,133 @@ import Testing
         #expect(s.phase == .open(id: 3, path: .completionSystem))
     }
 
+    // MARK: keys pressed while the list walks
+
+    /// The queue, driven as CompletionSession drives it (a reference, so its steps read inside #expect).
+    final class Keys {
+        var queue = CompletionKeyQueue()
+        func add(_ key: CompletionKeyQueue.Key, on list: CompletionList?, row: Int) { queue.add(key, on: list, row: row) }
+        func type(_ text: String) -> Bool { queue.type(Array(text.utf8)) }
+        func next(_ list: CompletionList?, busy: Bool = false, hold: Bool = false) -> CompletionKeyQueue.Step {
+            queue.next(list: list, busy: busy, hold: hold)
+        }
+    }
+
+    /// A list of three folders and a file, `cd`-less: what the queue's keys act on.
+    func three() throws -> CompletionList {
+        try #require(engine(["ls", ""], entries: [.init("alpha", .folder), .init("beta", .folder), .init("gamma", .folder), .init("x.txt", .file)]))
+    }
+
+    @Test func aWaitingKeyActsOnceTheListShowsAndKeysTypedAfterItGoAfterIt() throws {
+        let list = try three()
+        let keys = Keys()
+        // Nothing waits: typed keys go on as they are.
+        #expect(!keys.type("a") && keys.queue.isEmpty && keys.next(list) == .idle)
+        keys.add(.tab, on: list, row: 2)
+        #expect(keys.type("b"))
+        keys.add(.enter, on: list, row: 0)
+        // While the folder is listed, nothing moves: not the key, not the letter behind it.
+        #expect(keys.next(list, busy: true, hold: true) == .wait)
+        #expect(keys.next(nil) == .wait) // no rows show yet (Loading)
+        // It takes the row chosen when it began to wait, on the list it waited on.
+        #expect(keys.next(list) == .act(.tab, row: 2))
+        // The letter goes after it, and not while a folder it went into holds the writes.
+        #expect(keys.next(list, busy: true, hold: true) == .wait)
+        #expect(keys.next(list) == .send(Array("b".utf8)))
+        // ↩︎ after the letter: the shell says its word with it first, so ↩︎ takes the row the letter narrowed to.
+        #expect(keys.queue.typedSince && keys.next(list) == .line)
+        #expect(keys.next(list) == .line)
+        keys.queue.lineIn()
+        #expect(keys.next(list) == .act(.enter, row: 2))
+        #expect(keys.next(list) == .idle && keys.queue.isEmpty)
+    }
+
+    @Test func typedKeysGoOutWhileAFolderIsListedWhereTheHoldIsOver() throws {
+        // zsh's path: its hold ends at 120 ms, and zsh reads what is typed once it has listed. A letter behind a key that
+        // went into a folder goes out then, in its order.
+        let list = try three()
+        let keys = Keys()
+        keys.add(.tab, on: list, row: 0)
+        _ = keys.type("c")
+        #expect(keys.next(list) == .act(.tab, row: 0))
+        #expect(keys.next(list, busy: true, hold: false) == .send(Array("c".utf8)))
+    }
+
+    @Test func aKeyAfterLettersTypedDuringTheWalkWaitsForTheShellsWord() throws {
+        let list = try three()
+        let keys = Keys()
+        keys.queue.typed() // a letter before ⇥ on a folder: the list's own already
+        keys.queue.walkBegan()
+        #expect(!keys.queue.typedSince)
+        keys.queue.typed() // a letter typed while the folder is listed
+        keys.add(.tab, on: list, row: 1)
+        #expect(keys.next(list) == .line)
+        keys.queue.lineIn()
+        #expect(keys.next(list) == .act(.tab, row: 1))
+    }
+
+    @Test func movesWaitInOrderAndStopAtTheEnds() throws {
+        let list = try three()
+        #expect(list.rows.count == 4)
+        let keys = Keys()
+        for key in [CompletionKeyQueue.Key.move(1), .move(1), .move(1), .move(1), .move(-1), .enter] { keys.add(key, on: list, row: 1) }
+        var rows: [Int] = []
+        while case let .act(_, row) = keys.next(list) { rows.append(row) }
+        #expect(rows == [2, 3, 3, 3, 2, 2])
+    }
+
+    @Test func aListGoneIntoStartsAtItsFirstRowAndOneGoneBackUpToAtItsFolder() throws {
+        let root = try #require(engine(["cd", ""], entries: [.init("Pictures", .folder), .init("projects", .folder), .init("prose", .folder)]))
+        let p = try #require(root.rows.firstIndex { $0.text == "projects" })
+        let keys = Keys()
+        // ⇥ on projects, then ↓ ↩︎ at once: they wait for the folder's list.
+        keys.add(.move(1), on: root, row: p)
+        keys.add(.enter, on: root, row: p)
+        let projects = inside(try #require(root.drillContext(p)), [.init("cv", .folder), .init("next-term", .folder), .init("site", .folder)])
+        projects.drilled(from: root, row: p)
+        // ↓ moves from the folder's first row, not from the row chosen where ⇥ was pressed.
+        #expect(keys.next(projects) == .act(.move(1), row: 1))
+        #expect(keys.next(projects) == .act(.enter, row: 1))
+        // ← then ↓: the list gone back up to starts at the folder gone up from.
+        keys.add(.left, on: projects, row: 2)
+        keys.add(.move(1), on: projects, row: 2)
+        #expect(keys.next(projects) == .act(.left, row: 2))
+        let up = try #require(projects.goUp())
+        #expect(up.preferredRow == p)
+        #expect(keys.next(up) == .act(.move(1), row: min(p + 1, up.rows.count - 1)))
+    }
+
+    @Test func aListTypingNarrowedStartsAtItsFirstRow() throws {
+        let list = try three()
+        let keys = Keys()
+        keys.add(.move(2), on: list, row: 0)
+        _ = keys.type("g")
+        keys.add(.enter, on: list, row: 0)
+        #expect(keys.next(list) == .act(.move(2), row: 2))
+        #expect(keys.next(list) == .send(Array("g".utf8)))
+        let before = list.generation
+        #expect(list.update(word: "g", unquoted: "g") && list.rows.map(\.text) == ["gamma"] && list.generation != before)
+        keys.queue.lineIn()
+        // The rows changed under the chosen one: the first is chosen, as the popup chooses it.
+        #expect(keys.next(list) == .act(.enter, row: 0))
+        // The same rows again keep the count.
+        let same = list.generation
+        #expect(list.update(word: "g", unquoted: "g") && list.generation == same)
+    }
+
+    @Test func aListThatClosesDropsItsKeysAndKeepsTheLetters() throws {
+        let list = try three()
+        let keys = Keys()
+        keys.add(.tab, on: list, row: 0)
+        _ = keys.type("a")
+        keys.add(.move(1), on: list, row: 0)
+        _ = keys.type("bc")
+        keys.add(.enter, on: list, row: 0)
+        // A key in the list never reaches the shell; what was typed goes out, in order.
+        #expect(keys.queue.close() == [Array("a".utf8), Array("bc".utf8)])
+        #expect(keys.queue.isEmpty && keys.next(list) == .idle)
+    }
+
     @Test func theDrillsKeys() {
         #expect(decode(CompletionProtocol.takeWord(id: 3, old: "So", new: "Sources/", open: true))?.fields == ["w", "So", "Sources/", "o"])
         #expect(decode(CompletionProtocol.takeWord(id: 3, old: "So", new: "Sources/"))?.fields == ["w", "So", "Sources/"])
@@ -464,6 +591,11 @@ import Testing
         #expect(decode(CompletionProtocol.tabKey(id: 1, drill: true))?.fields == ["d"])
         #expect(decode(CompletionProtocol.tabKey(id: 1, wait: 0.3, quiet: true, drill: true))?.fields == ["w300", "q1", "d"])
         #expect(CompletionProtocol.parse(kind: "done", value: "000008;kept") == .done(id: 8, outcome: .kept))
+        // Keys that waited, after letters typed: the hook says the word now, then `sync` with Next Term's id.
+        #expect(decode(CompletionProtocol.sync(id: 12)) == Decoded(kind: "s", id: 12, fields: []))
+        #expect(CompletionProtocol.parse(kind: "sync", value: "000012") == .sync(id: 12))
+        #expect(CompletionProtocol.parse(kind: "sync", value: "x") == nil && CompletionProtocol.parse(kind: "sync", value: "000012;1") == nil)
+        #expect(CompletionProtocol.markKinds.contains("sync"))
         // Only a hook that knows them is sent them.
         #expect(CompletionProtocol.Arm().drills && !CompletionProtocol.Arm(version: 1).drills)
     }

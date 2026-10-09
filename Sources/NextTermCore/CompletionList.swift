@@ -18,7 +18,12 @@ public final class CompletionList: @unchecked Sendable {
     }
 
     public let id: Int
-    public private(set) var rows: [Row] = []
+    public private(set) var rows: [Row] = [] {
+        didSet { if rows != oldValue { generation &+= 1 } }
+    }
+    /// Counts the changes to `rows`: keys that waited (CompletionKeyQueue) start again at the first row when typing
+    /// changed them, as the popup does.
+    public private(set) var generation = 0
     /// How many match in all (more than `rows` when only the best are listed); `exact` false when that is
     /// not known (a folder too big to read whole, zsh's list cut at 2,000 and then narrowed).
     public private(set) var total = 0

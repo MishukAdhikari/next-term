@@ -83,7 +83,13 @@ final class CompletionPopup: NSObject, NSTableViewDataSource, NSTableViewDelegat
         selected = row
         table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         table.scrollRowToVisible(row)
-        if announce { Self.announce("\(Self.spoken(rows[row])), \(row + 1) of \(rows.count)") }
+        if announce { announceSelected() }
+    }
+
+    /// The chosen row, as ↓ ↑ say it: "next-term, folder, 2 of 3".
+    func announceSelected() {
+        guard rows.indices.contains(selected) else { return }
+        Self.announce("\(Self.spoken(rows[selected])), \(selected + 1) of \(rows.count)")
     }
 
     /// The panel's size for the rows, and its place: under the word on the caret's row, above it when there

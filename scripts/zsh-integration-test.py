@@ -218,7 +218,7 @@ def legacy_events(shell):
         elif kind == "jobs":
             count, _, listing = val.partition(";")
             val = count + ":" + (base64.b64decode(listing).decode() if listing else "")
-        elif kind in ("arm", "tab", "comp", "done", "line"):
+        elif kind in ("arm", "tab", "comp", "done", "line", "sync"):
             continue
         events.append((nonce, kind, val))
     return events
@@ -438,6 +438,21 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     check(drawn(sh, start, "cd So") and lines == [["000053", "0", "So", "So"]],
           f"[{label}] ←: a take with o puts back the word gone in from, and the list stays open", f"{sh.line(start)!r} {lines}")
     sh.send(frame("k", 53, ["c"]), 0.2)
+    sh.send("\x03", 0.4)
+
+    # Into a folder, then a letter typed while it was listed and a key that waited behind it, all in one write as Next
+    # Term sends them: the take's word, the letter's, then `sync`, so the key acts on the list for `Sources/i`.
+    start = len(sh.buf)
+    sh.send("cd So", 0.3)
+    tab_key(sh, 54, 0.05)
+    if sh.wait_mark("tab", start, 1):
+        sh.send(frame("a", 54, ["o"]), 0.3)
+    mark = len(sh.buf)
+    sh.send(frame("k", 54, ["w", "So", "Sources/", "o"]) + b"i" + frame("s", 9), 0.5)
+    said = [(k, f) for _, k, f in sh.marks(mark) if k in ("line", "sync")]
+    check(drawn(sh, start, "cd Sources/i") and said[-1:] == [("sync", ["000009"])] and [f for k, f in said[:-1]][-1:] == [["000054", "0", "Sources/i", "Sources/i"]],
+          f"[{label}] the sync key after a take and a letter: the letter's word, then `sync`", f"{sh.line(start)!r} {said}")
+    sh.send(frame("k", 54, ["c"]), 0.2)
     sh.send("\x03", 0.4)
 
     # A take with o for a word the line no longer has: nothing changes, and the list is reported gone.
@@ -903,6 +918,29 @@ def drill_checks(label, rc_extra=""):
     check(["000069", "inserted"] in dones(start) and drawn(sh, start, "cd projects/cv/") and not comp_list(sh, start, 69)[1],
           f"[{label}] with d, an empty folder goes in alone", f"{sh.line(start)!r} {dones(start)}")
     sh.send("\x03", 0.4)
+
+    # The sync key: Next Term's keys that waited for a folder's list come after letters typed meanwhile. Sent right
+    # behind them, before zsh has redrawn: the word with them is reported first, then `sync` with Next Term's id.
+    start = len(sh.buf)
+    sh.send("cd ", 0.3)
+    tab_key(sh, 77, 0.6)
+    comp_list(sh, start, 77)
+    mark = len(sh.buf)
+    sh.send(b"pr" + frame("s", 5), 0.5)
+    said = [(k, f) for _, k, f in sh.marks(mark) if k in ("line", "sync")]
+    check(said[-1:] == [("sync", ["000005"])] and [f for k, f in said[:-1]][-1:] == [["000077", "0", "pr", "pr"]],
+          f"[{label}] the sync key: the word with the letters typed before it, then `sync`", str(said))
+    mark = len(sh.buf)
+    sh.send("o", 0.3)
+    check(lines(mark) == [["000077", "0", "pro", "pro"]] and drawn(sh, start, "cd pro"),
+          f"[{label}] and the list is still open for the line", f"{sh.line(start)!r} {lines(mark)}")
+    sh.send(frame("k", 77, ["c"]), 0.2)
+    sh.send("\x03", 0.4)
+    # With no list open: `sync` alone, and nothing on the line.
+    start = len(sh.buf)
+    sh.send(frame("s", 6), 0.3)
+    said = [(k, f) for _, k, f in sh.marks(start) if k != "arm"]
+    check(said == [("sync", ["000006"])] and "6973" not in sh.screen(start), f"[{label}] the sync key with no list open: `sync` alone", str(said))
 
     errors = sh.errors()
     for l in errors:

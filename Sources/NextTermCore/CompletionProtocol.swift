@@ -11,6 +11,7 @@ import Foundation
 ///     comp ; id ; total ; chunk ; chunks ; stem ; stem unquoted ; text,description,group,kind …
 ///     done ; id ; native | inserted | kept
 ///     line ; id ; left ; word ; word unquoted
+///     sync ; id
 ///
 /// App to shell: the private key `prefix`, then a kind letter, a 6-digit id, a 6-digit length and the payload
 /// (`frame`). The payload is ASCII: its fields are split by `;`, and every byte outside `!`…`~`, `\` itself
@@ -40,7 +41,7 @@ public enum CompletionProtocol {
     public static let frameWait = 0.5
     static let idWidth = 6
 
-    public static let markKinds: Set<Substring> = ["arm", "tab", "comp", "done", "line"]
+    public static let markKinds: Set<Substring> = ["arm", "tab", "comp", "done", "line", "sync"]
 
     // MARK: shell to app
 
@@ -50,6 +51,8 @@ public enum CompletionProtocol {
         case comp(CompChunk)
         case done(id: Int, outcome: Outcome)
         case line(LineReport)
+        /// The answer to a `sync` key, under its id: every key typed before it is in the `line` reports before this.
+        case sync(id: Int)
     }
 
     /// What the shell can take, sent at each new line and keymap change.
@@ -223,6 +226,9 @@ public enum CompletionProtocol {
             guard fields.count == 2, let id = number(fields[0]), let outcome = Outcome(rawValue: String(fields[1])) else { return nil }
             return .done(id: id, outcome: outcome)
         case "line": return parseLine(fields)
+        case "sync":
+            guard fields.count == 1, let id = number(fields[0]) else { return nil }
+            return .sync(id: id)
         default: return nil
         }
     }
@@ -341,6 +347,9 @@ public enum CompletionProtocol {
         /// A plugin choice changed (Settings, the question): zsh-autocomplete's list off (q1) or on (q0) in this
         /// shell. Never sent at a prompt by itself.
         case config = 0x63 // c
+        /// The list's keys that waited for a folder's list come after keys typed meanwhile: the hook reports the word now
+        /// (if it changed), then `sync` under this id, so they act on the list for that word. From version 2.
+        case sync = 0x73 // s
     }
 
     /// The bytes for one private key: the prefix, the kind, the id, the payload's length and the payload.
@@ -405,6 +414,8 @@ public enum CompletionProtocol {
         let words = old.map { [$0, new ?? ""] } ?? []
         return frame(.take, id: id, fields: ["u", padded(parent % 1_000_000)] + words)
     }
+    /// Asks the hook for the word now, then `sync` under `id` (Next Term's own count, not a list's).
+    public static func sync(id: Int) -> [UInt8] { frame(.sync, id: id) }
     /// The list closed with nothing chosen: the shell stops reporting the line.
     public static func close(id: Int) -> [UInt8] { frame(.take, id: id, fields: ["c"]) }
     /// Suggest a Command's answer: the whole line, replaced (one line or several). It never runs.

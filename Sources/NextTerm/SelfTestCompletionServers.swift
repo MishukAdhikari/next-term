@@ -421,6 +421,27 @@ extension SelfTest {
         }
         await clear()
 
+        // Keys pressed while a folder is listed wait, in order: → ↓ ↩︎ puts the second row inside on the line; → b ⇥
+        // goes into foo, b narrows it, and ⇥ goes into bar (empty, so it goes in alone).
+        if await open("ls ~/app/") {
+            _ = choose("foo")
+            right()
+            key("", 125)
+            key("\r", 36)
+            check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/foo/x.txt") && !popup.isVisible },
+                  "\(part): → ↓ ↩︎ at once: the second row inside goes on the line", promptLine(tab))
+        }
+        await clear()
+        if await open("ls ~/app/") {
+            _ = choose("foo")
+            right()
+            typeKeys(window, "b")
+            key("\t", 48)
+            check(await wait(3) { promptLine(tab).hasSuffix("ls ~/app/foo/bar/") && !popup.isVisible },
+                  "\(part): → b ⇥ at once: into foo, b, then into bar", promptLine(tab))
+        }
+        await clear()
+
         // After cd, folders only: lib is empty, so it goes in alone and the list closes.
         if await open("cd ~/app/") {
             check(!popup.shownTexts.contains("food.txt") && choose("lib"), "\(part): `cd ~/app/` lists only folders", "\(popup.shownTexts)")
@@ -585,6 +606,13 @@ extension SelfTest {
                 check(await wait(5) { promptLine(tab).hasSuffix("cd ~/app/") && shown().contains("lib") && shown().firstIndex(of: "foo") == popup.selected },
                       "Tab completion, the server hook: ← puts back the word gone in from, with that folder chosen",
                       "\(promptLine(tab)) \(popup.shownTexts) \(popup.selected)")
+                // → then b and ⇥ at once: into foo; b goes to the shell once zsh has listed it; ⇥ waits for the hook's
+                // word with b (its `sync`), then goes into bar, which is empty, so it goes in alone.
+                pressKey(window, "\u{F703}", code: 124, flags: [.function, .numericPad])
+                typeKeys(window, "b")
+                pressKey(window, "\t", code: 48)
+                check(await wait(5) { promptLine(tab).hasSuffix("cd ~/app/foo/bar/") && !popup.isVisible },
+                      "Tab completion, the server hook: → b ⇥ at once go into foo, then bar, in that order", promptLine(tab))
                 pressKey(window, "\u{1b}", code: 53)
             } else {
                 check(false, "Tab completion, the server hook: `cd ~/app/` lists the server's folders through the hook", "\(popup.shownTexts)")

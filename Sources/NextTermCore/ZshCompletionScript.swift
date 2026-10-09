@@ -212,8 +212,17 @@ __nextterm_ckeywidget() {
     (n) # Next Term can't show zsh's list: zsh's own Tab.
         if [[ $__nextterm_cid == $__nextterm_copen ]]; then __nextterm_cclose; zle -U $'\t'; fi ;;
     (c) __nextterm_cconfig ;;
+    (s) __nextterm_csync $__nextterm_cid ;;
   esac
   return 0
+}
+
+# Next Term's list keys that waited for a folder's list come after keys typed meanwhile: the word now goes first, if it
+# changed (zsh may not have redrawn since), then `sync` with Next Term's id, so they act on the list for that word.
+__nextterm_csync() {
+  emulate -L zsh
+  [[ -n $__nextterm_copen ]] && __nextterm_cline
+  __nextterm_cmark sync $1
 }
 
 # The word before the cursor, as typed: the last of zsh's own words for the command so far ("" after a blank).

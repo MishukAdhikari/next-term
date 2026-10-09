@@ -10,9 +10,10 @@ final class CompletionController {
     private weak var owner: TerminalWindowController?
     private(set) lazy var popup: CompletionPopup = {
         let popup = CompletionPopup()
-        // A click puts the row on the line; not while a folder is being listed, whose rows are about to change.
+        // A click puts the row on the line; not while the list's keys wait (a folder being listed), whose rows are about
+        // to change.
         popup.onPick = { [weak self] row in
-            guard let session = self?.shown, !session.isWalking else { return }
+            guard let session = self?.shown, !session.keysWait else { return }
             session.accept(row)
         }
         return popup
@@ -106,7 +107,8 @@ final class CompletionController {
     /// The keys while a list is open: ↑ ↓ (and ⇧Tab, ^P, ^N) choose; Tab and → go into a folder and put anything else
     /// on the line, and ← goes back up from a folder gone into (CompletionDrill.action); Return inserts; Esc closes and
     /// is never sent; ^C, ^J, and ← or → with nothing to go to, close and go on to the shell; letters and Backspace go
-    /// to the shell, which reports the word for the list to narrow (⌫ right after going into a folder goes back up).
+    /// to the shell, which reports the word for the list to narrow (⌫ that takes the `/` after a folder gone into goes
+    /// back up). While the list walks (a folder being listed), its keys wait, ↓ ↑ too, in order with the letters typed.
     private func listKey(_ event: NSEvent, _ session: CompletionSession) -> Bool {
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
         // ^N, ^P, ^C and ^J by the letter, whatever the keyboard layout.
@@ -122,14 +124,14 @@ final class CompletionController {
         case (123, []): // ←: back up; at the top, the cursor moves
             return session.walk(.left, row: row)
         case (36, []), (76, []): // Return, Enter
-            // While a folder is listed it waits for the folder's list; under Loading it does nothing.
-            if rows || session.isWalking { session.enter(on: popup.selected) }
+            // While the list walks it waits for the list it acts on; under Loading it does nothing.
+            if rows || session.keysWait { session.enter(on: popup.selected) }
             return true
         case (125, []): // ↓
-            popup.move(by: 1)
+            move(1, session)
             return true
         case (126, []), (48, [.shift]): // ↑, ⇧Tab
-            popup.move(by: -1)
+            move(-1, session)
             return true
         case (53, []): // Esc
             session.closeList()
@@ -137,10 +139,10 @@ final class CompletionController {
         default:
             switch letter {
             case "n":
-                popup.move(by: 1)
+                move(1, session)
                 return true
             case "p":
-                popup.move(by: -1)
+                move(-1, session)
                 return true
             case "c", "j":
                 session.closeList()
@@ -150,6 +152,11 @@ final class CompletionController {
                 return false
             }
         }
+    }
+
+    /// ↓ ↑: the popup's row now, or, while the list walks, once the list it acts on shows (CompletionSession.choose).
+    private func move(_ delta: Int, _ session: CompletionSession) {
+        if !session.choose(by: delta) { popup.move(by: delta) }
     }
 
     // MARK: the popup
@@ -177,14 +184,20 @@ final class CompletionController {
         if !loading, rows.isEmpty { return session.closeList() } // nothing matches what was typed
         // Said when it opens, and when the Loading row gives way to the list, unless the session said where it went.
         let announce = (!popup.isVisible || (popup.loading && !loading)) && (session.list == nil || session.announced !== session.list)
-        // A list gone into or back up to starts at its own row: the first, or the folder gone back up from.
+        // A list gone into or back up to starts at its own row: the first, or the folder gone back up from; or the row
+        // ↓ ↑ moved to while it was listed.
         let fresh = shownList !== session.list
+        let moved = session.takeChosenRow(for: session.list)
         popup.show(rows, loading: loading, footer: Self.footer(session.list), anchor: anchor(tab, word: session.list?.word ?? ""),
-                   over: window, fresh: fresh, choosing: session.list?.preferredRow)
+                   over: window, fresh: fresh || moved != nil, choosing: moved ?? session.list?.preferredRow)
         shown = session
         shownList = session.list
         addMonitors()
-        if announce { popup.announceOpen() }
+        if announce {
+            popup.announceOpen()
+        } else if moved != nil {
+            popup.announceSelected()
+        }
     }
 
     /// "2,000 of 10,000. Type to narrow." when only the best are listed.

@@ -741,6 +741,28 @@ extension SelfTest {
             key("\u{1b}", 53)
         }
         await clearLine(tab)
+        // ↓ waits too: → ↓ ↩︎ at once puts the second row inside on the line.
+        if await open("cd ") {
+            _ = choose("projects")
+            right()
+            key("", 125)
+            key("\r", 36)
+            check(await wait(3) { line("cd projects/next-term/") && !popup.isVisible }, "\(part): → ↓ ↩︎ at once: the second row inside goes on the line",
+                  promptLine(tab))
+        }
+        await clearLine(tab)
+        // A letter typed meanwhile keeps its place: → n ⇥ at once goes into projects, n narrows it, and ⇥ goes into
+        // next-term, the row n chose (after the hook's `sync`).
+        if await open("cd ") {
+            _ = choose("projects")
+            right()
+            typeKeys(window, "n")
+            tabKey()
+            check(await wait(3) { line("cd projects/next-term/") && shown() == ["Sources"] && popup.isVisible },
+                  "\(part): → n ⇥ at once: into projects, n, then into next-term", "\(promptLine(tab)) \(popup.shownTexts)")
+            key("\u{1b}", 53)
+        }
+        await clearLine(tab)
         check(!tab.status.running, "\(part): nothing ran")
     }
 

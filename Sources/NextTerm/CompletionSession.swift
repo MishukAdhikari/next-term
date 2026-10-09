@@ -15,7 +15,8 @@ import NextTermCore
 ///
 /// ⇥ or → on a folder row goes into it (CompletionDrill): the name and `/` go on the line and the same list shows what
 /// is inside; ⌫ that takes the `/`, or ←, goes back up. Writes wait while the folder is listed, as they wait for a Tab's
-/// answer, and so do the list's own keys pressed meanwhile, in order.
+/// answer. The list's own keys pressed meanwhile (↓ ↑ too) wait in one queue with the keys typed after them
+/// (CompletionKeyQueue), and act in order: a key after letters typed first waits for the shell's word with them.
 final class CompletionSession {
     private(set) weak var tab: TerminalTab?
     private(set) var state = CompletionState()
@@ -74,22 +75,27 @@ final class CompletionSession {
     private var drillFallback: (() -> Void)?
     /// On zsh's path, the list gone from and its row, while zsh lists what is inside (for a refusal, and for ⌫).
     private var drillFrom: (list: CompletionList, row: Int)?
-    /// The list's keys pressed while a folder is listed (⇥ or →, ↩︎, ←), in order: they act once the folder's list
-    /// shows, until one goes into a folder again.
-    private enum WaitingKey {
-        case tab
-        case enter
-        case left
-    }
-    private var waitingKeys: [WaitingKey] = []
+    /// The list's keys pressed while it walks (⇥ or →, ↩︎, ←, ↓ ↑), and the keys typed after them, in order: they act
+    /// once the list they act on shows.
+    private var queue = CompletionKeyQueue()
     /// ← on a server's screen, until what was typed has echoed and the keys back up are typed: the list's keys wait.
     private var upPending = false
-    /// A folder is being listed, or ← is going back up on a server's screen: the list's keys wait (and a click does
-    /// nothing).
-    var isWalking: Bool { state.isDrilling || upPending }
-    /// The list on screen when a key began to wait while a folder was listed: still the one (it couldn't be entered),
-    /// the key takes the row chosen in it; another (the folder's, or the one gone back up to), its own row.
-    private weak var keyList: CompletionList?
+    /// ↩︎ on a server's screen, until what was typed has echoed and the name's keys are typed: the same.
+    private var acceptPending = false
+    /// A folder is being listed, or ← or ↩︎ waits for an echo on a server's screen: the list's keys wait.
+    var isWalking: Bool { state.isDrilling || upPending || acceptPending }
+    /// The list's keys wait (and a click does nothing): it walks, or keys from before still do.
+    var keysWait: Bool { isWalking || !queue.isEmpty }
+    /// The `sync` asked of the hook for keys that wait after letters typed (its id, and its deadline), and the last id.
+    private var syncToken: Int?
+    private var syncCount = 0
+    private var syncDeadline: DispatchWorkItem?
+    /// The same on a server's screen: since when keys that wait have waited for what was typed to echo, and the next look.
+    private var echoSince: TimeInterval?
+    private var echoPoll: DispatchWorkItem?
+    /// The row the keys that waited moved to (↓ ↑), for the popup to choose as it shows that list.
+    private weak var chosenList: CompletionList?
+    private var chosenRow = 0
     /// The single-match rule while what is inside is listed: what goes on the line alone if it isn't in time.
     private var singleInsert: (id: Int, word: String)?
     private var singleKeys: (id: Int, keys: (erase: Int, text: String))?
@@ -136,12 +142,19 @@ final class CompletionSession {
             let dispatching = (view?.window as? TerminalWindow)?.dispatchingKey ?? false
             if !dispatching || scan.pasteStarts { closeList() }
         }
-        guard state.holding else {
+        // Typed after a list key that waits: it goes out after that key acts.
+        if queue.type(Array(data)) { return true }
+        guard state.holding || !held.isEmpty else {
             tabWaiting = false
             note(data)
             return false
         }
         held.append(.bytes(data))
+        // Keys a closed list let go are still on their way out: these go after them.
+        if !state.holding {
+            release()
+            return true
+        }
         // Keys typed while a server's folder is listed: the shell's own Tab goes first (or the one folder, alone),
         // then they do, and the listing is dropped. A Tab is never sent late.
         if state.path == .screen, let id = state.pendingID {
@@ -174,6 +187,7 @@ final class CompletionSession {
         let open = isListOpen
         let scan = InputScan.scan(data, inPaste: &inPaste)
         lastInputAt = TerminalTab.now
+        queue.typed()
         if scan.disarms { reportsSinceReturn = 0 }
         state.input(scan)
         if open, !isListOpen {
@@ -187,23 +201,25 @@ final class CompletionSession {
         view?.sendPastGate(ArraySlice(bytes))
     }
 
-    /// The held writes go out in order, up to a Tab that starts holding again; then a Tab or a Return that waits
-    /// follows the state it now finds.
+    /// The held writes go out in order, up to a Tab that starts holding again; then a Tab that waits follows the state
+    /// it now finds, and so do the list's keys that wait (and the keys typed after them, which a list that closes lets go).
     private func release() {
-        while !state.holding, !held.isEmpty {
-            switch held.removeFirst() {
-            case .bytes(let data):
-                // Typed after a Tab that waits: that Tab is dropped.
-                tabWaiting = false
-                note(data)
-                view?.sendPastGate(data)
-            case .tab:
-                followTab()
+        repeat {
+            while !state.holding, !held.isEmpty {
+                switch held.removeFirst() {
+                case .bytes(let data):
+                    // Typed after a Tab that waits: that Tab is dropped.
+                    tabWaiting = false
+                    note(data)
+                    view?.sendPastGate(data)
+                case .tab:
+                    followTab()
+                }
             }
-        }
-        heldPaste = inPaste
-        if tabWaiting, !state.holding { followTab() }
-        if !waitingKeys.isEmpty, !state.holding { followKeys() }
+            heldPaste = inPaste
+            if tabWaiting, !state.holding { followTab() }
+            if !queue.isEmpty { followKeys() }
+        } while !state.holding && !held.isEmpty
     }
 
     /// A Tab pressed while another was in flight follows the rule of the state that one left. Still in flight, it
@@ -220,43 +236,107 @@ final class CompletionSession {
             if !state.shown || list.rows.isEmpty {
                 tabWaiting = true
             } else {
-                tab(on: waitingRow(list))
+                tab(on: list.preferredRow ?? 0)
             }
         } else if !realTab() {
             pass([0x09])
         }
     }
 
-    /// A list key pressed while a folder was listed waits, in order with the others.
-    private func wait(_ key: WaitingKey) {
-        if waitingKeys.isEmpty { keyList = list }
-        waitingKeys.append(key)
+    /// A list key pressed while the list walks waits, in order with the others and the keys typed after it.
+    private func wait(_ key: CompletionKeyQueue.Key) {
+        let showing = state.shown && list?.rows.isEmpty == false ? list : nil
+        queue.add(key, on: showing, row: selection?() ?? 0)
     }
 
-    /// The keys that waited for a folder's list, in order, each on the list showing then, until one goes into a folder
-    /// again. None if the list closed meanwhile (the name went in alone): a key in the list never reaches the shell.
+    /// The keys that waited, in order, each on the list showing then, and the keys typed after them; until one walks
+    /// again. If the list closed meanwhile (the name went in alone), its keys never reach the shell, and the keys typed
+    /// after them go out.
     private func followKeys() {
-        while let key = waitingKeys.first, !isWalking {
+        var moved: (list: CompletionList, row: Int)?
+        follow: while !queue.isEmpty {
             guard isListOpen else {
-                waitingKeys = []
-                return
+                held += queue.close().map { .bytes(ArraySlice($0)) }
+                break
             }
-            guard let list, state.shown, !list.rows.isEmpty else { return } // its rows are still to come
-            waitingKeys.removeFirst()
-            let row = waitingRow(list)
-            switch key {
-            case .tab: tab(on: row)
-            case .enter: accept(row)
-            case .left: if list.parent != nil { goUp() }
+            switch queue.next(list: state.shown ? list : nil, busy: isWalking, hold: state.holding || upPending || acceptPending) {
+            case .idle, .wait:
+                break follow
+            case .line:
+                guard lineIsIn() else { break follow }
+                queue.lineIn()
+            case .send(let bytes):
+                let data = ArraySlice(bytes)
+                tabWaiting = false
+                note(data)
+                view?.sendPastGate(data)
+            case let .act(key, row):
+                guard let list else { break follow }
+                switch key {
+                case .tab: tab(on: row)
+                case .enter: accept(row)
+                case .left: if list.parent != nil { goUp() }
+                case .move: moved = (list, row)
+                }
             }
-            keyList = self.list
+        }
+        if let moved, moved.list === list {
+            chosenList = moved.list
+            chosenRow = moved.row
+            changed()
         }
     }
 
-    /// The row a key that waited takes (keyList).
-    private func waitingRow(_ list: CompletionList) -> Int {
-        let row = list === keyList ? selection?() ?? 0 : list.preferredRow ?? 0
-        return list.rows.indices.contains(row) ? row : 0
+    /// Keys typed went to the shell since the walk began: whether the shell's word with them is in, so the keys that
+    /// wait act on the list narrowed for it. On a server's screen, once what was typed has echoed and the output has
+    /// rested (300 ms at most); through the hook, once its `sync` comes back (asked for here).
+    private func lineIsIn() -> Bool {
+        guard let tab else { return true }
+        if state.path == .screen {
+            let since = echoSince ?? TerminalTab.now
+            echoSince = since
+            if settled(tab) || TerminalTab.now - since >= 0.3 {
+                echoSince = nil
+                return true
+            }
+            if echoPoll == nil {
+                let poll = DispatchWorkItem { [weak self] in
+                    self?.echoPoll = nil
+                    self?.release()
+                }
+                echoPoll = poll
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.015, execute: poll)
+            }
+            return false
+        }
+        guard state.arm?.drills == true else { return true }
+        if syncToken == nil {
+            syncCount = syncCount % 999_999 + 1
+            syncToken = syncCount
+            write(CompletionProtocol.sync(id: syncCount))
+            let deadline = DispatchWorkItem { [weak self] in self?.syncLate() }
+            syncDeadline?.cancel()
+            syncDeadline = deadline
+            DispatchQueue.main.asyncAfter(deadline: .now() + (tab.remote == nil ? CompletionProtocol.frameWait : RemoteCompletion.deadline),
+                                          execute: deadline)
+        }
+        return false
+    }
+
+    /// The hook's `sync` didn't come in time: the list's keys that waited go, and the keys typed after them go out.
+    private func syncLate() {
+        guard syncToken != nil else { return }
+        syncToken = nil
+        held += queue.close().map { .bytes(ArraySlice($0)) }
+        release()
+        changed()
+    }
+
+    /// The row the keys that waited moved to, for the popup showing `list` (once).
+    func takeChosenRow(for list: CompletionList?) -> Int? {
+        defer { chosenList = nil }
+        guard let list, chosenList === list, list.rows.indices.contains(chosenRow) else { return nil }
+        return chosenRow
     }
 
     private func pass(_ bytes: [UInt8]) {
@@ -427,6 +507,13 @@ final class CompletionSession {
             }
         case .line(let report):
             line(report)
+        case .sync(let id):
+            // Every key typed before the `sync` key is in the reports before this: the keys that wait follow.
+            if id == syncToken {
+                syncToken = nil
+                syncDeadline?.cancel()
+                queue.lineIn()
+            }
         }
         release()
         changed()
@@ -540,7 +627,7 @@ final class CompletionSession {
         guard isListOpen else { return false }
         let index = row.flatMap { list?.rows.indices.contains($0) == true ? $0 : nil }
         let target = index.flatMap { list?.tabTarget($0) }
-        let action = CompletionDrill.action(key, on: target, inside: list?.parent != nil, drills: entersFolders, drilling: isWalking)
+        let action = CompletionDrill.action(key, on: target, inside: list?.parent != nil, drills: entersFolders, drilling: keysWait)
         switch action {
         case .goIn, .putOnLine, .beep: if let index { tab(on: index) }
         case .backUp: goUp()
@@ -548,7 +635,7 @@ final class CompletionSession {
             closeList()
             return false
         case .wait:
-            if isWalking { wait(key == .left ? .left : .tab) } else if key == .tab { tabBeforeRows() }
+            if keysWait { wait(key == .left ? .left : .tab) } else if key == .tab { tabBeforeRows() }
         }
         return true
     }
@@ -571,11 +658,19 @@ final class CompletionSession {
         }
     }
 
-    /// ↩︎ on row `index`: while a folder is listed it waits, then takes the row chosen in the folder's list.
+    /// ↩︎ on row `index`: while the list walks it waits, then takes the row chosen in the list showing then.
     func enter(on index: Int) {
         guard isListOpen else { return }
-        if isWalking { return wait(.enter) }
+        if keysWait { return wait(.enter) }
         accept(index)
+    }
+
+    /// ↓ ↑ (⌃N ⌃P, ⇧⇥) while the list walks: they wait with its other keys, and move the row the next one takes. False:
+    /// the popup moves its row now.
+    func choose(by delta: Int) -> Bool {
+        guard isListOpen, keysWait else { return false }
+        wait(.move(delta))
+        return true
     }
 
     /// Puts row `index` on the line, and closes the list.
@@ -602,7 +697,6 @@ final class CompletionSession {
     /// reporting the line. Keys held while a folder was listed go out.
     func closeList() {
         tabWaiting = false
-        waitingKeys = []
         guard state.openID != nil else { return }
         closeKeys()
         state.closed()
@@ -629,6 +723,7 @@ final class CompletionSession {
             write(CompletionProtocol.frame(.native, id: id))
             state.steppedBack(id)
             listClosed()
+            release()
             changed()
         } else {
             closeList()
@@ -643,8 +738,16 @@ final class CompletionSession {
         drillEcho = nil
         singleInsert = nil
         singleKeys = nil
-        waitingKeys = []
+        // The list's keys that waited go; the keys typed after them go out after the writes held before them.
+        held += queue.close().map { .bytes(ArraySlice($0)) }
+        syncToken = nil
+        syncDeadline?.cancel()
+        echoPoll?.cancel()
+        echoPoll = nil
+        echoSince = nil
+        chosenList = nil
         upPending = false
+        acceptPending = false
         list = nil
         caretRow = nil
         screenWord = nil
@@ -921,10 +1024,12 @@ extension CompletionSession {
     }
 
     /// A row chosen on a server's list: once what was typed has echoed (300 ms at most), the keys that put it in
-    /// place of the name on screen.
+    /// place of the name on screen. The list's keys wait meanwhile; the keys typed after them go out after the name.
     fileprivate func screenAccept(_ candidate: PathCompletion.Candidate, text: String, _ list: CompletionList, since start: TimeInterval) {
-        guard state.openID == list.id, let tab else { return }
+        acceptPending = false
+        guard state.openID == list.id, let tab else { return release() }
         if !settled(tab), TerminalTab.now - start < 0.3 {
+            acceptPending = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.015) { [weak self] in self?.screenAccept(candidate, text: text, list, since: start) }
             return
         }
@@ -937,6 +1042,7 @@ extension CompletionSession {
         typeOnScreen(keys)
         changed()
         CompletionPopup.announce("Inserted \(text)")
+        release()
     }
 }
 
@@ -947,6 +1053,8 @@ extension CompletionSession {
     /// list shows what is inside. Nothing inside: the name goes in alone and the list closes; it can't be entered: a beep,
     /// and the list stays; not listed in time: the name goes in alone.
     fileprivate func drill(_ index: Int, _ list: CompletionList) {
+        // Keys typed before ⇥ are the list's own: only those typed from now on make a key that waits ask for the word.
+        queue.walkBegan()
         switch state.path {
         case .engine?: engineDrill(index, list)
         case .completionSystem?: zshDrill(index, list)
@@ -1185,13 +1293,13 @@ extension CompletionSession {
     /// from (and the rest of it, typed). The list that was open meanwhile stays until the screen shows that word.
     private func screenUp(_ list: CompletionList, since start: TimeInterval) {
         upPending = false
-        guard state.openID == list.id, self.list === list, !state.isDrilling, let tab else { return followKeys() }
+        guard state.openID == list.id, self.list === list, !state.isDrilling, let tab else { return release() }
         if !settled(tab), TerminalTab.now - start < 0.3 {
             upPending = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.015) { [weak self] in self?.screenUp(list, since: start) }
             return
         }
-        defer { followKeys() }
+        defer { release() }
         guard let left = tab.lineLeftOfCursor(), let now = list.screenWord?.next(left), let keys = list.upKeys(at: now),
               let above = list.goUp(), let word = above.screenWord else { return NSSound.beep() }
         typeOnScreen(keys)
