@@ -88,18 +88,11 @@ final class SkillsClaudeChoice: NSObject {
             SkillReviewText.choiceLine(skill: folder.skill, plugin: folder.plugin, choice: choice, start: folder.start,
                                        keptLink: folder.keptLink, clashes: folder.clashes)
         }
-        let warns = choice == .link && folders.contains(where: Self.starts)
-        line.stringValue = (warns ? "⚠︎ " : "") + SkillReviewText.choiceSummary(clauses, choice: choice)
+        let warns = choice == .link && folders.contains { SkillReviewText.choiceWarns($0.plugin, start: $0.start, clashes: $0.clashes) }
+        line.stringValue = SkillReviewText.choiceSummary(clauses, choice: choice, warns: warns)
         line.textColor = warns ? .labelColor : .secondaryLabelColor
         popup.setAccessibilityHelp(line.stringValue)
         NSAccessibility.post(element: line, notification: .valueChanged)
-    }
-
-    /// Added, the folder starts programs by itself in every Claude Code session.
-    private static func starts(_ folder: Folder) -> Bool {
-        let plugin = folder.plugin
-        let shadowed = folder.clashes.contains { $0.kind == .installed }
-        return plugin.mayLoadAsPlugin && plugin.startsPrograms && !plugin.programsOnly && folder.start != .offByKey && !shadowed
     }
 
     @objc private func changed() {

@@ -259,11 +259,14 @@ extension SelfTest {
                                      + "Amp, Cursor, opencode and goose also find it through the Claude Code link."),
               "skills plugins: an update that keeps the link names Claude Code and the agents that find it through the link", linkedDetails)
         // AE6: the same parts as the installed copy keep the link by default; leaving it out would remove it.
+        // The line beside the popup opens with ⚠︎, since the plugin it keeps linked starts programs (R6).
         let linkedPopup = linkedSheet.choice.popup
         let keeps = linkedPopup.itemTitles == ["Remove it from Claude Code", "Add it to Claude Code as a plugin"] && linkedPopup.indexOfSelectedItem == 1
-        check(keeps && linkedSheet.choice.line.stringValue.hasPrefix("demo-plugin: stays linked."),
+        let staysLinked = "⚠︎ demo-plugin: stays linked. It starts what its review lists every time Claude Code opens, without asking you: "
+            + "1 MCP server and 1 hook."
+        check(keeps && linkedSheet.choice.line.stringValue == staysLinked,
               "skills plugins: an update with the same parts keeps its link, and the popup offers to remove it",
-              "\(linkedPopup.itemTitles) \(linkedSheet.choice.line.stringValue)")
+              "\(linkedPopup.itemTitles) \(linkedPopup.indexOfSelectedItem) \(linkedSheet.choice.line.stringValue)")
 
         // Removal names what may stay, and changes no other app's file: a Codex server with the skill's
         // address (as Codex would have added it), the plugin's parts and Amp's servers in open sessions.

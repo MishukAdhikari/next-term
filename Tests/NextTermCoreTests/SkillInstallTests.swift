@@ -212,6 +212,31 @@ import Testing
         #expect(trash < move && !left.agents.contains(.claudeCode) && !makesLink(left))
     }
 
+    /// AE6 as the self-test reviews it: the same folder again over its linked install. The link stays by
+    /// default, the popup offers to remove it, and the line beside the popup says it stays linked and what it
+    /// starts, opening with ⚠︎ since it starts programs by itself. Left out, the line says the link goes.
+    @Test func anUpdateWithTheSamePartsKeepsItsLinkAndOffersToRemoveIt() throws {
+        let files = [".mcp.json": Self.server, "hooks/hooks.json": Self.hooks]
+        let installed = try install(files)
+        let package = try stage(files)
+        let plugin = try #require(package?.claude)
+        let shown = plan(.skip, package)
+        let preset = SkillInstall.defaultClaudeLink(shown, package: package, installed: installed, facts: .init())
+        #expect(shown.keptLink != nil && shown.clashes.isEmpty && preset == .link)
+        let items = SkillReviewText.choiceItems(count: 1, removesLink: shown.keptLink != nil)
+        #expect(items == ["Remove it from Claude Code", "Add it to Claude Code as a plugin"])
+        let start = plugin.start(key: nil)
+        let warns = SkillReviewText.choiceWarns(plugin, start: start, clashes: shown.clashes)
+        func summary(_ choice: SkillInstall.ClaudeLink) -> String {
+            let clause = SkillReviewText.choiceLine(skill: "writing-helper", plugin: plugin, choice: choice, start: start,
+                                                    keptLink: true, clashes: shown.clashes)
+            return SkillReviewText.choiceSummary([clause], choice: choice, warns: warns)
+        }
+        #expect(warns && summary(.link) == "⚠︎ writing-helper: stays linked. It starts what its review lists every time Claude Code opens, "
+            + "without asking you: 1 MCP server and 1 hook.")
+        #expect(summary(.skip).hasPrefix("writing-helper: its link is removed, so nothing in it starts in Claude Code."))
+    }
+
     /// A changed hook command, a new key outside the allowlist or a new program in bin/ are new parts.
     @Test(arguments: [
         ["hooks/hooks.json": #"{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "./other.sh"}]}]}}"#],

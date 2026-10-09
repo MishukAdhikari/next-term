@@ -285,9 +285,21 @@ public enum SkillReviewText {
         return "\(linked). It " + starts
     }
 
+    /// Added as a plugin, the folder starts programs by itself every time Claude Code opens, so the line
+    /// beside the popup opens with ⚠︎ (R6). Not when Claude Code won't load it as a plugin (a manifest with no
+    /// usable name, H2, or a plugin of the same name installed for the user, H7), when its only programs are
+    /// in bin/ (they run only when called, H6), or when the user's key keeps it off.
+    public static func choiceWarns(_ plugin: SkillPackage.ClaudePlugin, start: SkillPackage.Start, clashes: [SkillInstall.Clash]) -> Bool {
+        let shadowed = clashes.contains { $0.kind == .installed }
+        let starts = plugin.mayLoadAsPlugin && plugin.startsPrograms && !plugin.programsOnly
+        return starts && start != .offByKey && !shadowed
+    }
+
     /// The whole line beside the popup: the first three folders' clauses (choiceLine), then how many more and
     /// what Install does with them, and, when they are left out, once what that means for the other agents.
-    public static func choiceSummary(_ clauses: [String], choice: SkillInstall.ClaudeLink) -> String {
+    /// `warns`: a folder linked this way starts programs by itself (choiceWarns), so the line opens with ⚠︎.
+    public static func choiceSummary(_ clauses: [String], choice: SkillInstall.ClaudeLink, warns: Bool = false) -> String {
+        let mark = warns && choice == .link && !clauses.isEmpty ? "⚠︎ " : ""
         var said = Array(clauses.prefix(3))
         let more = clauses.count - said.count
         if more > 0 {
@@ -298,7 +310,7 @@ public enum SkillReviewText {
             said.append(clauses.count == 1 ? "Codex and the other agents still load its skill. If you use npx skills update, it may add it back."
                 : "Codex and the other agents still load their skills. If you use npx skills update, it may add them back.")
         }
-        return said.joined(separator: " ")
+        return mark + said.joined(separator: " ")
     }
 
     // MARK: Settings › Skills
