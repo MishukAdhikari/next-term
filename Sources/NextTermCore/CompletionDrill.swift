@@ -102,6 +102,14 @@ public enum CompletionDrill {
         return (gone.count, String(text))
     }
 
+    /// The folder a list of what is inside one is for, by the word before its rows (zsh's stem, unquoted): `projects` for
+    /// `projects/` and `~/src/projects/`.
+    public static func folderName(_ stem: String) -> String {
+        let path = stem.hasSuffix("/") ? stem.dropLast() : Substring(stem)
+        let name = path.split(separator: "/", omittingEmptySubsequences: false).last.map(String.init) ?? ""
+        return name.isEmpty ? stem : name
+    }
+
     /// What VoiceOver says on going into a folder: "In projects, 12 items".
     public static func announcement(into name: String, total: Int, exact: Bool) -> String {
         let items = total == 1 ? "1 item" : "\(total.formatted()) items"

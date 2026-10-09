@@ -713,6 +713,10 @@ extension SelfTest {
         tabKey()
         check(await wait(3) { line("cd Sp\\ ace/") && popup.isVisible && shown() == ["inner"] },
               "\(part): one folder that matches goes in, quoted, and what is inside is listed", "\(promptLine(tab)) \(popup.shownTexts)")
+        #if DEBUG
+        check(CompletionPopup.lastAnnouncement == "In Sp ace, 1 item", "\(part): VoiceOver says the folder the one match went into",
+              CompletionPopup.lastAnnouncement)
+        #endif
         key("\u{1b}", 53)
         await clearLine(tab)
         tab.view.send(txt: "cd Pic")

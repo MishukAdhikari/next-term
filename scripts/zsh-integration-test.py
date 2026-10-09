@@ -218,7 +218,7 @@ def legacy_events(shell):
         elif kind == "jobs":
             count, _, listing = val.partition(";")
             val = count + ":" + (base64.b64decode(listing).decode() if listing else "")
-        elif kind in ("arm", "tab", "comp", "done", "line", "sync"):
+        elif kind in ("arm", "tab", "comp", "done", "line", "sync", "into"):
             continue
         events.append((nonce, kind, val))
     return events
@@ -797,6 +797,8 @@ def drill_checks(label, rc_extra=""):
         return [f for _, k, f in sh.marks(since) if k == "done"]
     def lines(since):
         return [f for _, k, f in sh.marks(since) if k == "line"]
+    def intos(since):
+        return [f for _, k, f in sh.marks(since) if k == "into"]
 
     # `cd ` lists the folders; a take with a new id goes into projects, and zsh lists what is inside under that id.
     start = len(sh.buf)
@@ -810,6 +812,7 @@ def drill_checks(label, rc_extra=""):
           f"[{label}] into a folder: zsh puts it in and lists what is inside, folders only, under the new id", f"{sh.line(start)!r} {inner} {stem}")
     check(lines(mark)[-1:] == [["000062", "0", "projects/", "projects/"]] and not dones(mark),
           f"[{label}] and that list is open for the word now", str(lines(mark)))
+    check(not intos(mark), f"[{label}] a folder gone into from the list has no `into` mark", str(intos(mark)))
     # ⌫ takes the `/`; the u key opens the list gone in from again, under its own id, for the word now.
     sh.send("\x7f", 0.3)
     check(lines(mark)[-1:] == [["000062", "0", "projects", "projects"]], f"[{label}] ⌫ is reported for the folder's list", str(lines(mark)[-2:]))
@@ -897,25 +900,29 @@ def drill_checks(label, rc_extra=""):
     sh.send(frame("k", 65, ["c"]), 0.2)
     sh.send("\x03", 0.4)
 
-    # The single-match rule: with d, one folder goes in and what is inside is listed under the Tab's own id.
+    # The single-match rule: with d, one folder goes in and what is inside is listed under the Tab's own id, after an
+    # `into` mark that says so (for VoiceOver's "In projects, 2 items").
     start = len(sh.buf)
     sh.send("cd pro", 0.3)
     tab_key(sh, 67, 0.8, fields=["d"])
-    _, items, _, _ = comp_list(sh, start, 67)
+    _, items, stem, _ = comp_list(sh, start, 67)
     check(drawn(sh, start, "cd projects/") and sorted(t.rstrip("/") for t, _, _ in items) == ["cv", "next-term"] and not dones(start),
           f"[{label}] one folder with d: it goes in and what is inside is listed", f"{sh.line(start)!r} {items} {dones(start)}")
+    kinds = [k for _, k, f in sh.marks(start) if k in ("into", "comp") and f[:1] == ["000067"]]
+    check(kinds[:1] == ["into"] and kinds.count("into") == 1 and "comp" in kinds and stem and stem[1] == "projects/",
+          f"[{label}] and an `into` mark comes first, the stem naming the folder", f"{kinds} {stem}")
     sh.send(frame("k", 67, ["c"]), 0.2)
     sh.send("\x03", 0.4)
     start = len(sh.buf)
     sh.send("cd pro", 0.3)
     tab_key(sh, 68, 0.6)
-    check(["000068", "inserted"] in dones(start) and drawn(sh, start, "cd projects/") and not comp_list(sh, start, 68)[1],
+    check(["000068", "inserted"] in dones(start) and drawn(sh, start, "cd projects/") and not comp_list(sh, start, 68)[1] and not intos(start),
           f"[{label}] without d, as before: it goes in alone", f"{sh.line(start)!r} {dones(start)}")
     sh.send("\x03", 0.4)
     start = len(sh.buf)
     sh.send("cd projects/c", 0.3)
     tab_key(sh, 69, 0.6, fields=["d"])
-    check(["000069", "inserted"] in dones(start) and drawn(sh, start, "cd projects/cv/") and not comp_list(sh, start, 69)[1],
+    check(["000069", "inserted"] in dones(start) and drawn(sh, start, "cd projects/cv/") and not comp_list(sh, start, 69)[1] and not intos(start),
           f"[{label}] with d, an empty folder goes in alone", f"{sh.line(start)!r} {dones(start)}")
     sh.send("\x03", 0.4)
 

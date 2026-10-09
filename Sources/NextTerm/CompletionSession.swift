@@ -96,6 +96,8 @@ final class CompletionSession {
     /// The row the keys that waited moved to (↓ ↑), for the popup to choose as it shows that list.
     private weak var chosenList: CompletionList?
     private var chosenRow = 0
+    /// zsh's single-match rule went into a folder for this Tab (`into`): its list is what is inside, for VoiceOver.
+    private var intoID: Int?
     /// The single-match rule while what is inside is listed: what goes on the line alone if it isn't in time.
     private var singleInsert: (id: Int, word: String)?
     private var singleKeys: (id: Int, keys: (erase: Int, text: String))?
@@ -367,6 +369,7 @@ final class CompletionSession {
         lastTab = .privateKey(id)
         heldPaste = inPaste
         list = nil
+        intoID = nil
         assembler.reset()
         // On zsh's path the hook puts one folder in and lists what is inside by itself (the single-match rule).
         let drill = state.path == .completionSystem && state.arm?.drills == true
@@ -514,6 +517,8 @@ final class CompletionSession {
                 syncDeadline?.cancel()
                 queue.lineIn()
             }
+        case .into(let id):
+            if state.pendingID == id, state.path == .completionSystem { intoID = id }
         }
         release()
         changed()
@@ -532,6 +537,10 @@ final class CompletionSession {
             made.drilled(from: from.list, row: from.row)
             lastDrill = .into
             announce(into: made.drilledName ?? "", made)
+        } else if intoID == chunk.id {
+            // zsh's single-match rule went into the one folder: what is inside.
+            intoID = nil
+            announce(into: CompletionDrill.folderName(chunk.stemUnquoted), made)
         }
         list = made
         state.listed(chunk.id)
@@ -746,6 +755,7 @@ final class CompletionSession {
         echoPoll = nil
         echoSince = nil
         chosenList = nil
+        intoID = nil
         upPending = false
         acceptPending = false
         list = nil

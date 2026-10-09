@@ -12,6 +12,7 @@ import Foundation
 ///     done ; id ; native | inserted | kept
 ///     line ; id ; left ; word ; word unquoted
 ///     sync ; id
+///     into ; id
 ///
 /// App to shell: the private key `prefix`, then a kind letter, a 6-digit id, a 6-digit length and the payload
 /// (`frame`). The payload is ASCII: its fields are split by `;`, and every byte outside `!`…`~`, `\` itself
@@ -41,7 +42,7 @@ public enum CompletionProtocol {
     public static let frameWait = 0.5
     static let idWidth = 6
 
-    public static let markKinds: Set<Substring> = ["arm", "tab", "comp", "done", "line", "sync"]
+    public static let markKinds: Set<Substring> = ["arm", "tab", "comp", "done", "line", "sync", "into"]
 
     // MARK: shell to app
 
@@ -53,6 +54,9 @@ public enum CompletionProtocol {
         case line(LineReport)
         /// The answer to a `sync` key, under its id: every key typed before it is in the `line` reports before this.
         case sync(id: Int)
+        /// The single-match rule on zsh's path (a Tab key with `d`): one folder went in, and the list that comes next
+        /// under `id` is what is inside it.
+        case into(id: Int)
     }
 
     /// What the shell can take, sent at each new line and keymap change.
@@ -226,9 +230,9 @@ public enum CompletionProtocol {
             guard fields.count == 2, let id = number(fields[0]), let outcome = Outcome(rawValue: String(fields[1])) else { return nil }
             return .done(id: id, outcome: outcome)
         case "line": return parseLine(fields)
-        case "sync":
+        case "sync", "into":
             guard fields.count == 1, let id = number(fields[0]) else { return nil }
-            return .sync(id: id)
+            return kind == "sync" ? .sync(id: id) : .into(id: id)
         default: return nil
         }
     }

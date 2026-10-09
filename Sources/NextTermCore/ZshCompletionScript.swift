@@ -446,7 +446,7 @@ __nextterm_csystem() {
     (1) __nextterm_cmi=1
         zle __nextterm_ctakewidget
         if [[ -n $drill && ${__nextterm_cmk[1]-} == d ]] && __nextterm_centers 1; then
-          __nextterm_cinside $id
+          __nextterm_cinside $id into
         else
           __nextterm_cdone $id inserted
         fi ;;
@@ -462,13 +462,15 @@ __nextterm_centers() {
   [[ -z $place ]] || [[ -d $place && -x $place ]]
 }
 
-# A folder just went in: zsh's matches for what is inside, listed under $1. None: the list closes (done inserted).
+# A folder just went in: zsh's matches for what is inside, listed under $1. None: the list closes (done inserted). With
+# $2 (the single-match rule), an `into` mark first says the list is a folder's inside, for VoiceOver.
 __nextterm_cinside() {
   emulate -L zsh
   local id=$1
   __nextterm_cwordnow
   __nextterm_ccapturenow
   if (( ${#__nextterm_cmw} )); then
+    [[ -n ${2-} ]] && __nextterm_cmark into $id
     __nextterm_ccomp $id
     __nextterm_copenlist $id z
   else

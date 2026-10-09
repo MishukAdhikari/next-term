@@ -583,6 +583,14 @@ import Testing
         #expect(keys.queue.isEmpty && keys.next(list) == .idle)
     }
 
+    @Test func theFolderZshWentIntoByTheSingleMatchRule() {
+        #expect(CompletionDrill.folderName("projects/") == "projects")
+        #expect(CompletionDrill.folderName("~/src/Sp ace/") == "Sp ace")
+        #expect(CompletionDrill.folderName("--file=./Sources/") == "Sources")
+        #expect(CompletionDrill.folderName("/") == "/")
+        #expect(CompletionDrill.folderName("~/") == "~")
+    }
+
     @Test func theDrillsKeys() {
         #expect(decode(CompletionProtocol.takeWord(id: 3, old: "So", new: "Sources/", open: true))?.fields == ["w", "So", "Sources/", "o"])
         #expect(decode(CompletionProtocol.takeWord(id: 3, old: "So", new: "Sources/"))?.fields == ["w", "So", "Sources/"])
@@ -595,7 +603,9 @@ import Testing
         #expect(decode(CompletionProtocol.sync(id: 12)) == Decoded(kind: "s", id: 12, fields: []))
         #expect(CompletionProtocol.parse(kind: "sync", value: "000012") == .sync(id: 12))
         #expect(CompletionProtocol.parse(kind: "sync", value: "x") == nil && CompletionProtocol.parse(kind: "sync", value: "000012;1") == nil)
-        #expect(CompletionProtocol.markKinds.contains("sync"))
+        // The single-match rule on zsh's path: the list that follows under that id is what is inside the folder.
+        #expect(CompletionProtocol.parse(kind: "into", value: "000009") == .into(id: 9))
+        #expect(CompletionProtocol.markKinds.isSuperset(of: ["sync", "into"]))
         // Only a hook that knows them is sent them.
         #expect(CompletionProtocol.Arm().drills && !CompletionProtocol.Arm(version: 1).drills)
     }

@@ -72,6 +72,7 @@ import Testing
         #expect(message("\(n);line;000007;0;Sou;Sou") == .line(.init(id: 7, left: false, word: "Sou", unquoted: "Sou")))
         #expect(message("\(n);line;000007;1") == .line(.init(id: 7, left: true)))
         #expect(message("\(n);sync;000012") == .sync(id: 12))
+        #expect(message("\(n);into;000009") == .into(id: 9))
         let items = "Sources,,,d \(percent("My Fo'lder $x")),\(percent("a folder")),\(percent("local, dirs")),d main,\(percent("main  -- [HEAD]  init")),,"
         let comp = message("\(n);comp;000008;3;1;1;\(percent("My\\ F/"));\(percent("My F/"));\(items)")
         guard case let .comp(chunk)? = comp else { Issue.record("no comp"); return }
