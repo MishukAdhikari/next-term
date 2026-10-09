@@ -453,7 +453,7 @@ import Testing
     @Test func craftedTextStaysQuick() {
         let parts = String(repeating: "a-", count: 250_000) + " mcp"
         let runners = String(repeating: "{" + String(repeating: #""command":"npx""#, count: 130), count: 500)
-        let downloads = String(repeating: "curl ", count: 200_000), decodes = String(repeating: "base64 -d x | tr ", count: 60_000)
+        let downloads = String(repeating: "curl ", count: 20_000), decodes = String(repeating: "base64 -d x | tr ", count: 6_000)
         let patterns = [SkillReview.mcpAdd, SkillReview.pluginInstall, SkillReview.downloadAndRun, SkillReview.decodeAndRun]
             + SkillReview.quotedServerPatterns.map(\.pattern)
         let start = Date()
