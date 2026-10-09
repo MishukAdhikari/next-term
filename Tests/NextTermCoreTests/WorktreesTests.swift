@@ -267,11 +267,11 @@ import Testing
         typealias F = WorktreeRemoval.Facts
         #expect(WorktreeRemoval.verdict(F()) == .remove)
         #expect(WorktreeRemoval.verdict(F(isMain: true)) == .refuse("It is the repository’s main checkout.", goTo: false))
-        #expect(WorktreeRemoval.verdict(F(isMissing: true)) == .forget)
+        #expect(WorktreeRemoval.verdict(F(isMissing: true)) == .forget(losing: nil))
         #expect(WorktreeRemoval.verdict(F(agents: [AgentGuard.Agent(program: "claude", tab: "✳ Fix it")]))
             == .refuse("Claude Code is working in it, in the tab “✳ Fix it”.", goTo: true))
         #expect(WorktreeRemoval.verdict(F(windows: ["xCloud ▸ 7027-sso"])) == .refuse("The window “xCloud ▸ 7027-sso” is open on it.", goTo: true))
-        #expect(WorktreeRemoval.verdict(F(tabWindows: ["xCloud"])) == .refuse("A tab in “xCloud” is in it.", goTo: true))
+        #expect(WorktreeRemoval.verdict(F(tabs: ["zsh"])) == .refuse("The tab “zsh” is in it.", goTo: true))
         let holder = LockHolder(pid: 7639, started: nil, program: "claude")
         #expect(WorktreeRemoval.verdict(F(lockReason: "claude agent a (pid 7639)", holder: holder, holderAlive: true))
             == .refuse("Claude Code (pid 7639) holds it.", goTo: false))
@@ -286,10 +286,57 @@ import Testing
         // The first reason wins: an agent before the changes it made.
         #expect(WorktreeRemoval.verdict(F(agents: [AgentGuard.Agent(program: "codex", tab: "t")], changedFiles: 4))
             == .refuse("Codex is working in it, in the tab “t”.", goTo: true))
+        // What git is in the middle of there goes with it, and so does a commit no branch or tag has.
+        let rebase = GitInProgress.rebase(branch: "fix/x", onto: nil, step: 2, total: 5)
+        #expect(WorktreeRemoval.verdict(F(inProgress: rebase))
+            == .refuse("A rebase of fix/x is in progress there: finish or abort it there first.", goTo: false))
+        #expect(WorktreeRemoval.verdict(F(inProgress: .merge, changedFiles: 2))
+            == .refuse("A merge is in progress there: finish or abort it there first.", goTo: false))
+        let sha = "4f2a9c1d0b7e6a5f4e3d2c1b0a9f8e7d6c5b4a39"
+        #expect(WorktreeRemoval.verdict(F(headOnNoBranch: true, head: sha))
+            == .refuse("It is detached at 4f2a9c1, a commit no branch or tag has: removing the worktree would lose it. New Branch… there keeps it.",
+                       goTo: false))
+        #expect(WorktreeRemoval.verdict(F(changedFiles: 1, headOnNoBranch: true, head: sha)) == .refuse("It has 1 changed file.", goTo: false))
+        #expect(WorktreeRemoval.verdict(F(head: sha)) == .remove)
+        #expect(WorktreeRemoval.verdict(F(isMissing: true, headOnNoBranch: true, head: sha)) == .forget(losing: "4f2a9c1"))
         #expect(WorktreeRemoval.arguments(path: "/w") == ["worktree", "remove", "/w"]) // never --force
         // git status's entries: a rename's old path is no entry of its own.
         #expect(WorktreeRemoval.countStatus(Data(" M a.txt\0?? new.txt\0R  b.txt\0old b.txt\0".utf8)) == 3)
         #expect(WorktreeRemoval.countStatus(Data()) == 0)
+    }
+
+    @Test func whatRemoveAndForgetSayGoes() {
+        #expect(WorktreeRemoval.removeInfo(branch: "fix/7027-sso", head: "4f2a9c1d0b")
+            == "Its folder is deleted, with the ignored files in it. The branch fix/7027-sso stays, with its commits.")
+        #expect(WorktreeRemoval.removeInfo(branch: nil, head: "4f2a9c1d0b")
+            == "Its folder is deleted, with the ignored files in it. It is detached at 4f2a9c1, which a branch or tag keeps.")
+        // Forgetting deletes git's record of it, and with it the worktree's HEAD and reflog: never "nothing on disk".
+        #expect(WorktreeRemoval.forgetInfo(branch: "fix/x", losing: nil)
+            == "Its folder is gone, but git still lists it, and keeps fix/x checked out there. Forgetting it deletes only git’s record of it.")
+        #expect(WorktreeRemoval.forgetInfo(branch: nil, losing: "4f2a9c1")
+            == "Its folder is gone, but git still lists it. Forgetting it deletes only git’s record of it. Its commit 4f2a9c1 is on no branch or tag and goes with it: make a branch at 4f2a9c1 first to keep it.")
+    }
+
+    @Test func aDetachedWorktreesCommitOnNoBranch() throws {
+        guard let git = GitRunner.locateGit() else { return }
+        let repo = try TemporaryRepository(git: git)
+        defer { repo.remove() }
+        let detached = repo.base + "/xCloud-wt-det"
+        repo.run(["worktree", "add", "-q", "--detach", detached, "HEAD"])
+        let head = { repo.output(["-C", detached, "rev-parse", "HEAD"]) }
+        // At a commit main has: kept.
+        #expect(!WorktreeRemoval.isOnNoBranch(head(), in: repo.path, git: git))
+        // A commit made there: only the worktree has it.
+        try "two\n".write(toFile: detached + "/a.txt", atomically: true, encoding: .utf8)
+        repo.run(["-C", detached, "commit", "-qam", "Two"])
+        let made = head()
+        #expect(made.count == 40)
+        #expect(WorktreeRemoval.isOnNoBranch(made, in: repo.path, git: git))
+        // A tag keeps it, and so would a branch.
+        repo.run(["tag", "keep", made])
+        #expect(!WorktreeRemoval.isOnNoBranch(made, in: repo.path, git: git))
+        // git can't say: not shown to be kept.
+        #expect(WorktreeRemoval.isOnNoBranch(String(repeating: "0", count: 40), in: repo.path, git: git))
     }
 
     @Test func gitsAlreadyExistsIsItsOwnFailure() {
@@ -327,6 +374,12 @@ struct TemporaryRepository {
         try? p.run()
         p.waitUntilExit()
         return p.terminationStatus
+    }
+
+    /// What git prints, trimmed.
+    func output(_ args: [String]) -> String {
+        guard let data = GitRunner.run(git, ["-C", path] + args, timeout: 10) else { return "" }
+        return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func write(_ name: String, _ text: String) throws {

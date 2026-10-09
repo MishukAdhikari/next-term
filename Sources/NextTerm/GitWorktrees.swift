@@ -131,7 +131,7 @@ extension GitActions {
         let tabs = local.filter { inside($0.1.liveDirectory) }
         known.agents = agents.map { AgentGuard.Agent(program: $0.1.status.program, tab: $0.1.title) }
         known.windows = windows.map(\.projectTitle)
-        known.tabWindows = tabs.map { $0.0.projectTitle }
+        known.tabs = tabs.map { $0.1.title }
         let goTo: () -> Void = {
             if let place = agents.first ?? (windows.isEmpty ? tabs.first : nil) {
                 place.0.show(place.1)
@@ -140,10 +140,16 @@ extension GitActions {
                 windows.first?.window?.makeKeyAndOrderFront(nil)
             }
         }
-        let facts = known
+        known.head = w.head
+        let facts = known, root = model.root
         DispatchQueue.global(qos: .userInitiated).async {
             var counted = facts
-            if !w.isPrunable { counted.changedFiles = WorktreeRemoval.changedFiles(at: w.path, git: git) ?? 0 }
+            if !w.isPrunable {
+                counted.changedFiles = WorktreeRemoval.changedFiles(at: w.path, git: git) ?? 0
+                counted.inProgress = AgentLocation.gitDir(ofCheckout: w.path).flatMap(BranchModel.inProgress(gitDir:))
+            }
+            // Detached: git's gc deletes a commit no branch or tag has once the worktree's reflog goes with it.
+            if w.isDetached, let head = w.head { counted.headOnNoBranch = WorktreeRemoval.isOnNoBranch(head, in: root, git: git) }
             let decided = WorktreeRemoval.verdict(counted)
             DispatchQueue.main.async { removal(decided, of: row, goTo: goTo) }
         }
@@ -159,15 +165,13 @@ extension GitActions {
         let w = row.worktree, folder = row.folder
         switch verdict {
         case .remove:
-            let keeps = w.branch.map { "The branch \($0) stays, with its commits." }
-                ?? "It is detached at \(String((w.head ?? "").prefix(7))): a commit made there that no branch has is left to git’s reflog."
-            GitPrompt.ask("Remove “\(folder)”?", info: "Its folder is deleted, with the ignored files in it. \(keeps)",
+            GitPrompt.ask("Remove “\(folder)”?", info: WorktreeRemoval.removeInfo(branch: w.branch, head: w.head),
                           buttons: ["Remove", "Cancel"], destructive: 0, over: window) { choice in
                 if choice == 0 { runRemoval(w, folder: folder, done: "Removed \(folder)" + (w.branch.map { "; \($0) stays" } ?? "")) }
             }
-        case .forget:
-            GitPrompt.ask("Forget “\(folder)”?", info: "Its folder is gone, but git still lists it\(w.branch.map { ", and keeps \($0) checked out there" } ?? ""). Forgetting it changes nothing on disk.",
-                          buttons: ["Forget", "Cancel"], over: window) { choice in
+        case let .forget(losing):
+            GitPrompt.ask("Forget “\(folder)”?", info: WorktreeRemoval.forgetInfo(branch: w.branch, losing: losing),
+                          buttons: ["Forget", "Cancel"], destructive: losing == nil ? nil : 0, over: window) { choice in
                 if choice == 0 { runRemoval(w, folder: folder, done: "Forgot \(folder)") }
             }
         case let .refuse(reason, there):

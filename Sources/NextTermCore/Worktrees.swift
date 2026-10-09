@@ -411,33 +411,47 @@ public enum WorktreeRemoval {
         public var agents: [AgentGuard.Agent] = []
         /// Windows open on it, by title.
         public var windows: [String] = []
-        /// Windows with a tab in it, by title.
-        public var tabWindows: [String] = []
+        /// Tabs in it, by title.
+        public var tabs: [String] = []
         /// nil when it isn't locked.
         public var lockReason: String?
         public var holder: LockHolder?
         public var holderAlive = false
+        /// What git is in the middle of there (a rebase stopped at a step, a merge): its state goes with it.
+        public var inProgress: GitInProgress?
         /// Changed and untracked files, as `git status` counts them.
         public var changedFiles = 0
+        /// Detached at `head`, a commit no branch, remote branch or tag has: only the worktree's own reflog,
+        /// which goes with it, still has it, and git's gc then deletes it.
+        public var headOnNoBranch = false
+        public var head: String?
 
-        public init(isMain: Bool = false, isMissing: Bool = false, agents: [AgentGuard.Agent] = [], windows: [String] = [], tabWindows: [String] = [],
-                    lockReason: String? = nil, holder: LockHolder? = nil, holderAlive: Bool = false, changedFiles: Int = 0) {
+        public init(isMain: Bool = false, isMissing: Bool = false, agents: [AgentGuard.Agent] = [], windows: [String] = [], tabs: [String] = [],
+                    lockReason: String? = nil, holder: LockHolder? = nil, holderAlive: Bool = false, inProgress: GitInProgress? = nil,
+                    changedFiles: Int = 0, headOnNoBranch: Bool = false, head: String? = nil) {
             self.isMain = isMain
             self.isMissing = isMissing
             self.agents = agents
             self.windows = windows
-            self.tabWindows = tabWindows
+            self.tabs = tabs
             self.lockReason = lockReason
             self.holder = holder
             self.holderAlive = holderAlive
+            self.inProgress = inProgress
             self.changedFiles = changedFiles
+            self.headOnNoBranch = headOnNoBranch
+            self.head = head
         }
+
+        /// The commit that would be lost, short; nil when none would be.
+        var lostCommit: String? { headOnNoBranch ? String((head ?? "").prefix(7)) : nil }
     }
 
     public enum Verdict: Equatable, Sendable {
         case remove
-        /// Its folder is gone: forget git's entry for it (`worktree remove` of that one only).
-        case forget
+        /// Its folder is gone: forget git's entry for it (`worktree remove` of that one only). `losing`: the
+        /// short sha of a commit on no branch that goes with that entry.
+        case forget(losing: String?)
         /// Not now, and why; `goTo`: a window or tab is in it, to bring forward.
         case refuse(String, goTo: Bool)
         /// Locked, by nothing that still runs: it can be unlocked first.
@@ -445,13 +459,13 @@ public enum WorktreeRemoval {
     }
 
     /// The first reason that holds, in this order: main checkout, a lock on a missing folder, agents, windows,
-    /// tabs, a lock, changes.
+    /// tabs, a lock, something in progress, changes, a commit on no branch.
     public static func verdict(_ facts: Facts) -> Verdict {
         if facts.isMain { return .refuse("It is the repository’s main checkout.", goTo: false) }
-        if facts.isMissing, facts.lockReason == nil { return .forget }
+        if facts.isMissing, facts.lockReason == nil { return .forget(losing: facts.lostCommit) }
         if let agent = facts.agents.first { return .refuse("\(agent.name) is working in it, in the tab “\(agent.tab)”.", goTo: true) }
         if let window = facts.windows.first { return .refuse("The window “\(window)” is open on it.", goTo: true) }
-        if let window = facts.tabWindows.first { return .refuse("A tab in “\(window)” is in it.", goTo: true) }
+        if let tab = facts.tabs.first { return .refuse("The tab “\(tab)” is in it.", goTo: true) }
         if let reason = facts.lockReason {
             if let holder = facts.holder {
                 let who = "\(AgentName.of(program: holder.program)) (pid \(holder.pid))"
@@ -459,8 +473,47 @@ public enum WorktreeRemoval {
             }
             return .unlockFirst(reason.isEmpty ? "It is locked, with no reason given." : "It is locked: \(reason).")
         }
+        if let doing = facts.inProgress { return .refuse("\(operation(doing)) is in progress there: finish or abort it there first.", goTo: false) }
         if facts.changedFiles > 0 { return .refuse("It has \(facts.changedFiles) changed file\(facts.changedFiles == 1 ? "" : "s").", goTo: false) }
+        if let lost = facts.lostCommit {
+            return .refuse("It is detached at \(lost), a commit no branch or tag has: removing the worktree would lose it. New Branch… there keeps it.",
+                           goTo: false)
+        }
         return .remove
+    }
+
+    /// "A rebase of fix/x", "A merge".
+    static func operation(_ doing: GitInProgress) -> String {
+        switch doing {
+        case let .rebase(branch, _, _, _): return "A rebase" + (branch.map { " of \($0)" } ?? "")
+        case .merge: return "A merge"
+        case .cherryPick: return "A cherry-pick"
+        case .revert: return "A revert"
+        case .bisect: return "A bisect"
+        }
+    }
+
+    /// What Remove asks under its title: what goes, and that the branch, or the commit it is detached at, stays.
+    public static func removeInfo(branch: String?, head: String?) -> String {
+        let keeps = branch.map { "The branch \($0) stays, with its commits." }
+            ?? "It is detached at \(String((head ?? "").prefix(7))), which a branch or tag keeps."
+        return "Its folder is deleted, with the ignored files in it. " + keeps
+    }
+
+    /// What Forget asks under its title: only git's record of the worktree goes (its HEAD and reflog), and a
+    /// commit on no branch goes with it.
+    public static func forgetInfo(branch: String?, losing: String?) -> String {
+        let held = branch.map { ", and keeps \($0) checked out there" } ?? ""
+        let lost = losing.map { " Its commit \($0) is on no branch or tag and goes with it: make a branch at \($0) first to keep it." } ?? ""
+        return "Its folder is gone, but git still lists it\(held). Forgetting it deletes only git’s record of it." + lost
+    }
+
+    /// Whether no branch, remote branch or tag has `commit`: then a detached worktree at it is all that keeps
+    /// it. True when git can't say.
+    public static func isOnNoBranch(_ commit: String, in root: String, git: String) -> Bool {
+        guard let out = GitRunner.run(git, ["-C", root, "--no-optional-locks", "rev-list", "-n", "1", commit, "--not", "--branches", "--remotes", "--tags"],
+                                      timeout: 30) else { return true }
+        return !String(decoding: out, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// Never --force: git refuses a worktree with changes, and the branch stays.
