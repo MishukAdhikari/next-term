@@ -460,7 +460,8 @@ import Testing
         for text in [parts, runners, downloads, decodes] {
             for pattern in patterns { #expect(text.range(of: pattern, options: .regularExpression) == nil) }
         }
-        #expect(Date().timeIntervalSince(start) < 2)
+        // About half a second alone; the read-forward forms took 40 s and more. The margin is for a loaded machine.
+        #expect(Date().timeIntervalSince(start) < 6)
     }
 
     // MARK: server JSON files
