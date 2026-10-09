@@ -250,10 +250,9 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
     @objc private func ticked() { refreshMove() }
 
     func controlTextDidChange(_ notification: Notification) {
-        guard let field = notification.object as? NSTextField, let row = groupRows.first(where: { $0.nameField === field }) else { return }
+        guard let field = notification.object as? NSTextField, groupRows.contains(where: { $0.nameField === field }) else { return }
         let shown = SecretRequestWindow.normalized(field.stringValue)
         if shown != field.stringValue { field.stringValue = shown }
-        _ = row
         refreshMove()
     }
 

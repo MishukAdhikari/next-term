@@ -171,8 +171,6 @@ public enum SecretImport {
         public let shared: Bool
         /// The entry has comments inside it, which a JSON rewrite loses.
         public let loses: Bool
-        /// Where its text is, for the backup's marker.
-        let range: Range<Int>
 
         public var movable: Bool { notMovable == nil }
         /// The last 4 characters, never more.
@@ -248,7 +246,7 @@ public enum SecretImport {
                     let id = [source.path, entry.location.description, "\(detected.field)"].joined(separator: "\u{0}")
                     scan.findings.append(Finding(id: SecretRun.digest(Data(id.utf8)), source: source, location: entry.location,
                                                  field: detected.field, variable: detected.variable, value: detected.value, kind: detected.kind,
-                                                 notMovable: reason, shared: shared, loses: entry.hasComments, range: detected.range))
+                                                 notMovable: reason, shared: shared, loses: entry.hasComments))
                 }
             }
         }
@@ -696,13 +694,13 @@ public enum SecretImport {
                                                notMovable: valueRefusal(variable: variable.key, value: variable.value),
                                                range: offsets(variable.range, in: text)))
             }
-            if odd.contains(table.name) { entry.notMovable = oddShapeReason(table.name, command: entry.command + entry.args, names: []) }
+            if odd.contains(table.name) { entry.notMovable = oddShapeReason(table.name) }
             entries.append(entry)
         }
         // Servers with no table of their own (all dotted keys): what they hold is listed, not movable.
         for name in odd.subtracting(entries.map(\.location.server)).sorted() {
             var entry = Entry(location: Location(container: ["mcp_servers"], server: name), range: 0..<0, command: [], args: [])
-            entry.notMovable = oddShapeReason(name, command: [], names: [])
+            entry.notMovable = oddShapeReason(name)
             for key in outline.keys {
                 let full = key.table + key.path
                 guard full.count == 4, full[0] == "mcp_servers", full[1] == name, full[2] == "env",
@@ -715,7 +713,8 @@ public enum SecretImport {
         return entries
     }
 
-    static func oddShapeReason(_ server: String, command: [String], names: [String]) -> String {
+    /// Why a server written with dotted keys can't move, with what to write by hand (names only).
+    static func oddShapeReason(_ server: String) -> String {
         "written in a shape Next Term can't edit. By hand: in [mcp_servers.\(server)], set command to the nxtrm path and put "
             + "secret, run, the key's name and -- before the old command in args, then remove the key from env"
     }
