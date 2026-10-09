@@ -114,7 +114,7 @@ public enum LaunchDecision {
 /// never taken twice.
 public struct UpdateMarker: Equatable, Sendable {
     public static let fileName = "update-marker.json"
-    /// Its name once a launch has claimed it (`SessionFiles.claim`).
+    /// Its name once a launch has claimed it (`claim(in:consumed:)`), until the launch has recorded it as consumed.
     public static let claimedName = "update-marker.claimed.json"
     /// A marker is a few hundred bytes: anything bigger is not one.
     public static let maxSize = 4096
@@ -222,6 +222,25 @@ extension UpdateMarker: Codable {
     }
 }
 
+extension UpdateMarker {
+    /// Claims the marker waiting in `files` for this launch (`SessionFiles.claim`, to `claimedName`) and reads it: nil
+    /// when none waits, another process took it, anything fails, or what was claimed is no marker. The claimed file
+    /// stays until the launch has recorded what its decision consumes (`RestoreDecision.consumes`); then it removes it.
+    ///
+    /// A claimed file there already was left by a launch that ended between its claim and that removal. Its name is
+    /// fixed, so it would block every claim after it, and every update relaunch would restore as after a crash. It goes
+    /// first: its id, when it reads, is added to `consumed` (a record that does not read stays so), and it is removed.
+    /// A link is removed, never followed.
+    public static func claim(in files: SessionFiles, consumed: inout ConsumedMarkers?) -> UpdateMarker? {
+        let leftover: Data? = try? files.read(claimedName, maxSize: maxSize)
+        if let id = leftover.flatMap(parse)?.id { consumed = consumed?.adding(id) }
+        try? files.remove(claimedName)
+        guard (try? files.claim(fileName, as: claimedName)) == true else { return nil }
+        let claimed: Data? = try? files.read(claimedName, maxSize: maxSize)
+        return claimed.flatMap(parse)
+    }
+}
+
 /// The markers launches have claimed, newest last, so a marker put back is refused.
 public struct ConsumedMarkers: Equatable, Sendable {
     public static let fileName = "consumed-markers.json"
@@ -248,7 +267,8 @@ public struct ConsumedMarkers: Equatable, Sendable {
         guard data.count <= maxSize else { return nil }
         guard let texts = try? JSONDecoder().decode([String].self, from: data) else { return nil }
         let ids: [UUID] = texts.compactMap(UUID.init(uuidString:))
-        return ids.count == texts.count ? ConsumedMarkers(ids: ids) : nil
+        guard ids.count == texts.count else { return nil }
+        return ConsumedMarkers(ids: ids)
     }
 
     public var data: Data {
@@ -259,7 +279,8 @@ public struct ConsumedMarkers: Equatable, Sendable {
 
 /// KTD13's crash-loop counter: launches in a row that tried to restore and did not settle. A launch raises it, and
 /// writes it, before it reads the snapshot, so a restore that crashes has counted already. It reads 1 on the first
-/// launch after a reset, so the raised count less one is the restores that did not finish.
+/// launch after a reset, so the raised count less one is the restores that did not finish. A counter that does not
+/// read, or was not written, never lets a restore run actions (`unread`, `RestoreFacts.attemptsWritten`).
 public struct RestoreAttempts: Equatable, Sendable {
     public static let fileName = "restore-attempts"
     public static let maxSize = 64
@@ -272,6 +293,9 @@ public struct RestoreAttempts: Equatable, Sendable {
     public static let settleTime: TimeInterval = 60
     /// It never counts past this.
     static let most = 1000
+    /// What a counter there that does not read counts as, one the folder refuses included: one restore that did not
+    /// finish, so the launch, raising it, restores in safe mode. Reading it as none would let a loop start over.
+    public static let unread = RestoreAttempts(count: safeMode - 1)
 
     public private(set) var count: Int
 
@@ -290,23 +314,25 @@ public struct RestoreAttempts: Equatable, Sendable {
         case cleanQuit
         /// An update quit wrote its marker.
         case markerWritten
+        /// The snapshot the tries were counted for was set aside: the next one gets tries of its own.
+        case setAside
     }
 
     public func after(_ event: Event) -> RestoreAttempts {
         switch event {
         case .launch, .tryAgain: return RestoreAttempts(count: count + 1)
-        case .settled, .cleanQuit, .markerWritten: return RestoreAttempts()
+        case .settled, .cleanQuit, .markerWritten, .setAside: return RestoreAttempts()
         }
     }
 
-    /// The counter in `data`, as `data` writes it. Anything else reads as none: the launch raises it and writes it
-    /// whole again, so the count goes on from there.
+    /// The counter in `data`, as `data` writes it; more digits than a number holds count as `most`. Anything else reads
+    /// as `unread`: the launch raises it and writes it whole again, so the count goes on from there.
     public static func parse(_ data: Data) -> RestoreAttempts {
-        guard data.count <= maxSize else { return RestoreAttempts() }
+        guard data.count <= maxSize else { return unread }
         let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         let digits = !text.isEmpty && text.utf8.allSatisfy { $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9") }
-        guard digits, let count = Int(text) else { return RestoreAttempts() }
-        return RestoreAttempts(count: count)
+        guard digits else { return unread }
+        return RestoreAttempts(count: Int(text) ?? most)
     }
 
     public var data: Data { Data("\(count)\n".utf8) }
@@ -326,6 +352,9 @@ public struct RestoreFacts: Sendable {
     public var consumed: ConsumedMarkers?
     /// The counter, raised for this launch.
     public var attempts: RestoreAttempts
+    /// The raised counter was written whole before the snapshot was read. When it was not (a full disk, a refused
+    /// file), a restore that crashes would not count, and the same snapshot would be restored forever.
+    public var attemptsWritten: Bool
     /// Now, on the uptime clock (`UpdateMarker.uptimeNow()`).
     public var uptime: TimeInterval
     /// This boot's session (`UpdateMarker.currentBootSession()`).
@@ -336,14 +365,15 @@ public struct RestoreFacts: Sendable {
     public var installResult: InstallResult?
 
     public init(lockTaken: Bool, marker: UpdateMarker? = nil, header: SessionSnapshot.Header? = nil, windows: Int = 0,
-                consumed: ConsumedMarkers? = ConsumedMarkers(), attempts: RestoreAttempts, uptime: TimeInterval,
-                bootSession: String?, version: String, installResult: InstallResult? = nil) {
+                consumed: ConsumedMarkers? = ConsumedMarkers(), attempts: RestoreAttempts, attemptsWritten: Bool,
+                uptime: TimeInterval, bootSession: String?, version: String, installResult: InstallResult? = nil) {
         self.lockTaken = lockTaken
         self.marker = marker
         self.header = header
         self.windows = windows
         self.consumed = consumed
         self.attempts = attempts
+        self.attemptsWritten = attemptsWritten
         self.uptime = uptime
         self.bootSession = bootSession
         self.version = version
@@ -384,6 +414,9 @@ public struct RestoreDecision: Equatable, Sendable {
         case afterLaunch
         /// `settleTime` after the restore's last action is applied, or after "Keep As Is" ends safe mode.
         case afterRestore
+        /// Once the snapshot is set aside (`RestoreAttempts.Event.setAside`): the tries counted were its own, so a launch
+        /// that crashes early does not set the next one aside untried. If it cannot be set aside, as `afterLaunch`.
+        case afterSetAside
     }
 
     public var kind: LaunchRestoreKind
@@ -391,21 +424,31 @@ public struct RestoreDecision: Equatable, Sendable {
     public var marker: UpdateMarker.Check
     /// The launch keeps the snapshot current: it holds the folder.
     public var saves: Bool
-    /// The marker to record as consumed: any marker claimed, whatever it came to.
-    public var consumes: UUID?
+    /// The markers to record as consumed, before the claimed file is removed: any marker claimed, whatever it came to,
+    /// and the one the snapshot waits for, as this launch deals with that update quit now.
+    public var consumes: [UUID]
     public var scrollback: Scrollback
     /// The install script's failed outcome: one alert says the update did not install, whatever restores.
     public var installAlert: InstallResult.Outcome?
-    /// The note that the update did not install: an update was being installed, the running version is not the one it
-    /// installs, and no alert says so already.
+    /// The note that the update did not install, shown once with what restores: the snapshot was saved at an update
+    /// quit no launch has dealt with (the marker it waits for is not consumed), the running version is not the one that
+    /// update installs, and no alert says so already.
     public var didNotInstallNote: Bool
     public var attemptsReset: AttemptsReset
 
     /// The launch table's `restore` input, once the restore has built what it builds.
     public func launchRestore(openedWindow: Bool) -> LaunchRestoreResult {
-        switch kind {
-        case .normal, .quarantine: return .notRun
-        case .restore, .safeMode: return openedWindow ? .openedWindows : .openedNoWindow
+        guard kind.restores else { return .notRun }
+        return openedWindow ? .openedWindows : .openedNoWindow
+    }
+}
+
+extension LaunchRestoreKind {
+    /// The windows come back.
+    var restores: Bool {
+        switch self {
+        case .normal, .quarantine: return false
+        case .restore, .safeMode: return true
         }
     }
 }
@@ -416,22 +459,22 @@ extension LaunchDecision {
     /// - a marker that holds (`check`) restores the update's snapshot;
     /// - otherwise an unclean snapshot restores as after a crash;
     /// - a snapshot with no windows is none;
-    /// - at a raised counter of 3, the restore is safe mode; at 4 or more, the snapshot is set aside.
-    /// Telling the user that an update did not install is decided alongside, whatever restores (R18).
+    /// - at a raised counter of 3, or one that was not written, the restore is safe mode; at 4 or more, the snapshot is
+    ///   set aside.
+    /// Telling the user that an update did not install is decided alongside (R18): the alert whatever restores, the
+    /// note once, with what restores.
     public static func restoring(_ facts: RestoreFacts) -> RestoreDecision {
         guard facts.lockTaken else {
-            return RestoreDecision(kind: .normal, marker: .missing, saves: false, consumes: nil, scrollback: .leave,
+            return RestoreDecision(kind: .normal, marker: .missing, saves: false, consumes: [], scrollback: .leave,
                                    installAlert: nil, didNotInstallNote: false, attemptsReset: .never)
         }
         let check = check(facts)
-        let kind = held(found(facts, marker: check), attempts: facts.attempts)
-        let restores = kind != .normal && kind != .quarantine
-        let alert: InstallResult.Outcome? = facts.installResult.map(\.outcome).flatMap { $0 == .installed ? nil : $0 }
-        let pending: String? = facts.header?.pendingToVersion
-        let notInstalled = alert == nil && pending != nil && pending != facts.version
-        return RestoreDecision(kind: kind, marker: check, saves: true, consumes: facts.marker?.id,
-                               scrollback: kind == .restore(.update) ? .read : .deleteUnread, installAlert: alert,
-                               didNotInstallNote: notInstalled, attemptsReset: restores ? .afterRestore : .afterLaunch)
+        let kind = held(found(facts, marker: check), attempts: facts.attempts, counted: facts.attemptsWritten)
+        let alert = failure(facts.installResult)
+        let note = alert == nil && kind.restores && didNotInstall(facts, marker: check)
+        let scrollback: RestoreDecision.Scrollback = kind == .restore(.update) ? .read : .deleteUnread
+        return RestoreDecision(kind: kind, marker: check, saves: true, consumes: used(facts), scrollback: scrollback,
+                               installAlert: alert, didNotInstallNote: note, attemptsReset: reset(after: kind))
     }
 
     /// Whether the claimed marker makes this launch the update's relaunch: the snapshot waits for it and was written by
@@ -453,13 +496,15 @@ extension LaunchDecision {
 
     /// Whether the old app, opened from its backup by the install script (KTD12), may take the sessions folder its
     /// `InstallScript.folderKeyArgument` names: a folder key, for a folder whose recorded app is gone, holding the
-    /// unclaimed result that says the old app was left in its backup, for the marker that quit wrote. Anything else is
-    /// ignored, and the app opens its own folder.
+    /// unclaimed result that says the old app was left in its backup, written at the quit the folder's snapshot was
+    /// saved at. That result names the marker the snapshot waits for (`awaitingMarker`, the header's): the update
+    /// quit's, or none for both after a "When I Quit" install, whose quit is a normal one and writes no marker. Anything
+    /// else is ignored, and the app opens its own folder.
     public static func acceptsBackupOpen(key: String, recordedBundlePath: String?, result: InstallResult?,
-                                         exists: (String) -> Bool) -> Bool {
+                                         awaitingMarker: UUID?, exists: (String) -> Bool) -> Bool {
         guard SessionFiles.isKey(key), let path = recordedBundlePath, !exists(path) else { return false }
         guard let result, result.outcome == .failedRestoredBackup else { return false }
-        return result.marker != nil
+        return result.marker == awaitingMarker
     }
 
     /// The kind of restore the snapshot asks for, before the counter: none without windows.
@@ -469,11 +514,44 @@ extension LaunchDecision {
         return header.clean ? nil : .crash
     }
 
-    /// The restore, held back by the restores that did not finish before it.
-    private static func held(_ kind: SessionSnapshot.RestoreKind?, attempts: RestoreAttempts) -> LaunchRestoreKind {
+    /// The restore, held back by the restores that did not finish before it. One whose try was not `counted` runs
+    /// nothing either: if it crashed, the next launch would not know.
+    private static func held(_ kind: SessionSnapshot.RestoreKind?, attempts: RestoreAttempts,
+                             counted: Bool) -> LaunchRestoreKind {
         guard let kind else { return .normal }
         if attempts.count >= RestoreAttempts.quarantine { return .quarantine }
-        if attempts.count >= RestoreAttempts.safeMode { return .safeMode(kind) }
+        if attempts.count >= RestoreAttempts.safeMode || !counted { return .safeMode(kind) }
         return .restore(kind)
+    }
+
+    /// The install script's outcome when it failed: the one alert says so.
+    private static func failure(_ result: InstallResult?) -> InstallResult.Outcome? {
+        let outcome: InstallResult.Outcome? = result?.outcome
+        return outcome == .installed ? nil : outcome
+    }
+
+    /// Whether the snapshot was saved at an update quit no launch has dealt with yet, and the running version is not the
+    /// one that update installs: the valid marker's to-version, else the snapshot's pending one. A launch that took the
+    /// marker the snapshot waits for, or restored the snapshot without it, has told the user already; a record that
+    /// does not read cannot say it has not.
+    private static func didNotInstall(_ facts: RestoreFacts, marker check: UpdateMarker.Check) -> Bool {
+        guard let header = facts.header, let awaited = header.awaitingMarker else { return false }
+        guard let consumed = facts.consumed, !consumed.contains(awaited) else { return false }
+        let installing: String? = check == .valid ? facts.marker?.toVersion : header.pendingToVersion
+        guard let installing else { return false }
+        return installing != facts.version
+    }
+
+    /// The markers the launch uses up: the one it claimed, then the one the snapshot waits for.
+    private static func used(_ facts: RestoreFacts) -> [UUID] {
+        let claimed: [UUID] = facts.marker.map { [$0.id] } ?? []
+        guard let awaited = facts.header?.awaitingMarker, !claimed.contains(awaited) else { return claimed }
+        return claimed + [awaited]
+    }
+
+    /// When the counter resets after a launch that holds the folder.
+    private static func reset(after kind: LaunchRestoreKind) -> RestoreDecision.AttemptsReset {
+        if kind == .quarantine { return .afterSetAside }
+        return kind.restores ? .afterRestore : .afterLaunch
     }
 }

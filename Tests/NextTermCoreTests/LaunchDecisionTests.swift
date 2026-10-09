@@ -211,10 +211,11 @@ enum RestoreFixture {
     }
 
     /// The relaunch 30 s after the update quit, into the new version: the lock taken, the marker claimed, two windows,
-    /// the first launch since the counter reset.
+    /// the first launch since the counter reset, written before the snapshot was read.
     static func update() -> RestoreFacts {
         RestoreFacts(lockTaken: true, marker: updateMarker, header: header(), windows: 2, consumed: ConsumedMarkers(),
-                     attempts: RestoreAttempts(count: 1), uptime: 1030, bootSession: boot, version: to)
+                     attempts: RestoreAttempts(count: 1), attemptsWritten: true, uptime: 1030, bootSession: boot,
+                     version: to)
     }
 
     /// The launch after a crash: no marker, an unclean snapshot with two windows.
@@ -301,6 +302,7 @@ enum RestoreFixture {
         #expect(two.after(.settled).count == 0)
         #expect(two.after(.cleanQuit).count == 0)
         #expect(two.after(.markerWritten).count == 0)
+        #expect(two.after(.setAside).count == 0)
         #expect(RestoreAttempts().count == 0)
         #expect(RestoreAttempts(count: -4).count == 0)
         #expect(RestoreAttempts.safeMode == 3)
@@ -308,14 +310,21 @@ enum RestoreFixture {
         #expect(RestoreAttempts.settleTime == 60)
     }
 
-    @Test func readsBackAsWrittenAndAnythingElseReadsAsNone() {
+    @Test func readsBackAsWrittenAndFailsClosedOtherwise() {
         for count in [0, 1, 3, 4, 17] {
             #expect(RestoreAttempts.parse(RestoreAttempts(count: count).data).count == count)
         }
         #expect(RestoreAttempts.parse(Data("2\n".utf8)).count == 2)
-        // A counter that does not read starts again: the launch raises it and writes it whole.
-        for text in ["", "x", "-3", "1.5", "3 3", String(repeating: "9", count: 40)] {
-            #expect(RestoreAttempts.parse(Data(text.utf8)).count == 0, "\(text)")
+        // A counter that does not read is no fresh start: it counts a restore that did not finish, so the launch,
+        // raising it, restores in safe mode.
+        let overlong = String(repeating: "1", count: RestoreAttempts.maxSize + 1)
+        for text in ["", "x", "-3", "1.5", "3 3", overlong] {
+            #expect(RestoreAttempts.parse(Data(text.utf8)) == RestoreAttempts.unread, "\(text)")
+        }
+        #expect(RestoreAttempts.unread.after(.launch).count == RestoreAttempts.safeMode)
+        // More digits than a number holds is a count past the cap, not none.
+        for text in [String(repeating: "9", count: 40), "99999999999999999999999\n"] {
+            #expect(RestoreAttempts.parse(Data(text.utf8)).count == RestoreAttempts.most, "\(text)")
         }
         // It never counts past its cap, however many launches fail.
         var attempts = RestoreAttempts(count: Int.max)
@@ -356,6 +365,78 @@ enum RestoreFixture {
     }
 }
 
+/// The claim, in a sessions folder of each test's own, made in a temporary folder.
+@Suite struct UpdateMarkerClaimTests {
+    /// The folder for a made-up app at /Users/x/Applications/Next Term.app, with its lock taken, and its parent to remove.
+    func owned() throws -> (files: SessionFiles, parent: URL) {
+        let path = canonicalPath(FileManager.default.temporaryDirectory.path) + "/nt-claim-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: false)
+        let parent = URL(fileURLWithPath: path)
+        let files = try SessionFiles.open(in: parent, bundlePath: "/Users/x/Applications/Next Term.app")
+        #expect(files.lock())
+        return (files, parent)
+    }
+
+    @Test func claimsTheMarkerWaiting() throws {
+        let (files, parent) = try owned()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        var consumed: ConsumedMarkers? = ConsumedMarkers()
+        #expect(UpdateMarker.claim(in: files, consumed: &consumed) == nil)
+        try files.replace(UpdateMarker.fileName, with: RestoreFixture.updateMarker.data)
+        #expect(UpdateMarker.claim(in: files, consumed: &consumed) == RestoreFixture.updateMarker)
+        // Taken once: it now waits under its claimed name for the launch to record it, and the record is the launch's.
+        let names: [String] = try files.names()
+        #expect(!names.contains(UpdateMarker.fileName))
+        #expect(names.contains(UpdateMarker.claimedName))
+        #expect(consumed == ConsumedMarkers())
+        // What is claimed but is no marker is none.
+        try files.remove(UpdateMarker.claimedName)
+        try files.replace(UpdateMarker.fileName, with: Data("not a marker".utf8))
+        #expect(UpdateMarker.claim(in: files, consumed: &consumed) == nil)
+    }
+
+    /// A launch that ended between its claim and removing the claimed file left it there. The name is fixed, so it
+    /// would block every claim after it, and every update relaunch would restore as after a crash.
+    @Test func aClaimALaunchLeftIsUsedUpAndNeverBlocksTheNext() throws {
+        let (files, parent) = try owned()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        var next = RestoreFixture.updateMarker
+        next.id = RestoreFixture.other
+        try files.replace(UpdateMarker.claimedName, with: RestoreFixture.updateMarker.data)
+        try files.replace(UpdateMarker.fileName, with: next.data)
+        var consumed: ConsumedMarkers? = ConsumedMarkers()
+        #expect(UpdateMarker.claim(in: files, consumed: &consumed) == next)
+        #expect(consumed == ConsumedMarkers().adding(RestoreFixture.marker))
+        // The left marker put back is used up.
+        try files.replace(UpdateMarker.claimedName, with: RestoreFixture.updateMarker.data)
+        try files.replace(UpdateMarker.fileName, with: RestoreFixture.updateMarker.data)
+        consumed = ConsumedMarkers()
+        let replayed = UpdateMarker.claim(in: files, consumed: &consumed)
+        #expect(replayed == RestoreFixture.updateMarker)
+        var facts = RestoreFixture.update()
+        facts.marker = replayed
+        facts.consumed = consumed
+        #expect(LaunchDecision.check(facts) == .consumed)
+        // A left file that is no marker goes too, and a record that does not read stays unread.
+        try files.replace(UpdateMarker.claimedName, with: Data("not a marker".utf8))
+        try files.replace(UpdateMarker.fileName, with: next.data)
+        var unread: ConsumedMarkers? = nil
+        #expect(UpdateMarker.claim(in: files, consumed: &unread) == next)
+        #expect(unread == nil)
+        // A link planted there is removed, never followed.
+        let outside = parent.appendingPathComponent("outside.json")
+        try RestoreFixture.updateMarker.data.write(to: outside)
+        try files.remove(UpdateMarker.claimedName)
+        let claimedPath = files.url.appendingPathComponent(UpdateMarker.claimedName).path
+        try FileManager.default.createSymbolicLink(atPath: claimedPath, withDestinationPath: outside.path)
+        try files.replace(UpdateMarker.fileName, with: next.data)
+        consumed = ConsumedMarkers()
+        #expect(UpdateMarker.claim(in: files, consumed: &consumed) == next)
+        #expect(consumed == ConsumedMarkers())
+        #expect(FileManager.default.fileExists(atPath: outside.path))
+    }
+}
+
 /// What a launch restores (plan 003's U6), from the facts its launch hook gathered.
 @Suite struct LaunchRestoreTests {
     func decide(_ facts: RestoreFacts) -> RestoreDecision { LaunchDecision.restoring(facts) }
@@ -371,7 +452,7 @@ enum RestoreFixture {
         #expect(decision.kind == .normal)
         #expect(decision.marker == .missing)
         #expect(!decision.saves)
-        #expect(decision.consumes == nil)
+        #expect(decision.consumes.isEmpty)
         #expect(decision.scrollback == .leave)
         #expect(decision.installAlert == nil)
         #expect(!decision.didNotInstallNote)
@@ -388,7 +469,7 @@ enum RestoreFixture {
             #expect(decision.marker == .valid, "\(version)")
             #expect(decision.kind == .restore(.update), "\(version)")
             #expect(decision.saves)
-            #expect(decision.consumes == RestoreFixture.marker)
+            #expect(decision.consumes == [RestoreFixture.marker])
             #expect(decision.scrollback == .read)
             #expect(decision.attemptsReset == .afterRestore)
             #expect(decision.launchRestore(openedWindow: true) == .openedWindows)
@@ -401,7 +482,8 @@ enum RestoreFixture {
     }
 
     /// A marker that does not hold: the launch restores as after a crash when the snapshot is unclean, and launches
-    /// normally otherwise. Either way the marker is used up, and scrollback is deleted unread.
+    /// normally otherwise. Either way the marker is used up, with the one the snapshot waits for, and scrollback is
+    /// deleted unread.
     @Test func aMarkerThatDoesNotHoldGivesACrashRestoreOrANormalLaunch() {
         let fixture = RestoreFixture.self
         let cases: [(String, UpdateMarker.Check, (inout RestoreFacts) -> Void)] = [
@@ -420,16 +502,18 @@ enum RestoreFixture {
         for (name, check, change) in cases {
             var facts = RestoreFixture.update()
             change(&facts)
+            let awaited: UUID? = facts.header?.awaitingMarker
+            let used: [UUID] = awaited == fixture.other ? [fixture.marker, fixture.other] : [fixture.marker]
             let unclean = decide(facts)
             #expect(unclean.marker == check, "\(name)")
             #expect(unclean.kind == .restore(.crash), "\(name)")
-            #expect(unclean.consumes == fixture.marker, "\(name)")
+            #expect(unclean.consumes == used, "\(name)")
             #expect(unclean.scrollback == .deleteUnread, "\(name)")
             facts.header?.clean = true
             let clean = decide(facts)
             #expect(clean.marker == check, "\(name)")
             #expect(clean.kind == .normal, "\(name)")
-            #expect(clean.consumes == fixture.marker, "\(name)")
+            #expect(clean.consumes == used, "\(name)")
             #expect(clean.scrollback == .deleteUnread, "\(name)")
             #expect(clean.attemptsReset == .afterLaunch, "\(name)")
         }
@@ -449,7 +533,7 @@ enum RestoreFixture {
         #expect(decision.kind == .normal)
         #expect(decision.marker == .missing)
         #expect(decision.saves)
-        #expect(decision.consumes == nil)
+        #expect(decision.consumes.isEmpty)
         #expect(decision.scrollback == .deleteUnread)
         #expect(decision.attemptsReset == .afterLaunch)
         let restore = decision.launchRestore(openedWindow: false)
@@ -471,7 +555,7 @@ enum RestoreFixture {
         let decision = decide(update)
         #expect(decision.marker == .valid)
         #expect(decision.kind == .normal)
-        #expect(decision.consumes == RestoreFixture.marker)
+        #expect(decision.consumes == [RestoreFixture.marker])
         #expect(decision.scrollback == .deleteUnread)
     }
 
@@ -501,7 +585,8 @@ enum RestoreFixture {
                 #expect(aside.kind == .quarantine, "\(kind), \(count)")
                 #expect(aside.saves)
                 #expect(aside.scrollback == .deleteUnread)
-                #expect(aside.attemptsReset == .afterLaunch)
+                // The tries counted were that snapshot's: the next one gets its own.
+                #expect(aside.attemptsReset == .afterSetAside)
                 #expect(aside.launchRestore(openedWindow: false) == .notRun)
             }
         }
@@ -512,6 +597,30 @@ enum RestoreFixture {
             tombstone.attempts = RestoreAttempts(count: count)
             #expect(decide(tombstone).kind == .normal, "\(count)")
         }
+    }
+
+    /// A raised counter that was not written (a full disk, a refused file) would not count this try if it crashed, and
+    /// the same snapshot would be restored forever. Such a restore runs nothing.
+    @Test func aCounterNotWrittenHoldsTheRestoreAtSafeMode() {
+        let kinds: [(SessionSnapshot.RestoreKind, RestoreFacts)] = [
+            (.update, RestoreFixture.update()),
+            (.crash, RestoreFixture.crash()),
+        ]
+        for (kind, base) in kinds {
+            var facts = base
+            facts.attemptsWritten = false
+            for count in [1, 2, 3] {
+                facts.attempts = RestoreAttempts(count: count)
+                #expect(decide(facts).kind == .safeMode(kind), "\(kind), \(count)")
+            }
+            facts.attempts = RestoreAttempts(count: 4)
+            #expect(decide(facts).kind == .quarantine, "\(kind)")
+        }
+        // Nothing to restore is still a normal launch.
+        var tombstone = RestoreFixture.crash()
+        tombstone.header?.clean = true
+        tombstone.attemptsWritten = false
+        #expect(decide(tombstone).kind == .normal)
     }
 
     @Test func anAwaitedMarkerThatNeverCameIsACrashThatSaysTheUpdateDidNotInstall() {
@@ -534,6 +643,74 @@ enum RestoreFixture {
         #expect(!decide(RestoreFixture.update()).didNotInstallNote)
         // A snapshot no update was installing for says nothing.
         #expect(!decide(RestoreFixture.crash()).didNotInstallNote)
+    }
+
+    /// R18 tells the user once. A launch that crashes before its first save leaves the update quit's header as it was,
+    /// so the next launch reads it again: the launch before has told the user already.
+    @Test func theUserIsToldOnceAcrossACrash() {
+        // The alert: the old version restores, the result is read and removed, and the marker is used up.
+        var first = RestoreFixture.update()
+        first.version = RestoreFixture.from
+        first.installResult = InstallResult(outcome: .failedKeptOld, marker: RestoreFixture.marker)
+        let alerted = decide(first)
+        #expect(alerted.installAlert == .failedKeptOld)
+        #expect(!alerted.didNotInstallNote)
+        var second = first
+        second.marker = nil
+        second.installResult = nil
+        second.consumed = alerted.consumes.reduce(ConsumedMarkers()) { $0.adding($1) }
+        second.attempts = RestoreAttempts(count: 2)
+        let again = decide(second)
+        #expect(again.kind == .restore(.crash))
+        #expect(again.installAlert == nil)
+        #expect(!again.didNotInstallNote)
+        // The note: no marker came, and the launch that said so takes the one the snapshot waits for.
+        var noted = first
+        noted.marker = nil
+        noted.installResult = nil
+        let told = decide(noted)
+        #expect(told.didNotInstallNote)
+        #expect(told.consumes == [RestoreFixture.marker])
+        noted.consumed = told.consumes.reduce(ConsumedMarkers()) { $0.adding($1) }
+        noted.attempts = RestoreAttempts(count: 2)
+        #expect(decide(noted).kind == .restore(.crash))
+        #expect(!decide(noted).didNotInstallNote)
+        // A record that does not read cannot say it was not told: nothing more is said.
+        noted.consumed = nil
+        #expect(!decide(noted).didNotInstallNote)
+    }
+
+    /// The note is shown with what restores: with nothing restored, no tab carries it.
+    @Test func theNoteShowsOnlyWithWhatRestores() {
+        var facts = RestoreFixture.update()
+        facts.marker = nil
+        facts.version = RestoreFixture.from
+        facts.attempts = RestoreAttempts(count: 3)
+        #expect(decide(facts).kind == .safeMode(.crash))
+        #expect(decide(facts).didNotInstallNote)
+        facts.attempts = RestoreAttempts(count: 4)
+        #expect(decide(facts).kind == .quarantine)
+        #expect(!decide(facts).didNotInstallNote)
+        facts.attempts = RestoreAttempts(count: 1)
+        facts.windows = 0
+        #expect(decide(facts).kind == .normal)
+        #expect(!decide(facts).didNotInstallNote)
+    }
+
+    /// The version an update installs is the valid marker's to-version, whatever the header says it was.
+    @Test func theNoteGoesByTheMarkersToVersion() {
+        var facts = RestoreFixture.update()
+        facts.header?.pendingToVersion = "9.9.9"
+        #expect(decide(facts).kind == .restore(.update))
+        #expect(!decide(facts).didNotInstallNote)
+        facts.version = RestoreFixture.from
+        #expect(decide(facts).didNotInstallNote)
+        // Without a valid marker the header's is the one there is.
+        facts.marker = nil
+        facts.version = RestoreFixture.to
+        #expect(decide(facts).didNotInstallNote)
+        facts.version = "9.9.9"
+        #expect(!decide(facts).didNotInstallNote)
     }
 
     @Test func aFailedInstallGivesOneAlertAlongsideWhateverRestoreApplies() {
@@ -569,15 +746,15 @@ enum RestoreFixture {
     }
 
     /// KTD12: the old app opened from its backup names its install path's folder. A release build takes that folder only
-    /// when its app is gone and it holds the result that says so.
+    /// when its app is gone and it holds the result that says so, written at the quit its snapshot was saved at.
     @Test func aBackupOpenArgumentIsAcceptedOnlyUnderItsCheck() {
         let key = "0123456789abcdef0123456789abcdef"
         let app = "/Applications/Next Term.app"
         let stranded = InstallResult(outcome: .failedRestoredBackup, marker: RestoreFixture.marker)
         func accepts(key: String = key, recorded: String? = app, there: Bool = false,
-                     result: InstallResult? = stranded) -> Bool {
-            LaunchDecision.acceptsBackupOpen(key: key, recordedBundlePath: recorded,
-                                             result: result) { (path: String) -> Bool in there && path == app }
+                     result: InstallResult? = stranded, awaiting: UUID? = RestoreFixture.marker) -> Bool {
+            LaunchDecision.acceptsBackupOpen(key: key, recordedBundlePath: recorded, result: result,
+                                             awaitingMarker: awaiting) { (path: String) -> Bool in there && path == app }
         }
         #expect(accepts())
         #expect(!accepts(there: true))
@@ -585,10 +762,18 @@ enum RestoreFixture {
         #expect(!accepts(result: nil))
         #expect(!accepts(result: InstallResult(outcome: .failedKeptOld, marker: RestoreFixture.marker)))
         #expect(!accepts(result: InstallResult(outcome: .installed, marker: RestoreFixture.marker)))
-        #expect(!accepts(result: InstallResult(outcome: .failedRestoredBackup, marker: nil)))
         for bad in ["", "../sessions", key.uppercased(), String(key.dropLast()), key + "0"] {
             #expect(!accepts(key: bad), "\(bad)")
         }
+        // "When I Quit": a normal quit wrote the tombstone and no marker, and the script ran with relaunch off.
+        let quitInstall = InstallResult(outcome: .failedRestoredBackup, marker: nil)
+        #expect(accepts(result: quitInstall, awaiting: nil))
+        #expect(!accepts(there: true, result: quitInstall, awaiting: nil))
+        // A result for another quit than the snapshot's.
+        #expect(!accepts(result: InstallResult(outcome: .failedRestoredBackup, marker: RestoreFixture.other)))
+        #expect(!accepts(result: quitInstall))
+        #expect(!accepts(awaiting: nil))
+        #expect(!accepts(awaiting: RestoreFixture.other))
     }
 }
 
@@ -605,21 +790,22 @@ enum RestoreFixture {
         var generation = 0
 
         /// A launch: the counter rises before anything is read, the marker is claimed, and the restore step decides.
-        /// A quarantine sets the snapshot aside.
+        /// A quarantine sets the snapshot aside, and the counter starts over.
         mutating func launch() -> RestoreDecision {
             attempts = attempts.after(.launch)
             uptime += 5
             let claimed = marker
             marker = nil
             let facts = RestoreFacts(lockTaken: true, marker: claimed, header: header, windows: windows,
-                                     consumed: consumed, attempts: attempts, uptime: uptime,
+                                     consumed: consumed, attempts: attempts, attemptsWritten: true, uptime: uptime,
                                      bootSession: RestoreFixture.boot, version: RestoreFixture.to)
             let decision = LaunchDecision.restoring(facts)
-            if let id = decision.consumes { consumed = consumed.adding(id) }
+            consumed = decision.consumes.reduce(consumed) { $0.adding($1) }
             if decision.kind == .quarantine {
                 header = nil
                 windows = 0
             }
+            if decision.attemptsReset == .afterSetAside { attempts = attempts.after(.setAside) }
             return decision
         }
 
@@ -668,9 +854,10 @@ enum RestoreFixture {
         #expect(folder.launch().kind == .safeMode(.crash))
         let aside = folder.launch()
         #expect(aside.kind == .quarantine)
-        #expect(aside.attemptsReset == .afterLaunch)
-        // The launch after it starts over.
-        folder.settle()
+        #expect(aside.attemptsReset == .afterSetAside)
+        #expect(folder.attempts.count == 0)
+        // That launch saves its own windows and crashes within its first minute: its snapshot was never tried, so the
+        // next launch restores it rather than setting it aside too.
         folder.save()
         #expect(folder.launch().kind == .restore(.crash))
         #expect(folder.attempts.count == 1)
