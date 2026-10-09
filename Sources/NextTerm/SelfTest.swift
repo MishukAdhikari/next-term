@@ -4336,7 +4336,8 @@ enum SelfTest {
             side.setSelectedRange(NSRange(location: 0, length: 0))
             // The line it replaced, selected on the old side: not in the file any more, so its text with the file's path.
             let old = diff.oldSideView, oldText = old.string as NSString
-            old.setSelectedRange(oldText.range(of: "line 2\n"))
+            let removed = oldText.range(of: "line 2\n")
+            if removed.location != NSNotFound { old.setSelectedRange(removed) }
             c.window?.makeFirstResponder(old)
             let fromOld = diff.contextItem()
             check(fromOld == ContextItem(path: file.path, note: "lines removed", code: "line 2", language: fromOld?.language ?? ""),
