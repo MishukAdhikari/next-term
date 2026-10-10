@@ -120,8 +120,10 @@ import Testing
         try ide(home, "Chrome1.2", vendor: "Google")
 
         let found = ImportJetBrains.detect(home: home, applications: [])
-        #expect(found.map(\.name) == ["PhpStorm 2026.1", "Android Studio 2025.3.4", "IntelliJ IDEA 2024.1"])
-        #expect(found.prefix(2).map(\.configPath) == [phpStorm, studio])
+        let names: [String] = ["PhpStorm 2026.1", "Android Studio 2025.3.4", "IntelliJ IDEA 2024.1"]
+        let paths: [String] = [phpStorm, studio]
+        #expect(found.map(\.name) == names)
+        #expect(Array(found.prefix(2)).map(\.configPath) == paths)
         #expect(found.map(\.notUsedLately) == [false, false, true])
         #expect(found.allSatisfy { $0.kind == .jetBrains && $0.preset == .jetBrains })
         let recentProjectsDate = try fm.attributesOfItem(atPath: phpStorm + "/options/recentProjects.xml")[.modificationDate] as? Date
@@ -142,7 +144,8 @@ import Testing
         try ide(home, "GoLand2026.1", usedDaysAgo: 1)
         let withFresh = ImportJetBrains.detect(home: home, applications: [])
         #expect(withFresh.map(\.name) == ["GoLand 2026.1", "IntelliJ IDEA 2024.1", "PhpStorm 2023.1", "IntelliJ IDEA CE 2022.1"])
-        #expect(withFresh.map(\.notUsedLately) == [false, true, true, true])
+        let lately: [Bool] = [false, true, true, true]
+        #expect(withFresh.map(\.notUsedLately) == lately)
     }
 
     @Test func aRecentlyUsedVersionWinsOverAnAbandonedNewerOne() throws {
@@ -639,11 +642,13 @@ import Testing
     @Test func terminalFontSizeIsTheTerminalsOwn() throws {
         let terminal = component("TerminalFontOptions", [("VERSION", "1"), ("FONT_FAMILY", "MesloLGS NF"), ("FONT_SIZE", "15.0")])
         var plan = try self.plan(["options/terminal-font.xml": terminal])
-        #expect(plan.settings == [PlannedSetting(.terminalFontSize(15), source: "options/terminal-font.xml FONT_SIZE 15")])
+        let own: [PlannedSetting] = [PlannedSetting(.terminalFontSize(15), source: "options/terminal-font.xml FONT_SIZE 15")]
+        #expect(plan.settings == own)
         #expect(plan.skipped == [SkippedItem("Terminal font “MesloLGS NF”", "not installed on this Mac")])
 
         plan = try self.plan(["options/terminal-font.xml": terminal, "options/editor-font.xml": component("DefaultFont", [("FONT_SIZE", "14")])])
-        #expect(plan.settings.map(\.setting) == [.fontSize(14), .terminalFontSize(15)])
+        let both: [ImportedSetting] = [.fontSize(14), .terminalFontSize(15)]
+        #expect(plan.settings.map(\.setting) == both)
         #expect(plan.skipped == [SkippedItem("Terminal font “MesloLGS NF”", "not installed on this Mac")])
 
         plan = try self.plan(["options/terminal-font.xml": component("TerminalFontOptions", [("FONT_SIZE", "40")])])
@@ -809,7 +814,8 @@ import Testing
         let config = try ide(home, "PhpStorm2026.1")
         try write(recents(entries), to: config + "/options/recentProjects.xml")
         let plan = ImportJetBrains.plan(for: app(config), home: home, applications: [])
-        #expect(plan.recentProjects == (6...25).reversed().map { home + "/Code/p\($0)" })
+        let newest: [String] = (6...25).reversed().map { home + "/Code/p\($0)" }
+        #expect(plan.recentProjects == newest)
         #expect(plan.skipped == [SkippedItem("5 older recent projects", "only the 20 most recent come over")])
     }
 
@@ -826,7 +832,8 @@ import Testing
         try write(recents([Entry(key: "$USER_HOME$/Code/old", activation: 1)]), to: old + "/options/recentProjects.xml")
         try touch(old + "/options/recentProjects.xml", daysAgo: 400)
         #expect(ImportJetBrains.detect(home: home, applications: []).map(\.name) == ["PhpStorm 2026.1", "WebStorm 2023.1"])
-        #expect(ImportJetBrains.plan(for: app(old), home: home, applications: []).recentProjects == [home + "/Code/new", home + "/Code/old"])
+        let recentPaths: [String] = [home + "/Code/new", home + "/Code/old"]
+        #expect(ImportJetBrains.plan(for: app(old), home: home, applications: []).recentProjects == recentPaths)
     }
 
     @Test func expandingPaths() {

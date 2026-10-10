@@ -50,7 +50,8 @@ import Testing
         let apps = found.map { $0.appPath.map { ($0 as NSString).lastPathComponent } }
         #expect(apps == ["PhpStorm.app", nil, "Android Studio.app", nil, nil])
         #expect(found.map(\.version) == ["2026.1.1", nil, "2025.3.4", nil, nil])
-        #expect(found.map(\.notUsedLately) == [false, false, false, false, true])
+        let stale: [Bool] = [false, false, false, false, true]
+        #expect(found.map(\.notUsedLately) == stale)
         #expect(ImportFixtures.secrets(in: found).isEmpty)
     }
 
@@ -63,7 +64,8 @@ import Testing
         #expect(ImportJetBrains.installedIDE(bundle: home + "/Applications/Acme.app") == nil)
         #expect(ImportJetBrains.installedIDE(bundle: home + "/Applications/Hidden Token.app") == nil)
         let installed = ImportJetBrains.installedIDEs(applications: [home + "/Applications"], home: home)
-        #expect(installed.map(\.name) == ["Android Studio", "PhpStorm"])
+        let installedNames: [String] = ["Android Studio", "PhpStorm"]
+        #expect(installed.map(\.name) == installedNames)
         #expect(ImportFixtures.secrets(in: installed).isEmpty)
     }
 
@@ -94,8 +96,11 @@ import Testing
         defer { remove(home) }
         let found = detect(home)
         #expect(found.count == 5)
-        #expect(found.suffix(2).map(\.name) == ["WebStorm 2024.2", "PhpStorm 2026.1"])
-        #expect(found.suffix(2).map(\.notUsedLately) == [true, true])
+        let last: [DetectedApp] = Array(found.suffix(2))
+        let lastNames: [String] = ["WebStorm 2024.2", "PhpStorm 2026.1"]
+        #expect(last.map(\.name) == lastNames)
+        let allStale = last.allSatisfy { $0.notUsedLately }
+        #expect(allStale)
     }
 
     @Test func planReadsIgnoredFilesAndNeverFollowsASymlinkOut() throws {
@@ -104,8 +109,10 @@ import Testing
         let found = detect(home)
         let phpStorm = try #require(found.first { $0.name == "PhpStorm 2026.1" })
         let plan = plan(phpStorm, home)
-        let hidden = PlannedSetting(.hiddenFiles(["node_modules", "*.log", "vendor"]), source: "options/filetypes.xml ignored files")
-        #expect(plan.settings.contains(hidden))
+        let patterns: [String] = ["node_modules", "*.log", "vendor"]
+        let hidden = PlannedSetting(.hiddenFiles(patterns), source: "options/filetypes.xml ignored files")
+        let hasHidden = plan.settings.contains(hidden)
+        #expect(hasHidden)
         #expect(plan.skipped.contains(SkippedItem("1 ignored file name", "looked like a credential")))
         #expect(plan.skipped.contains(SkippedItem("1 ignored file name", "not a name the sidebar can hide")))
         // The active keymap's file leads out of the settings folder, so it is never read: no shortcut comes over.
@@ -120,12 +127,15 @@ import Testing
         defer { remove(home) }
         let found = detect(home)
         let studio = try #require(found.first { $0.name.hasPrefix("Android Studio") })
-        #expect(plan(studio, home).settings.map(\.setting) == [.terminalFontSize(12)])
+        let studioSettings: [ImportedSetting] = [.terminalFontSize(12)]
+        #expect(plan(studio, home).settings.map(\.setting) == studioSettings)
         let goLand = try #require(found.first { $0.name.hasPrefix("GoLand") })
-        #expect(plan(goLand, home).settings.map(\.setting) == [.fontSize(15)])
+        let goLandSettings: [ImportedSetting] = [.fontSize(15)]
+        #expect(plan(goLand, home).settings.map(\.setting) == goLandSettings)
         let rubyMine = try #require(found.first { $0.name.hasPrefix("RubyMine") })
         let rubyPlan = plan(rubyMine, home)
-        #expect(rubyPlan.settings.map(\.setting) == [.softWrap(true)])
+        let rubySettings: [ImportedSetting] = [.softWrap(true)]
+        #expect(rubyPlan.settings.map(\.setting) == rubySettings)
         let note = SkippedItem("idea.config.path in idea.properties",
                                "uses a variable; only a full path or ${user.home} is read, so the settings here were read")
         #expect(rubyPlan.skipped.contains(note))
@@ -134,9 +144,12 @@ import Testing
     @Test func configPathLines() {
         let home = "/Users/me"
         func setting(_ text: String) -> ImportJetBrains.ConfigPathSetting { ImportJetBrains.configPathSetting(text, home: home) }
-        #expect(setting("idea.config.path=${user.home}/cfg") == .path(canonicalPath("/Users/me/cfg")))
-        #expect(setting("  idea.config.path : /opt/ide/config  ") == .path(canonicalPath("/opt/ide/config")))
-        #expect(setting("idea.config.path /opt/a\nidea.config.path=/opt/b") == .path(canonicalPath("/opt/b")))
+        typealias Setting = ImportJetBrains.ConfigPathSetting
+        let user: Setting = .path(canonicalPath("/Users/me/cfg")), opt: Setting = .path(canonicalPath("/opt/ide/config"))
+        let last: Setting = .path(canonicalPath("/opt/b"))
+        #expect(setting("idea.config.path=${user.home}/cfg") == user)
+        #expect(setting("  idea.config.path : /opt/ide/config  ") == opt)
+        #expect(setting("idea.config.path /opt/a\nidea.config.path=/opt/b") == last)
         #expect(setting("# idea.config.path=/opt/a") == .unset)
         #expect(setting("idea.config.path.extra=/opt/a") == .unset)
         #expect(setting("idea.config.path=") == .unset)

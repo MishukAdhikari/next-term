@@ -72,8 +72,9 @@ import Testing
             return plan()
         }
         let ask = try general(#"<option name="confirmOpenNewProject2" value="-1" /><option name="reopenLastProject" value="true" />"#)
-        #expect(ask.settings.map(\.setting).filter { $0.key == "openProjectsIn" || $0.key == "launchOpens" }
-                == [.launchOpens("lastProjects"), .openProjectsIn("ask")])
+        let chosen: [ImportedSetting] = ask.settings.map(\.setting).filter { $0.key == "openProjectsIn" || $0.key == "launchOpens" }
+        let expected: [ImportedSetting] = [.launchOpens("lastProjects"), .openProjectsIn("ask")]
+        #expect(chosen == expected)
         let attach = try general(#"<option name="confirmOpenNewProject2" value="2" />"#)
         #expect(attach.skipped.contains(SkippedItem("Open project attached to the open one", "Next Term opens a project in a window of its own")))
         let odd = try general(#"<option name="confirmOpenNewProject2" value="7" /><option name="reopenLastProject" value="maybe" />"#)
@@ -112,8 +113,11 @@ import Testing
         #expect(jetBrains["gitCommit:"] == .some(commandK) && jetBrains["gitPush:"] == .some(shiftCommandK))
         #expect(jetBrains["newTab:"] == .some(KeyChord(key: "t", command: true)))
         // ⇧⌘K is Push… alone (Delete Line moved to ⌘⌫); ⌘K is Clear Buffer's in a terminal and Commit…'s elsewhere.
-        #expect(jetBrains.filter { $0.value == shiftCommandK }.map(\.key) == ["gitPush:"])
-        #expect(Set(jetBrains.filter { $0.value == commandK }.map(\.key)) == ["clearBuffer:", "gitCommit:"])
+        let onShiftK: [String] = jetBrains.filter { $0.value == shiftCommandK }.map(\.key)
+        let onK: Set<String> = Set(jetBrains.filter { $0.value == commandK }.map(\.key))
+        let both: Set<String> = ["clearBuffer:", "gitCommit:"]
+        #expect(onShiftK == ["gitPush:"])
+        #expect(onK == both)
         #expect(KeyBindings.canShareKey("clearBuffer:", "gitCommit:") && KeyBindings.canShareKey("newWindow:", "clearBuffer:"))
         #expect(!KeyBindings.canShareKey("clearBuffer:", "splitRight:") && !KeyBindings.canShareKey("gitCommit:", "gitPush:"))
         let titles = ["clearBuffer:": "Clear Buffer", "gitCommit:": "Commit…"]

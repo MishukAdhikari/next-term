@@ -362,14 +362,16 @@ import Testing
     @Test func includesComeAfterGhosttysOwnFiles() throws {
         let later = try plan(files: [xdg: "config-file = local.conf\nfont-size = 10", "/.config/ghostty/local.conf": "font-size = 14",
                                      appSupport: "font-size = 12"])
-        #expect(later.settings.map(\.setting) == [.terminalFontSize(14)])
+        let laterSize: [ImportedSetting] = [.terminalFontSize(14)]
+        #expect(later.settings.map(\.setting) == laterSize)
 
         let breadthFirst = try plan(files: [
             xdg: "config-file = a.conf\nconfig-file = b.conf",
             "/.config/ghostty/a.conf": "config-file = c.conf", "/.config/ghostty/b.conf": "font-size = 15",
             "/.config/ghostty/c.conf": "font-size = 17",
         ])
-        #expect(breadthFirst.settings.map(\.setting) == [.terminalFontSize(17)])
+        let breadthFirstSize: [ImportedSetting] = [.terminalFontSize(17)]
+        #expect(breadthFirst.settings.map(\.setting) == breadthFirstSize)
     }
 
     @Test func includePaths() throws {

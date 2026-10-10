@@ -75,7 +75,8 @@ import Testing
         try makeDatabase(home + "/Library/Application Support/Zed/db/0-preview/db.sqlite", sql: sql)
         let recents = ImportZed.recentProjects(home: home)
         #expect(recents.paths.count == 20 && recents.paths.first == home + "/Code/p24")
-        #expect(recents.skipped == [SkippedItem("5 older recent projects", "only the 20 most recent come over")])
+        let older: [SkippedItem] = [SkippedItem("5 older recent projects", "only the 20 most recent come over")]
+        #expect(recents.skipped == older)
     }
 
     @Test func olderZedKeptPathsAsBincode() throws {
@@ -122,9 +123,11 @@ import Testing
     }
 
     @Test func foldersInTheOrderTheyWereOpened() {
-        #expect(ImportZed.opened(["/a", "/b", "/c"], order: [2, 0, 1]) == ["/b", "/c", "/a"])
-        #expect(ImportZed.opened(["/a", "/b"], order: [0, 0]) == ["/a", "/b"])
-        #expect(ImportZed.opened(["/a", "/b"], order: nil) == ["/a", "/b"])
+        let three: [String] = ["/a", "/b", "/c"], two: [String] = ["/a", "/b"]
+        let reordered: [String] = ["/b", "/c", "/a"]
+        #expect(ImportZed.opened(three, order: [2, 0, 1]) == reordered)
+        #expect(ImportZed.opened(two, order: [0, 0]) == two)
+        #expect(ImportZed.opened(two, order: nil) == two)
     }
 
     // MARK: settings and keys
@@ -135,8 +138,8 @@ import Testing
         let plan = try plan(home)
         let settings: [ImportedSetting] = [.fontSize(14), .terminalFontSize(12), .launchOpens("welcome"), .currentLineBlame(true)]
         #expect(plan.settings.map(\.setting) == settings)
-        #expect(plan.settings.map(\.source) == ["buffer_font_size 14", "terminal.font_size 12", "restore_on_startup none",
-                                                "git.inline_blame.enabled true"])
+        let sources: [String] = ["buffer_font_size 14", "terminal.font_size 12", "restore_on_startup none", "git.inline_blame.enabled true"]
+        #expect(plan.settings.map(\.source) == sources)
         for key in ["terminal.env", "context_servers", "language_models"] {
             #expect(plan.skipped.contains(SkippedItem(key, "never imported: can hold secrets")), "\(key)")
         }
