@@ -26,7 +26,9 @@ extension SelfTest {
         let standIn = home + "/bin/claude"
         try? fm.createDirectory(atPath: project, withIntermediateDirectories: true)
         try? fm.createDirectory(atPath: home + "/bin", withIntermediateDirectories: true)
-        let script = "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \(ShellQuote.quote(resumed))\n"
+        // It runs past the start watch's window, so MCP reads its resume as one (KTD17): an agent that ended within it
+        // reads "ended".
+        let script = "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \(ShellQuote.quote(resumed))\nsleep \(Int(StartWatch.window) + 1)\n"
         let made = fm.createFile(atPath: standIn, contents: Data(script.utf8), attributes: [.posixPermissions: 0o755])
         var opened: [TerminalWindowController] = []
         defer {

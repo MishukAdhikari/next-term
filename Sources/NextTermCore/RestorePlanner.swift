@@ -783,6 +783,17 @@ public struct RestoreNote: Equatable, Sendable {
         return TerminalText.oneLine(why + " \(line) is on the line, not run.")
     }
 
+    /// What MCP says of an automatic resume that ended within its start watch with nothing to fall back from
+    /// (`StartWatch.Verdict.leftAsIs`: status 0, Ctrl-C, a key pressed first, or its shell gone): no agent runs in the tab.
+    /// Nil for any other outcome.
+    public var endedText: String? {
+        guard outcome == .resume, !safeMode else { return nil }
+        let name = agent?.name ?? "an agent"
+        let seconds = Int(StartWatch.window)
+        return TerminalText.oneLine("The resume of \(name) session \(session?.id ?? "") ended within \(seconds) seconds, "
+            + "so no agent runs in this tab now.")
+    }
+
     /// When an action that types happens: once the shell is ready, unless the user types first.
     static let onceReady = "once the shell is ready, unless you type first"
     /// Why an action that types was cancelled.

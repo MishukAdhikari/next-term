@@ -170,13 +170,15 @@ extension MCPServer {
 /// A restored tab's `restored` details, which list_tabs, read_tab and wait_for_tab give (R24): why it came back, what the
 /// restore does or did to it, its state before the restart, whether the restart cut its work off, and a one-line note.
 /// They last until the first command the user or MCP starts in the tab after the restore: the shell's first prompt starts
-/// none, and the restore's own resume is not one of theirs. An automatic resume reads "resume" only once the start watch
-/// settles it (KTD6, KTD17): a start that failed reads as the agent's resume command on the line, with its error.
+/// none, and the restore's own resume is not one of theirs. An automatic resume reads "pending" until the start watch
+/// settles it, and "resume" only once it settled it as resumed (KTD6, KTD17): a start that failed reads as the agent's
+/// resume command on the line, with its error; a new session as "new_session"; one that ended within the watch as
+/// "ended".
 public struct MCPRestored: Equatable, Sendable {
     /// An update, a quit under "Resume where I left off", a crash, or safe mode.
     public var reason: SessionSnapshot.RestoreKind
     /// What the restore does or did to the tab; nil when its action that types was cancelled before it typed anything,
-    /// which MCP gives as "cancelled".
+    /// which MCP gives as "cancelled". MCP reads it with the start watch's verdict (`reading`).
     public var outcome: RestoreOutcome?
     /// The restore's action: pending until the shell is ready, then applied, or cancelled when the user typed first, or
     /// dismissed (a shell not ready in time, Keep As Is).
@@ -229,7 +231,15 @@ public struct MCPRestored: Equatable, Sendable {
         let text: String?
         if let outcome {
             note.outcome = outcome
-            text = pending.state == .pending ? nil : start?.note ?? note.text()
+            if pending.state == .pending {
+                text = nil
+            } else if let said = start?.note {
+                text = said
+            } else if start?.verdict == .leftAsIs {
+                text = note.endedText
+            } else {
+                text = note.text()
+            }
         } else {
             text = note.cancelledText()
         }
@@ -243,16 +253,33 @@ public struct MCPRestored: Equatable, Sendable {
 
     /// What the restore did, as it turned out. An action that types, cancelled because something reached the line before
     /// the shell was ready, typed nothing: no agent resumed and no line waits (nil). An automatic resume stays pending
-    /// until the start watch settles it (`start`, KTD6), and then reads as a resume unless it failed at start, which put
+    /// until the start watch settles it (`start`, KTD6), and then ran its command, unless it failed at start, which put
     /// its plain resume form back on the line. Applied with no verdict, the restore pressed no Return: its session was
     /// taken by another process since, or the user typed over it first, and the agent's resume command is on the line
-    /// instead, unrun. A command that started meanwhile does not make it a resume.
+    /// instead, unrun. A command that started meanwhile does not make it a resume. How the resume it ran turned out is
+    /// MCP's to read (`reading`).
     public static func outcome(planned: RestoreOutcome, action: SessionSnapshot.ActionState,
                                start: StartWatch.Verdict? = nil) -> RestoreOutcome? {
         if action == .cancelled && planned.action.types { return nil }
         guard planned == .resume, action == .applied else { return planned }
         guard let start, start.settled, !start.failed else { return .agentOnTheLine }
         return .resume
+    }
+
+    /// The outcome as MCP reads it (KTD17, R26): `outcome`'s word, or "cancelled" when the restore typed nothing. An
+    /// automatic resume reads "resume" only once its start watch settled it as resumed: "pending" until then, while its
+    /// shell is not ready or the watch runs; "new_session" when its agent started another session; and "ended" when it
+    /// ended within the watch with nothing to fall back from (status 0, Ctrl-C, a key pressed first, its shell gone), as
+    /// no agent runs there then. One that failed at start reads as its resume command on the line.
+    public static func reading(_ outcome: RestoreOutcome?, action: SessionSnapshot.ActionState, start: StartWatch.Verdict?) -> String {
+        guard let outcome else { return "cancelled" }
+        guard outcome == .resume else { return word(outcome) }
+        guard action != .pending else { return "pending" }
+        switch start {
+        case .newSession?: return "new_session"
+        case .leftAsIs?: return "ended"
+        case .resumed?, .watching?, .failedAtStart?, nil: return word(outcome)
+        }
     }
 
     /// Whether they still show, with `commands` started at the tab's prompt since it started. An automatic resume whose
@@ -273,15 +300,17 @@ public struct MCPRestored: Equatable, Sendable {
         return start.lineBack && commandsRun <= 1
     }
 
-    /// As MCP gives them, under "restored".
+    /// As MCP gives them, under "restored". A resume still pending also gives the outcome it plans.
     public var fields: [String: Any] {
+        let read = Self.reading(outcome, action: action, start: start?.verdict)
         var fields: [String: Any] = [
             "reason": Self.word(reason),
-            "outcome": outcome.map(Self.word) ?? "cancelled",
+            "outcome": read,
             "action": action.rawValue,
             "state_before": stateBefore.rawValue,
             "interrupted": interrupted,
         ]
+        if read == "pending", let outcome { fields["planned_outcome"] = Self.word(outcome) }
         if action != .pending, let note { fields["note"] = note }
         if lineHeld { fields["line_held"] = true }
         return fields

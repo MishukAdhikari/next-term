@@ -551,8 +551,10 @@ extension AgentEvidence {
     /// argv's own arguments, or a word typed with arguments that argv ends with. A function typed alone shows neither.
     /// The words typed after it must read alone as they do at the end of argv: an alias ending in an option that takes a
     /// value (`claude --model`) leaves that value to the typed words, which a replay would split. Its own words hold no
-    /// form or one-shot option (`alias cc='claude --continue'`), which a replay would bring back beside the resume form.
-    /// Nil when argv's options are not known, as the launcher replays the last of them.
+    /// form or one-shot option (`alias cc='claude --continue'`), which a replay would bring back beside the resume form,
+    /// and no prompt word or `--` (`alias crd='claude "review my changes"'`, `rv(){ claude "review this" "$@"; }`,
+    /// `alias c='claude --'`), with which a replay would send that prompt again, unseen on the line, or read the resume
+    /// form as a prompt (R8). Nil when argv's options are not known, as the launcher replays the last of them.
     static func launcher(of agent: RestoreAgent, typed: String?, expanded: String?, argv: [String]?,
                          options: [SessionSnapshot.LaunchOption]?) -> SessionSnapshot.Launcher? {
         guard let typed, let argv, options != nil, let last = CommandClassifier.segments(typed).last else { return nil }
@@ -566,10 +568,14 @@ extension AgentEvidence {
             return nil
         }
         let cli = agent.cli
-        let own = cli.read(Array(argv.dropLast(rest.count))).pieces
-        let replays = own.allSatisfy { (piece: AgentCLI.Piece) -> Bool in
-            guard case .known(_, _, let option) = piece else { return true }
-            return option.kind != .form && option.kind != .oneShot
+        let ownWords = Array(argv.dropLast(rest.count))
+        let own = cli.read(ownWords).pieces
+        let replays = !ownWords.contains("--") && own.allSatisfy { (piece: AgentCLI.Piece) -> Bool in
+            switch piece {
+            case .known(_, _, let option): return option.kind != .form && option.kind != .oneShot
+            case .unknown: return true
+            case .word: return false
+            }
         }
         guard replays, own + cli.read(rest).pieces == cli.read(argv).pieces, let typedOptions = agent.launchOptions(in: rest) else {
             return nil
@@ -577,14 +583,18 @@ extension AgentEvidence {
         return SessionSnapshot.Launcher(word: word, typed: typedOptions.count)
     }
 
-    /// The typed line ran the agent as typed (KTD5): its command's first word is the agent's program, with no assignment
-    /// or wrapper before it and no alias in between; or that word is an alias (`launcher`, which passes argv's own
-    /// arguments on) whose expansion changed nothing else of the line and runs the agent's program, with its options,
-    /// first. A function, which the shell expands as itself, shows neither; nor does an alias that sets a variable, wraps
-    /// the agent, or runs anything before it.
+    /// The typed line ran the agent as typed (KTD5): its last command, the one that started the agent as the launcher
+    /// reads it, has the agent's program as its first word, with no assignment or wrapper before it and no alias in
+    /// between; or that word is an alias (`launcher`, which passes argv's own arguments on) whose expansion changed
+    /// nothing else of the line and runs the agent's program, with its options, first. A function, which the shell expands
+    /// as itself, shows neither; nor does an alias that sets a variable, wraps the agent, or runs anything before it; nor
+    /// an earlier command that names the agent and ended before a function started it (`claude --version; cad`).
     static func ranAsTyped(_ agent: RestoreAgent, typed: String?, expanded: String?, launcher: SessionSnapshot.Launcher?) -> Bool {
         guard let typed else { return false }
-        guard let expanded, expanded != typed else { return agent.arguments(inLine: typed)?.plain == true }
+        guard let expanded, expanded != typed else {
+            guard let last = CommandClassifier.segments(typed).last else { return false }
+            return agent.arguments(inLine: last)?.plain == true
+        }
         let before = CommandClassifier.segments(typed)
         let after = CommandClassifier.segments(expanded)
         guard launcher != nil, let last = after.last, before.count == after.count, before.dropLast() == after.dropLast() else {

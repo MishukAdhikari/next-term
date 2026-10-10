@@ -91,6 +91,25 @@ import Testing
         #expect(typed.verdict(at: 100.5) == .leftAsIs)
     }
 
+    /// The tab's writes into its shell since the Return are the user's: one before the end is a key pressed, and the
+    /// fallback after a failed start types only onto a line nothing reached since the Return. A key pressed between the
+    /// end mark and the verdict, which the watch no longer counts, still takes the line, so the plain form is never typed
+    /// onto the user's own.
+    @Test func aWriteSinceTheReturnTakesTheFallbacksLine() {
+        var watch = StartWatch.Watch(session: s, since: 100, writes: 7)
+        watch.wrote(7)
+        watch.ended(status: 1, at: 100.4)
+        watch.wrote(8)
+        #expect(watch.end?.keyPressed == false && watch.verdict(at: 100.45) == .failedAtStart(status: 1))
+        #expect(watch.line.taken(userTyped: false, writes: 8))
+        #expect(!watch.line.taken(userTyped: false, writes: 7))
+        // A write before the end: the user took over, and the tab stays as it is.
+        var typed = StartWatch.Watch(session: s, since: 100, writes: 7)
+        typed.wrote(8)
+        typed.ended(status: 1, at: 100.4)
+        #expect(typed.end?.keyPressed == true && typed.verdict(at: 100.5) == .leftAsIs)
+    }
+
     // MARK: the fallback and its notes
 
     /// Claude's record after `claude --permission-mode bypassPermissions` with exact id S from its session file.

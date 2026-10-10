@@ -255,16 +255,19 @@ import Testing
         let (_, cancelledRecord) = plan(.resume, state: .cancelled)
         let cancelled = MCPRestored(plan: resume, record: cancelledRecord, since: MCPRestored.Since(commands: 1, beforeInput: 0))
         #expect(cancelled == nil)
-        // Still waiting for its shell: pending, input refused, nothing to tell yet.
+        // Still waiting for its shell: pending, input refused, nothing to tell yet. MCP reads it as pending, a resume
+        // planned, never as a resume.
         let (_, waiting) = plan(.resume, state: .pending)
         let pending = try #require(MCPRestored(plan: resume, record: waiting, since: MCPRestored.Since(commands: 0, beforeInput: nil)))
         #expect(pending.outcome == .resume && pending.note == nil && pending.inputRefusal?.contains("being restored") == true)
+        #expect(pending.fields["outcome"] as? String == "pending" && pending.fields["planned_outcome"] as? String == "resume")
     }
 
-    /// R26, KTD17, AE31: an automatic resume reads "resume" only once the start watch settles it. While it watches, the
-    /// action is pending: no note, input refused, and the resume's own command, started, does not end the details. A
-    /// command started before the verdict does not make it a resume. A failed start reads as on the line, with the agent's
-    /// error, its plain resume form held until the user types; a new session, or an agent the user stopped, as a resume.
+    /// R26, KTD17, AE31: an automatic resume reads "resume" only once the start watch settles it as resumed. While it
+    /// watches, the action is pending and MCP reads "pending": no note, input refused, and the resume's own command,
+    /// started, does not end the details. A command started before the verdict does not make it a resume. A failed start
+    /// reads as on the line, with the agent's error, its plain resume form held until the user types; a new session as
+    /// "new_session", and an agent that ended within the watch with nothing to fall back from as "ended".
     @Test func aResumeReadsResumeOnlyAfterTheStartWatch() throws {
         let (resume, record) = plan(.resume)
         let (_, waiting) = plan(.resume, state: .pending)
@@ -275,6 +278,7 @@ import Testing
         // Watching: its command started, and the action waits for the verdict.
         let watching = try #require(details(waiting, 1, StartWatch.Report(verdict: .watching)))
         #expect(watching.action == .pending && watching.fields["action"] as? String == "pending" && watching.note == nil)
+        #expect(watching.fields["outcome"] as? String == "pending" && watching.fields["planned_outcome"] as? String == "resume")
         #expect(watching.fields["note"] == nil && !watching.lineHeld)
         #expect(watching.inputRefusal?.contains("being restored") == true && watching.inputRefusal?.contains("starts") == true)
         // A command started, the action applied, and no verdict: the restore pressed no Return, so that command is not
@@ -283,6 +287,7 @@ import Testing
         // Resumed: still running at 5 s, or its session file named the session.
         let resumed = try #require(details(record, 1, StartWatch.Report(verdict: .resumed)))
         #expect(resumed.outcome == .resume && resumed.note?.hasPrefix("Resumed Claude Code session S.") == true && !resumed.lineHeld)
+        #expect(resumed.fields["outcome"] as? String == "resume" && resumed.fields["planned_outcome"] == nil)
         // Failed at start: on the line, with the agent's error, held until the user types.
         let error = "claude exited at once (status 1): “error: unknown option '--permission-mode'”. The plain resume is back on the line. "
             + "Left off: --permission-mode."
@@ -297,18 +302,37 @@ import Testing
         // A failure with no line put back (the user typed first, or the tab had its fallback): the note alone.
         let noted = try #require(details(record, 1, StartWatch.Report(verdict: .failedAtStart(status: 1), note: "claude exited at once (status 1).")))
         #expect(noted.outcome == .agentOnTheLine && !noted.lineHeld && noted.note == "claude exited at once (status 1).")
-        // A new session: the agent runs, in another session, and the note says so.
+        // A new session: the agent runs, in another session, and the note says so. It is no resume of S.
         let other = "Claude Code started a new session instead of resuming session S."
         let new = try #require(details(record, 1, StartWatch.Report(verdict: .newSession("1f2e3d4c-5b6a-4978-8695-a4b3c2d1e0f9"), note: other)))
-        #expect(new.outcome == .resume && new.note == other && !new.lineHeld)
-        // Stopped by the user, or ended with status 0: it ran, and stays as it is.
-        #expect(details(record, 1, StartWatch.Report(verdict: .leftAsIs))?.outcome == .resume)
-        // The rule alone.
+        #expect(new.fields["outcome"] as? String == "new_session" && new.note == other && !new.lineHeld)
+        // Stopped by the user, ended with status 0, or its shell gone, within the watch: no agent runs, and nothing waits
+        // on the line.
+        let ended = try #require(details(record, 1, StartWatch.Report(verdict: .leftAsIs)))
+        #expect(ended.fields["outcome"] as? String == "ended" && !ended.lineHeld && ended.inputRefusal == nil)
+        #expect(ended.note == "The resume of Claude Code session S ended within 5 seconds, so no agent runs in this tab now.")
+        #expect(ended.fields["note"] as? String == ended.note)
+        // The rule alone: what the restore did, and what MCP reads of it.
         #expect(MCPRestored.outcome(planned: .resume, action: .pending, start: .watching) == .resume)
         #expect(MCPRestored.outcome(planned: .resume, action: .applied, start: .resumed) == .resume)
         #expect(MCPRestored.outcome(planned: .resume, action: .applied, start: .failedAtStart(status: 1)) == .agentOnTheLine)
         #expect(MCPRestored.outcome(planned: .resume, action: .applied, start: .watching) == .agentOnTheLine)
         #expect(MCPRestored.outcome(planned: .resume, action: .applied, start: nil) == .agentOnTheLine)
+        let readings: [(RestoreOutcome?, SessionSnapshot.ActionState, StartWatch.Verdict?, String)] = [
+            (.resume, .pending, nil, "pending"),
+            (.resume, .pending, .watching, "pending"),
+            (.resume, .applied, .resumed, "resume"),
+            (.resume, .applied, .newSession("1f2e3d4c-5b6a-4978-8695-a4b3c2d1e0f9"), "new_session"),
+            (.resume, .applied, .leftAsIs, "ended"),
+            (.agentOnTheLine, .applied, .failedAtStart(status: 1), "agent_on_the_line"),
+            (.agentOnTheLine, .applied, nil, "agent_on_the_line"),
+            (.commandOnTheLine, .pending, nil, "command_on_the_line"),
+            (nil, .cancelled, nil, "cancelled"),
+        ]
+        for (outcome, action, start, word) in readings {
+            let read = MCPRestored.reading(outcome, action: action, start: start)
+            #expect(read == word, "\(String(describing: outcome)) \(action) \(String(describing: start)): \(read)")
+        }
         // Its own command counts: the next one ends the details, whatever the verdict.
         #expect(details(waiting, 2, StartWatch.Report(verdict: .watching)) == nil)
         #expect(details(record, 2, StartWatch.Report(verdict: .resumed)) == nil)

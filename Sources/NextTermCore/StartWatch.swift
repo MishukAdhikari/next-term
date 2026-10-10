@@ -86,21 +86,34 @@ public enum StartWatch {
         public let session: String?
         /// When the Return went, on the clock the times given are on.
         public let since: TimeInterval
+        /// The tab's writes into its shell when the Return went, as the app counts them: any after them are the user's.
+        public let writes: Int
         public private(set) var end: End?
         /// The id the agent's session file named when last read, before the end.
         public private(set) var sessionFile: String?
         /// Something reached the tab from the user since the Return, before the end.
         public private(set) var keyPressed = false
 
-        public init(session: String?, since: TimeInterval) {
+        public init(session: String?, since: TimeInterval, writes: Int = 0) {
             self.session = session
             self.since = since
+            self.writes = writes
         }
 
         /// The user put something in the tab: a key, a paste, a drop.
         public mutating func key() {
             if end == nil { keyPressed = true }
         }
+
+        /// The tab's writes into its shell now: any since the Return, before the end, are a key pressed.
+        public mutating func wrote(_ count: Int) {
+            if count != writes { key() }
+        }
+
+        /// The line a failed start's fallback types onto: the restore's while nothing was written into the shell since
+        /// the Return. A failed start had no write before its end, so one since, even between the end mark and the verdict
+        /// (which `key` no longer counts), is the user's, and the fallback types nothing onto it.
+        public var line: RestoreLayout.LineWatch { RestoreLayout.LineWatch(writes: writes) }
 
         /// The shell's end mark came, at `now`. Only the first counts.
         public mutating func ended(status: Int32, at now: TimeInterval) {

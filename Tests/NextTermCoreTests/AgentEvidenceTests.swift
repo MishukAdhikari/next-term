@@ -672,6 +672,28 @@ import Testing
         #expect(unclear.launcher == Launcher(word: "cad", typed: 1))
     }
 
+    /// R8, KTD7: a launcher whose own words hold a prompt word, or end the options with `--`, is not replayed: Return on
+    /// its replay would send that prompt again, unseen on the line, or make the resume form a prompt. The line is rebuilt
+    /// from argv instead, without the prompt, and the launch did not run as typed.
+    @Test func aLauncherThatHoldsAPromptIsNotReplayed() throws {
+        let home = try makeHome().home
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        func line(_ argv: [String], typed: String, expanded: String? = nil) throws -> String? {
+            let evidence = try #require(capture(try process(argv), typed: typed, expanded: expanded, home: home))
+            #expect(evidence.launcher == nil && !evidence.ranAsTyped, "\(typed)")
+            return evidence.putBack(id: uuid)?.line
+        }
+        // alias crd='claude --dangerously-skip-permissions "review my changes"', typed alone.
+        let review = ["claude", "--dangerously-skip-permissions", "review my changes"]
+        #expect(try line(review, typed: "crd", expanded: "claude --dangerously-skip-permissions \"review my changes\"")
+                == "claude --dangerously-skip-permissions --resume \(uuid)")
+        // rv(){ claude "review this" "$@"; }, typed with options: the shell sends no expansion for a function.
+        #expect(try line(["claude", "review this", "--model", "opus"], typed: "rv --model opus") == "claude --model opus --resume \(uuid)")
+        // alias c='claude --', typed alone or with a prompt: a replay would read the resume form as a prompt.
+        #expect(try line(["claude", "--"], typed: "c", expanded: "claude --") == "claude --resume \(uuid)")
+        #expect(try line(["claude", "--", "fix it"], typed: "c 'fix it'", expanded: "claude -- 'fix it'") == "claude --resume \(uuid)")
+    }
+
     /// KTD5, AE23, AE25, AE26: the permission options the nonce-verified typed line shows, or its alias expansion; a
     /// function's own options show on neither.
     @Test func thePermissionOptionsTheTypedOrExpandedLineShowsAreConfirmed() throws {
@@ -696,6 +718,11 @@ import Testing
                                          typed: "codex --yolo -a never --model o3", home: home))
         #expect(codex.confirmed.map(\.words) == [["--yolo"], ["-a", "never"]])
         #expect(try confirmed(danger, typed: nil) == [])
+        // Only the line's last command started the agent, as the launcher reads it: an earlier command that names the
+        // agent ran and ended before it, and confirms nothing a function after it started.
+        #expect(try confirmed(danger, typed: "claude --dangerously-skip-permissions --version; cad") == [])
+        #expect(try confirmed(danger, typed: "cl", expanded: "claude --dangerously-skip-permissions --version && cad") == [])
+        #expect(try confirmed(danger, typed: "cd ~/app && claude --dangerously-skip-permissions") == [["--dangerously-skip-permissions"]])
     }
 
     /// U2, KTD20: the version, for notes only, when the path the agent was installed at names it. No process runs.
@@ -758,6 +785,9 @@ import Testing
         #expect(try !ran("cl", expanded: "claude --dangerously-skip-permissions"))
         #expect(try !ran("FOO=1 cad", expanded: "FOO=1 claude --dangerously-skip-permissions", argv: danger))
         #expect(try !ran("cd ~/app && cad", expanded: "cd ~/work && claude --dangerously-skip-permissions", argv: danger))
+        // The line's last command started the agent: an earlier one that names it ran and ended before a function did.
+        #expect(try !ran("claude --version; cad", argv: ["claude", "--model", "opus"]))
+        #expect(try !ran("claude --dangerously-skip-permissions --version && cad", argv: danger))
         // Another config folder given on the line: on the line, whatever its session file says.
         let (project, start) = (home + "/Code/app", try ownStart())
         try write(json(["pid": Int(getpid()), "sessionId": uuid, "cwd": project, "procStart": AgentEvidence.procStartText(start)]),

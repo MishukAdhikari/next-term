@@ -138,8 +138,10 @@ extension SelfTestRestore {
         let new = Array(standInRuns(harness).dropFirst(before.count))
         check(resumed && new == ["--resume \(id)"] && tab.status.running,
               "AE17: the stand-in Claude Code resumes its session once its shell is ready, and once", "runs since the launch \(new)")
+        // MCP reads "pending" until the start watch settles the resume, and "resume" once the stand-in still runs at its end.
+        _ = await SelfTest.wait(StartWatch.window + 3) { MCPRestoredTabs.details(tab)?.fields["outcome"] as? String == "resume" }
         let outcome = MCPRestoredTabs.details(tab)?.fields["outcome"] as? String
-        check(outcome == "resume", "AE17: MCP says the tab resumed", outcome ?? "no details")
+        check(outcome == "resume", "AE17: MCP says the tab resumed once its start watch settled", outcome ?? "no details")
 
         // AE18's given: the same Claude tab, under Resume, with "Ask whether to resume when quitting" off. The resumed
         // stand-in names its session in its own file, as Claude Code does. One the gate kept from resuming waits on the

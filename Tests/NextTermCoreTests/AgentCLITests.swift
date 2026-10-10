@@ -147,9 +147,15 @@ import Testing
     }
 
     @Test func everyEntryIsCheckedAndOnlyItsOwnOptionsAreHidden() {
+        // A date as the release check prints it (`date +%Y-%m-%d`), so a release that sets it from that output passes.
+        let format = DateFormatter()
+        format.locale = Locale(identifier: "en_US_POSIX")
+        format.timeZone = TimeZone(identifier: "UTC")
+        format.dateFormat = "yyyy-MM-dd"
         for agent in RestoreAgent.allCases where agent != .unknown {
             let cli = agent.cli
-            #expect(cli.checked.date.hasPrefix("2026-10-1"), "\(agent)")
+            let date = format.date(from: cli.checked.date)
+            #expect(date.map(format.string(from:)) == cli.checked.date, "\(agent): \(cli.checked.date)")
             #expect(cli.checked.version.map { !$0.isEmpty } ?? true, "\(agent)")
             #expect(cli.hidden.isSubset(of: Set(cli.options.keys)), "\(agent)")
         }
@@ -358,29 +364,46 @@ import Testing
                 }
             }
             if !takesMore, pick(5) == 0 { arguments += ["--", prompt(), "--zq9"] }
-            // Typed as the agent itself, or through an alias that holds some of the agent's own options.
+            // Typed as the agent itself, or through an alias (`ag`, whose expansion the shell sends) or a function (`fn`,
+            // whose own words nothing shows) that holds some of the agent's own options, and now and then a prompt word of
+            // its own or an end of options (`--`). Either passes the words typed after it on.
             let own: [String] = names.filter { (name: String) -> Bool in
                 guard let option = cli.options[name] else { return false }
                 return option.values == .none && (option.kind == .plain || option.kind == .permission)
             }
-            let aliasOptions: [String] = pick(2) == 0 ? [] : Array(own.prefix(2))
-            let argv = [program] + aliasOptions + arguments
+            let launcher = ["", "ag", "fn"][pick(3)]
+            var ownWords: [String] = launcher.isEmpty ? [] : Array(own.prefix(pick(3)))
+            if !launcher.isEmpty, pick(3) == 0 { ownWords.append(prompt()) }
+            if !launcher.isEmpty, pick(4) == 0 { ownWords.append("--") }
+            let holdsPrompt = ownWords.contains("--") || ownWords.contains { $0.hasPrefix("Xyzzy") }
+            let argv = [program] + ownWords + arguments
             let rest = arguments.map(typed).joined(separator: " ")
-            let line = aliasOptions.isEmpty ? program + " " + rest : "ag " + rest
-            let expanded = aliasOptions.isEmpty ? nil : ([program] + aliasOptions).joined(separator: " ") + " " + rest
+            let body = ([program] + ownWords.map(typed)).joined(separator: " ")
+            let line = (launcher.isEmpty ? program : launcher) + " " + rest
+            let expanded = launcher == "ag" ? body + " " + rest : nil
             let leader = AgentProcess(pid: 7, startedAt: Date(timeIntervalSince1970: 1_790_000_000), executable: "/opt/homebrew/bin/" + program,
                                       arguments: argv)
             let input = AgentEvidence.Capture(leader: leader, verified: true, typedLine: line, expandedLine: expanded, home: "/Users/x")
             var evidence = try #require(AgentEvidence.capture(input), "\(argv)")
             #expect(evidence.agent == agent, "\(argv)")
+            // A launcher whose own words hold a prompt word or `--` is never replayed, and did not run as typed.
+            if holdsPrompt { #expect(evidence.launcher == nil && !evidence.ranAsTyped, "\(line) for \(argv)") }
             evidence.sessionID = id
             evidence.source = agent.fileSource ?? .typedAndArgv
             evidence.sessionFolder = "/Users/x/app"
             let put = try #require(evidence.putBack(id: id, folder: "/Users/x/app"), "\(argv)")
             let command = evidence.resumeCommand
-            for text in [put.line, command ?? ""] + put.leftOff {
+            // The line as the shell runs it: a launcher replayed runs its own words first.
+            let replayed = !launcher.isEmpty && (put.line == launcher || put.line.hasPrefix(launcher + " "))
+            let ran = replayed ? body + put.line.dropFirst(launcher.count) : put.line
+            for text in [ran, command ?? ""] + put.leftOff {
                 #expect(!text.contains("Xyzzy"), "\(argv) gave \(text)")
                 #expect(SessionSnapshot.Command.problem(with: text) == nil, "\(text)")
+            }
+            // It resumes the session it names: its resume form reads back as forms, never as a prompt after `--`.
+            if put.namesSession {
+                let words = AgentKind.words(ran)
+                #expect(cli.read(Array(words.dropFirst())).session == id, "\(argv) gave \(ran)")
             }
             built.lines += 1
             if evidence.launcher != nil { built.replayed += 1 }
@@ -433,6 +456,53 @@ import Testing
                 #expect(RestoreAgent(program: program) == agent, "\(agent) \(program)")
                 if let kind = agent.kind { #expect(AgentKind(program: program) == kind, "\(agent) \(program)") }
             }
+        }
+    }
+
+    /// The paste dialect each program gets (AgentPrompt) is the same for every name the table runs its agent by, so a name
+    /// the table adds is not pasted to as another program.
+    @Test func thePasteDialectIsTheSameForEveryNameOfAnAgent() {
+        let expected: [RestoreAgent: AgentDialect] = [.claude: .atHash, .opencode: .atHash, .copilot: .atColon, .gemini: .atProse,
+                                                      .qwen: .atProse]
+        for agent in RestoreAgent.allCases {
+            let dialects: [AgentDialect] = agent.cli.programs.map(AgentDialect.forProgram)
+            #expect(Set(dialects).count <= 1, "\(agent): \(dialects)")
+            #expect(dialects.allSatisfy { $0 == expected[agent] ?? .plain }, "\(agent): \(dialects)")
+        }
+    }
+
+    /// The commit message agents run as their agent's program, by its name, and only ever once: their arguments read with
+    /// the table as a one-shot run, never as a launch a restore would keep or resume.
+    @Test func theCommitMessageAgentsRunTheirAgentOnce() throws {
+        for known in CommitMessageAgent.known {
+            let agent = try #require(RestoreAgent(program: known.program), "\(known.program)")
+            #expect(agent.program == known.program && agent.name == known.name, "\(known.program)")
+            let arguments = known.arguments(prompt: "Xyzzy write it", answerFile: "/Users/x/answer")
+            let pieces = agent.cli.read(arguments).pieces
+            let once = pieces.contains { (piece: AgentCLI.Piece) -> Bool in
+                guard case .known(_, _, let option) = piece else { return false }
+                return option.kind == .oneShot
+            }
+            #expect(once, "\(known.program): \(Self.describe(agent.cli.read(arguments)))")
+        }
+    }
+
+    /// Suggest a Command's agents run as their agent's program, by its name, and only ever once; the agents it leaves
+    /// out are named as the table names them.
+    @Test func theCommandSuggestionAgentsRunTheirAgentOnce() throws {
+        for adapter in CommandSuggestion.adapters {
+            let agent = try #require(RestoreAgent(program: adapter.program), "\(adapter.program)")
+            #expect(agent.program == adapter.program && agent.name == adapter.name, "\(adapter.program)")
+            let reading = agent.cli.read(adapter.arguments)
+            let once = reading.pieces.contains { (piece: AgentCLI.Piece) -> Bool in
+                guard case .known(_, _, let option) = piece else { return false }
+                return option.kind == .oneShot
+            }
+            #expect(once && reading.session == nil, "\(adapter.program): \(Self.describe(reading))")
+        }
+        let names = Set(RestoreAgent.allCases.map(\.name))
+        for (name, _) in CommandSuggestion.leftOut {
+            #expect(names.contains(name), "\(name)")
         }
     }
 

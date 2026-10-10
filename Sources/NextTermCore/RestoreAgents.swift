@@ -281,34 +281,39 @@ extension SessionSnapshot.Agent {
         return SessionSnapshot.LaunchOption.kept(options)
     }
 
-    /// The permission options a typed line, or an alias's expansion, shows for this agent (KTD5). None when the line
-    /// does not run it, or its options cannot be kept whole.
+    /// The permission options a typed line, or an alias's expansion, shows for this agent (KTD5): in its last command,
+    /// the one that started the agent, as the launcher and the typed-line check read it. An earlier command that names the
+    /// agent ran and ended before it (`claude --dangerously-skip-permissions --version; cad`), and confirms nothing. None
+    /// when that command does not run the agent, or its options cannot be kept whole.
     public func confirmedOptions(inLine line: String) -> [SessionSnapshot.LaunchOption] {
-        guard let run = arguments(inLine: line), let options = launchOptions(in: run.arguments) else { return [] }
+        guard let last = CommandClassifier.segments(line).last, let run = arguments(inLine: last),
+              let options = launchOptions(in: run.arguments) else { return [] }
         return options.filter { cli.options[$0.name]?.kind == .permission }
     }
 
     /// `options` (argv's, as a record keeps them) read with the running build's table (KTD20): what a put-back line
     /// keeps, what an automatic resume carries, and what is left off. A form or a one-shot option is dropped. An option
     /// whose value capture could not tell from a prompt word is left off and named, unless the table now knows it takes
-    /// none. `confirmed` holds the permission options the nonce-verified typed or alias-expanded line showed: a permission
+    /// none. A word capture's table read as an option's value, which this table reads as no value of it, is a prompt word
+    /// now (R8): the line keeps only the words the option takes, and an option this table no longer knows is left off with
+    /// it. `confirmed` holds the permission options the nonce-verified typed or alias-expanded line showed: a permission
     /// option is carried only when argv and that line both show it, as a process can rewrite its own argv (KTD5).
     public func reading(_ options: [SessionSnapshot.LaunchOption], confirmed: [SessionSnapshot.LaunchOption]) -> LaunchReading {
         var reading = LaunchReading()
         var shown: [[String]] = confirmed.filter { cli.options[$0.name]?.kind == .permission }.map(\.words)
         for option in options {
             let read = cli.read(option.words)
-            guard let first = read.pieces.first else { continue }
+            guard let first = read.pieces.first, let given = read.given.first else { continue }
+            // Its words read as this option and its values alone, as capture's table read them.
+            let whole = read.pieces.count == 1
             switch first {
             case .known(let name, let values, let known):
                 if known.kind == .form || known.kind == .oneShot { continue }
-                // Its words read as this option and its values alone, as capture's table read them.
-                let whole = read.pieces.count == 1
                 if option.unclear, known.values != .none || !whole {
                     reading.leaveOff(name)
                     continue
                 }
-                reading.line += option.words
+                reading.line += given
                 guard whole, known.carries(values) else {
                     reading.allowed = false
                     continue
@@ -327,7 +332,7 @@ extension SessionSnapshot.Agent {
                     reading.allowed = false
                 }
             case .unknown(let name, _):
-                if option.unclear {
+                if option.unclear || !whole {
                     reading.leaveOff(name)
                 } else {
                     reading.line += option.words

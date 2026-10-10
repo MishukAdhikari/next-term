@@ -252,8 +252,6 @@ final class StartWatcher {
     private var started = false
     /// The first row of its output, scroll-invariant.
     private var outputRow: Int?
-    /// The tab's writes into its shell when the watch began: any after them are the user's.
-    private var writes = 0
     /// The agent's error, read at the end mark.
     private var error: String?
     private var lastRead: TimeInterval = -.infinity
@@ -287,8 +285,8 @@ final class StartWatcher {
     /// The Return went: the watch starts now.
     func begin() {
         guard let tab else { return finish(StartWatch.Report(verdict: .leftAsIs)) }
-        watch = StartWatch.Watch(session: start.session, since: TerminalTab.now)
-        writes = tab.view.inputWrites
+        // The tab's writes into its shell from here are the user's.
+        watch = StartWatch.Watch(session: start.session, since: TerminalTab.now, writes: tab.view.inputWrites)
         let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] (timer: Timer) in
             MainActor.assumeIsolated {
                 guard let self else { return timer.invalidate() }
@@ -340,7 +338,7 @@ final class StartWatcher {
                 return
             }
             guard started, var watch, watch.end == nil else { return }
-            if tab.view.inputWrites != writes { watch.key() }
+            watch.wrote(tab.view.inputWrites)
             watch.ended(status: status, at: TerminalTab.now)
             self.watch = watch
             error = StartWatch.error(in: printed(tab))
@@ -356,7 +354,7 @@ final class StartWatcher {
         // The shell ended under it: nothing to fall back to.
         guard !tab.exited else { return finish(StartWatch.Report(verdict: .leftAsIs)) }
         guard var watch else { return }
-        if tab.view.inputWrites != writes { watch.key() }
+        watch.wrote(tab.view.inputWrites)
         if watch.end == nil, start.agent.fileSource != nil, now - lastRead >= StartWatch.fileInterval {
             lastRead = now
             watch.read(sessionFile: sessionFile(tab))
@@ -374,7 +372,8 @@ final class StartWatcher {
             heldNote = note
             finish(StartWatch.Report(verdict: verdict, note: note), keepingMarks: true)
         default:
-            after = (verdict, step, now, RestoreLayout.LineWatch(writes: tab.view.inputWrites))
+            // The line as it stood at the Return: a key pressed after the end mark, before this tick, takes it.
+            after = (verdict, step, now, watch.line)
         }
     }
 

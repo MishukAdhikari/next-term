@@ -279,6 +279,24 @@ import Testing
         #expect(valued.putBack(id: uuid) == PutBack(line: "claude --resume \(uuid)", namesSession: true, leftOff: ["--model"]))
     }
 
+    /// R8, KTD20: the build that restores reads a record with its own table. A word capture's table read as an option's
+    /// value, which this table reads as no value of it, is a prompt word now: it never reaches the line, and nothing runs
+    /// by itself. An option this table no longer knows, kept with a word after it, is left off with that word, and named.
+    @Test func wordsAnOptionNoLongerTakesNeverReachALine() {
+        let fewer = launch(.claude, [["--model", "opus", "Xyzzy fix the tests"]])
+        #expect(fewer.putBack(id: uuid) == PutBack(line: "claude --model opus --resume \(uuid)", namesSession: true, leftOff: []))
+        #expect(!fewer.launch.allowed)
+        let none = launch(.claude, [["--verbose", "Xyzzy fix the tests"], ["--dangerously-skip-permissions"]])
+        #expect(none.putBack(id: uuid)?.line == "claude --verbose --dangerously-skip-permissions --resume \(uuid)")
+        let gone = launch(.claude, [["--zq1", "Xyzzy fix the tests"], ["--model", "opus"]])
+        #expect(gone.putBack(id: uuid) == PutBack(line: "claude --model opus --resume \(uuid)", namesSession: true, leftOff: ["--zq1"]))
+        #expect(!gone.launch.allowed)
+        // A launcher brings its own back: only what was typed after it is read.
+        let replayed = launch(.claude, [["--dangerously-skip-permissions"], ["--model", "opus", "Xyzzy fix"]],
+                              launcher: Launcher(word: "cad", typed: 1))
+        #expect(replayed.putBack(id: uuid)?.line == "cad --model opus --resume \(uuid)")
+    }
+
     /// R8: a form, a one-shot option or an old resume form never reaches a line, whatever the record holds, as the table
     /// of the build that restores reads it again.
     @Test func formsAndOneShotOptionsNeverReachALine() {
