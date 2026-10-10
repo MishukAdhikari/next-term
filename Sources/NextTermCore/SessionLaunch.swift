@@ -26,6 +26,51 @@ public enum SessionLaunch {
         }
     }
 
+    /// The sessions folder in `parent` this launch takes, its lock held (KTD12):
+    /// - none for a translocated copy (`isTranslocated`), which runs from a new random path each launch, so nothing it
+    ///   saved would ever be read or removed;
+    /// - the folder the install script names with `InstallScript.folderKeyArgument` when it opens the old app from its
+    ///   backup, once `LaunchDecision.acceptsBackupOpen` takes it: a folder there already, whose app is gone, holding the
+    ///   result that says so for the marker its snapshot waits for. Its result stays for `read`;
+    /// - else the app's own, made when it is not there.
+    /// Nil when another Next Term holds the folder, or it cannot be made private. `exists` is for the tests.
+    public static func takeFolder(in parent: URL, bundlePath: String, arguments: [String],
+                                  exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> SessionFiles? {
+        guard !isTranslocated(bundlePath: bundlePath) else { return nil }
+        if let key = backupKey(in: arguments), let files = backupFolder(in: parent, key: key, exists: exists) { return files }
+        guard let files = try? SessionFiles.open(in: parent, bundlePath: bundlePath), files.lock() else { return nil }
+        return files
+    }
+
+    /// Whether the app at `bundlePath` runs from a translocated copy, which the next launch will not find again.
+    public static func isTranslocated(bundlePath: String) -> Bool {
+        bundlePath.contains("/AppTranslocation/")
+    }
+
+    /// The folder key the install script passed, or nil when it passed none.
+    static func backupKey(in arguments: [String]) -> String? {
+        guard let index = arguments.firstIndex(of: InstallScript.folderKeyArgument), index + 1 < arguments.count else { return nil }
+        return arguments[index + 1]
+    }
+
+    /// The folder `key` names, locked, when the backup-open check takes it; otherwise it is left as it was. A key never
+    /// makes a folder.
+    private static func backupFolder(in parent: URL, key: String, exists: (String) -> Bool) -> SessionFiles? {
+        guard SessionFiles.isKey(key) else { return nil }
+        let url = parent.appendingPathComponent(SessionFiles.folderName(key: key), isDirectory: true)
+        guard PrivateFolder.isPrivate(url.path), let files = try? SessionFiles.open(in: parent, key: key), files.lock() else { return nil }
+        let data: Data? = (try? files.read(InstallResult.fileName, maxSize: InstallResult.maxSize)) ?? nil
+        let result: InstallResult? = data.flatMap(InstallResult.parse)
+        let awaiting: UUID? = SessionWriter.load(from: files)?.header.awaitingMarker
+        let recorded = SessionFiles.recordedBundlePath(in: files.url)
+        guard LaunchDecision.acceptsBackupOpen(key: key, recordedBundlePath: recorded, result: result, awaitingMarker: awaiting,
+                                               exists: exists) else {
+            files.unlock()
+            return nil
+        }
+        return files
+    }
+
     /// The facts the restore step decides on, read from `files`, whose lock this process holds. `resumesAtLaunch`:
     /// Settings › General's "At launch" reads "Resume where I left off".
     public static func read(_ files: SessionFiles, version: String, resumesAtLaunch: Bool,

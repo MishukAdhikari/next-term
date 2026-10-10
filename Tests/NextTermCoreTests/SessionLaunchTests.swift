@@ -226,4 +226,129 @@ import Testing
         try files.replace(RestoreAttempts.fileName, with: Data("x".utf8))
         #expect(SessionLaunch.count(.tryAgain, in: files) == RestoreAttempts.unread.after(.tryAgain))
     }
+
+    // MARK: the folder a launch takes
+
+    static let app = "/Users/x/Applications/Next Term.app"
+    static let backup = "/Users/x/Applications/.next-term-backup.Ab12Cd/Next Term.app"
+    static let stranded = InstallResult(outcome: .failedRestoredBackup, marker: RestoreFixture.marker)
+
+    func makeParent() throws -> URL {
+        let path = canonicalPath(FileManager.default.temporaryDirectory.path) + "/nt-launch-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: false)
+        return URL(fileURLWithPath: path)
+    }
+
+    /// The update quit's folder for the app at `app`, as the install script leaves it when neither app could go back in:
+    /// the snapshot waiting for the fixture's marker, `result`, and the lock let go. Its key.
+    func strand(in parent: URL, app: String = Self.app, result: InstallResult? = Self.stranded) throws -> String {
+        let files = try SessionFiles.open(in: parent, bundlePath: app)
+        #expect(files.lock())
+        try files.replace(SessionSnapshot.fileName(), with: try updateSnapshot().encoded())
+        if let result { try files.replace(InstallResult.fileName, with: Data(result.json.utf8)) }
+        files.unlock()
+        return files.key
+    }
+
+    func take(_ parent: URL, bundlePath: String = Self.backup, arguments: [String], appThere: Bool = false) -> SessionFiles? {
+        SessionLaunch.takeFolder(in: parent, bundlePath: bundlePath, arguments: arguments) { (_: String) -> Bool in appThere }
+    }
+
+    /// Takes the lock just after its holder let it go: a process another test starts meanwhile holds a copy of it a
+    /// moment (SessionFilesTests.lockOnceFree). False when it stays held for a second.
+    func lockSoon(_ files: SessionFiles) -> Bool {
+        for _ in 0..<100 {
+            if files.lock() { return true }
+            usleep(10_000)
+        }
+        return false
+    }
+
+    func keyArguments(_ key: String) -> [String] {
+        [Self.backup + "/Contents/MacOS/Next Term", InstallScript.folderKeyArgument, key]
+    }
+
+    /// KTD12: the old app the install script opens from its backup takes the folder the script names by its key, when
+    /// that folder's app is gone and it holds the result saying so for the marker its snapshot waits for. The result
+    /// stays for the read that follows, which gives the one alert, and the folder keeps the install path as its app's.
+    @Test func theOldAppOpenedFromItsBackupTakesTheFolderItsKeyNames() throws {
+        let parent = try makeParent()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let key = try strand(in: parent)
+        // Tried again while the folder's lock looks held, as `lockSoon` does.
+        var tried: SessionFiles?
+        for _ in 0..<100 where tried?.key != key {
+            tried?.unlock()
+            tried = take(parent, arguments: keyArguments(key))
+            if tried?.key != key { usleep(10_000) }
+        }
+        let taken = try #require(tried)
+        #expect(taken.key == key && taken.isOwner)
+        #expect(SessionFiles.recordedBundlePath(in: taken.url) == canonicalPath(Self.app))
+        let found = read(taken)
+        #expect(found.facts.installResult == Self.stranded)
+        #expect(found.facts.header?.awaitingMarker == RestoreFixture.marker)
+        // No folder was made for the backup's own path.
+        let folders = try FileManager.default.contentsOfDirectory(atPath: parent.path)
+        #expect(folders == [SessionFiles.folderName(key: key)])
+    }
+
+    /// Any other use of the argument is ignored, and the app takes its own folder, leaving the named one as it was.
+    @Test func aFolderKeyIsIgnoredUnlessItsCheckPasses() throws {
+        let own = SessionFiles.key(forBundlePath: Self.backup)
+        let cases: [(String, InstallResult?, Bool, (String) -> [String])] = [
+            ("its app is there", Self.stranded, true, keyArguments),
+            ("no result", nil, false, keyArguments),
+            ("the old app was kept", InstallResult(outcome: .failedKeptOld, marker: RestoreFixture.marker), false, keyArguments),
+            ("installed", InstallResult(outcome: .installed, marker: RestoreFixture.marker), false, keyArguments),
+            ("a result for another quit", InstallResult(outcome: .failedRestoredBackup, marker: RestoreFixture.other), false,
+             keyArguments),
+            ("no key after the argument", Self.stranded, false, { (_: String) -> [String] in [Self.backup, InstallScript.folderKeyArgument] }),
+            ("not a key", Self.stranded, false, { (_: String) -> [String] in [Self.backup, InstallScript.folderKeyArgument, "../x"] }),
+            ("no argument", Self.stranded, false, { (_: String) -> [String] in [Self.backup] }),
+        ]
+        for (name, result, appThere, arguments) in cases {
+            let parent = try makeParent()
+            defer { try? FileManager.default.removeItem(at: parent) }
+            let key = try strand(in: parent, result: result)
+            let taken = take(parent, arguments: arguments(key), appThere: appThere)
+            #expect(taken?.key == own && taken?.isOwner == true, "\(name)")
+            let left = try SessionFiles.open(in: parent, key: key)
+            #expect(lockSoon(left), "\(name)")
+            let data: Data? = (try? left.read(InstallResult.fileName, maxSize: InstallResult.maxSize)) ?? nil
+            #expect(data.flatMap(InstallResult.parse) == result, "\(name): the named folder is left as it was")
+        }
+    }
+
+    /// A key that names no folder makes none, and a folder another Next Term holds is not taken from it.
+    @Test func aFolderKeyNeverMakesAFolderOrTakesAHeldOne() throws {
+        let parent = try makeParent()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let missing = SessionFiles.key(forBundlePath: "/Users/x/Gone/Next Term.app")
+        let own = try #require(take(parent, arguments: keyArguments(missing)))
+        #expect(own.key == SessionFiles.key(forBundlePath: Self.backup))
+        own.unlock()
+        #expect(!FileManager.default.fileExists(atPath: parent.appendingPathComponent(SessionFiles.folderName(key: missing)).path))
+        let key = try strand(in: parent)
+        let holder = try SessionFiles.open(in: parent, key: key)
+        #expect(lockSoon(holder))
+        let taken = take(parent, arguments: keyArguments(key))
+        #expect(taken?.key == SessionFiles.key(forBundlePath: Self.backup))
+        #expect(holder.isOwner)
+    }
+
+    /// A translocated copy runs from a new random path each launch, so a folder it made would never be read or removed:
+    /// it takes none, and makes none.
+    @Test func aTranslocatedCopyTakesNoFolder() throws {
+        let parent = try makeParent()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let translocated = "/private/var/folders/zz/abc/T/AppTranslocation/0A1B2C3D-4E5F/d/Next Term.app"
+        #expect(SessionLaunch.isTranslocated(bundlePath: translocated))
+        #expect(!SessionLaunch.isTranslocated(bundlePath: Self.app))
+        #expect(take(parent, bundlePath: translocated, arguments: [translocated]) == nil)
+        let key = try strand(in: parent)
+        #expect(take(parent, bundlePath: translocated, arguments: keyArguments(key)) == nil)
+        let folders = try FileManager.default.contentsOfDirectory(atPath: parent.path)
+        #expect(folders == [SessionFiles.folderName(key: key)])
+    }
 }

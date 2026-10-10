@@ -453,7 +453,7 @@ enum UpdatePlanning {
     /// Why sessions can't be kept: a translocated copy, or no session saved (no sessions folder, the save gate still
     /// closed, or the last save failed).
     static var refusal: KeepRefusal? {
-        if Bundle.main.bundlePath.contains("/AppTranslocation/") { return .translocated }
+        if SessionLaunch.isTranslocated(bundlePath: Bundle.main.bundlePath) { return .translocated }
         let sessions = SessionRestore.shared
         guard sessions.files != nil, sessions.lastSave?.succeeded == true else { return .notSaved }
         return nil

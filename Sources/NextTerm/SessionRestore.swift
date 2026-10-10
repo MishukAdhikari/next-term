@@ -9,7 +9,7 @@ import NextTermCore
 /// windows are built. At every quit that holds the folder, `finishAtQuit` writes the quit's last save, in order: the
 /// state file, scrollback, the update's marker; then Updater spawns the install script, and the tabs are terminated.
 ///
-/// A copy of Next Term that cannot take the folder restores and saves nothing. Neither does the plain self-test; the
+/// A copy of Next Term that cannot take the folder, or runs translocated, restores and saves nothing. Neither does the plain self-test; the
 /// relaunch harness restores and saves in its own folder (`SelfTest.sessionsParent`).
 @MainActor
 final class SessionRestore {
@@ -63,16 +63,20 @@ final class SessionRestore {
     /// The launch hook (KTD14), after the zsh integration is written and before the self-test branch and
     /// `--open-request`: a request launch restores too, so the quit's session is not lost to its first save (R32).
     ///
-    /// It takes the sessions folder, raises the restore attempts counter, claims the update's marker and reads the
-    /// snapshot (SessionLaunch), and the restore step decides. What the decision uses up (the marker, a quit consent id) is
-    /// recorded before anything is restored. Scrollback is read for an update or quit restore, and removed unread
-    /// otherwise. Remote saving is held while the windows are built, synchronously, so no MCP call runs meanwhile; each
-    /// pane's action then waits for its shell. Safe mode builds the layout alone and asks Keep As Is or Try Again; a
-    /// snapshot set aside is said once. Then saving starts. Returns the launch table's restore input: windows built, or
-    /// none, and plan 005's rows apply.
+    /// It takes the sessions folder (`SessionLaunch.takeFolder`: the app's own, the one the install script names when it
+    /// opens the old app from its backup, none for a translocated copy) and sweeps the folders of copies gone a while,
+    /// raises the restore attempts counter, claims the update's marker and reads the snapshot (SessionLaunch), and the
+    /// restore step decides. What the decision uses up (the marker, a quit consent id) is recorded before anything is
+    /// restored. Scrollback is read for an update or quit restore, and removed unread otherwise. Remote saving is held
+    /// while the windows are built, synchronously, so no MCP call runs meanwhile; each pane's action then waits for its
+    /// shell. Safe mode builds the layout alone and asks Keep As Is or Try Again; a snapshot set aside is said once. Then
+    /// saving starts. Returns the launch table's restore input: windows built, or none, and plan 005's rows apply.
     func launch(settings: LaunchSettings) -> LaunchRestoreResult {
-        guard files == nil, let parent = SelfTest.sessionsParent,
-              let files = try? SessionFiles.open(in: parent, bundlePath: Bundle.main.bundlePath), files.lock() else { return .notRun }
+        guard files == nil, let parent = SelfTest.sessionsParent else { return .notRun }
+        let taken = SessionLaunch.takeFolder(in: parent, bundlePath: Bundle.main.bundlePath, arguments: CommandLine.arguments)
+        let kept: Set<String> = taken.map { (files: SessionFiles) -> Set<String> in [files.key] } ?? []
+        DispatchQueue.global(qos: .utility).async { SessionFiles.sweepSiblings(in: parent, keeping: kept) }
+        guard let files = taken else { return .notRun }
         self.files = files
         let names: [String] = (try? files.names()) ?? []
         let version = Updater.shared.current?.description ?? ""
