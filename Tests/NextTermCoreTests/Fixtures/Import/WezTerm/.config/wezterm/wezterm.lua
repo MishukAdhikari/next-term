@@ -49,6 +49,9 @@ config.keys = {
   { key = 'Enter', mods = 'CMD|SHIFT', action = act.TogglePaneZoomState },
   { key = 'c', mods = 'CTRL|SHIFT', action = wezterm.action { CopyTo = 'Clipboard' } },
   { key = 'a', mods = 'LEADER', action = act.SpawnWindow },
+  { key = 'p', mods = 'CMD|SHIFT', action = act.SplitHorizontal { args = { 'ssh', 'admin@db.example' } } },
+  { key = 'o', mods = 'CMD|SHIFT', action = act.SpawnTab { DomainName = 'prod' } },
+  { key = 'i', mods = 'CMD|SHIFT', action = act.SplitPane { direction = 'Right', command = { args = { 'htop' } } } },
   { key = 's', mods = 'CMD', action = act.SendString 'FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' },
   { key = 'e', mods = 'CMD', action = wezterm.action_callback(function(win, pane) win:perform_action(act.Nop, pane) end) },
 }

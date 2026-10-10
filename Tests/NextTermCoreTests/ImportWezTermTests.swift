@@ -81,7 +81,29 @@ import Testing
         let reasons = reasons(plan)
         #expect(reasons["keys LEADER+a → SpawnWindow"] == ImportShortcuts.twoStep)
         #expect(reasons["1 key whose action is Lua code"] == "Lua code is never run")
-        #expect(reasons["1 key"] == "no matching Next Term command, or they send text to the terminal")
+        #expect(reasons["4 keys"] == "no matching Next Term command, or they send text to the terminal")
+    }
+
+    /// A split or tab that runs a program, or opens in another domain (an SSH one), is not Next Term's plain split
+    /// or New Tab: not mapped, and never shown.
+    @Test func aSpawnThatRunsSomethingElseIsNotMapped() throws {
+        let home = try ImportFixtures.copy("WezTerm")
+        defer { remove(home) }
+        let plan = try plan(home)
+        let commands: [String] = plan.shortcuts.map(\.command)
+        let splits: Int = commands.filter { $0 == "splitRight:" }.count
+        let tabs: Int = commands.filter { $0 == "newTab:" }.count
+        #expect(splits == 1 && tabs == 1)
+        let text = String(describing: plan)
+        // (ssh_domains is named as a setting never imported; the key's program and its domain never are.)
+        for shown in ["admin@", "db.example", "\"prod\"", "htop"] { #expect(!text.contains(shown), "\(shown)") }
+        let local = LuaValue.table(items: [], fields: ["domain": .string("CurrentPaneDomain")])
+        let remote = LuaValue.table(items: [], fields: ["domain": .table(items: [], fields: ["DomainName": .string("prod")])])
+        #expect(ImportWezTerm.spawnsTheShell(nil) && ImportWezTerm.spawnsTheShell(local) && ImportWezTerm.spawnsTheShell(.string("DefaultDomain")))
+        #expect(!ImportWezTerm.spawnsTheShell(remote) && !ImportWezTerm.spawnsTheShell(.computed))
+        let split = LuaValue.table(items: [], fields: ["direction": .string("Down"), "command": local])
+        #expect(ImportWezTerm.command("SplitPane", [split]) == "splitDown:")
+        #expect(ImportWezTerm.command("SpawnWindow", [.string("x")]) == nil)
     }
 
     @Test func codeAndSecretsAreOnlyNamed() throws {

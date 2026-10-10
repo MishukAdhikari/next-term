@@ -392,25 +392,27 @@ public enum ImportKitty {
 
     // MARK: keys
 
+    /// kitty actions that take no arguments, with the Next Term command of the same meaning. With arguments they are
+    /// something else: `new_tab ssh host` and `new_os_window htop` run that program (kitty's boss.py hands them to
+    /// the new window), so only the bare action maps.
+    static let plainActions: [String: String] = [
+        "new_tab": "newTab:", "new_tab_with_cwd": "newTab:", "new_os_window": "newWindow:", "new_os_window_with_cwd": "newWindow:",
+        "close_tab": "closeTab:", "close_window": "closeTab:", // kitty's window is a pane; Close Tab closes the pane in front
+        "close_os_window": "performClose:", "next_tab": "showNextTab:", "previous_tab": "showPreviousTab:",
+        "next_window": "selectNextPane:", "previous_window": "selectPreviousPane:", "copy_to_clipboard": "copy:",
+        "copy_or_noop": "copy:", "paste_from_clipboard": "paste:", "toggle_fullscreen": "toggleFullScreen:",
+        "edit_config_file": "showSettings:", "set_tab_title": "renameTab:", "search_scrollback": "performFindPanelAction:#1",
+    ]
+
+    /// The actions whose arguments pick the command (`goto_tab 2`, `neighboring_window left`): only these show them.
+    static let pickedByArguments: Set<String> = ["goto_tab", "neighboring_window", "clear_terminal", "change_font_size", "toggle_layout"]
+
     /// kitty actions with a Next Term command of the same meaning, by the action and the arguments that matter.
     static func command(_ action: [String]) -> String? {
         guard let name = action.first else { return nil }
         let args = Array(action.dropFirst())
+        if let plain = plainActions[name] { return args.isEmpty ? plain : nil }
         switch name {
-        case "new_tab", "new_tab_with_cwd": return "newTab:"
-        case "new_os_window", "new_os_window_with_cwd": return "newWindow:"
-        case "close_tab", "close_window": return "closeTab:" // kitty's window is a pane; Close Tab closes the pane in front
-        case "close_os_window": return "performClose:"
-        case "next_tab": return "showNextTab:"
-        case "previous_tab": return "showPreviousTab:"
-        case "next_window": return "selectNextPane:"
-        case "previous_window": return "selectPreviousPane:"
-        case "copy_to_clipboard", "copy_or_noop": return "copy:"
-        case "paste_from_clipboard": return "paste:"
-        case "toggle_fullscreen": return "toggleFullScreen:"
-        case "edit_config_file": return "showSettings:"
-        case "set_tab_title": return args.isEmpty ? "renameTab:" : nil
-        case "search_scrollback": return "performFindPanelAction:#1"
         case "goto_tab":
             guard let n = args.first.flatMap({ Int($0) }), (1...8).contains(n) else { return nil }
             return "selectTabByNumber:#\(n)"
@@ -500,8 +502,7 @@ public enum ImportKitty {
                 unmatched += 1
                 continue
             }
-            let location = launchOptions(Array(action.dropFirst()))?["--location"]
-            let shown = action.first == "launch" ? ["launch", "--location=" + (location ?? "")] : action
+            let shown = shownAction(action)
             let source = ImportKeys.label("map \(trigger) → \(shown.joined(separator: " "))")
             if options["--when-focus-on"] != nil {
                 plan.skipped.append(SkippedItem(source, "only while some windows have the keyboard"))
@@ -520,6 +521,16 @@ public enum ImportKitty {
             plan.skipped.append(SkippedItem("\(unmatched) map line\(unmatched == 1 ? "" : "s")",
                                             "no matching Next Term command, or they send text or run programs"))
         }
+    }
+
+    /// What a mapped action is shown as: its name, and only the arguments that picked the command (a split's
+    /// `--location`, `goto_tab`'s number). A program, its arguments or text the action would send is never shown.
+    static func shownAction(_ action: [String]) -> [String] {
+        guard let name = action.first else { return [] }
+        if name == "launch" { return ["launch", "--location=" + (launchOptions(Array(action.dropFirst()))?["--location"] ?? "")] }
+        guard pickedByArguments.contains(name) else { return [name] }
+        let picking = name == "change_font_size" ? 2 : 1
+        return [name] + Array(action.dropFirst().prefix(picking))
     }
 
     /// A kitty shortcut ("cmd+shift+t", "kitty_mod+enter", "ctrl+x>ctrl+y"): `kitty_mod` stands for its modifiers,

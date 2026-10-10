@@ -10,6 +10,7 @@ folder: tests copy it to a temp folder and pass that as `home`.
   `geninclude` and an `envinclude`.
 - `dark-theme.auto.conf` is the themes kitten's dark theme, whose colours win.
 - `map` lines with a Next Term command (`kitty_mod` is ⌘⇧ here), and ones that must not come over: a two-step key, a
-  key only for some windows, text to send, a `launch` that runs a program, and a key unmapped by a later line.
+  key only for some windows, text to send, a `launch` that runs a program, `new_os_window` and `new_tab_with_cwd`
+  followed by a program (ssh, and one with the planted secret), and a key unmapped by a later line.
 - Planted fake secrets that must never appear in anything an import returns (ImportFixtures.plantedSecrets): in
   `shell`, `env`, `remote_control_password`, a `send_text` map and `outside.conf`.

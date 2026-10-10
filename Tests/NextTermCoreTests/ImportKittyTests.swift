@@ -95,8 +95,29 @@ import Testing
         #expect(reasons["map ctrl+a>c → new_tab"] == ImportShortcuts.twoStep)
         #expect(reasons["map cmd+s → next_tab"] == "only while some windows have the keyboard")
         #expect(reasons["map cmd+plus → change_font_size all +2.0"] == ImportShortcuts.notRecognised)
-        #expect(reasons["2 map lines"] == "no matching Next Term command, or they send text or run programs")
+        #expect(reasons["4 map lines"] == "no matching Next Term command, or they send text or run programs")
         #expect(!plan.shortcuts.contains { $0.command == "closeTab:" }, "a later map with no action unmaps cmd+w")
+    }
+
+    /// new_tab and new_os_window followed by a program run it in the new window: not New Tab or New Window, and
+    /// the program and its arguments are never shown.
+    @Test func aNewWindowThatRunsAProgramIsNotMapped() throws {
+        let home = try ImportFixtures.copy("kitty")
+        defer { remove(home) }
+        let plan = try plan(home)
+        #expect(!plan.shortcuts.contains { $0.command == "newWindow:" })
+        let newTabs: Int = plan.shortcuts.filter { (row: PlannedShortcut) -> Bool in row.command == "newTab:" }.count
+        #expect(newTabs == 1, "only the bare new_tab_with_cwd")
+        let text = String(describing: plan)
+        for shown in ["ssh", "db.example", "vault", "htop"] { #expect(!text.contains(shown), "\(shown)") }
+        #expect(ImportFixtures.secrets(in: plan).isEmpty)
+        let bare = ImportKitty.command(["new_os_window"])
+        #expect(bare == "newWindow:" && ImportKitty.command(["new_os_window", "htop"]) == nil)
+        #expect(ImportKitty.command(["close_tab", "x"]) == nil && ImportKitty.command(["goto_tab", "2"]) == "selectTabByNumber:#2")
+        let shown: [String] = ImportKitty.shownAction(["change_font_size", "all", "+2", "extra"])
+        #expect(shown == ["change_font_size", "all", "+2"])
+        let cleared: [String] = ImportKitty.shownAction(["clear_terminal", "reset", "anything"])
+        #expect(cleared == ["clear_terminal", "reset"])
     }
 
     @Test func valuesAndForms() throws {

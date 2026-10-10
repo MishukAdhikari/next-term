@@ -279,12 +279,15 @@ public enum ImportWezTerm {
     static func command(_ action: String, _ args: [LuaValue]) -> String? {
         let argument = args.first
         switch action {
-        case "SpawnTab": return "newTab:"
-        case "SpawnWindow": return "newWindow:"
+        case "SpawnTab": return args.count <= 1 && spawnsTheShell(argument) ? "newTab:" : nil
+        case "SpawnWindow": return args.isEmpty ? "newWindow:" : nil
         // WezTerm's names are the other way round from most: SplitHorizontal puts the panes side by side.
-        case "SplitHorizontal": return "splitRight:"
-        case "SplitVertical": return "splitDown:"
+        case "SplitHorizontal": return args.count <= 1 && spawnsTheShell(argument) ? "splitRight:" : nil
+        case "SplitVertical": return args.count <= 1 && spawnsTheShell(argument) ? "splitDown:" : nil
         case "SplitPane":
+            let fields: Set<String> = ["direction", "size", "command", "top_level"]
+            guard args.count == 1, argument?.items?.isEmpty == true, argument?.fields?.keys.allSatisfy(fields.contains) == true,
+                  spawnsTheShell(argument?["command"]) else { return nil }
             switch argument?["direction"]?.string {
             case "Right"?: return "splitRight:"
             case "Down"?: return "splitDown:"
@@ -316,6 +319,17 @@ public enum ImportWezTerm {
         case "TogglePaneZoomState": return "toggleZoomPane:"
         default: return nil
         }
+    }
+
+    /// A spawn that starts the shell in this Mac's own domain, as Next Term's New Tab and splits do: no argument,
+    /// `'CurrentPaneDomain'` or `'DefaultDomain'`, or a SpawnCommand that sets only that `domain`. One with `args`,
+    /// `cwd`, environment variables or another domain (an SSH one) runs something else.
+    static func spawnsTheShell(_ value: LuaValue?) -> Bool {
+        guard let value else { return true }
+        let local: Set<String> = ["CurrentPaneDomain", "DefaultDomain"]
+        if let name = value.string { return local.contains(name) }
+        guard value.items?.isEmpty == true, let fields = value.fields else { return false }
+        return fields.allSatisfy { name, field in name == "domain" && field.string.map(local.contains) == true }
     }
 
     /// An action's name and arguments: `act.Copy`, `act.SpawnTab 'CurrentPaneDomain'`, or the older
