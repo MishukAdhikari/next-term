@@ -63,7 +63,7 @@ struct MenuKeysTests {
         #expect(bindings.owners(of: Self.commandR, defaults: keys, except: "gitFetch:").isEmpty)
         let titles = ["gitFetch:": "Fetch", "branchPopup.fetch": "Fetch"]
         #expect(KeyBindings.sharingNote(Self.commandR, ["gitFetch:", "branchPopup.fetch"], title: { titles[$0] ?? $0 })
-            == "⌘R is Fetch while the branch popup is open, Fetch everywhere else")
+            == "⌘R is Fetch while the branch popup is open and everywhere else")
         // Under JetBrains' set ⌘R is Replace…, which the popup's Fetch shares it with in turn.
         let jetBrains = Self.defaults(under: .jetBrains)
         #expect(bindings.sharers(of: Self.commandR, defaults: jetBrains, except: "replaceInFile:") == ["branchPopup.fetch"])

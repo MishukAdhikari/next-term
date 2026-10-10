@@ -48,7 +48,7 @@ extension SelfTest {
 
         // ⌘R is Fetch in the branch popup too, and Settings says which has it where.
         let fetchTip = ShortcutRecorder(commandID: "gitFetch:").toolTip
-        check(fetchTip == "⌘R is Fetch while the branch popup is open, Fetch everywhere else", "Settings says ⌘R is the branch popup's Fetch too",
+        check(fetchTip == "⌘R is Fetch while the branch popup is open and everywhere else", "Settings says ⌘R is the branch popup's Fetch too",
               fetchTip ?? "no tooltip")
 
         // A key you gave another command before it was Commit…'s default stays yours: Commit… has none until yours moves.

@@ -201,6 +201,11 @@ import Testing
             == "⌘⌫ is Delete Line while the editor has the keyboard, Move to Trash while the project sidebar has the keyboard")
         #expect(KeyBindings.sharingNote(KeyChord(key: "c", command: true), ["copy:", "branchPopup.copyName"], title: title)
             == "⌘C is Copy Name while the branch popup is open, Copy everywhere else")
+        // One name in two places is said once, with both places (a third is listed with commas).
+        #expect(KeyBindings.sharingNote(KeyChord(key: "r", command: true), ["gitFetch:", "branchPopup.fetch"], title: { _ in "Fetch" })
+            == "⌘R is Fetch while the branch popup is open and everywhere else")
+        #expect(KeyBindings.sharingNote(KeyChord(key: "y", command: true), ["sidebar.trash", "deleteLine:", "branchPopup.copyName"], title: { _ in "Same" })
+            == "⌘Y is Same while the editor has the keyboard, while the project sidebar has the keyboard and while the branch popup is open")
     }
 
     @Test func aPartWithoutTypingTakesPlainKeys() {
