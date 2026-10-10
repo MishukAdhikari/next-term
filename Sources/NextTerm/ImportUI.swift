@@ -24,7 +24,8 @@ enum ImportSources {
     }
 
     static let noneFound = "No settings were found on this Mac from VS Code or an editor built on it (VS Code Insiders, VSCodium, "
-        + "Cursor, Windsurf, Kiro, Trae and others), a JetBrains IDE, Zed, iTerm2, Ghostty, Warp or a changed Terminal profile."
+        + "Cursor, Windsurf, Kiro, Trae and others), a JetBrains IDE, Zed, iTerm2, Ghostty, cmux, kitty, Alacritty, WezTerm, Kaku, "
+        + "Warp or a changed Terminal profile."
 
     /// Each family's reader (NextTermCore/Import*.swift). The self-test can swap these for its own.
     nonisolated(unsafe) static var detectors: [() -> [DetectedApp]] = [

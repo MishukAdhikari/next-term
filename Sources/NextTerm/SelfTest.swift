@@ -660,6 +660,7 @@ enum SelfTest {
         await importForkChecks()
         await importTerminalSizeChecks(c)
         await importReachChecks()
+        await importTerminalChecks()
         await behaviourSettingsChecks(c, proj: proj)
         await singleClickChecks(c, proj: proj, tab: inProject)
         await safetyChecks(c, proj: proj)
