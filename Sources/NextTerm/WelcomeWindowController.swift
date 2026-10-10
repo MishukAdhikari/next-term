@@ -5,7 +5,7 @@ import NextTermCore
 /// the right the chosen project with every agent's saved sessions for it, newest first, each one a click
 /// from running again in a tab in the right folder.
 final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate,
-                                     NSSearchFieldDelegate {
+                                     NSSearchFieldDelegate, NSMenuItemValidation {
     private let search = NSSearchField()
     private var openTip: ShortcutToolTip?
     /// The saved hosts, each a click from a tab on it, and Connect to Server… for another.
@@ -27,6 +27,9 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// The filter when more agents have sessions here than the buttons fit.
     private let agentMenu = NSPopUpButton(frame: .zero, pullsDown: false)
     private let sessionsTitle = NSTextField(labelWithString: "")
+    /// Narrows the chosen project's sessions as you type, within the agent filter (`SearchWords`, as the
+    /// projects search and ⌥⌘O match), over what each row shows. Emptied when another project is chosen.
+    private let sessionSearch = NSSearchField()
     private let empty = NSTextField(wrappingLabelWithString: "")
     private let resumeButton = NSButton(title: "Resume", target: nil, action: nil)
     private let forkButton = NSButton(title: "Fork", target: nil, action: nil)
@@ -36,6 +39,14 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var projects: [String] = []
     private var sessions: [AgentSession] = []
     private var shownSessions: [AgentSession] = []
+    /// The sessions the search leaves, before the agent filter: what the filter's counts count.
+    private var matchedSessions: [AgentSession] = []
+    /// The shown project's sessions are still being read (none cached), and the agents that could not be.
+    private var sessionsLoading = false
+    private var sessionProblems: [AgentKind: String] = [:]
+    /// The search text the list was last narrowed by, and the count VoiceOver hears once typing settles.
+    private var appliedSessionQuery = ""
+    private var countAnnouncement: DispatchWorkItem?
     private var branches: [String: String] = [:]
     /// Sessions already read, per project, so moving through the list is instant (refreshed in the background).
     private var cache: [String: [AgentSession]] = [:]
@@ -44,8 +55,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var sessionTabs = SessionTabs()
 
     init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 580),
-                              styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        let window = WelcomeWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 580),
+                                   styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "Welcome to Next Term"
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
@@ -56,6 +67,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         window.minSize = NSSize(width: 720, height: 440)
         super.init(window: window)
         window.delegate = self
+        window.keyEquivalentHandler = { [weak self] event in self?.handleKeyEquivalent(event) ?? false }
         build()
         window.center()
     }
@@ -137,6 +149,15 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         agentMenu.action = #selector(agentMenuChanged)
         agentMenu.setAccessibilityLabel("Show sessions of")
         agentMenu.isHidden = true
+        // Figures all one width, so a count narrowed by the search (padded to the total's width) keeps the filter's size.
+        filter.font = .monospacedDigitSystemFont(ofSize: filter.font?.pointSize ?? NSFont.systemFontSize, weight: .regular)
+        agentMenu.font = .monospacedDigitSystemFont(ofSize: agentMenu.font?.pointSize ?? NSFont.systemFontSize, weight: .regular)
+        sessionSearch.placeholderString = "Search sessions"
+        sessionSearch.setAccessibilityLabel("Search agent sessions")
+        sessionSearch.delegate = self
+        sessionSearch.sendsSearchStringImmediately = true
+        sessionSearch.target = self
+        sessionSearch.action = #selector(sessionSearchChanged)
         configure(sessionsTable, rowHeight: 50, action: nil, double: #selector(resumeSelected))
         let sessionsScroll = Self.scroll(sessionsTable)
         empty.textColor = Theme.textDim
@@ -150,7 +171,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         forkButton.target = self
         forkButton.action = #selector(forkSelected)
         forkButton.toolTip = "Continue a copy, leaving this one as it is (safe while it is open in another terminal)"
-        for view in [projectName, projectPath, openButton, sessionsTitle, filter, agentMenu, sessionsScroll, empty, resumeButton, forkButton] as [NSView] {
+        for view in [projectName, projectPath, openButton, sessionsTitle, filter, agentMenu, sessionSearch, sessionsScroll, empty,
+                     resumeButton, forkButton] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             detailPane.addSubview(view)
         }
@@ -213,7 +235,12 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             filter.trailingAnchor.constraint(equalTo: detailPane.trailingAnchor, constant: -24),
             agentMenu.centerYAnchor.constraint(equalTo: sessionsTitle.centerYAnchor),
             agentMenu.trailingAnchor.constraint(equalTo: detailPane.trailingAnchor, constant: -24),
-            sessionsScroll.topAnchor.constraint(equalTo: sessionsTitle.bottomAnchor, constant: 10),
+            // The search sits between the heading and the rows, as the projects search does on the left: the heading
+            // and the buttons stay where they were, and the rows start below it.
+            sessionSearch.topAnchor.constraint(equalTo: sessionsTitle.bottomAnchor, constant: 10),
+            sessionSearch.leadingAnchor.constraint(equalTo: detailPane.leadingAnchor, constant: 24),
+            sessionSearch.trailingAnchor.constraint(equalTo: detailPane.trailingAnchor, constant: -24),
+            sessionsScroll.topAnchor.constraint(equalTo: sessionSearch.bottomAnchor, constant: 8),
             sessionsScroll.leadingAnchor.constraint(equalTo: detailPane.leadingAnchor, constant: 14),
             sessionsScroll.trailingAnchor.constraint(equalTo: detailPane.trailingAnchor, constant: -14),
             sessionsScroll.bottomAnchor.constraint(equalTo: resumeButton.topAnchor, constant: -12),
@@ -289,8 +316,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     /// Return opens the chosen project, or with none chosen (none listed yet, or none matching the search), the Open…
-    /// panel: never a button that is off. It never resumes a session: a double-click on it or the Resume button does
-    /// that. Set each time the project shown changes.
+    /// panel: never a button that is off. Outside the sessions search (where it resumes, `handleKeyEquivalent`) it never
+    /// resumes a session: a double-click on it or the Resume button does that. Set each time the project shown changes.
     private func updateReturnKey() {
         let none = current == nil
         openPanelButton.keyEquivalent = none ? "\r" : ""
@@ -310,7 +337,11 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     @objc private func searchChanged() { applySearch() }
-    func controlTextDidChange(_ obj: Notification) { applySearch() }
+
+    func controlTextDidChange(_ obj: Notification) {
+        // Two search fields, one delegate: the sessions search must never rerun the projects search.
+        if (obj.object as? NSSearchField) === sessionSearch { sessionSearchChanged() } else { applySearch() }
+    }
 
     private func applySearch() {
         let previous = current
@@ -341,13 +372,18 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     private func showProject() {
+        let previous = current
         current = projects[safe: projectsTable.selectedRow]
+        if current != previous { resetSessionSearch() }
+        sessionSearch.isEnabled = current != nil
         updateReturnKey()
         guard let project = current else {
             projectName.stringValue = allProjects.isEmpty ? "No projects yet" : "No project matches"
             projectPath.stringValue = allProjects.isEmpty ? "Open a folder to start; it will be listed here." : ""
             openButton.isEnabled = false
             sessions = []
+            sessionsLoading = false
+            sessionProblems = [:]
             applyFilter()
             return
         }
@@ -359,14 +395,18 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         projectPath.toolTip = project
         sessions = cache[project] ?? []
         sessionTabs = SessionTabs()
-        applyFilter(loading: cache[project] == nil)
+        sessionsLoading = cache[project] == nil
+        sessionProblems = [:]
+        applyFilter()
         SessionStore.load(project) { [weak self] listing, tabs in
             guard let self else { return }
             self.cache[project] = listing.sessions
             guard self.selectedProject == project else { return }
             self.sessions = listing.sessions
             self.sessionTabs = tabs
-            self.applyFilter(problems: listing.problems)
+            self.sessionsLoading = false
+            self.sessionProblems = listing.problems
+            self.applyFilter()
         }
     }
 
@@ -429,15 +469,21 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     static let filterButtons = 3
 
     /// Shows the agents that have sessions here as filter buttons ("All 12", "Claude Code 9"…), or in a
-    /// menu when there are more than fit; nothing for one agent.
-    private func showAgentFilter(_ agents: [AgentKind]) {
-        let count = { (agent: AgentKind) in self.sessions.filter { $0.agent == agent }.count }
+    /// menu when there are more than fit; nothing for one agent. While a search narrows the list, the counts are
+    /// of the sessions it matches, and the agents stay: one with no match shows 0.
+    private func showAgentFilter(_ agents: [AgentKind], searching: Bool) {
+        func label(_ name: String, _ agent: AgentKind?) -> String {
+            let total = agent.map { agent in sessions.filter { $0.agent == agent }.count } ?? sessions.count
+            guard searching else { return "\(name)  \(total)" }
+            let matched = agent.map { agent in matchedSessions.filter { $0.agent == agent }.count } ?? matchedSessions.count
+            return Self.countLabel(name, matched, total: total)
+        }
         let buttons = agents.count > 1 && agents.count <= Self.filterButtons
         filter.segmentCount = buttons ? agents.count + 1 : 0
         if buttons {
-            filter.setLabel("All  \(sessions.count)", forSegment: 0)
+            filter.setLabel(label("All", nil), forSegment: 0)
             for (i, agent) in agents.enumerated() {
-                filter.setLabel("\(agent.name)  \(count(agent))", forSegment: i + 1)
+                filter.setLabel(label(agent.name, agent), forSegment: i + 1)
             }
             filter.selectedSegment = agentFilter.flatMap { agents.firstIndex(of: $0) }.map { $0 + 1 } ?? 0
         }
@@ -445,10 +491,18 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         agentMenu.isHidden = agents.count <= Self.filterButtons
         if !agentMenu.isHidden {
             agentMenu.removeAllItems()
-            agentMenu.addItem(withTitle: "All agents  \(sessions.count)")
-            for agent in agents { agentMenu.addItem(withTitle: "\(agent.name)  \(count(agent))") }
+            agentMenu.addItem(withTitle: label("All agents", nil))
+            for agent in agents { agentMenu.addItem(withTitle: label(agent.name, agent)) }
             agentMenu.selectItem(at: agentFilter.flatMap { agents.firstIndex(of: $0) }.map { $0 + 1 } ?? 0)
         }
+    }
+
+    /// "Claude Code  3" for 3 of 50: figure spaces in front keep the count as wide as the total it narrows, so the
+    /// filter keeps its size as you type (its font's figures are all one width).
+    static func countLabel(_ name: String, _ count: Int, total: Int) -> String {
+        let figures = String(count)
+        let room = max(0, String(total).count - figures.count)
+        return name + "  " + String(repeating: "\u{2007}", count: room) + figures
     }
 
     /// Every agent whose sessions are listed: "Claude Code, Codex, … or Copilot CLI".
@@ -460,25 +514,169 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// The agents that have sessions here, in a fixed order.
     private var presentAgents: [AgentKind] { AgentKind.allCases.filter { agent in sessions.contains { $0.agent == agent } } }
 
-    private func applyFilter(loading: Bool = false, problems: [AgentKind: String] = [:]) {
+    /// The list: the project's sessions the search matches, of the agent chosen in the filter.
+    private func applyFilter() {
         let agents = presentAgents
         if let agentFilter, !agents.contains(agentFilter) { self.agentFilter = nil }
-        showAgentFilter(agents)
-        shownSessions = agentFilter.map { agent in sessions.filter { $0.agent == agent } } ?? sessions
+        let query = sessionSearch.stringValue
+        appliedSessionQuery = query
+        matchedSessions = AgentSessions.matching(sessions, query)
+        showAgentFilter(agents, searching: !SearchWords(query).isEmpty)
+        shownSessions = agentFilter.map { agent in matchedSessions.filter { $0.agent == agent } } ?? matchedSessions
         sessionsTable.reloadData()
         if !shownSessions.isEmpty { sessionsTable.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
         let none = shownSessions.isEmpty
         empty.isHidden = !none
         if none {
-            var text = loading ? "Reading sessions…"
+            let typed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            var text = sessionsLoading ? "Reading sessions…"
                 : "No agent sessions here yet. Conversations you have with \(Self.agentNames) in this folder appear here, ready to pick up again."
-            if !loading, !problems.isEmpty {
-                text += "\n\nCould not read " + problems.keys.map(\.name).sorted().joined(separator: ", ") + " (its format may have changed)."
+            if !typed.isEmpty, !sessions.isEmpty {
+                text = "No sessions match “" + typed + "”."
+            } else if !sessionsLoading, !sessionProblems.isEmpty {
+                text += "\n\nCould not read " + sessionProblems.keys.map(\.name).sorted().joined(separator: ", ") + " (its format may have changed)."
             }
             empty.stringValue = text
         }
         updateSessionButtons()
     }
+
+    // MARK: sessions search
+
+    @objc private func sessionSearchChanged() {
+        // Its action and its text-change notice both come for each key: the list is narrowed once.
+        guard sessionSearch.stringValue != appliedSessionQuery else { return }
+        applyFilter()
+        announceSessionCount()
+    }
+
+    /// Another project: an empty search, so its sessions all show.
+    private func resetSessionSearch() {
+        countAnnouncement?.cancel()
+        countAnnouncement = nil
+        sessionSearch.stringValue = ""
+    }
+
+    /// How many the search leaves, as VoiceOver says it.
+    var sessionCountText: String {
+        switch shownSessions.count {
+        case 0: return "No sessions match"
+        case 1: return "1 session"
+        default: return "\(shownSessions.count) sessions"
+        }
+    }
+
+    /// For the self-test: what VoiceOver was last told.
+    private(set) var announcedSessionCount: String?
+
+    /// VoiceOver hears the count once typing settles, not after every key.
+    private func announceSessionCount() {
+        countAnnouncement?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let window = self.window, window.isVisible else { return }
+            let text = self.sessionCountText
+            self.announcedSessionCount = text
+            NSAccessibility.post(element: window, notification: .announcementRequested,
+                                 userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+        }
+        countAnnouncement = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.announceDelay, execute: work)
+    }
+
+    static let announceDelay = 0.6
+
+    /// ↓ and ↑ move the selection in the list while the search keeps the keyboard; Return does what Resume does
+    /// while it is on (and nothing else: never Open Project); Esc empties the search, and on an empty one does
+    /// what it did before.
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard control === sessionSearch else { return false }
+        switch selector {
+        case #selector(NSResponder.moveDown(_:)): moveSessionSelection(by: 1)
+        case #selector(NSResponder.moveUp(_:)): moveSessionSelection(by: -1)
+        case #selector(NSResponder.insertNewline(_:)): resumeFromSearch()
+        case #selector(NSResponder.cancelOperation(_:)):
+            guard !textView.string.isEmpty else { return false }
+            textView.string = ""
+            sessionSearch.stringValue = ""
+            sessionSearchChanged()
+        default: return false
+        }
+        return true
+    }
+
+    private func moveSessionSelection(by step: Int) {
+        guard !shownSessions.isEmpty else { return }
+        let row = max(0, min(shownSessions.count - 1, sessionsTable.selectedRow + step))
+        sessionsTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        sessionsTable.scrollRowToVisible(row)
+    }
+
+    private func resumeFromSearch() {
+        if resumeButton.isEnabled { resumeSelected() }
+    }
+
+    /// The sessions search is being typed in.
+    private var sessionSearchHasKeyboard: Bool {
+        guard let editor = sessionSearch.currentEditor() else { return false }
+        return window?.firstResponder === editor
+    }
+
+    /// Two keys the window takes before its buttons and the menus do: Find… (⌘F) goes to the sessions search while
+    /// a project's sessions show, and Return in that search resumes (Open Project holds Return everywhere else).
+    private func handleKeyEquivalent(_ event: NSEvent) -> Bool {
+        let chord = KeyboardShortcuts.chord(from: event)
+        if let chord, chord == Self.findChord { return focusSessionSearch() }
+        if sessionSearchHasKeyboard, chord == KeyChord(key: "\r") {
+            resumeFromSearch()
+            return true
+        }
+        return false
+    }
+
+    /// Find…'s key now (⌘F, unless it was given another).
+    private static var findChord: KeyChord? {
+        let item = KeyboardShortcuts.shared.commands.first { $0.id == "performFindPanelAction:#1" }?.item
+        return item.flatMap(KeyboardShortcuts.chord(of:))
+    }
+
+    /// Find… chosen in the menu bar, as its key does (`handleKeyEquivalent`).
+    @objc func performFindPanelAction(_ sender: Any?) {
+        if !focusSessionSearch() { NSSound.beep() }
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        guard item.action == #selector(performFindPanelAction(_:)) else { return true }
+        return current != nil && item.tag == Int(NSFindPanelAction.showFindPanel.rawValue)
+    }
+
+    /// To the sessions search, its text selected; false with no project's sessions shown.
+    @discardableResult
+    func focusSessionSearch() -> Bool {
+        guard current != nil, let window else { return false }
+        window.makeFirstResponder(sessionSearch)
+        sessionSearch.currentEditor()?.selectAll(nil)
+        return true
+    }
+
+    /// For the self-test.
+    var sessionQuery: String {
+        get { sessionSearch.stringValue }
+        set {
+            sessionSearch.stringValue = newValue
+            sessionSearchChanged()
+        }
+    }
+    var sessionSearchField: NSSearchField { sessionSearch }
+    /// For the self-test: the filter set to `agent` (nil: All), as a click on it does.
+    func filterSessions(by agent: AgentKind?) {
+        agentFilter = agent
+        applyFilter()
+    }
+    var sessionFilterLabels: [String] {
+        filterIsMenu ? agentMenu.itemTitles : (0..<filter.segmentCount).compactMap { filter.label(forSegment: $0) }
+    }
+    var emptyText: String? { empty.isHidden ? nil : empty.stringValue }
+    var selectedSessionTitle: String? { selectedSession?.title }
 
     private var selectedSession: AgentSession? { shownSessions[safe: sessionsTable.selectedRow] }
 
@@ -542,6 +740,17 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     func tableViewSelectionDidChange(_ notification: Notification) {
         if (notification.object as? NSTableView) === projectsTable { showProject() }
         if (notification.object as? NSTableView) === sessionsTable { updateSessionButtons() }
+    }
+}
+
+/// The Welcome window, which lets its controller take a key before its buttons and the menus do
+/// (`WelcomeWindowController.handleKeyEquivalent`).
+final class WelcomeWindow: NSWindow {
+    var keyEquivalentHandler: ((NSEvent) -> Bool)?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if keyEquivalentHandler?(event) == true { return true }
+        return super.performKeyEquivalent(with: event)
     }
 }
 
