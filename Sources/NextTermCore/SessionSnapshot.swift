@@ -360,12 +360,25 @@ extension SessionSnapshot {
         public var leftOff: [String]
         /// Every option it ran with may be carried by an automatic resume: none left off, and none it could not name.
         public var flagsAllowed: Bool
+        /// The options it ran with, from its argv in order, each with its values as argv gave them (U2). Never a prompt
+        /// word, a form or a one-shot option. A restore reads them again with the running build's table, which says what
+        /// a line and a resume carry (KTD20). Nil when not known: no argv, a file from before they were kept, or a list
+        /// that could not be kept whole (`LaunchOption.kept`).
+        public var options: [LaunchOption]?
+        /// The word typed to start it, when it passes its arguments on (KTD7): a put-back line replays it.
+        public var launcher: Launcher?
+        /// The permission options the nonce-verified typed line, or its alias expansion, showed (KTD5). Argv alone
+        /// can't confirm one, as a process can rewrite its own argv.
+        public var confirmed: [LaunchOption]
+        /// The agent's version, when the path it was installed at names it (AgentCLI.version(at:)). For notes only.
+        public var version: String?
 
         /// Each fact not known reads as the answer that resumes nothing: nil, or false.
         public init(agent: Agent, sessionID: String? = nil, source: IDSource = .guess, sessionFolder: String? = nil, store: String? = nil,
                     executable: String? = nil, interpreter: String? = nil, script: String? = nil, startedAt: Date? = nil,
                     sessionDate: Date? = nil, routingMatchesShell: Bool = false, autoContinueOff: Bool = false,
-                    ranAsTyped: Bool = false, flags: [String] = [], leftOff: [String] = [], flagsAllowed: Bool = false) {
+                    ranAsTyped: Bool = false, flags: [String] = [], leftOff: [String] = [], flagsAllowed: Bool = false,
+                    options: [LaunchOption]? = nil, launcher: Launcher? = nil, confirmed: [LaunchOption] = [], version: String? = nil) {
             self.agent = agent
             self.sessionID = sessionID
             self.source = source
@@ -382,10 +395,71 @@ extension SessionSnapshot {
             self.flags = flags
             self.leftOff = leftOff
             self.flagsAllowed = flagsAllowed
+            self.options = options
+            self.launcher = launcher
+            self.confirmed = confirmed
+            self.version = version
         }
 
         /// An id from agreeing evidence. Anything less is a guess.
         public var isExact: Bool { sessionID != nil && source.isExact }
+    }
+
+    /// An option an agent ran with, as its argv gave it (U2).
+    public struct LaunchOption: Equatable, Sendable {
+        /// Its words: `--model opus`, `--approval-mode=yolo`, `--allowedTools Edit Bash`.
+        public var words: [String]
+        /// An option the capture's table did not know, followed by a word that may be its value or a prompt's. That word
+        /// is not kept, so a line leaves the option off, and its note names it (KTD7).
+        public var unclear: Bool
+
+        public init(_ words: [String], unclear: Bool = false) {
+            self.words = words
+            self.unclear = unclear
+        }
+
+        /// `--approval-mode` of `--approval-mode=yolo`.
+        public var name: String {
+            guard let first = words.first else { return "" }
+            return String(first.prefix { $0 != "=" })
+        }
+
+        /// `options` when a file may keep them all: at most `Evidence.mostOptions`, each an option a note may name with at
+        /// most that many words (an unclear one alone, with no `=`), together one line of plain text, and no secret. Nil
+        /// otherwise, as a line never carries part of what ran.
+        public static func kept(_ options: [LaunchOption]) -> [LaunchOption]? {
+            let most = Evidence.mostOptions
+            guard options.count <= most, options.allSatisfy({ $0.isKeepable(most: most) }) else { return nil }
+            let line = options.flatMap(\.words).joined(separator: " ")
+            guard SessionSnapshot.Command.problem(with: line) == nil, CommandSecrets.mayKeep(line) else { return nil }
+            return options
+        }
+
+        private func isKeepable(most: Int) -> Bool {
+            guard let first = words.first, first.hasPrefix("-"), words.count <= most, RestoreAgent.isOptionName(name) else { return false }
+            return !unclear || (words.count == 1 && !first.contains("="))
+        }
+    }
+
+    /// The word typed to start an agent, kept when it passes its arguments on: an alias, or a word typed with arguments
+    /// that argv ends with (KTD7). A put-back line is that word, the options typed after it, and the resume form.
+    public struct Launcher: Equatable, Sendable {
+        /// A command's name or an absolute path, typed bare: `claude-auto-danger`, `/Users/x/bin/cad`.
+        public var word: String
+        /// How many of the evidence's `options`, the last ones, were typed after it. The rest are the launcher's own.
+        public var typed: Int
+
+        public init(word: String, typed: Int) {
+            self.word = word
+            self.typed = typed
+        }
+
+        /// One word the shell reads back as typed: ASCII letters, digits and `@%_+:,./-`, no option, and a path only when
+        /// absolute, so a line in another folder runs the same file. No `=`, `~`, quote or space.
+        public static func isWord(_ word: String) -> Bool {
+            guard SnapshotText.token(word, max: 255, extra: "@%_+:,./-") != nil, !word.hasPrefix("-") else { return false }
+            return (!word.contains("/") || word.hasPrefix("/")) && CommandSecrets.mayKeep(word)
+        }
     }
 
     /// What the restore does to a pane, and how far it got. Only a record: each launch plans again.
@@ -939,6 +1013,14 @@ extension SessionSnapshot.Evidence {
             fixed.leftOff = []
             fixed.flagsAllowed = false
         }
+        fixed.options = options.flatMap(SessionSnapshot.LaunchOption.kept)
+        fixed.confirmed = SessionSnapshot.LaunchOption.kept(confirmed) ?? []
+        // The launcher replays the last of the options: with none known, or fewer than it names, it replays nothing.
+        if let launcher {
+            let replayed = fixed.options.map { launcher.typed >= 0 && launcher.typed <= $0.count } ?? false
+            if !replayed || !SessionSnapshot.Launcher.isWord(launcher.word) { fixed.launcher = nil }
+        }
+        fixed.version = version.flatMap { AgentCLI.isVersion($0) ? $0 : nil }
         return fixed
     }
 
@@ -1087,6 +1169,22 @@ extension KeyedDecodingContainer {
             read.append(text)
         }
         return read
+    }
+
+    /// A list of a launch's options read entry by entry, at most `Evidence.mostOptions`, within the file's budget. Nil
+    /// when it is not a list, one entry does not read, it holds more, or the budget runs out: a list is taken whole or
+    /// not at all.
+    fileprivate func launchOptions(_ key: Key, budget: SnapshotBudget?) -> [SessionSnapshot.LaunchOption]? {
+        let most = SessionSnapshot.Evidence.mostOptions
+        let read = entries(SessionSnapshot.LaunchOption.self, key, max: most + 1, budget: budget)
+        guard read.count <= most else { return nil }
+        let options = read.compactMap { $0 }
+        return options.count == read.count && read.count == count(of: key) ? options : nil
+    }
+
+    /// How many entries the list at `key` holds; -1 when it is not a list.
+    private func count(of key: Key) -> Int {
+        (try? nestedUnkeyedContainer(forKey: key))?.count ?? -1
     }
 
     /// A list of numbers read one by one, at most `max` of them, within the file's budget. Nil when it is
@@ -1379,6 +1477,7 @@ extension SessionSnapshot.Evidence: Codable {
     private enum Keys: String, CodingKey {
         case agent, sessionID, source, sessionFolder, store, executable, interpreter, script, startedAt, sessionDate
         case routingMatchesShell, autoContinueOff, ranAsTyped, flags, leftOff, flagsAllowed
+        case options, launcher, confirmed, version
     }
 
     public init(from decoder: Decoder) throws {
@@ -1404,6 +1503,11 @@ extension SessionSnapshot.Evidence: Codable {
             }
             if key == .flags { flags = words } else { leftOff = words }
         }
+        // Added after schema 1 shipped: a file without them reads as having none.
+        if c.contains(.options) { options = c.launchOptions(.options, budget: decoder.snapshotBudget) }
+        confirmed = c.launchOptions(.confirmed, budget: decoder.snapshotBudget) ?? []
+        launcher = c.optional(SessionSnapshot.Launcher.self, .launcher)
+        version = c.optional(String.self, .version)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1424,6 +1528,43 @@ extension SessionSnapshot.Evidence: Codable {
         if !flags.isEmpty { try c.encode(flags, forKey: .flags) }
         if !leftOff.isEmpty { try c.encode(leftOff, forKey: .leftOff) }
         try c.encode(flagsAllowed, forKey: .flagsAllowed)
+        try c.encodeIfPresent(options, forKey: .options)
+        try c.encodeIfPresent(launcher, forKey: .launcher)
+        if !confirmed.isEmpty { try c.encode(confirmed, forKey: .confirmed) }
+        try c.encodeIfPresent(version, forKey: .version)
+    }
+}
+
+extension SessionSnapshot.LaunchOption: Codable {
+    private enum Keys: String, CodingKey { case words, unclear }
+
+    /// Its words read one by one within the file's budget. One that does not read whole is not taken in part.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        let most = SessionSnapshot.Evidence.mostOptions
+        guard let words = c.strings(.words, max: most, budget: decoder.snapshotBudget) else { throw SessionSnapshot.DecodeError.unreadable }
+        self.init(words, unclear: c.contains(.unclear) ? try c.decode(Bool.self, forKey: .unclear) : false)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Keys.self)
+        try c.encode(words, forKey: .words)
+        if unclear { try c.encode(true, forKey: .unclear) }
+    }
+}
+
+extension SessionSnapshot.Launcher: Codable {
+    private enum Keys: String, CodingKey { case word, typed }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        self.init(word: try c.decode(String.self, forKey: .word), typed: try c.decode(Int.self, forKey: .typed))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Keys.self)
+        try c.encode(word, forKey: .word)
+        try c.encode(typed, forKey: .typed)
     }
 }
 

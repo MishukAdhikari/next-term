@@ -269,6 +269,11 @@ import Testing
         #expect(agent.agent?.script == "/opt/agents/lib/claude/cli.js")
         #expect(agent.agent?.startedAt == Date(timeIntervalSince1970: 1_789_980_000))
         #expect(agent.agent?.ranAsTyped == true)
+        // Written before a record kept the launch's options, its launcher, its confirmed options and its version: none.
+        #expect(agent.agent?.options == nil)
+        #expect(agent.agent?.launcher == nil)
+        #expect(agent.agent?.confirmed == [])
+        #expect(agent.agent?.version == nil)
         #expect(!agent.systemZsh) // not in the file: not known
         #expect(agent.scrollback == UUID(uuidString: "9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"))
         #expect(agent.pending == Snapshot.PendingAction(action: .resume, state: .pending, reason: .update))
@@ -750,6 +755,131 @@ import Testing
         #expect(fixed.executable == "/opt/agents/bin/claude")
         #expect(fixed.interpreter == nil)
         #expect(fixed.script == nil)
+    }
+
+    /// `evidence` written to a file and read back.
+    private func throughAFile(_ evidence: Snapshot.Evidence) throws -> Snapshot.Evidence? {
+        var agentPane = pane(1)
+        agentPane.agent = evidence
+        let snapshot = Snapshot(header: header(), windows: [Window(groups: [Group(root: .pane(agentPane), focused: id(1))])])
+        return try Snapshot.decode(snapshot.encoded()).panes.first?.agent
+    }
+
+    @Test func theLaunchsOptionsLauncherConfirmedOptionsAndVersionRoundTrip() throws {
+        typealias Option = Snapshot.LaunchOption
+        var evidence = Snapshot.Evidence(agent: .claude, sessionID: "5e4d3c2b-1a09-4f8e-9d7c-6b5a4f3e2d1c", source: .sessionFile)
+        let options: [Option] = [
+            Option(["--dangerously-skip-permissions"]), Option(["--model", "opus[1m]"]), Option(["--approval-mode=yolo"]),
+            Option(["--allowedTools", "Edit", "Bash(git *)"]), Option(["--mcp-config", "./mcp.json"]), Option(["--newflag"], unclear: true),
+        ]
+        evidence.options = options
+        evidence.launcher = Snapshot.Launcher(word: "claude-auto-danger", typed: 2)
+        evidence.confirmed = [Option(["--dangerously-skip-permissions"])]
+        evidence.version = "2.1.280"
+        let back = try #require(try throughAFile(evidence))
+        #expect(back == evidence)
+        #expect(back.options?.map(\.name) == ["--dangerously-skip-permissions", "--model", "--approval-mode", "--allowedTools",
+                                                "--mcp-config", "--newflag"])
+
+        // None at all is a list of none, which a file keeps apart from a list not known.
+        var none = evidence
+        none.options = []
+        none.launcher = nil
+        #expect(try throughAFile(none)?.options == [])
+    }
+
+    @Test func optionsPastTheCapOrHoldingASecretKeepNone() throws {
+        typealias Option = Snapshot.LaunchOption
+        var evidence = Snapshot.Evidence(agent: .claude)
+        evidence.launcher = Snapshot.Launcher(word: "cc", typed: 0)
+        evidence.confirmed = [Option(["--dangerously-skip-permissions"])]
+        let most = Snapshot.Evidence.mostOptions
+        evidence.options = (0..<most).map { Option(["--flag\($0)"]) }
+        #expect(try throughAFile(evidence)?.options?.count == most)
+
+        let refused: [[Option]] = [
+            (0...most).map { Option(["--flag\($0)"]) }, // one past the cap
+            [Option(["--model", "opus"]), Option(["--token", "ghp_7Kq2Lm9Xw4Rt6Yv8Bn3Cd5Ef1Gh0Jk2Lm4Np6"])], // a secret
+            [Option(["--model", "opus\nrm -rf ~"])], // a line break
+            [Option(["--model", "op\u{202E}us"])], // a bidi override
+            [Option(["-\u{202E}x"])], // a name no note may show
+            [Option(["model", "opus"])], // not an option
+            [Option([])],
+            [Option(["--newflag", "value"], unclear: true)], // an unclear option keeps no word after it
+            [Option(["--newflag=value"], unclear: true)],
+            [Option(["--allowedTools"] + (0...most).map { "Tool\($0)" })], // more values than the cap
+        ]
+        for options in refused {
+            evidence.options = options
+            let back = try #require(try throughAFile(evidence))
+            #expect(back.options == nil, "\(options)")
+            // The launcher replays some of them, so it goes with them.
+            #expect(back.launcher == nil, "\(options)")
+            #expect(back.confirmed == evidence.confirmed)
+        }
+
+        // The confirmed options follow the same rules: a list that breaks one is none.
+        evidence.options = [Option(["--allowedTools", "Edit"])]
+        evidence.confirmed = [Option(["--allowedTools", "Edit"]), Option(["--token", "ghp_7Kq2Lm9Xw4Rt6Yv8Bn3Cd5Ef1Gh0Jk2Lm4Np6"])]
+        #expect(try throughAFile(evidence)?.confirmed == [])
+    }
+
+    @Test func aLauncherIsOneWordTypedBareThatReplaysNoMoreOptionsThanWereKept() throws {
+        typealias Option = Snapshot.LaunchOption
+        var evidence = Snapshot.Evidence(agent: .claude)
+        evidence.options = [Option(["--dangerously-skip-permissions"]), Option(["--model", "opus"])]
+        let launchers: [(String, Int, Bool)] = [
+            ("claude-auto-danger", 0, true), ("cc", 2, true), ("/Users/x/bin/cad", 1, true), ("claude_yolo.v2", 0, true),
+            ("cc", 3, false), ("cc", -1, false), ("my agent", 0, false), ("~/bin/cad", 0, false), ("bin/cad", 0, false),
+            ("-cad", 0, false), ("A=1", 0, false), ("cad;rm", 0, false), ("ca\u{202E}d", 0, false), ("", 0, false),
+        ]
+        for (word, typed, kept) in launchers {
+            evidence.launcher = Snapshot.Launcher(word: word, typed: typed)
+            let back = try throughAFile(evidence)
+            #expect((back?.launcher != nil) == kept, "\(word) \(typed)")
+            #expect(back?.options == evidence.options, "\(word) \(typed)")
+        }
+        // Options not known give the launcher nothing to replay.
+        evidence.options = nil
+        evidence.launcher = Snapshot.Launcher(word: "cc", typed: 0)
+        #expect(try throughAFile(evidence)?.launcher == nil)
+    }
+
+    @Test func aVersionIsOneTokenStartingWithADigit() throws {
+        var evidence = Snapshot.Evidence(agent: .claude)
+        let versions: [(String, Bool)] = [
+            ("2.1.280", true), ("0.154.0", true), ("2025.09.18-7ae6800", true), ("v1.74.3", true), ("1.0.0+build_7", true),
+            ("latest", false), ("2.1;rm", false), ("2.1 280", false), ("", false), (String(repeating: "1", count: 65), false),
+        ]
+        for (version, kept) in versions {
+            evidence.version = version
+            #expect(try throughAFile(evidence)?.version == (kept ? version : nil), "\(version)")
+        }
+    }
+
+    @Test func launchFieldsOfTheWrongShapeReadAsNone() throws {
+        let shapes = [
+            #""options":"--model","confirmed":{"words":["--yolo"]},"launcher":"cc","version":2"#,
+            #""options":[{"words":"--model"}],"confirmed":[1],"launcher":{"word":"cc"},"version":["2.1.280"]"#,
+            #""options":[{"words":["--model",7]}],"confirmed":[{"words":[]}],"launcher":{"typed":0},"version":null"#,
+            #""options":[{"unclear":true}],"confirmed":[{"words":["--yolo"],"unclear":"yes"}],"launcher":{"word":"cc","typed":"0"}"#,
+        ]
+        for shape in shapes {
+            let agent = #""agent":{"agent":"claude","sessionID":"abc","source":"sessionFile",\#(shape)}"#
+            let pane = try #require(try decode(oneTab(#"{"pane":{"id":"\#(id(1).uuidString)",\#(agent)}}"#)).panes.first, "\(shape)")
+            let evidence = try #require(pane.agent, "\(shape)")
+            #expect(evidence.sessionID == "abc", "\(shape)")
+            #expect(evidence.options == nil, "\(shape)")
+            #expect(evidence.launcher == nil, "\(shape)")
+            #expect(evidence.confirmed == [], "\(shape)")
+            #expect(evidence.version == nil, "\(shape)")
+        }
+        // An entry that does not read drops its whole list, never only itself.
+        let partly = #""options":[{"words":["--model","opus"]},{"words":[1]}],"confirmed":[{"words":["--yolo"]},{}]"#
+        let agent = #""agent":{"agent":"codex","source":"openRollout",\#(partly)}"#
+        let evidence = try #require(try decode(oneTab(#"{"pane":{"id":"\#(id(1).uuidString)",\#(agent)}}"#)).panes.first?.agent)
+        #expect(evidence.options == nil)
+        #expect(evidence.confirmed == [])
     }
 
     // MARK: caps while reading

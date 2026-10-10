@@ -53,11 +53,11 @@ import Testing
     }
 
     /// `shell`: the login shell's routing variables, as values (digested here); nil when the login shell is not known.
-    func capture(_ leader: AgentProcess?, typed: String? = nil, home: String, children: [String] = [],
+    func capture(_ leader: AgentProcess?, typed: String? = nil, expanded: String? = nil, home: String, children: [String] = [],
                  shell: [String: String]? = nil) -> Evidence? {
         let routing = shell.map(digested)
         let input = AgentEvidence.Capture(leader: leader, verified: true, childSessionIDs: children, typedLine: typed,
-                                          shellRouting: routing, home: home)
+                                          expandedLine: expanded, shellRouting: routing, home: home)
         return AgentEvidence.capture(input)
     }
 
@@ -514,6 +514,200 @@ import Testing
         #expect(evidence.flags == ["--model", "opus"] && evidence.leftOff == ["--dangerously-skip-permissions"] && !evidence.flagsAllowed)
         let plain = try #require(capture(try process(["claude", "--model", "opus"]), typed: "claude --model opus", home: home))
         #expect(plain.flags == ["--model", "opus"] && plain.leftOff.isEmpty && plain.flagsAllowed)
+    }
+
+    // MARK: the launch
+
+    /// The words of each option a record keeps.
+    func words(_ options: [SessionSnapshot.LaunchOption]?) -> [[String]]? {
+        options?.map(\.words)
+    }
+
+    /// U2, AE26: argv's options in order with their values, as argv gave them, and never a prompt word.
+    @Test func theLaunchsOptionsComeFromArgvInOrderWithoutItsPrompt() throws {
+        let home = try makeHome().home
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let argv = ["claude", "--model", "opus[1m]", "--permission-mode", "bypassPermissions", "fix the tests"]
+        let typed = "claude --model 'opus[1m]' --permission-mode bypassPermissions \"fix the tests\""
+        let evidence = try #require(capture(try process(argv), typed: typed, home: home))
+        #expect(words(evidence.options) == [["--model", "opus[1m]"], ["--permission-mode", "bypassPermissions"]])
+        #expect(evidence.options?.allSatisfy { !$0.unclear } == true)
+
+        // Each as it was written: `=` keeps its option and value one word.
+        let launches: [(RestoreAgent, [String], String, [[String]])] = [
+            (.gemini, ["gemini", "--approval-mode=yolo"], "/opt/homebrew/bin/gemini", [["--approval-mode=yolo"]]),
+            (.copilot, ["copilot", "-r", uuid, "--allow-all"], "/opt/homebrew/bin/copilot", [["--allow-all"]]),
+            (.codex, ["codex", "--yolo"], "/opt/homebrew/bin/codex", [["--yolo"]]),
+            (.claude, ["claude", "--allowedTools", "Edit", "Bash(git *)", "--verbose"], "/opt/homebrew/bin/claude",
+             [["--allowedTools", "Edit", "Bash(git *)"], ["--verbose"]]),
+            (.claude, ["claude", "--mcp-config", "./mcp.json"], "/opt/homebrew/bin/claude", [["--mcp-config", "./mcp.json"]]),
+            (.claude, ["claude"], "/opt/homebrew/bin/claude", []),
+        ]
+        for (agent, argv, executable, expected) in launches {
+            let found = try #require(capture(try process(argv, executable: executable), home: home), "\(argv)")
+            #expect(found.agent == agent, "\(argv)")
+            #expect(words(found.options) == expected, "\(argv)")
+        }
+
+        // Without argv nothing is known of them: the typed line alone is not what ran.
+        #expect(capture(nil, typed: typed, home: home)?.options == nil)
+    }
+
+    /// U2, R8: forms name a session the resume names itself, and one-shot options hand the agent a prompt: neither is kept.
+    @Test func formsAndOneShotOptionsAreNotKept() throws {
+        let home = try makeHome().home
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let launches: [([String], String, [[String]])] = [
+            (["claude", "--resume", uuid, "--fork-session", "-p", "--model", "opus", "say the password"], "/opt/homebrew/bin/claude",
+             [["--model", "opus"]]),
+            (["codex", "-a", "never", "exec", "--model", "o3", "fix it"], "/opt/homebrew/bin/codex", [["-a", "never"], ["--model", "o3"]]),
+            (["codex", "--yolo", "resume", uuid, "-C", "/Users/x/app"], "/opt/homebrew/bin/codex", [["--yolo"]]),
+            (["qwen", "-p", "delete the tests", "-y"], "/opt/homebrew/bin/qwen", [["-y"]]),
+            (["claude", "--model", "opus", "--", "--verbose", "fix it"], "/opt/homebrew/bin/claude", [["--model", "opus"]]),
+        ]
+        for (argv, executable, expected) in launches {
+            let found = try #require(capture(try process(argv, executable: executable), home: home), "\(argv)")
+            #expect(words(found.options) == expected, "\(argv)")
+            let file = String(decoding: try JSONEncoder().encode(found), as: UTF8.self)
+            for prompt in ["say the password", "fix it", "delete the tests"] {
+                #expect(!file.contains(prompt), "\(argv)")
+            }
+        }
+    }
+
+    /// AE30: an option the table does not know keeps the value `=` joins to it. A word after it may be its value or a
+    /// prompt's, so the option is marked unclear and the word is not kept.
+    @Test func anOptionTheTableDoesNotKnowKeepsOnlyAJoinedValue() throws {
+        let home = try makeHome().home
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let launches: [([String], [[String]], [Bool])] = [
+            (["claude", "--newflag", "value"], [["--newflag"]], [true]),
+            (["claude", "--newflag=value"], [["--newflag=value"]], [false]),
+            (["claude", "--newflag", "--model", "opus"], [["--newflag"], ["--model", "opus"]], [false, false]),
+            (["claude", "--model", "opus", "--newflag"], [["--model", "opus"], ["--newflag"]], [false, false]),
+            (["claude", "--newflag", "--", "fix it"], [["--newflag"]], [true]),
+        ]
+        for (argv, expected, unclear) in launches {
+            let found = try #require(capture(try process(argv), home: home), "\(argv)")
+            #expect(words(found.options) == expected, "\(argv)")
+            #expect(found.options?.map(\.unclear) == unclear, "\(argv)")
+        }
+    }
+
+    @Test func optionsHoldingASecretOrPastTheCapKeepNone() throws {
+        let home = try makeHome().home
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let secret = ["qwen", "--openai-api-key", "sk-proj-7Kq2Lm9Xw4Rt6Yv8Bn3Cd5Ef1Gh0Jk2Lm4Np6Qr8St0Uv", "--model", "qwen3"]
+        let keyed = try #require(capture(try process(secret, executable: "/opt/homebrew/bin/qwen"), home: home))
+        #expect(keyed.options == nil)
+        let most = SessionSnapshot.Evidence.mostOptions
+        let many = ["claude"] + (0...most).flatMap { ["--add-dir", "/Users/x/dir\($0)"] }
+        #expect(try #require(capture(try process(many), home: home)).options == nil)
+        let enough = ["claude"] + (0..<most).flatMap { ["--add-dir", "/Users/x/dir\($0)"] }
+        #expect(try #require(capture(try process(enough), home: home)).options?.count == most)
+    }
+
+    /// KTD7, AE23-AE25, AE27: the typed first word is kept only when it passes its arguments on: an alias whose
+    /// expansion ends in the agent with argv's own arguments, or a word typed with arguments that argv ends with.
+    @Test func aLauncherIsKeptOnlyWhenItPassesItsArgumentsOn() throws {
+        let home = try makeHome().home
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let danger = ["claude", "--dangerously-skip-permissions"]
+        func launcher(_ argv: [String], typed: String?, expanded: String? = nil) throws -> SessionSnapshot.Launcher? {
+            try #require(capture(try process(argv), typed: typed, expanded: expanded, home: home)).launcher
+        }
+        typealias Launcher = SessionSnapshot.Launcher
+        // An alias, typed alone or with options and a prompt: the options typed after it are the last ones kept.
+        #expect(try launcher(danger, typed: "claude-auto-danger", expanded: "claude --dangerously-skip-permissions")
+                == Launcher(word: "claude-auto-danger", typed: 0))
+        let typedOptions = danger + ["--model", "opus", "fix it"]
+        let expansion = "claude --dangerously-skip-permissions --model opus 'fix it'"
+        #expect(try launcher(typedOptions, typed: "cad --model opus 'fix it'", expanded: expansion) == Launcher(word: "cad", typed: 1))
+        // An alias that sets a variable, or moves to a folder first, brings that back itself.
+        let prefixed = "CLAUDE_CONFIG_DIR=~/.claude-work claude"
+        #expect(try launcher(["claude"], typed: "cw", expanded: prefixed) == Launcher(word: "cw", typed: 0))
+        #expect(try launcher(["claude"], typed: "cw", expanded: "cd ~/work && claude") == Launcher(word: "cw", typed: 0))
+        // A function, or a script on the path, typed with arguments that argv ends with.
+        #expect(try launcher(danger + ["--model", "opus"], typed: "claude-auto-danger --model opus")
+                == Launcher(word: "claude-auto-danger", typed: 1))
+        #expect(try launcher(danger + ["fix it"], typed: "/Users/x/bin/cad 'fix it'") == Launcher(word: "/Users/x/bin/cad", typed: 0))
+        #expect(try launcher(["claude", "--model", "opus"], typed: "cd ~/app && claude --model opus") == Launcher(word: "claude", typed: 1))
+
+        // None: a function typed alone, or an alias whose last command is not the agent with argv's own arguments.
+        #expect(try launcher(danger, typed: "claude-auto-danger") == nil)
+        #expect(try launcher(["claude"], typed: "claude") == nil)
+        #expect(try launcher(danger, typed: "cl", expanded: "claude --dangerously-skip-permissions; echo done") == nil)
+        #expect(try launcher(danger, typed: "cl", expanded: "claude --dangerously-skip-permissions | tee log") == nil)
+        #expect(try launcher(danger, typed: "cl", expanded: "claude --verbose") == nil)
+        // Argv that does not end with what was typed, or an alias that splits an option from its value.
+        #expect(try launcher(danger, typed: "cad --model opus") == nil)
+        #expect(try launcher(["claude", "--model", "opus"], typed: "cm opus", expanded: "claude --model opus") == nil)
+        // A prefix, a wrapper, a word typed with quotes or a home folder's tilde, or a line that runs on after it.
+        #expect(try launcher(["claude", "--model", "opus"], typed: "CLAUDE_CONFIG_DIR=/Users/x/w claude --model opus") == nil)
+        #expect(try launcher(["claude", "--model", "opus"], typed: "nice claude --model opus") == nil)
+        #expect(try launcher(["claude", "--model", "opus"], typed: "'my claude' --model opus") == nil)
+        #expect(try launcher(["claude", "--model", "opus"], typed: "~/bin/cad --model opus") == nil)
+        #expect(try launcher(["claude", "--model", "opus"], typed: "cad --model opus && echo done") == nil)
+        // Without argv, or with options that could not be kept, there is nothing to replay.
+        #expect(capture(nil, typed: "claude-auto-danger", expanded: "claude --dangerously-skip-permissions", home: home)?.launcher == nil)
+        let token = "ghp_7Kq2Lm9Xw4Rt6Yv8Bn3Cd5Ef1Gh0Jk2Lm4Np6"
+        #expect(try launcher(["claude", "--model", "opus", "--token=" + token], typed: "cad --token=" + token) == nil)
+        // A word after an option the table does not know is never kept, so a secret there leaves nothing to refuse.
+        let unclear = try #require(capture(try process(["claude", "--model", "opus", "--token", token]), typed: "cad --token " + token,
+                                           home: home))
+        #expect(words(unclear.options) == [["--model", "opus"], ["--token"]])
+        #expect(unclear.launcher == Launcher(word: "cad", typed: 1))
+    }
+
+    /// KTD5, AE23, AE25, AE26: the permission options the nonce-verified typed line shows, or its alias expansion; a
+    /// function's own options show on neither.
+    @Test func thePermissionOptionsTheTypedOrExpandedLineShowsAreConfirmed() throws {
+        let home = try makeHome().home
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let danger = ["claude", "--dangerously-skip-permissions"]
+        func confirmed(_ argv: [String], typed: String?, expanded: String? = nil) throws -> [[String]] {
+            try #require(capture(try process(argv), typed: typed, expanded: expanded, home: home)).confirmed.map(\.words)
+        }
+        #expect(try confirmed(danger, typed: "claude-auto-danger", expanded: "claude --dangerously-skip-permissions")
+                == [["--dangerously-skip-permissions"]])
+        #expect(try confirmed(danger, typed: "claude-auto-danger") == [])
+        #expect(try confirmed(danger + ["--model", "opus"], typed: "claude --dangerously-skip-permissions --model opus")
+                == [["--dangerously-skip-permissions"]])
+        let argv = ["claude", "--model", "opus[1m]", "--permission-mode", "bypassPermissions", "fix the tests"]
+        #expect(try confirmed(argv, typed: "claude --model 'opus[1m]' --permission-mode bypassPermissions \"fix the tests\"")
+                == [["--permission-mode", "bypassPermissions"]])
+        // The line's own words, whatever argv shows: a process can rewrite its argv, not the line the shell reported.
+        #expect(try confirmed(danger, typed: "claude") == [])
+        #expect(try confirmed(["claude"], typed: "claude --allowedTools Edit 'Bash(git *)'") == [["--allowedTools", "Edit", "Bash(git *)"]])
+        let codex = try #require(capture(try process(["codex", "--yolo", "-a", "never"], executable: "/opt/homebrew/bin/codex"),
+                                         typed: "codex --yolo -a never --model o3", home: home))
+        #expect(codex.confirmed.map(\.words) == [["--yolo"], ["-a", "never"]])
+        #expect(try confirmed(danger, typed: nil) == [])
+    }
+
+    /// U2, KTD20: the version, for notes only, when the path the agent was installed at names it. No process runs.
+    @Test func theVersionIsReadFromTheInstallPathAlone() throws {
+        let home = try makeHome().home
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let installs: [([String], String, String?)] = [
+            (["claude"], "/Users/x/.local/share/claude/versions/2.1.280", "2.1.280"),
+            (["codex"], "/opt/homebrew/Caskroom/codex/0.154.0/codex-aarch64-apple-darwin", "0.154.0"),
+            (["gemini"], "/opt/homebrew/Cellar/gemini-cli/0.9.0/libexec/bin/gemini", "0.9.0"),
+            (["node", "/Users/x/.local/share/cursor-agent/versions/2025.09.18-7ae6800/index.js"], "/Users/x/.local/share/cursor-agent/node",
+             "2025.09.18-7ae6800"),
+            // Node's version, or a version folder of a package that is not the agent's own, is not the agent's.
+            (["node", "/Users/x/.nvm/versions/node/v22.1.0/lib/node_modules/@anthropic-ai/claude-code/cli.js"],
+             "/Users/x/.nvm/versions/node/v22.1.0/bin/node", nil),
+            (["node", "/opt/homebrew/lib/node_modules/@google/gemini-cli/dist/index.js"], "/opt/homebrew/Cellar/node/22.1.0/bin/node", nil),
+            (["claude"], "/opt/homebrew/bin/claude", nil),
+            (["claude"], "/Users/x/.local/share/claude/versions/latest", nil),
+        ]
+        for (argv, executable, version) in installs {
+            let found = try #require(capture(try process(argv, executable: executable), home: home), "\(executable)")
+            #expect(found.version == version, "\(executable)")
+        }
+        #expect(RestoreAgent.claude.cli.version(at: ["/Users/x/.local/share/claude/versions/2.1.280"]) == "2.1.280")
+        #expect(RestoreAgent.codex.cli.version(at: ["/opt/homebrew/Caskroom/claude-code/2.1.280/claude"]) == nil)
     }
 
     @Test func anEnvPrefixOrAnAliasDidNotRunAsTyped() throws {

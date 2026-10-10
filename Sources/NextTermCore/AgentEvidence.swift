@@ -505,9 +505,15 @@ extension AgentEvidence {
         evidence.flags = options.carried
         evidence.leftOff = options.leftOff
         evidence.flagsAllowed = argv != nil && options.allowed
+        // The launch as a put-back line replays it (U2, KTD7): argv's options, the typed word that passes them on, and
+        // the permission options the typed line or its alias expansion showed. The expansion is read here only.
+        evidence.options = argv.flatMap(agent.launchOptions(in:))
+        evidence.confirmed = input.typedLine.map { agent.confirmedOptions(inLine: expanded ?? $0) } ?? []
+        evidence.launcher = launcher(of: agent, typed: input.typedLine, expanded: expanded, argv: argv, options: evidence.options)
         if let leader {
             evidence.sessionFolder = evidence.sessionFolder ?? leader.directory
             evidence.startedAt = leader.startedAt
+            evidence.version = agent.cli.version(at: RestoreAgent.installPaths(of: leader, resolved: true))
             record(code(of: leader), in: &evidence)
             evidence.routingMatchesShell = input.shellRouting.map { shell in
                 candidates.allSatisfy { process in
@@ -542,6 +548,30 @@ extension AgentEvidence {
             evidence.sessionID = named.first
             evidence.source = .childEnvironment
         }
+    }
+
+    /// The word typed to start the agent, when it passes its arguments on (KTD7): the first word of the typed line's last
+    /// command, with no prefix or wrapper before it, that is an alias whose expansion's last command runs the agent with
+    /// argv's own arguments, or a word typed with arguments that argv ends with. A function typed alone shows neither.
+    /// The words typed after it must read alone as they do at the end of argv: an alias ending in an option that takes a
+    /// value (`claude --model`) leaves that value to the typed words, which a replay would split. Nil when argv's options
+    /// are not known, as the launcher replays the last of them.
+    static func launcher(of agent: RestoreAgent, typed: String?, expanded: String?, argv: [String]?,
+                         options: [SessionSnapshot.LaunchOption]?) -> SessionSnapshot.Launcher? {
+        guard let typed, let argv, options != nil, let last = CommandClassifier.segments(typed).last else { return nil }
+        let words = AgentKind.words(last)
+        guard let word = words.first, CommandClassifier.programIndex(words) == 0, SessionSnapshot.Launcher.isWord(word) else { return nil }
+        let rest = Array(words.dropFirst())
+        guard rest.count <= argv.count, Array(argv.suffix(rest.count)) == rest else { return nil }
+        if let expanded {
+            guard let tail = CommandClassifier.segments(expanded).last, agent.arguments(inLine: tail)?.arguments == argv else { return nil }
+        } else if rest.isEmpty {
+            return nil
+        }
+        let cli = agent.cli
+        let apart = cli.read(Array(argv.dropLast(rest.count))).pieces + cli.read(rest).pieces
+        guard apart == cli.read(argv).pieces, let typedOptions = agent.launchOptions(in: rest) else { return nil }
+        return SessionSnapshot.Launcher(word: word, typed: typedOptions.count)
     }
 
     /// The store an agent that resumes by itself keeps, by its real path (a link to it, such as a dotfiles folder,

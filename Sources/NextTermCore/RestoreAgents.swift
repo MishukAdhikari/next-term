@@ -82,7 +82,7 @@ extension SessionSnapshot.Agent {
 
     /// Where a process's code lies: its executable, and the script an interpreter runs, with that script's real path when
     /// `resolved` (npm's `bin/cmd` link leads into Command Code's package).
-    private static func installPaths(of process: AgentProcess, resolved: Bool) -> [String] {
+    static func installPaths(of process: AgentProcess, resolved: Bool) -> [String] {
         guard let index = scriptIndex(argv: process.arguments, executable: process.executable) else { return [process.executable] }
         let word = process.arguments[index]
         let folder = process.directory.map { $0 + "/" + word }
@@ -264,6 +264,38 @@ extension SessionSnapshot.Agent {
             options.allowed = false
         }
         return options
+    }
+
+    /// The options in the agent's own arguments (after its program) as a file keeps them (U2): in order, each with its
+    /// values as the arguments gave them. Prompt words, forms and one-shot options are none of them, as a resume never
+    /// sends a prompt again (R8) and names its own session. An option the table does not know keeps a value `=` joins
+    /// to it; a word after it may be its value or a prompt's, so it is marked unclear and the word is not kept. Nil when
+    /// they cannot be kept whole (SessionSnapshot.LaunchOption.kept).
+    public func launchOptions(in arguments: [String]) -> [SessionSnapshot.LaunchOption]? {
+        let reading = cli.read(arguments)
+        var options: [SessionSnapshot.LaunchOption] = []
+        for (index, piece) in reading.pieces.enumerated() {
+            switch piece {
+            case .word:
+                continue
+            case .known(_, _, let option):
+                if option.kind == .form || option.kind == .oneShot { continue }
+                options.append(SessionSnapshot.LaunchOption(reading.given[index]))
+            case .unknown(_, let value):
+                let next = reading.pieces.indices.contains(index + 1) ? reading.pieces[index + 1] : nil
+                let wordAfter: Bool
+                if case .word = next { wordAfter = true } else { wordAfter = false }
+                options.append(SessionSnapshot.LaunchOption(reading.given[index], unclear: value == nil && wordAfter))
+            }
+        }
+        return SessionSnapshot.LaunchOption.kept(options)
+    }
+
+    /// The permission options a typed line, or an alias's expansion, shows for this agent (KTD5). None when the line
+    /// does not run it, or its options cannot be kept whole.
+    public func confirmedOptions(inLine line: String) -> [SessionSnapshot.LaunchOption] {
+        guard let run = arguments(inLine: line), let options = launchOptions(in: run.arguments) else { return [] }
+        return options.filter { cli.options[$0.name]?.kind == .permission }
     }
 
     /// `flags` are exactly what this agent's resume may carry.

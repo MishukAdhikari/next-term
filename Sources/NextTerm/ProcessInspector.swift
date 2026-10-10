@@ -91,8 +91,10 @@ enum ProcessInspector {
     /// tab's shell. For an agent that runs itself again in a child (RestoreAgent.relaunchesItself), that child is read
     /// with it; for Copilot CLI, the session its commands are told. The agent's routing variables are compared with the
     /// login shell's (LoginShell.routing), the environment a restored tab's shell starts with: the tab's own shell
-    /// shows the kernel no environment, and what its rc files export never reaches that record. Nil when the tab runs
-    /// no agent.
+    /// shows the kernel no environment, and what its rc files export never reaches that record. The launch is kept as a
+    /// put-back line replays it (U2): the leader's argv gives its options, the integration's typed line and its alias
+    /// expansion (held in memory only) give the launcher and the permission options they confirm, and the path the
+    /// kernel ran gives the version, with no process started to ask. Nil when the tab runs no agent.
     static func agentEvidence(ptyFileDescriptor fd: Int32, shellPid: pid_t, status: TabStatus,
                               home: String = NSHomeDirectory()) -> SessionSnapshot.Evidence? {
         var capture = AgentEvidence.Capture(status: status, home: home)

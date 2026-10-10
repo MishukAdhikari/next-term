@@ -211,6 +211,37 @@ public struct AgentCLI: Sendable {
         paths.contains { path in pathHints.contains { path.range(of: $0, options: .caseInsensitive) != nil } }
     }
 
+    /// The agent's version, when one of `paths` names it: the file or folder in the agent's own versions folder
+    /// (`~/.local/share/claude/versions/2.1.280`), or its Homebrew keg or cask (`Caskroom/codex/0.154.0/`). It is
+    /// read from the path alone, as no process may run to ask the agent, and a note may name it; nothing checks it
+    /// (KTD20). Another program's versions folder, such as node's under nvm, names none.
+    public func version(at paths: [String]) -> String? {
+        let versions = pathHints.filter { $0.hasSuffix("/versions/") }
+        let brewNames = Set(programs + programs.map { $0 + "-cli" })
+        for path in paths {
+            for hint in versions {
+                guard let found = path.range(of: hint, options: .caseInsensitive) else { continue }
+                let next = path[found.upperBound...].prefix { $0 != "/" }
+                if Self.isVersion(String(next)) { return String(next) }
+            }
+            let parts = path.split(separator: "/").map(String.init)
+            for index in parts.indices.dropLast(2) where parts[index] == "Cellar" || parts[index] == "Caskroom" {
+                if brewNames.contains(parts[index + 1]), Self.isVersion(parts[index + 2]) { return parts[index + 2] }
+            }
+        }
+        return nil
+    }
+
+    /// A version as an install path names one: a digit first (after a `v`), then letters, digits and `.-+_`, at most 64
+    /// bytes. `latest`, or anything a line could not show plainly, is none.
+    public static func isVersion(_ text: String) -> Bool {
+        let bytes = Array(text.utf8)
+        let digits = UInt8(ascii: "0")...UInt8(ascii: "9")
+        let start = bytes.first == UInt8(ascii: "v") ? 1 : 0
+        guard bytes.count <= 64, bytes.count > start, digits.contains(bytes[start]) else { return false }
+        return isToken(bytes, extra: ".-+_")
+    }
+
     // MARK: the resume form
 
     /// Shaped like this agent's session ids, and safe as one word of a line.
@@ -258,13 +289,22 @@ public struct AgentCLI: Sendable {
     /// An agent's arguments read with the table, in order.
     public struct Reading: Equatable, Sendable {
         public var pieces: [Piece] = []
+        /// Each piece's words as the arguments gave them, in step with `pieces`: `--model=opus` stays one word, and a
+        /// command's value follows the command.
+        public var given: [[String]] = []
         /// The session a form names, as given: not yet checked against the id pattern.
         public var session: String?
+
+        mutating func add(_ piece: Piece, given words: [String]) {
+            pieces.append(piece)
+            given.append(words)
+        }
 
         /// The command at `index` takes `value`.
         mutating func fill(_ index: Int, with value: String) {
             guard case .known(let name, _, let option) = pieces[index] else { return }
             pieces[index] = .known(name, values: [value], option)
+            given[index].append(value)
             if option.namesSession, session == nil { session = value }
         }
     }
@@ -280,7 +320,7 @@ public struct AgentCLI: Sendable {
             let word = arguments[index]
             index += 1
             if word == "--" {
-                reading.pieces += arguments[index...].map { Piece.word($0) }
+                for rest in arguments[index...] { reading.add(.word(rest), given: [rest]) }
                 break
             }
             guard Self.isOption(word) else {
@@ -289,11 +329,11 @@ public struct AgentCLI: Sendable {
                     awaiting = nil
                     inCommands = false
                 } else if inCommands, let option = options[word] {
-                    reading.pieces.append(.known(word, values: [], option))
+                    reading.add(.known(word, values: [], option), given: [word])
                     if option.values != .none { awaiting = reading.pieces.count - 1 }
                 } else {
                     inCommands = false
-                    reading.pieces.append(.word(word))
+                    reading.add(.word(word), given: [word])
                 }
                 continue
             }
@@ -301,16 +341,18 @@ public struct AgentCLI: Sendable {
             let name = String(parts[0])
             let joined = parts.count > 1 ? String(parts[1]) : nil
             guard let option = options[name] else {
-                reading.pieces.append(.unknown(name, value: joined))
+                reading.add(.unknown(name, value: joined), given: [word])
                 continue
             }
             var values = joined.map { [$0] } ?? []
+            var given = [word]
             while option.values == .many || (option.values == .one && values.isEmpty),
                   index < arguments.count, !Self.isOption(arguments[index]) {
                 values.append(arguments[index])
+                given.append(arguments[index])
                 index += 1
             }
-            reading.pieces.append(.known(name, values: values, option))
+            reading.add(.known(name, values: values, option), given: given)
             if option.namesSession, reading.session == nil { reading.session = values.first }
         }
         return reading
