@@ -122,6 +122,27 @@ import Testing
         #expect(global.paths.isEmpty && global.skipped.isEmpty)
     }
 
+    /// A database (or the -wal SQLite would read beside it) linked from outside Zed's db folder is never opened.
+    @Test func aDatabaseLinkedFromElsewhereIsNotOpened() throws {
+        let home = try fixture(database: false)
+        defer { remove(home) }
+        let sql = try String(contentsOfFile: home + "/workspaces.sql", encoding: .utf8).replacingOccurrences(of: "HOME/", with: home + "/")
+        try makeDatabase(home + "/elsewhere/db.sqlite", sql: sql)
+        let folder = home + "/Library/Application Support/Zed/db/0-stable"
+        try fm.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: folder + "/db.sqlite", withDestinationPath: home + "/elsewhere/db.sqlite")
+        #expect(ImportZed.databaseFiles(home: home).isEmpty)
+        #expect(ImportZed.recentProjects(home: home).paths.isEmpty)
+
+        // The database itself inside, its -wal linked out: not opened either.
+        try fm.removeItem(atPath: folder + "/db.sqlite")
+        try fm.copyItem(atPath: home + "/elsewhere/db.sqlite", toPath: folder + "/db.sqlite")
+        #expect(ImportZed.recentProjects(home: home).paths.count == 2)
+        try Data().write(to: URL(fileURLWithPath: home + "/elsewhere/wal"))
+        try fm.createSymbolicLink(atPath: folder + "/db.sqlite-wal", withDestinationPath: home + "/elsewhere/wal")
+        #expect(ImportZed.recentProjects(home: home).paths.isEmpty)
+    }
+
     @Test func foldersInTheOrderTheyWereOpened() {
         let three: [String] = ["/a", "/b", "/c"], two: [String] = ["/a", "/b"]
         let reordered: [String] = ["/b", "/c", "/a"]

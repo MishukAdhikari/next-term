@@ -410,13 +410,21 @@ public enum ImportZed {
     }
 
     /// Zed's databases (`~/Library/Application Support/Zed/db/0-<channel>/db.sqlite`, `db.rs`) that exist, for
-    /// their dates; only the recent projects are ever read from one (ImportZedRecents.swift).
+    /// their dates; only the recent projects are ever read from one (ImportZedRecents.swift). Each as its real path,
+    /// and only while it and the files SQLite opens beside it (-wal, -shm) stay inside Zed's db folder: a database
+    /// linked from elsewhere is never opened.
     static func databaseFiles(home: String) -> [String] {
         let base = (home as NSString).appendingPathComponent("Library/Application Support/Zed/db")
         guard let channels = try? FileManager.default.contentsOfDirectory(atPath: base) else { return [] }
         return channels.filter { $0.hasPrefix("0-") }.sorted().flatMap { channel -> [String] in
-            let folder = (base as NSString).appendingPathComponent(channel)
-            return ["db.sqlite", "db.sqlite-wal"].map { (folder as NSString).appendingPathComponent($0) }.filter(isRegularFile)
+            let beside = ["db.sqlite", "db.sqlite-wal", "db.sqlite-shm"].map { channel + "/" + $0 }
+            let linkedOut = beside.contains { relative in
+                var info = stat()
+                let path = (base as NSString).appendingPathComponent(relative)
+                return lstat(path, &info) == 0 && ImportVSCode.file(relative, inside: base) == nil
+            }
+            guard !linkedOut else { return [] }
+            return beside.prefix(2).compactMap { ImportVSCode.file($0, inside: base) }
         }
     }
 }

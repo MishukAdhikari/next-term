@@ -46,7 +46,15 @@ public enum ImportCmux {
         // cmux's shortcuts come before Ghostty's keybinds: cmux handles a key before the terminal sees it.
         addShortcuts(home: home, usKeyboard: usKeyboard, to: &plan)
         let bundle = app.appPath ?? ImportAppBundles.find(bundles, applications: apps)?.path
-        let files = ImportGhostty.configFiles(home: home) + [ghosttyFile(home: home)].compactMap { $0 }
+        var files = ImportGhostty.configFiles(home: home)
+        // cmux's own config is read only as a file in its own folder, never through a link out of it.
+        if let own = ghosttyFile(home: home) {
+            if let real = ImportFile.ownFile(own, folders: [ghosttyFolder(home: home)]) {
+                files.append(real)
+            } else {
+                plan.skipped.append(SkippedItem((own as NSString).lastPathComponent, ImportFile.linkedOut))
+            }
+        }
         let folders = ImportGhostty.configFolders(home: home) + [ghosttyFolder(home: home)]
         let source = ImportGhostty.Source(files: files, folders: folders, bundles: [bundle].compactMap { $0 }, app: "cmux")
         ImportGhostty.addSettings(source, home: home, usKeyboard: usKeyboard, fonts: fonts, applications: apps, to: &plan)

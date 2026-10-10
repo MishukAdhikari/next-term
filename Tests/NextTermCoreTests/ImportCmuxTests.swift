@@ -53,6 +53,22 @@ import Testing
         #expect(ImportFixtures.secrets(in: plan).isEmpty)
     }
 
+    /// cmux's own Ghostty config is never read through a link out of its folder.
+    @Test func itsOwnConfigLinkedOutIsNotRead() throws {
+        let home = try ImportFixtures.copy("cmux")
+        defer { remove(home) }
+        let outside = home + "/outside.ghostty"
+        let secret = ImportFixtures.plantedSecrets[1]
+        try "font-family = Leaked Mono\nfont-size = 29\ncommand = vault \(secret)\n".write(toFile: outside, atomically: true, encoding: .utf8)
+        let own = home + "/Library/Application Support/com.cmuxterm.app/config.ghostty"
+        try fm.removeItem(atPath: own)
+        try fm.createSymbolicLink(atPath: own, withDestinationPath: outside)
+        let plan = try plan(home)
+        #expect(!plan.settings.contains { $0.setting == .terminalFontFamily("Leaked Mono") || $0.setting == .terminalFontSize(29) })
+        #expect(reasons(plan)["config.ghostty"] == ImportFile.linkedOut)
+        #expect(!String(describing: plan).contains("Leaked") && ImportFixtures.secrets(in: plan).isEmpty)
+    }
+
     @Test func cmuxShortcutsThenGhosttyKeybinds() throws {
         let home = try ImportFixtures.copy("cmux")
         defer { remove(home) }
