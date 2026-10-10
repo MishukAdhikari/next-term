@@ -137,17 +137,22 @@ public enum AgentSessions {
 
     /// Sessions a live `claude` has open: ~/.claude/sessions/<pid>.json (never the .key files beside them).
     static func claudeRunning(home: String) -> Set<String> {
+        Set(claudeHolders(home: home).keys)
+    }
+
+    /// The live `claude` processes that have each session open, by session id, from the same files.
+    public static func claudeHolders(home: String) -> [String: Set<Int32>] {
         let folder = (home as NSString).appendingPathComponent(".claude/sessions")
-        guard let files = try? FileManager.default.contentsOfDirectory(atPath: folder) else { return [] }
-        var ids = Set<String>()
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: folder) else { return [:] }
+        var holders: [String: Set<Int32>] = [:]
         for file in files where file.hasSuffix(".json") {
-            guard let pid = Int32(file.dropLast(5)), kill(pid, 0) == 0 || errno == EPERM,
+            guard let pid = Int32(file.dropLast(5)), pid > 0, kill(pid, 0) == 0 || errno == EPERM,
                   let data = readHead((folder as NSString).appendingPathComponent(file), bytes: 16384),
                   let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                   let id = json["sessionId"] as? String else { continue }
-            ids.insert(id)
+            holders[id, default: []].insert(pid)
         }
-        return ids
+        return holders
     }
 
     /// What Claude Code records of the `claude` with process `pid`, from the file `claudeRunning` and

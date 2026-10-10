@@ -968,4 +968,61 @@ import Testing
         gemini.agent = .gemini
         #expect(!lookup.available(gemini, home: home))
     }
+
+    /// The update sheet plans before the quit, while the tab's own claude still holds its session (R14, KTD5): a session
+    /// only processes the quit stops hold reads as free there, to the gate's session check and to a guess alike, as it
+    /// will once they have stopped. One any other process holds does not, and the restore itself frees none.
+    @Test func onTheSheetASessionHeldOnlyByTheTabsOwnProcessCountsAsFree() throws {
+        let home = canonicalPath(FileManager.default.temporaryDirectory.path) + "/nt-freed-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let project = "/Users/x/app"
+        let dir = home + "/.claude/projects/" + AgentSessions.claudeFolderName(project)
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: home + "/.claude/sessions", withIntermediateDirectories: true)
+        for id in [g, g2] {
+            let line: [String: Any] = ["type": "user", "cwd": project, "timestamp": "2026-10-09T10:00:00Z", "message": ["content": "task"]]
+            try JSONSerialization.data(withJSONObject: line).write(to: URL(fileURLWithPath: dir + "/\(id).jsonl"))
+        }
+        // This test's own process holds g2, as the tab's live claude would, and its parent holds g; a record of a process
+        // gone, or of no process, holds nothing.
+        let own = getpid(), parent = getppid()
+        let sessions = home + "/.claude/sessions/"
+        try JSONSerialization.data(withJSONObject: ["sessionId": g2]).write(to: URL(fileURLWithPath: sessions + "\(own).json"))
+        try JSONSerialization.data(withJSONObject: ["sessionId": g]).write(to: URL(fileURLWithPath: sessions + "\(parent).json"))
+        try JSONSerialization.data(withJSONObject: ["sessionId": g2]).write(to: URL(fileURLWithPath: sessions + "999999.json"))
+        try JSONSerialization.data(withJSONObject: ["sessionId": g2]).write(to: URL(fileURLWithPath: sessions + "0.json"))
+        let holders = AgentSessions.claudeHolders(home: home)
+        #expect(holders == [g2: [own], g: [parent]])
+        #expect(AgentSessions.claudeRunning(home: home) == [g, g2])
+
+        // Held only by a process the quit stops: freed, by its id in lower case.
+        let quitStops = { (pid: Int32) -> Bool in pid == own }
+        let freed = SessionLookup.freedAtQuit(holders: holders, stops: quitStops)
+        #expect(freed == [g2.lowercased()])
+        #expect(SessionLookup.freedAtQuit(holders: [g2.uppercased(): [own]], stops: quitStops) == [g2.lowercased()])
+        // Held by another process too, under any case of its id, or by none the quit stops: still taken.
+        #expect(SessionLookup.freedAtQuit(holders: [g2: [own, own + 1]], stops: quitStops).isEmpty)
+        #expect(SessionLookup.freedAtQuit(holders: [g2: [own], g2.uppercased(): [parent]], stops: quitStops).isEmpty)
+        #expect(SessionLookup.freedAtQuit(holders: holders) { (_: Int32) -> Bool in false }.isEmpty)
+
+        // The gate's session check: taken as the restore reads it, free as the sheet reads it.
+        let evidence = Evidence(agent: .claude, sessionID: g2, source: .sessionFile, sessionFolder: project, store: home + "/.claude")
+        let lookup = SessionLookup.live(home: home)
+        let sheet = lookup.freeing(freed)
+        #expect(!lookup.available(evidence, home: home))
+        #expect(sheet.available(evidence, home: home))
+        var upper = evidence
+        upper.sessionID = g2.uppercased()
+        #expect(sheet.available(upper, home: home))
+        // Freeing one session frees no other: g stays its holder's.
+        var other = evidence
+        other.sessionID = g
+        #expect(!sheet.available(other, home: home))
+        #expect(!lookup.freeing([]).available(evidence, home: home))
+
+        // A guess reads the same: the sheet finds the tab's own session, as the relaunch will.
+        #expect(RestorePlanner.guess(.claude, in: project, after: .distantPast, excluding: [], lookup: lookup) == nil)
+        let guessed = RestorePlanner.guess(.claude, in: project, after: .distantPast, excluding: [], lookup: sheet)
+        #expect(guessed?.id == g2 && guessed?.naming == .newest)
+    }
 }

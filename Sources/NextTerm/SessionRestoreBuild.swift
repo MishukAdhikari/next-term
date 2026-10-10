@@ -29,14 +29,16 @@ enum RestorePlanning {
         return NSHomeDirectory()
     }
 
+    /// `freed`: the sessions, by lowercased id, that only processes the update quit stops hold, which the update sheet
+    /// reads as free, to the gate's session check and to guesses alike (`SessionLookup.freeing`, R14). None for a restore.
     static func plan(_ snapshot: SessionSnapshot, kind: SessionSnapshot.RestoreKind, safeMode: Bool,
-                     quitConsent: Bool) -> Planned {
+                     quitConsent: Bool, freed: Set<String> = []) -> Planned {
         let home = NSHomeDirectory()
         let agents = agentHome
         let checks = check(folders(in: snapshot, home: home), within: folderBudget)
         let checkFolder = { (path: String) -> FolderCheck in checks[path] ?? .notChecked }
         let hosts = hostNames()
-        let lookup = SessionLookup.live(home: agents)
+        let lookup = SessionLookup.live(home: agents).freeing(freed)
         let world = RestorePlanner.World(home: home, checkFolder: checkFolder, resumeFacts: { evidence, folder, projects in
             ResumeFacts.read(for: evidence, projects: projects, tabFolder: folder,
                              sessionAvailable: lookup.available(evidence, home: agents), home: agents)

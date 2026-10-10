@@ -365,7 +365,8 @@ enum UpdatePlanning {
         let controllers = AppDelegate.shared.controllers
         let header = SessionSnapshot.Header(launchID: UUID(), generation: 0, clean: false, savedAt: Date())
         let snapshot = SessionSnapshot(header: header, windows: SessionCapture.windows(controllers))
-        let planned = RestorePlanning.plan(snapshot, kind: .update, safeMode: false, quitConsent: false)
+        let freed = freedAtQuit(controllers)
+        let planned = RestorePlanning.plan(snapshot, kind: .update, safeMode: false, quitConsent: false, freed: freed)
         var plans: [UUID: PanePlan] = [:]
         for plan in planned.plans where plans[plan.pane] == nil { plans[plan.pane] = plan }
         let leftOut = Set(SessionRestore.shared.lastSave?.panesLeftOut ?? [])
@@ -389,6 +390,22 @@ enum UpdatePlanning {
             return UpdateWindow(name: name(of: controller), panes: panes)
         }
         return UpdatePlan(windows: windows, refusal: refusal)
+    }
+
+    /// The sessions the update quit frees: those only processes in this Next Term's local tabs hold, such as a tab's own
+    /// running claude. The quit hangs up each tab's shell and what runs in it, so after the relaunch these sessions are
+    /// free and resume; read now, while their claude still runs, they would read as taken (R14, KTD5).
+    private static func freedAtQuit(_ controllers: [TerminalWindowController]) -> Set<String> {
+        let shells: [pid_t] = controllers.flatMap(\.tabs).compactMap { (tab: TerminalTab) -> pid_t? in
+            guard tab.remote == nil, !tab.exited else { return nil }
+            let pid = tab.view.process.shellPid
+            return pid > 0 ? pid : nil
+        }
+        guard !shells.isEmpty else { return [] }
+        let holders = AgentSessions.claudeHolders(home: RestorePlanning.agentHome)
+        return SessionLookup.freedAtQuit(holders: holders) { (pid: Int32) -> Bool in
+            shells.contains { (shell: pid_t) -> Bool in ProcessInspector.descends(pid, from: shell) }
+        }
     }
 
     /// The same plan, with each pane's busy state read again and the closed tabs gone: what the wait reads each second.

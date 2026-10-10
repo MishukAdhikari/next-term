@@ -183,6 +183,36 @@ public struct SessionLookup {
         }
     }
 
+    /// The same lookup, with the sessions in `freed` (by lowercased id) read as no live process holding them: how the
+    /// update sheet plans before the quit, which stops their only holders (`freedAtQuit`), so that its session check and
+    /// its guesses read what the relaunch will (R14, KTD5). The restore itself frees none.
+    public func freeing(_ freed: Set<String>) -> SessionLookup {
+        guard !freed.isEmpty else { return self }
+        let read = self.read
+        var lookup = self
+        lookup.read = { (agent: AgentKind, folder: String, since: Date) -> [AgentSession] in
+            read(agent, folder, since).map { (session: AgentSession) -> AgentSession in
+                guard session.isRunning, freed.contains(session.id.lowercased()) else { return session }
+                return AgentSession(agent: session.agent, id: session.id, cwd: session.cwd, title: session.title,
+                                    named: session.named, createdAt: session.createdAt, updatedAt: session.updatedAt,
+                                    gitBranch: session.gitBranch, model: session.model, isRunning: false)
+            }
+        }
+        return lookup
+    }
+
+    /// The sessions, by lowercased id, whose every live holder is a process the update quit stops (`stops`: one in a
+    /// local tab of this Next Term), such as the tab's own agent, read by the sheet before the quit (R14). A session any
+    /// other process also holds is not among them.
+    public static func freedAtQuit(holders: [String: Set<Int32>], stops: (Int32) -> Bool) -> Set<String> {
+        var held: [String: Bool] = [:]
+        for (id, pids) in holders where !pids.isEmpty {
+            let key = id.lowercased()
+            held[key] = (held[key] ?? true) && pids.allSatisfy(stops)
+        }
+        return Set(held.filter { (entry: (key: String, value: Bool)) -> Bool in entry.value }.keys)
+    }
+
     /// The stores in `home`.
     public static func live(home: String = NSHomeDirectory()) -> SessionLookup {
         SessionLookup(read: { (agent: AgentKind, folder: String, since: Date) -> [AgentSession] in
