@@ -1,0 +1,347 @@
+{
+  "Sublime Text" : {
+    "changes_if_applied" : 22,
+    "not_brought_over" : [
+      {
+        "item" : "Sublime Text's own shortcuts",
+        "reason" : "there is no Sublime Text shortcut set, so Next Term's shortcuts stay"
+      },
+      {
+        "item" : "wrap_width 100",
+        "reason" : "Next Term wraps at the window edge; a wrap column isn't supported"
+      },
+      {
+        "item" : "1 excluded name",
+        "reason" : "looked like a credential"
+      },
+      {
+        "item" : "1 excluded pattern",
+        "reason" : "not a name the sidebar can hide"
+      },
+      {
+        "item" : "Vim keys (Vintage)",
+        "reason" : "Next Term has no Vim mode yet"
+      },
+      {
+        "item" : "tab_size",
+        "reason" : "tab width and spaces come later"
+      },
+      {
+        "item" : "translate_tabs_to_spaces",
+        "reason" : "tab width and spaces come later"
+      },
+      {
+        "item" : "rulers",
+        "reason" : "a ruler column comes later"
+      },
+      {
+        "item" : "color_scheme",
+        "reason" : "colour themes come later"
+      },
+      {
+        "item" : "theme",
+        "reason" : "colour themes come later"
+      },
+      {
+        "item" : "caret_style",
+        "reason" : "the editor keeps macOS's text caret; the cursor style here is the terminal's"
+      },
+      {
+        "item" : "http_proxy",
+        "reason" : "never imported: can hold secrets"
+      },
+      {
+        "item" : "github_token",
+        "reason" : "never imported: can hold secrets"
+      },
+      {
+        "item" : "font_options",
+        "reason" : "font features and ligatures aren't supported"
+      },
+      {
+        "item" : "other settings: highlight_line, scroll_past_end",
+        "reason" : "no matching Next Term setting yet"
+      },
+      {
+        "item" : "super+shift+o → prompt_open",
+        "reason" : "replaced further down by show_overlay"
+      },
+      {
+        "item" : "super+t → show_overlay",
+        "reason" : "passes arguments in Sublime Text that make it another command"
+      },
+      {
+        "item" : "super+k, super+b → toggle_side_bar",
+        "reason" : "two-step keys aren't supported yet"
+      },
+      {
+        "item" : "ctrl+t → transpose",
+        "reason" : "no matching Next Term command"
+      },
+      {
+        "item" : "super+d → noop",
+        "reason" : "turning a key off isn't brought over"
+      },
+      {
+        "item" : "ctrl+tab → next_view",
+        "reason" : "one shortcut per command here; ⌥⌘→ comes over"
+      },
+      {
+        "item" : "super+e → insert",
+        "reason" : "no matching Next Term command"
+      },
+      {
+        "item" : "super+shift+e → slurp_find_string",
+        "reason" : "works only in some places in Sublime Text; keys for one context come later"
+      },
+      {
+        "item" : "super+j → toggle_comment",
+        "reason" : "replaced further down by join_lines"
+      },
+      {
+        "item" : "super+j → join_lines",
+        "reason" : "no matching Next Term command"
+      },
+      {
+        "item" : "keypad_enter → find_next",
+        "reason" : "numpad keys aren't supported"
+      },
+      {
+        "item" : "beta.sublime-project",
+        "reason" : "only a project's first folder comes over (1 more folder left out)"
+      },
+      {
+        "item" : "1 recent project",
+        "reason" : "looked like a credential"
+      },
+      {
+        "item" : "Vim keys (NeoVintageous package)",
+        "reason" : "Next Term has no Vim mode yet"
+      },
+      {
+        "item" : "3 other packages",
+        "reason" : "packages aren't imported"
+      },
+      {
+        "item" : "2 other settings files",
+        "reason" : "settings for one language or package aren't imported"
+      },
+      {
+        "item" : "snippets",
+        "reason" : "snippets aren't supported"
+      },
+      {
+        "item" : "build systems",
+        "reason" : "never imported: runs commands"
+      }
+    ],
+    "note" : "Nothing changes here: apply_import opens Next Term's import window with these rows, and only the user's Apply changes anything.",
+    "plan_id" : "p-(differs with the home folder)",
+    "recent_projects" : {
+      "count" : 2,
+      "id" : "recents",
+      "more" : 0,
+      "shown" : [
+        "~/Code/alpha",
+        "~/Code/beta"
+      ],
+      "ticked" : true
+    },
+    "settings" : [
+      {
+        "from" : "font_face JetBrains Mono",
+        "id" : "set:editorFontFamily",
+        "note" : null,
+        "ticked" : true,
+        "title" : "editorFontFamily title"
+      },
+      {
+        "from" : "font_size 13",
+        "id" : "set:fontSize",
+        "note" : null,
+        "ticked" : true,
+        "title" : "fontSize title"
+      },
+      {
+        "from" : "line_padding_top 2, line_padding_bottom 2",
+        "id" : "set:editorLineHeight",
+        "note" : "the nearest line height to Sublime Text's padding",
+        "ticked" : true,
+        "title" : "editorLineHeight title"
+      },
+      {
+        "from" : "word_wrap true",
+        "id" : "set:softWrap",
+        "note" : null,
+        "ticked" : true,
+        "title" : "softWrap title"
+      },
+      {
+        "from" : "preview_on_click only_left",
+        "id" : "set:sidebarSingleClickOpens",
+        "note" : null,
+        "ticked" : true,
+        "title" : "sidebarSingleClickOpens title"
+      },
+      {
+        "from" : "trim_trailing_white_space_on_save \"all\"",
+        "id" : "set:trimTrailingWhitespace",
+        "note" : null,
+        "ticked" : true,
+        "title" : "trimTrailingWhitespace title"
+      },
+      {
+        "from" : "ensure_newline_at_eof_on_save true",
+        "id" : "set:insertFinalNewline",
+        "note" : null,
+        "ticked" : true,
+        "title" : "insertFinalNewline title"
+      },
+      {
+        "from" : "file_exclude_patterns and folder_exclude_patterns",
+        "id" : "set:hiddenFilePatterns",
+        "note" : null,
+        "ticked" : true,
+        "title" : "hiddenFilePatterns title"
+      }
+    ],
+    "shortcut_set" : {
+      "in_use" : true,
+      "to" : "Next Term"
+    },
+    "source" : "Sublime Text",
+    "up_to_date" : false,
+    "your_shortcuts" : [
+      {
+        "allowed" : true,
+        "from" : "Default.sublime-keymap: super+alt+s → save_all",
+        "id" : "key:saveAllDocuments:",
+        "new" : "⌥⌘S",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Save All"
+      },
+      {
+        "allowed" : true,
+        "from" : "Default (OSX).sublime-keymap: super+shift+o → show_overlay",
+        "id" : "key:goToFile:",
+        "new" : "⇧⌘O",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Go to File…"
+      },
+      {
+        "allowed" : true,
+        "from" : "Default (OSX).sublime-keymap: super+alt+l → show_overlay",
+        "id" : "key:goToLine:",
+        "new" : "⌥⌘L",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Go to Line…"
+      },
+      {
+        "allowed" : true,
+        "from" : "Default (OSX).sublime-keymap: super+shift+t → reopen_last_file",
+        "id" : "key:reopenClosedTab:",
+        "new" : "⇧⌘T",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Reopen Closed Tab"
+      },
+      {
+        "allowed" : true,
+        "from" : "Default (OSX).sublime-keymap: super+shift+k → run_macro_file",
+        "id" : "key:deleteLine:",
+        "new" : "⇧⌘K",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Delete Line"
+      },
+      {
+        "allowed" : true,
+        "from" : "Default (OSX).sublime-keymap: primary+1 → select_by_index",
+        "id" : "key:selectTabByNumber:#1",
+        "new" : "⌘1",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Select Tab 1"
+      },
+      {
+        "allowed" : true,
+        "from" : "Default (OSX).sublime-keymap: super+b → toggle_side_bar",
+        "id" : "key:toggleProjectSidebar:",
+        "new" : "⌘B",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Hide or Show Project Sidebar"
+      },
+      {
+        "allowed" : true,
+        "from" : "Default (OSX).sublime-keymap: super+alt+f → show_panel",
+        "id" : "key:replaceInFile:",
+        "new" : "⌥⌘F",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Replace…"
+      },
+      {
+        "allowed" : true,
+        "from" : "Default (OSX).sublime-keymap: super+alt+right → next_view",
+        "id" : "key:showNextTab:",
+        "new" : "⌥⌘→",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Show Next Tab"
+      },
+      {
+        "allowed" : true,
+        "from" : "Default (OSX).sublime-keymap: super+alt+w → close_others_by_index",
+        "id" : "key:closeOtherTabs:",
+        "new" : "⌥⌘W",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Close Other Tabs"
+      },
+      {
+        "allowed" : true,
+        "from" : "Default (OSX).sublime-keymap: super+alt+r → open_dir",
+        "id" : "key:revealInFinder:",
+        "new" : "⌥⌘R",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Reveal in Finder"
+      },
+      {
+        "allowed" : true,
+        "from" : "Default (OSX).sublime-keymap: super+forward_slash → toggle_comment",
+        "id" : "key:toggleComment:",
+        "new" : "⌘/",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Comment Line"
+      },
+      {
+        "allowed" : true,
+        "from" : "Default (OSX).sublime-keymap: super+equals → increase_font_size",
+        "id" : "key:increaseFontSize:",
+        "new" : "⌘=",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Bigger"
+      }
+    ]
+  }
+}

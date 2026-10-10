@@ -1,0 +1,8 @@
+{
+	// A fork nobody has heard of: found because its product.json names both folders.
+	"nameShort": "Forky",
+	"nameLong": "Forky Editor",
+	"applicationName": "forky",
+	"dataFolderName": ".forky",
+	"version": "0.3.1",
+}

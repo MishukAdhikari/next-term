@@ -8,11 +8,14 @@ import Foundation
 public enum ImportWarp {
     static func folder(home: String) -> String { (home as NSString).appendingPathComponent(".warp") }
 
-    /// Warp, when it has a settings file. Last use is that file's date (detection opens nothing).
-    public static func detect(home: String = NSHomeDirectory()) -> [DetectedApp] {
+    /// Warp, when it has a settings file. Last use is that file's date (detection opens no config file).
+    /// `applications`: where Warp.app is looked for, /Applications and ~/Applications unless given.
+    public static func detect(home: String = NSHomeDirectory(), applications: [String]? = nil) -> [DetectedApp] {
         let settings = (folder(home: home) as NSString).appendingPathComponent("settings.toml")
         guard isRegularFile(settings) else { return [] }
-        return [DetectedApp(kind: .warp, name: "Warp", configPath: folder(home: home), lastUsed: ImportFile.modificationDate(settings))]
+        let bundle = ImportAppBundles.find(["Warp.app"], applications: applications ?? ImportVSCode.applicationFolders(home: home))
+        return [DetectedApp(kind: .warp, name: "Warp", configPath: folder(home: home), lastUsed: ImportFile.modificationDate(settings),
+                            appPath: bundle?.path, version: bundle?.version)]
     }
 
     /// The only values converted: table and key.
@@ -56,10 +59,9 @@ public enum ImportWarp {
         }
         if let raw = scan.values[size] {
             if let value = TOML.number(raw), value > 0 {
-                var notes = ["sets the editor too: Next Term has one size for both"]
-                if value.rounded() < 8 || value.rounded() > 32 { notes.insert("Next Term's sizes go from 8 to 32", at: 0) }
-                plan.settings.append(PlannedSetting(.fontSize(clamping: value), source: "font_size \(ImportITerm2.formatted(value))",
-                                                    note: notes.joined(separator: "; ")))
+                let note = value.rounded() < 8 || value.rounded() > 32 ? "Next Term's sizes go from 8 to 32" : nil
+                plan.settings.append(PlannedSetting(.terminalFontSize(clamping: value), source: "font_size \(ImportITerm2.formatted(value))",
+                                                    note: note))
             } else {
                 plan.skipped.append(SkippedItem("font_size", "not a font size Next Term can use"))
             }

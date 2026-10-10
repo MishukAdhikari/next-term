@@ -45,6 +45,10 @@ public enum KeymapPreset: String, CaseIterable, Codable, Sendable {
                 "indentSelection:": none,          // ⌘] and ⌘[ are Forward and Back there; ⇥ and ⇧⇥ indent
                 "outdentSelection:": none,
                 "gitFetch:": KeyChord(key: "f", command: true, option: true), // ⌘R is Replace there; ⌥⌘F is free once Replace moves
+                // ⌘K clears only while a terminal has the keyboard (KeyBindings.terminalKeyboardCommands); ⇧⌘K is
+                // free once Delete Line moves to ⌘⌫. ⌘T stays New Tab, which it is in every terminal.
+                "gitCommit:": cmd("k"),
+                "gitPush:": KeyChord(key: "k", command: true, shift: true),
             ]
         }
     }
@@ -61,19 +65,72 @@ public enum KeymapPreset: String, CaseIterable, Codable, Sendable {
 
 /// The apps an import can read.
 public enum ImportSourceKind: String, CaseIterable, Codable, Sendable {
-    case vsCode, vsCodeInsiders, vsCodium, cursor, devinDesktop, jetBrains, zed, iTerm2, ghostty, warp, terminalApp
+    /// `vsCodeFork`: any other editor built on VS Code (Trae, Kiro, Antigravity, Positron, one found by its
+    /// product.json…), named by its app.
+    case vsCode, vsCodeInsiders, vsCodium, cursor, devinDesktop, vsCodeFork, jetBrains, zed, iTerm2, ghostty, warp, terminalApp
+    case kitty, alacritty, wezTerm, kaku, cmux, sublimeText
 
     /// The preset that fits people coming from it.
     public var preset: KeymapPreset {
         switch self {
-        case .vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop: return .vsCode
+        case .vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop, .vsCodeFork: return .vsCode
         case .jetBrains: return .jetBrains
-        case .zed, .iTerm2, .ghostty, .warp, .terminalApp: return .nextTerm
+        case .zed, .iTerm2, .ghostty, .warp, .terminalApp, .kitty, .alacritty, .wezTerm, .kaku, .cmux, .sublimeText: return .nextTerm
+        }
+    }
+
+    /// The group the import window lists it in.
+    public var family: ImportFamily {
+        switch self {
+        case .vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop, .vsCodeFork, .jetBrains, .zed, .sublimeText: return .editors
+        case .iTerm2, .ghostty, .warp, .terminalApp, .kitty, .alacritty, .wezTerm, .kaku, .cmux: return .terminals
+        }
+    }
+
+    /// What an import from it can bring, whatever its files hold today (fixed per app, so listing apps reads
+    /// nothing).
+    public var canBring: [ImportContent] {
+        switch self {
+        case .vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop, .vsCodeFork, .jetBrains:
+            return [.shortcuts, .settings, .fonts, .colours, .projects]
+        case .zed, .sublimeText: return [.shortcuts, .settings, .fonts, .projects]
+        case .ghostty, .kitty, .alacritty, .wezTerm, .kaku, .cmux: return [.shortcuts, .settings, .fonts, .colours]
+        case .iTerm2, .warp, .terminalApp: return [.settings, .fonts, .colours]
+        }
+    }
+
+    /// Whether its reader looks for the app itself, so an app not found was removed. Terminal comes with macOS.
+    public var looksForApp: Bool { self != .terminalApp }
+}
+
+/// The groups the import window lists apps in, in its order. Files (a theme or settings file picked by hand) come
+/// in a later version.
+public enum ImportFamily: String, CaseIterable, Codable, Sendable {
+    case editors, terminals
+
+    public var title: String {
+        switch self {
+        case .editors: return "Editors"
+        case .terminals: return "Terminals"
         }
     }
 }
 
-/// An app found on this Mac (found by folders and dates only: nothing is parsed until the user picks it).
+/// What an app can bring, as the import window names it.
+public enum ImportContent: String, CaseIterable, Codable, Sendable {
+    case shortcuts, settings, fonts, colours, projects
+
+    /// "shortcuts, settings, fonts and colours".
+    public static func list(_ contents: [ImportContent]) -> String {
+        let names = contents.map(\.rawValue)
+        guard let last = names.last else { return "" }
+        return names.count == 1 ? last : names.dropLast().joined(separator: ", ") + " and " + last
+    }
+}
+
+/// An app found on this Mac: by folders, dates and its app's version file. No setting is read until the user picks it,
+/// except what tells the app apart: a JetBrains IDE's keymap choice and idea.properties (where its settings are),
+/// and whether Terminal's default profile was changed.
 public struct DetectedApp: Equatable, Sendable {
     public let kind: ImportSourceKind
     /// "VS Code", "PhpStorm 2026.1", "Cursor".
@@ -83,19 +140,44 @@ public struct DetectedApp: Equatable, Sendable {
     public let lastUsed: Date?
     /// The keymap the app itself uses (a JetBrains keymap or Zed's base_keymap can point elsewhere).
     public var preset: KeymapPreset
+    /// The app bundle found for it, when an importer looks (nil: not found, so the app may have been removed
+    /// while its settings stayed).
+    public var appPath: String?
+    /// The app's version, when its bundle says it ("1.105.1").
+    public var version: String?
+    /// Unused for 180 days: listed under "Not used lately", never left out.
+    public var notUsedLately: Bool
 
-    public init(kind: ImportSourceKind, name: String, configPath: String, lastUsed: Date?, preset: KeymapPreset? = nil) {
+    public init(kind: ImportSourceKind, name: String, configPath: String, lastUsed: Date?, preset: KeymapPreset? = nil,
+                appPath: String? = nil, version: String? = nil, notUsedLately: Bool = false) {
         self.kind = kind
         self.name = name
         self.configPath = configPath
         self.lastUsed = lastUsed
         self.preset = preset ?? kind.preset
+        self.appPath = appPath
+        self.version = version
+        self.notUsedLately = notUsedLately
+    }
+
+    /// Its reader looked for the app and didn't find it: the settings stayed after the app was removed.
+    public var appRemoved: Bool { appPath == nil && kind.looksForApp }
+
+    /// How long an app goes unused before it is "not used lately" (JetBrains' own ConfigImportHelper ignores
+    /// settings unused this long).
+    public static let notUsedAfter: TimeInterval = 180 * 24 * 60 * 60
+
+    /// Whether an app last used at `lastUsed` counts as not used lately (an unknown date doesn't).
+    public static func isNotUsedLately(_ lastUsed: Date?, now: Date = Date()) -> Bool {
+        guard let lastUsed else { return false }
+        return now.timeIntervalSince(lastUsed) >= notUsedAfter
     }
 }
 
 /// A Next Term setting an import can set, already clamped to Next Term's range.
 public enum ImportedSetting: Equatable, Sendable {
-    case fontSize(Double)          // 8–32 points, shared by editor and terminal
+    case fontSize(Double)          // 8–32 points: the editor's, and the terminal's while it has no size of its own
+    case terminalFontSize(Double)  // 8–32 points: the terminal's own size
     case editorLineHeight(Double)  // 1.0–2.0, multiple of the font's own line height, steps of 0.05
     case softWrap(Bool)
     case optionAsMeta(Bool)
@@ -111,11 +193,18 @@ public enum ImportedSetting: Equatable, Sendable {
     case trimTrailingWhitespace(Bool)     // on save
     case insertFinalNewline(Bool)         // on save
     case hiddenFiles([String])            // FileHiding patterns, added to the user's own
+    case sidebarSingleClick(Bool)         // a click on a file in the project sidebar opens it, in a preview tab
+    case backgroundFetch(String)          // a FetchFrequency: 5, 10, 30, popup or off
+    case diffLayout(String)               // sideBySide or unified
+    case currentLineBlame(Bool)           // the caret line's last commit, after its text
+    case openProjectsIn(String)           // where Open Project goes when the window is in use: ask, thisWindow, newWindow
+    case launchOpens(String)              // a LaunchOpens: welcome or lastProjects
 
     /// The UserDefaults key the app keeps it under.
     public var key: String {
         switch self {
         case .fontSize: return "fontSize"
+        case .terminalFontSize: return "terminalFontSize"
         case .editorLineHeight: return "editorLineHeight"
         case .softWrap: return "softWrap"
         case .optionAsMeta: return "optionAsMeta"
@@ -131,11 +220,18 @@ public enum ImportedSetting: Equatable, Sendable {
         case .trimTrailingWhitespace: return "trimTrailingWhitespace"
         case .insertFinalNewline: return "insertFinalNewline"
         case .hiddenFiles: return "hiddenFilePatterns"
+        case .sidebarSingleClick: return "sidebarSingleClickOpens"
+        case .backgroundFetch: return "backgroundFetch"
+        case .diffLayout: return "diffLayout"
+        case .currentLineBlame: return "currentLineBlame"
+        case .openProjectsIn: return "openProjectsIn"
+        case .launchOpens: return LaunchSettings.Key.opens
         }
     }
 
     /// The keys that hold a Bool (UserDefaults hands a number back for those too).
-    public static let boolKeys: Set<String> = ["softWrap", "optionAsMeta", "terminalCursorBlink", "trimTrailingWhitespace", "insertFinalNewline"]
+    public static let boolKeys: Set<String> = ["softWrap", "optionAsMeta", "terminalCursorBlink", "trimTrailingWhitespace", "insertFinalNewline",
+                                               "sidebarSingleClickOpens", "currentLineBlame"]
 
     /// Every key applying it writes, for the snapshot Undo restores: custom colours are also kept for
     /// Settings to offer again.
@@ -145,6 +241,10 @@ public enum ImportedSetting: Equatable, Sendable {
     }
 
     public static func fontSize(clamping value: Double) -> ImportedSetting { .fontSize(min(32, max(8, value.rounded()))) }
+
+    public static func terminalFontSize(clamping value: Double) -> ImportedSetting {
+        .terminalFontSize(min(32, max(8, value.rounded())))
+    }
 
     public static func lineHeight(clamping factor: Double) -> ImportedSetting {
         .editorLineHeight(min(2.0, max(1.0, (factor * 20).rounded() / 20)))

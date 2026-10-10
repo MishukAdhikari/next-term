@@ -1,0 +1,11 @@
+{
+	"nameShort": "Trae",
+	"nameLong": "Trae",
+	"applicationName": "trae",
+	"dataFolderName": ".trae",
+	"darwinBundleIdentifier": "com.trae.app",
+	"version": "1.104.3",
+	"extensionsGallery": {
+		"serviceUrl": "https://example.invalid/gallery"
+	}
+}

@@ -1,0 +1,71 @@
+# Alacritty 0.14 config, written by hand for the import tests (never copied from a real Mac).
+
+[general]
+import = [
+  "themes/night.toml",            # relative to this file
+  "~/.config/alacritty/keys.toml",
+  "~/outside.toml",                # outside Alacritty's folder: never read
+  "escape.toml",                   # a link out of the folder: never followed
+  "broken.toml",                   # not valid TOML: skipped, as Alacritty skips it
+  "missing.toml",                  # missing: skipped quietly, as Alacritty does
+]
+working_directory = "~/Projects"
+live_config_reload = true
+
+[env]
+GITHUB_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJmaXh0dXJlIjoic2VjcmV0In0.bm90LWEtcmVhbC1zaWduYXR1cmU"
+
+[terminal]
+shell = { program = "/bin/zsh", args = ["-l", "-c", "export API_KEY=FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA; exec zsh"] }
+
+[font]
+size = 14.5
+
+[font.normal]
+family = "JetBrains Mono"
+style = "Regular"
+
+[cursor]
+style = { shape = "Beam", blinking = "On" }
+
+[scrolling]
+history = 50_000
+
+[window]
+option_as_alt = "OnlyLeft"
+opacity = 0.9
+padding = { x = 4, y = 4 }
+
+[colors.primary]
+foreground = "#c0caf5"
+background = "0x1a1b26"
+
+[colors.normal]
+red = "#ff0000"
+
+[colors.cursor]
+text = "CellBackground"
+cursor = "CellForeground"
+
+[colors.selection]
+background = "#33467c"
+
+[bell]
+command = { program = "osascript", args = ["-e", "say FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"] }
+
+[[hints.enabled]]
+command = "open"
+regex = "https?://[^ ]+"
+
+[keyboard]
+bindings = [
+  { key = "T", mods = "Command|Shift", action = "CreateNewTab" },
+  { key = "Key1", mods = "Command|Option", action = "SelectTab1" },
+  { key = "K", mods = "Command", chars = "FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
+  { key = "N", mods = "Command|Shift", command = { program = "sh", args = ["-c", "echo eyJhbGciOiJIUzI1NiJ9.eyJmaXh0dXJlIjoic2VjcmV0In0.bm90LWEtcmVhbC1zaWduYXR1cmU"] } },
+  { key = "F", mods = "Command", mode = "Search", action = "SearchForward" },
+  { key = "ArrowRight", mods = "Command|Shift", mode = "~Vi|~Search", action = "SelectNextTab" },
+  { key = "C", mods = "Control", action = "Copy" },
+  { key = 42, mods = "Command", action = "Paste" },
+  { key = "L", mods = "Command", action = "ClearLogNotice" },
+]

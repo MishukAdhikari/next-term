@@ -156,6 +156,10 @@ enum SkillsMCP {
             if open.key == key, open.asker == asker { return wait(open, reply: reply) }
             return reply(MCPControl.ok(["status": "busy", "note": "Another request is waiting for the user. Ask again later."]))
         }
+        // An import request waiting for the user counts too: one request at a time.
+        if MCPImportControl.open != nil {
+            return reply(MCPControl.ok(["status": "busy", "note": "Another request is waiting for the user. Ask again later."]))
+        }
         guard askedCount[asker, default: 0] < maxRequestsPerAsker else {
             return reply(MCPControl.ok(["status": "declined", "note": "Too many requests this session; ask the user directly instead."]))
         }

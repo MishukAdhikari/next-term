@@ -1,0 +1,14 @@
+{
+  "Profiles": [
+    {
+      "Guid": "DYN-BASE",
+      "Name": "Base",
+      "Normal Font": "JetBrainsMono-Regular 15",
+      "Option Key Sends": 2,
+      "Right Option Key Sends": 2,
+      "Command": "/bin/zsh -c 'export API_KEY=FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA; exec zsh'",
+      "Custom Command": "Yes",
+      "Triggers": [{ "regex": "^Password:", "action": "PasswordTrigger", "parameter": "FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }]
+    }
+  ]
+}

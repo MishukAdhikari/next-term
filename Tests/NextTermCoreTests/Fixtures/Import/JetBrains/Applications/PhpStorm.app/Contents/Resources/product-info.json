@@ -1,0 +1,18 @@
+{
+  "name": "PhpStorm",
+  "version": "2026.1.1",
+  "buildNumber": "261.22158.282",
+  "productCode": "PS",
+  "productVendor": "JetBrains",
+  "dataDirectoryName": "PhpStorm2026.1",
+  "svgIconPath": "bin/phpstorm.svg",
+  "launch": [
+    {
+      "os": "macOS",
+      "launcherPath": "../MacOS/phpstorm",
+      "javaExecutablePath": "../jbr/Contents/Home/bin/java",
+      "vmOptionsFilePath": "../bin/phpstorm.vmoptions",
+      "customProperties": ["-Dfixture.token=eyJhbGciOiJIUzI1NiJ9.eyJmaXh0dXJlIjoic2VjcmV0In0.bm90LWEtcmVhbC1zaWduYXR1cmU"]
+    }
+  ]
+}

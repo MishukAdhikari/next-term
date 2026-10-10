@@ -1,0 +1,19 @@
+// Your own keys, written by hand for the import tests.
+[
+  {
+    "context": "Workspace",
+    "bindings": {
+      "cmd-alt-c": "workspace::CopyPath",
+      "cmd-k": "git::Commit",
+      "cmd-shift-k": "git::Push",
+      "cmd-ctrl-b": "git::Branch",
+      "cmd-alt-shift-t": "pane::ReopenClosedItem"
+    }
+  },
+  {
+    "context": "Terminal",
+    "bindings": {
+      "cmd-alt-t": ["terminal::SendText", "export TOKEN=FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"]
+    }
+  }
+]

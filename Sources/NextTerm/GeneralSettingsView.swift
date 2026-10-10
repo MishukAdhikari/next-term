@@ -83,9 +83,13 @@ final class GeneralSettingsView: NSView {
             stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -24),
         ])
         refresh()
+        // An import or its Undo can change what reopens at launch.
+        NotificationCenter.default.addObserver(self, selector: #selector(importChanged), name: ImportCoordinator.changed, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    @objc private func importChanged() { refresh() }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()

@@ -1,0 +1,182 @@
+{
+  "Alacritty" : {
+    "changes_if_applied" : 10,
+    "not_brought_over" : [
+      {
+        "item" : "colors.bright.white",
+        "reason" : "only #rrggbb colours are read"
+      },
+      {
+        "item" : "keyboard.bindings Command+F → SearchForward",
+        "reason" : "only in one of Alacritty's modes (Search)"
+      },
+      {
+        "item" : "keyboard.bindings Command+a scan code → Paste",
+        "reason" : "key not recognised"
+      },
+      {
+        "item" : "1 key binding with a command",
+        "reason" : "never imported: runs commands"
+      },
+      {
+        "item" : "2 key bindings",
+        "reason" : "no matching Next Term command, or they send text to the terminal"
+      },
+      {
+        "item" : "import outside.toml",
+        "reason" : "only files in Alacritty's own folder are read"
+      },
+      {
+        "item" : "import escape.toml",
+        "reason" : "only files in Alacritty's own folder are read"
+      },
+      {
+        "item" : "import broken.toml",
+        "reason" : "not valid TOML, so Alacritty skips it too"
+      },
+      {
+        "item" : "env",
+        "reason" : "never imported: runs commands or can hold secrets"
+      },
+      {
+        "item" : "hints",
+        "reason" : "never imported: runs commands or can hold secrets"
+      },
+      {
+        "item" : "shell",
+        "reason" : "never imported: runs commands or can hold secrets"
+      },
+      {
+        "item" : "bell.command",
+        "reason" : "never imported: runs commands or can hold secrets"
+      },
+      {
+        "item" : "window.opacity",
+        "reason" : "the terminal is opaque here"
+      },
+      {
+        "item" : "other settings: general.live_config_reload, window.padding",
+        "reason" : "no matching Next Term setting yet"
+      }
+    ],
+    "note" : "Nothing changes here: apply_import opens Next Term's import window with these rows, and only the user's Apply changes anything.",
+    "plan_id" : "p-(differs with the home folder)",
+    "settings" : [
+      {
+        "from" : "font.normal.family JetBrains Mono",
+        "id" : "set:terminalFontFamily",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalFontFamily title"
+      },
+      {
+        "from" : "font.size 14.5",
+        "id" : "set:terminalFontSize",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalFontSize title"
+      },
+      {
+        "from" : "cursor.style.shape Beam",
+        "id" : "set:terminalCursorShape",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalCursorShape title"
+      },
+      {
+        "from" : "cursor.style.blinking On",
+        "id" : "set:terminalCursorBlink",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalCursorBlink title"
+      },
+      {
+        "from" : "scrolling.history 50000",
+        "id" : "set:terminalScrollback",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalScrollback title"
+      },
+      {
+        "from" : "window.option_as_alt OnlyLeft",
+        "id" : "set:optionAsMeta",
+        "note" : "on in Alacritty for Left Option only; Next Term can't set one side yet",
+        "ticked" : false,
+        "title" : "optionAsMeta title"
+      },
+      {
+        "from" : "working_directory ~/Projects",
+        "id" : "set:terminalStartFolder",
+        "note" : "in project windows too, where new tabs otherwise open in the project's folder",
+        "ticked" : false,
+        "title" : "terminalStartFolder title"
+      },
+      {
+        "colours" : 18,
+        "from" : "[colors]",
+        "id" : "set:terminalPalette",
+        "note" : "18 of 20 colours; the others stay Next Term's",
+        "ticked" : true,
+        "title" : "terminalPalette title"
+      }
+    ],
+    "shortcut_set" : {
+      "in_use" : true,
+      "to" : "Next Term"
+    },
+    "source" : "Alacritty",
+    "up_to_date" : false,
+    "your_shortcuts" : [
+      {
+        "allowed" : true,
+        "from" : "keyboard.bindings Command+D → CreateNewWindow",
+        "id" : "key:newWindow:",
+        "new" : "⌘D",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "New Window"
+      },
+      {
+        "allowed" : true,
+        "from" : "keyboard.bindings Command|Shift+T → CreateNewTab",
+        "id" : "key:newTab:",
+        "new" : "⇧⌘T",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "New Tab"
+      },
+      {
+        "allowed" : true,
+        "from" : "keyboard.bindings Command|Option+Key1 → SelectTab1",
+        "id" : "key:selectTabByNumber:#1",
+        "new" : "⌥⌘1",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Select Tab 1"
+      },
+      {
+        "allowed" : true,
+        "from" : "keyboard.bindings Command|Shift+ArrowRight → SelectNextTab",
+        "id" : "key:showNextTab:",
+        "new" : "⇧⌘→",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Show Next Tab"
+      },
+      {
+        "allowed" : false,
+        "from" : "keyboard.bindings Control+C → Copy",
+        "id" : "key:copy:",
+        "new" : "⌃C",
+        "note" : "Control keys without ⌘ stay with your shell and agents",
+        "now" : "no key",
+        "ticked" : false,
+        "title" : "Copy"
+      }
+    ]
+  }
+}

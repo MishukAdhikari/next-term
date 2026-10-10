@@ -83,6 +83,12 @@ final class KeyboardShortcuts {
     private(set) var editorKeys: [KeyChord: NSMenuItem] = [:]
     /// The item of another command on the same key, which gives it up while the menus are open over the editor.
     private var sharedKeys: [KeyChord: NSMenuItem] = [:]
+    /// Clear Buffer on a key a command for everywhere has too (⌘K, Commit… under the JetBrains set): its item holds
+    /// no key while the menus are closed, and a terminal with the keyboard answers it (NextTermView.performKeyEquivalent);
+    /// everywhere else the key is the other command's (KeyBindings.terminalKeyboardCommands).
+    private(set) var terminalKeys: [KeyChord: NSMenuItem] = [:]
+    /// The command for everywhere on each of those keys, which gives it up while the menus are open over a terminal.
+    private var terminalSharedKeys: [KeyChord: NSMenuItem] = [:]
     private var trackingObservers: [NSObjectProtocol] = []
     /// Whether the editor's items show their keys now (the menu bar is open).
     private(set) var showsEditorKeys = false
@@ -99,6 +105,16 @@ final class KeyboardShortcuts {
         return editorKeys[chord]
     }
 
+    /// The terminal command `event` presses while a terminal has the keyboard, if its key is shared (`terminalKeys`).
+    func terminalItem(for event: NSEvent) -> NSMenuItem? {
+        guard !terminalKeys.isEmpty, let chord = Self.chord(from: event) else { return nil }
+        if let typed = event.charactersIgnoringModifiers, typed.count == 1,
+           let item = terminalKeys[KeyChord(key: typed, command: chord.command, shift: chord.shift, option: chord.option, control: chord.control)] {
+            return item
+        }
+        return terminalKeys[chord]
+    }
+
     /// The menu bar opened: the editor's items show their keys, and with the editor's keyboard a shared key is
     /// shown on the editor's command only, since that is what it does there.
     func menuBarOpened() {
@@ -110,15 +126,24 @@ final class KeyboardShortcuts {
             }
             Self.set(chord, on: item)
         }
+        // Over a terminal, a key Clear Buffer shares with a command for everywhere is shown on Clear Buffer.
+        if NSApp.keyWindow?.firstResponder is NextTermView {
+            for (chord, item) in terminalKeys {
+                terminalSharedKeys[chord].map { Self.set(nil, on: $0) }
+                Self.set(chord, on: item)
+            }
+        }
         showsEditorKeys = true
     }
 
-    /// The menu bar closed: the editor's items give their keys back.
+    /// The menu bar closed: the editor's and the terminal's items give their keys back.
     func menuBarClosed() {
         guard showsEditorKeys else { return }
         showsEditorKeys = false
         for item in editorKeys.values { Self.set(nil, on: item) }
+        for item in terminalKeys.values { Self.set(nil, on: item) }
         for (chord, other) in sharedKeys { Self.set(chord, on: other) }
+        for (chord, other) in terminalSharedKeys { Self.set(chord, on: other) }
     }
 
     private func walk(_ menu: NSMenu, path: [String]) {
@@ -252,11 +277,27 @@ final class KeyboardShortcuts {
         showsEditorKeys = false
         editorKeys = [:]
         sharedKeys = [:]
+        terminalKeys = [:]
+        terminalSharedKeys = [:]
         func isEditors(_ item: NSMenuItem) -> Bool { Self.id(of: item).map { editorIDs.contains($0) } ?? false }
+        func scope(_ item: NSMenuItem) -> KeyBindings.Scope? { Self.id(of: item).map(KeyBindings.scope(of:)) }
+        func keepsToTerminal(_ item: NSMenuItem) -> Bool {
+            Self.id(of: item).map { KeyBindings.terminalKeyboardCommands.contains($0) } ?? false
+        }
         for (item, chord) in chords where isEditors(item) {
             if let chord { editorKeys[chord] = item }
         }
+        // Keys a command for everywhere has: Clear Buffer gives such a key to it outside a terminal.
+        var everywhere: [KeyChord: NSMenuItem] = [:]
+        for (item, chord) in chords where scope(item) == .everywhere {
+            if let chord, everywhere[chord] == nil { everywhere[chord] = item }
+        }
         for (item, chord) in chords where !isEditors(item) {
+            if let chord, keepsToTerminal(item), let other = everywhere[chord] {
+                terminalKeys[chord] = item
+                terminalSharedKeys[chord] = other
+                continue
+            }
             Self.set(chord, on: item)
             if let chord, editorKeys[chord] != nil { sharedKeys[chord] = item }
         }
@@ -942,7 +983,7 @@ final class EditorSettingsView: NSView {
             stack.spacing = 10
             return stack
         }
-        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own line height; 1.35 reads well for code. The font size is shared with the terminal (⌘+ and ⌘-); the terminal’s font is in the Terminal tab. Claude Code, Gemini CLI, Qwen Code, opencode and Copilot CLI started in a new tab connect to Next Term as their IDE: the selected lines go with each prompt (and for Gemini and Qwen, the open files), never from .env files. They connect by themselves (Next Term turns Gemini's and Qwen's IDE mode on); turn these off to stop sharing. ⌥⌘K adds an @-mention to the prompt of Claude, opencode and Copilot.")
+        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own line height; 1.35 reads well for code. Terminals use this font size too unless the Terminal tab gives them their own; ⌘+ and ⌘- change the size of what has the keyboard. The terminal’s font is in the Terminal tab. Claude Code, Gemini CLI, Qwen Code, opencode and Copilot CLI started in a new tab connect to Next Term as their IDE: the selected lines go with each prompt (and for Gemini and Qwen, the open files), never from .env files. They connect by themselves (Next Term turns Gemini's and Qwen's IDE mode on); turn these off to stop sharing. ⌥⌘K adds an @-mention to the prompt of Claude, opencode and Copilot.")
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 11)
         note.preferredMaxLayoutWidth = 420

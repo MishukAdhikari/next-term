@@ -1,0 +1,12 @@
+// The api project's own settings, as a repository keeps them.
+{
+	"editor.fontSize": 13,
+	"editor.wordWrap": "off",
+	"files.exclude": {
+		"**/generated": true
+	},
+	"terminal.integrated.cwd": "/tmp",
+	"terminal.integrated.env.linux": {
+		"DATABASE_PASSWORD": "FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	},
+}

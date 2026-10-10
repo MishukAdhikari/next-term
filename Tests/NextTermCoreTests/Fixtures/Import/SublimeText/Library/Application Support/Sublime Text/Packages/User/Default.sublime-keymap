@@ -1,0 +1,5 @@
+[
+	// The macOS file is read after this one, so its ⇧⌘O wins.
+	{ "keys": ["super+shift+o"], "command": "prompt_open" },
+	{ "keys": ["super+alt+s"], "command": "save_all" },
+]

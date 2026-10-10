@@ -657,6 +657,13 @@ enum SelfTest {
         await ragColorChecks(c, proj: proj)
         await envValueChecks(c, proj: proj)
         await importChecks(c, proj: proj)
+        await importUndoGuardChecks()
+        await importForkChecks()
+        await importTerminalSizeChecks(c)
+        await importReachChecks()
+        await importTerminalChecks()
+        await importWindowChecks()
+        await importAgentChecks()
         await behaviourSettingsChecks(c, proj: proj)
         await singleClickChecks(c, proj: proj, tab: inProject)
         await safetyChecks(c, proj: proj)
@@ -1241,13 +1248,16 @@ enum SelfTest {
         await pause(0.4)
         if let previewWindow = window.window { await screenshot(previewWindow, suffix: "import") }
         // ⌥⌘P is Push…'s: the row waits unticked and says so; ticked, it moves the key from Push… (and Undo gives it back).
+        // A ticked setting Next Term already has (the font, if it is Menlo here) changes nothing and isn't counted.
+        let alreadySet = plan.settings.filter { $0.ticked && ImportCurrent.has($0.setting) }.count
         let goToFileRow = window.shortcutRow(for: "goToFile:")
         let namesPush = goToFileRow?.note?.contains("⌥⌘P is Push…’s here; tick to move it") == true
-        let countedWithout = "Apply \(KeymapPreset.vsCode.overrides.count + 5) Changes"
+        let countedWithout = "Apply \(KeymapPreset.vsCode.overrides.count + 5 - alreadySet) Changes"
         check(goToFileRow?.ticked == false && namesPush && window.applyTitle == countedWithout,
               "a key of yours another command has waits unticked, naming the command", "\(goToFileRow?.note ?? "no row") | \(window.applyTitle)")
         window.tickShortcutForTest("goToFile:")
-        check(window.applyTitle == "Apply \(KeymapPreset.vsCode.overrides.count + 6) Changes", "the preview counts what is ticked", window.applyTitle)
+        check(window.applyTitle == "Apply \(KeymapPreset.vsCode.overrides.count + 6 - alreadySet) Changes", "the preview counts what is ticked",
+              window.applyTitle)
         func swatches(in view: NSView?) -> [PaletteSwatches] {
             guard let view else { return [] }
             return (view as? PaletteSwatches).map { [$0] } ?? view.subviews.flatMap { swatches(in: $0) }

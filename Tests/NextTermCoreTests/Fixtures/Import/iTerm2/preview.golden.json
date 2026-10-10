@@ -1,0 +1,72 @@
+{
+  "iTerm2" : {
+    "changes_if_applied" : 5,
+    "not_brought_over" : [
+      {
+        "item" : "DynamicProfiles/05-escape.json",
+        "reason" : "it links outside iTerm2's DynamicProfiles folder, so it isn't read"
+      },
+      {
+        "item" : "DynamicProfiles/50-broken.json",
+        "reason" : "couldn't be read"
+      },
+      {
+        "item" : "Load settings from a custom folder or URL",
+        "reason" : "iTerm2 loads them from there when it starts; the copy on this Mac was read, which may be older"
+      },
+      {
+        "item" : "⌘] and ⌘[ (Next and Previous Pane in iTerm2)",
+        "reason" : "they indent and outdent here; ⌥⌘] and ⌥⌘[ move between panes"
+      }
+    ],
+    "note" : "Nothing changes here: apply_import opens Next Term's import window with these rows, and only the user's Apply changes anything.",
+    "plan_id" : "p-(differs with the home folder)",
+    "settings" : [
+      {
+        "from" : "Normal Font JetBrainsMono-Regular 15",
+        "id" : "set:terminalFontSize",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalFontSize title"
+      },
+      {
+        "from" : "Normal Font JetBrainsMono-Regular",
+        "id" : "set:terminalFontFamily",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalFontFamily title"
+      },
+      {
+        "from" : "Option Key Sends Esc+, Right Option Key Sends Esc+",
+        "id" : "set:optionAsMeta",
+        "note" : null,
+        "ticked" : true,
+        "title" : "optionAsMeta title"
+      },
+      {
+        "colours" : 3,
+        "from" : "the default profile's colours, from its dynamic profile",
+        "id" : "set:terminalPalette",
+        "note" : "3 of 20 colours; the others stay Next Term's",
+        "ticked" : true,
+        "title" : "terminalPalette title"
+      },
+      {
+        "from" : "Cursor Type Bar",
+        "id" : "set:terminalCursorShape",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalCursorShape title"
+      }
+    ],
+    "shortcut_set" : {
+      "in_use" : true,
+      "to" : "Next Term"
+    },
+    "source" : "iTerm2",
+    "up_to_date" : false,
+    "your_shortcuts" : [
+
+    ]
+  }
+}

@@ -1,0 +1,214 @@
+{
+  "cmux" : {
+    "changes_if_applied" : 18,
+    "not_brought_over" : [
+      {
+        "item" : "shortcuts.bindings.closeTab: [ctrl+b, x]",
+        "reason" : "two-step keys aren't supported yet"
+      },
+      {
+        "item" : "2 cmux shortcuts",
+        "reason" : "no matching Next Term command (workspaces, notifications, the browser and other cmux features)"
+      },
+      {
+        "item" : "other cmux.json settings: agentChat, terminal, actions",
+        "reason" : "no matching Next Term setting yet; actions, commands and hooks there are never read"
+      },
+      {
+        "item" : "command",
+        "reason" : "never imported: runs commands or can hold secrets"
+      }
+    ],
+    "note" : "Nothing changes here: apply_import opens Next Term's import window with these rows, and only the user's Apply changes anything.",
+    "plan_id" : "p-(differs with the home folder)",
+    "settings" : [
+      {
+        "from" : "font-family JetBrains Mono",
+        "id" : "set:terminalFontFamily",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalFontFamily title"
+      },
+      {
+        "from" : "font-size 14",
+        "id" : "set:terminalFontSize",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalFontSize title"
+      },
+      {
+        "from" : "macos-option-as-alt left",
+        "id" : "set:optionAsMeta",
+        "note" : "on in cmux for Left Option only; Next Term can't set one side yet",
+        "ticked" : false,
+        "title" : "optionAsMeta title"
+      },
+      {
+        "colours" : 4,
+        "from" : "theme Night Owl",
+        "id" : "set:terminalPalette",
+        "note" : "4 of 20 colours; the others stay Next Term's",
+        "ticked" : true,
+        "title" : "terminalPalette title"
+      }
+    ],
+    "shortcut_set" : {
+      "in_use" : true,
+      "to" : "Next Term"
+    },
+    "source" : "cmux",
+    "up_to_date" : false,
+    "your_shortcuts" : [
+      {
+        "allowed" : true,
+        "from" : "shortcuts.bindings.newSurface: cmd+shift+t",
+        "id" : "key:newTab:",
+        "new" : "⇧⌘T",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "New Tab"
+      },
+      {
+        "allowed" : true,
+        "from" : "shortcuts.bindings.splitRight: cmd+backslash",
+        "id" : "key:splitRight:",
+        "new" : "⌘\\",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Split Right"
+      },
+      {
+        "allowed" : true,
+        "from" : "shortcuts.bindings.toggleSplitZoom: cmd+shift+enter",
+        "id" : "key:toggleZoomPane:",
+        "new" : "⇧⌘↩",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Maximize Pane"
+      },
+      {
+        "allowed" : true,
+        "from" : "shortcuts.bindings.focusLeft: cmd+ctrl+left",
+        "id" : "key:selectPaneLeft:",
+        "new" : "⌃⌘←",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Select Pane on the Left"
+      },
+      {
+        "allowed" : true,
+        "from" : "shortcuts.bindings.selectSurfaceByNumber: cmd+opt+1",
+        "id" : "key:selectTabByNumber:#1",
+        "new" : "⌥⌘1",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Select Tab 1"
+      },
+      {
+        "allowed" : true,
+        "from" : "shortcuts.bindings.selectSurfaceByNumber: cmd+opt+1",
+        "id" : "key:selectTabByNumber:#2",
+        "new" : "⌥⌘2",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Select Tab 2"
+      },
+      {
+        "allowed" : true,
+        "from" : "shortcuts.bindings.selectSurfaceByNumber: cmd+opt+1",
+        "id" : "key:selectTabByNumber:#3",
+        "new" : "⌥⌘3",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Select Tab 3"
+      },
+      {
+        "allowed" : true,
+        "from" : "shortcuts.bindings.selectSurfaceByNumber: cmd+opt+1",
+        "id" : "key:selectTabByNumber:#4",
+        "new" : "⌥⌘4",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Select Tab 4"
+      },
+      {
+        "allowed" : true,
+        "from" : "shortcuts.bindings.selectSurfaceByNumber: cmd+opt+1",
+        "id" : "key:selectTabByNumber:#5",
+        "new" : "⌥⌘5",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Select Tab 5"
+      },
+      {
+        "allowed" : true,
+        "from" : "shortcuts.bindings.selectSurfaceByNumber: cmd+opt+1",
+        "id" : "key:selectTabByNumber:#6",
+        "new" : "⌥⌘6",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Select Tab 6"
+      },
+      {
+        "allowed" : true,
+        "from" : "shortcuts.bindings.selectSurfaceByNumber: cmd+opt+1",
+        "id" : "key:selectTabByNumber:#7",
+        "new" : "⌥⌘7",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Select Tab 7"
+      },
+      {
+        "allowed" : true,
+        "from" : "shortcuts.bindings.selectSurfaceByNumber: cmd+opt+1",
+        "id" : "key:selectTabByNumber:#8",
+        "new" : "⌥⌘8",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Select Tab 8"
+      },
+      {
+        "allowed" : true,
+        "from" : "shortcuts.bindings.selectSurfaceByNumber: cmd+opt+1",
+        "id" : "key:selectTabByNumber:#9",
+        "new" : "⌥⌘9",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Select Last Tab"
+      },
+      {
+        "allowed" : true,
+        "from" : "shortcuts.bindings.toggleFileExplorer: cmd+opt+b",
+        "id" : "key:toggleProjectSidebar:",
+        "new" : "⌥⌘B",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Hide or Show Project Sidebar"
+      },
+      {
+        "allowed" : true,
+        "from" : "keybind super+d → new_split:down",
+        "id" : "key:splitDown:",
+        "new" : "⌘D",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Split Down"
+      }
+    ]
+  }
+}

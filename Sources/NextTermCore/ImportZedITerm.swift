@@ -15,18 +15,24 @@ public enum ImportZed {
         (home as NSString).appendingPathComponent(".config/zed")
     }
 
+    /// Zed's app bundles, its release channels in order.
+    static let bundles = ["Zed.app", "Zed Preview.app", "Zed Nightly.app"]
+
     /// Zed, when its settings file exists. Last use is the newest of that file and Zed's own database, which
-    /// Zed writes whenever it runs (dates only: neither file is opened).
-    public static func detect(home: String = NSHomeDirectory()) -> [DetectedApp] {
+    /// Zed writes whenever it runs (dates only: neither file is opened). `applications`: where the app is looked
+    /// for, /Applications and ~/Applications unless given.
+    public static func detect(home: String = NSHomeDirectory(), applications: [String]? = nil) -> [DetectedApp] {
         let folder = settingsFolder(home: home)
         let settings = (folder as NSString).appendingPathComponent("settings.json")
         guard isRegularFile(settings) else { return [] }
         let dates = ([settings] + databaseFiles(home: home)).compactMap(ImportFile.modificationDate)
-        return [DetectedApp(kind: .zed, name: "Zed", configPath: folder, lastUsed: dates.max())]
+        let bundle = ImportAppBundles.find(bundles, applications: applications ?? ImportVSCode.applicationFolders(home: home))
+        return [DetectedApp(kind: .zed, name: "Zed", configPath: folder, lastUsed: dates.max(), appPath: bundle?.path, version: bundle?.version)]
     }
 
     /// The preset from `base_keymap`, the editor's and terminal's fonts and the other settings Next Term has too,
-    /// your own keys from keymap.json, and what Zed has that isn't brought over. Recent projects stay empty.
+    /// your own keys from keymap.json, recent projects (ImportZedRecents.swift), and what Zed has that isn't
+    /// brought over.
     /// `fonts`: the fonts this Mac has (tests pass their own).
     public static func plan(for app: DetectedApp, home: String = NSHomeDirectory(), usKeyboard: Bool = true,
                             fonts: FontCatalog = .system) -> ImportPlan {
@@ -54,9 +60,9 @@ public enum ImportZed {
         let keys = keymapPlan((folder as NSString).appendingPathComponent("keymap.json"), usKeyboard: usKeyboard)
         plan.shortcuts = keys.shortcuts
         plan.skipped += keys.skipped
-        if !databaseFiles(home: home).isEmpty {
-            plan.skipped.append(SkippedItem("recent projects", "Zed's recent projects come in a later version"))
-        }
+        let recents = recentProjects(home: home)
+        plan.recentProjects = recents.paths
+        plan.skipped += recents.skipped
         return plan
     }
 
@@ -135,7 +141,8 @@ public enum ImportZed {
     /// Top-level keys turned into settings: only their values are ever converted. Inside `terminal` and
     /// `project_panel`, `report` names only the keys in `nestedReasons`.
     static let mappedKeys: Set<String> = ["base_keymap", "buffer_font_family", "buffer_font_size", "buffer_line_height", "soft_wrap",
-                                          "remove_trailing_whitespace_on_save", "ensure_final_newline_on_save", "file_scan_exclusions"]
+                                          "remove_trailing_whitespace_on_save", "ensure_final_newline_on_save", "file_scan_exclusions",
+                                          "restore_on_startup"]
 
     /// The settings Next Term has too: font size, line height, soft wrap, clean-up on save and hidden files for the
     /// editor; Option as Meta, where it sits, its cursor, scrollback and start folder for the terminal; and the
@@ -153,19 +160,16 @@ public enum ImportZed {
         }
         let terminal = nested("terminal")
 
-        // Font size: one for both here, the buffer's first.
+        // The buffer's size is the editor's; the terminal's own, when set (Zed's terminal uses the buffer's without).
         let bufferSize = value("buffer_font_size", in: members).map(ImportVSCode.number)
         let terminalSize = value("font_size", in: terminal).map(ImportVSCode.number)
         if case .some(.none) = bufferSize { skipped.append(SkippedItem("buffer_font_size", notRecognised)) }
         if case .some(.none) = terminalSize { skipped.append(SkippedItem("terminal.font_size", notRecognised)) }
         if let size = bufferSize ?? nil, size > 0 {
             settings.append(fontSizeRow(size, source: "buffer_font_size", note: nil))
-            if let other = terminalSize ?? nil, other.rounded() != size.rounded() {
-                skipped.append(SkippedItem("terminal.font_size \(ImportVSCode.format(other))",
-                                           "Next Term uses one size for the editor and the terminal, so the buffer's \(ImportVSCode.format(size)) is used"))
-            }
-        } else if let size = terminalSize ?? nil, size > 0 {
-            settings.append(fontSizeRow(size, source: "terminal.font_size", note: "sets the editor too: Next Term has one size for both"))
+        }
+        if let size = terminalSize ?? nil, size > 0 {
+            settings.append(fontSizeRow(size, source: "terminal.font_size", note: nil, terminal: true))
         }
 
         if let raw = value("buffer_line_height", in: members) {
@@ -204,6 +208,24 @@ public enum ImportZed {
                 if let row = ImportRows.hiddenFiles(strings, source: "file_scan_exclusions") { settings.append(row) }
             } else {
                 skipped.append(SkippedItem("file_scan_exclusions", notRecognised))
+            }
+        }
+
+        if let raw = value("restore_on_startup", in: members) {
+            let last = LaunchOpens.lastProjects.rawValue, welcome = LaunchOpens.welcome.rawValue
+            let opens = ["last_workspace": last, "last_session": last, "none": welcome, "empty_tab": welcome, "launchpad": welcome]
+            if let name = raw as? String, let choice = opens[name] {
+                settings.append(PlannedSetting(.launchOpens(choice), source: "restore_on_startup \(name)"))
+            } else {
+                skipped.append(SkippedItem("restore_on_startup", notRecognised))
+            }
+        }
+        if let blame = nested("git").last(where: { $0.key == "inline_blame" }), case .object(let object) = blame.value,
+           let enabled = object.members.last(where: { $0.key == "enabled" }) {
+            if let on = ImportVSCode.bool(enabled.value.object(in: text)) {
+                settings.append(PlannedSetting(.currentLineBlame(on), source: "git.inline_blame.enabled \(on)"))
+            } else {
+                skipped.append(SkippedItem("git.inline_blame.enabled", notRecognised))
             }
         }
 
@@ -300,11 +322,12 @@ public enum ImportZed {
         }
     }
 
-    static func fontSizeRow(_ size: Double, source: String, note: String?) -> PlannedSetting {
+    /// The editor's size, or with `terminal` the terminal's own.
+    static func fontSizeRow(_ size: Double, source: String, note: String?, terminal: Bool = false) -> PlannedSetting {
         var notes = [note].compactMap { $0 }
         if size.rounded() < 8 || size.rounded() > 32 { notes.insert("Next Term's sizes go from 8 to 32", at: 0) }
-        return PlannedSetting(.fontSize(clamping: size), source: "\(source) \(ImportVSCode.format(size))",
-                              note: notes.isEmpty ? nil : notes.joined(separator: "; "))
+        let setting = terminal ? ImportedSetting.terminalFontSize(clamping: size) : .fontSize(clamping: size)
+        return PlannedSetting(setting, source: "\(source) \(ImportVSCode.format(size))", note: notes.isEmpty ? nil : notes.joined(separator: "; "))
     }
 
     // MARK: reporting the rest
@@ -329,6 +352,7 @@ public enum ImportZed {
     static let nestedReasons: [String: [String: String]] = [
         "terminal": ["line_height": "the terminal's line height follows its font", "font_fallbacks": fallbacks],
         "project_panel": [:],
+        "git": [:],
     ]
 
     /// One skipped row per setting the import saw and doesn't bring over, in the file's order, with the
@@ -385,14 +409,22 @@ public enum ImportZed {
         return .members(root.members, text: text)
     }
 
-    /// Zed's databases (`~/Library/Application Support/Zed/db/0-<channel>/db.sqlite`, `db.rs`) that exist.
-    /// Listed for their dates and to say recents exist; v1 never opens them.
+    /// Zed's databases (`~/Library/Application Support/Zed/db/0-<channel>/db.sqlite`, `db.rs`) that exist, for
+    /// their dates; only the recent projects are ever read from one (ImportZedRecents.swift). Each as its real path,
+    /// and only while it and the files SQLite opens beside it (-wal, -shm) stay inside Zed's db folder: a database
+    /// linked from elsewhere is never opened.
     static func databaseFiles(home: String) -> [String] {
         let base = (home as NSString).appendingPathComponent("Library/Application Support/Zed/db")
         guard let channels = try? FileManager.default.contentsOfDirectory(atPath: base) else { return [] }
         return channels.filter { $0.hasPrefix("0-") }.sorted().flatMap { channel -> [String] in
-            let folder = (base as NSString).appendingPathComponent(channel)
-            return ["db.sqlite", "db.sqlite-wal"].map { (folder as NSString).appendingPathComponent($0) }.filter(isRegularFile)
+            let beside = ["db.sqlite", "db.sqlite-wal", "db.sqlite-shm"].map { channel + "/" + $0 }
+            let linkedOut = beside.contains { relative in
+                var info = stat()
+                let path = (base as NSString).appendingPathComponent(relative)
+                return lstat(path, &info) == 0 && ImportVSCode.file(relative, inside: base) == nil
+            }
+            guard !linkedOut else { return [] }
+            return beside.prefix(2).compactMap { ImportVSCode.file($0, inside: base) }
         }
     }
 }
@@ -404,11 +436,14 @@ public enum ImportITerm2 {
         (home as NSString).appendingPathComponent("Library/Preferences/com.googlecode.iterm2.plist")
     }
 
-    /// iTerm2, when its preferences file exists; last use is that file's date (it isn't opened).
-    public static func detect(home: String = NSHomeDirectory()) -> [DetectedApp] {
+    /// iTerm2, when its preferences file exists; last use is that file's date (it isn't opened). `applications`:
+    /// where the app (iTerm.app) is looked for, /Applications and ~/Applications unless given.
+    public static func detect(home: String = NSHomeDirectory(), applications: [String]? = nil) -> [DetectedApp] {
         let path = preferencesPath(home: home)
         guard isRegularFile(path) else { return [] }
-        return [DetectedApp(kind: .iTerm2, name: "iTerm2", configPath: path, lastUsed: ImportFile.modificationDate(path))]
+        let bundle = ImportAppBundles.find(["iTerm.app"], applications: applications ?? ImportVSCode.applicationFolders(home: home))
+        return [DetectedApp(kind: .iTerm2, name: "iTerm2", configPath: path, lastUsed: ImportFile.modificationDate(path),
+                            appPath: bundle?.path, version: bundle?.version)]
     }
 
     /// The font, its size, Option as Meta and the colours from the default profile, and what else it saw. The
@@ -419,7 +454,8 @@ public enum ImportITerm2 {
         var plan = ImportPlan(preset: app.preset)
         guard app.kind == .iTerm2 else { return plan }
         let path = app.configPath.isEmpty ? preferencesPath(home: home) : app.configPath
-        guard let data = ImportFile.data(path), let preferences = Preferences(data) else {
+        let dynamic = dynamicProfiles(home: home)
+        guard let data = ImportFile.data(path), let preferences = Preferences(data, dynamic: dynamic.profiles) else {
             plan.skipped.append(SkippedItem((path as NSString).lastPathComponent, "couldn't be read, so no settings came over"))
             plan.skipped.append(paneKeys)
             return plan
@@ -435,6 +471,8 @@ public enum ImportITerm2 {
         } else {
             plan.skipped.append(SkippedItem("profiles", "iTerm2 has no saved profile yet, so no settings came over"))
         }
+        plan.skipped += dynamic.skipped
+        if let note = preferences.customFolder { plan.skipped.append(note) }
         if preferences.globalKeyMappings > 0 {
             let count = preferences.globalKeyMappings
             plan.skipped.append(SkippedItem("iTerm2 key mappings (\(count))", "terminal key mappings aren't brought over"))
@@ -472,19 +510,30 @@ public enum ImportITerm2 {
         /// "Cursor Type": 0 underline, 1 vertical bar, 2 box (`ITAddressBookMgr.h`); "Blinking Cursor".
         var cursorType: Int?
         var blinkingCursor: Bool?
+        /// The default profile is a dynamic one, merged over its parent.
+        var dynamic = false
     }
 
     struct Preferences: Equatable {
         var profile: Profile?
         /// How many entries `GlobalKeyMap` has (counted, never read).
         var globalKeyMappings = 0
+        /// A note when iTerm2 loads its settings from a custom folder or URL.
+        var customFolder: SkippedItem?
 
-        init?(_ data: Data) {
+        /// `dynamic`: the dynamic profiles, in load order (`dynamicProfiles`).
+        init?(_ data: Data, dynamic: [[String: Any]] = []) {
             guard let root = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any] else {
                 return nil
             }
             globalKeyMappings = (root["GlobalKeyMap"] as? [String: Any])?.count ?? 0
-            profile = ImportITerm2.defaultProfile(root).map(ImportITerm2.profile)
+            customFolder = ImportITerm2.customFolderNote(root)
+            let found = ImportITerm2.defaultProfile(root, dynamic: dynamic)
+            profile = found.map { values, isDynamic in
+                var profile = ImportITerm2.profile(values)
+                profile.dynamic = isDynamic
+                return profile
+            }
         }
     }
 
@@ -495,11 +544,17 @@ public enum ImportITerm2 {
     /// The colours read, by palette slot: the 16 ANSI colours, then text, background, cursor and selection.
     static let colourKeys = (0...15).map { "Ansi \($0) Color" } + ["Foreground Color", "Background Color", "Cursor Color", "Selection Color"]
 
-    /// The profile `Default Bookmark Guid` names in `New Bookmarks`, else the first one.
-    static func defaultProfile(_ root: [String: Any]) -> [String: Any]? {
+    /// The profile `Default Bookmark Guid` names: in `New Bookmarks`, else among the dynamic profiles (each merged
+    /// over its parent), else the first regular one. True when it is a dynamic one.
+    static func defaultProfile(_ root: [String: Any], dynamic: [[String: Any]] = []) -> (values: [String: Any], dynamic: Bool)? {
         let profiles = (root["New Bookmarks"] as? [Any])?.compactMap { $0 as? [String: Any] } ?? []
         let guid = root["Default Bookmark Guid"] as? String
-        return profiles.first { guid != nil && $0["Guid"] as? String == guid } ?? profiles.first
+        if let match = profiles.first(where: { guid != nil && $0["Guid"] as? String == guid }) { return (match, false) }
+        if let guid, !dynamic.isEmpty {
+            let merged = mergedDynamic(dynamic, regular: profiles, defaultProfile: profiles.first ?? [:])
+            if let profile = merged[guid] { return (profile, true) }
+        }
+        return profiles.first.map { ($0, false) }
     }
 
     static func profile(_ values: [String: Any]) -> Profile {
@@ -572,12 +627,12 @@ public enum ImportITerm2 {
             skipped.append(SkippedItem("Normal Font", "the size couldn't be read"))
             return nil
         }
-        let setting = ImportedSetting.fontSize(clamping: size)
-        var notes = ["sets the editor too: Next Term has one size for both"]
-        if case .fontSize(let clamped) = setting, size < 8 || size > 32 {
-            notes.insert("iTerm2 has \(formatted(size)); Next Term's sizes go from 8 to 32, so \(formatted(clamped))", at: 0)
+        let setting = ImportedSetting.terminalFontSize(clamping: size)
+        var note: String?
+        if case .terminalFontSize(let clamped) = setting, size < 8 || size > 32 {
+            note = "iTerm2 has \(formatted(size)); Next Term's sizes go from 8 to 32, so \(formatted(clamped))"
         }
-        return PlannedSetting(setting, source: "Normal Font " + font, note: notes.joined(separator: "; "))
+        return PlannedSetting(setting, source: "Normal Font " + font, note: note)
     }
 
     /// Option as Meta when either Option key sends Meta or Esc+: ticked only when both do and the keyboard
@@ -610,7 +665,8 @@ public enum ImportITerm2 {
     static func coloursRow(_ palette: TerminalPalette, profile: Profile) -> PlannedSetting? {
         var notes: [String] = []
         if profile.otherColourSpace { notes.append("colours in Display P3 or a calibrated space are read as sRGB, so a few may look slightly different") }
-        let source = "the default profile's colours" + (profile.darkVariants ? " (its Dark Mode ones)" : "")
+        var source = "the default profile's colours" + (profile.darkVariants ? " (its Dark Mode ones)" : "")
+        if profile.dynamic { source += ", from its dynamic profile" }
         return ImportColours.row(palette, source: source, note: notes.isEmpty ? nil : notes.joined(separator: "; "))
     }
 
@@ -678,8 +734,38 @@ public enum ImportITerm2 {
 enum ImportFile {
     static let limit = 64 << 20
 
+    /// The files the readers open, for tests: every open in an importer (`data` here, ImportVSCode.readText,
+    /// ImportJetBrains.read and the two SQLite opens) tells it the file's real path. Set for one test's task with
+    /// `$opened.withValue`, so tests running at the same time never see each other's; nil in the app.
+    @TaskLocal static var opened: OpenedFiles?
+
+    /// The real paths opened while a test watched.
+    final class OpenedFiles: @unchecked Sendable {
+        private let lock = NSLock()
+        private var paths = Set<String>()
+
+        var all: Set<String> {
+            lock.lock()
+            defer { lock.unlock() }
+            return paths
+        }
+
+        func add(_ path: String) {
+            lock.lock()
+            paths.insert(path)
+            lock.unlock()
+        }
+    }
+
+    /// Called by every reader as it opens `path`.
+    static func record(_ path: String) {
+        guard let opened else { return }
+        opened.add(canonicalPath(path))
+    }
+
     static func data(_ path: String) -> Data? {
         guard isRegularFile(path), let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        ImportFile.record(path)
         defer { try? handle.close() }
         let data: Data
         do {

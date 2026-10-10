@@ -1,0 +1,120 @@
+{
+  "changes_if_applied" : 12,
+  "not_brought_over" : [
+    {
+      "item" : "2 extensions",
+      "reason" : "extensions aren't imported"
+    },
+    {
+      "item" : "workbench.colorTheme",
+      "reason" : "colour themes come later"
+    },
+    {
+      "item" : "terminal.integrated.env.osx",
+      "reason" : "never imported: can hold secrets"
+    },
+    {
+      "item" : "cursor.general.apiKey",
+      "reason" : "never imported: can hold secrets"
+    },
+    {
+      "item" : "terminal.integrated.profiles.osx",
+      "reason" : "never imported: runs commands"
+    },
+    {
+      "item" : "cmd+k cmd+s → workbench.action.openGlobalKeybindings",
+      "reason" : "no matching Next Term command"
+    },
+    {
+      "item" : "cmd+shift+e → workbench.action.terminal.sendSequence",
+      "reason" : "no matching Next Term command"
+    },
+    {
+      "item" : "1 remote project",
+      "reason" : "remote and virtual folders aren't imported"
+    }
+  ],
+  "note" : "Nothing changes here: apply_import opens Next Term's import window with these rows, and only the user's Apply changes anything.",
+  "plan_id" : "p-(differs with the home folder)",
+  "recent_projects" : {
+    "count" : 2,
+    "id" : "recents",
+    "more" : 0,
+    "shown" : [
+      "~/Code/api",
+      "~/Code/web"
+    ],
+    "ticked" : true
+  },
+  "settings" : [
+    {
+      "from" : "editor.fontSize 15",
+      "id" : "set:fontSize",
+      "note" : null,
+      "ticked" : true,
+      "title" : "fontSize title"
+    },
+    {
+      "from" : "editor.wordWrap on",
+      "id" : "set:softWrap",
+      "note" : null,
+      "ticked" : true,
+      "title" : "softWrap title"
+    },
+    {
+      "colours" : 2,
+      "from" : "terminal colours in workbench.colorCustomizations",
+      "id" : "set:terminalPalette",
+      "note" : "2 of 20 colours; the others stay Next Term's",
+      "ticked" : true,
+      "title" : "terminalPalette title"
+    },
+    {
+      "from" : "files.trimTrailingWhitespace true",
+      "id" : "set:trimTrailingWhitespace",
+      "note" : null,
+      "ticked" : true,
+      "title" : "trimTrailingWhitespace title"
+    },
+    {
+      "from" : "files.exclude",
+      "id" : "set:hiddenFilePatterns",
+      "note" : null,
+      "ticked" : true,
+      "title" : "hiddenFilePatterns title"
+    }
+  ],
+  "shortcut_set" : {
+    "differs" : 5,
+    "id" : "preset",
+    "lines" : [
+      "Split Right   ⌘D → ⌘\\"
+    ],
+    "ticked" : true,
+    "to" : "VS Code"
+  },
+  "source" : "Cursor",
+  "up_to_date" : false,
+  "your_shortcuts" : [
+    {
+      "allowed" : true,
+      "from" : "keybindings.json: cmd+t → workbench.action.quickOpen",
+      "id" : "key:goToFile:",
+      "new" : "⌘T",
+      "note" : null,
+      "now" : "no key",
+      "ticked" : true,
+      "title" : "Go to File…"
+    },
+    {
+      "allowed" : false,
+      "from" : "keybindings.json: ctrl+shift+` → workbench.action.terminal.new",
+      "id" : "key:newTab:",
+      "new" : "⌃⇧`",
+      "note" : "Control keys without ⌘ stay with your shell and agents",
+      "now" : "no key",
+      "ticked" : false,
+      "title" : "New Tab"
+    }
+  ]
+}

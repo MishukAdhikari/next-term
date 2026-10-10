@@ -1,0 +1,33 @@
+// Settings in here override those in "Default/Preferences.sublime-settings",
+// and are overridden in turn by syntax-specific settings.
+{
+	"font_face": "JetBrains Mono",
+	"font_size": 14,
+	"line_padding_top": 2,
+	"line_padding_bottom": 2,
+	/* Two spaces, and rulers at 80 and 120 */
+	"tab_size": 2,
+	"translate_tabs_to_spaces": true,
+	"rulers": [80, 120],
+	"word_wrap": true,
+	"wrap_width": 100,
+	"trim_trailing_white_space_on_save": "all",
+	"trim_only_modified_white_space": false,
+	"ensure_newline_at_eof_on_save": true,
+	"preview_on_click": "only_left",
+	"color_scheme": "Mariana.sublime-color-scheme",
+	"theme": "Default Dark.sublime-theme",
+	"caret_style": "phase",
+	"highlight_line": true,
+	"scroll_past_end": true,
+	"folder_exclude_patterns": [".svn", ".git", ".hg", "CVS", ".Trash", ".Trash-*", "node_modules", "vendor/cache"],
+	"file_exclude_patterns": ["*.pyc", ".DS_Store", "*.sublime-workspace", "*.log", "FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"],
+	// An empty list turns Vintage, the Vim mode, on.
+	"ignored_packages": [],
+	"vintage_start_in_command_mode": true,
+	"http_proxy": "http://fixture:FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@proxy.invalid",
+	"github_token": "eyJhbGciOiJIUzI1NiJ9.eyJmaXh0dXJlIjoic2VjcmV0In0.bm90LWEtcmVhbC1zaWduYXR1cmU",
+	"font_options": ["no_calt"],
+	// The last value of a key wins, as in Sublime Text.
+	"font_size": 13,
+}

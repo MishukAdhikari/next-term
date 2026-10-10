@@ -4,7 +4,8 @@ import Foundation
 // claudedocs/research_next-term-migration (§3.4 terminals, §6 safety). Only allowlisted keys have their
 // values looked at; keys that run programs or can hold secrets are named, never read. `config-file`
 // includes are followed only inside Ghostty's own folders, and a `theme` only by name, from Ghostty's
-// themes folders. Nothing is written.
+// themes folders and those of apps that come with them (cmux, which reads the same files: ImportCmux.swift).
+// Nothing is written.
 
 public enum ImportGhostty {
     /// Where Ghostty reads its config, in order (later values win): the XDG folder, then Application Support.
@@ -21,12 +22,14 @@ public enum ImportGhostty {
             .filter(isRegularFile)
     }
 
-    /// Ghostty, when it has a config file. Last use is the newest file's date (detection opens nothing).
-    public static func detect(home: String = NSHomeDirectory()) -> [DetectedApp] {
+    /// Ghostty, when it has a config file. Last use is the newest file's date (detection opens no config file).
+    /// `applications`: where Ghostty.app is looked for, /Applications and ~/Applications unless given.
+    public static func detect(home: String = NSHomeDirectory(), applications: [String]? = nil) -> [DetectedApp] {
         let files = configFiles(home: home)
         guard let last = files.last else { return [] }
         let used = files.compactMap(ImportFile.modificationDate).max()
-        return [DetectedApp(kind: .ghostty, name: "Ghostty", configPath: last, lastUsed: used)]
+        let bundle = ImportAppBundles.find(["Ghostty.app"], applications: applications ?? ImportVSCode.applicationFolders(home: home))
+        return [DetectedApp(kind: .ghostty, name: "Ghostty", configPath: last, lastUsed: used, appPath: bundle?.path, version: bundle?.version)]
     }
 
     // MARK: plan
@@ -38,16 +41,32 @@ public enum ImportGhostty {
                             fonts: FontCatalog = .system, applications: [String]? = nil) -> ImportPlan {
         var plan = ImportPlan(preset: app.preset)
         guard app.kind == .ghostty else { return plan }
-        var skipped: [SkippedItem] = []
-        let config = Config(entries(home: home, skipped: &skipped))
         let apps = applications ?? ["/Applications", (home as NSString).appendingPathComponent("Applications")]
+        let source = Source(files: configFiles(home: home), folders: configFolders(home: home), bundles: [], app: "Ghostty")
+        addSettings(source, home: home, usKeyboard: usKeyboard, fonts: fonts, applications: apps, to: &plan)
+        return plan
+    }
+
+    /// The files an app reads Ghostty's settings from, in order, the folders their includes may be in, the app
+    /// bundles whose themes come first, and the app's name for the preview.
+    struct Source {
+        let files: [String]
+        let folders: [String]
+        let bundles: [String]
+        let app: String
+    }
+
+    /// The rows for every setting the config files set (Ghostty's, or cmux's, which reads the same files).
+    static func addSettings(_ source: Source, home: String, usKeyboard: Bool, fonts: FontCatalog, applications: [String],
+                            to plan: inout ImportPlan) {
+        var skipped: [SkippedItem] = []
+        let config = Config(entries(source, home: home, skipped: &skipped))
         addFont(config, fonts: fonts, to: &plan)
-        addOptionAsAlt(config, usKeyboard: usKeyboard, to: &plan)
-        addColours(config, home: home, applications: apps, to: &plan)
-        addTerminal(config, home: home, to: &plan)
+        addOptionAsAlt(config, usKeyboard: usKeyboard, app: source.app, to: &plan)
+        addColours(config, home: home, applications: applications, bundles: source.bundles, to: &plan)
+        addTerminal(config, home: home, app: source.app, to: &plan)
         addKeybinds(config, usKeyboard: usKeyboard, to: &plan)
         plan.skipped += skipped + report(config)
-        return plan
     }
 
     // MARK: reading
@@ -77,11 +96,11 @@ public enum ImportGhostty {
     /// files they include, then the files those include, each in the order listed (Ghostty loads includes
     /// once its own files are read, so a value in an include wins over one in a later file). Keys that run
     /// programs or can hold secrets are dropped here, so no value of theirs is kept.
-    static func entries(home: String, skipped: inout [SkippedItem]) -> [Entry] {
-        let folders = configFolders(home: home).map { canonicalPath($0) }
+    static func entries(_ source: Source, home: String, skipped: inout [SkippedItem]) -> [Entry] {
+        let folders = source.folders.map { canonicalPath($0) }
         // Paths as listed, not resolved: an include is relative to the folder its file was opened from, which
         // for a symlinked config (stow, chezmoi) isn't the folder the file is really in.
-        var queue = configFiles(home: home)
+        var queue = source.files
         var seen = Set<String>()
         var result: [Entry] = []
         var redacted: [String] = []
@@ -207,15 +226,13 @@ public enum ImportGhostty {
             plan.skipped.append(SkippedItem("font-size", "not a font size Next Term can use"))
             return
         }
-        var notes = ["sets the editor too: Next Term has one size for both"]
-        if size.rounded() < 8 || size.rounded() > 32 { notes.insert("Next Term's sizes go from 8 to 32", at: 0) }
-        plan.settings.append(PlannedSetting(.fontSize(clamping: size), source: "font-size \(ImportITerm2.formatted(size))",
-                                            note: notes.joined(separator: "; ")))
+        let note = size.rounded() < 8 || size.rounded() > 32 ? "Next Term's sizes go from 8 to 32" : nil
+        plan.settings.append(PlannedSetting(.terminalFontSize(clamping: size), source: "font-size \(ImportITerm2.formatted(size))", note: note))
     }
 
     /// `macos-option-as-alt`: true or false for both keys, or one side only (offered unticked: Next Term can't
     /// set one side yet). Unset is left alone, since Ghostty's own default depends on the keyboard layout.
-    static func addOptionAsAlt(_ config: Config, usKeyboard: Bool, to plan: inout ImportPlan) {
+    static func addOptionAsAlt(_ config: Config, usKeyboard: Bool, app: String = "Ghostty", to plan: inout ImportPlan) {
         guard let value = config.optionAsAlt?.lowercased() else { return }
         let source = "macos-option-as-alt \(value)"
         switch value {
@@ -223,7 +240,7 @@ public enum ImportGhostty {
             plan.settings.append(PlannedSetting(.optionAsMeta(false), source: source))
         case "true", "left", "right":
             var notes: [String] = []
-            if value != "true" { notes.append("on in Ghostty for \(value.capitalized) Option only; Next Term can't set one side yet") }
+            if value != "true" { notes.append("on in \(app) for \(value.capitalized) Option only; Next Term can't set one side yet") }
             if !usKeyboard { notes.append("your keyboard layout may need Option to type @ [ ] { }") }
             plan.settings.append(PlannedSetting(.optionAsMeta(true), source: source, ticked: notes.isEmpty,
                                                 note: notes.isEmpty ? nil : notes.joined(separator: "; ")))
@@ -237,7 +254,7 @@ public enum ImportGhostty {
     /// `cursor-style` (a hollow block comes over filled), `cursor-style-blink` (empty: Ghostty's default, so
     /// nothing), and the start folder (`startFolder`). `scrollback-limit` counts bytes, not lines, so it is
     /// reported, not converted.
-    static func addTerminal(_ config: Config, home: String, to plan: inout ImportPlan) {
+    static func addTerminal(_ config: Config, home: String, app: String = "Ghostty", to plan: inout ImportPlan) {
         if let style = config.terminal["cursor-style"] {
             let shapes = ["block": CursorShape.block, "block_hollow": .block, "bar": .bar, "underline": .underline]
             if let shape = shapes[style] {
@@ -255,9 +272,9 @@ public enum ImportGhostty {
             }
         }
         if config.terminal["scrollback-limit"] != nil {
-            plan.skipped.append(SkippedItem("scrollback-limit", "Ghostty counts it in bytes and Next Term in lines, so it isn't converted"))
+            plan.skipped.append(SkippedItem("scrollback-limit", "\(app) counts it in bytes and Next Term in lines, so it isn't converted"))
         }
-        addStartFolder(config, home: home, to: &plan)
+        addStartFolder(config, home: home, app: app, to: &plan)
     }
 
     /// Where Ghostty opens a new tab. By default it follows the tab in front (`tab-inherit-working-directory`,
@@ -266,7 +283,7 @@ public enum ImportGhostty {
     /// `working-directory`: `home` or a folder is offered, and unset is the home folder, where Ghostty starts
     /// when opened from the Dock or Finder. Its `inherit`, the folder Ghostty itself was started from, has no
     /// equivalent here.
-    static func addStartFolder(_ config: Config, home: String, to plan: inout ImportPlan) {
+    static func addStartFolder(_ config: Config, home: String, app: String = "Ghostty", to plan: inout ImportPlan) {
         let key = config.terminal["tab-inherit-working-directory"] == nil ? "window-inherit-working-directory" : "tab-inherit-working-directory"
         let inherit = config.terminal[key].flatMap { $0.isEmpty ? nil : $0 }
         let directory = config.terminal["working-directory"].flatMap { $0.isEmpty ? nil : $0 }
@@ -274,7 +291,7 @@ public enum ImportGhostty {
         guard inherit == "false" else {
             if inherit == "true" { plan.settings.append(ImportRows.startFolder(.current, source: "\(key) true")) }
             if directory != nil {
-                plan.skipped.append(SkippedItem("working-directory", "Ghostty starts only its first window there; new tabs open in the folder of the tab in front"))
+                plan.skipped.append(SkippedItem("working-directory", "\(app) starts only its first window there; new tabs open in the folder of the tab in front"))
             }
             return
         }
@@ -283,7 +300,7 @@ public enum ImportGhostty {
             let source = directory == nil ? "\(key) false (the home folder)" : "working-directory home"
             plan.settings.append(ImportRows.startFolder(.home, source: source))
         case "inherit"?:
-            plan.skipped.append(SkippedItem("working-directory inherit", "the folder Ghostty itself was started from, which Next Term has no setting for"))
+            plan.skipped.append(SkippedItem("working-directory inherit", "the folder \(app) itself was started from, which Next Term has no setting for"))
         case let path?:
             let row = ImportRows.startFolder(path, key: "working-directory", home: home)
             plan.settings += [row.setting].compactMap { $0 }
@@ -294,19 +311,21 @@ public enum ImportGhostty {
     // MARK: colours
 
     /// A theme's colours, then the config's own on top (Ghostty's order). The theme is read by name from the
-    /// themes folders beside the config and inside Ghostty.app; a theme given as a path isn't read.
-    static func addColours(_ config: Config, home: String, applications: [String], to plan: inout ImportPlan) {
+    /// themes folders beside the config, then those inside `bundles`, Ghostty.app and other apps that come with
+    /// Ghostty's themes (cmux); a theme given as a path isn't read.
+    static func addColours(_ config: Config, home: String, applications: [String], bundles: [String] = [],
+                           to plan: inout ImportPlan) {
         var palette: [Int: String] = [:]
         var colours: [String: String] = [:]
         var source: [String] = []
         if let value = config.theme {
-            if let name = themeName(value), let file = themeFile(name, home: home, applications: applications) {
+            if let name = themeName(value), let file = themeFile(name, home: home, applications: applications, bundles: bundles) {
                 let theme = Config(parse(ImportFile.text(file) ?? ""))
                 palette = theme.palette
                 colours = theme.colours
                 source.append("theme \(name)")
             } else if let name = themeName(value) {
-                plan.skipped.append(SkippedItem("theme \(name)", "not found in Ghostty's themes folders"))
+                plan.skipped.append(SkippedItem("theme \(name)", "not found in Ghostty's themes folders, or in an app that comes with them"))
             } else {
                 plan.skipped.append(SkippedItem("theme", "only a theme given by name is read"))
             }
@@ -355,11 +374,35 @@ public enum ImportGhostty {
         return name
     }
 
-    /// The theme's file: the user's own themes first, then the ones Ghostty comes with.
-    static func themeFile(_ name: String, home: String, applications: [String]) -> String? {
+    /// The theme's file: the user's own themes first, then the ones that come with `bundles`, with Ghostty.app,
+    /// and with any other app in `applications` that has Ghostty's themes folder (cmux ships them). In an app, a
+    /// theme is read only when it is a plain file inside that folder.
+    static func themeFile(_ name: String, home: String, applications: [String], bundles: [String] = []) -> String? {
         let own = configFolders(home: home).map { ($0 as NSString).appendingPathComponent("themes") }
-        let bundled = applications.map { ($0 as NSString).appendingPathComponent("Ghostty.app/Contents/Resources/ghostty/themes") }
-        return (own + bundled).map { ($0 as NSString).appendingPathComponent(name) }.first(where: isRegularFile)
+        if let file = own.map({ ($0 as NSString).appendingPathComponent(name) }).first(where: isRegularFile) { return file }
+        for bundle in bundles + themeBundles(applications) {
+            if let file = ImportVSCode.file(name, inside: (bundle as NSString).appendingPathComponent(bundledThemes)) { return file }
+        }
+        return nil
+    }
+
+    /// Where an app that embeds Ghostty keeps its themes, inside its bundle.
+    static let bundledThemes = "Contents/Resources/ghostty/themes"
+
+    /// The apps in `applications` that come with Ghostty's themes: Ghostty.app first, then the rest by name (at
+    /// most 500 bundles are looked at in each folder).
+    static func themeBundles(_ applications: [String]) -> [String] {
+        var ghostty: [String] = []
+        var others: [String] = []
+        for folder in applications {
+            let names = ((try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? []).filter { $0.hasSuffix(".app") }.sorted()
+            for name in names.prefix(500) {
+                let bundle = (folder as NSString).appendingPathComponent(name)
+                guard ImportVSCode.isDirectory((bundle as NSString).appendingPathComponent(bundledThemes)) else { continue }
+                if name == "Ghostty.app" { ghostty.append(bundle) } else { others.append(bundle) }
+            }
+        }
+        return ghostty + others
     }
 
     // MARK: keybinds

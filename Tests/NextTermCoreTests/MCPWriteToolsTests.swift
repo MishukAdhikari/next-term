@@ -41,7 +41,8 @@ import Testing
             let meta = try #require(tool["_meta"] as? [String: Any])
             let name = tool["name"] as? String ?? ""
             #expect(meta["next-term/scope"] as? String == MCPServer.tool(named: name)?.scope?.rawValue, "\(name)")
-            #expect(meta["anthropic/alwaysLoad"] as? Bool == true)
+            // The import tools, used once in a while, are left for tool search to find.
+            #expect(meta["anthropic/alwaysLoad"] as? Bool == (MCPServer.isImportTool(name) ? nil : true), "\(name)")
         }
     }
 

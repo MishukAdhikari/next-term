@@ -8,31 +8,46 @@ import Foundation
 public enum ImportJetBrains {
     // MARK: Detection
 
-    /// The settings folders of the IDEs on this Mac, newest version of each product, most recently used first.
-    /// Found by folder names and modification times; the only file read is the keymap choice, for the preset.
-    public static func detect(home: String = NSHomeDirectory()) -> [DetectedApp] {
-        detect(home: home, now: Date())
+    /// The settings folders of the IDEs on this Mac, newest version of each product, most recently used first, each
+    /// named as its installed app's product-info.json names it (`applications`: where apps are looked for,
+    /// /Applications and ~/Applications unless given). Found by folder names and modification times; besides
+    /// product-info.json and idea.properties (ImportJetBrainsApps.swift), the only file read is the keymap choice,
+    /// for the preset. An IDE unused for 180 days is marked `notUsedLately`, never left out.
+    public static func detect(home: String = NSHomeDirectory(), applications: [String]? = nil) -> [DetectedApp] {
+        detect(home: home, applications: applications ?? ImportVSCode.applicationFolders(home: home), now: Date())
     }
 
-    static func detect(home: String, now: Date) -> [DetectedApp] {
-        products(home: home, now: now)
-            .map { DetectedApp(kind: .jetBrains, name: $0.displayName, configPath: $0.path, lastUsed: $0.lastUsed,
-                               preset: keymap(config: $0.path).preset) }
+    static func detect(home: String, applications: [String] = [], now: Date) -> [DetectedApp] {
+        products(home: home, applications: applications, now: now).map { folder in
+            DetectedApp(kind: .jetBrains, name: folder.displayName, configPath: folder.path, lastUsed: folder.lastUsed,
+                        preset: keymap(config: folder.path).preset, appPath: folder.installed?.bundle, version: folder.appVersion,
+                        notUsedLately: folder.isStale(now: now))
+        }
     }
 
-    /// One `<Product><Version>` settings folder.
+    /// One `<Product><Version>` settings folder (or the folder idea.config.path moved it to).
     struct Folder {
         let product: String
         let version: [Int]
         let versionText: String
         let path: String
         let lastUsed: Date?
+        /// The installed app of the same product, if any.
+        var installed: Installed? = nil
+        /// The installed app's version, when it is this very version's app.
+        var appVersion: String? = nil
 
-        /// "PhpStorm 2026.1", "Android Studio 2025.3.4".
-        var displayName: String { (ImportJetBrains.productNames[product] ?? product) + " " + versionText }
+        /// "PhpStorm 2026.1", "Android Studio 2025.3.4": the installed app's name, else one of our own.
+        var displayName: String { (installed?.name ?? ImportJetBrains.productNames[product] ?? product) + " " + versionText }
+
+        /// Unused for 180 days (or never saved a setting).
+        func isStale(now: Date) -> Bool {
+            guard let lastUsed else { return true }
+            return now.timeIntervalSince(lastUsed) >= ImportJetBrains.staleAfter
+        }
     }
 
-    /// Folder prefixes whose display name is not the prefix itself.
+    /// Folder prefixes whose display name is not the prefix itself, for IDEs whose app isn't installed.
     static let productNames = [
         "IntelliJIdea": "IntelliJ IDEA", "IdeaIC": "IntelliJ IDEA CE", "PyCharmCE": "PyCharm CE",
         "AndroidStudio": "Android Studio", "AndroidStudioPreview": "Android Studio Preview",
@@ -43,17 +58,23 @@ public enum ImportJetBrains {
     /// Gateway and its thin client only reach remote machines; their settings are not an editor's.
     static let remoteOnlyProducts: Set<String> = ["JetBrainsGateway", "JetBrainsClient"]
 
-    /// JetBrains' own ConfigImportHelper ignores settings unused this long.
-    static let staleAfter: TimeInterval = 180 * 24 * 60 * 60
+    /// JetBrains' own ConfigImportHelper ignores settings unused this long; here they are "not used lately".
+    static let staleAfter = DetectedApp.notUsedAfter
 
-    /// The folders `detect` offers: unused ones hidden unless nothing else is left, then the newest version
-    /// of each product (hiding first, so a recently used older version wins over an abandoned newer one).
-    static func products(home: String, now: Date) -> [Folder] {
-        let all = settingsFolders(home: home)
-        let fresh = all.filter { folder in folder.lastUsed.map { now.timeIntervalSince($0) < staleAfter } ?? false }
+    /// The newest version of each product, preferring versions used lately (so a recently used older version wins
+    /// over an abandoned newer one). Each product is decided on its own: a fresh IDE never hides a stale one.
+    static func products(home: String, applications: [String] = [], now: Date) -> [Folder] {
+        let all = settingsFolders(home: home, installed: installedIDEs(applications: applications, home: home))
         var newest: [String: Folder] = [:]
-        for folder in fresh.isEmpty ? all : fresh {
-            if let kept = newest[folder.product], !isNewer(folder, than: kept) { continue }
+        for folder in all {
+            if let kept = newest[folder.product] {
+                let keptFresh = !kept.isStale(now: now), fresh = !folder.isStale(now: now)
+                if keptFresh != fresh {
+                    if fresh { newest[folder.product] = folder }
+                    continue
+                }
+                if !isNewer(folder, than: kept) { continue }
+            }
             newest[folder.product] = folder
         }
         return newest.values.sorted { a, b in
@@ -67,23 +88,37 @@ public enum ImportJetBrains {
         return (a.lastUsed ?? .distantPast) > (b.lastUsed ?? .distantPast)
     }
 
-    /// Every `JetBrains/<Product><Version>` and `Google/AndroidStudio<Version>` folder that has `options/`.
-    static func settingsFolders(home: String) -> [Folder] {
+    /// Every `JetBrains/<Product><Version>` and `Google/AndroidStudio<Version>` folder with `options/` (in it, or
+    /// where its idea.properties moves it), and each installed IDE whose usual folder is missing but whose bundle's
+    /// idea.properties moves its settings somewhere that has them.
+    static func settingsFolders(home: String, installed: [Installed] = []) -> [Folder] {
         let support = (home as NSString).appendingPathComponent("Library/Application Support")
         var found: [Folder] = []
-        for (vendor, prefix) in [("JetBrains", ""), ("Google", "AndroidStudio")] {
+        var seen = Set<String>(), paths = Set<String>()
+        func add(vendor: String, name: String, usual: String) {
+            guard let parsed = splitVersion(name) else { return }
+            let exact = installed.first { $0.vendor == vendor && $0.dataDirectoryName == name }
+            let path = movedConfig(usual: usual, bundle: exact?.bundle, home: home) ?? usual
+            let options = (path as NSString).appendingPathComponent("options")
+            guard isDirectory(options), paths.insert(canonicalPath(path)).inserted else { return }
+            seen.insert(vendor + "/" + name)
+            let app = exact ?? installed.first { $0.vendor == vendor && $0.product == parsed.product }
+            found.append(Folder(product: parsed.product, version: parsed.version, versionText: parsed.text, path: path,
+                                lastUsed: newestXML(in: options), installed: app, appVersion: exact?.version))
+        }
+        for (vendor, prefix) in vendors {
             let base = (support as NSString).appendingPathComponent(vendor)
             guard let names = try? FileManager.default.contentsOfDirectory(atPath: base) else { continue }
             for name in names.sorted() where !notProducts.contains(name) {
                 guard let parsed = splitVersion(name), parsed.product.hasPrefix(prefix),
                       !parsed.product.hasSuffix("Light"), // LightEdit mode's own folder (`phpstorm -e`)
                       !remoteOnlyProducts.contains(parsed.product) else { continue }
-                let path = (base as NSString).appendingPathComponent(name)
-                let options = (path as NSString).appendingPathComponent("options")
-                guard isDirectory(options) else { continue }
-                found.append(Folder(product: parsed.product, version: parsed.version, versionText: parsed.text,
-                                    path: path, lastUsed: newestXML(in: options)))
+                add(vendor: vendor, name: name, usual: (base as NSString).appendingPathComponent(name))
             }
+        }
+        for ide in installed where !seen.contains(ide.vendor + "/" + ide.dataDirectoryName) {
+            let base = (support as NSString).appendingPathComponent(ide.vendor)
+            add(vendor: ide.vendor, name: ide.dataDirectoryName, usual: (base as NSString).appendingPathComponent(ide.dataDirectoryName))
         }
         return found
     }
@@ -117,16 +152,19 @@ public enum ImportJetBrains {
     /// What importing from `app` would change. Recent projects come from every detected JetBrains IDE,
     /// because each keeps its own list and people move between them. `usKeyboard`: the current layout is
     /// U.S.-style, so Option is not needed to type symbols (§3 principle 4).
-    public static func plan(for app: DetectedApp, home: String = NSHomeDirectory(), usKeyboard: Bool = true) -> ImportPlan {
-        plan(for: app, home: home, usKeyboard: usKeyboard, now: Date())
+    public static func plan(for app: DetectedApp, home: String = NSHomeDirectory(), usKeyboard: Bool = true,
+                            applications: [String]? = nil) -> ImportPlan {
+        plan(for: app, home: home, usKeyboard: usKeyboard, now: Date(), applications: applications ?? ImportVSCode.applicationFolders(home: home))
     }
 
-    /// `fonts`: the fonts this Mac has (tests pass their own).
-    static func plan(for app: DetectedApp, home: String, usKeyboard: Bool, now: Date, fonts: FontCatalog = .system) -> ImportPlan {
+    /// `fonts`: the fonts this Mac has; `applications`: where apps are looked for (tests pass their own of both).
+    static func plan(for app: DetectedApp, home: String, usKeyboard: Bool, now: Date, fonts: FontCatalog = .system,
+                     applications: [String] = []) -> ImportPlan {
         var plan = ImportPlan(preset: app.preset)
         addKeymap(config: app.configPath, to: &plan)
         addSettings(config: app.configPath, usKeyboard: usKeyboard, fonts: fonts, to: &plan)
-        var configs = products(home: home, now: now).map(\.path)
+        if let note = unusableConfigPath(config: app.configPath, home: home) { plan.skipped.append(note) }
+        var configs = products(home: home, applications: applications, now: now).map(\.path)
         if !configs.contains(app.configPath) { configs.insert(app.configPath, at: 0) }
         let recents = recentProjects(configs: configs, home: home)
         plan.recentProjects = recents.paths
@@ -233,10 +271,8 @@ public enum ImportJetBrains {
 
     static func addSettings(config: String, usKeyboard: Bool, fonts: FontCatalog = .system, to plan: inout ImportPlan) {
         let font = editorFont(config: config)
-        var editorSize: Double?
         if let text = font.size {
             if let size = number(text) {
-                editorSize = size
                 plan.settings.append(fontSizeRow(size, source: "\(font.file) \(font.sizeKey) \(clean(text))"))
             } else {
                 plan.skipped.append(SkippedItem("\(font.file) \(font.sizeKey)", "not a font size Next Term can use"))
@@ -263,7 +299,9 @@ public enum ImportJetBrains {
         let editor = options(component(read(config, "options/editor.xml", keep: editorKeys), "EditorSettings"), keep: editorKeys)
         addSoftWrap(editor, to: &plan)
         addCleanUp(editor, to: &plan)
-        addTerminal(config: config, usKeyboard: usKeyboard, editorSize: editorSize, fonts: fonts, to: &plan)
+        addIgnoredFiles(config: config, to: &plan)
+        addGeneral(config: config, to: &plan)
+        addTerminal(config: config, usKeyboard: usKeyboard, fonts: fonts, to: &plan)
         addRedacted(editor, file: "options/editor.xml", to: &plan)
 
         if let scheme = activeScheme(config: config) {
@@ -386,7 +424,65 @@ public enum ImportJetBrains {
         }
     }
 
-    static func addTerminal(config: String, usKeyboard: Bool, editorSize: Double?, fonts: FontCatalog = .system, to plan: inout ImportPlan) {
+    /// The names "Ignored Files and Folders" lists by default in one IDE version or another: only what the user
+    /// added comes over.
+    static let defaultIgnoredFiles: Set<String> = [
+        "*.pyc", "*.pyo", "*.rbc", "*.yarb", "*~", ".DS_Store", ".git", ".hg", ".svn", "CVS", "__pycache__", "_svn",
+        "vssver.scc", "vssver2.scc", "*.hprof", "*.orig", "*.rej", ".bzr", "RCS", "SCCS", "rcs", "*.lib", ".bundle",
+        "*.tmp", ".pyc", ".pyo",
+    ]
+
+    /// `options/filetypes.xml`'s ignored files (names, `*` and `?` allowed, at any depth, as the sidebar's
+    /// patterns without "/" read them), less the IDE's own defaults, hidden in the project sidebar too.
+    static func addIgnoredFiles(config: String, to plan: inout ImportPlan) {
+        let file = "options/filetypes.xml"
+        let manager = component(read(config, file), "FileTypeManager")
+        guard let list = manager?.children.first(where: { $0.name == "ignoreFiles" })?["list"] else { return }
+        var patterns: [String] = []
+        var secret = 0, unusable = 0
+        for raw in list.split(separator: ";") {
+            let name = raw.trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, !defaultIgnoredFiles.contains(name), !FileNode.hiddenNames.contains(name) else { continue }
+            if SecretGuard.looksSecret(name) {
+                secret += 1
+            } else if name.contains("/") || name.hasPrefix("!") || name.count > 200 {
+                unusable += 1
+            } else if !patterns.contains(name) {
+                patterns.append(name)
+            }
+        }
+        if !patterns.isEmpty { plan.settings.append(PlannedSetting(.hiddenFiles(patterns), source: "\(file) ignored files")) }
+        if secret > 0 { plan.skipped.append(SkippedItem(plural(secret, "ignored file name", "ignored file names"), "looked like a credential")) }
+        if unusable > 0 { plan.skipped.append(SkippedItem(plural(unusable, "ignored file name", "ignored file names"), "not a name the sidebar can hide")) }
+    }
+
+    /// `options/ide.general.xml`: "Reopen projects on startup" (`reopenLastProject`) and "Open project in"
+    /// (`confirmOpenNewProject2`: -1 ask, 0 a new window, 1 this window, 2 attached to the open one). Each is in
+    /// the file only once the user changed it.
+    static func addGeneral(config: String, to plan: inout ImportPlan) {
+        let file = "options/ide.general.xml"
+        let keys: Set<String> = ["reopenLastProject", "confirmOpenNewProject2"]
+        let general = options(component(read(config, file, keep: keys), "GeneralSettings"), keep: keys)
+        switch general.values["reopenLastProject"] {
+        case "true"?: plan.settings.append(PlannedSetting(.launchOpens(LaunchOpens.lastProjects.rawValue), source: "\(file) reopenLastProject true"))
+        case "false"?: plan.settings.append(PlannedSetting(.launchOpens(LaunchOpens.welcome.rawValue), source: "\(file) reopenLastProject false"))
+        case nil: break
+        default: plan.skipped.append(SkippedItem("\(file) reopenLastProject", "not a value Next Term can use"))
+        }
+        let targets = ["-1": "ask", "0": "newWindow", "1": "thisWindow"]
+        if let raw = general.values["confirmOpenNewProject2"]?.trimmingCharacters(in: .whitespaces) {
+            if let target = targets[raw] {
+                plan.settings.append(PlannedSetting(.openProjectsIn(target), source: "\(file) confirmOpenNewProject2 \(raw)"))
+            } else if raw == "2" {
+                plan.skipped.append(SkippedItem("Open project attached to the open one", "Next Term opens a project in a window of its own"))
+            } else {
+                plan.skipped.append(SkippedItem("\(file) confirmOpenNewProject2", "not a value Next Term can use"))
+            }
+        }
+        addRedacted(general, file: file, to: &plan)
+    }
+
+    static func addTerminal(config: String, usKeyboard: Bool, fonts: FontCatalog = .system, to plan: inout ImportPlan) {
         let terminalKeys: Set<String> = ["useOptionAsMetaKey"]
         let terminal = options(component(read(config, "options/terminal.xml", keep: terminalKeys), "TerminalOptionsProvider"),
                                keep: terminalKeys)
@@ -411,12 +507,7 @@ public enum ImportJetBrains {
         let sizeKey = font.values["FONT_SIZE"] != nil ? "FONT_SIZE" : "FONT_SIZE_2D"
         if let text = font.values[sizeKey] {
             if let size = number(text) {
-                if editorSize == nil {
-                    plan.settings.append(fontSizeRow(size, source: "options/terminal-font.xml \(sizeKey) \(clean(text))"))
-                } else if let editorSize, editorSize.rounded() != size.rounded() {
-                    plan.skipped.append(SkippedItem("Terminal font size \(clean(text))",
-                        "Next Term uses one size for the editor and the terminal, so the editor's \(clean(String(editorSize))) is used"))
-                }
+                plan.settings.append(fontSizeRow(size, source: "options/terminal-font.xml \(sizeKey) \(clean(text))", terminal: true))
             } else {
                 plan.skipped.append(SkippedItem("options/terminal-font.xml \(sizeKey)", "not a font size Next Term can use"))
             }
@@ -491,9 +582,11 @@ public enum ImportJetBrains {
         }
     }
 
-    static func fontSizeRow(_ size: Double, source: String) -> PlannedSetting {
+    /// The editor's size, or with `terminal` the terminal's own.
+    static func fontSizeRow(_ size: Double, source: String, terminal: Bool = false) -> PlannedSetting {
         let inRange = (8...32).contains(size.rounded())
-        return PlannedSetting(.fontSize(clamping: size), source: source, note: inRange ? nil : "Next Term's sizes go from 8 to 32")
+        let setting = terminal ? ImportedSetting.terminalFontSize(clamping: size) : .fontSize(clamping: size)
+        return PlannedSetting(setting, source: source, note: inRange ? nil : "Next Term's sizes go from 8 to 32")
     }
 
     /// A positive, finite number ("14", "13.5", "1.2"); nil for anything else ("nan", "-1", "big").
@@ -602,6 +695,7 @@ public enum ImportJetBrains {
     static let settingsFiles: Set<String> = [
         "options/editor-font.xml", "options/editor.xml", "options/terminal.xml", "options/terminal-font.xml",
         "options/keymap.xml", "options/mac/keymap.xml", "options/recentProjects.xml", "options/colors.scheme.xml",
+        "options/filetypes.xml", "options/ide.general.xml",
     ]
 
     /// Files beside them that hold credentials, hosts or connection details (§6.3).
@@ -631,9 +725,10 @@ public enum ImportJetBrains {
     /// Only the `<option>`s named in `keep` keep their values and children; every other option is reduced
     /// to its name while parsing. `rootOnly`: stop at the first element (to learn a keymap's or scheme's name).
     static func read(_ config: String, _ relative: String, keep: Set<String> = [], rootOnly: Bool = false) -> Node? {
-        guard mayOpen(relative) else { return nil }
-        let path = (config as NSString).appendingPathComponent(relative)
-        guard isRegularFile(path), let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        // A symlink never leads a read out of the settings folder.
+        guard mayOpen(relative), let path = ImportVSCode.file(relative, inside: config),
+              let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        ImportFile.record(path)
         defer { try? handle.close() }
         guard let data = try? handle.read(upToCount: rootOnly ? 16384 : maxFileSize + 1),
               rootOnly || data.count <= maxFileSize else { return nil }

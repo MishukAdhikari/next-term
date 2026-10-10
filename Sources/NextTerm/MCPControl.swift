@@ -269,6 +269,10 @@ enum MCPControl {
             MainActor.assumeIsolated {
                 SkillsMCP.call(tool, arguments, caller: caller, approval: approval, connection: connection, requester: requester, reply: reply)
             }
+        case _ where MCPServer.isImportTool(tool):
+            MainActor.assumeIsolated {
+                MCPImportControl.call(tool, arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
+            }
         case _ where MCPServer.isControlTool(tool):
             MainActor.assumeIsolated {
                 MCPWriteControl.call(tool, arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
