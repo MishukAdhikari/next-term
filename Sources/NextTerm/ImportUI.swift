@@ -8,10 +8,15 @@ import NextTermCore
 
 /// The apps on this Mac an import can read, and their plans.
 enum ImportSources {
-    /// Every app found, most recently used first. Folders and dates only: nothing is parsed yet.
+    /// Every app found, most recently used first, those not used lately (180 days) last. Folders and dates
+    /// only: nothing is parsed yet.
     static func detect() -> [DetectedApp] {
-        let found = detectors.flatMap { $0() }
-        return found.sorted { ($0.lastUsed ?? .distantPast) > ($1.lastUsed ?? .distantPast) }
+        var found = detectors.flatMap { $0() }
+        for index in found.indices where DetectedApp.isNotUsedLately(found[index].lastUsed) { found[index].notUsedLately = true }
+        return found.sorted { a, b in
+            if a.notUsedLately != b.notUsedLately { return !a.notUsedLately }
+            return (a.lastUsed ?? .distantPast) > (b.lastUsed ?? .distantPast)
+        }
     }
 
     static func plan(for app: DetectedApp) -> ImportPlan {
@@ -302,7 +307,15 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         if apps.isEmpty {
             rows.append(Self.wrapping(ImportSources.noneFound, secondary: true))
         }
-        rows += radios.dropFirst() + [keep]
+        // Apps not used lately (180 days) come last, after keeping Next Term's, under their own heading.
+        let appRadios: [NSView] = Array(radios.dropFirst())
+        let recent = apps.firstIndex(where: \.notUsedLately) ?? apps.count
+        rows.append(contentsOf: appRadios[..<recent])
+        rows.append(keep)
+        if recent < apps.count {
+            rows.append(Self.heading("Not used lately"))
+            rows.append(contentsOf: appRadios[recent...])
+        }
         rows.append(Self.wrapping("Reads files on this Mac only. Never changes the other app. Nothing leaves your Mac.", secondary: true, size: 11))
         let preview = NSButton(title: "Preview…", target: self, action: #selector(previewChosen))
         preview.keyEquivalent = "\r"

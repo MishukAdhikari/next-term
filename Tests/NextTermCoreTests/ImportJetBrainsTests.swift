@@ -119,22 +119,30 @@ import Testing
         let studio = try ide(home, "AndroidStudio2025.3.4", vendor: "Google", usedDaysAgo: 3)
         try ide(home, "Chrome1.2", vendor: "Google")
 
-        let found = ImportJetBrains.detect(home: home)
-        #expect(found.map(\.name) == ["PhpStorm 2026.1", "Android Studio 2025.3.4"])
-        #expect(found.map(\.configPath) == [phpStorm, studio])
+        let found = ImportJetBrains.detect(home: home, applications: [])
+        #expect(found.map(\.name) == ["PhpStorm 2026.1", "Android Studio 2025.3.4", "IntelliJ IDEA 2024.1"])
+        #expect(found.prefix(2).map(\.configPath) == [phpStorm, studio])
+        #expect(found.map(\.notUsedLately) == [false, false, true])
         #expect(found.allSatisfy { $0.kind == .jetBrains && $0.preset == .jetBrains })
         let recentProjectsDate = try fm.attributesOfItem(atPath: phpStorm + "/options/recentProjects.xml")[.modificationDate] as? Date
         #expect(found.first?.lastUsed == recentProjectsDate)
     }
 
-    @Test func unusedIDEsShowWhenNothingElseIsFound() throws {
+    @Test func unusedIDEsAreListedAsNotUsedLately() throws {
         let home = try home()
         defer { try? fm.removeItem(atPath: home) }
         try ide(home, "PhpStorm2023.1", usedDaysAgo: 300)
         try ide(home, "IntelliJIdea2024.1", usedDaysAgo: 200)
         try ide(home, "IdeaIC2022.1", usedDaysAgo: nil) // options/ but never saved a setting
-        #expect(ImportJetBrains.detect(home: home).map(\.name) == ["IntelliJ IDEA 2024.1", "PhpStorm 2023.1", "IntelliJ IDEA CE 2022.1"])
-        #expect(ImportJetBrains.detect(home: home + "/nowhere").isEmpty)
+        let found = ImportJetBrains.detect(home: home, applications: [])
+        #expect(found.map(\.name) == ["IntelliJ IDEA 2024.1", "PhpStorm 2023.1", "IntelliJ IDEA CE 2022.1"])
+        #expect(found.map(\.notUsedLately) == [true, true, true])
+        #expect(ImportJetBrains.detect(home: home + "/nowhere", applications: []).isEmpty)
+        // One IDE used lately hides none of them.
+        try ide(home, "GoLand2026.1", usedDaysAgo: 1)
+        let withFresh = ImportJetBrains.detect(home: home, applications: [])
+        #expect(withFresh.map(\.name) == ["GoLand 2026.1", "IntelliJ IDEA 2024.1", "PhpStorm 2023.1", "IntelliJ IDEA CE 2022.1"])
+        #expect(withFresh.map(\.notUsedLately) == [false, true, true, true])
     }
 
     @Test func aRecentlyUsedVersionWinsOverAnAbandonedNewerOne() throws {
@@ -145,7 +153,7 @@ import Testing
         // Versions compare as numbers: 2025.10 is newer than 2025.9.
         try ide(home, "PyCharm2025.9", usedDaysAgo: 1)
         try ide(home, "PyCharm2025.10", usedDaysAgo: 2)
-        #expect(Set(ImportJetBrains.detect(home: home).map(\.name)) == ["PhpStorm 2026.1", "PyCharm 2025.10"])
+        #expect(Set(ImportJetBrains.detect(home: home, applications: []).map(\.name)) == ["PhpStorm 2026.1", "PyCharm 2025.10"])
     }
 
     @Test func folderNames() {
@@ -165,8 +173,8 @@ import Testing
         defer { try? fm.removeItem(atPath: home) }
         let config = try ide(home, "PhpStorm2026.1")
         for (path, text) in files { try write(text, to: config + "/" + path) }
-        let preset = ImportJetBrains.detect(home: home).first?.preset
-        let plan = ImportJetBrains.plan(for: app(config), home: home)
+        let preset = ImportJetBrains.detect(home: home, applications: []).first?.preset
+        let plan = ImportJetBrains.plan(for: app(config), home: home, applications: [])
         let notes = plan.skipped.filter { $0.item.contains("Keymap") || $0.item.contains("Classic") }
         return (preset, notes, plan.shortcuts)
     }
@@ -279,7 +287,7 @@ import Testing
         // Older IDEs keep the active keymap in options/keymap.xml.
         try write(keymapChoice("macOS - Mishuk"), to: config + "/options/keymap.xml")
         try write(Self.ownKeymap, to: config + "/keymaps/macOS - Mishuk.xml")
-        let plan = ImportJetBrains.plan(for: app(config), home: home)
+        let plan = ImportJetBrains.plan(for: app(config), home: home, applications: [])
         #expect(plan.shortcuts.map(\.command) == ["toggleEditorFocus:", "closeTab:", "duplicateLine:", "findInFiles:", "goToFile:", "goToLine:",
                                                   "showNextTab:", "splitRight:"])
         func row(_ id: String) -> PlannedShortcut? { plan.shortcuts.first { $0.command == id } }
@@ -375,8 +383,8 @@ import Testing
         let home = try home()
         defer { try? fm.removeItem(atPath: home) }
         let config = try ide(home, "PhpStorm2026.1")
-        #expect(ImportJetBrains.plan(for: app(config, preset: .vsCode), home: home).preset == .vsCode)
-        #expect(ImportJetBrains.plan(for: app(config), home: home).preset == .jetBrains)
+        #expect(ImportJetBrains.plan(for: app(config, preset: .vsCode), home: home, applications: []).preset == .vsCode)
+        #expect(ImportJetBrains.plan(for: app(config), home: home, applications: []).preset == .jetBrains)
     }
 
     // MARK: Settings
@@ -677,7 +685,7 @@ import Testing
         try write(component("SshConfigs", [("password", token)]), to: config + "/options/sshConfigs.xml")
         try write(component("x", [("x", token)]), to: config + "/workspace/abc.xml")
 
-        let plan = ImportJetBrains.plan(for: app(config), home: home)
+        let plan = ImportJetBrains.plan(for: app(config), home: home, applications: [])
         let everything = String(describing: plan)
         #expect(!everything.contains(token) && !everything.contains(apiKey) && !everything.contains("export"))
         #expect(plan.settings.map(\.setting) == [.fontSize(13), .optionAsMeta(true)])
@@ -726,17 +734,17 @@ import Testing
         // A settings folder that disappeared, an empty one, broken XML, a folder where a file should be, a huge file.
         let home = try home()
         defer { try? fm.removeItem(atPath: home) }
-        let gone = ImportJetBrains.plan(for: app(home + "/nowhere"), home: home)
+        let gone = ImportJetBrains.plan(for: app(home + "/nowhere"), home: home, applications: [])
         #expect(gone == ImportPlan(preset: .jetBrains))
         let config = try ide(home, "PhpStorm2026.1")
-        #expect(ImportJetBrains.plan(for: app(config), home: home) == ImportPlan(preset: .jetBrains))
+        #expect(ImportJetBrains.plan(for: app(config), home: home, applications: []) == ImportPlan(preset: .jetBrains))
         try write("<application><component name=\"DefaultFont\"><option name=\"FONT_SIZE\" value=\"14\" />", to: config + "/options/editor-font.xml")
         try write("", to: config + "/options/terminal.xml")
         try folder(config + "/options/editor.xml")
         try write(component("TerminalFontOptions", [("FONT_SIZE", "15")]) + String(repeating: " ", count: 5 << 20),
                   to: config + "/options/terminal-font.xml")
         try write("\u{0}\u{1}not xml", to: config + "/options/recentProjects.xml")
-        #expect(ImportJetBrains.plan(for: app(config), home: home) == ImportPlan(preset: .jetBrains))
+        #expect(ImportJetBrains.plan(for: app(config), home: home, applications: []) == ImportPlan(preset: .jetBrains))
     }
 
     @Test func noNetworkingInTheImporter() throws {
@@ -781,7 +789,7 @@ import Testing
             Entry(key: home + "/Code/real", activation: 50),
         ]), to: studio + "/options/recentProjects.xml")
 
-        let plan = ImportJetBrains.plan(for: app(phpStorm), home: home)
+        let plan = ImportJetBrains.plan(for: app(phpStorm), home: home, applications: [])
         #expect(plan.recentProjects == ["a", "AndroidStudioProjects/app", "b", "xcloudmigration/wp-content/plugins/wp-xcloud-migration", "real"]
             .map { $0.hasPrefix("Android") ? home + "/" + $0 : home + "/Code/" + $0 })
         #expect(plan.skipped == [SkippedItem("2 recent projects", "the folder no longer exists"),
@@ -800,7 +808,7 @@ import Testing
         }
         let config = try ide(home, "PhpStorm2026.1")
         try write(recents(entries), to: config + "/options/recentProjects.xml")
-        let plan = ImportJetBrains.plan(for: app(config), home: home)
+        let plan = ImportJetBrains.plan(for: app(config), home: home, applications: [])
         #expect(plan.recentProjects == (6...25).reversed().map { home + "/Code/p\($0)" })
         #expect(plan.skipped == [SkippedItem("5 older recent projects", "only the 20 most recent come over")])
     }
@@ -817,8 +825,8 @@ import Testing
         let old = try ide(home, "WebStorm2023.1", usedDaysAgo: 400)
         try write(recents([Entry(key: "$USER_HOME$/Code/old", activation: 1)]), to: old + "/options/recentProjects.xml")
         try touch(old + "/options/recentProjects.xml", daysAgo: 400)
-        #expect(ImportJetBrains.detect(home: home).map(\.name) == ["PhpStorm 2026.1"])
-        #expect(ImportJetBrains.plan(for: app(old), home: home).recentProjects == [home + "/Code/new", home + "/Code/old"])
+        #expect(ImportJetBrains.detect(home: home, applications: []).map(\.name) == ["PhpStorm 2026.1", "WebStorm 2023.1"])
+        #expect(ImportJetBrains.plan(for: app(old), home: home, applications: []).recentProjects == [home + "/Code/new", home + "/Code/old"])
     }
 
     @Test func expandingPaths() {

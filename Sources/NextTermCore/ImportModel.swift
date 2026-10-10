@@ -89,9 +89,11 @@ public struct DetectedApp: Equatable, Sendable {
     public var appPath: String?
     /// The app's version, when its bundle says it ("1.105.1").
     public var version: String?
+    /// Unused for 180 days: listed under "Not used lately", never left out.
+    public var notUsedLately: Bool
 
     public init(kind: ImportSourceKind, name: String, configPath: String, lastUsed: Date?, preset: KeymapPreset? = nil,
-                appPath: String? = nil, version: String? = nil) {
+                appPath: String? = nil, version: String? = nil, notUsedLately: Bool = false) {
         self.kind = kind
         self.name = name
         self.configPath = configPath
@@ -99,6 +101,17 @@ public struct DetectedApp: Equatable, Sendable {
         self.preset = preset ?? kind.preset
         self.appPath = appPath
         self.version = version
+        self.notUsedLately = notUsedLately
+    }
+
+    /// How long an app goes unused before it is "not used lately" (JetBrains' own ConfigImportHelper ignores
+    /// settings unused this long).
+    public static let notUsedAfter: TimeInterval = 180 * 24 * 60 * 60
+
+    /// Whether an app last used at `lastUsed` counts as not used lately (an unknown date doesn't).
+    public static func isNotUsedLately(_ lastUsed: Date?, now: Date = Date()) -> Bool {
+        guard let lastUsed else { return false }
+        return now.timeIntervalSince(lastUsed) >= notUsedAfter
     }
 }
 
