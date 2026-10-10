@@ -491,7 +491,8 @@ public enum ResumeCheck: String, CaseIterable, Sendable {
     case location
     /// What runs is not a regular file of the user's or root's, or others can write it.
     case ownership
-    /// A project config it reads changed after it started, or its start is not known.
+    /// A project config it reads changed after it started, or code that config starts and a tab can write did (a
+    /// script in a project, the tab's or session's folder, or a temporary folder), or its start is not known.
     case projectConfig
 }
 
@@ -515,6 +516,8 @@ public struct ResumeFacts: Sendable {
     public var temporaryFolders: [String]
     /// The session is in its store and no live process holds it (checked when the action runs).
     public var sessionAvailable: Bool
+    /// A project config the agent reads, or code that config starts in `outside` or `temporaryFolders`, changed after
+    /// the agent started, or that cannot be told.
     public var projectConfigChanged: Bool
     public var settingsAutoContinue: Bool
 
@@ -541,9 +544,13 @@ public struct ResumeFacts: Sendable {
         facts.outside = (projects + [tabFolder, evidence.sessionFolder].compactMap { $0 }).map(canonicalPath)
         facts.temporaryFolders = AgentEvidence.temporaryFolders()
         let folder = evidence.sessionFolder ?? tabFolder
-        facts.projectConfigChanged = folder.map {
-            AgentEvidence.projectConfigChanged(agent: evidence.agent, folder: $0, since: evidence.startedAt, home: home)
-        } ?? true
+        if let folder {
+            let agent = evidence.agent
+            let start = evidence.startedAt
+            let within = facts.outside + facts.temporaryFolders
+            facts.projectConfigChanged = AgentEvidence.projectConfigChanged(agent: agent, folder: folder, since: start, home: home)
+                || AgentEvidence.projectCodeChanged(agent: agent, folder: folder, since: start, within: within, home: home)
+        }
         let claude = evidence.agent == .claude
         facts.settingsAutoContinue = claude && AgentEvidence.claudeSettingsAutoContinue(home: home, store: evidence.store, folder: folder)
         return facts

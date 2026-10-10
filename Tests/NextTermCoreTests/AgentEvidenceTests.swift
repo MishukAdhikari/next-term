@@ -694,6 +694,162 @@ import Testing
         #expect(facts.projectConfigChanged && !facts.settingsAutoContinue && facts.outside.contains(project))
     }
 
+    // MARK: the code a project config starts
+
+    /// A resume starts the config's hooks and MCP servers again. A script they name in the project, rewritten after
+    /// the start, sends the agent to the line though the config's own dates are older.
+    @Test func aScriptAHookOrServerStartsRewrittenAfterTheStartIsSeen() throws {
+        let (home, project) = try makeHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let server: [String: Any] = ["command": "node", "args": ["mcp/server.js"]]
+        try write(json(["mcpServers": ["docs": server]]), to: project + "/.mcp.json")
+        let hook = ["type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/start.sh --quiet"]
+        try write(json(["hooks": ["SessionStart": [["hooks": [hook]]]]]), to: project + "/.claude/settings.json")
+        let status = ["type": "command", "command": "~/bin/status.sh"]
+        try write(json(["statusLine": status]), to: project + "/web/.claude/settings.json")
+        try write("// one", to: project + "/mcp/server.js")
+        try write("#!/bin/sh", to: project + "/.claude/hooks/start.sh", mode: 0o700)
+        try write("#!/bin/sh", to: home + "/bin/status.sh", mode: 0o700)
+        func changed(since start: Date, in folder: String? = nil, agent: RestoreAgent = .claude) -> Bool {
+            AgentEvidence.projectCodeChanged(agent: agent, folder: folder ?? project, since: start, within: [project], home: home)
+        }
+        func startNow() -> Date {
+            usleep(20_000)
+            defer { usleep(20_000) }
+            return Date()
+        }
+        var start = startNow()
+        #expect(!changed(since: start) && !changed(since: start, in: project + "/web"))
+        try write("// two", to: project + "/mcp/server.js")
+        #expect(changed(since: start))
+        // From a folder below, a relative word is also taken from the config's own folder.
+        #expect(changed(since: start, in: project + "/web"))
+        #expect(!AgentEvidence.projectConfigChanged(agent: .claude, folder: project, since: start, home: home))
+        start = startNow()
+        #expect(!changed(since: start))
+        try write("#!/bin/sh\necho two", to: project + "/.claude/hooks/start.sh", mode: 0o700)
+        #expect(changed(since: start))
+        #expect(!changed(since: start, agent: .codex))
+        #expect(changed(since: start.addingTimeInterval(-60)))
+        start = startNow()
+        // A script outside the projects and the tab's folder is not a tab's to rewrite.
+        try write("#!/bin/sh\necho two", to: home + "/bin/status.sh", mode: 0o700)
+        #expect(!changed(since: start, in: project + "/web"))
+        // The facts read at restore count it, with the projects, the tab's folder and the temporary folders.
+        let evidence = Evidence(agent: .claude, sessionFolder: project, startedAt: startNow())
+        func read() -> ResumeFacts {
+            ResumeFacts.read(for: evidence, projects: [project], tabFolder: project, sessionAvailable: true, home: home)
+        }
+        #expect(!read().projectConfigChanged)
+        try write("// three", to: project + "/mcp/server.js")
+        #expect(read().projectConfigChanged)
+        #expect(AgentEvidence.projectCodeChanged(agent: .claude, folder: project, since: nil, within: [project], home: home))
+    }
+
+    /// What the check cannot follow counts as changed: a variable, a glob, a command substitution, a quote that does
+    /// not end, a config that does not read, and a folder named in the project. An option, a package name, a web
+    /// address and the project folder itself name no script.
+    @Test func codeTheCheckCannotFollowCountsAsChanged() throws {
+        let (home, project) = try makeHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        try write("// one", to: project + "/mcp/server.js")
+        let later = Date().addingTimeInterval(60)
+        func changed() -> Bool {
+            AgentEvidence.projectCodeChanged(agent: .claude, folder: project, since: later, within: [project], home: home)
+        }
+        func server(_ server: [String: Any]) throws -> Bool {
+            try write(json(["mcpServers": ["docs": server]]), to: project + "/.mcp.json")
+            return changed()
+        }
+        #expect(try !server(["command": "npx", "args": ["-y", "@scope/server", "--root=.", "https://example.com/sse?key=1"]]))
+        #expect(try !server(["command": "node", "args": ["mcp/server.js"], "env": ["TOKEN": "${TOKEN}"]]))
+        #expect(try !server(["command": "$HOME/bin/server", "args": ["${CLAUDE_PROJECT_DIR}/mcp/server.js"]]))
+        #expect(try server(["command": "node", "args": ["${SERVER}"]]))
+        #expect(try server(["command": "node", "args": ["mcp/*.js"]]))
+        #expect(try server(["command": "sh", "args": ["-c", "node `cat mcp/which`"]]))
+        #expect(try server(["command": "node", "args": ["server.js"], "cwd": "mcp"]))
+        #expect(try server(["command": "node", "args": ["--require=./mcp"]]))
+        try write("{\"mcpServers\": ", to: project + "/.mcp.json")
+        #expect(changed())
+        try FileManager.default.removeItem(atPath: project + "/.mcp.json")
+        #expect(!changed())
+        func hook(_ command: String) throws -> Bool {
+            let hook = ["type": "command", "command": command]
+            try write(json(["hooks": ["Stop": [["hooks": [hook]]]]]), to: project + "/.claude/settings.local.json")
+            return changed()
+        }
+        #expect(try !hook("[ -f mcp/server.js ] && node mcp/server.js >/dev/null 2>&1; echo done # all"))
+        #expect(try hook("sh -c 'node mcp/server.js"))
+        #expect(try hook("cd web && node server.js"))
+        #expect(try hook("node mcp/{server,other}.js"))
+        #expect(try hook("node ~other/server.js"))
+    }
+
+    /// Codex's and Qwen Code's configs name code too: Codex's MCP servers and notify program, Qwen Code's MCP servers,
+    /// in a settings file that may hold comments.
+    @Test func codexAndQwenConfigsAreReadForTheCodeTheyStart() throws {
+        let (home, project) = try makeHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        try write("// one", to: project + "/mcp/server.js")
+        try write("print(1)", to: project + "/notify.py")
+        let toml = """
+            model = "o3" # $ and * in a comment
+            notify = ["python3", "notify.py"]
+
+            [mcp_servers.docs]
+            command = "node"
+            args = [
+              "mcp/server.js",
+              "--port", "3000",
+            ]
+
+            [mcp_servers.docs.env]
+            TOKEN = "${TOKEN}"
+
+            [shell_environment_policy]
+            exclude = ["AWS_*"]
+            """
+        try write(toml, to: project + "/.codex/config.toml")
+        let qwen = """
+            {
+              // Qwen Code reads comments.
+              "mcpServers": {"docs": {"command": "node", "args": ["mcp/server.js"], "env": {"TOKEN": "$TOKEN"}}}
+            }
+            """
+        try write(qwen, to: project + "/.qwen/settings.json")
+        func changed(_ agent: RestoreAgent, since start: Date) -> Bool {
+            AgentEvidence.projectCodeChanged(agent: agent, folder: project, since: start, within: [project], home: home)
+        }
+        func startNow() -> Date {
+            usleep(20_000)
+            defer { usleep(20_000) }
+            return Date()
+        }
+        var start = startNow()
+        #expect(!changed(.codex, since: start) && !changed(.qwen, since: start))
+        try write("// two", to: project + "/mcp/server.js")
+        #expect(changed(.codex, since: start) && changed(.qwen, since: start))
+        start = startNow()
+        try write("print(2)", to: project + "/notify.py")
+        #expect(changed(.codex, since: start) && !changed(.qwen, since: start))
+        // A multi-line string that holds lines like a server's is only a string; a command in one is not read.
+        let later = Date().addingTimeInterval(60)
+        #expect(!changed(.codex, since: later))
+        func codex(_ text: String) throws -> Bool {
+            try write(text, to: project + "/.codex/config.toml")
+            return changed(.codex, since: later)
+        }
+        #expect(try !codex(toml + "\ninstructions = \"\"\"\n[mcp_servers.other]\ncommand = \"mcp\"\n\"\"\"\n"))
+        #expect(try codex("[mcp_servers.docs]\ncommand = \"\"\"node\"\"\"\n"))
+        #expect(try codex("[mcp_servers.docs]\ncommand = = \"node\"\n"))
+        #expect(try codex("[mcp_servers.docs]\ncommand = \"node\"\ncwd = \"mcp\"\n"))
+        #expect(try codex("[mcp_servers]\ndocs = { command = \"node\" }\n"))
+        #expect(try !codex("[mcp_servers.\"docs\"]\ncommand = \"node\"\nargs = ['mcp/server.js']\n"))
+        #expect(try codex("notify = \"notify.py\"\n[mcp_servers.docs]\ncommand = \"node\"\nargs = [\"mcp/server.js\", 1]\n"))
+        #expect(try codex("[hooks]\nstart = \"notify.py\"\n"))
+        #expect(try codex("[mcp_servers.docs\n"))
+    }
+
     // MARK: paths
 
     @Test func theInvokedPathIsRecordedWhenItLeadsToWhatRan() throws {

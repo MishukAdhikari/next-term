@@ -663,7 +663,7 @@ extension AgentEvidence {
     }
 
     /// `file` (relative) in `folder`, or a folder on the way to it, changed after `start`, or cannot be read.
-    private static func changed(_ file: String, in folder: String, after start: Date) -> Bool {
+    static func changed(_ file: String, in folder: String, after start: Date) -> Bool {
         var path = folder == "/" ? "" : folder
         for part in file.split(separator: "/") {
             path += "/" + part
@@ -694,7 +694,7 @@ extension AgentEvidence {
 
     /// What a failed lstat or stat says: nothing is there. Any other failure (a folder that cannot be searched, a
     /// loop of links) tells nothing.
-    private static func isAbsent(_ error: Int32) -> Bool {
+    static func isAbsent(_ error: Int32) -> Bool {
         error == ENOENT || error == ENOTDIR
     }
 
