@@ -26,7 +26,8 @@ public enum ImportZed {
     }
 
     /// The preset from `base_keymap`, the editor's and terminal's fonts and the other settings Next Term has too,
-    /// your own keys from keymap.json, and what Zed has that isn't brought over. Recent projects stay empty.
+    /// your own keys from keymap.json, recent projects (ImportZedRecents.swift), and what Zed has that isn't
+    /// brought over.
     /// `fonts`: the fonts this Mac has (tests pass their own).
     public static func plan(for app: DetectedApp, home: String = NSHomeDirectory(), usKeyboard: Bool = true,
                             fonts: FontCatalog = .system) -> ImportPlan {
@@ -54,9 +55,9 @@ public enum ImportZed {
         let keys = keymapPlan((folder as NSString).appendingPathComponent("keymap.json"), usKeyboard: usKeyboard)
         plan.shortcuts = keys.shortcuts
         plan.skipped += keys.skipped
-        if !databaseFiles(home: home).isEmpty {
-            plan.skipped.append(SkippedItem("recent projects", "Zed's recent projects come in a later version"))
-        }
+        let recents = recentProjects(home: home)
+        plan.recentProjects = recents.paths
+        plan.skipped += recents.skipped
         return plan
     }
 
@@ -403,8 +404,8 @@ public enum ImportZed {
         return .members(root.members, text: text)
     }
 
-    /// Zed's databases (`~/Library/Application Support/Zed/db/0-<channel>/db.sqlite`, `db.rs`) that exist.
-    /// Listed for their dates and to say recents exist; v1 never opens them.
+    /// Zed's databases (`~/Library/Application Support/Zed/db/0-<channel>/db.sqlite`, `db.rs`) that exist, for
+    /// their dates; only the recent projects are ever read from one (ImportZedRecents.swift).
     static func databaseFiles(home: String) -> [String] {
         let base = (home as NSString).appendingPathComponent("Library/Application Support/Zed/db")
         guard let channels = try? FileManager.default.contentsOfDirectory(atPath: base) else { return [] }

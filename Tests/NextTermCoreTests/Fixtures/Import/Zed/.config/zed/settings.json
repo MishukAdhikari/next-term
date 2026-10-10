@@ -1,0 +1,17 @@
+// Zed settings, written by hand for the import tests.
+{
+  "buffer_font_size": 14,
+  "terminal": {
+    "font_size": 12,
+    "env": { "GITHUB_TOKEN": "eyJhbGciOiJIUzI1NiJ9.eyJmaXh0dXJlIjoic2VjcmV0In0.bm90LWEtcmVhbC1zaWduYXR1cmU" }
+  },
+  "restore_on_startup": "none",
+  "git": {
+    "inline_blame": { "enabled": true, "delay_ms": 600 },
+    "git_gutter": "tracked_files"
+  },
+  "context_servers": {
+    "fixture": { "command": { "path": "npx", "args": ["-y", "fixture-server"], "env": { "API_KEY": "FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" } } }
+  },
+  "language_models": { "openai": { "api_url": "https://llm.example.invalid/v1?key=FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" } }
+}

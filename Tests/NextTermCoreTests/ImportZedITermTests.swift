@@ -388,10 +388,10 @@ import Testing
         try write("[{ \"bindings\": ", to: keymap)
         #expect(reasons(ImportZed.plan(for: app, home: home)) == ["keymap.json": "couldn't be read as JSON; your shortcuts were skipped"])
 
-        // Recents are Phase 2b: the database is only noticed, never opened.
+        // A database that can't be read is said so (ImportZedRecentsTests reads real ones).
         try write("not a database", to: home + "/Library/Application Support/Zed/db/0-stable/db.sqlite")
         plan = ImportZed.plan(for: app, home: home)
-        #expect(reasons(plan)["recent projects"] == "Zed's recent projects come in a later version")
+        #expect(reasons(plan)["recent projects"] == "couldn't be read; quit Zed and try again")
         #expect(plan.recentProjects.isEmpty)
     }
 
