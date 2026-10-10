@@ -212,7 +212,9 @@ public enum ImportSublimeText {
         }
         let padding = topValue + bottomValue
         guard padding > 0 else { return }
-        let fontSize = (size ?? nil).flatMap { $0 > 0 ? $0 : nil } ?? defaultFontSize
+        let setSize: Double? = size ?? nil
+        var fontSize: Double = defaultFontSize
+        if let setSize, setSize > 0 { fontSize = setSize }
         let natural = fontSize * ImportVSCode.naturalLineHeightRatio
         let source = "line_padding_top \(ImportVSCode.format(topValue)), line_padding_bottom \(ImportVSCode.format(bottomValue))"
         plan.settings.append(PlannedSetting(.lineHeight(clamping: (natural + padding) / natural), source: source,

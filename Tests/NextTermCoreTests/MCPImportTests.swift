@@ -11,7 +11,8 @@ import Testing
     let names = ["list_import_sources", "preview_import", "apply_import", "undo_import"]
 
     @Test func theImportToolsAreTheirOwnListAndNotAlwaysLoaded() throws {
-        #expect(MCPServer.importTools.map(\.name) == names)
+        let listed: [String] = MCPServer.importTools.map(\.name)
+        #expect(listed == names)
         for name in names {
             let tool = try #require(MCPServer.tool(named: name))
             #expect(MCPServer.isImportTool(name) && !MCPServer.isControlTool(name), "\(name)")
@@ -117,7 +118,9 @@ import Testing
         let apps = ["Cursor", "PhpStorm 2026.1", "VS Code", "VS Code", "Zed Preview"].map {
             DetectedApp(kind: .vsCode, name: $0, configPath: "/nonexistent", lastUsed: nil)
         }
-        #expect(MCPImport.ids(of: apps) == ["cursor", "phpstorm-2026.1", "vs-code", "vs-code-2", "zed-preview"])
+        let ids: [String] = MCPImport.ids(of: apps)
+        let expected: [String] = ["cursor", "phpstorm-2026.1", "vs-code", "vs-code-2", "zed-preview"]
+        #expect(ids == expected)
         #expect(MCPImport.source("PhpStorm 2026.1", in: apps)?.id == "phpstorm-2026.1")
         #expect(MCPImport.source("ZED-PREVIEW", in: apps)?.app.name == "Zed Preview")
         #expect(MCPImport.source("vim", in: apps) == nil)
@@ -179,8 +182,13 @@ import Testing
         #expect(answer["source"] as? String == "Cursor")
         #expect((answer["plan_id"] as? String)?.hasPrefix("p-") == true)
         let set = try #require(answer["shortcut_set"] as? [String: Any])
-        #expect(set["id"] as? String == "preset" && set["to"] as? String == "VS Code" && set["ticked"] as? Bool == true)
-        #expect(set["differs"] as? Int == KeymapPreset.vsCode.overrides.count)
+        let setID: String? = set["id"] as? String
+        let setTo: String? = set["to"] as? String
+        let setTicked: Bool? = set["ticked"] as? Bool
+        #expect(setID == "preset" && setTo == "VS Code" && setTicked == true)
+        let differs: Int? = set["differs"] as? Int
+        let overrides: Int = KeymapPreset.vsCode.overrides.count
+        #expect(differs == overrides)
         let settings = try #require(answer["settings"] as? [[String: Any]])
         let ids = settings.compactMap { $0["id"] as? String }
         let expected = ["set:fontSize", "set:softWrap", "set:trimTrailingWhitespace", "set:hiddenFilePatterns", "set:terminalPalette"]
@@ -287,8 +295,11 @@ import Testing
 
     /// AE4: what the user ticked or unticked against what the agent asked for.
     @Test func theUsersChangesAreNamed() {
-        let changed = MCPImport.userChanged(asked: ["preset", "set:softWrap", "set:fontSize"], applied: ["preset", "set:fontSize", "recents"])
-        #expect(changed == ["recents ticked", "set:softWrap unticked"])
+        let asked: Set<String> = ["preset", "set:softWrap", "set:fontSize"]
+        let applied: Set<String> = ["preset", "set:fontSize", "recents"]
+        let changed: [String] = MCPImport.userChanged(asked: asked, applied: applied)
+        let expected: [String] = ["recents ticked", "set:softWrap unticked"]
+        #expect(changed == expected)
         #expect(MCPImport.userChanged(asked: ["preset"], applied: ["preset"]).isEmpty)
     }
 
