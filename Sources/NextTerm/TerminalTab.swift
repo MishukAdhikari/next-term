@@ -71,24 +71,18 @@ final class NextTermView: LocalProcessTerminalView {
 
     // MARK: drawing only what can be seen
 
-    /// SwiftTerm marks what changed through setNeedsDisplay(_:) and needsDisplay (its own override of the first is
-    /// `#if false`). While nobody can see the window (NSWindow.canBeSeen), or before the view is in one, the gate
-    /// drops those marks and remembers them; the whole terminal is drawn once when it can be seen again. The output
-    /// is still parsed meanwhile: only the drawing waits.
+    /// SwiftTerm marks what its output changed through setNeedsDisplay(_:) (its own override of it is `#if false`).
+    /// While nobody can see the window (NSWindow.canBeSeen), or before the view is in one, the gate drops those marks
+    /// and remembers them; the whole terminal is drawn once when it can be seen again. The output is still parsed
+    /// meanwhile: only the drawing waits. Not `needsDisplay`, which SwiftTerm sets only on a resize, a selection or a
+    /// font change: overriding it cost an idle window with 10 tabs 4 M instructions a second (30% more), and those
+    /// rare marks would draw once while hidden at most.
     private var drawGate = DrawGate(visible: false)
     private var visibilityObservers: [NSObjectProtocol] = []
 
     override func setNeedsDisplay(_ invalidRect: NSRect) {
         guard mayDraw() else { return }
         super.setNeedsDisplay(invalidRect)
-    }
-
-    override var needsDisplay: Bool {
-        get { super.needsDisplay }
-        set {
-            if newValue, !mayDraw() { return }
-            super.needsDisplay = newValue
-        }
     }
 
     /// Asked at each mark, so a window seen again draws its next change even before its notification comes.
@@ -102,7 +96,7 @@ final class NextTermView: LocalProcessTerminalView {
     func drawIfSeenAgain() {
         let seen = window?.canBeSeen ?? false
         guard seen != drawGate.visible else { return }
-        if drawGate.setVisible(seen) { super.needsDisplay = true }
+        if drawGate.setVisible(seen) { needsDisplay = true }
     }
 
     /// Changes dropped while the terminal could not be seen, for the self-test.
