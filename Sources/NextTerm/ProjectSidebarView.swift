@@ -215,6 +215,11 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     override var isFlipped: Bool { true }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let window { git.window = window }
+    }
+
     override func layout() {
         super.layout()
         header.inset = headerInset

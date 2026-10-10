@@ -77,6 +77,12 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
 
     deinit { monitor.stop() }
 
+    /// Its window's visibility gates the refreshes file changes set off.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let window { monitor.window = window }
+    }
+
     static let tabIcon: NSImage? = NSImage(systemSymbolName: "plus.forwardslash.minus", accessibilityDescription: "Git Diff")?
         .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .medium).applying(.init(paletteColors: [Theme.gitModified])))
 
