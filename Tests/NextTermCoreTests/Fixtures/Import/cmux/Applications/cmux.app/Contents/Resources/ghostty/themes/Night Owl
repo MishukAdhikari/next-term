@@ -1,0 +1,5 @@
+# A Ghostty theme as cmux ships them.
+palette = 0=#011627
+palette = 1=#ef5350
+background = #011627
+foreground = #d6deeb

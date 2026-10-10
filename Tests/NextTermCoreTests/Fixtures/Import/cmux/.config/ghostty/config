@@ -1,0 +1,5 @@
+# Ghostty's config, which cmux reads too.
+font-family = JetBrains Mono
+font-size = 13
+theme = Night Owl
+keybind = super+d=new_split:down
