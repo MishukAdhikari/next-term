@@ -1094,9 +1094,10 @@ enum SelfTest {
               welcome.shownSessionTitles.joined(separator: " | ") + " — listed \(welcome.shownProjects.contains(project)), selected \(welcome.selectedProject ?? "none"), direct \(direct.sessions.map(\.title)) \(direct.problems), home \(SessionStore.home)")
         check(welcome.shownSessionTitles.first == "Fix the login redirect loop", "newest first, with the agent's own title")
         welcomeReturnKeyChecks(welcome, project: project)
-        let searched = await welcomeSessionSearchChecks(welcome, project: project)
         await pause(0.3)
-        await screenshot(welcomeWindow, suffix: "welcome")
+        await screenshot(welcomeWindow, suffix: "welcome") // every session listed, the search empty
+        let searched = await welcomeSessionSearchChecks(welcome, project: project)
+        if searched { await screenshot(welcomeWindow, suffix: "welcome-search") } // “loop fix” typed, its one session
         // Return in the sessions search, where it is Resume's (Open Project has it everywhere else); without the
         // keys (the app not in front), the button's own action.
         if searched { pressAppKey(welcomeWindow, "\r", code: 36) } else { welcome.resumeSelected() }
