@@ -414,10 +414,14 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             connectionToken = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16)).lowercased()
             view.interceptInput = nil
             view.acceptsInput = true
+            DescriptorSweep.markCloseOnExec() // ssh inherits nothing of ours (see below)
             view.startProcess(executable: shellPath, args: RemoteConnection.tabArguments(remote, path: path, tabKey: remoteKey, token: connectionToken),
                               environment: RemoteConnection.environment(), execName: nil, currentDirectory: NSHomeDirectory())
             return
         }
+        // SwiftTerm's forkpty and execve close nothing: without this the shell would hold every earlier tab's pty
+        // master (and the MCP socket), and after a crash or Force Quit the kernel could hang none of those tabs up.
+        DescriptorSweep.markCloseOnExec()
         view.startProcess(
             executable: shellPath,
             args: [],

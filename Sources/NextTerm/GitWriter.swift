@@ -195,6 +195,7 @@ final class GitWriter {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("next-term-git-\(UUID().uuidString)")
         guard FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]),
               let handle = try? FileHandle(forWritingTo: url) else { return Result(status: 1, output: "Could not start git.") }
+        DescriptorSweep.closeOnExec(handle.fileDescriptor) // git's copy only, never a tab's shell's
         defer { try? FileManager.default.removeItem(at: url) }
         process.standardOutput = handle
         process.standardError = handle

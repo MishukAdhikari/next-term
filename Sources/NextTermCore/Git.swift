@@ -514,12 +514,15 @@ public enum GitRunner {
         let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("next-term-out-\(UUID().uuidString)")
         guard FileManager.default.createFile(atPath: outputURL.path, contents: nil, attributes: [.posixPermissions: 0o600]),
               let output = try? FileHandle(forWritingTo: outputURL) else { return nil }
+        // git gets its own copy as its standard output; a tab's shell starting meanwhile must not get one too.
+        DescriptorSweep.closeOnExec(output.fileDescriptor)
         defer { try? FileManager.default.removeItem(at: outputURL) }
         let inputURL = FileManager.default.temporaryDirectory.appendingPathComponent("next-term-in-\(UUID().uuidString)")
         var inputFile: FileHandle?
         if let input {
             guard FileManager.default.createFile(atPath: inputURL.path, contents: input, attributes: [.posixPermissions: 0o600]),
                   let handle = try? FileHandle(forReadingFrom: inputURL) else { return nil }
+            DescriptorSweep.closeOnExec(handle.fileDescriptor)
             inputFile = handle
         }
         defer { if input != nil { try? FileManager.default.removeItem(at: inputURL) } }
