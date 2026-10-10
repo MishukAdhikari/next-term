@@ -53,13 +53,15 @@ import Testing
             wezterm.on('gui-startup', function() config.initial_cols = 80 end)
             os.execute('rm -rf /')                  -- a call: never run
             config.colors = require('colors')
+            config.keys = {}
+            config.keys[#config.keys + 1] = { key = 'k', mods = 'CMD' }
             return config
             """)
         #expect(!scan.unreadable)
         // A table with code in it is kept, and named as partly code.
         #expect(Array(scan.fields.keys) == ["window_padding"] && scan.partlyComputed == ["window_padding"])
         let names = Set(scan.computed)
-        let expected: Set<String> = ["font_size", "line_height", "font", "term", "default_cursor_style", "initial_cols", "colors"]
+        let expected: Set<String> = ["font_size", "line_height", "font", "term", "default_cursor_style", "initial_cols", "colors", "keys"]
         #expect(names == expected)
     }
 

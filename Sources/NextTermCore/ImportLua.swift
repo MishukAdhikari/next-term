@@ -469,8 +469,11 @@ private struct LuaParser {
         try expect("=")
         let values = try expressionList()
         for (offset, target) in targets.enumerated() {
-            guard let path = target.path, path.count >= 2 else { continue }
-            note(path, offset < values.count ? values[offset] : .computed)
+            if let path = target.path, path.count >= 2 {
+                note(path, offset < values.count ? values[offset] : .computed)
+            } else if let path = target.indexed, path.count >= 2 {
+                note(path, .computed)
+            }
         }
     }
 
@@ -506,6 +509,8 @@ private struct LuaParser {
     struct Target {
         var path: [String]?
         var call: (name: String, args: [LuaValue], targets: [[String]])?
+        /// The path up to an index Lua works out (`config.keys[#config.keys + 1]`): what is set there is code.
+        var indexed: [String]?
     }
 
     mutating func suffixed() throws -> Target {
@@ -520,6 +525,7 @@ private struct LuaParser {
             dotted = resolve(first)
         }
         var call: (name: String, args: [LuaValue], targets: [[String]])?
+        var indexed: [String]?
         while true {
             if accept(".") {
                 let field = try name()
@@ -529,7 +535,12 @@ private struct LuaParser {
             } else if accept("[") {
                 let key = try expression()
                 try expect("]")
-                if let text = key.string { path?.append(text) } else { path = nil }
+                if let text = key.string {
+                    path?.append(text)
+                } else {
+                    if indexed == nil { indexed = path }
+                    path = nil
+                }
                 dotted = nil
                 call = nil
             } else if accept(":") {
@@ -547,7 +558,7 @@ private struct LuaParser {
                 break
             }
         }
-        return Target(path: path, call: call)
+        return Target(path: path, call: call, indexed: indexed)
     }
 
     func startsArguments() -> Bool {
