@@ -215,7 +215,7 @@ extension SelfTest {
 
     /// git in `dir`, as the self-test's own committer; what it printed.
     @discardableResult
-    private static func gitOutput(_ git: String, _ dir: String, _ args: [String]) -> String {
+    static func gitOutput(_ git: String, _ dir: String, _ args: [String]) -> String {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: git)
         p.arguments = ["-C", dir, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false",

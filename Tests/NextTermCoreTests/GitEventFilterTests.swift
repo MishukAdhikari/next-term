@@ -126,4 +126,19 @@ import Testing
         #expect(!GitEventFilter.isNestedRepository(path("missing")))
     }
 
+    @Test func gitRunsAreCountedByFolder() throws {
+        guard let git = GitRunner.locateGit() else { return }
+        let base = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path))
+            .appendingPathComponent("nt-runcount-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        try FileManager.default.createDirectory(at: base.appendingPathComponent("repo"), withIntermediateDirectories: true)
+        let repo = base.appendingPathComponent("repo").path
+        #expect(GitRunner.runs(in: base.path) == 0)
+        _ = GitRunner.run(git, ["-C", repo, "init", "-q"], timeout: 10)
+        _ = GitRunner.snapshot(for: repo, git: git) // rev-parse, status, and hash-object for the empty tree, diff-index
+        #expect(GitRunner.runs(in: repo) >= 4)
+        #expect(GitRunner.runs(in: base.path) == GitRunner.runs(in: repo)) // below a folder counts for it
+        #expect(GitRunner.runs(in: repo + "-other") == 0)
+        #expect(GitRunner.runs(in: repo + "/src") == 0)
+    }
 }

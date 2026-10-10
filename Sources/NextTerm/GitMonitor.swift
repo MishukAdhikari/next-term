@@ -24,6 +24,9 @@ final class GitMonitor {
     /// Seconds on a steady clock, for the gate.
     private static var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
+    /// Refreshes started so far, for the self-test.
+    private(set) var refreshCount = 0
+
     /// The window whose visibility gates refreshes set off by file changes; nil counts as visible.
     weak var window: NSWindow? {
         didSet {
@@ -117,6 +120,7 @@ final class GitMonitor {
             return
         }
         running = true
+        refreshCount += 1
         gate.started(at: Self.now)
         timer?.cancel()
         timer = nil

@@ -653,6 +653,7 @@ enum SelfTest {
         await branchCompareChecks(c)
         await gitDiffChecks(c, proj: proj)
         await backgroundFetchChecks(c)
+        await gitRefreshChecks(c)
         await ragColorChecks(c, proj: proj)
         await envValueChecks(c, proj: proj)
         await importChecks(c, proj: proj)
