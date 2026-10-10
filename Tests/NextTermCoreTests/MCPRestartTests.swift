@@ -604,4 +604,43 @@ import Testing
         calls.end(call)
         #expect(done.wait(timeout: .now() + 2) == .success)
     }
+
+    // MARK: the socket
+
+    /// KTD17: a process the app starts (a tab's shell, and what runs on in it after the quit) never holds the app's
+    /// listener. Once the app closes its own, at an update's drain that keeps the file, a connect there is refused, which
+    /// `nxtrm mcp` reads as a restart, and the next launch finds nothing answering, so it listens there again.
+    @Test func aProcessTheAppStartsNeverKeepsItsSocketListening() throws {
+        let path = FileManager.default.temporaryDirectory.path + "/nt-\(UUID().uuidString.prefix(8)).sock"
+        defer { unlink(path) }
+        let listener = MCPSocket.listen(path: path)
+        try #require(listener >= 0)
+        #expect(MCPSocket.isCloseOnExec(listener))
+        var info = stat()
+        #expect(lstat(path, &info) == 0 && info.st_mode & 0o777 == 0o600)
+        // A connection, and the app's end of it, are not handed on either.
+        let caller = MCPSocket.connect(path: path)
+        try #require(caller >= 0)
+        let served = MCPSocket.accept(listener)
+        #expect(served >= 0 && MCPSocket.isCloseOnExec(served) && MCPSocket.isCloseOnExec(caller))
+        [caller, served].filter { $0 >= 0 }.forEach { Darwin.close($0) }
+
+        // Started with nothing closed before its program runs, as forkpty and execve start a tab's shell.
+        var pid: pid_t = 0
+        let command: [String] = ["/bin/sleep", "5"]
+        let words: [UnsafeMutablePointer<CChar>?] = command.map { strdup($0) } + [nil]
+        defer { words.forEach { free($0) } }
+        try #require(posix_spawn(&pid, "/bin/sleep", nil, nil, words, nil) == 0)
+        defer {
+            kill(pid, SIGKILL)
+            var status: Int32 = 0
+            waitpid(pid, &status, 0)
+        }
+        Darwin.close(listener) // the drain: the app's copy goes, the file stays
+        let late = MCPSocket.connect(path: path)
+        let code = errno
+        if late >= 0 { Darwin.close(late) }
+        #expect(late < 0 && code == ECONNREFUSED, "a connect after the drain is refused, not left waiting in the child's listener")
+        #expect(MCPServer.SocketFailure(connectError: code) == .refused)
+    }
 }

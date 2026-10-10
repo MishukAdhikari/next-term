@@ -415,27 +415,9 @@ enum MCPBridge {
 
     /// Connects to the app's socket: the descriptor, or how it failed.
     private static func connect(_ path: String) -> Result<Int32, MCPServer.SocketFailure> {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { return .failure(.unreachable) }
-        var address = sockaddr_un()
-        address.sun_family = sa_family_t(AF_UNIX)
-        let bytes = Array(path.utf8)
-        guard bytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
-            close(fd)
-            return .failure(.unreachable)
-        }
-        withUnsafeMutableBytes(of: &address.sun_path) { buffer in
-            buffer.copyBytes(from: bytes)
-            buffer[bytes.count] = 0
-        }
-        let connected = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
-        }
-        guard connected == 0 else {
-            let code = errno
-            close(fd)
-            return .failure(MCPServer.SocketFailure(connectError: code))
-        }
+        let fd = MCPSocket.connect(path: path)
+        // Refused and missing by errno; any other failure, a path too long for a socket included, is unreachable.
+        guard fd >= 0 else { return .failure(MCPServer.SocketFailure(connectError: errno)) }
         return .success(fd)
     }
 

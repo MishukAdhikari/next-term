@@ -29,25 +29,11 @@ final class MCPControlServer: @unchecked Sendable {
         // Another Next Term already answers here (a second copy of the app): leave it be.
         if Self.answers(self.path) { NSLog("Next Term: another Next Term serves \(self.path)"); return }
         unlinkIfSocket(self.path)
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { return }
-        var address = sockaddr_un()
-        address.sun_family = sa_family_t(AF_UNIX)
-        let bytes = Array(self.path.utf8)
-        guard bytes.count < MemoryLayout.size(ofValue: address.sun_path) else { close(fd); return }
-        withUnsafeMutableBytes(of: &address.sun_path) { buffer in
-            buffer.copyBytes(from: bytes)
-            buffer[bytes.count] = 0
-        }
-        // Owner only from the moment it exists.
-        let previousMask = umask(0o077)
-        let bound = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
-        }
-        umask(previousMask)
-        guard bound == 0, chmod(self.path, 0o600) == 0, listen(fd, 16) == 0 else {
+        // Owner only from the moment it exists, and never handed to a tab's shell (MCPSocket): a copy there would keep
+        // it listening after a quit or an update's drain closed this one.
+        let fd = MCPSocket.listen(path: self.path)
+        guard fd >= 0 else {
             NSLog("Next Term: MCP socket failed: \(String(cString: strerror(errno)))")
-            close(fd)
             return
         }
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
@@ -79,27 +65,11 @@ final class MCPControlServer: @unchecked Sendable {
         return fd >= 0
     }
 
-    static func connectSocket(_ path: String) -> Int32 {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { return -1 }
-        var address = sockaddr_un()
-        address.sun_family = sa_family_t(AF_UNIX)
-        let bytes = Array(path.utf8)
-        guard bytes.count < MemoryLayout.size(ofValue: address.sun_path) else { close(fd); return -1 }
-        withUnsafeMutableBytes(of: &address.sun_path) { buffer in
-            buffer.copyBytes(from: bytes)
-            buffer[bytes.count] = 0
-        }
-        let connected = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
-        }
-        if connected != 0 { close(fd); return -1 }
-        return fd
-    }
+    static func connectSocket(_ path: String) -> Int32 { MCPSocket.connect(path: path) }
 
     private func acceptAll() {
         while true {
-            let client = accept(listenSocket, nil, nil)
+            let client = MCPSocket.accept(listenSocket)
             guard client >= 0 else { return }
             var uid: uid_t = 0, gid: gid_t = 0
             guard getpeereid(client, &uid, &gid) == 0, uid == getuid() else { close(client); continue }

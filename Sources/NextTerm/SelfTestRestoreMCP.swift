@@ -403,11 +403,12 @@ extension SelfTest {
         }
         await pause(2)
         server.start(path: path)
+        let listening = server.isRunning
         let listed = await reading.value
         let result = listed?["result"] as? [String: Any]
-        check(server.isRunning && result?["isError"] as? Bool == false && Date().timeIntervalSince(started) > 1.5,
+        check(listening && result?["isError"] as? Bool == false && Date().timeIntervalSince(started) > 1.5,
               "MCP restore: a tool that reads is tried again until Next Term listens again, and answers",
-              "\(listed ?? [:])")
+              listening ? "\(listed ?? [:])" : "MCP socket did not listen again")
 
         // Any other quit: a request still being read hears at once that Next Term quit, not after its read's 10 seconds,
         // and the socket file goes.
@@ -418,6 +419,9 @@ extension SelfTest {
               "MCP restore: at a quit that is not an update's, a request still being read hears at once that Next Term quit, "
                   + "and the socket file goes", "\(unread.answer?.text ?? "no answer") in \(unread.took) s, file gone \(gone)")
         server.start(path: path)
+        // Every MCP check after these needs it: a socket that stays down fails them all, so it is named here.
+        check(server.isRunning, "MCP restore: after the drains the socket listens again, with a tab's shell still running",
+              "MCP socket did not listen again")
         busy.view.send(txt: "\u{03}")
     }
 }
