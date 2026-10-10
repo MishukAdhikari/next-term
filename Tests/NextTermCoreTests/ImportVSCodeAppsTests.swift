@@ -68,7 +68,8 @@ import Testing
         let token = try #require(ImportVSCode.product(bundle: apps + "/Hidden Token.app"))
         #expect(token.nameShort == nil && token.version == nil && token.dataFolderName == ".hidden-token")
         // Only apps whose product.json names both folders count.
-        #expect(ImportVSCode.installedProducts(applications: [apps]).map(\.nameShort) == ["Forky", "Trae"])
+        let names: [String?] = ImportVSCode.installedProducts(applications: [apps]).map(\.nameShort)
+        #expect(names == ["Forky", "Trae"])
         #expect(ImportVSCode.product(bundle: apps + "/Notes.app") == nil)
         #expect(ImportVSCode.installedProducts(applications: [home + "/nowhere"]).isEmpty)
         for bad in ["", ".", "..", "a/b", "x\0y", String(repeating: "a", count: 101)] { #expect(ImportVSCode.plainName(bad) == nil) }
@@ -167,7 +168,8 @@ import Testing
         #expect(!plan.skipped.contains { $0.item.contains("vim.* setting") }) // said once
         // Three others, one of them an id that looks like a token: counted, never named.
         #expect(plan.skipped.contains(SkippedItem("3 other extensions", "extensions aren't imported")))
-        #expect(plan.settings.map(\.setting) == [.fontSize(14), .softWrap(true)])
+        let settings: [ImportedSetting] = plan.settings.map(\.setting)
+        #expect(settings == [.fontSize(14), .softWrap(true)])
         #expect(ImportFixtures.secrets(in: plan).isEmpty)
         // The extension removed, the settings still say Vim.
         try FileManager.default.removeItem(atPath: home + "/.trae/extensions/extensions.json")
@@ -183,7 +185,8 @@ import Testing
         #expect(ImportVSCode.extensions(home: home, dataFolders: [".forky"], user: forky.configPath) == nil)
         let plan = plan(forky, home)
         #expect(plan.preset == .vsCode && !plan.skipped.contains { $0.item.contains("extension") })
-        #expect(plan.settings.map(\.setting) == [.fontSize(16)])
+        let settings: [ImportedSetting] = plan.settings.map(\.setting)
+        #expect(settings == [.fontSize(16)])
     }
 
     @Test func dataFoldersComeFromTheInstalledAppOrTheKnownList() throws {

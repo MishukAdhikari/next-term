@@ -30,8 +30,12 @@ import Testing
             defaults.set(Data([1, 2]), forKey: "terminalPalette")
             let keys = ["softWrap", "fontSize", "terminalScrollback", "keymapPreset", "hiddenFilePatterns", "terminalPalette", "editorFontFamily"]
             let values = ImportSnapshot.values(of: keys, in: defaults)
-            #expect(values == ["softWrap": .bool(true), "fontSize": .double(15), "terminalScrollback": .double(3_000),
-                               "keymapPreset": .string("vsCode"), "hiddenFilePatterns": .strings(["*.log"]), "terminalPalette": .data(Data([1, 2]))])
+            // Typed apart from the #expect, so the literal type-checks quickly on older compilers.
+            var expected: [String: Value] = ["softWrap": .bool(true), "fontSize": .double(15), "terminalScrollback": .double(3_000)]
+            expected["keymapPreset"] = .string("vsCode")
+            expected["hiddenFilePatterns"] = .strings(["*.log"])
+            expected["terminalPalette"] = .data(Data([1, 2]))
+            #expect(values == expected)
         }
     }
 
@@ -72,7 +76,8 @@ import Testing
                                                            source: "Cursor", summary: "3 settings", date: date))
         #expect(snapshot.touched == ["fontSize", "editorFontFamily"])
         #expect(snapshot.before == ["fontSize": .double(14)]) // the font had none before
-        #expect(snapshot.after == ["fontSize": .double(16), "editorFontFamily": .string("Menlo")])
+        let expectedAfter: [String: Value] = ["fontSize": .double(16), "editorFontFamily": .string("Menlo")]
+        #expect(snapshot.after == expectedAfter)
         #expect(snapshot.source == "Cursor" && snapshot.summary == "3 settings" && snapshot.date == date)
         #expect(snapshot.id?.isEmpty == false)
         let next = try #require(ImportSnapshot.applied(keys: ["fontSize"], before: before, after: after, source: "Zed", summary: ""))
@@ -93,7 +98,8 @@ import Testing
         current["customTerminalPalette"] = .data(Data([2]))
         current["editorFontFamily"] = nil // back to Next Term's font
         let changed = snapshot.changedSince(current)
-        #expect(changed == ["fontSize", "terminalPalette", "customTerminalPalette", "editorFontFamily"])
+        let expected: [String] = ["fontSize", "terminalPalette", "customTerminalPalette", "editorFontFamily"]
+        #expect(changed == expected)
         #expect(ImportSnapshot.titles(of: changed) == ["Font size", "Terminal colours", "Editor font"])
         // A snapshot from before 0.11 has no values after, so it can't say.
         let old = ImportSnapshot(source: "Cursor", summary: "", before: [:], touched: ["fontSize"], after: nil)
