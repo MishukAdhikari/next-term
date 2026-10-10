@@ -292,6 +292,30 @@ import Testing
         #expect(found == ImportFixtures.plantedSecrets)
     }
 
+    /// File access is recorded: detection and the plan open only these files of the fixture, and the preview an
+    /// agent gets matches the fixture's golden file (as ImportFileAccessTests checks the other fixtures).
+    @Test func opensOnlyItsFilesAndPreviewsAsItsGoldenFile() throws {
+        let home = try fixture()
+        defer { remove(home) }
+        let apps = [home + "/Applications"]
+        let watched = ImportFixtures.watched(home: home, detect: { ImportSublimeText.detect(home: home, applications: apps) },
+                                             plan: { ImportSublimeText.plan(for: $0, home: home, fonts: testFonts) })
+        let expected: [String] = [
+            "Applications/Sublime Text.app/Contents/Info.plist",
+            "Code/beta/beta.sublime-project",
+            "Library/Application Support/Sublime Text/Local/Session.sublime_session",
+            "Library/Application Support/Sublime Text/Packages/User/Default (OSX).sublime-keymap",
+            "Library/Application Support/Sublime Text/Packages/User/Default.sublime-keymap",
+            "Library/Application Support/Sublime Text/Packages/User/Preferences.sublime-settings",
+        ]
+        #expect(watched.opened == expected)
+        let text = ImportFixtures.previews(watched.plans, home: home)
+        let secrets: [String] = ImportFixtures.secrets(in: text)
+        #expect(secrets.isEmpty && !text.contains("•••"))
+        let golden = try ImportFixtures.golden("SublimeText", text)
+        #expect(text == golden)
+    }
+
     /// The owner's rule: this editor is named only in its importer, the import window and the switching guide's
     /// import rows. In the sources, only these files may name it (ImportJetBrains.swift matches the IDEs' built-in
     /// keymap of that name, from before the importer).

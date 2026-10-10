@@ -734,8 +734,38 @@ public enum ImportITerm2 {
 enum ImportFile {
     static let limit = 64 << 20
 
+    /// The files the readers open, for tests: every open in an importer (`data` here, ImportVSCode.readText,
+    /// ImportJetBrains.read and the two SQLite opens) tells it the file's real path. Set for one test's task with
+    /// `$opened.withValue`, so tests running at the same time never see each other's; nil in the app.
+    @TaskLocal static var opened: OpenedFiles?
+
+    /// The real paths opened while a test watched.
+    final class OpenedFiles: @unchecked Sendable {
+        private let lock = NSLock()
+        private var paths = Set<String>()
+
+        var all: Set<String> {
+            lock.lock()
+            defer { lock.unlock() }
+            return paths
+        }
+
+        func add(_ path: String) {
+            lock.lock()
+            paths.insert(path)
+            lock.unlock()
+        }
+    }
+
+    /// Called by every reader as it opens `path`.
+    static func record(_ path: String) {
+        guard let opened else { return }
+        opened.add(canonicalPath(path))
+    }
+
     static func data(_ path: String) -> Data? {
         guard isRegularFile(path), let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        ImportFile.record(path)
         defer { try? handle.close() }
         let data: Data
         do {

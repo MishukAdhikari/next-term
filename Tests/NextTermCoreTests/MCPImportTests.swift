@@ -244,6 +244,24 @@ import Testing
         #expect(text == expected)
     }
 
+    /// File access is recorded: detection and the plan open only these files of the fixture (ImportFileAccessTests
+    /// has the other fixtures').
+    @Test func theCursorFixtureOpensOnlyItsFiles() throws {
+        let home = try fixture()
+        defer { remove(home) }
+        let apps = [home + "/Applications"]
+        let watched = ImportFixtures.watched(home: home, detect: { ImportVSCode.detect(home: home, applications: apps) },
+                                             plan: { plan($0, home: home) })
+        let expected: [String] = [
+            ".cursor/extensions/extensions.json",
+            "Applications/Cursor.app/Contents/Resources/app/product.json",
+            "Library/Application Support/Cursor/User/globalStorage/state.vscdb",
+            "Library/Application Support/Cursor/User/keybindings.json",
+            "Library/Application Support/Cursor/User/settings.json",
+        ]
+        #expect(watched.opened == expected)
+    }
+
     @Test func longListsAreCappedAndCounted() {
         let skipped = (0..<150).map { SkippedItem("key\($0)", "come later") }
         let shortcuts = (0..<120).map { PlannedShortcut(command: "c\($0)", title: "C\($0)", chord: nil, source: "s") }

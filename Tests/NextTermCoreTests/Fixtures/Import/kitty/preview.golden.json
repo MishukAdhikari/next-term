@@ -1,0 +1,241 @@
+{
+  "kitty" : {
+    "changes_if_applied" : 15,
+    "not_brought_over" : [
+      {
+        "item" : "color4",
+        "reason" : "only #rrggbb colours are read, not colour names"
+      },
+      {
+        "item" : "color16–color255",
+        "reason" : "Next Term sets the first 16 colours only"
+      },
+      {
+        "item" : "map ctrl+a>c → new_tab",
+        "reason" : "two-step keys aren't supported yet"
+      },
+      {
+        "item" : "map cmd+s → next_tab",
+        "reason" : "only while some windows have the keyboard"
+      },
+      {
+        "item" : "map cmd+plus → change_font_size all +2.0",
+        "reason" : "key not recognised"
+      },
+      {
+        "item" : "4 map lines",
+        "reason" : "no matching Next Term command, or they send text or run programs"
+      },
+      {
+        "item" : "include",
+        "reason" : "only files in kitty's own folder are read"
+      },
+      {
+        "item" : "include",
+        "reason" : "a path with an environment variable isn't expanded, so it isn't read"
+      },
+      {
+        "item" : "include missing.conf",
+        "reason" : "file not found"
+      },
+      {
+        "item" : "geninclude",
+        "reason" : "never run: it runs a program"
+      },
+      {
+        "item" : "envinclude",
+        "reason" : "never read: it comes from environment variables"
+      },
+      {
+        "item" : "background_opacity",
+        "reason" : "the terminal is opaque here"
+      },
+      {
+        "item" : "copy_on_select",
+        "reason" : "copy on select isn't a setting yet"
+      },
+      {
+        "item" : "other settings: tab_bar_style",
+        "reason" : "no matching Next Term setting yet"
+      },
+      {
+        "item" : "shell",
+        "reason" : "never imported: runs commands or can hold secrets"
+      },
+      {
+        "item" : "env",
+        "reason" : "never imported: runs commands or can hold secrets"
+      },
+      {
+        "item" : "remote_control_password",
+        "reason" : "never imported: runs commands or can hold secrets"
+      },
+      {
+        "item" : "startup_session",
+        "reason" : "never imported: runs commands or can hold secrets"
+      }
+    ],
+    "note" : "Nothing changes here: apply_import opens Next Term's import window with these rows, and only the user's Apply changes anything.",
+    "plan_id" : "p-(differs with the home folder)",
+    "settings" : [
+      {
+        "from" : "font_family JetBrains Mono",
+        "id" : "set:terminalFontFamily",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalFontFamily title"
+      },
+      {
+        "from" : "font_size 15",
+        "id" : "set:terminalFontSize",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalFontSize title"
+      },
+      {
+        "from" : "cursor_shape beam",
+        "id" : "set:terminalCursorShape",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalCursorShape title"
+      },
+      {
+        "from" : "cursor_blink_interval 0",
+        "id" : "set:terminalCursorBlink",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalCursorBlink title"
+      },
+      {
+        "from" : "scrollback_lines -1",
+        "id" : "set:terminalScrollback",
+        "note" : "kitty keeps all of it; Next Term keeps at most 100,000 lines",
+        "ticked" : true,
+        "title" : "terminalScrollback title"
+      },
+      {
+        "from" : "macos_option_as_alt left",
+        "id" : "set:optionAsMeta",
+        "note" : "on in kitty for Left Option only; Next Term can't set one side yet",
+        "ticked" : false,
+        "title" : "optionAsMeta title"
+      },
+      {
+        "colours" : 7,
+        "from" : "your colour settings, dark-theme.auto.conf over them",
+        "id" : "set:terminalPalette",
+        "note" : "7 of 20 colours; the others stay Next Term's",
+        "ticked" : true,
+        "title" : "terminalPalette title"
+      }
+    ],
+    "shortcut_set" : {
+      "in_use" : true,
+      "to" : "Next Term"
+    },
+    "source" : "kitty",
+    "up_to_date" : false,
+    "your_shortcuts" : [
+      {
+        "allowed" : true,
+        "from" : "map kitty_mod+t → new_tab_with_cwd",
+        "id" : "key:newTab:",
+        "new" : "⇧⌘T",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "New Tab"
+      },
+      {
+        "allowed" : true,
+        "from" : "map cmd+d → launch --location=vsplit",
+        "id" : "key:splitRight:",
+        "new" : "⌘D",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Split Right"
+      },
+      {
+        "allowed" : true,
+        "from" : "map cmd+shift+d → launch --location=hsplit",
+        "id" : "key:splitDown:",
+        "new" : "⇧⌘D",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Split Down"
+      },
+      {
+        "allowed" : true,
+        "from" : "map cmd+k → clear_terminal to_cursor",
+        "id" : "key:clearBuffer:",
+        "new" : "⌘K",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Clear Buffer"
+      },
+      {
+        "allowed" : true,
+        "from" : "map cmd+1 → goto_tab 1",
+        "id" : "key:selectTabByNumber:#1",
+        "new" : "⌘1",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Select Tab 1"
+      },
+      {
+        "allowed" : true,
+        "from" : "map cmd+enter → toggle_layout stack",
+        "id" : "key:toggleZoomPane:",
+        "new" : "⌘↩",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Maximize Pane"
+      },
+      {
+        "allowed" : true,
+        "from" : "map cmd+shift+w → close_os_window",
+        "id" : "key:performClose:",
+        "new" : "⇧⌘W",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Close Window"
+      },
+      {
+        "allowed" : true,
+        "from" : "map kitty_mod+left → neighboring_window left",
+        "id" : "key:selectPaneLeft:",
+        "new" : "⇧⌘←",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Select Pane on the Left"
+      },
+      {
+        "allowed" : false,
+        "from" : "map ctrl+shift+c → copy_to_clipboard",
+        "id" : "key:copy:",
+        "new" : "⌃⇧C",
+        "note" : "Control keys without ⌘ stay with your shell and agents",
+        "now" : "no key",
+        "ticked" : false,
+        "title" : "Copy"
+      },
+      {
+        "allowed" : true,
+        "from" : "map cmd+opt+equal → change_font_size all +2.0",
+        "id" : "key:increaseFontSize:",
+        "new" : "⌥⌘=",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Bigger"
+      }
+    ]
+  }
+}

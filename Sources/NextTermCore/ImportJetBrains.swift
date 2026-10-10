@@ -728,6 +728,7 @@ public enum ImportJetBrains {
         // A symlink never leads a read out of the settings folder.
         guard mayOpen(relative), let path = ImportVSCode.file(relative, inside: config),
               let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        ImportFile.record(path)
         defer { try? handle.close() }
         guard let data = try? handle.read(upToCount: rootOnly ? 16384 : maxFileSize + 1),
               rootOnly || data.count <= maxFileSize else { return nil }

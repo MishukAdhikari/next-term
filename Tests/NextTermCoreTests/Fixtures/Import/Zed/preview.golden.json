@@ -1,0 +1,139 @@
+{
+  "Zed" : {
+    "changes_if_applied" : 10,
+    "not_brought_over" : [
+      {
+        "item" : "Zed's own shortcuts",
+        "reason" : "there is no Zed preset, so Next Term's shortcuts stay"
+      },
+      {
+        "item" : "terminal.env",
+        "reason" : "never imported: can hold secrets"
+      },
+      {
+        "item" : "context_servers",
+        "reason" : "never imported: can hold secrets"
+      },
+      {
+        "item" : "language_models",
+        "reason" : "never imported: can hold secrets"
+      },
+      {
+        "item" : "cmd-alt-t → terminal::SendText",
+        "reason" : "no matching Next Term command"
+      },
+      {
+        "item" : "both-b",
+        "reason" : "only a workspace's first folder comes over (1 more folder left out)"
+      },
+      {
+        "item" : "1 recent project",
+        "reason" : "the folder no longer exists"
+      },
+      {
+        "item" : "1 recent project",
+        "reason" : "looked like a credential"
+      }
+    ],
+    "note" : "Nothing changes here: apply_import opens Next Term's import window with these rows, and only the user's Apply changes anything.",
+    "plan_id" : "p-(differs with the home folder)",
+    "recent_projects" : {
+      "count" : 2,
+      "id" : "recents",
+      "more" : 0,
+      "shown" : [
+        "~/Code/both-b",
+        "~/Code/app"
+      ],
+      "ticked" : true
+    },
+    "settings" : [
+      {
+        "from" : "buffer_font_size 14",
+        "id" : "set:fontSize",
+        "note" : null,
+        "ticked" : true,
+        "title" : "fontSize title"
+      },
+      {
+        "from" : "terminal.font_size 12",
+        "id" : "set:terminalFontSize",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalFontSize title"
+      },
+      {
+        "from" : "restore_on_startup none",
+        "id" : "set:launchOpens",
+        "note" : null,
+        "ticked" : true,
+        "title" : "launchOpens title"
+      },
+      {
+        "from" : "git.inline_blame.enabled true",
+        "id" : "set:currentLineBlame",
+        "note" : null,
+        "ticked" : true,
+        "title" : "currentLineBlame title"
+      }
+    ],
+    "shortcut_set" : {
+      "in_use" : true,
+      "to" : "Next Term"
+    },
+    "source" : "Zed",
+    "up_to_date" : false,
+    "your_shortcuts" : [
+      {
+        "allowed" : true,
+        "from" : "keymap.json: cmd-alt-c → workspace::CopyPath",
+        "id" : "key:copyFilePath:",
+        "new" : "⌥⌘C",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Copy Path"
+      },
+      {
+        "allowed" : true,
+        "from" : "keymap.json: cmd-k → git::Commit",
+        "id" : "key:gitCommit:",
+        "new" : "⌘K",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Commit…"
+      },
+      {
+        "allowed" : true,
+        "from" : "keymap.json: cmd-shift-k → git::Push",
+        "id" : "key:gitPush:",
+        "new" : "⇧⌘K",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Push…"
+      },
+      {
+        "allowed" : true,
+        "from" : "keymap.json: cmd-ctrl-b → git::Branch",
+        "id" : "key:showBranches:",
+        "new" : "⌃⌘B",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Branches…"
+      },
+      {
+        "allowed" : true,
+        "from" : "keymap.json: cmd-alt-shift-t → pane::ReopenClosedItem",
+        "id" : "key:reopenClosedTab:",
+        "new" : "⌥⇧⌘T",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Reopen Closed Tab"
+      }
+    ]
+  }
+}

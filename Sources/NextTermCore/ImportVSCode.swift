@@ -683,6 +683,7 @@ public enum ImportVSCode {
         guard let escaped = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else { return (.failed, SQLITE_MISUSE) }
         var db: OpaquePointer?
         let uri = "file:\(escaped)?mode=ro" + (immutable ? "&immutable=1" : "")
+        ImportFile.record(path)
         let opened = sqlite3_open_v2(uri, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil)
         guard opened == SQLITE_OK, let db else {
             sqlite3_close(db)
@@ -794,6 +795,7 @@ public enum ImportVSCode {
     /// block the read forever.
     static func readText(_ path: String, limit: Int) -> String? {
         guard isRegularFile(path), let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        ImportFile.record(path)
         defer { try? handle.close() }
         let data: Data
         do {
