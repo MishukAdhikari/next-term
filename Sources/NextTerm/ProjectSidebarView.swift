@@ -109,6 +109,10 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// Watches the repository's .git when the tree shows a folder inside it (commits, checkouts).
     private var gitDirWatcher: DirectoryWatcher?
     let git = GitMonitor()
+    /// Which file changes can change git's status, from the last refresh; nil before one, or outside a repository.
+    private var gitEvents: GitEventFilter?
+    /// Folders known to be (or not be) nested repositories, until the next refresh.
+    private var nestedRepositories: [String: Bool] = [:]
     /// HEAD moved (a commit, a checkout): open files compare against the new commit.
     var onHeadChange: (() -> Void)?
     private var lastHead: String?
@@ -274,6 +278,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         }
         watcher = DirectoryWatcher(path: canonical) { [weak self] paths in self?.filesChanged(paths) }
         gitDirWatcher = nil
+        gitEvents = nil
         git.watch(canonical)
         showDatabases(DatabaseScan())
         scanDatabases()
@@ -627,15 +632,33 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         hiddenRows[ObjectIdentifier(node)] = node.hiddenCount > 0 ? HiddenEntries(count: node.hiddenCount) : nil
     }
 
-    /// FSEvents reports changed folders: re-read the ones the tree has loaded, and refresh git.
+    /// FSEvents reports changed folders: re-read the ones the tree has loaded (ignored ones too), and refresh
+    /// git if any of them can change what it says.
     private func filesChanged(_ paths: [String]) {
         guard let root else { return }
         for raw in Set(paths) {
             let path = raw.count > 1 && raw.hasSuffix("/") ? String(raw.dropLast()) : raw
             if let node = root.node(at: path), node.isLoaded { refresh(node) }
         }
-        git.refreshSoon()
+        gitFilesChanged(paths)
         scheduleDatabaseScan(for: paths)
+    }
+
+    /// Changes in the work tree or its .git: a refresh soon, unless none can change git's status (a writer in
+    /// `.next/` or `node_modules/`, git's own objects, a nested worktree).
+    private func gitFilesChanged(_ paths: [String]) {
+        if let filter = gitEvents {
+            let matters = paths.contains { filter.matters($0, isRepository: isNestedRepository) }
+            guard matters else { return }
+        }
+        git.refreshSoon()
+    }
+
+    private func isNestedRepository(_ folder: String) -> Bool {
+        if let known = nestedRepositories[folder] { return known }
+        let found = GitEventFilter.isNestedRepository(folder)
+        nestedRepositories[folder] = found
+        return found
     }
 
     func reloadAll() {
@@ -660,6 +683,8 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     private func gitChanged(_ snapshot: GitSnapshot?) {
+        gitEvents = snapshot.map { GitEventFilter(snapshot: $0, workTree: canonicalPath($0.root)) }
+        nestedRepositories.removeAll()
         header.show(snapshot)
         gitActivityChanged()
         if let head = snapshot?.head, head != lastHead {
@@ -670,7 +695,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         if let snapshot, let root, canonicalPath(snapshot.root) != root.path {
             let dotGit = canonicalPath(snapshot.root) + "/.git"
             if gitDirWatcher == nil, FileManager.default.fileExists(atPath: dotGit) {
-                gitDirWatcher = DirectoryWatcher(path: dotGit) { [weak self] _ in self?.git.refreshSoon() }
+                gitDirWatcher = DirectoryWatcher(path: dotGit) { [weak self] paths in self?.gitFilesChanged(paths) }
             }
         } else {
             gitDirWatcher = nil

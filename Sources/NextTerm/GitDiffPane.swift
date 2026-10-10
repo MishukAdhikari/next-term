@@ -546,13 +546,17 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
     // MARK: watching
 
     /// A file or a branch changing (yours, an agent's, a commit, a stage) is read again once things settle;
-    /// what can't matter (git's objects, files it ignores) is not.
+    /// what can't matter (git's objects, folders it ignores, nested worktrees) is not.
     private func watch() {
         let objects = GitRunner.commonGitDir(root: root).map { canonicalPath($0) + "/objects" }
         let changed: ([String]) -> Void = { [weak self] paths in
             guard let self else { return }
             let relevant = paths.filter { path in objects.map { !canonicalPath(path).hasPrefix($0) } ?? true }
             guard !relevant.isEmpty else { return }
+            if let snapshot = self.monitor.snapshot {
+                let filter = GitEventFilter(snapshot: snapshot, workTree: canonicalPath(snapshot.root))
+                guard relevant.contains(where: { filter.matters($0, isRepository: { GitEventFilter.isNestedRepository($0) }) }) else { return }
+            }
             self.touched.formUnion(relevant.map { canonicalPath($0.hasSuffix("/") && $0.count > 1 ? String($0.dropLast()) : $0) })
             self.monitor.refreshSoon()
         }
