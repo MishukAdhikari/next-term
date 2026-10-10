@@ -55,6 +55,17 @@ extension ImportJetBrains {
             "NextSplitter": "selectNextPane:",
             "PrevSplitter": "selectPreviousPane:",
             "GoToLastTab": "selectTabByNumber:#9",
+            "CloseAllEditorsButActive": "closeOtherTabs:",
+            "CloseAllToTheRight": "closeTabsToTheRight:",
+            "ReopenClosedTab": "reopenClosedTab:",
+            "CopyPaths": "copyFilePath:",                // Copy Absolute Path
+            "CopyContentRootPath": "copyRelativeFilePath:", // Path From Content Root
+            "RevealIn": "revealInFinder:",
+            "CheckinProject": "gitCommit:",
+            "Vcs.Push": "gitPush:",
+            "Vcs.UpdateProject": "gitUpdate:",
+            "Git.Fetch": "gitFetch:",
+            "Git.Branches": "showBranches:",
         ]
         for n in 1...8 { map["GoToTab\(n)"] = "selectTabByNumber:#\(n)" }
         return map

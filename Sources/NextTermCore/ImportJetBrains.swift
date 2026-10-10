@@ -300,6 +300,7 @@ public enum ImportJetBrains {
         addSoftWrap(editor, to: &plan)
         addCleanUp(editor, to: &plan)
         addIgnoredFiles(config: config, to: &plan)
+        addGeneral(config: config, to: &plan)
         addTerminal(config: config, usKeyboard: usKeyboard, fonts: fonts, to: &plan)
         addRedacted(editor, file: "options/editor.xml", to: &plan)
 
@@ -453,6 +454,32 @@ public enum ImportJetBrains {
         if !patterns.isEmpty { plan.settings.append(PlannedSetting(.hiddenFiles(patterns), source: "\(file) ignored files")) }
         if secret > 0 { plan.skipped.append(SkippedItem(plural(secret, "ignored file name", "ignored file names"), "looked like a credential")) }
         if unusable > 0 { plan.skipped.append(SkippedItem(plural(unusable, "ignored file name", "ignored file names"), "not a name the sidebar can hide")) }
+    }
+
+    /// `options/ide.general.xml`: "Reopen projects on startup" (`reopenLastProject`) and "Open project in"
+    /// (`confirmOpenNewProject2`: -1 ask, 0 a new window, 1 this window, 2 attached to the open one). Each is in
+    /// the file only once the user changed it.
+    static func addGeneral(config: String, to plan: inout ImportPlan) {
+        let file = "options/ide.general.xml"
+        let keys: Set<String> = ["reopenLastProject", "confirmOpenNewProject2"]
+        let general = options(component(read(config, file, keep: keys), "GeneralSettings"), keep: keys)
+        switch general.values["reopenLastProject"] {
+        case "true"?: plan.settings.append(PlannedSetting(.launchOpens(LaunchOpens.lastProjects.rawValue), source: "\(file) reopenLastProject true"))
+        case "false"?: plan.settings.append(PlannedSetting(.launchOpens(LaunchOpens.welcome.rawValue), source: "\(file) reopenLastProject false"))
+        case nil: break
+        default: plan.skipped.append(SkippedItem("\(file) reopenLastProject", "not a value Next Term can use"))
+        }
+        let targets = ["-1": "ask", "0": "newWindow", "1": "thisWindow"]
+        if let raw = general.values["confirmOpenNewProject2"]?.trimmingCharacters(in: .whitespaces) {
+            if let target = targets[raw] {
+                plan.settings.append(PlannedSetting(.openProjectsIn(target), source: "\(file) confirmOpenNewProject2 \(raw)"))
+            } else if raw == "2" {
+                plan.skipped.append(SkippedItem("Open project attached to the open one", "Next Term opens a project in a window of its own"))
+            } else {
+                plan.skipped.append(SkippedItem("\(file) confirmOpenNewProject2", "not a value Next Term can use"))
+            }
+        }
+        addRedacted(general, file: file, to: &plan)
     }
 
     static func addTerminal(config: String, usKeyboard: Bool, fonts: FontCatalog = .system, to plan: inout ImportPlan) {
@@ -668,7 +695,7 @@ public enum ImportJetBrains {
     static let settingsFiles: Set<String> = [
         "options/editor-font.xml", "options/editor.xml", "options/terminal.xml", "options/terminal-font.xml",
         "options/keymap.xml", "options/mac/keymap.xml", "options/recentProjects.xml", "options/colors.scheme.xml",
-        "options/filetypes.xml",
+        "options/filetypes.xml", "options/ide.general.xml",
     ]
 
     /// Files beside them that hold credentials, hosts or connection details (§6.3).

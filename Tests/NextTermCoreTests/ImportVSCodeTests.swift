@@ -420,6 +420,7 @@ import Testing
             PlannedSetting(.trimTrailingWhitespace(true), source: "files.trimTrailingWhitespace true"),
             PlannedSetting(.terminalCursorShape("bar"), source: "terminal.integrated.cursorStyle line"),
             PlannedSetting(.terminalScrollback(50000), source: "terminal.integrated.scrollback 50000"),
+            PlannedSetting(.backgroundFetch("5"), source: "git.autofetch true", note: "VS Code fetches every 3 minutes; Next Term every 5, 10 or 30"),
         ])
         // files.exclude hides only what the sidebar hides anyway, so it needs no row.
         #expect(result.skipped == [
@@ -430,7 +431,7 @@ import Testing
             SkippedItem("search.exclude", "Find in Files skips what git ignores; a file mask such as !dist/** leaves out more"),
             SkippedItem("editor.cursorBlinking", "the editor keeps macOS's text caret; the cursor style here is the terminal's"),
             SkippedItem("[python]", "per-language settings come later"),
-            SkippedItem("2 other settings", "Next Term has no matching setting"),
+            SkippedItem("1 other setting", "Next Term has no matching setting"),
         ])
         #expect(try settings(#"{"editor.fontSize": 13}"#).skipped.isEmpty)
         #expect(try settings(#"{"editor.minimap.enabled": false}"#).skipped == [SkippedItem("1 other setting", "Next Term has no matching setting")])
@@ -904,7 +905,9 @@ import Testing
         #expect(row("splitRight:")?.ticked == false && row("splitRight:")?.note?.hasPrefix("⇧⌘D is Split Down’s here") == true)
         // Show Next Tab is ⇧⌘] already, so there is nothing to bring over.
         #expect(row("showNextTab:") == nil)
-        #expect(row("closeTab:")?.ticked == true && row("toggleProjectSidebar:")?.ticked == true && row("toggleComment:")?.ticked == true)
+        #expect(row("closeTab:")?.ticked == true && row("toggleComment:")?.ticked == true)
+        // ⌥⌘B is Git › Branches… here.
+        #expect(row("toggleProjectSidebar:")?.ticked == false && row("toggleProjectSidebar:")?.note?.hasPrefix("⌥⌘B is Branches…’s here") == true)
         #expect(row("goToLine:")?.ticked == false && row("toggleTerminalCollapsed:")?.ticked == false)
         // ⌘D is free under the VS Code keys (Split Right is ⌘\ there, Duplicate Line has none), so it comes over.
         #expect(row("duplicateLine:")?.ticked == true && row("duplicateLine:")?.note == nil)

@@ -111,6 +111,12 @@ public struct ImportSnapshot: Codable, Equatable, Sendable {
         case "trimTrailingWhitespace": return "Trim trailing spaces on save"
         case "insertFinalNewline": return "Final newline on save"
         case "hiddenFilePatterns": return "Hidden files"
+        case "sidebarSingleClickOpens": return "Open files with a single click"
+        case "backgroundFetch": return "Fetch in the background"
+        case "diffLayout": return "Unified diffs"
+        case "currentLineBlame": return "Current line blame"
+        case "openProjectsIn": return "Open projects in"
+        case LaunchSettings.Key.opens: return "At launch"
         default: return key
         }
     }

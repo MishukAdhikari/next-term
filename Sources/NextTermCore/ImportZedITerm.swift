@@ -135,7 +135,8 @@ public enum ImportZed {
     /// Top-level keys turned into settings: only their values are ever converted. Inside `terminal` and
     /// `project_panel`, `report` names only the keys in `nestedReasons`.
     static let mappedKeys: Set<String> = ["base_keymap", "buffer_font_family", "buffer_font_size", "buffer_line_height", "soft_wrap",
-                                          "remove_trailing_whitespace_on_save", "ensure_final_newline_on_save", "file_scan_exclusions"]
+                                          "remove_trailing_whitespace_on_save", "ensure_final_newline_on_save", "file_scan_exclusions",
+                                          "restore_on_startup"]
 
     /// The settings Next Term has too: font size, line height, soft wrap, clean-up on save and hidden files for the
     /// editor; Option as Meta, where it sits, its cursor, scrollback and start folder for the terminal; and the
@@ -201,6 +202,24 @@ public enum ImportZed {
                 if let row = ImportRows.hiddenFiles(strings, source: "file_scan_exclusions") { settings.append(row) }
             } else {
                 skipped.append(SkippedItem("file_scan_exclusions", notRecognised))
+            }
+        }
+
+        if let raw = value("restore_on_startup", in: members) {
+            let last = LaunchOpens.lastProjects.rawValue, welcome = LaunchOpens.welcome.rawValue
+            let opens = ["last_workspace": last, "last_session": last, "none": welcome, "empty_tab": welcome, "launchpad": welcome]
+            if let name = raw as? String, let choice = opens[name] {
+                settings.append(PlannedSetting(.launchOpens(choice), source: "restore_on_startup \(name)"))
+            } else {
+                skipped.append(SkippedItem("restore_on_startup", notRecognised))
+            }
+        }
+        if let blame = nested("git").last(where: { $0.key == "inline_blame" }), case .object(let object) = blame.value,
+           let enabled = object.members.last(where: { $0.key == "enabled" }) {
+            if let on = ImportVSCode.bool(enabled.value.object(in: text)) {
+                settings.append(PlannedSetting(.currentLineBlame(on), source: "git.inline_blame.enabled \(on)"))
+            } else {
+                skipped.append(SkippedItem("git.inline_blame.enabled", notRecognised))
             }
         }
 
@@ -327,6 +346,7 @@ public enum ImportZed {
     static let nestedReasons: [String: [String: String]] = [
         "terminal": ["line_height": "the terminal's line height follows its font", "font_fallbacks": fallbacks],
         "project_panel": [:],
+        "git": [:],
     ]
 
     /// One skipped row per setting the import saw and doesn't bring over, in the file's order, with the

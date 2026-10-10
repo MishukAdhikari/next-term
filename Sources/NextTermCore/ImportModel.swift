@@ -44,6 +44,10 @@ public enum KeymapPreset: String, CaseIterable, Codable, Sendable {
                 "deleteLine:": cmd("\u{8}"),       // ⌘⌫, in the editor only (the sidebar's ⌘⌫ still trashes)
                 "indentSelection:": none,          // ⌘] and ⌘[ are Forward and Back there; ⇥ and ⇧⇥ indent
                 "outdentSelection:": none,
+                // ⌘K clears only while a terminal has the keyboard (KeyBindings.terminalKeyboardCommands); ⇧⌘K is
+                // free once Delete Line moves to ⌘⌫. ⌘T stays New Tab, which it is in every terminal.
+                "gitCommit:": cmd("k"),
+                "gitPush:": KeyChord(key: "k", command: true, shift: true),
             ]
         }
     }
@@ -134,6 +138,12 @@ public enum ImportedSetting: Equatable, Sendable {
     case trimTrailingWhitespace(Bool)     // on save
     case insertFinalNewline(Bool)         // on save
     case hiddenFiles([String])            // FileHiding patterns, added to the user's own
+    case sidebarSingleClick(Bool)         // a click on a file in the project sidebar opens it, in a preview tab
+    case backgroundFetch(String)          // a FetchFrequency: 5, 10, 30, popup or off
+    case diffLayout(String)               // sideBySide or unified
+    case currentLineBlame(Bool)           // the caret line's last commit, after its text
+    case openProjectsIn(String)           // where Open Project goes when the window is in use: ask, thisWindow, newWindow
+    case launchOpens(String)              // a LaunchOpens: welcome or lastProjects
 
     /// The UserDefaults key the app keeps it under.
     public var key: String {
@@ -155,11 +165,18 @@ public enum ImportedSetting: Equatable, Sendable {
         case .trimTrailingWhitespace: return "trimTrailingWhitespace"
         case .insertFinalNewline: return "insertFinalNewline"
         case .hiddenFiles: return "hiddenFilePatterns"
+        case .sidebarSingleClick: return "sidebarSingleClickOpens"
+        case .backgroundFetch: return "backgroundFetch"
+        case .diffLayout: return "diffLayout"
+        case .currentLineBlame: return "currentLineBlame"
+        case .openProjectsIn: return "openProjectsIn"
+        case .launchOpens: return LaunchSettings.Key.opens
         }
     }
 
     /// The keys that hold a Bool (UserDefaults hands a number back for those too).
-    public static let boolKeys: Set<String> = ["softWrap", "optionAsMeta", "terminalCursorBlink", "trimTrailingWhitespace", "insertFinalNewline"]
+    public static let boolKeys: Set<String> = ["softWrap", "optionAsMeta", "terminalCursorBlink", "trimTrailingWhitespace", "insertFinalNewline",
+                                               "sidebarSingleClickOpens", "currentLineBlame"]
 
     /// Every key applying it writes, for the snapshot Undo restores: custom colours are also kept for
     /// Settings to offer again.

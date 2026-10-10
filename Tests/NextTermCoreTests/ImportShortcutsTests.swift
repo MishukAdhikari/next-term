@@ -34,6 +34,9 @@ import Testing
             "selectPaneAbove:": cmd("\u{F700}", option: true), "selectPaneBelow:": cmd("\u{F701}", option: true),
             "selectNextPane:": cmd("]", option: true), "selectPreviousPane:": cmd("[", option: true),
             "toggleZoomPane:": cmd("\r", shift: true), "equalizePanes:": nil,
+            "reopenClosedTab:": cmd("t", shift: true), "closeOtherTabs:": nil, "closeTabsToTheRight:": nil, "revealInFinder:": nil,
+            "copyFilePath:": nil, "copyRelativeFilePath:": nil, "showBranches:": cmd("b", option: true), "gitFetch:": nil,
+            "gitUpdate:": nil, "gitCommit:": nil, "gitPush:": nil,
         ]
         for n in 1...9 { map["selectTabByNumber:#\(n)"] = .some(cmd("\(n)")) }
         return map

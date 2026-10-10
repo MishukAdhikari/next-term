@@ -303,6 +303,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         applyBlame(announce: currentLineBlame)
     }
 
+    /// Current Line Blame on or off, as the menu sets it, without a word about a file that has none (an import).
+    func setCurrentLineBlame(_ on: Bool) {
+        currentLineBlame = on
+        applyBlame(announce: false)
+    }
+
     /// Turning blame on says so when the file in front has none (outside git, too large).
     private func applyBlame(announce: Bool) {
         controllers.forEach { $0.editorArea.applyBlame(announce: announce && $0.window?.isKeyWindow == true) }

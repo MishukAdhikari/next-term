@@ -90,7 +90,7 @@ extension SelfTest {
     }
 
     /// Every label's text and every button's title in the import window, top to bottom as laid out.
-    private static func importWindowTexts(_ window: ImportWindowController) -> [String] {
+    static func importWindowTexts(_ window: ImportWindowController) -> [String] {
         func texts(in view: NSView) -> [String] {
             var found: [String] = []
             if let button = view as? NSButton {

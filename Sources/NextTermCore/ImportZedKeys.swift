@@ -61,6 +61,20 @@ extension ImportZed {
         "workspace::ActivatePaneDown": "selectPaneBelow:",
         "workspace::ActivateNextPane": "selectNextPane:",
         "workspace::ActivatePreviousPane": "selectPreviousPane:",
+        "pane::CloseInactiveItems": "closeOtherTabs:",
+        "pane::CloseItemsToTheRight": "closeTabsToTheRight:",
+        "pane::ReopenClosedItem": "reopenClosedTab:",
+        "workspace::CopyPath": "copyFilePath:",
+        "editor::CopyPath": "copyFilePath:",
+        "workspace::CopyRelativePath": "copyRelativeFilePath:",
+        "editor::CopyRelativePath": "copyRelativeFilePath:",
+        "editor::RevealInFileManager": "revealInFinder:",
+        "workspace::ToggleZoom": "toggleZoomPane:",
+        "git::Commit": "gitCommit:",
+        "git::Push": "gitPush:",
+        "git::Pull": "gitUpdate:",
+        "git::Fetch": "gitFetch:",
+        "git::Branch": "showBranches:",
     ]
 
     /// `["pane::ActivateItem", 0]` is the first tab: the one action whose argument is read (a number, 0 to 7).

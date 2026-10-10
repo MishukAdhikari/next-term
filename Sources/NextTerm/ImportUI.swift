@@ -191,6 +191,21 @@ extension AppDelegate {
             // Added to the patterns you have.
             let mine = Preferences.hiddenFilePatterns
             setHiddenFilePatterns(mine + patterns.filter { !mine.contains($0) })
+        default: applyWindowSetting(setting)
+        }
+    }
+
+    /// How files and projects open, what reopens at launch, diffs and git, as their menus and Settings set them.
+    private func applyWindowSetting(_ setting: ImportedSetting) {
+        switch setting {
+        case .sidebarSingleClick(let on): sidebarSingleClickOpens = on
+        case .backgroundFetch(let raw): if let frequency = FetchFrequency(rawValue: raw) { BackgroundFetcher.shared.frequency = frequency }
+        case .diffLayout(let raw): if let layout = DiffLayout(rawValue: raw) { DiffLayout.current = layout }
+        case .currentLineBlame(let on): setCurrentLineBlame(on)
+        case .openProjectsIn(let raw): if let target = ProjectTarget(rawValue: raw) { projectTarget = target }
+        case .launchOpens(let raw):
+            if LaunchOpens(rawValue: raw) != nil { UserDefaults.standard.set(raw, forKey: LaunchSettings.Key.opens) }
+        default: break
         }
     }
 
@@ -241,7 +256,44 @@ extension AppDelegate {
         case ("trimTrailingWhitespace", .bool(let on)?), ("insertFinalNewline", .bool(let on)?): defaults.set(on, forKey: key)
         case ("terminalStartFolder", nil), ("trimTrailingWhitespace", nil), ("insertFinalNewline", nil):
             defaults.removeObject(forKey: key)
+        default: restoreWindowSetting(key, to: value)
+        }
+    }
+
+    /// Undo for how files and projects open, what reopens at launch, diffs and git: the value before, or none,
+    /// so the default returns.
+    private func restoreWindowSetting(_ key: String, to value: ImportCoordinator.Snapshot.Value?) {
+        let defaults = UserDefaults.standard
+        switch (key, value) {
+        case ("sidebarSingleClickOpens", .bool(let on)?): sidebarSingleClickOpens = on
+        case ("currentLineBlame", .bool(let on)?): setCurrentLineBlame(on)
+        case ("backgroundFetch", .string(let raw)?), ("diffLayout", .string(let raw)?), ("openProjectsIn", .string(let raw)?),
+             (LaunchSettings.Key.opens, .string(let raw)?):
+            applyWindowSetting(Self.windowSetting(key, raw))
+        case ("sidebarSingleClickOpens", nil):
+            sidebarSingleClickOpens = false
+            defaults.removeObject(forKey: key)
+        case ("currentLineBlame", nil):
+            setCurrentLineBlame(false)
+            defaults.removeObject(forKey: key)
+        case ("backgroundFetch", nil):
+            BackgroundFetcher.shared.frequency = .standard
+            defaults.removeObject(forKey: key)
+        case ("diffLayout", nil):
+            DiffLayout.current = .sideBySide
+            defaults.removeObject(forKey: key)
+        case ("openProjectsIn", nil), (LaunchSettings.Key.opens, nil):
+            defaults.removeObject(forKey: key)
         default: break
+        }
+    }
+
+    private static func windowSetting(_ key: String, _ raw: String) -> ImportedSetting {
+        switch key {
+        case "backgroundFetch": return .backgroundFetch(raw)
+        case "diffLayout": return .diffLayout(raw)
+        case "openProjectsIn": return .openProjectsIn(raw)
+        default: return .launchOpens(raw)
         }
     }
 
@@ -724,7 +776,34 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         case .trimTrailingWhitespace(let on): return on ? "Trim trailing spaces on save" : "Don’t trim trailing spaces on save"
         case .insertFinalNewline(let on): return on ? "End files with a newline on save" : "Don’t add a final newline on save"
         case .hiddenFiles(let patterns): return "Hide in the project sidebar: " + FileHiding.text(of: patterns)
+        default: return describeWindowSetting(setting)
         }
+    }
+
+    static func describeWindowSetting(_ setting: ImportedSetting) -> String {
+        switch setting {
+        case .sidebarSingleClick(let on):
+            return on ? "Open files with a single click, in a preview tab" : "Open files with a double click"
+        case .backgroundFetch(let raw):
+            let frequency = FetchFrequency(rawValue: raw) ?? .standard
+            return "Fetch in the background: " + lowerFirst(frequency.title)
+        case .diffLayout(let raw): return raw == "unified" ? "Show diffs in one column (Unified Diffs)" : "Show diffs side by side"
+        case .currentLineBlame(let on): return on ? "Show the current line’s last commit (Current Line Blame)" : "Don’t show the current line’s last commit"
+        case .openProjectsIn(let raw):
+            switch raw {
+            case "newWindow": return "Open projects in a new window"
+            case "thisWindow": return "Open projects in the window in use"
+            default: return "Ask where to open projects"
+            }
+        case .launchOpens(let raw): return "At launch: " + lowerFirst((LaunchOpens(rawValue: raw) ?? .standard).title)
+        default: return ""
+        }
+    }
+
+    /// "Every 5 minutes" → "every 5 minutes", leaving the rest ("the Welcome window") as it is.
+    static func lowerFirst(_ text: String) -> String {
+        guard let first = text.first else { return text }
+        return first.lowercased() + String(text.dropFirst())
     }
 
     static func startFolderTitle(_ folder: StartFolder) -> String {

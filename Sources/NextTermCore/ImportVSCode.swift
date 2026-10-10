@@ -83,6 +83,8 @@ public enum ImportVSCode {
         "editor.fontFamily", "terminal.integrated.fontFamily", "workbench.colorCustomizations", "workbench.colorTheme",
         "files.trimTrailingWhitespace", "files.insertFinalNewline", "files.exclude", "terminal.integrated.cursorStyle",
         "terminal.integrated.cursorBlinking", "terminal.integrated.scrollback", "terminal.integrated.cwd",
+        "workbench.list.openMode", "window.openFoldersInNewWindow", "window.restoreWindows", "diffEditor.renderSideBySide",
+        "git.autofetch", "git.autofetchPeriod", "git.blame.editorDecoration.enabled",
     ]
 
     /// Keys Next Term has no setting for (§3.5), reported by name when the user set them.
@@ -191,6 +193,9 @@ public enum ImportVSCode {
         let terminal = terminalBehaviour(file, appName: appName, home: home)
         result.settings += terminal.settings
         result.skipped += terminal.skipped
+        let window = windowAndGit(file, appName: appName)
+        result.settings += window.settings
+        result.skipped += window.skipped
         result.skipped += unmappedKeys(file)
         result.vimSettings = Set(file.members.map(\.key).filter { $0.hasPrefix("vim.") }).count
         return result
@@ -277,6 +282,64 @@ public enum ImportVSCode {
             }
         }
         return result
+    }
+
+    // MARK: opening files and projects, diffs and git
+
+    /// How a click opens a file, where projects open, what reopens at launch, how diffs show, and git's
+    /// fetching and blame: each only when the user set it.
+    static func windowAndGit(_ file: SettingsFile, appName: String) -> SettingsResult {
+        var result = SettingsResult()
+        func add(_ key: String, _ rows: [String: (ImportedSetting, String?)]) {
+            guard file.has(key) else { return }
+            let value = file.value(key)
+            let raw = string(value) ?? bool(value).map { $0 ? "true" : "false" }
+            guard let raw, let row = rows[raw] else { return result.skipped.append(SkippedItem(key, notRecognised)) }
+            result.settings.append(PlannedSetting(row.0, source: "\(key) \(raw)", note: row.1))
+        }
+        add("workbench.list.openMode", ["singleClick": (.sidebarSingleClick(true), nil), "doubleClick": (.sidebarSingleClick(false), nil)])
+        let thisWindow = ImportedSetting.openProjectsIn("thisWindow")
+        add("window.openFoldersInNewWindow", [
+            "on": (.openProjectsIn("newWindow"), nil), "off": (thisWindow, nil),
+            "default": (thisWindow, "as \(appName) opens a folder chosen in its File menu"),
+        ])
+        let last = ImportedSetting.launchOpens(LaunchOpens.lastProjects.rawValue)
+        add("window.restoreWindows", [
+            "none": (.launchOpens(LaunchOpens.welcome.rawValue), nil), "all": (last, nil), "folders": (last, nil), "preserve": (last, nil),
+            "one": (last, "\(appName) reopens only the last window; Next Term reopens every project that was open"),
+        ])
+        add("diffEditor.renderSideBySide", ["true": (.diffLayout("sideBySide"), nil), "false": (.diffLayout("unified"), nil)])
+        add("git.blame.editorDecoration.enabled", ["true": (.currentLineBlame(true), nil), "false": (.currentLineBlame(false), nil)])
+        let fetch = autofetch(file, appName: appName)
+        result.settings += [fetch.setting].compactMap { $0 }
+        result.skipped += fetch.skipped
+        return result
+    }
+
+    /// git.autofetch: off, or on (`true`, or `all` for every remote) every git.autofetchPeriod seconds (180
+    /// unless set), as Next Term's nearest choice: every 5, 10 or 30 minutes.
+    static func autofetch(_ file: SettingsFile, appName: String) -> Row {
+        let key = "git.autofetch", periodKey = "git.autofetchPeriod"
+        guard file.has(key) else { return (nil, []) }
+        let value = file.value(key)
+        if bool(value) == false { return (PlannedSetting(.backgroundFetch(FetchFrequency.off.rawValue), source: "\(key) false"), []) }
+        guard bool(value) == true || string(value) == "all" else { return (nil, [SkippedItem(key, notRecognised)]) }
+        var skipped: [SkippedItem] = []
+        var seconds = 180.0
+        var source = "\(key) \(bool(value) == true ? "true" : "all")"
+        if file.has(periodKey) {
+            if let period = number(file.value(periodKey)), period > 0, period < 1e7 {
+                seconds = period
+                source += ", \(periodKey) \(format(period))"
+            } else {
+                skipped.append(SkippedItem(periodKey, notRecognised))
+            }
+        }
+        let minutes = seconds / 60
+        let frequency: FetchFrequency = minutes <= 7.5 ? .fiveMinutes : minutes <= 20 ? .tenMinutes : .thirtyMinutes
+        let exact = (frequency.interval ?? 0) == seconds
+        let note = exact ? nil : "\(appName) fetches every \(format((minutes * 10).rounded() / 10)) minutes; Next Term every 5, 10 or 30"
+        return (PlannedSetting(.backgroundFetch(frequency.rawValue), source: source, note: note), skipped)
     }
 
     // MARK: fonts and colours

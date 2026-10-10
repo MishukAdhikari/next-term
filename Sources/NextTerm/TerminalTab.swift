@@ -21,6 +21,15 @@ final class NextTermView: LocalProcessTerminalView {
     /// Tab completion's ordered writer (CompletionSession): true, the write waits and goes out later.
     var completionGate: ((ArraySlice<UInt8>) -> Bool)?
 
+    /// A key Clear Buffer shares with a command for everywhere (⌘K, Commit… under the JetBrains set) is Clear
+    /// Buffer's here, before the menus, while this terminal has the keyboard (KeyboardShortcuts.terminalKeys).
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard window?.firstResponder === self, let item = KeyboardShortcuts.shared.terminalItem(for: event),
+              let action = item.action else { return super.performKeyEquivalent(with: event) }
+        NSApp.sendAction(action, to: item.target, from: item)
+        return true
+    }
+
     override func dataReceived(slice: ArraySlice<UInt8>) {
         super.dataReceived(slice: slice) // parse first: OSC marks in this chunk update the status
         onOutput?()

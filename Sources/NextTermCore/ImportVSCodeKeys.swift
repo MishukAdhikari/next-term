@@ -74,6 +74,20 @@ extension ImportVSCode {
             "workbench.action.navigateUp": "selectPaneAbove:",
             "workbench.action.navigateDown": "selectPaneBelow:",
             "workbench.action.lastEditorInGroup": "selectTabByNumber:#9",
+            "workbench.action.closeOtherEditors": "closeOtherTabs:",
+            "workbench.action.closeEditorsToTheRight": "closeTabsToTheRight:",
+            "workbench.action.reopenClosedEditor": "reopenClosedTab:",
+            "copyFilePath": "copyFilePath:",
+            "workbench.action.files.copyPathOfActiveFile": "copyFilePath:",
+            "copyRelativeFilePath": "copyRelativeFilePath:",
+            "workbench.action.files.copyRelativePathOfActiveFile": "copyRelativeFilePath:",
+            "revealFileInOS": "revealInFinder:",
+            "workbench.action.files.revealActiveFileInWindows": "revealInFinder:",
+            "git.commit": "gitCommit:",
+            "git.push": "gitPush:",
+            "git.pull": "gitUpdate:",
+            "git.fetch": "gitFetch:",
+            "git.checkout": "showBranches:",
         ]
         for position in ["Bottom", "Right", "Left", "Top"] {
             map["workbench.action.positionPanel" + position] = "setTerminalPosition:" + position.lowercased()

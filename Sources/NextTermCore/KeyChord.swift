@@ -81,6 +81,10 @@ public struct KeyBindings: Equatable, Sendable {
         "selectPaneAbove:", "selectPaneBelow:", "selectNextPane:", "selectPreviousPane:", "toggleZoomPane:", "equalizePanes:",
     ]
 
+    /// The terminal command that keeps to a terminal with the keyboard when a command for everywhere has its key
+    /// too: Clear Buffer, whose ⌘K is Commit… everywhere else under the JetBrains set, as in JetBrains' IDEs.
+    public static let terminalKeyboardCommands: Set<String> = ["clearBuffer:"]
+
     /// The parts of the window a command can be kept to: its key works only there.
     public enum Part: Int, CaseIterable, Sendable {
         case editor, sidebar, gitLists, diff, branchPopup
@@ -179,6 +183,9 @@ public struct KeyBindings: Equatable, Sendable {
     /// and so is Accept's from the sidebar's.
     public static func canShareKey(_ first: String, _ second: String) -> Bool {
         let one = scope(of: first), other = scope(of: second)
+        // Clear Buffer while a terminal has the keyboard, the other command everywhere else.
+        if terminalKeyboardCommands.contains(first) && other == .everywhere { return true }
+        if terminalKeyboardCommands.contains(second) && one == .everywhere { return true }
         if case .part(let a) = one, case .part(let b) = other {
             // Accept answers wherever the keyboard is in the window, and the sidebar can be beside the proposed edit.
             if Set([a, b]) == [.diff, .sidebar] { return false }
@@ -205,8 +212,12 @@ public struct KeyBindings: Equatable, Sendable {
             return nil
         }
         let inParts = ids.filter { part($0) != nil }.sorted { (part($0)?.rawValue ?? 0) < (part($1)?.rawValue ?? 0) }
-        let phrases = inParts.map { "\(title($0)) \(part($0)?.whileActive ?? "")" }
-            + ids.filter { part($0) == nil }.map { "\(title($0)) everywhere else" }
+        // Clear Buffer beside a command for everywhere: it keeps to a terminal with the keyboard.
+        let withEverywhere = ids.contains { scope(of: $0) == .everywhere }
+        let inTerminal = ids.filter { withEverywhere && terminalKeyboardCommands.contains($0) }
+        var phrases = inParts.map { "\(title($0)) \(part($0)?.whileActive ?? "")" }
+        phrases += inTerminal.map { "\(title($0)) while a terminal has the keyboard" }
+        phrases += ids.filter { part($0) == nil && !inTerminal.contains($0) }.map { "\(title($0)) everywhere else" }
         return "\(chord.display) is " + phrases.joined(separator: ", ")
     }
 
