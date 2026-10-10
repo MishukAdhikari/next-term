@@ -378,6 +378,9 @@ extension SelfTest {
         let params = ClaudeIDEServer.selectionParams(path: base.appendingPathComponent("notes.txt").path, text: "copy \(value) here",
                                                      start: (0, 0), end: (0, 10))
         check(params["text"] as? String == "copy ••• here", "secrets: the selection sent to IDE clients is masked", "\(params["text"] ?? "")")
+        let gemini = GeminiIDEServer.masked([["path": base.appendingPathComponent("notes.txt").path, "selectedText": "copy \(value) here"]])
+        check(gemini.first?["selectedText"] as? String == "copy ••• here", "secrets: the selection Gemini CLI and Qwen Code are told of is masked too",
+              "\(gemini.first?["selectedText"] ?? "")")
     }
 }
 
