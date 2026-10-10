@@ -2037,6 +2037,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     func windowWillClose(_ notification: Notification) {
         ticker?.invalidate()
         ticker = nil
+        sidebar.stopWatching()
         for tab in tabs { tab.terminate() }
         groups.removeAll()
         editorArea.closeAll()

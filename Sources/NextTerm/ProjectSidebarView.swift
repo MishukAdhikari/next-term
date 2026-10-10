@@ -113,6 +113,8 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     private var gitEvents: GitEventFilter?
     /// Folders known to be (or not be) nested repositories, until the next refresh.
     private var nestedRepositories: [String: Bool] = [:]
+    /// The window closed: nothing is watched any more.
+    private var closed = false
     /// HEAD moved (a commit, a checkout): open files compare against the new commit.
     var onHeadChange: (() -> Void)?
     private var lastHead: String?
@@ -220,6 +222,15 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         if let window { git.window = window }
     }
 
+    /// Its window closed: stop watching files and git now, not when the sidebar is freed, so an app left running
+    /// with no windows (or a sidebar something still holds) never refreshes git again.
+    func stopWatching() {
+        closed = true
+        watcher = nil
+        gitDirWatcher = nil
+        git.stop()
+    }
+
     override func layout() {
         super.layout()
         header.inset = headerInset
@@ -258,7 +269,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// Shows `path`'s tree (a no-op if it is already the root). Folders are read in the background.
     func setRoot(_ path: String) {
         let canonical = canonicalPath(path)
-        guard canonical != root?.path else { return }
+        guard canonical != root?.path, !closed else { return }
         // A name being edited is done, as a click elsewhere would end it, while its row is still there.
         if isRenaming { window?.makeFirstResponder(outline) }
         runHeld()
