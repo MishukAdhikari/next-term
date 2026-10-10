@@ -29,7 +29,8 @@ enum ImportSources {
     /// Each family's reader (NextTermCore/Import*.swift). The self-test can swap these for its own.
     nonisolated(unsafe) static var detectors: [() -> [DetectedApp]] = [
         { ImportVSCode.detect() }, { ImportJetBrains.detect() }, { ImportZed.detect() }, { ImportITerm2.detect() },
-        { ImportGhostty.detect() }, { ImportWarp.detect() }, { ImportTerminalApp.detect() }, { ImportAlacritty.detect() },
+        { ImportGhostty.detect() }, { ImportWarp.detect() }, { ImportTerminalApp.detect() }, { ImportKitty.detect() },
+        { ImportAlacritty.detect() },
     ]
     nonisolated(unsafe) static var planner: (DetectedApp, Bool) -> ImportPlan? = { app, usKeyboard in
         switch app.kind {
@@ -41,6 +42,7 @@ enum ImportSources {
         case .ghostty: return ImportGhostty.plan(for: app, usKeyboard: usKeyboard)
         case .warp: return ImportWarp.plan(for: app, usKeyboard: usKeyboard)
         case .terminalApp: return ImportTerminalApp.plan(for: app, usKeyboard: usKeyboard)
+        case .kitty: return ImportKitty.plan(for: app, usKeyboard: usKeyboard)
         case .alacritty: return ImportAlacritty.plan(for: app, usKeyboard: usKeyboard)
         }
     }

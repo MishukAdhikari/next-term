@@ -67,14 +67,14 @@ public enum ImportSourceKind: String, CaseIterable, Codable, Sendable {
     /// `vsCodeFork`: any other editor built on VS Code (Trae, Kiro, Antigravity, Positron, one found by its
     /// product.json…), named by its app.
     case vsCode, vsCodeInsiders, vsCodium, cursor, devinDesktop, vsCodeFork, jetBrains, zed, iTerm2, ghostty, warp, terminalApp
-    case alacritty
+    case kitty, alacritty
 
     /// The preset that fits people coming from it.
     public var preset: KeymapPreset {
         switch self {
         case .vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop, .vsCodeFork: return .vsCode
         case .jetBrains: return .jetBrains
-        case .zed, .iTerm2, .ghostty, .warp, .terminalApp, .alacritty: return .nextTerm
+        case .zed, .iTerm2, .ghostty, .warp, .terminalApp, .kitty, .alacritty: return .nextTerm
         }
     }
 }
