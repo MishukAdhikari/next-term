@@ -17,7 +17,7 @@ extension SelfTest {
         let home = canonicalPath(NSTemporaryDirectory()) + "/nt-scrollback-\(getpid())"
         try? fm.removeItem(atPath: home)
         try? fm.createDirectory(atPath: home + "/bin", withIntermediateDirectories: true)
-        try? fm.copyItem(atPath: "/bin/sleep", toPath: home + "/bin/claude")
+        check(sleepStandIn(at: home + "/bin/claude"), "scrollback: the stand-in claude is made and runs")
         let holder = app.openFolder(proj.path, newWindow: false)
         let tab = holder.addTab(directory: proj.path)
         defer {
@@ -107,7 +107,7 @@ extension SelfTest {
                   "scrollback: an agent's pane keeps only what came before its command",
                   agentText.components(separatedBy: "\r\n").suffix(3).joined(separator: " | "))
         } else {
-            check(false, "scrollback: a tab runs a stand-in claude", tab.status.command)
+            check(false, "scrollback: a tab runs a stand-in claude", ([tab.status.command] + tab.screenTail(2)).joined(separator: " | "))
         }
         tab.view.send(txt: "\u{03}")
         _ = await wait(5) { !tab.status.running }

@@ -151,6 +151,35 @@ import Testing
         #expect(evidence.startedAt == (try ownStart()))
     }
 
+    /// The self-test's stand-in (SelfTestAgentEvidence): a `claude` typed by its path with a word after it, the shell
+    /// sending no expansion or one that changed nothing. Its session file gives an exact id, the line ran as typed, and
+    /// the put-back line replays the path typed with the resume form alone, the word left off. A path the secret
+    /// detector would mask (a folder named with an upper-case UUID, as this test's home is) is no launcher to replay:
+    /// the line is the program's name with the resume form.
+    @Test func aClaudeTypedByItsPathIsPutBackByThatPath() throws {
+        let (home, project) = try makeHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        try claudeFile(home: home, fields: claudeFields(start: try ownStart(), cwd: project))
+        let hidden = home + "/bin/claude"
+        try #require(!SessionSnapshot.Launcher.isWord(hidden))
+        for path in ["/Users/x/bin/claude", hidden] {
+            let leader = try process([path, "120"], executable: path, directory: project)
+            for expanded in [nil, path + " 120"] {
+                let evidence = try #require(capture(leader, typed: path + " 120", expanded: expanded, home: home))
+                #expect(evidence.agent == .claude && evidence.source == .sessionFile && evidence.sessionID == uuid)
+                #expect(evidence.sessionFolder == project && evidence.executable == path && evidence.store == home + "/.claude")
+                #expect(evidence.ranAsTyped && evidence.launch.allowed)
+                let line = evidence.putBack(id: evidence.sessionID, folder: evidence.sessionFolder)?.line
+                if path == hidden {
+                    #expect(evidence.launcher == nil && line == "claude --resume \(uuid)")
+                } else {
+                    #expect(evidence.launcher == SessionSnapshot.Launcher(word: path, typed: 0))
+                    #expect(line == "/Users/x/bin/claude --resume \(uuid)")
+                }
+            }
+        }
+    }
+
     @Test func aClaudeFileThatDoesNotMatchIsAGuess() throws {
         let (home, project) = try makeHome()
         defer { try? FileManager.default.removeItem(atPath: home) }

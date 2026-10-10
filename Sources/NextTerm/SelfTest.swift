@@ -156,6 +156,26 @@ enum SelfTest {
     /// moments sit just before each redraw. In `wait`, a ^C goes to the trap at any moment.
     static func standInWait(_ seconds: String) -> String { "sleep \(seconds) & wait $!" }
 
+    /// A stand-in agent at `path` that the kernel names by its file: /bin/sleep copied there and signed ad hoc. A copy
+    /// that keeps Apple's signature is a platform binary off the system volume, which launch constraints kill as it
+    /// starts (the shell shows the command start and end at once). True once the stand-in has run and exited by itself.
+    static func sleepStandIn(at path: String) -> Bool {
+        let fm = FileManager.default
+        try? fm.removeItem(atPath: path)
+        guard (try? fm.copyItem(atPath: "/bin/sleep", toPath: path)) != nil else { return false }
+        func ran(_ program: String, _ arguments: [String]) -> Bool {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: program)
+            process.arguments = arguments
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            guard (try? process.run()) != nil else { return false }
+            process.waitUntilExit()
+            return process.terminationReason == .exit && process.terminationStatus == 0
+        }
+        return ran("/usr/bin/codesign", ["--force", "--sign", "-", path]) && ran(path, ["0"])
+    }
+
     /// The processes on `tab`'s terminal with their state, for a check whose program didn't stop.
     static func terminalProcesses(_ tab: TerminalTab) -> String {
         guard let name = ptsname(tab.view.process.childfd) else { return "" }
