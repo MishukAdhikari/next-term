@@ -183,10 +183,12 @@ import Testing
         #expect(RestoreAgent.claude.options(in: ["--", "--dangerously-skip-permissions"]).allowed)
     }
 
-    @Test func everyBypassAndCodeLoadingOptionIsLeftOff() {
+    @Test func everyPermissionAndCodeLoadingOptionIsLeftOff() {
         for agent in Self.automatic {
-            #expect(!agent.bypassOptions.isEmpty && !agent.codeOptions.isEmpty)
-            for option in agent.bypassOptions + agent.codeOptions {
+            let permission = agent.cli.names(.permission)
+            let code = agent.cli.names(.codeLoading)
+            #expect(!permission.isEmpty && !code.isEmpty)
+            for option in permission + code {
                 for arguments in [[option], [option, "value"], [option + "=value"]] {
                     let options = agent.options(in: arguments)
                     #expect(!options.allowed && options.leftOff == [option], "\(agent) \(arguments)")
@@ -216,7 +218,14 @@ import Testing
                 continue
             }
             #expect(command.hasSuffix(" \(flag) x"))
-            for value in ["opus;rm", "a b", String(repeating: "a", count: 65), "op$(id)", "opus[1m]"] {
+            // A context size in brackets is part of a model's name, quoted on the line.
+            evidence.set(agent.options(in: [flag, "opus[1m]"]))
+            guard case .resume(let sized) = evidence.gate(facts) else {
+                Issue.record("\(agent) did not resume with \(flag) opus[1m]")
+                continue
+            }
+            #expect(sized.hasSuffix(" \(flag) 'opus[1m]'"))
+            for value in ["opus;rm", "a b", String(repeating: "a", count: 65), "op$(id)", "[1m]"] {
                 let options = agent.options(in: [flag, value])
                 #expect(!options.allowed && options.leftOff == [flag] && options.carried.isEmpty, "\(agent) \(value)")
                 evidence.set(options)

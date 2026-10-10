@@ -1,8 +1,9 @@
 import Foundation
 
 // The agents a restore knows, and what it may do for each (the plan's agent evidence matrix): the program, the id
-// pattern and the resume form; the put-back line every agent with a resume form gets (KTD7); and, for Claude Code,
-// Codex and Qwen Code alone, the options a resume may carry and the gate an automatic resume must pass (KTD5).
+// pattern, the resume form and the options, all read from each agent's AgentCLI entry (KTD20); the put-back line every
+// agent with a resume form gets (KTD7); and, for Claude Code, Codex and Qwen Code alone, the options a resume may carry
+// and the gate an automatic resume must pass (KTD5).
 //
 // A put-back line is the resume form with the id and nothing else: no prompt words, no options, no environment
 // prefix. An automatic resume runs the recorded absolute path through `/usr/bin/env -u <auto-continue variables>`,
@@ -38,25 +39,12 @@ public struct AgentOptions: Equatable, Sendable {
 // MARK: - The matrix
 
 extension SessionSnapshot.Agent {
-    /// The agent a tab's program is, from the name CommandClassifier worked out.
-    public init?(program: String) {
-        switch program {
-        case "claude", "claude-code", "claude.exe": self = .claude
-        case "codex": self = .codex
-        case "qwen", "qwen-code": self = .qwen
-        case "copilot": self = .copilot
-        case "gemini", "gemini-cli": self = .gemini
-        case "cursor-agent": self = .cursor
-        case "opencode": self = .opencode
-        case "amp": self = .amp
-        case "junie": self = .junie
-        case "command-code", "commandcode", "cmd": self = .commandCode
-        case "kiro", "kiro-cli": self = .kiro
-        case "goose": self = .goose
-        case "agy": self = .agy
-        case "aider": self = .aider
-        default: return nil
-        }
+    /// The agent a tab's program is, from the name CommandClassifier worked out: by the table's names alone, or, for a
+    /// name other programs share (Cursor's `agent`, Command Code's `cmd`), only when one of `paths` lies in its own
+    /// install.
+    public init?(program: String, at paths: [String] = []) {
+        guard let agent = Self.allCases.first(where: { $0.cli.runs(program: program, at: paths) }) else { return nil }
+        self = agent
     }
 
     public init(kind: AgentKind) {
@@ -74,11 +62,32 @@ extension SessionSnapshot.Agent {
 
     /// The agent a process runs, as the kernel shows it, judged strictly (CommandClassifier.agentName): by its
     /// executable's or argv[0]'s name, an agent's own install, or the script an interpreter runs (an npm install's
-    /// `bin/claude` link, run by node). One the matrix does not know is `.unknown`, still an agent; a process that runs
-    /// none, such as a dev server in a folder named like an agent, is nil.
+    /// `bin/claude` link, run by node). A name other programs share counts only when what runs lies in that agent's own
+    /// install, every link resolved; so does an install the classifier does not know, such as Cursor's own node running
+    /// its `index.js`. One the matrix does not know is `.unknown`, still an agent; a process that runs none, such as a
+    /// dev server in a folder named like an agent, is nil.
     public init?(process: AgentProcess) {
-        guard let name = CommandClassifier.agentName(executable: process.executable, arguments: process.arguments) else { return nil }
-        self = Self(program: name) ?? .unknown
+        guard let name = CommandClassifier.agentName(executable: process.executable, arguments: process.arguments) else {
+            guard let agent = Self.installed(at: Self.installPaths(of: process, resolved: false)) else { return nil }
+            self = agent
+            return
+        }
+        self = Self(program: name) ?? Self(program: name, at: Self.installPaths(of: process, resolved: true)) ?? .unknown
+    }
+
+    /// The agent whose own install one of `paths` lies in.
+    static func installed(at paths: [String]) -> Self? {
+        allCases.first { $0.cli.isInstall(paths) }
+    }
+
+    /// Where a process's code lies: its executable, and the script an interpreter runs, with that script's real path when
+    /// `resolved` (npm's `bin/cmd` link leads into Command Code's package).
+    private static func installPaths(of process: AgentProcess, resolved: Bool) -> [String] {
+        guard let index = scriptIndex(argv: process.arguments, executable: process.executable) else { return [process.executable] }
+        let word = process.arguments[index]
+        let folder = process.directory.map { $0 + "/" + word }
+        guard let script = word.hasPrefix("/") ? word : folder else { return [process.executable] }
+        return [process.executable, script] + (resolved ? [canonicalPath(script)] : [])
     }
 
     /// The agent a typed line runs, judged as strictly: `.unknown` for one the matrix does not know, nil for none.
@@ -120,25 +129,7 @@ extension SessionSnapshot.Agent {
     }
 
     /// The program its line starts with.
-    public var program: String? {
-        switch self {
-        case .claude: return "claude"
-        case .codex: return "codex"
-        case .qwen: return "qwen"
-        case .copilot: return "copilot"
-        case .gemini: return "gemini"
-        case .cursor: return "cursor-agent"
-        case .opencode: return "opencode"
-        case .amp: return "amp"
-        case .junie: return "junie"
-        case .commandCode: return "command-code"
-        case .kiro: return "kiro-cli"
-        case .goose: return "goose"
-        case .agy: return "agy"
-        case .aider: return "aider"
-        case .unknown: return nil
-        }
-    }
+    public var program: String? { cli.programs.first }
 
     /// Only these resume by themselves: their own session file gives the exact id (KTD5).
     public var resumesAutomatically: Bool { fileSource != nil }
@@ -154,110 +145,51 @@ extension SessionSnapshot.Agent {
     }
 
     /// It can be resumed from the command line. agy and Aider cannot: they get a note (R7).
-    public var hasResumeForm: Bool {
-        switch self {
-        case .agy, .aider, .unknown: return false
-        default: return true
-        }
-    }
+    public var hasResumeForm: Bool { cli.resume != nil }
 
-    /// Its resume form's words after the program, with `id`. Codex's names the session's folder when that is a
-    /// plain absolute path.
+    /// Its resume form's words after the program, with `id`: the subcommand its options belong to, then the resume
+    /// form. Codex's names the session's folder when that is a plain absolute path.
     func resumeWords(id: String, folder: String?) -> [String]? {
-        switch self {
-        case .claude, .qwen, .gemini, .cursor, .commandCode: return ["--resume", id]
-        case .codex:
-            let plain = SnapshotText.plainPath(folder, max: SessionSnapshot.Limits.standard.path)
-            return ["resume", id] + (plain.map { ["-C", $0] } ?? [])
-        case .copilot: return ["--resume=" + id]
-        case .opencode: return ["-s", id]
-        case .amp: return ["threads", "continue", id]
-        case .junie: return ["--session-id", id, "--resume"]
-        case .kiro: return ["chat", "--resume-id", id]
-        case .goose: return ["session", "--resume", "--session-id", id]
-        case .agy, .aider, .unknown: return nil
-        }
+        cli.resumeWords(id: id, folder: folder).map { cli.subcommand + $0 }
     }
 
     // MARK: ids
 
-    /// Shaped like this agent's session ids, and safe as one word of a line: a UUID, opencode's `ses_…`, Amp's
-    /// `T-…`, or else ASCII letters and digits, with `._:-_` after the first, at most 128 long.
-    public func isSessionID(_ id: String) -> Bool {
-        guard hasResumeForm, (1...128).contains(id.utf8.count) else { return false }
-        switch self {
-        case .claude, .codex, .qwen, .gemini, .copilot:
-            return id.utf8.count == 36 && UUID(uuidString: id) != nil
-        case .opencode:
-            return id.hasPrefix("ses_") && Self.isToken(id.utf8.dropFirst(4), extra: "")
-        case .amp:
-            return id.hasPrefix("T-") && Self.isToken(id.utf8.dropFirst(2), extra: "-")
-        default:
-            return Self.isToken(id.utf8, extra: "._:_-")
-        }
-    }
-
-    /// Letters and digits first, then those or `extra`.
-    private static func isToken<Bytes: Collection>(_ bytes: Bytes, extra: String) -> Bool where Bytes.Element == UInt8 {
-        guard let first = bytes.first, isAlphanumeric(first) else { return false }
-        let allowed = Set(extra.utf8)
-        return bytes.allSatisfy { isAlphanumeric($0) || allowed.contains($0) }
-    }
-
-    private static func isAlphanumeric(_ byte: UInt8) -> Bool {
-        (0x30...0x39).contains(byte) || (0x41...0x5A).contains(byte) || (0x61...0x7A).contains(byte)
-    }
+    /// Shaped like this agent's session ids (its table's id pattern), and safe as one word of a line.
+    public func isSessionID(_ id: String) -> Bool { cli.isSessionID(id) }
 
     /// An option's name (`--model`, `-m`) or a subcommand (`exec`), holding nothing shaped like a secret: what a
     /// note may show of a word.
     static func isOptionName(_ name: String) -> Bool {
         let body = name.utf8.drop { $0 == UInt8(ascii: "-") }
-        guard name.utf8.count - body.count <= 2, body.count <= 48, isToken(body, extra: "._-") else { return false }
+        guard name.utf8.count - body.count <= 2, body.count <= 48, AgentCLI.isToken(body, extra: "._-") else { return false }
         return CommandSecrets.mayKeep(name)
     }
 
     /// The session `arguments` (the agent's own, after its program) resume, when one is named in this agent's
-    /// pattern.
+    /// pattern. The session list's agents read it as the list does; the rest, from the form the table says names it.
     public func resumedID(in arguments: [String]) -> String? {
         let id: String?
         if let kind, let program {
             id = kind.resumedID(in: ([program] + arguments.map(ShellQuote.quote)).joined(separator: " "))
         } else {
-            switch self {
-            case .amp: id = Self.ampThread(arguments)
-            case .junie, .goose: id = Self.value(of: "--session-id", in: arguments)
-            case .kiro: id = Self.value(of: "--resume-id", in: arguments)
-            default: id = nil
-            }
+            id = cli.read(arguments).session
         }
         return id.flatMap { isSessionID($0) ? $0 : nil }
-    }
-
-    /// `amp threads continue <id>`.
-    private static func ampThread(_ arguments: [String]) -> String? {
-        guard let threads = arguments.firstIndex(of: "threads"), threads + 1 < arguments.count,
-              arguments[threads + 1] == "continue" else { return nil }
-        return arguments[(threads + 2)...].first { !$0.hasPrefix("-") }
-    }
-
-    private static func value(of option: String, in arguments: [String]) -> String? {
-        for (index, word) in arguments.enumerated() {
-            if word.hasPrefix(option + "=") { return String(word.dropFirst(option.count + 1)) }
-            if word == option, index + 1 < arguments.count, !arguments[index + 1].hasPrefix("-") { return arguments[index + 1] }
-        }
-        return nil
     }
 
     // MARK: arguments
 
     /// The agent's own arguments in a typed line, and whether its program is the first word there (no assignment,
-    /// wrapper or option before it).
+    /// wrapper or option before it). A name the agent shares with other programs (`cmd`) counts here, as the process
+    /// has shown it runs from the agent's own install.
     public func arguments(inLine line: String) -> (arguments: [String], plain: Bool)? {
         for segment in CommandClassifier.segments(line) {
             let words = AgentKind.words(segment)
             guard let index = CommandClassifier.programIndex(words) else { continue }
             let run = Array(words[index...])
-            if Self(program: CommandClassifier.baseName(run[0])) == self { return (Array(run.dropFirst()), index == 0) }
+            let name = CommandClassifier.baseName(run[0])
+            if cli.programs.contains(name) || cli.installedNames.contains(name) { return (Array(run.dropFirst()), index == 0) }
             if let script = Self.scriptIndex(argv: run, executable: ""), Self.scriptAgent(run[script]) == self {
                 return (Array(run[(script + 1)...]), index == 0)
             }
@@ -279,9 +211,11 @@ extension SessionSnapshot.Agent {
         return argv.indices.dropFirst().first { !argv[$0].hasPrefix("-") }
     }
 
-    /// The agent a script is, by its name or its own package (CommandClassifier.scriptAgentName).
+    /// The agent a script is, by its name or its own package (CommandClassifier.scriptAgentName), or by an install the
+    /// classifier does not know (Cursor's `index.js`). A name other programs share counts only in the agent's install.
     static func scriptAgent(_ script: String) -> Self? {
-        CommandClassifier.scriptAgentName(script).map { Self(program: $0) ?? .unknown }
+        guard let name = CommandClassifier.scriptAgentName(script) else { return installed(at: [script]) }
+        return Self(program: name, at: [script]) ?? .unknown
     }
 
     // MARK: the put-back line
@@ -303,108 +237,26 @@ extension SessionSnapshot.Agent {
 // MARK: - Options
 
 extension SessionSnapshot.Agent {
-    /// How the agent's options are read.
-    struct OptionRules {
-        /// Options an automatic resume carries, and whether each takes a value (a model name, `isModel`).
-        var carried: [String: Bool] = [:]
-        /// Its resume form's own options: never left off. The word after one is its value unless it is an option.
-        var form: Set<String> = []
-        /// First words that run it once and quit (Codex's `exec`): left off.
-        var oneShot: Set<String> = []
-    }
-
-    var optionRules: OptionRules {
-        switch self {
-        case .claude:
-            return OptionRules(carried: ["--model": true, "--fallback-model": true, "--verbose": false],
-                               form: ["--resume", "-r", "--continue", "-c", "--session-id", "--fork-session"])
-        case .codex:
-            return OptionRules(carried: ["-m": true, "--model": true], form: ["--last", "--all", "-C", "--cd"], oneShot: ["exec", "e", "review"])
-        case .qwen:
-            return OptionRules(carried: ["-m": true, "--model": true], form: ["--resume", "-r", "--continue", "-c", "--session-id"])
-        case .copilot, .cursor: return OptionRules(form: ["--resume", "--continue"])
-        case .gemini: return OptionRules(form: ["--resume", "-r"])
-        case .opencode: return OptionRules(form: ["-s", "--session", "-c", "--continue"])
-        case .junie: return OptionRules(form: ["--session-id", "--resume"])
-        case .commandCode: return OptionRules(form: ["--resume", "-r", "--session", "-c", "--continue"])
-        case .kiro: return OptionRules(form: ["--resume-id", "--resume", "-r"])
-        case .goose: return OptionRules(form: ["--resume", "-r", "--session-id", "--name", "-n"])
-        case .amp, .agy, .aider, .unknown: return OptionRules()
-        }
-    }
-
-    /// Permission flags: never carried, and a resume with one goes on the line (KTD5). Every option not carried is
-    /// left off; these lists name the ones that matter most.
-    public var bypassOptions: [String] {
-        switch self {
-        case .claude:
-            return ["--dangerously-skip-permissions", "--allow-dangerously-skip-permissions", "--permission-mode", "--allowedTools",
-                    "--allowed-tools", "--disallowedTools", "--disallowed-tools"]
-        case .codex:
-            return ["--dangerously-bypass-approvals-and-sandbox", "--yolo", "--full-auto", "-a", "--ask-for-approval", "-s", "--sandbox"]
-        case .qwen: return ["-y", "--yolo", "--approval-mode", "--allowed-tools"]
-        default: return []
-        }
-    }
-
-    /// Options that load code, settings or instructions.
-    public var codeOptions: [String] {
-        switch self {
-        case .claude:
-            return ["--settings", "--mcp-config", "--strict-mcp-config", "--add-dir", "--plugin-dir", "--system-prompt",
-                    "--system-prompt-file", "--append-system-prompt", "--append-system-prompt-file", "--agents", "--setting-sources"]
-        case .codex: return ["-c", "--config", "-p", "--profile", "--add-dir", "--enable", "--disable"]
-        case .qwen:
-            return ["-e", "--extensions", "--include-directories", "--allowed-mcp-server-names", "--sandbox", "--sandbox-image",
-                    "--openai-base-url", "--openai-api-key", "--proxy"]
-        default: return []
-        }
-    }
-
-    /// A model name a resume may carry: letters, digits and `._:/-`, at most 64.
-    static func isModel(_ value: String) -> Bool {
-        value.utf8.count <= 64 && isToken(value.utf8, extra: "._:/-")
-    }
-
-    /// What capture keeps of the agent's own arguments (after its program): the options a resume may carry, the
-    /// names of the rest, and whether anything was left off. Prompt words and the resume form are neither: a
-    /// resume never re-sends a prompt (R8), and forms its own.
+    /// What capture keeps of the agent's own arguments (after its program), read with its table: the plain options an
+    /// automatic resume may carry, with values within their patterns; the names of the rest; and whether anything was
+    /// left off. Prompt words and forms are neither: a resume never re-sends a prompt (R8), and forms its own. Only
+    /// Claude Code, Codex and Qwen Code carry any, as only they resume by themselves.
     public func options(in arguments: [String]) -> AgentOptions {
-        let rules = optionRules
         var options = AgentOptions(carried: [], leftOff: [], allowed: true)
-        var index = 0
-        var positional = 0
-        while index < arguments.count {
-            let word = arguments[index]
-            index += 1
-            if word == "--" { break }
-            guard word.hasPrefix("-"), word != "-" else {
-                if positional == 0, rules.oneShot.contains(word) { options.leaveOff(word) }
-                positional += 1
+        for piece in cli.read(arguments).pieces {
+            switch piece {
+            case .word:
                 continue
-            }
-            let parts = word.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-            let name = String(parts[0])
-            let inline = parts.count > 1 ? String(parts[1]) : nil
-            let next = index < arguments.count && !arguments[index].hasPrefix("-") ? arguments[index] : nil
-            if rules.form.contains(name) {
-                if inline == nil, next != nil { index += 1 }
-                continue
-            }
-            guard let takesValue = rules.carried[name] else {
+            case .unknown(let name, _):
                 options.leaveOff(name)
-                continue
+            case .known(let name, let values, let option):
+                if option.kind == .form { continue }
+                if resumesAutomatically, option.kind == .plain, option.carries(values) {
+                    options.carried += [name] + values
+                } else {
+                    options.leaveOff(name)
+                }
             }
-            guard takesValue else {
-                if inline == nil { options.carried.append(name) } else { options.leaveOff(name) }
-                continue
-            }
-            if inline == nil, next != nil { index += 1 }
-            guard let value = inline ?? next, Self.isModel(value) else {
-                options.leaveOff(name)
-                continue
-            }
-            options.carried += [name, value]
         }
         let most = SessionSnapshot.Evidence.mostOptions
         if options.carried.count > most || !CommandSecrets.mayKeep(options.carried.joined(separator: " ")) {
@@ -631,7 +483,7 @@ extension SessionSnapshot.Evidence {
         }
         guard let executable else { return false }
         let name = CommandClassifier.agentName(executable: executable, arguments: [executable])
-        return name.flatMap(RestoreAgent.init(program:)) == agent
+        return name.flatMap { RestoreAgent(program: $0, at: [executable]) } == agent
     }
 
     /// The executable; for a script agent, its interpreter and script, both needed.

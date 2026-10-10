@@ -930,7 +930,7 @@ extension SessionSnapshot.Evidence {
         fixed.interpreter = SnapshotText.plainPath(interpreter, max: limits.path)
         fixed.script = SnapshotText.plainPath(script, max: limits.path)
         // A word or a name that breaks its rule drops its whole list: a resume never carries part of what ran.
-        let words = flags.compactMap { SnapshotText.token($0, max: 64, extra: "._:/=-") }
+        let words = flags.compactMap { SnapshotText.token($0, max: 64, extra: "._:/=-[]") }
         if words.count != flags.count || flags.count > Self.mostOptions {
             fixed.flags = []
             fixed.flagsAllowed = false
