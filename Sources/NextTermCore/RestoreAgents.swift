@@ -608,9 +608,7 @@ extension SessionSnapshot.Evidence {
         guard agent.hasResumeForm, let program = agent.program else { return nil }
         let cli = agent.cli
         let options = self.options ?? []
-        let replayed = launcher.flatMap { (launcher: SessionSnapshot.Launcher) -> SessionSnapshot.Launcher? in
-            cli.subcommand.isEmpty && (0...options.count).contains(launcher.typed) ? launcher : nil
-        }
+        let replayed = replayedLauncher
         let kept = agent.reading(replayed.map { Array(options.suffix($0.typed)) } ?? options, confirmed: [])
         let start = replayed.map { [$0.word] } ?? [program]
         let launch = start + (kept.line.isEmpty ? [] : cli.subcommand) + kept.line
@@ -629,5 +627,23 @@ extension SessionSnapshot.Evidence {
             }
         }
         return PutBack(line: program, namesSession: false, leftOff: [])
+    }
+
+    /// The launcher a put-back line replays (KTD7): the record's, unless the agent's options belong to a subcommand or
+    /// the count typed after it is not one the options hold. Nil when the line is rebuilt from the program.
+    public var replayedLauncher: SessionSnapshot.Launcher? {
+        guard let launcher, agent.cli.subcommand.isEmpty, (0...(options ?? []).count).contains(launcher.typed) else { return nil }
+        return launcher
+    }
+
+    /// The launcher a put-back line replays with the resume form and `id` alone, none of the options typed after it, as
+    /// in `cw --resume S` (KTD6): the start watch's fallback after that line failed, so a launcher that sets the agent's
+    /// store still finds the session. Nil with no launcher replayed, or no line that names the session.
+    public func launcherResume(id: String, folder: String? = nil) -> String? {
+        guard let launcher = replayedLauncher else { return nil }
+        var bare = self
+        bare.launcher = SessionSnapshot.Launcher(word: launcher.word, typed: 0)
+        guard let back = bare.putBack(id: id, folder: folder), back.namesSession else { return nil }
+        return back.line
     }
 }

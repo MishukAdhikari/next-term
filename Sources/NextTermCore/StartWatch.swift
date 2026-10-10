@@ -9,7 +9,9 @@ import Foundation
 // - still running at 5 s, or the session file names the session: resumed;
 // - a nonzero end within 5 s, with no key pressed first and a status other than 130 (Ctrl-C): failed at start. The
 //   agent's plain resume form goes back on the line, unrun, once per tab, and the note quotes the agent's error and names
-//   every option the plain form dropped. A second failure, or a plain form that is what failed, gives the note alone;
+//   every option the plain form dropped. After a line that replayed the user's launcher, the plain form is that launcher
+//   with the resume form alone (`cw --resume S`), so a launcher that sets the agent's store still finds the session. A
+//   second failure, or a plain form that is what failed, gives the note alone;
 // - the session file names another id at 5 s: the agent started a new session, and the note says so;
 // - Ctrl-C, status 0, or a key pressed first: the tab stays as it is.
 
@@ -139,8 +141,9 @@ public enum StartWatch {
         public var agent: RestoreAgent
         /// The session it resumes.
         public var session: String?
-        /// The plain resume form: the agent's program and resume form with the session, no option
-        /// (`RestoreAgent.putBackLine`). Nil with no session named.
+        /// The plain resume form, with the session and no option: after a line that replayed the user's launcher, that
+        /// launcher and the resume form (`SessionSnapshot.Evidence.launcherResume`); otherwise the agent's program and
+        /// resume form (`RestoreAgent.putBackLine`). Nil with no session named.
         public var plain: String?
         /// The options the run carried that the plain form drops, by name, in order.
         public var dropped: [String]
@@ -149,17 +152,29 @@ public enum StartWatch {
 
         /// `evidence` is the agent's record, `session` the one its line or resume names, and `line` the put-back line the
         /// user ran. The options dropped are those the line, or the resume, carried: each of the record's options a line
-        /// keeps. One left off, whose value Next Term could not tell from a prompt's, never was on it.
+        /// keeps, or after a launcher, each of those typed after it, as the launcher brings its own back. One left off,
+        /// whose value Next Term could not tell from a prompt's, never was on it. An automatic resume runs the recorded
+        /// program, never the launcher, so its plain form is the program's.
         public init(evidence: SessionSnapshot.Evidence, session: String?, line: String?) {
             agent = evidence.agent
             self.session = session
             self.line = line
+            let launcher = line.flatMap { (typed: String) -> SessionSnapshot.Launcher? in
+                guard let launcher = evidence.replayedLauncher,
+                      typed.split(separator: " ").first.map(String.init) == ShellQuote.quote(launcher.word) else { return nil }
+                return launcher
+            }
             plain = session.flatMap { (id: String) -> String? in
                 guard evidence.agent.isSessionID(id) else { return nil }
+                guard launcher == nil else { return evidence.launcherResume(id: id, folder: evidence.sessionFolder) }
                 return evidence.agent.putBackLine(id: id, folder: evidence.sessionFolder)
             }
+            let options = evidence.options ?? []
+            let carried = launcher.map { (launcher: SessionSnapshot.Launcher) -> [SessionSnapshot.LaunchOption] in
+                Array(options.suffix(launcher.typed))
+            }
             var names: [String] = []
-            for option in evidence.options ?? [] {
+            for option in carried ?? options {
                 let kept = evidence.agent.reading([option], confirmed: []).line
                 if !kept.isEmpty, !names.contains(option.name) { names.append(option.name) }
             }
