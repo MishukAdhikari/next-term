@@ -662,6 +662,7 @@ enum SelfTest {
         await importReachChecks()
         await importTerminalChecks()
         await importWindowChecks()
+        await importAgentChecks()
         await behaviourSettingsChecks(c, proj: proj)
         await singleClickChecks(c, proj: proj, tab: inProject)
         await safetyChecks(c, proj: proj)
