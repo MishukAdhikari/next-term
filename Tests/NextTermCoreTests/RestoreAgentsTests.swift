@@ -427,18 +427,63 @@ import Testing
         var (evidence, facts) = passing(.claude)
         evidence.executable = "/opt/homebrew/bin/node"
         evidence.interpreter = "/opt/homebrew/bin/node"
-        evidence.script = "/Users/x/app/agent/cli.js"
+        let inProject = "/Users/x/app/node_modules/@anthropic-ai/claude-code/cli.js"
+        evidence.script = inProject
         let node = FileFacts(realPath: "/opt/homebrew/Cellar/node/24.1.0/bin/node", owner: geteuid(), mode: 0o755, isRegular: true)
         facts.files["/opt/homebrew/bin/node"] = node
-        facts.files["/Users/x/app/agent/cli.js"] = FileFacts(realPath: "/Users/x/app/agent/cli.js", owner: geteuid(), mode: 0o644, isRegular: true)
+        facts.files[inProject] = FileFacts(realPath: inProject, owner: geteuid(), mode: 0o644, isRegular: true)
         #expect(evidence.gate(facts) == .onTheLine([.location]))
-        evidence.script = "/opt/homebrew/lib/claude/cli.js"
+        let script = "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js"
+        evidence.script = script
         #expect(evidence.gate(facts) == .onTheLine([.executable]))
-        facts.files["/opt/homebrew/lib/claude/cli.js"] = FileFacts(realPath: "/opt/homebrew/lib/claude/cli.js", owner: geteuid(), mode: 0o664,
-                                                                   isRegular: true)
+        facts.files[script] = FileFacts(realPath: script, owner: geteuid(), mode: 0o664, isRegular: true)
         #expect(evidence.gate(facts) == .onTheLine([.ownership]))
-        facts.files["/opt/homebrew/lib/claude/cli.js"]?.mode = 0o644
+        facts.files[script]?.mode = 0o644
         #expect(evidence.gate(facts) == .resume(evidence.resumeCommand ?? "none"))
+    }
+
+    /// The snapshot is read as untrusted, so the code it records must be the agent's, as capture judged it
+    /// (CommandClassifier.agentName): by the executable's own name or install, or an interpreter running the agent's
+    /// script. A recorded `/bin/zsh` for Codex would run `./resume` from the session's folder.
+    @Test func codeThatIsNotTheAgentGoesOnTheLine() {
+        typealias Code = (executable: String, interpreter: String?, script: String?)
+        let claudeScript = "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js"
+        let codexScript = "/opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js"
+        let qwenScript = "/opt/homebrew/lib/node_modules/@qwen-code/qwen-code/cli.js"
+        let theirs: [(RestoreAgent, Code)] = [
+            (.claude, ("/Users/x/.local/bin/claude", nil, nil)),
+            (.claude, ("/Users/x/.local/share/claude/versions/2.1.280", nil, nil)),
+            (.claude, ("/opt/homebrew/bin/node", "/opt/homebrew/bin/node", claudeScript)),
+            (.codex, ("/opt/homebrew/bin/codex", nil, nil)),
+            (.codex, ("/opt/homebrew/bin/node", "/opt/homebrew/bin/node", codexScript)),
+            (.qwen, ("/opt/homebrew/bin/node", "/opt/homebrew/bin/node", qwenScript)),
+        ]
+        let notTheirs: [(RestoreAgent, Code)] = [
+            (.codex, ("/bin/zsh", nil, nil)),
+            (.claude, ("/usr/bin/python3", nil, nil)),
+            (.claude, ("/opt/homebrew/bin/codex", nil, nil)),
+            (.claude, ("/opt/homebrew/bin/node", nil, nil)),
+            (.claude, ("/bin/sh", "/bin/sh", claudeScript)),
+            (.claude, ("/opt/homebrew/bin/node", "/opt/homebrew/bin/node", "/Users/x/tools/run.js")),
+            (.claude, ("/opt/homebrew/bin/node", "/opt/homebrew/bin/node", codexScript)),
+            (.qwen, ("/Users/x/.local/bin/claude", nil, nil)),
+        ]
+        for (agent, code) in theirs + notTheirs {
+            var (evidence, facts) = passing(agent)
+            evidence.executable = code.executable
+            evidence.interpreter = code.interpreter
+            evidence.script = code.script
+            for path in [code.executable, code.interpreter, code.script].compactMap({ $0 }) {
+                facts.files[path] = FileFacts(realPath: path, owner: 0, mode: 0o755, isRegular: true)
+            }
+            let isTheirs = theirs.contains { $0.0 == agent && $0.1 == code }
+            if isTheirs {
+                #expect(evidence.gate(facts) == .resume(evidence.resumeCommand ?? "none"), "\(agent) \(code)")
+            } else {
+                #expect(evidence.resumeCommand == nil, "\(agent) \(code)")
+                #expect(evidence.gate(facts) == .onTheLine([.executable]), "\(agent) \(code)")
+            }
+        }
     }
 
     /// A link the user owns in ~/.local/bin, not writable by others, that leads into the workspace: its real path decides.
@@ -505,10 +550,14 @@ import Testing
             var lines = [agent.putBackLine(id: id, folder: folder)]
             let automatic = Self.automatic[round % Self.automatic.count]
             let script = round % 2 == 0
+            let package = ["claude": "@anthropic-ai/claude-code/cli.js", "codex": "@openai/codex/bin/codex.js",
+                           "qwen": "@qwen-code/qwen-code/cli.js"][automatic.program ?? ""] ?? "agent/cli.js"
+            let binary = "/opt/homebrew/bin/" + (automatic.program ?? "agent")
             var evidence = Evidence(agent: automatic, sessionID: mixed(Self.sampleID(automatic), 4), source: .sessionFile,
-                                    sessionFolder: mixed("/Users/x/app", 4), executable: mixed("/opt/homebrew/bin/node", 5),
+                                    sessionFolder: mixed("/Users/x/app", 4),
+                                    executable: mixed(script ? "/opt/homebrew/bin/node" : binary, 5),
                                     interpreter: script ? mixed("/opt/homebrew/bin/node", 5) : nil,
-                                    script: script ? mixed("/opt/homebrew/lib/agent/cli.js", 5) : nil)
+                                    script: script ? mixed("/opt/homebrew/lib/node_modules/" + package, 5) : nil)
             evidence.flags = automatic == .codex ? ["-m", mixed("gpt-5", 3)] : ["--model", mixed("opus", 3)]
             let command = evidence.resumeCommand
             lines.append(command)

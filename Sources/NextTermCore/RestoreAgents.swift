@@ -620,6 +620,20 @@ extension SessionSnapshot.Evidence {
         return ResumeCheck.allCases.filter(problems.contains)
     }
 
+    /// Whether the code the snapshot records is this agent, judged as capture judged the process
+    /// (CommandClassifier.agentName): the executable by its own name or its agent's install, or an interpreter running
+    /// the agent's script. The snapshot is read as untrusted: a recorded `/bin/zsh` for Codex would run `./resume`.
+    private var codeIsTheAgent: Bool {
+        if let interpreter {
+            let name = CommandClassifier.stem(CommandClassifier.baseName(interpreter))
+            guard CommandClassifier.interpreters.contains(name), let script else { return false }
+            return RestoreAgent.scriptAgent(script) == agent
+        }
+        guard let executable else { return false }
+        let name = CommandClassifier.agentName(executable: executable, arguments: [executable])
+        return name.flatMap(RestoreAgent.init(program:)) == agent
+    }
+
     /// The executable; for a script agent, its interpreter and script, both needed.
     private var codePaths: [String]? {
         if let interpreter {
@@ -631,10 +645,11 @@ extension SessionSnapshot.Evidence {
 
     /// The automatic resume (KTD5): `/usr/bin/env -u <auto-continue variables>`, the recorded absolute path (a
     /// script agent's interpreter and script), the resume form with the id, and the options it may carry. Nil when
-    /// any of it is missing or not one plain line. It holds no prompt words. Only the gate hands it out (`.resume`).
+    /// any of it is missing or not one plain line, or the code recorded is not the agent (`codeIsTheAgent`). It holds no
+    /// prompt words. Only the gate hands it out (`.resume`).
     var resumeCommand: String? {
         guard agent.resumesAutomatically, let id = sessionID, agent.isSessionID(id), agent.carries(flags),
-              SnapshotText.plainPath(sessionFolder, max: SessionSnapshot.Limits.standard.path) != nil,
+              SnapshotText.plainPath(sessionFolder, max: SessionSnapshot.Limits.standard.path) != nil, codeIsTheAgent,
               let paths = codePaths, let words = agent.resumeWords(id: id, folder: sessionFolder) else { return nil }
         let limit = SessionSnapshot.Limits.standard.path
         guard paths.allSatisfy({ SnapshotText.plainPath($0, max: limit) != nil }) else { return nil }
