@@ -2,7 +2,7 @@ import AppKit
 import NextTermCore
 
 /// The import tools (MCPServer.importTools) on the app's side. list_import_sources and preview_import only read:
-/// the apps found (folders and dates) and the rows the import window would show, as Core works them out
+/// the apps found (DetectedApp: folders, dates and versions) and the rows the import window would show, as Core works them out
 /// (MCPImport). apply_import and undo_import are requests: under either approval policy the ask is on the Mac
 /// (the import window itself for an import, an approval window for Undo), and only the user's click changes
 /// anything. Local only: the remote door gets none of them.
@@ -86,7 +86,7 @@ enum MCPImportControl {
 
     // MARK: listing
 
-    /// The apps found, by folders and dates only: no planner runs, so nothing is parsed.
+    /// The apps found, as detection finds them: no planner runs, so no setting's value is read (DetectedApp says what is).
     static func list(_ arguments: [String: Any], reply: @escaping Reply) {
         let include: Bool
         switch MCPImport.includeTargets(arguments) {

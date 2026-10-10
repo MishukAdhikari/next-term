@@ -713,8 +713,9 @@ import Testing
         try stateDB(user + "/globalStorage/state.vscdb", entries: [["folderUri": uri(older)]], close: true)
         let plan = self.plan(app(user, .vsCodeInsiders, name: "VS Code Insiders"), home: home)
         #expect(plan.recentProjects == [older])
-        #expect(plan.skipped == [SkippedItem("recent projects in ~/.vscode-insiders-shared/sharedStorage",
-                                             "not found where VS Code Insiders usually keeps them (a portable install keeps them elsewhere)")])
+        let reason = "not found in the shared storage where VS Code Insiders usually keeps them (a portable install keeps them elsewhere)"
+        #expect(plan.skipped == [SkippedItem("recent projects", reason)])
+        #expect(!String(describing: plan.skipped).contains(".vscode-insiders-shared"), "an app's folders are never named")
     }
 
     @Test func productJSONWithoutAUsableName() throws {

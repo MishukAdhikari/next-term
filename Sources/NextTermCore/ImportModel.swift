@@ -127,7 +127,9 @@ public enum ImportContent: String, CaseIterable, Codable, Sendable {
     }
 }
 
-/// An app found on this Mac (found by folders and dates only: nothing is parsed until the user picks it).
+/// An app found on this Mac: by folders, dates and its app's version file. No setting is read until the user picks it,
+/// except what tells the app apart: a JetBrains IDE's keymap choice and idea.properties (where its settings are),
+/// and whether Terminal's default profile was changed.
 public struct DetectedApp: Equatable, Sendable {
     public let kind: ImportSourceKind
     /// "VS Code", "PhpStorm 2026.1", "Cursor".

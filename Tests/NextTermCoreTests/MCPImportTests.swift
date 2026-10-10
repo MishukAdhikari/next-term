@@ -40,7 +40,7 @@ import Testing
             #expect(tool.timeout == timeouts[name], "\(name)")
         }
         let list = MCPServer.tool(named: "list_import_sources")?.description ?? ""
-        #expect(list.contains("instead of reading those apps' files yourself") && list.contains("no settings file is read"))
+        #expect(list.contains("instead of reading those apps' files yourself") && list.contains("no setting's value is returned"))
         let apply = MCPServer.tool(named: "apply_import")?.description ?? ""
         #expect(apply.contains("Only the user's Apply changes anything") && apply.contains("they may change the rows"))
         #expect(apply.contains("asked on the Mac first") && apply.contains("pending") && apply.contains("changed_since_preview"))

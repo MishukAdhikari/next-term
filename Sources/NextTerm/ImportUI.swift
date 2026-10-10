@@ -8,8 +8,8 @@ import NextTermCore
 
 /// The apps on this Mac an import can read, and their plans.
 enum ImportSources {
-    /// Every app found, most recently used first, those not used lately (180 days) last. Folders and dates
-    /// only: nothing is parsed yet.
+    /// Every app found, most recently used first, those not used lately (180 days) last. No setting is read yet
+    /// beyond what DetectedApp names.
     static func detect() -> [DetectedApp] {
         var found = detectors.flatMap { $0() }
         for index in found.indices where DetectedApp.isNotUsedLately(found[index].lastUsed) { found[index].notUsedLately = true }

@@ -625,9 +625,10 @@ public enum ImportVSCode {
             if isRegularFile(path) {
                 databases.append(path)
             } else {
-                // A portable install or --shared-data-dir moves it, and Next Term can't see either.
-                notes.append(SkippedItem("recent projects in ~/\(shared)/sharedStorage",
-                                         "not found where \(app.name) usually keeps them (a portable install keeps them elsewhere)"))
+                // A portable install or --shared-data-dir moves it, and Next Term can't see either. The folder isn't
+                // named: an agent's preview_import never gets an app's settings folders.
+                notes.append(SkippedItem("recent projects",
+                                         "not found in the shared storage where \(app.name) usually keeps them (a portable install keeps them elsewhere)"))
             }
         }
         databases.append((app.configPath as NSString).appendingPathComponent("globalStorage/state.vscdb"))

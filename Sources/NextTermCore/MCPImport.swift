@@ -87,7 +87,8 @@ public enum MCPImport {
         return info
     }
 
-    /// One app as list_import_sources gives it: folders and dates only, nothing parsed. Its settings folder is never named.
+    /// One app as list_import_sources gives it: what detection found (DetectedApp), no setting's value. Its settings folder
+    /// is never named.
     static func describe(_ app: DetectedApp, id: String) -> [String: Any] {
         var info: [String: Any] = ["id": id, "name": app.name, "family": app.kind.family.rawValue]
         info["app_installed"] = !app.appRemoved
