@@ -10,7 +10,7 @@ import Testing
     func remove(_ home: String) { try? fm.removeItem(atPath: (home as NSString).deletingLastPathComponent) }
 
     func plan(_ home: String) throws -> ImportPlan {
-        let app = try #require(ImportITerm2.detect(home: home).first)
+        let app = try #require(ImportITerm2.detect(home: home, applications: []).first)
         return ImportITerm2.plan(for: app, home: home, fonts: testFonts)
     }
 

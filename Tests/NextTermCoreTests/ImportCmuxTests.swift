@@ -100,7 +100,7 @@ import Testing
         let apps = [home + "/Applications"]
         func plan(_ theme: String) throws -> ImportPlan {
             try "theme = \(theme)\n".write(toFile: home + "/.config/ghostty/config", atomically: true, encoding: .utf8)
-            let app = try #require(ImportGhostty.detect(home: home).first)
+            let app = try #require(ImportGhostty.detect(home: home, applications: []).first)
             return ImportGhostty.plan(for: app, home: home, fonts: testFonts, applications: apps)
         }
         #expect(try palette(plan("Night Owl"))?.background == 0x011627)

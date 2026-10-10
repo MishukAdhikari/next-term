@@ -345,6 +345,9 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     /// `completion` runs once, when the window closes (with the plan applied, or nil).
+    /// One list grouped by kind of app (editors, then terminals), each app with its version (or "app removed"), when
+    /// it was last used and what it can bring; then keeping Next Term's shortcuts; then, folded, the apps not used
+    /// lately.
     func showChooser(firstRun: Bool, completion: ((_ imported: ImportPlan?) -> Void)?) {
         self.completion = completion
         apps = ImportSources.detect()
@@ -354,11 +357,16 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         radios = []
         let keep = NSButton(radioButtonWithTitle: "Keep Next Term’s shortcuts", target: self, action: #selector(radioChanged(_:)))
         keep.tag = -1
+        keep.identifier = .init("spaced")
         radios.append(keep)
+        var appRows: [[NSView]] = []
         for (index, found) in apps.enumerated() {
-            let radio = NSButton(radioButtonWithTitle: found.name + Self.used(found.lastUsed), target: self, action: #selector(radioChanged(_:)))
+            let radio = NSButton(radioButtonWithTitle: found.name, target: self, action: #selector(radioChanged(_:)))
             radio.tag = index
+            let detail = Self.detail(found)
+            radio.setAccessibilityHelp(detail)
             radios.append(radio)
+            appRows.append([radio, Self.wrapping(detail, secondary: true, size: 11, indent: true)])
         }
         // First run defaults to keeping everything; from the menu, to the app used last.
         let selected = firstRun || apps.isEmpty ? keep : radios[1]
@@ -366,14 +374,34 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         if apps.isEmpty {
             rows.append(Self.wrapping(ImportSources.noneFound, secondary: true))
         }
-        // Apps not used lately (180 days) come last, after keeping Next Term's, under their own heading.
-        let appRadios: [NSView] = Array(radios.dropFirst())
-        let recent = apps.firstIndex(where: \.notUsedLately) ?? apps.count
-        rows.append(contentsOf: appRadios[..<recent])
+        // Apps used lately, by kind; apps not used lately (180 days) come last, folded, after keeping Next Term's.
+        for family in ImportFamily.allCases {
+            let members = apps.indices.filter { !apps[$0].notUsedLately && apps[$0].kind.family == family }
+            guard !members.isEmpty else { continue }
+            rows.append(Self.heading(family.title))
+            for index in members { rows += appRows[index] }
+        }
         rows.append(keep)
-        if recent < apps.count {
-            rows.append(Self.heading("Not used lately"))
-            rows.append(contentsOf: appRadios[recent...])
+        let stale = apps.indices.filter { apps[$0].notUsedLately }
+        staleList = nil
+        if !stale.isEmpty {
+            let disclosure = NSButton(title: "", target: self, action: #selector(toggleStaleList(_:)))
+            disclosure.bezelStyle = .disclosure
+            disclosure.setButtonType(.pushOnPushOff)
+            disclosure.setAccessibilityLabel("Show the apps not used lately")
+            let header = NSStackView(views: [disclosure, Self.heading("Not used lately (\(stale.count))")])
+            header.spacing = 4
+            header.identifier = .init("heading")
+            let list = NSStackView(views: stale.flatMap { appRows[$0] })
+            list.orientation = .vertical
+            list.alignment = .leading
+            list.spacing = 8
+            // Open when one of them is chosen (every app found is not used lately).
+            let open = stale.contains { radios[$0 + 1] === selected }
+            disclosure.state = open ? .on : .off
+            list.isHidden = !open
+            staleList = list
+            rows += [header, list]
         }
         rows.append(Self.wrapping("Reads files on this Mac only. Never changes the other app. Nothing leaves your Mac.", secondary: true, size: 11))
         let preview = NSButton(title: "Preview…", target: self, action: #selector(previewChosen))
@@ -381,12 +409,39 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         let close = NSButton(title: firstRun ? "Keep Next Term’s Shortcuts" : "Close", target: self, action: #selector(closeWithoutImport))
         close.keyEquivalent = "\u{1b}"
         preview.isEnabled = !apps.isEmpty
-        layout(rows, buttons: [close, preview])
+        previewButton = preview
+        layout(rows, buttons: [close, preview], scrolls: apps.count > Self.appsShownWithoutScrolling)
         showWindow(nil)
         window?.center()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         updatePreviewButton()
+    }
+
+    /// More apps than this, and the chooser scrolls.
+    static let appsShownWithoutScrolling = 7
+
+    /// The folded list of apps not used lately.
+    private var staleList: NSView?
+    private var previewButton: NSButton?
+
+    @objc private func toggleStaleList(_ sender: NSButton) {
+        staleList?.isHidden = sender.state != .on
+        window?.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    /// "1.105.1  ·  used 3 days ago  ·  brings shortcuts, settings, fonts and colours", or "app removed" for an app
+    /// whose settings stayed behind.
+    static func detail(_ app: DetectedApp) -> String {
+        var parts: [String] = []
+        if app.appRemoved {
+            parts.append("app removed")
+        } else if let version = app.version {
+            parts.append(version)
+        }
+        if let used = used(app.lastUsed) { parts.append(used) }
+        parts.append("brings " + ImportContent.list(app.kind.canBring))
+        return parts.joined(separator: "  ·  ")
     }
 
     @objc private func radioChanged(_ sender: NSButton) {
@@ -396,8 +451,7 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
 
     private func updatePreviewButton() {
         let chosen = radios.first { $0.state == .on }?.tag ?? -1
-        (window?.contentView?.subviews.compactMap { $0 as? NSStackView }.first?.arrangedSubviews.last as? NSStackView)?
-            .arrangedSubviews.compactMap { $0 as? NSButton }.first { $0.title == "Preview…" }?.isEnabled = chosen >= 0
+        previewButton?.isEnabled = chosen >= 0
     }
 
     @objc private func previewChosen() {
@@ -613,6 +667,9 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
 
     /// For the self-test: tick state and apply.
     var applyTitle: String { applyButton?.title ?? "" }
+    /// For the self-test: the app chosen in the chooser, and whether the apps not used lately are shown.
+    var chosenTitle: String? { radios.first { $0.state == .on }?.title }
+    var staleListIsOpen: Bool { staleList?.isHidden == false }
     func applyForTest() { applyChosen() }
 
     // MARK: layout
@@ -622,7 +679,7 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
-        for (i, row) in rows.enumerated() where i > 0 && (row.identifier?.rawValue == "heading") {
+        for (i, row) in rows.enumerated() where i > 0 && ["heading", "spaced"].contains(row.identifier?.rawValue) {
             stack.setCustomSpacing(16, after: rows[i - 1])
         }
         stack.edgeInsets = NSEdgeInsets(top: 22, left: 24, bottom: 16, right: 24)
@@ -723,15 +780,17 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         return box
     }
 
-    private static func used(_ date: Date?) -> String {
-        guard let date else { return "" }
+    /// "used 3 days ago" (nil: no date).
+    static func used(_ date: Date?) -> String? {
+        guard let date else { return nil }
         let days = Int(Date().timeIntervalSince(date) / 86400)
         switch days {
-        case ..<1: return "  ·  used today"
-        case 1: return "  ·  used yesterday"
-        case 2..<14: return "  ·  used \(days) days ago"
-        case 14..<60: return "  ·  used \(days / 7) weeks ago"
-        default: return "  ·  used \(days / 30) months ago"
+        case ..<1: return "used today"
+        case 1: return "used yesterday"
+        case 2..<14: return "used \(days) days ago"
+        case 14..<60: return "used \(days / 7) weeks ago"
+        case 60..<730: return "used \(days / 30) months ago"
+        default: return "used \(days / 365) years ago"
         }
     }
 
@@ -901,7 +960,11 @@ final class ImportSettingsView: NSView {
             button.bezelStyle = .rounded
             button.controlSize = .small
             button.tag = index
-            let row = NSStackView(views: [NSTextField(labelWithString: app.name), button])
+            var tags: [String] = []
+            if app.appRemoved { tags.append("app removed") }
+            if app.notUsedLately { tags.append("not used lately") }
+            let name = NSTextField(labelWithString: ([app.name] + tags).joined(separator: "  ·  "))
+            let row = NSStackView(views: [name, button])
             appsStack.addArrangedSubview(row)
         }
         if let last = ImportCoordinator.shared.last {

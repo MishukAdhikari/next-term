@@ -15,14 +15,19 @@ public enum ImportZed {
         (home as NSString).appendingPathComponent(".config/zed")
     }
 
+    /// Zed's app bundles, its release channels in order.
+    static let bundles = ["Zed.app", "Zed Preview.app", "Zed Nightly.app"]
+
     /// Zed, when its settings file exists. Last use is the newest of that file and Zed's own database, which
-    /// Zed writes whenever it runs (dates only: neither file is opened).
-    public static func detect(home: String = NSHomeDirectory()) -> [DetectedApp] {
+    /// Zed writes whenever it runs (dates only: neither file is opened). `applications`: where the app is looked
+    /// for, /Applications and ~/Applications unless given.
+    public static func detect(home: String = NSHomeDirectory(), applications: [String]? = nil) -> [DetectedApp] {
         let folder = settingsFolder(home: home)
         let settings = (folder as NSString).appendingPathComponent("settings.json")
         guard isRegularFile(settings) else { return [] }
         let dates = ([settings] + databaseFiles(home: home)).compactMap(ImportFile.modificationDate)
-        return [DetectedApp(kind: .zed, name: "Zed", configPath: folder, lastUsed: dates.max())]
+        let bundle = ImportAppBundles.find(bundles, applications: applications ?? ImportVSCode.applicationFolders(home: home))
+        return [DetectedApp(kind: .zed, name: "Zed", configPath: folder, lastUsed: dates.max(), appPath: bundle?.path, version: bundle?.version)]
     }
 
     /// The preset from `base_keymap`, the editor's and terminal's fonts and the other settings Next Term has too,
@@ -423,11 +428,14 @@ public enum ImportITerm2 {
         (home as NSString).appendingPathComponent("Library/Preferences/com.googlecode.iterm2.plist")
     }
 
-    /// iTerm2, when its preferences file exists; last use is that file's date (it isn't opened).
-    public static func detect(home: String = NSHomeDirectory()) -> [DetectedApp] {
+    /// iTerm2, when its preferences file exists; last use is that file's date (it isn't opened). `applications`:
+    /// where the app (iTerm.app) is looked for, /Applications and ~/Applications unless given.
+    public static func detect(home: String = NSHomeDirectory(), applications: [String]? = nil) -> [DetectedApp] {
         let path = preferencesPath(home: home)
         guard isRegularFile(path) else { return [] }
-        return [DetectedApp(kind: .iTerm2, name: "iTerm2", configPath: path, lastUsed: ImportFile.modificationDate(path))]
+        let bundle = ImportAppBundles.find(["iTerm.app"], applications: applications ?? ImportVSCode.applicationFolders(home: home))
+        return [DetectedApp(kind: .iTerm2, name: "iTerm2", configPath: path, lastUsed: ImportFile.modificationDate(path),
+                            appPath: bundle?.path, version: bundle?.version)]
     }
 
     /// The font, its size, Option as Meta and the colours from the default profile, and what else it saw. The

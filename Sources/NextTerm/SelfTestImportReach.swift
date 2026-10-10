@@ -100,9 +100,9 @@ extension SelfTest {
         window.showChooser(firstRun: false, completion: nil)
         await pause(0.3)
         let texts = importWindowTexts(window)
-        let heading = texts.firstIndex(of: "NOT USED LATELY"), stale = texts.firstIndex { $0.hasPrefix("WebStorm 2024.2") }
+        let heading = texts.firstIndex { $0.hasPrefix("NOT USED LATELY") }, stale = texts.firstIndex { $0.hasPrefix("WebStorm 2024.2") }
         let fresh = texts.firstIndex { $0.hasPrefix("GoLand 2026.1") }
         check(heading != nil && stale != nil && fresh != nil && fresh! < heading! && heading! < stale!,
-              "an IDE not used lately is listed last, under Not used lately, not hidden", texts.joined(separator: " | "))
+              "an IDE not used lately is listed last, folded under Not used lately, not left out", texts.joined(separator: " | "))
     }
 }

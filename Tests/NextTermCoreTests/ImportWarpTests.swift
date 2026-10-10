@@ -22,7 +22,7 @@ import Testing
         defer { try? FileManager.default.removeItem(atPath: home) }
         try write(settings.replacingOccurrences(of: "$HOME", with: home), to: home + "/.warp/settings.toml")
         for (path, text) in files { try write(text, to: home + "/.warp/" + path) }
-        let app = try #require(ImportWarp.detect(home: home).first)
+        let app = try #require(ImportWarp.detect(home: home, applications: []).first)
         return ImportWarp.plan(for: app, home: home, usKeyboard: usKeyboard, fonts: testFonts)
     }
 
@@ -88,10 +88,17 @@ import Testing
     @Test func detection() throws {
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
-        #expect(ImportWarp.detect(home: home).isEmpty)
+        #expect(ImportWarp.detect(home: home, applications: []).isEmpty)
         let used = Date(timeIntervalSince1970: 1_790_000_000)
         try write("", to: home + "/.warp/settings.toml", date: used)
-        #expect(ImportWarp.detect(home: home) == [DetectedApp(kind: .warp, name: "Warp", configPath: home + "/.warp", lastUsed: used)])
+        #expect(ImportWarp.detect(home: home, applications: []) == [DetectedApp(kind: .warp, name: "Warp", configPath: home + "/.warp", lastUsed: used)])
+        #expect(ImportWarp.detect(home: home, applications: []).first?.appRemoved == true)
+
+        // The app and its version, from the folders given.
+        let plist = #"<plist version="1.0"><dict><key>CFBundleShortVersionString</key><string>0.2025.10.01</string></dict></plist>"#
+        try write(plist, to: home + "/Applications/Warp.app/Contents/Info.plist", date: used)
+        let found = try #require(ImportWarp.detect(home: home, applications: [home + "/Applications"]).first)
+        #expect(found.appPath == home + "/Applications/Warp.app" && found.version == "0.2025.10.01" && !found.appRemoved)
     }
 
     @Test func settingsAndACustomTheme() throws {

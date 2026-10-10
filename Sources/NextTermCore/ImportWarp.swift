@@ -8,11 +8,14 @@ import Foundation
 public enum ImportWarp {
     static func folder(home: String) -> String { (home as NSString).appendingPathComponent(".warp") }
 
-    /// Warp, when it has a settings file. Last use is that file's date (detection opens nothing).
-    public static func detect(home: String = NSHomeDirectory()) -> [DetectedApp] {
+    /// Warp, when it has a settings file. Last use is that file's date (detection opens no config file).
+    /// `applications`: where Warp.app is looked for, /Applications and ~/Applications unless given.
+    public static func detect(home: String = NSHomeDirectory(), applications: [String]? = nil) -> [DetectedApp] {
         let settings = (folder(home: home) as NSString).appendingPathComponent("settings.toml")
         guard isRegularFile(settings) else { return [] }
-        return [DetectedApp(kind: .warp, name: "Warp", configPath: folder(home: home), lastUsed: ImportFile.modificationDate(settings))]
+        let bundle = ImportAppBundles.find(["Warp.app"], applications: applications ?? ImportVSCode.applicationFolders(home: home))
+        return [DetectedApp(kind: .warp, name: "Warp", configPath: folder(home: home), lastUsed: ImportFile.modificationDate(settings),
+                            appPath: bundle?.path, version: bundle?.version)]
     }
 
     /// The only values converted: table and key.

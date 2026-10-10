@@ -35,7 +35,7 @@ import Testing
     func zedHome(settings: String) throws -> (home: String, app: DetectedApp) {
         let home = try home()
         try write(settings, to: home + "/.config/zed/settings.json")
-        let apps = ImportZed.detect(home: home)
+        let apps = ImportZed.detect(home: home, applications: [])
         try #require(apps.count == 1)
         return (home, apps[0])
     }
@@ -43,17 +43,17 @@ import Testing
     @Test func zedDetection() throws {
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
-        #expect(ImportZed.detect(home: home).isEmpty)
+        #expect(ImportZed.detect(home: home, applications: []).isEmpty)
 
         // A folder where the file should be is not a settings file.
         try FileManager.default.createDirectory(atPath: home + "/.config/zed/settings.json", withIntermediateDirectories: true)
-        #expect(ImportZed.detect(home: home).isEmpty)
+        #expect(ImportZed.detect(home: home, applications: []).isEmpty)
         try FileManager.default.removeItem(atPath: home + "/.config/zed/settings.json")
 
         // Detection only looks at dates: a file that isn't even valid JSON is still found.
         let edited = Date(timeIntervalSince1970: 1_790_000_000)
         try write("{ not json", to: home + "/.config/zed/settings.json", date: edited)
-        let app = try #require(ImportZed.detect(home: home).first)
+        let app = try #require(ImportZed.detect(home: home, applications: []).first)
         #expect(app.kind == .zed && app.name == "Zed")
         #expect(app.configPath == home + "/.config/zed")
         #expect(app.lastUsed == edited)
@@ -64,7 +64,7 @@ import Testing
         try write("", to: home + "/Library/Application Support/Zed/db/0-stable/db.sqlite", date: Date(timeIntervalSince1970: 1_780_000_000))
         try write("", to: home + "/Library/Application Support/Zed/db/0-stable/db.sqlite-wal", date: ran)
         try write("", to: home + "/Library/Application Support/Zed/db/other/db.sqlite", date: Date(timeIntervalSince1970: 1_799_000_000))
-        #expect(ImportZed.detect(home: home).first?.lastUsed == ran)
+        #expect(ImportZed.detect(home: home, applications: []).first?.lastUsed == ran)
     }
 
     @Test func zedBaseKeymapPicksThePreset() throws {
@@ -198,7 +198,7 @@ import Testing
             defer { try? FileManager.default.removeItem(atPath: home) }
             try write(settings, to: home + "/.config/zed/settings.json")
             try FileManager.default.createDirectory(atPath: home + "/Code", withIntermediateDirectories: true)
-            let app = try #require(ImportZed.detect(home: home).first)
+            let app = try #require(ImportZed.detect(home: home, applications: []).first)
             return ImportZed.plan(for: app, home: home, usKeyboard: usKeyboard, fonts: testFonts)
         }
         func settings(_ text: String) throws -> [ImportedSetting] { try plan(text).settings.map(\.setting) }
@@ -309,7 +309,7 @@ import Testing
         defer { try? FileManager.default.removeItem(atPath: home) }
         let settings = home + "/.config/zed/settings.json"
         try write("{}", to: settings)
-        let app = try #require(ImportZed.detect(home: home).first)
+        let app = try #require(ImportZed.detect(home: home, applications: []).first)
 
         func plan(_ text: String?) throws -> ImportPlan {
             try? FileManager.default.removeItem(atPath: settings)
@@ -344,7 +344,7 @@ import Testing
         // A named pipe is never opened (opening one waits for a writer).
         try FileManager.default.removeItem(atPath: settings)
         #expect(mkfifo(settings, 0o600) == 0)
-        #expect(ImportZed.detect(home: home).isEmpty)
+        #expect(ImportZed.detect(home: home, applications: []).isEmpty)
         #expect(reasons(ImportZed.plan(for: app, home: home))["settings.json"] == "couldn't be read, so no settings came over")
 
         // Another app's entry gets nothing from the Zed reader.
@@ -454,7 +454,7 @@ import Testing
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
         _ = try writePlist(root, home: home, format: format)
-        let app = try #require(ImportITerm2.detect(home: home).first)
+        let app = try #require(ImportITerm2.detect(home: home, applications: []).first)
         return ImportITerm2.plan(for: app, home: home, usKeyboard: usKeyboard, fonts: testFonts)
     }
 
@@ -470,15 +470,15 @@ import Testing
     @Test func iTermDetection() throws {
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
-        #expect(ImportITerm2.detect(home: home).isEmpty)
+        #expect(ImportITerm2.detect(home: home, applications: []).isEmpty)
         try FileManager.default.createDirectory(atPath: home + plistPath, withIntermediateDirectories: true)
-        #expect(ImportITerm2.detect(home: home).isEmpty, "a folder is not the preferences file")
+        #expect(ImportITerm2.detect(home: home, applications: []).isEmpty, "a folder is not the preferences file")
         try FileManager.default.removeItem(atPath: home + plistPath)
 
         let used = Date(timeIntervalSince1970: 1_790_500_000)
         let path = try writePlist(preferences([profile(guid: "A")], defaultGuid: "A"), home: home, date: used)
-        #expect(ImportITerm2.detect(home: home) == [DetectedApp(kind: .iTerm2, name: "iTerm2", configPath: path, lastUsed: used)])
-        #expect(ImportITerm2.detect(home: home).first?.preset == .nextTerm)
+        #expect(ImportITerm2.detect(home: home, applications: []) == [DetectedApp(kind: .iTerm2, name: "iTerm2", configPath: path, lastUsed: used)])
+        #expect(ImportITerm2.detect(home: home, applications: []).first?.preset == .nextTerm)
     }
 
     @Test func iTermUsesTheDefaultProfile() throws {
@@ -727,7 +727,7 @@ import Testing
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
         let path = try writePlist(preferences([], defaultGuid: nil), home: home)
-        let app = try #require(ImportITerm2.detect(home: home).first)
+        let app = try #require(ImportITerm2.detect(home: home, applications: []).first)
         let unreadable = SkippedItem("com.googlecode.iterm2.plist", "couldn't be read, so no settings came over")
 
         // No profile saved yet (a fresh iTerm2 keeps its default profile built in).
@@ -751,7 +751,7 @@ import Testing
 
         // A named pipe is never opened.
         #expect(mkfifo(path, 0o600) == 0)
-        #expect(ImportITerm2.detect(home: home).isEmpty)
+        #expect(ImportITerm2.detect(home: home, applications: []).isEmpty)
         #expect(ImportITerm2.plan(for: app, home: home) == ImportPlan(preset: .nextTerm, skipped: [unreadable, paneNote]))
 
         // Another app's entry gets nothing from the iTerm2 reader.

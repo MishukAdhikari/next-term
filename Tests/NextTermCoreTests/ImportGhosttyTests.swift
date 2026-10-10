@@ -24,7 +24,7 @@ import Testing
         defer { try? FileManager.default.removeItem(atPath: home) }
         try write(config, to: home + appSupport)
         for (path, text) in files { try write(text, to: home + path) }
-        let app = try #require(ImportGhostty.detect(home: home).first)
+        let app = try #require(ImportGhostty.detect(home: home, applications: []).first)
         return ImportGhostty.plan(for: app, home: home, usKeyboard: usKeyboard, fonts: testFonts, applications: [home + "/Applications"])
     }
 
@@ -35,15 +35,15 @@ import Testing
     @Test func detection() throws {
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
-        #expect(ImportGhostty.detect(home: home).isEmpty)
+        #expect(ImportGhostty.detect(home: home, applications: []).isEmpty)
         try FileManager.default.createDirectory(atPath: home + xdg, withIntermediateDirectories: true)
-        #expect(ImportGhostty.detect(home: home).isEmpty, "a folder is not a config file")
+        #expect(ImportGhostty.detect(home: home, applications: []).isEmpty, "a folder is not a config file")
         try FileManager.default.removeItem(atPath: home + xdg)
 
         let older = Date(timeIntervalSince1970: 1_790_000_000), newer = Date(timeIntervalSince1970: 1_791_000_000)
         try write("font-size = 13", to: home + xdg, date: newer)
         try write("# empty", to: home + appSupport, date: older)
-        let app = try #require(ImportGhostty.detect(home: home).first)
+        let app = try #require(ImportGhostty.detect(home: home, applications: []).first)
         #expect(app == DetectedApp(kind: .ghostty, name: "Ghostty", configPath: home + appSupport, lastUsed: newer))
         #expect(app.preset == .nextTerm)
     }
@@ -354,7 +354,7 @@ import Testing
             try FileManager.default.createDirectory(atPath: (home + path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
             try FileManager.default.createSymbolicLink(atPath: home + path, withDestinationPath: home + target)
         }
-        let app = try #require(ImportGhostty.detect(home: home).first)
+        let app = try #require(ImportGhostty.detect(home: home, applications: []).first)
         return ImportGhostty.plan(for: app, home: home, fonts: testFonts, applications: [home + "/Applications"])
     }
 

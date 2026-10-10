@@ -43,7 +43,7 @@ import Testing
     }
 
     func plan(_ home: String) throws -> ImportPlan {
-        let app = try #require(ImportZed.detect(home: home).first)
+        let app = try #require(ImportZed.detect(home: home, applications: []).first)
         return ImportZed.plan(for: app, home: home, fonts: testFonts)
     }
 

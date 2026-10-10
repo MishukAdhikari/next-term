@@ -34,7 +34,7 @@ extension SelfTest {
             { ImportAlacritty.detect(home: home, applications: applications) },
             { ImportWezTerm.detect(home: home, applications: applications) },
             { ImportCmux.detect(home: home, applications: applications) },
-            { ImportITerm2.detect(home: home) },
+            { ImportITerm2.detect(home: home, applications: applications) },
         ]
         ImportSources.planner = { app, usKeyboard in
             switch app.kind {

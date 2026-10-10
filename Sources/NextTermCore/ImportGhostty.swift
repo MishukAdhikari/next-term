@@ -22,12 +22,14 @@ public enum ImportGhostty {
             .filter(isRegularFile)
     }
 
-    /// Ghostty, when it has a config file. Last use is the newest file's date (detection opens nothing).
-    public static func detect(home: String = NSHomeDirectory()) -> [DetectedApp] {
+    /// Ghostty, when it has a config file. Last use is the newest file's date (detection opens no config file).
+    /// `applications`: where Ghostty.app is looked for, /Applications and ~/Applications unless given.
+    public static func detect(home: String = NSHomeDirectory(), applications: [String]? = nil) -> [DetectedApp] {
         let files = configFiles(home: home)
         guard let last = files.last else { return [] }
         let used = files.compactMap(ImportFile.modificationDate).max()
-        return [DetectedApp(kind: .ghostty, name: "Ghostty", configPath: last, lastUsed: used)]
+        let bundle = ImportAppBundles.find(["Ghostty.app"], applications: applications ?? ImportVSCode.applicationFolders(home: home))
+        return [DetectedApp(kind: .ghostty, name: "Ghostty", configPath: last, lastUsed: used, appPath: bundle?.path, version: bundle?.version)]
     }
 
     // MARK: plan
