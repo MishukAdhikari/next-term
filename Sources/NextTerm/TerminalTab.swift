@@ -21,8 +21,12 @@ final class NextTermView: LocalProcessTerminalView {
     /// Tab completion's ordered writer (CompletionSession): true, the write waits and goes out later.
     var completionGate: ((ArraySlice<UInt8>) -> Bool)?
 
+    /// Bytes of output parsed so far: what is new since a poll last looked (the served-URL scan).
+    private(set) var outputBytes = 0
+
     override func dataReceived(slice: ArraySlice<UInt8>) {
         super.dataReceived(slice: slice) // parse first: OSC marks in this chunk update the status
+        outputBytes &+= slice.count
         onOutput?()
     }
 
@@ -619,6 +623,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private var servingStart: Int?
     private var servingScanned: Int?
     private var servingCommand = -1
+    /// The tab's output count (NextTermView.outputBytes) at the last scan: no new output, nothing new to scan.
+    private var servingOutput = -1
 
     /// Twice a second: look at what the running command printed since it started for a loopback URL.
     /// Not for agents, editors or ssh (an address there is the agent's business, or the other host's).
@@ -639,8 +645,13 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             // itself is skipped below).
             servingStart = pendingServingStart ?? max(0, (lastTextRow() ?? 0) - 50)
             pendingServingStart = nil
+            servingOutput = -1
         }
-        guard servedURL == nil, let start = servingStart, let last = lastTextRow() else { return }
+        // A tab with nothing new printed since the last look has nothing new to scan (the last line, which may
+        // have been mid-write then, is as it was).
+        guard servedURL == nil, view.outputBytes != servingOutput else { return }
+        servingOutput = view.outputBytes
+        guard let start = servingStart, let last = lastTextRow() else { return }
         let first = max(start, (servingScanned ?? start - 1) + 1, last - 400)
         guard first <= last else { return }
         let terminal = view.getTerminal()
