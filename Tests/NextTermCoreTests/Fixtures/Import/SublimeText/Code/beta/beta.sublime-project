@@ -1,0 +1,5 @@
+{
+	"folders": [ { "path": "." }, { "path": "../alpha" } ],
+	"settings": { "env": { "TOKEN": "FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" } },
+	"build_systems": [ { "name": "Deploy", "shell_cmd": "deploy --token eyJhbGciOiJIUzI1NiJ9.eyJmaXh0dXJlIjoic2VjcmV0In0.bm90LWEtcmVhbC1zaWduYXR1cmU" } ],
+}

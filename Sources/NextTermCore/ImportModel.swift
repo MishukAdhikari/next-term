@@ -67,15 +67,63 @@ public enum ImportSourceKind: String, CaseIterable, Codable, Sendable {
     /// `vsCodeFork`: any other editor built on VS Code (Trae, Kiro, Antigravity, Positron, one found by its
     /// product.json…), named by its app.
     case vsCode, vsCodeInsiders, vsCodium, cursor, devinDesktop, vsCodeFork, jetBrains, zed, iTerm2, ghostty, warp, terminalApp
-    case kitty, alacritty, wezTerm, kaku, cmux
+    case kitty, alacritty, wezTerm, kaku, cmux, sublimeText
 
     /// The preset that fits people coming from it.
     public var preset: KeymapPreset {
         switch self {
         case .vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop, .vsCodeFork: return .vsCode
         case .jetBrains: return .jetBrains
-        case .zed, .iTerm2, .ghostty, .warp, .terminalApp, .kitty, .alacritty, .wezTerm, .kaku, .cmux: return .nextTerm
+        case .zed, .iTerm2, .ghostty, .warp, .terminalApp, .kitty, .alacritty, .wezTerm, .kaku, .cmux, .sublimeText: return .nextTerm
         }
+    }
+
+    /// The group the import window lists it in.
+    public var family: ImportFamily {
+        switch self {
+        case .vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop, .vsCodeFork, .jetBrains, .zed, .sublimeText: return .editors
+        case .iTerm2, .ghostty, .warp, .terminalApp, .kitty, .alacritty, .wezTerm, .kaku, .cmux: return .terminals
+        }
+    }
+
+    /// What an import from it can bring, whatever its files hold today (fixed per app, so listing apps reads
+    /// nothing).
+    public var canBring: [ImportContent] {
+        switch self {
+        case .vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop, .vsCodeFork, .jetBrains:
+            return [.shortcuts, .settings, .fonts, .colours, .projects]
+        case .zed, .sublimeText: return [.shortcuts, .settings, .fonts, .projects]
+        case .ghostty, .kitty, .alacritty, .wezTerm, .kaku, .cmux: return [.shortcuts, .settings, .fonts, .colours]
+        case .iTerm2, .warp, .terminalApp: return [.settings, .fonts, .colours]
+        }
+    }
+
+    /// Whether its reader looks for the app itself, so an app not found was removed. Terminal comes with macOS.
+    public var looksForApp: Bool { self != .terminalApp }
+}
+
+/// The groups the import window lists apps in, in its order. Files (a theme or settings file picked by hand) come
+/// in a later version.
+public enum ImportFamily: String, CaseIterable, Codable, Sendable {
+    case editors, terminals
+
+    public var title: String {
+        switch self {
+        case .editors: return "Editors"
+        case .terminals: return "Terminals"
+        }
+    }
+}
+
+/// What an app can bring, as the import window names it.
+public enum ImportContent: String, CaseIterable, Codable, Sendable {
+    case shortcuts, settings, fonts, colours, projects
+
+    /// "shortcuts, settings, fonts and colours".
+    public static func list(_ contents: [ImportContent]) -> String {
+        let names = contents.map(\.rawValue)
+        guard let last = names.last else { return "" }
+        return names.count == 1 ? last : names.dropLast().joined(separator: ", ") + " and " + last
     }
 }
 
@@ -108,6 +156,9 @@ public struct DetectedApp: Equatable, Sendable {
         self.version = version
         self.notUsedLately = notUsedLately
     }
+
+    /// Its reader looked for the app and didn't find it: the settings stayed after the app was removed.
+    public var appRemoved: Bool { appPath == nil && kind.looksForApp }
 
     /// How long an app goes unused before it is "not used lately" (JetBrains' own ConfigImportHelper ignores
     /// settings unused this long).

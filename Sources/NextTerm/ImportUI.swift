@@ -24,14 +24,14 @@ enum ImportSources {
     }
 
     static let noneFound = "No settings were found on this Mac from VS Code or an editor built on it (VS Code Insiders, VSCodium, "
-        + "Cursor, Windsurf, Kiro, Trae and others), a JetBrains IDE, Zed, iTerm2, Ghostty, cmux, kitty, Alacritty, WezTerm, Kaku, "
-        + "Warp or a changed Terminal profile."
+        + "Cursor, Windsurf, Kiro, Trae and others), a JetBrains IDE, Zed, Sublime Text, iTerm2, Ghostty, cmux, kitty, Alacritty, "
+        + "WezTerm, Kaku, Warp or a changed Terminal profile."
 
     /// Each family's reader (NextTermCore/Import*.swift). The self-test can swap these for its own.
     nonisolated(unsafe) static var detectors: [() -> [DetectedApp]] = [
         { ImportVSCode.detect() }, { ImportJetBrains.detect() }, { ImportZed.detect() }, { ImportITerm2.detect() },
         { ImportGhostty.detect() }, { ImportWarp.detect() }, { ImportTerminalApp.detect() }, { ImportKitty.detect() },
-        { ImportAlacritty.detect() }, { ImportWezTerm.detect() }, { ImportCmux.detect() },
+        { ImportAlacritty.detect() }, { ImportWezTerm.detect() }, { ImportCmux.detect() }, { ImportSublimeText.detect() },
     ]
     nonisolated(unsafe) static var planner: (DetectedApp, Bool) -> ImportPlan? = { app, usKeyboard in
         switch app.kind {
@@ -47,6 +47,7 @@ enum ImportSources {
         case .alacritty: return ImportAlacritty.plan(for: app, usKeyboard: usKeyboard)
         case .wezTerm, .kaku: return ImportWezTerm.plan(for: app, usKeyboard: usKeyboard)
         case .cmux: return ImportCmux.plan(for: app, usKeyboard: usKeyboard)
+        case .sublimeText: return ImportSublimeText.plan(for: app, usKeyboard: usKeyboard)
         }
     }
 
