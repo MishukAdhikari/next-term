@@ -1,0 +1,5 @@
+# Outside Alacritty's folder: an import that names it is never read.
+[font]
+size = 31
+[env]
+SECRET = "FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
