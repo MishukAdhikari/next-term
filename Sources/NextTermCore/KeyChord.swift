@@ -201,17 +201,21 @@ public struct KeyBindings: Equatable, Sendable {
     /// `ids` on one key has it where, the parts' first. Commands of one name are named once: "⌘R is Fetch while the
     /// branch popup is open and everywhere else".
     public static func sharingNote(_ chord: KeyChord, _ ids: [String], title: (String) -> String) -> String {
+        if let first = ids.first, ids.count > 1, ids.allSatisfy({ title($0) == title(first) }) {
+            let parts = ids.compactMap { id -> Part? in
+                if case .part(let part) = scope(of: id) { return part }
+                return nil
+            }.sorted { $0.rawValue < $1.rawValue }
+            let places = parts.map(\.whileActive) + (parts.count < ids.count ? ["everywhere else"] : [])
+            let listed = places.count < 3 ? places.joined(separator: " and ")
+                : places.dropLast().joined(separator: ", ") + " and " + (places.last ?? "")
+            return "\(chord.display) is \(title(first)) " + listed
+        }
         func part(_ id: String) -> Part? {
             if case .part(let part) = scope(of: id) { return part }
             return nil
         }
         let inParts = ids.filter { part($0) != nil }.sorted { (part($0)?.rawValue ?? 0) < (part($1)?.rawValue ?? 0) }
-        if let first = ids.first, ids.allSatisfy({ title($0) == title(first) }) {
-            let places = inParts.compactMap { part($0)?.whileActive } + (ids.contains { part($0) == nil } ? ["everywhere else"] : [])
-            let listed = places.count < 3 ? places.joined(separator: " and ")
-                : places.dropLast().joined(separator: ", ") + " and " + (places.last ?? "")
-            return "\(chord.display) is \(title(first)) " + listed
-        }
         let phrases = inParts.map { "\(title($0)) \(part($0)?.whileActive ?? "")" }
             + ids.filter { part($0) == nil }.map { "\(title($0)) everywhere else" }
         return "\(chord.display) is " + phrases.joined(separator: ", ")
