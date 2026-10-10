@@ -20,7 +20,12 @@ enum ImportSources {
     }
 
     static func plan(for app: DetectedApp) -> ImportPlan {
-        planner(app, usesUSKeyboard) ?? ImportPlan(preset: app.preset)
+        plan(for: app, usKeyboard: usesUSKeyboard)
+    }
+
+    /// The plan with the keyboard layout given (read on the main thread), so it can be made off it.
+    static func plan(for app: DetectedApp, usKeyboard: Bool) -> ImportPlan {
+        planner(app, usKeyboard) ?? ImportPlan(preset: app.preset)
     }
 
     static let noneFound = "No settings were found on this Mac from VS Code or an editor built on it (VS Code Insiders, VSCodium, "
@@ -333,6 +338,30 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
     private var applyButton: NSButton?
     private var radios: [NSButton] = []
 
+    /// An agent's request (apply_import): this window is its ask, with the agent's rows ticked and a banner naming it.
+    struct AgentAsk {
+        /// Who asks, as the approval windows name it ("the agent in the tab “claude” in api").
+        let who: String
+        /// The agent's reason, shown as its own words.
+        let reason: String?
+        /// The row ids it asked for (MCPImport's ids), ticked at first; the rest start unticked.
+        let ticks: Set<String>
+        /// Lines under its words: an earlier import's Undo that would go, a file's warning.
+        let notes: [String]
+        /// How the user answered, once.
+        let answered: (AgentOutcome) -> Void
+    }
+
+    enum AgentOutcome {
+        /// Applied with these rows ticked; `snapshot` nil when nothing changed, `replaced` the import whose Undo went.
+        case applied(ticked: Set<String>, snapshot: ImportSnapshot?, replaced: ImportSnapshot?)
+        case declined(stopAsking: Bool)
+    }
+
+    private(set) var agentAsk: AgentAsk?
+    /// The user's own import window is open (not an agent's request).
+    var isOpenForUser: Bool { window?.isVisible == true && agentAsk == nil }
+
     init() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 520), styleMask: [.titled, .closable],
                               backing: .buffered, defer: false)
@@ -349,6 +378,12 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
     /// it was last used and what it can bring; then keeping Next Term's shortcuts; then, folded, the apps not used
     /// lately.
     func showChooser(firstRun: Bool, completion: ((_ imported: ImportPlan?) -> Void)?) {
+        // An agent's request is open here: it comes to the front instead, and stays as the user left it.
+        if agentAsk != nil {
+            window?.makeKeyAndOrderFront(nil)
+            completion?(nil)
+            return
+        }
         self.completion = completion
         apps = ImportSources.detect()
         let title = Self.label(firstRun ? "Coming from another app?" : "Bring over your settings and shortcuts", size: 20, weight: .semibold)
@@ -463,11 +498,47 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
 
     /// The preview: every change with where it came from, each one a checkbox.
     func showPreview(for found: DetectedApp, plan given: ImportPlan? = nil) {
+        if agentAsk != nil {
+            window?.makeKeyAndOrderFront(nil)
+            return
+        }
         app = found
         source = given ?? ImportSources.plan(for: found)
         buildPreview(usePreset: true)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// An agent's request: the preview of `plan` with the rows it asked for ticked and the others unticked, under a
+    /// banner naming the agent. Shown in front without taking the keyboard, and Return never applies it.
+    func showAgentRequest(for found: DetectedApp, plan: ImportPlan, ask: AgentAsk) {
+        agentAsk = ask
+        completion = nil
+        app = found
+        source = plan
+        buildPreview(usePreset: ask.ticks.contains(MCPImport.presetID))
+        window?.center()
+        window?.orderFront(nil)
+        if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
+    }
+
+    /// Ends an agent's request as a decline (no answer in time): the window closes.
+    func endAgentRequest() {
+        guard agentAsk != nil else { return }
+        closeWithoutImport()
+    }
+
+    /// The banner over an agent's request: who asks, in whose words, and what the user decides.
+    private func agentBanner(_ ask: AgentAsk, from name: String) -> [NSView] {
+        let who = ask.who.prefix(1).uppercased() + String(ask.who.dropFirst())
+        var views = [Self.wrapping("\(who) asks to bring these over from \(name). Only the rows you tick change, and only when you click Apply.")]
+        if let words = ask.reason?.trimmingCharacters(in: .whitespacesAndNewlines), !words.isEmpty {
+            let quote = Self.wrapping("The agent says: “\(String(words.prefix(500)))”", secondary: true, size: 12)
+            quote.toolTip = "These are the agent's words, not Next Term's."
+            views.append(quote)
+        }
+        for note in ask.notes { views.append(Self.wrapping(note, secondary: true, size: 12)) }
+        return views
     }
 
     /// The user's own shortcuts are checked against Next Term's as they will be: under the plan's preset
@@ -480,6 +551,9 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         self.plan = plan
         settingBoxes = []
         var rows: [NSView] = [Self.label("Bring over from \(found.name)", size: 20, weight: .semibold)]
+        let ask = agentAsk
+        if let ask { rows += agentBanner(ask, from: found.name) }
+        let ids = MCPImport.rowIDs(plan)
 
         // Shortcuts.
         if plan.preset != .nextTerm || current != .nextTerm {
@@ -488,6 +562,7 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
                                : "Use \(plan.preset.name) shortcuts (\(plan.preset.overrides.count) differ from Next Term’s)",
                                target: self, action: #selector(presetToggled))
             box.state = plan.preset != current && usePreset ? .on : .off
+            box.identifier = .init(MCPImport.presetID)
             box.isEnabled = plan.preset != current
             presetBox = box
             rows.append(box)
@@ -504,10 +579,12 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
             rows.append(Self.heading("Your shortcuts (\(plan.shortcuts.count))"))
             let chords = KeyboardShortcuts.shared.chords(under: under)
             var list: [NSView] = []
-            for planned in plan.shortcuts {
+            for (index, planned) in plan.shortcuts.enumerated() {
                 let box = NSButton(checkboxWithTitle: Self.describe(planned, from: chords[planned.command] ?? nil),
                                    target: self, action: #selector(recount))
-                box.state = planned.ticked ? .on : .off
+                let ticked = ask.map { $0.ticks.contains(ids.shortcuts[index]) && planned.allowed } ?? planned.ticked
+                box.state = ticked ? .on : .off
+                box.identifier = .init(ids.shortcuts[index])
                 box.isEnabled = planned.allowed
                 shortcutBoxes.append((box, planned))
                 list.append(box)
@@ -538,9 +615,11 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         // Settings.
         if !plan.settings.isEmpty {
             rows.append(Self.heading("Settings"))
-            for planned in plan.settings {
+            for (index, planned) in plan.settings.enumerated() {
                 let box = NSButton(checkboxWithTitle: Self.describe(planned.setting), target: self, action: #selector(recount))
-                box.state = planned.ticked ? .on : .off
+                let ticked = ask.map { $0.ticks.contains(ids.settings[index]) } ?? planned.ticked
+                box.state = ticked ? .on : .off
+                box.identifier = .init(ids.settings[index])
                 settingBoxes.append((box, planned))
                 rows.append(box)
                 if case .terminalPalette(let palette) = planned.setting { rows.append(Self.swatches(palette)) }
@@ -555,7 +634,9 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
             rows.append(Self.heading("Recent projects"))
             let box = NSButton(checkboxWithTitle: "Add \(projects.count) recent project\(projects.count == 1 ? "" : "s") to Open Recent and the Welcome window",
                                target: self, action: #selector(recount))
-            box.state = .on
+            let recentsTicked = ask.map { $0.ticks.contains(MCPImport.recentsID) } ?? true
+            box.state = recentsTicked ? .on : .off
+            box.identifier = .init(MCPImport.recentsID)
             recentsBox = box
             rows.append(box)
             let names = projects.prefix(8).map { RecentProjects.abbreviate($0) }.joined(separator: "\n")
@@ -581,11 +662,18 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         }
 
         let cancel = NSButton(title: "Cancel", target: self, action: #selector(closeWithoutImport))
-        cancel.keyEquivalent = "\u{1b}"
         let apply = NSButton(title: "Apply", target: self, action: #selector(applyChosen))
-        apply.keyEquivalent = "\r"
         applyButton = apply
-        layout(rows, buttons: [cancel, apply], scrolls: true)
+        if ask != nil {
+            // An agent asks at a moment of its own choosing: no key answers it, and only a click applies.
+            apply.refusesFirstResponder = true
+            let stop = NSButton(title: "Decline and Stop Asking", target: self, action: #selector(declineAndStop))
+            layout(rows, buttons: [stop, cancel, apply], scrolls: true)
+        } else {
+            cancel.keyEquivalent = "\u{1b}"
+            apply.keyEquivalent = "\r"
+            layout(rows, buttons: [cancel, apply], scrolls: true)
+        }
         recount()
     }
 
@@ -621,10 +709,11 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
 
     private var choice: ImportChoice {
         let projects = plan?.recentProjects.filter { !AppDelegate.shared.recentProjects.contains($0) } ?? []
-        return ImportChoice(usePreset: presetBox?.isEnabled == true && presetBox?.state == .on,
-                            settings: settingBoxes.filter { $0.0.state == .on }.map(\.1),
-                            shortcuts: shortcutBoxes.filter { $0.0.state == .on && $0.1.allowed }.map(\.1),
-                            recentProjects: recentsBox?.state == .on ? projects : [])
+        let usePreset = presetBox?.isEnabled == true && presetBox?.state == .on
+        let settings: [PlannedSetting] = settingBoxes.filter { $0.0.state == .on }.map(\.1)
+        let shortcuts: [PlannedShortcut] = shortcutBoxes.filter { $0.0.state == .on && $0.1.allowed }.map(\.1)
+        let recents: [String] = recentsBox?.state == .on ? projects : []
+        return ImportChoice(usePreset: usePreset, settings: settings, shortcuts: shortcuts, recentProjects: recents)
     }
 
     @objc private func recount() {
@@ -638,21 +727,58 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func applyChosen() {
         guard let plan, let app else { return }
-        ImportCoordinator.shared.apply(choice, plan: plan, from: app.name)
+        let ticked = tickedIDs
+        let replaced = ImportCoordinator.shared.last
+        let snapshot = ImportCoordinator.shared.apply(choice, plan: plan, from: app.name)
+        if let ask = agentAsk {
+            agentAsk = nil
+            ask.answered(.applied(ticked: ticked, snapshot: snapshot, replaced: snapshot == nil ? nil : replaced))
+        }
         finish(with: plan)
+    }
+
+    /// The ids of the rows ticked now (MCPImport's), for an agent's answer.
+    var tickedIDs: Set<String> {
+        guard let plan else { return [] }
+        let ids = MCPImport.rowIDs(plan)
+        var ticked = Set<String>()
+        if presetBox?.isEnabled == true, presetBox?.state == .on { ticked.insert(MCPImport.presetID) }
+        for (index, entry) in settingBoxes.enumerated() where entry.0.state == .on { ticked.insert(ids.settings[index]) }
+        for (index, entry) in shortcutBoxes.enumerated() where entry.0.state == .on && entry.1.allowed { ticked.insert(ids.shortcuts[index]) }
+        if recentsBox?.state == .on { ticked.insert(MCPImport.recentsID) }
+        return ticked
+    }
+
+    @objc private func declineAndStop() { declineAgent(stopAsking: true) }
+
+    /// Answers an agent's request as declined, once.
+    private func declineAgent(stopAsking: Bool) {
+        if let ask = agentAsk {
+            agentAsk = nil
+            ask.answered(.declined(stopAsking: stopAsking))
+        }
+        finish(with: nil)
     }
 
     @objc private func copySkipped() {
         guard let plan else { return }
-        var text = "Next Term imported settings from \(app?.name ?? "another app"). These were not brought over; help me with them if Next Term has a way:\n"
+        let name = app?.name ?? "another app"
+        var text = "Next Term imported settings from \(name). These were not brought over; help me with them if Next Term has a way. "
+            + "Next Term's MCP tools list_import_sources, preview_import and apply_import show and ask for the same rows: use them rather than "
+            + "reading \(name)'s own files, which sit next to tokens.\n"
         text += plan.skipped.map { "- \($0.item): \($0.reason)" }.joined(separator: "\n")
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
 
-    @objc private func closeWithoutImport() { finish(with: nil) }
+    @objc private func closeWithoutImport() { declineAgent(stopAsking: false) }
 
     func windowWillClose(_ notification: Notification) {
+        // Closing an agent's request is a decline.
+        if let ask = agentAsk {
+            agentAsk = nil
+            ask.answered(.declined(stopAsking: false))
+        }
         let done = completion
         completion = nil
         done?(nil)

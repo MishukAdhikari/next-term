@@ -108,7 +108,8 @@ enum MCPWriteControl {
                         change: @escaping (_ approved: String, _ window: AgentApprovalWindow?) -> Void) {
         if case .preApprovedByGrant(let grant) = context.approval { return change("by grant \(grant)", nil) }
         if isStopped(context) { return reply(MCPControl.fail(stoppedText)) }
-        if pending != nil {
+        // One request at a time, an import request included.
+        if pending != nil || MCPImportControl.open != nil {
             return reply(MCPControl.fail("Another change is waiting for the user's answer on the Mac; nothing changed. Try again once it is answered."))
         }
         let asking = Asking(asker: context.asker)
