@@ -800,6 +800,7 @@ enum SelfTest {
 
         await paneChecks(c)
         await menuChecks(c)
+        await MainActor.run { acknowledgementsChecks() }
         await newFileChecks(c)
         await paneHeaderChecks(c)
 

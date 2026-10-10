@@ -1198,11 +1198,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     // MARK: menu
 
+    @objc func showAcknowledgements(_ sender: Any?) {
+        MainActor.assumeIsolated { AcknowledgementsWindowController.show() }
+    }
+
     private func buildMenu() -> NSMenu {
         let main = NSMenu()
 
         let app = submenu(main, "Next Term")
         app.addItem(withTitle: "About Next Term", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        item(app, "Acknowledgements", #selector(showAcknowledgements(_:)), "", target: self)
         app.addItem(.separator())
         item(app, "Settings…", #selector(showSettings(_:)), ",", target: self)
         item(app, "Check for Updates…", #selector(checkForUpdates(_:)), "", target: self)
