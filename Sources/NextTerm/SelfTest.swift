@@ -1095,13 +1095,26 @@ enum SelfTest {
         check(welcome.shownSessionTitles.first == "Fix the login redirect loop", "newest first, with the agent's own title")
         welcomeReturnKeyChecks(welcome, project: project)
         await pause(0.3)
-        await screenshot(welcomeWindow, suffix: "welcome")
-        welcome.resumeSelected()
+        await screenshot(welcomeWindow, suffix: "welcome") // every session listed, the search empty
+        let searched = await welcomeSessionSearchChecks(welcome, project: project)
+        if searched { await screenshot(welcomeWindow, suffix: "welcome-search") } // “loop fix” typed, its one session
+        // Return in the sessions search, where it is Resume's (Open Project has it everywhere else); without the
+        // keys (the app not in front), the button's own action.
+        if searched { pressAppKey(welcomeWindow, "\r", code: 36) } else { welcome.resumeSelected() }
         // In a new tab, or in the project window's untouched first tab when it is in that folder already.
         let resumed = await wait(10) { app.controllers.flatMap(\.tabs).contains { $0.screenTail(10).contains("claude --resume s1") } }
+        if searched { check(resumed, "Return in the sessions search resumes the session selected there") }
         let tab = app.controllers.flatMap(\.tabs).first { $0.screenTail(10).contains("claude --resume s1") }
         check(resumed && tab.map { canonicalPath($0.directory) == project } == true,
               "Resume runs `claude --resume <id>` in a new tab in the session's folder", tab?.screenTail(4).joined(separator: " | ") ?? "no tab")
+        welcome.close()
+        // Closed with a search typed (the keys above leave "loop fix"), and shown again, as when the last project
+        // window closes: the same project, every session listed.
+        welcome.sessionQuery = "loop fix"
+        app.showWelcome(nil)
+        check(await wait(5) { welcome.sessionQuery.isEmpty && welcome.shownSessionTitles.count == 3 },
+              "the Welcome window shown again empties the sessions search, and lists every session",
+              "“\(welcome.sessionQuery)”, \(welcome.shownSessionTitles.count) shown, project \(welcome.selectedProject ?? "none")")
         welcome.close()
 
         guard let holder = app.controllers.first(where: { $0.project == project }) ?? app.controllers.first(where: { $0.tabs.contains { $0 === tab } }),
