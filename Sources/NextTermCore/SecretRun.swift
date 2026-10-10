@@ -452,20 +452,20 @@ public enum SecretRun {
     }
 
     /// "npx -y runs the newest @x/y each time, …" for a package with no exact version: npx, bunx, uvx, pnpm dlx and
-    /// yarn dlx (`unpinnedPackage`), and `pipx run`.
+    /// yarn dlx (`SkillReview.unpinnedPackage`), and `pipx run`.
     static func unpinnedText(_ words: [String]) -> String? {
         let start = words.firstIndex { !isAssignment($0) } ?? words.endIndex
         let command = Array(words[start...])
         guard let first = command.first else { return nil }
         let isPipx = CommandClassifier.baseName(first) == "pipx"
-        guard isPipx ? unpinnedPipx(command) != nil : unpinnedPackage(command) else { return nil }
+        guard isPipx ? unpinnedPipx(command) != nil : SkillReview.unpinnedPackage(command) else { return nil }
         let package = (isPipx ? unpinnedPipx(command) : command.dropFirst().first { !$0.hasPrefix("-") && $0 != "dlx" }) ?? ""
         let lead = command.prefix { $0 != package }.joined(separator: " ")
         return "\(lead) runs the newest \(package) each time, so code you haven't seen gets the key. Pin a version to avoid this."
     }
 
     /// `pipx run`'s package when it has no exact version: the value of `--spec` when given, else the first word after
-    /// `run` that is not a flag. Pinned only as `name==<exact version>`.
+    /// `run` that is not a flag. Pinned only as `name==<exact version>` (`SkillReview.isExactVersion`).
     static func unpinnedPipx(_ words: [String]) -> String? {
         guard words.count >= 3, words[1] == "run" else { return nil }
         var package: String?
@@ -487,47 +487,8 @@ public enum SecretRun {
             index += 1
         }
         guard let package else { return nil }
-        if let equals = package.range(of: "=="), isExactVersion(package[equals.upperBound...]) { return nil }
+        if let equals = package.range(of: "=="), SkillReview.isExactVersion(package[equals.upperBound...]) { return nil }
         return package
-    }
-
-    // From SkillReview (skills-mcp), copied unchanged until the 0.11 base holds it; the rebase calls SkillReview's.
-
-    /// An exact version, as npm writes one: 1.2.3, 1.2.3-beta.1, 1.2.3+build.5. `@latest`, `@next`, `@^1`,
-    /// `@1` and other ranges are not one.
-    static let exactVersion = #"\d+\.\d+\.\d+(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?"#
-
-    /// A command's words run a package with no exact version: npx, bunx or uvx, or pnpm or yarn with dlx
-    /// first. The package is the first word after them that is not a flag.
-    static func unpinnedPackage(_ words: [String]) -> Bool {
-        guard let first = words.first else { return false }
-        var program = (first as NSString).lastPathComponent.lowercased()
-        for suffix in [".cmd", ".exe"] where program.hasSuffix(suffix) { program.removeLast(suffix.count) }
-        var rest = words.dropFirst()
-        switch program {
-        case "npx", "bunx", "uvx": break
-        case "pnpm", "yarn":
-            guard rest.first?.lowercased() == "dlx" else { return false }
-            rest = rest.dropFirst()
-        default: return false
-        }
-        guard let package = rest.first(where: { !$0.hasPrefix("-") }) else { return false }
-        return !isPinned(package, python: program == "uvx")
-    }
-
-    /// `name@1.2.3` (`@scope/name@1.2.3`), or for uvx also `name==1.2.3`. A path is the folder's own code,
-    /// not a package fetched by name.
-    static func isPinned(_ package: String, python: Bool) -> Bool {
-        if package.hasPrefix(".") || package.hasPrefix("/") || package.hasPrefix("~") { return true }
-        var name = Substring(package.lowercased())
-        if name.hasPrefix("@") { name = name.dropFirst() }
-        if let at = name.firstIndex(of: "@") { return isExactVersion(name[name.index(after: at)...]) }
-        if python, let equals = name.range(of: "==") { return isExactVersion(name[equals.upperBound...]) }
-        return false
-    }
-
-    static func isExactVersion(_ text: Substring) -> Bool {
-        String(text).range(of: "^" + exactVersion + "$", options: .regularExpression) != nil
     }
 
     // MARK: the folder's .env
