@@ -105,7 +105,7 @@ import Testing
         // A bundled theme, from Ghostty.app; a missing one; a path.
         let bundled = try self.plan("theme = Dracula", files: ["/Applications/Ghostty.app/Contents/Resources/ghostty/themes/Dracula": "background = #282a36"])
         #expect(bundled.settings.first?.source == "theme Dracula")
-        #expect(reasons(try self.plan("theme = Nowhere"))["theme Nowhere"] == "not found in Ghostty's themes folders")
+        #expect(reasons(try self.plan("theme = Nowhere"))["theme Nowhere"] == "not found in Ghostty's themes folders, or in an app that comes with them")
         #expect(reasons(try self.plan("theme = /etc/passwd"))["theme"] == "only a theme given by name is read")
         #expect(reasons(try self.plan("theme = ../../secret"))["theme"] == "only a theme given by name is read")
     }
