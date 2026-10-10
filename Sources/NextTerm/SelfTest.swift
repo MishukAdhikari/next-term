@@ -654,6 +654,7 @@ enum SelfTest {
         await gitDiffChecks(c, proj: proj)
         await backgroundFetchChecks(c)
         await gitRefreshChecks(c)
+        await tabHangupChecks(c)
         await ragColorChecks(c, proj: proj)
         await envValueChecks(c, proj: proj)
         await importChecks(c, proj: proj)
