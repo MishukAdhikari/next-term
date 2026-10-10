@@ -655,6 +655,7 @@ enum SelfTest {
         await backgroundFetchChecks(c)
         await gitRefreshChecks(c)
         await tabHangupChecks(c)
+        await drawingChecks(c)
         await ragColorChecks(c, proj: proj)
         await envValueChecks(c, proj: proj)
         await importChecks(c, proj: proj)
