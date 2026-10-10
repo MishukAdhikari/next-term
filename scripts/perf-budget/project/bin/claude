@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""A stand-in for an AI agent at work, as its terminal UI draws (named claude, so Next Term takes it for an agent):
+a spinner and status block redrawn about 12 times a second, a line of streamed text every second. Stops by itself
+after the seconds given (default 60), or on ^C."""
+import os, sys, time
+
+seconds = float(sys.argv[1]) if len(sys.argv) > 1 else 60
+spinner = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+width = 76
+start = time.time()
+height = 0
+frame = 0
+os.write(1, b'\x1b[?25l')  # the cursor hidden, as agent UIs keep it
+try:
+    while time.time() - start < seconds:
+        frame += 1
+        elapsed = int(time.time() - start)
+        out = '\x1b[2K\x1b[1A' * height + '\x1b[2K\r' if height else ''
+        if frame % 12 == 0:  # a finished line of the transcript, above the live block
+            out += f'● Update(src/components/Panel{frame}.tsx) · added 3 lines, removed 1 line in handleSubmit\n'
+        block = [
+            f'{spinner[frame % len(spinner)]} Working… ({elapsed}s · ↓ {frame * 7} tokens · esc to interrupt)',
+            '',
+            '╭' + '─' * width + '╮',
+            '│ > ' + ' ' * (width - 3) + '│',
+            '╰' + '─' * width + '╯',
+            '  ⏵⏵ accept edits on (shift+tab to cycle)',
+        ]
+        out += '\n'.join(block) + '\n'
+        height = len(block)
+        os.write(1, out.encode())
+        time.sleep(0.08)
+except KeyboardInterrupt:
+    pass
+finally:
+    os.write(1, b'\x1b[?25h')
