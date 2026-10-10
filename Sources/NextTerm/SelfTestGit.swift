@@ -132,7 +132,10 @@ extension SelfTest {
                   "Delete on Remote deletes only the commit it showed: after a push since the last fetch, it asks you to fetch", sheetText())
             check(run(remote, "rev-parse", "feat/remote-x") == pushedSince, "and the commit pushed since stays on the remote")
             _ = await press("Fetch")
-            check(await wait(10) { run(repo, "rev-parse", "origin/feat/remote-x") == pushedSince }, "Fetch brings that commit in")
+            // Its notice comes once the branches are read again, after the fetch: dismissed before then, it would come
+            // up over the delete's Undo below.
+            check(await wait(10) { run(repo, "rev-parse", "origin/feat/remote-x") == pushedSince && GitToast.text?.hasPrefix("Fetched") == true },
+                  "Fetch brings that commit in", GitToast.text ?? "no notice")
             GitToast.dismiss()
         }
 
