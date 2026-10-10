@@ -1107,6 +1107,14 @@ enum SelfTest {
         check(resumed && tab.map { canonicalPath($0.directory) == project } == true,
               "Resume runs `claude --resume <id>` in a new tab in the session's folder", tab?.screenTail(4).joined(separator: " | ") ?? "no tab")
         welcome.close()
+        // Closed with a search typed (the keys above leave "loop fix"), and shown again, as when the last project
+        // window closes: the same project, every session listed.
+        welcome.sessionQuery = "loop fix"
+        app.showWelcome(nil)
+        check(await wait(5) { welcome.sessionQuery.isEmpty && welcome.shownSessionTitles.count == 3 },
+              "the Welcome window shown again empties the sessions search, and lists every session",
+              "“\(welcome.sessionQuery)”, \(welcome.shownSessionTitles.count) shown, project \(welcome.selectedProject ?? "none")")
+        welcome.close()
 
         guard let holder = app.controllers.first(where: { $0.project == project }) ?? app.controllers.first(where: { $0.tabs.contains { $0 === tab } }),
               let window = holder.window else { return check(false, "a window for the project") }

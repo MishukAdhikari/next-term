@@ -27,8 +27,8 @@ public struct SearchWords: Sendable, Equatable {
 }
 
 extension AgentSession {
-    /// A sessions search looks only at what the session's row shows (its title, agent, branch and model), all
-    /// read with the list already: never the transcript, its folder or its id.
+    /// A sessions search looks only at the session's title, agent, branch and model, all read with the list
+    /// already: never the transcript, its folder, its id, its time or whether it is running.
     public func matches(_ search: SearchWords) -> Bool {
         guard !search.isEmpty else { return true }
         let fields = [title, agent.name, gitBranch ?? "", model ?? ""]

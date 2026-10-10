@@ -28,7 +28,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     private let agentMenu = NSPopUpButton(frame: .zero, pullsDown: false)
     private let sessionsTitle = NSTextField(labelWithString: "")
     /// Narrows the chosen project's sessions as you type, within the agent filter (`SearchWords`, as the
-    /// projects search and ⌥⌘O match), over what each row shows. Emptied when another project is chosen.
+    /// projects search and ⌥⌘O match), over each session's title, agent, branch and model. Emptied when another
+    /// project is chosen, and when the window is shown again after a close.
     private let sessionSearch = NSSearchField()
     private let empty = NSTextField(wrappingLabelWithString: "")
     private let resumeButton = NSButton(title: "Resume", target: nil, action: nil)
@@ -75,6 +76,9 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     required init?(coder: NSCoder) { fatalError("not used") }
 
     override func showWindow(_ sender: Any?) {
+        // Shown again after a close (this controller lives as long as the app), it lists every session, as for
+        // another project. Shown while up, or brought back from the Dock, it keeps what was typed.
+        if let window, !window.isVisible, !window.isMiniaturized { resetSessionSearch() }
         reloadProjects()
         reloadServers()
         super.showWindow(sender)
