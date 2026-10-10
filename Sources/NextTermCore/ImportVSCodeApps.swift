@@ -10,8 +10,9 @@ extension ImportVSCode {
     /// An editor known by name, found by its settings folder even after the app itself was removed (its
     /// folder stays behind). `folder` is the app's product.json `nameShort`, which names its folder in
     /// ~/Library/Application Support; `dataFolders` its `dataFolderName`, the folder in the home folder that
-    /// holds its extensions. Each was checked against the app's own product.json or the folders its
-    /// uninstaller removes; an editor whose names couldn't be checked is found only while it is installed.
+    /// holds its extensions (none: not checked, so never guessed). Each was checked against the app's own
+    /// product.json or the folders its uninstaller removes; an editor whose settings folder couldn't be checked
+    /// (Windsurf Next) is found only while it is installed.
     struct Source {
         let kind: ImportSourceKind
         let name: String
@@ -40,6 +41,9 @@ extension ImportVSCode {
         Source(kind: .vsCodeFork, name: "Antigravity", folder: "Antigravity", bundles: ["Antigravity.app"], dataFolders: [".antigravity"]),
         Source(kind: .vsCodeFork, name: "Positron", folder: "Positron", bundles: ["Positron.app"], dataFolders: [".positron"]),
         Source(kind: .vsCodeFork, name: "Void", folder: "Void", bundles: ["Void.app"], dataFolders: [".void-editor"]),
+        // Qoder's settings folder is checked, its extensions folder isn't (~/.qoder also holds its agents' data),
+        // so its keymap extensions are read only while the app is installed and its product.json names the folder.
+        Source(kind: .vsCodeFork, name: "Qoder", folder: "Qoder", bundles: ["Qoder.app"], dataFolders: []),
     ]
 
     static let family: Set<ImportSourceKind> = [.vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop, .vsCodeFork]

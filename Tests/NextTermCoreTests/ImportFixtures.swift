@@ -18,7 +18,7 @@ enum ImportFixtures {
     /// A copy of the fixture `name` in a new temp folder (a test may add dates or databases to it), as its
     /// real path. The caller removes it.
     static func copy(_ name: String) throws -> String {
-        let folder = canonicalPath(FileManager.default.temporaryDirectory.path) + "/nt-fx-" + UUID().uuidString.prefix(8)
+        let folder = canonicalPath(FileManager.default.temporaryDirectory.path) + "/nt-fx-" + String(UUID().uuidString.prefix(8))
         try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
         let home = folder + "/home"
         try FileManager.default.copyItem(atPath: root.appendingPathComponent(name).path, toPath: home)

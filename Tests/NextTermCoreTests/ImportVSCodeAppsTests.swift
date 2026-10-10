@@ -201,6 +201,28 @@ import Testing
         #expect(ImportVSCode.extensions(home: home + "/Library", dataFolders: ["../.kiro"], user: kiro.configPath) == nil)
     }
 
+    @Test func anExtensionsFolderThatWasNeverCheckedIsReadOnlyFromTheInstalledApp() throws {
+        let home = try fixture()
+        defer { remove(home) }
+        // Qoder removed: its settings folder is known, its extensions folder isn't, so nothing in ~/.qoder is read.
+        try FileManager.default.createDirectory(atPath: support(home, "Qoder"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: home + "/.qoder/extensions", withIntermediateDirectories: true)
+        try #"[{"identifier": {"id": "k--kato.intellij-idea-keybindings"}}]"#
+            .write(toFile: home + "/.qoder/extensions/extensions.json", atomically: true, encoding: .utf8)
+        let qoder = try app(home, "Qoder")
+        #expect(qoder.kind == .vsCodeFork && qoder.appPath == nil)
+        #expect(ImportVSCode.source(folder: "Qoder")?.dataFolders == [])
+        #expect(plan(qoder, home).preset == .vsCode)
+        // Installed, its product.json names the folder, and the IntelliJ keys there choose the JetBrains set.
+        let bundle = home + "/Applications/Qoder.app/Contents/Resources/app"
+        try FileManager.default.createDirectory(atPath: bundle, withIntermediateDirectories: true)
+        try #"{"nameShort": "Qoder", "dataFolderName": ".qoder", "version": "0.2.1"}"#
+            .write(toFile: bundle + "/product.json", atomically: true, encoding: .utf8)
+        let installed = try app(home, "Qoder")
+        #expect(installed.appPath == home + "/Applications/Qoder.app" && installed.version == "0.2.1")
+        #expect(plan(installed, home).preset == .jetBrains)
+    }
+
     @Test func keymapExtensionIds() {
         #expect(ImportVSCode.keymapExtension("K--KATO.intellij-idea-keybindings")?.kind == .jetBrains)
         // Each new editor's own copy of the IntelliJ keys.
