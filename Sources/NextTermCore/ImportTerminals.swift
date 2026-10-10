@@ -72,7 +72,7 @@ extension ImportColours {
     /// (colour names, `rgb(…)`, a colour with alpha).
     static func hex(_ text: String) -> UInt32? {
         var value = text.trimmingCharacters(in: .whitespaces)
-        if value.lowercased().hasPrefix("0x") { value = "#" + value.dropFirst(2) }
+        if value.lowercased().hasPrefix("0x") { value = "#" + String(value.dropFirst(2)) }
         guard let colour = TerminalPalette.hex(value), colour.alpha >= 1 else { return nil }
         return colour.rgb
     }
