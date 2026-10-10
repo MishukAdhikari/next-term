@@ -210,12 +210,13 @@ public struct KeyBindings: Equatable, Sendable {
         return "\(chord.display) is " + phrases.joined(separator: ", ")
     }
 
-    /// Whether `id`, a command outside the menus still on its default key `chord`, gives that key up: you gave it yourself
-    /// to another command it can't share it with (before it was this command's default, or by an import then). Settings
-    /// never lets two such commands have one key, and the one you chose keeps it. `isCommand`: whether an id is a command
-    /// still (a saved change can outlive its command).
+    /// Whether `id`, a command still on its default key `chord`, gives that key up: you gave it yourself to another
+    /// command it can't share it with (before it was this command's default, by an import then, or under another set of
+    /// keys). Settings never lets two such commands have one key, and the one you chose keeps it: a menu command's new
+    /// default as much as a key outside the menus. `isCommand`: whether an id is a command still (a saved change can
+    /// outlive its command).
     public func givesWay(_ id: String, _ chord: KeyChord, isCommand: (String) -> Bool) -> Bool {
-        guard overrides[id] == nil, case .part = Self.scope(of: id) else { return false }
+        guard overrides[id] == nil else { return false }
         return overrides.contains { other, key in
             key == chord && other != id && Self.isUsable(chord, for: other) && !Self.canShareKey(id, other) && isCommand(other)
         }

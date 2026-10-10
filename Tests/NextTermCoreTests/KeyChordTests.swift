@@ -136,13 +136,37 @@ import Testing
         var plain = KeyBindings()
         plain.set(KeyChord(key: "\r"), for: "copyFilePath:", default: nil)
         #expect(!plain.givesWay("sidebar.rename", KeyChord(key: "\r"), isCommand: { _ in true }))
-        // A menu command never gives way.
+        // The command you gave the key to keeps it.
         #expect(!bindings.givesWay("copyFilePath:", optionCommandC, isCommand: isCommand))
         // Given ⌥⌘C again in Settings (Use It Here), it is the sidebar's, and File › Copy Path is left without one.
         bindings.set(nil, for: "copyFilePath:", default: nil)
         bindings.set(optionCommandC, for: "sidebar.copyPath", default: optionCommandC)
         #expect(!bindings.givesWay("sidebar.copyPath", optionCommandC, isCommand: isCommand))
         #expect(bindings.owners(of: optionCommandC, defaults: defaults, except: "goToLine:") == ["sidebar.copyPath"])
+    }
+
+    @Test func aMenuDefaultGivesWayToAKeyYouSet() {
+        // ⇧⌘C given to Soft Wrap before it was Commit…'s default: Commit… has no key, and Settings sees one owner.
+        let shiftCommandC = KeyChord(key: "c", command: true, shift: true), commandR = KeyChord(key: "r", command: true)
+        let defaults: [String: KeyChord?] = ["gitCommit:": shiftCommandC, "toggleSoftWrap:": nil, "gitFetch:": commandR,
+                                             "branchPopup.fetch": commandR, "sidebar.refresh": nil, "goToLine:": nil]
+        func isCommand(_ id: String) -> Bool { defaults.index(forKey: id) != nil }
+        var bindings = KeyBindings()
+        bindings.set(shiftCommandC, for: "toggleSoftWrap:", default: nil)
+        #expect(bindings.givesWay("gitCommit:", shiftCommandC, isCommand: isCommand))
+        #expect(bindings.owners(of: shiftCommandC, defaults: defaults, except: "goToLine:") == ["toggleSoftWrap:"])
+        // Given back in Settings, Commit… has it again.
+        bindings.reset("toggleSoftWrap:")
+        #expect(!bindings.givesWay("gitCommit:", shiftCommandC, isCommand: isCommand))
+        // A key the branch popup has can be any command's too: Fetch keeps ⌘R when you give the popup's Fetch ⌘R yourself.
+        var popup = KeyBindings()
+        popup.set(commandR, for: "branchPopup.fetch", default: nil)
+        #expect(!popup.givesWay("gitFetch:", commandR, isCommand: isCommand))
+        // A sidebar command can't share a key with a command for everywhere: the one you chose keeps it.
+        var sidebar = KeyBindings()
+        sidebar.set(commandR, for: "sidebar.refresh", default: nil)
+        #expect(sidebar.givesWay("gitFetch:", commandR, isCommand: isCommand))
+        #expect(sidebar.owners(of: commandR, defaults: defaults, except: "goToLine:") == ["sidebar.refresh"])
     }
 
     @Test func aKeyBelongsToOneCommandPerPart() {
