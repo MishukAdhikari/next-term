@@ -73,7 +73,9 @@ import Testing
         }
         // Every schema is a JSON object schema (the raw strings parse).
         #expect(tools.allSatisfy { ($0["inputSchema"] as? [String: Any])?["type"] as? String == "object" })
-        #expect(tools.allSatisfy { (($0["_meta"] as? [String: Any])?["anthropic/alwaysLoad"] as? Bool) == true })
+        let loaded = tools.filter { !MCPServer.isImportTool($0["name"] as? String ?? "") }
+        #expect(loaded.count == tools.count - MCPServer.importTools.count)
+        #expect(loaded.allSatisfy { (($0["_meta"] as? [String: Any])?["anthropic/alwaysLoad"] as? Bool) == true })
     }
 
     @Test func callsGoToTheAppAndUnknownsAreErrors() {

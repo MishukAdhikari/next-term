@@ -1,0 +1,11 @@
+// Cursor's key bindings.
+[
+	{ "key": "cmd+t", "command": "workbench.action.quickOpen" },
+	{ "key": "cmd+k cmd+s", "command": "workbench.action.openGlobalKeybindings" },
+	{
+		"key": "cmd+shift+e",
+		"command": "workbench.action.terminal.sendSequence",
+		"args": { "text": "export TOKEN=FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n" }
+	},
+	{ "key": "ctrl+shift+`", "command": "workbench.action.terminal.new" }
+]

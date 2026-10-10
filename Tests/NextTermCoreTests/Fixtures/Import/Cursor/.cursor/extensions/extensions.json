@@ -1,0 +1,4 @@
+[
+	{ "identifier": { "id": "esbenp.prettier-vscode" }, "metadata": { "publisherId": "eyJhbGciOiJIUzI1NiJ9.eyJmaXh0dXJlIjoic2VjcmV0In0.bm90LWEtcmVhbC1zaWduYXR1cmU" } },
+	{ "identifier": { "id": "dbaeumer.vscode-eslint" } }
+]

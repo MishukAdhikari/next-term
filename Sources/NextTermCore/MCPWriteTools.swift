@@ -49,11 +49,11 @@ extension MCPServer {
     static let scopeTags: [String: Scope] = {
         let read = ["list_tabs", "read_tab", "wait_for_tab", "list_projects", "get_editor_selection", "get_open_files",
                     "read_file", "find_in_files", "git_status", "get_diff", "list_hosts", "check_host", "host_sessions",
-                    "host_changes", "list_skills", "settings_get"]
+                    "host_changes", "list_skills", "settings_get", "list_import_sources", "preview_import"]
         let write = ["open_project", "new_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab", "close_tab",
                      "add_host", "remove_host", "new_remote_tab", "install_skill", "remove_skill", "open_in_editor",
                      "propose_edit", "write_file", "create_file", "stage", "commit", "focus_tab", "split_pane",
-                     "close_pane", "zoom_pane", "set_layout", "settings_set"]
+                     "close_pane", "zoom_pane", "set_layout", "settings_set", "apply_import", "undo_import"]
         var tags: [String: Scope] = [:]
         for name in read { tags[name] = .read }
         for name in write { tags[name] = .write }
@@ -129,9 +129,11 @@ extension MCPServer.Tool {
     /// Next Term's scope tag (nil only for a tool nobody tagged, which a unit test refuses).
     public var scope: MCPServer.Scope? { MCPServer.scopeTags[name] }
 
-    /// The `_meta` it is listed with: Claude Code keeps it loaded, and the scope tag is there for any client.
+    /// The `_meta` it is listed with: Claude Code keeps it loaded (unless it is used only once in a while), and
+    /// the scope tag is there for any client.
     var meta: [String: Any] {
-        var meta: [String: Any] = ["anthropic/alwaysLoad": true]
+        var meta: [String: Any] = [:]
+        if alwaysLoad { meta["anthropic/alwaysLoad"] = true }
         if let scope { meta["next-term/scope"] = scope.rawValue }
         return meta
     }
