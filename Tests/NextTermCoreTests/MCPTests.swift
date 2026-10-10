@@ -120,8 +120,9 @@ import Testing
         for name in names { #expect(MCPServer.instructions.contains(name), "\(name)") }
     }
 
-    /// `secret_run` is the wrapper's socket request, never a tool: a bridge answers a call by that name itself, and
-    /// the call never reaches the app (AE7).
+    /// `secret_run` is the wrapper's socket request, never a tool: a bridge answers a call by that name itself, as it
+    /// answers any tool it doesn't list, so an agent's call never reaches the app, which takes that request only from
+    /// Next Term's own binary.
     @Test func theBridgeRefusesSecretRunItself() {
         var called = false
         let reply = MCPServer.respond(to: ["jsonrpc": "2.0", "id": 9, "method": "tools/call",

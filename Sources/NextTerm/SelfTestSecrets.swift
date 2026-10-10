@@ -70,7 +70,7 @@ extension SelfTest {
         SecretAudit.lines(in: store.folder.readAudit())
     }
 
-    // MARK: U2, the store
+    // MARK: the store
 
     static func secretsStoreChecks(_ base: URL) async {
         let store = SecretsStore.shared
@@ -293,7 +293,7 @@ final class SecretsMCPClient {
 }
 
 extension SelfTest {
-    // MARK: U3, masking
+    // MARK: masking
 
     /// A random value for a check, never typed: written to a file the tab reads with `K=$(cat …)`.
     static func secretsValue(_ prefix: String) -> String {
@@ -390,7 +390,7 @@ final class SecretsAnswers {
 }
 
 extension SelfTest {
-    // MARK: U4, the panel and grants
+    // MARK: the panel and grants
 
     /// A request as the socket or the tools build one, with Next Term's facts filled in.
     static func secretsRequest(asker: String, command: [String], source: SecretBinding.Source = .wrapper, names: [String] = ["PANEL_KEY"],
@@ -628,7 +628,7 @@ final class SecretsWrapperRun: @unchecked Sendable {
 }
 
 extension SelfTest {
-    // MARK: U5, nxtrm secret run
+    // MARK: nxtrm secret run
 
     static func secretsWrapperChecks(_ base: URL) async {
         let requests = SecretRequests.shared
@@ -747,7 +747,7 @@ extension SelfTest {
 }
 
 extension SelfTest {
-    // MARK: U6, the MCP tools
+    // MARK: the MCP tools
 
     /// A secret tool called in-process as a local agent's call, its answer as JSON.
     static func secretsTool(_ tool: String, _ arguments: [String: Any], pid: pid_t? = nil, approval: MCPApproval = .askOnMac,
@@ -1133,7 +1133,7 @@ extension SelfTest {
 }
 
 extension SelfTest {
-    // MARK: U7, Settings › Secrets and Window › Secrets
+    // MARK: Settings › Secrets and Window › Secrets
 
     static func secretsSettingsChecks(base: URL) async {
         let store = SecretsStore.shared
@@ -1277,7 +1277,7 @@ extension SelfTest {
 }
 
 extension SelfTest {
-    // MARK: U8, the import
+    // MARK: the import
 
     /// Fixture configs in a temporary home: the sheet moves one group, the files run the wrapper, the backups hold
     /// markers, and Undo puts the entries back. With agent control off, the sheet refuses.
@@ -1387,7 +1387,7 @@ extension SelfTest {
 }
 
 extension SelfTest {
-    // MARK: U9, remote hooks
+    // MARK: remote connections
 
     /// A remote connection, as the remote door will call: run_with_secrets still shows the panel, with only "Allow
     /// once", and asks Touch ID even when the connection's changes are pre-approved; the same call asks again;

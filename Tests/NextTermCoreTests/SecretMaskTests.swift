@@ -128,7 +128,8 @@ private let key40 = "Zq8pLmW2vXn4Rt7yKb1sQe5uHj3oAc6dFg9iTw0e" // 40 characters,
     }
 
     @Test func savedScrollbackIsMaskedAcrossAWrap() {
-        // Plan 003's transform joins a wrapped row to the row before it, then masks the logical line.
+        // Scrollback saved for an update is masked by logical line: a wrapped row is joined to the row before it first,
+        // so a value split by the wrap is still found.
         let m = mask([stored])
         let rows = ["$ printenv OUT", "value: \(stored.prefix(9))", "\(stored.dropFirst(9)) (done)"]
         let joined = rows[0] + "\n" + rows[1] + rows[2]

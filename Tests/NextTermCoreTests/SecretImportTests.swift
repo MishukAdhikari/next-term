@@ -374,7 +374,8 @@ typealias F = SecretImportFixtures
         // Not movable rows are not grouped.
         #expect(groups.allSatisfy { $0.findings.allSatisfy(\.movable) })
 
-        // AE9: the three entries run the wrapper, Codex's gains its timeout, and the backups hold markers, never the token.
+        // Moving the key rewrites each of the three entries that held it to run the wrapper. Codex's gains its timeout,
+        // and the backups hold markers, never the token.
         let planned = SecretImport.plan([SecretImport.Move(name: "GITHUB_TOKEN", findings: github.findings)], nxtrm: F.nxtrm)
         #expect(planned.edits.count == 2 && planned.failures.isEmpty)
         for edit in planned.edits { #expect(SecretImport.apply(edit) == .written) }
