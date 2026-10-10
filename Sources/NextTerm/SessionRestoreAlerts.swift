@@ -7,16 +7,16 @@ import NextTermCore
 /// snapshot was moved out of the way, and the alert says where.
 @MainActor
 enum SessionRestoreAlerts {
-    /// Safe mode's question, app-modal. Return presses Keep As Is. `text` says what Try Again does
-    /// (`RestoreAlertText.safeModeText(for:)`): it promises a resume only when a pane would resume.
-    static func askAfterSafeMode(text: String) {
+    /// Safe mode's question, app-modal. Return presses Keep As Is. Its text says what Try Again does: it puts back what
+    /// each tab held, and resumes no agent (R21).
+    static func askAfterSafeMode() {
         let sessions = SessionRestore.shared
         guard sessions.phase == .safeMode else { return }
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = RestoreAlertText.safeModeTitle
-        alert.informativeText = text
+        alert.informativeText = RestoreAlertText.safeModeText
         alert.addButton(withTitle: RestoreAlertText.keepAsIs)
         alert.addButton(withTitle: RestoreAlertText.tryAgain)
         guard alert.runModal() == .alertSecondButtonReturn else { return sessions.keepAsIs() }

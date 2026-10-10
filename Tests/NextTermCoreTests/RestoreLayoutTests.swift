@@ -147,15 +147,12 @@ import Testing
         #expect(!kept.contains(SessionLaunch.setAsideName) && kept.contains(folder))
     }
 
-    /// Try Again resumes agents only when a pane would resume by itself: after an update restore whose try was not
-    /// counted. Two restores that did not finish leave a crash or quit restore, whose agents' lines go back unrun.
-    @Test func safeModePromisesAResumeOnlyWhenTryAgainWouldResume() {
-        let none = RestoreAlertText.safeModeText(resumes: false)
-        #expect(none == "Each tab says what it held. Keep As Is leaves them as they are. Try Again puts back what each tab held, once.")
-        #expect(!none.contains("resume"))
-        let some = RestoreAlertText.safeModeText(resumes: true)
-        #expect(some == "Each tab says what it held. Keep As Is leaves them as they are. Try Again puts back what each tab held, "
-            + "and resumes the agents that may resume by themselves, once.")
+    /// Try Again resumes nothing (R21): the alert promises only what it puts back, and says nothing runs by itself.
+    @Test func safeModePromisesNoResume() {
+        let text = RestoreAlertText.safeModeText
+        #expect(text == "Each tab says what it held. Keep As Is leaves them as they are. Try Again puts back what each tab held, once, "
+            + "and runs nothing: an agent's resume command waits on the line for you.")
+        #expect(!text.contains("resumes"))
         // A try the sessions folder refuses to count runs nothing, and says so.
         #expect(RestoreAlertText.notCountedTitle == "Try Again ran nothing")
         #expect(RestoreAlertText.notCountedText.contains("could not record") && RestoreAlertText.notCountedText.contains("as they are"))

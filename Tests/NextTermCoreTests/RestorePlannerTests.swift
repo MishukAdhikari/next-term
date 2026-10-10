@@ -674,8 +674,9 @@ import Testing
         let panes = [pane(1, typed("claude"), agent: evidence), pane(2, typed("npm run dev")), pane(3, typed("make test", running: false, exit: 2)),
                      remote(4, keep: .off, typed("htop"))]
         let plans = plan(panes, kind: .update, safeMode: true, world: world(facts: facts))
-        // What Try Again would apply: the update restore's own outcomes.
-        expectOutcomes(plans, .resume, .commandOnTheLine, .idle, .freshConnection)
+        // What Try Again would apply: the update restore's outcomes, with each agent's resume command on the line, unrun.
+        // The launch that held the restore back used the update's consent (R21, KTD2).
+        expectOutcomes(plans, .agentOnTheLine, .commandOnTheLine, .idle, .freshConnection)
         #expect(plans.allSatisfy { $0.reason == .safeMode && $0.pending.reason == .safeMode })
         let held = "Nothing ran, because the last two restores did not finish. This tab held: "
         #expect(text(plans[0]) == held + "Claude Code was running. To resume it, type: claude --resume \(s)")
@@ -693,32 +694,41 @@ import Testing
         let older = pane(1, typed("claude"), agent: evidence, selected: 10)
         let newer = pane(2, typed("claude"), agent: evidence, selected: 20)
         let plans = plan([older, newer], safeMode: true, world: world(facts: facts))
-        expectOutcomes(plans, .agentOnTheLine, .resume)
+        expectOutcomes(plans, .agentOnTheLine, .agentOnTheLine)
         let held = "Nothing ran, because the last two restores did not finish. This tab held: "
         let expected = held + "Claude Code was running. Another tab held this session too. To resume it, type: claude --resume \(s)"
         #expect(text(plans[0]) == expected)
-        #expect(plans[1].listLine == "on Try Again, Claude Code resumes")
-        #expect(plans[0].listLine == "on Try Again, Claude Code's resume command goes on the line, as another tab resumes this session")
+        #expect(plans[1].listLine == "on Try Again, Claude Code's resume command goes on the line")
+        #expect(plans[0].listLine == "on Try Again, Claude Code's resume command goes on the line")
         let dev = plan(pane(3, typed("npm run dev")), safeMode: true, world: world())
         #expect(dev.listLine == "on Try Again, npm run dev goes back on the line")
         #expect(plan(pane(4, typed("ls", running: false)), safeMode: true, world: world()).listLine == "opens in its folder")
         #expect(plan(remote(5, keep: .off, nil), safeMode: true, world: world()).listLine == "connection closes")
     }
 
-    /// Safe mode comes after two restores that did not finish, and those come back as a crash or quit restore without the
-    /// consent: Try Again resumes nothing then, and the alert does not say it would. Only an update restore whose try was
-    /// not counted is held in safe mode with a resume to apply.
-    @Test func safeModesTryAgainResumesOnlyAfterAnUpdateRestore() {
+    /// Safe mode's Try Again never resumes an agent, whatever restore it holds back (R21, KTD2, KTD13): the launch that
+    /// claimed the marker or the quit's consent id used that consent, whether or not its restore finished. Each agent's
+    /// resume command goes on the line, unrun, and the alert promises no resume.
+    @Test func safeModesTryAgainNeverResumes() {
         let (evidence, facts) = exactClaude()
         let panes = [pane(1, typed("claude"), agent: evidence), pane(2, typed("npm run dev"))]
         let crash = plan(panes, kind: .crash, safeMode: true, world: world(facts: facts))
-        let quit = plan(panes, kind: .quit, safeMode: true, quitConsent: false, world: world(facts: facts))
+        let quit = plan(panes, kind: .quit, safeMode: true, quitConsent: true, world: world(facts: facts))
         let update = plan(panes, kind: .update, safeMode: true, world: world(facts: facts))
-        #expect(!crash.contains { $0.outcome == .resume } && !quit.contains { $0.outcome == .resume })
-        #expect(update.contains { $0.outcome == .resume })
-        #expect(RestoreAlertText.safeModeText(for: crash) == RestoreAlertText.safeModeText(resumes: false))
-        #expect(RestoreAlertText.safeModeText(for: quit) == RestoreAlertText.safeModeText(resumes: false))
-        #expect(RestoreAlertText.safeModeText(for: update) == RestoreAlertText.safeModeText(resumes: true))
+        for plans in [crash, quit, update] {
+            expectOutcomes(plans, .agentOnTheLine, .commandOnTheLine)
+            #expect(plans[0].line == "claude --resume \(s)")
+        }
+        // Out of safe mode, the same update restore resumes.
+        let resumes = plan(panes, kind: .update, world: world(facts: facts))
+        expectOutcomes(resumes, .resume, .commandOnTheLine)
+        // A resume held by safe mode never runs as Try Again applies it, whatever planned it: its resume command goes on
+        // the line, unrun, with no word of a session taken.
+        var held = resumes[0]
+        held.reason = .safeMode
+        #expect(RestoreLayout.resumeStart(held, sessionAvailable: true) == .putBack(line: "claude --resume \(s)", note: nil))
+        #expect(RestoreLayout.resumeStart(resumes[0], sessionAvailable: true) == .run(resumes[0].line ?? ""))
+        #expect(!RestoreAlertText.safeModeText.contains("resumes"))
     }
 
     // MARK: before the shell is ready

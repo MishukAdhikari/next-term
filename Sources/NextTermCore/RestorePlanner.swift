@@ -17,8 +17,9 @@ import Foundation
 // - a command still running goes back on the line, unrun, when it was typed whole in the system /bin/zsh (R9);
 //   any other gets a note;
 // - an idle tab gets its folder back, and a note with its last command.
-// A crash restore never resumes. In safe mode the plan is what Try Again would apply; until then each local tab only
-// says what it held, and its list line says it waits for Try Again. Nothing here runs or types anything.
+// A crash restore never resumes, and neither does safe mode, whatever restore it holds back (R21). In safe mode the plan
+// is what Try Again would apply; until then each local tab only says what it held, and its list line says it waits for
+// Try Again. Nothing here runs or types anything.
 
 // MARK: - What the restore does
 
@@ -313,7 +314,8 @@ public enum RestorePlanner {
         var plans: [PanePlan] = inputs.map { (input: PaneInput) -> PanePlan in plan(input) }
         for (index, last) in selectedEarlier(sessions, panes: panes) {
             inputs[index].selectedEarlier = true
-            inputs[index].sharedSession = plans[last].outcome == .resume
+            // Safe mode resumes nothing, and its note says another tab held the session too.
+            inputs[index].sharedSession = plans[last].outcome == .resume || safeMode
             plans[index] = plan(inputs[index])
         }
         return plans
@@ -449,7 +451,8 @@ public enum RestorePlanner {
     /// passed, the pane selected last of those on its session, in its own folder, with the exact id its evidence holds.
     /// Only the command the gate builds from this pane's own evidence runs.
     private static func resumeCommand(_ input: PaneInput, evidence: SessionSnapshot.Evidence, session: NamedSession?) -> String? {
-        guard case .resume(let command)? = input.verdict, mayResume(input.kind, consent: input.quitConsent), !input.selectedEarlier else {
+        guard case .resume(let command)? = input.verdict, mayResume(input.kind, consent: input.quitConsent, safeMode: input.safeMode),
+              !input.selectedEarlier else {
             return nil
         }
         guard input.folder?.movedFrom == nil, let session, session.naming == .exact, session.id == evidence.sessionID else { return nil }
@@ -463,9 +466,12 @@ public enum RestorePlanner {
     }
 
     /// Agents may resume by themselves after an update the user agreed to, or a quit the user let go ahead with the box
-    /// checked (R5, R30). Never after a crash.
-    static func mayResume(_ kind: SessionSnapshot.RestoreKind, consent: Bool) -> Bool {
-        kind == .update || (kind == .quit && consent)
+    /// checked (R5, R30). Never after a crash, and never in safe mode, whatever restore it holds back: the launch that
+    /// claimed the marker or found the consent id unused used that consent, so Try Again puts each agent's resume command
+    /// on the line, unrun (R21, KTD2, KTD13).
+    static func mayResume(_ kind: SessionSnapshot.RestoreKind, consent: Bool, safeMode: Bool) -> Bool {
+        guard !safeMode else { return false }
+        return kind == .update || (kind == .quit && consent)
     }
 
     private static func input(for pane: SessionSnapshot.Pane, place: Place, session: NamedSession?, kind: SessionSnapshot.RestoreKind,
@@ -481,16 +487,17 @@ public enum RestorePlanner {
         if let recorded = pane.agent?.sessionFolder, let sessionFolder = lexical(recorded), world.checkFolder(sessionFolder) == .found {
             input.sessionFolder = sessionFolder
         }
-        input.verdict = verdict(for: pane, kind: kind, consent: consent, projects: place.projects, world: world)
+        input.verdict = verdict(for: pane, kind: kind, consent: consent, safeMode: safeMode, projects: place.projects, world: world)
         return input
     }
 
     /// The gate's verdict, asked only where a resume could follow: an update restore or a consented quit restore, an
     /// agent that resumes by itself with an exact id from its own session file, still running from a line typed in a shell
     /// with the integration that passed every check. A fact not known asks nothing.
-    private static func verdict(for pane: SessionSnapshot.Pane, kind: SessionSnapshot.RestoreKind, consent: Bool, projects: [String],
-                                world: World) -> ResumeVerdict? {
-        guard mayResume(kind, consent: consent), let command = pane.command, command.check == .kept, command.line != nil else {
+    private static func verdict(for pane: SessionSnapshot.Pane, kind: SessionSnapshot.RestoreKind, consent: Bool, safeMode: Bool,
+                                projects: [String], world: World) -> ResumeVerdict? {
+        guard mayResume(kind, consent: consent, safeMode: safeMode), let command = pane.command, command.check == .kept,
+              command.line != nil else {
             return nil
         }
         guard command.running, command.source == .integration else { return nil }
@@ -894,7 +901,7 @@ public struct RestoreNote: Equatable, Sendable {
         case .agentOnTheLine where session == nil:
             words = "\(line ?? name) goes on the line, with no session named"
         case .agentOnTheLine:
-            words = "\(name)'s resume command goes on the line" + (sharedSession ? ", as another tab resumes this session" : "")
+            words = "\(name)'s resume command goes on the line" + (sharedSession && !safeMode ? ", as another tab resumes this session" : "")
         case .commandOnTheLine:
             words = "\(command ?? "its command") goes back on the line"
         case .agentNote, .agentHint:

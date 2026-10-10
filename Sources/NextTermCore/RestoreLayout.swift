@@ -114,8 +114,10 @@ public enum RestoreLayout {
     }
 
     /// An automatic resume as its turn comes: `sessionAvailable` is its session read again now, free in its own store
-    /// with no process holding it.
+    /// with no process holding it. One safe mode held never runs as Try Again applies it, whatever planned it (R21): the
+    /// launch that held it back used its consent, so its resume command goes on the line, unrun.
     public static func resumeStart(_ plan: PanePlan, sessionAvailable: Bool) -> ResumeStart {
+        if plan.reason == .safeMode { return .putBack(line: plan.note.line, note: nil) }
         guard plan.outcome == .resume, let command = plan.line, sessionAvailable else {
             return .putBack(line: plan.note.line, note: plan.note.sessionTakenText)
         }
@@ -175,18 +177,10 @@ public enum RestoreLayout {
 public enum RestoreAlertText {
     public static let safeModeTitle = "Next Term restored your windows but ran nothing, because the last two restores did not finish."
 
-    /// What Keep As Is and Try Again do. Try Again resumes agents only when a pane would resume by itself (`resumes`).
-    public static func safeModeText(resumes: Bool) -> String {
-        let held = "Each tab says what it held. Keep As Is leaves them as they are. Try Again puts back what each tab held"
-        return held + (resumes ? ", and resumes the agents that may resume by themselves, once." : ", once.")
-    }
-
-    /// Safe mode's words for the plans Try Again would apply. Two restores that did not finish come back as a crash or a
-    /// quit restore without the consent, which resume nothing; only an update restore whose try was not counted is held
-    /// with a resume to apply.
-    public static func safeModeText(for plans: [PanePlan]) -> String {
-        safeModeText(resumes: plans.contains { (plan: PanePlan) -> Bool in plan.outcome == .resume })
-    }
+    /// What Keep As Is and Try Again do. Try Again resumes no agent (R21): the launch that held the restore back used its
+    /// consent, so each agent's resume command goes on the line, unrun.
+    public static let safeModeText = "Each tab says what it held. Keep As Is leaves them as they are. Try Again puts back what each "
+        + "tab held, once, and runs nothing: an agent's resume command waits on the line for you."
 
     public static let keepAsIs = "Keep As Is"
     public static let tryAgain = "Try Again"

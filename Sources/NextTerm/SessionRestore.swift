@@ -130,10 +130,7 @@ final class SessionRestore {
         actions.onSettled = { [weak self] in self?.restoreSettled() }
         phase = safeMode ? .safeMode : .restoringTabs
         actions.start()
-        if safeMode {
-            let text = RestoreAlertText.safeModeText(for: planned.plans)
-            DispatchQueue.main.async { SessionRestoreAlerts.askAfterSafeMode(text: text) }
-        }
+        if safeMode { DispatchQueue.main.async { SessionRestoreAlerts.askAfterSafeMode() } }
         return !built.windows.isEmpty
     }
 
