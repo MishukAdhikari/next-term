@@ -6,8 +6,9 @@ import SQLite3
 // settings, §4 recents, §5 detection, §6 safety). Everything here only reads, and only these: settings.json (a
 // value is converted only for an allowlisted key), keybindings.json (each rule's key, command and when:
 // ImportVSCodeKeys.swift), globalStorage/storage.json (the number of profiles), the app's product.json (four
-// keys: ImportVSCodeApps.swift), one key of a state.vscdb opened in place read-only, and the folders list of a
-// workspace file a recent entry names. Nothing is written, copied or sent anywhere.
+// keys) and the extension ids in extensions.json (ImportVSCodeApps.swift), two keys of a state.vscdb opened in
+// place read-only, and the folders list of a workspace file a recent entry names. Nothing is written,
+// copied or sent anywhere.
 
 /// The VS Code family: detection by product.json and folder (ImportVSCodeApps.swift), and the plan for one
 /// detected app.
@@ -47,12 +48,17 @@ public enum ImportVSCode {
         plan.settings = settings.settings
         let keys = keybindingsPlan(user: app.configPath, usKeyboard: usKeyboard)
         plan.shortcuts = keys.shortcuts
-        plan.skipped = settings.skipped + keys.skipped + neverImportedFiles(user: app.configPath)
+        // Keymap extensions can point to the JetBrains set (§2.4 of the research; only their ids are read).
+        let product = installedProduct(for: app, applications: applications)
+        let dataFolders = product?.dataFolderName.map { [$0] } ?? source(folder: settingsFolder(of: app))?.dataFolders ?? []
+        let installed = extensions(home: home, dataFolders: dataFolders, user: app.configPath)
+        let keymap = keymapRows(installed, vimSettings: settings.vimSettings, preset: plan.preset)
+        plan.preset = keymap.preset
+        plan.skipped = keymap.skipped + settings.skipped + keys.skipped + neverImportedFiles(user: app.configPath)
         let profiles = otherProfiles(user: app.configPath)
         if profiles > 0 {
             plan.skipped.append(SkippedItem(counted(profiles, "other profile"), "only the default profile is read; other profiles: choose in a later version"))
         }
-        let product = installedProduct(for: app, applications: applications)
         let recents = recentProjects(app: app, home: home, shared: product?.sharedDataFolderName)
         plan.recentProjects = recents.paths
         plan.skipped += recents.skipped
@@ -137,6 +143,8 @@ public enum ImportVSCode {
     struct SettingsResult {
         var settings: [PlannedSetting] = []
         var skipped: [SkippedItem] = []
+        /// How many `vim.*` keys there are: a Vim user, even with the extension gone.
+        var vimSettings = 0
     }
 
     /// The default profile's settings.json (`<User>/settings.json`) as preview rows.
@@ -184,6 +192,7 @@ public enum ImportVSCode {
         result.settings += terminal.settings
         result.skipped += terminal.skipped
         result.skipped += unmappedKeys(file)
+        result.vimSettings = Set(file.members.map(\.key).filter { $0.hasPrefix("vim.") }).count
         return result
     }
 

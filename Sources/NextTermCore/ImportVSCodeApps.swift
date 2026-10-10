@@ -1,8 +1,10 @@
 import Foundation
 
-// Which editors built on VS Code are on this Mac. Read here, and only here: each app bundle's product.json (four
-// keys: nameShort, dataFolderName, sharedDataFolderName and version), never shown. A file is read only when its
-// real path stays inside the folder it belongs to, so a symlink never leads a read out of it.
+// Which editors built on VS Code are on this Mac, and which keymap extensions they have. Read here, and only
+// here: each app bundle's product.json (four keys: nameShort, dataFolderName, sharedDataFolderName and
+// version), and the extension ids in <dataFolderName>/extensions/extensions.json. Neither file is ever shown:
+// only a fixed label for a known extension, and a count of the rest. A file is read only when its real path
+// stays inside the folder it belongs to, so a symlink never leads a read out of it.
 
 extension ImportVSCode {
     /// An editor known by name, found by its settings folder even after the app itself was removed (its
@@ -174,5 +176,129 @@ extension ImportVSCode {
             }
         }
         return nil
+    }
+
+    // MARK: keymap extensions
+
+    /// What a keymap extension says about the shortcuts its user expects.
+    enum KeymapKind: Equatable {
+        /// JetBrains keys: the JetBrains shortcut set fits.
+        case jetBrains
+        /// Modal editing, which Next Term doesn't have.
+        case vim
+        case emacs
+        /// Another editor's keys that have no shortcut set here (the editor's name).
+        case other(String)
+    }
+
+    struct KeymapExtension: Equatable {
+        /// How the extension is named in the preview (a fixed label, never the id as read).
+        let label: String
+        let kind: KeymapKind
+    }
+
+    /// Known keymap extensions by id (lowercased, as extensions.json may hold any case).
+    static let keymapExtensions: [String: KeymapExtension] = [
+        "k--kato.intellij-idea-keybindings": KeymapExtension(label: "IntelliJ IDEA Keybindings", kind: .jetBrains),
+        "vscodevim.vim": KeymapExtension(label: "Vim", kind: .vim),
+        "asvetliakov.vscode-neovim": KeymapExtension(label: "VSCode Neovim", kind: .vim),
+        "tuttieee.emacs-mcx": KeymapExtension(label: "Awesome Emacs Keymap", kind: .emacs),
+        "lfs.vscode-emacs-friendly": KeymapExtension(label: "Emacs Friendly Keymap", kind: .emacs),
+        "hiro-sun.vscode-emacs": KeymapExtension(label: "Emacs Keymap", kind: .emacs),
+        "ms-vscode.atom-keybindings": KeymapExtension(label: "Atom Keymap", kind: .other("Atom")),
+        "ms-vscode.vs-keybindings": KeymapExtension(label: "Visual Studio Keymap", kind: .other("Visual Studio")),
+        "alphabotsec.vscode-eclipse-keybindings": KeymapExtension(label: "Eclipse Keymap", kind: .other("Eclipse")),
+        "ms-vscode.notepadplusplus-keybindings": KeymapExtension(label: "Notepad++ keymap", kind: .other("Notepad++")),
+    ]
+
+    /// The keymap extension an id is (a known one, or any id naming IntelliJ or JetBrains keys, as each new
+    /// editor gets its own copy of that extension), or nil.
+    static func keymapExtension(_ id: String) -> KeymapExtension? {
+        let id = id.lowercased()
+        if let known = keymapExtensions[id] { return known }
+        let jetBrains = id.contains("intellij") || id.contains("jetbrains")
+        let keys = id.contains("keybinding") || id.contains("keymap")
+        return jetBrains && keys ? KeymapExtension(label: "a JetBrains keymap extension", kind: .jetBrains) : nil
+    }
+
+    struct Extensions: Equatable {
+        /// Every extension extensions.json lists.
+        var count = 0
+        /// The keymap extensions among them that are turned on, in the order listed.
+        var keymaps: [KeymapExtension] = []
+    }
+
+    static let disabledKey = "extensionsIdentifiers/disabled"
+
+    /// The extensions in the first of `dataFolders` (in the home folder) that has an extensions.json: only
+    /// each entry's `identifier.id` is read, and only the count and the known keymap extensions are kept.
+    /// `user`: the app's `User` folder, whose state.vscdb lists the extensions turned off (one keyed read).
+    /// Nil when there is no extensions.json.
+    static func extensions(home: String, dataFolders: [String], user: String) -> Extensions? {
+        for name in dataFolders {
+            guard let folder = plainName(name).map({ (home as NSString).appendingPathComponent($0) }),
+                  let path = file("extensions/extensions.json", inside: folder),
+                  let text = readText(path, limit: 16 << 20), JSONC.isShallow(text),
+                  let entries = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [Any] else { continue }
+            var ids: [String] = []
+            for case let entry as [String: Any] in entries {
+                guard let identifier = entry["identifier"] as? [String: Any], let id = identifier["id"] as? String,
+                      !id.isEmpty, id.count <= 200, !ids.contains(id.lowercased()) else { continue }
+                ids.append(id.lowercased())
+            }
+            let disabled = disabledExtensions(user: user)
+            let keymaps = ids.filter { !disabled.contains($0) }.compactMap(keymapExtension)
+            return Extensions(count: ids.count, keymaps: keymaps)
+        }
+        return nil
+    }
+
+    /// The ids of the extensions turned off in the default profile, from one key of
+    /// `User/globalStorage/state.vscdb` (only each entry's `id` is read). Empty when it can't be read.
+    static func disabledExtensions(user: String) -> Set<String> {
+        let database = (user as NSString).appendingPathComponent("globalStorage/state.vscdb")
+        guard isRegularFile(database), case .value(let data) = readItem(database, key: disabledKey),
+              let entries = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else { return [] }
+        var ids = Set<String>()
+        for case let entry as [String: Any] in entries {
+            if let id = entry["id"] as? String { ids.insert(id.lowercased()) }
+        }
+        return ids
+    }
+
+    static let noVimMode = "Next Term has no Vim mode yet"
+
+    /// What the keymap extensions mean for the plan: the JetBrains set for IntelliJ keys (when the app's
+    /// own keymap is VS Code's), a note for modal and other editors' keys, and the rest counted.
+    /// `vimSettings`: how many `vim.*` keys settings.json has (a Vim user whose extension is gone).
+    static func keymapRows(_ extensions: Extensions?, vimSettings: Int, preset: KeymapPreset) -> (preset: KeymapPreset, skipped: [SkippedItem]) {
+        var preset = preset
+        var skipped: [SkippedItem] = []
+        let keymaps = extensions?.keymaps ?? []
+        for keymap in keymaps {
+            switch keymap.kind {
+            case .jetBrains:
+                guard preset == .vsCode else { continue }
+                preset = .jetBrains
+                skipped.append(SkippedItem("\(keymap.label) extension",
+                                           "its own keys aren't read; JetBrains (macOS) shortcuts are offered instead of VS Code’s"))
+            case .vim:
+                skipped.append(SkippedItem("Vim keys (\(keymap.label) extension)", noVimMode))
+            case .emacs:
+                skipped.append(SkippedItem("Emacs keys (\(keymap.label) extension)", "Next Term has no Emacs shortcut set"))
+            case .other(let editor):
+                skipped.append(SkippedItem("\(editor) keys (\(keymap.label) extension)", "Next Term has no \(editor) shortcut set"))
+            }
+        }
+        if vimSettings > 0, !keymaps.contains(where: { $0.kind == .vim }) {
+            skipped.append(SkippedItem("Vim keys (\(counted(vimSettings, "vim.* setting")))", noVimMode))
+        }
+        if let extensions {
+            let others = extensions.count - keymaps.count
+            if others > 0 {
+                skipped.append(SkippedItem(counted(others, keymaps.isEmpty ? "extension" : "other extension"), "extensions aren't imported"))
+            }
+        }
+        return (preset, skipped)
     }
 }
