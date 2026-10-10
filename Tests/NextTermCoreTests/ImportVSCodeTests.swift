@@ -707,7 +707,7 @@ import Testing
         let plan = self.plan(app(user, .vsCodeInsiders, name: "VS Code Insiders"), home: home)
         #expect(plan.recentProjects == [older])
         #expect(plan.skipped == [SkippedItem("recent projects in ~/.vscode-insiders-shared/sharedStorage",
-                                             "not found where VS Code Insiders keeps them; choose the file to bring them over")])
+                                             "not found where VS Code Insiders usually keeps them (a portable install keeps them elsewhere)")])
     }
 
     @Test func productJSONWithoutAUsableName() throws {

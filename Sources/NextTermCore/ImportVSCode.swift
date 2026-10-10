@@ -568,7 +568,7 @@ public enum ImportVSCode {
             } else {
                 // A portable install or --shared-data-dir moves it, and Next Term can't see either.
                 notes.append(SkippedItem("recent projects in ~/\(shared)/sharedStorage",
-                                         "not found where \(app.name) keeps them; choose the file to bring them over"))
+                                         "not found where \(app.name) usually keeps them (a portable install keeps them elsewhere)"))
             }
         }
         databases.append((app.configPath as NSString).appendingPathComponent("globalStorage/state.vscdb"))
