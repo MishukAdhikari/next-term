@@ -133,6 +133,14 @@ import Testing
         #expect(ImportKitty.globPattern(String(repeating: "*", count: 300)) == nil)
     }
 
+    /// A config far bigger than any real one isn't read.
+    @Test func aHugeConfigIsNotRead() throws {
+        let huge = String(repeating: "font_size 12\n", count: ImportKitty.Reader.maxBytes / 13 + 10)
+        let plan = try plan(config: huge)
+        #expect(plan.settings.isEmpty)
+        #expect(plan.skipped.contains(SkippedItem("kitty.conf", "couldn't be read")))
+    }
+
     /// An include loop, or a file including itself, stops: each file is read once.
     @Test func includeLoops() throws {
         let root = canonicalPath(fm.temporaryDirectory.path) + "/nt-kitty-" + String(UUID().uuidString.prefix(8))
@@ -141,6 +149,7 @@ import Testing
         try "include a.conf\nfont_size 12\ninclude kitty.conf".write(toFile: root + "/.config/kitty/kitty.conf", atomically: true, encoding: .utf8)
         try "include kitty.conf\ninclude a.conf\ncursor_shape block".write(toFile: root + "/.config/kitty/a.conf", atomically: true, encoding: .utf8)
         let plan = try plan(root)
-        #expect(plan.settings.map(\.setting) == [.terminalFontSize(12), .terminalCursorShape("block")])
+        let expected: [ImportedSetting] = [.terminalFontSize(12), .terminalCursorShape("block")]
+        #expect(plan.settings.map(\.setting) == expected)
     }
 }

@@ -108,6 +108,8 @@ public enum ImportKitty {
         var seen = Set<String>()
 
         static let fileLimit = 32
+        /// No config file is near this; a bigger one isn't read.
+        static let maxBytes = 4 << 20
 
         init(folder: String, home: String) {
             self.folder = canonicalPath(folder)
@@ -119,7 +121,7 @@ public enum ImportKitty {
             let real = canonicalPath(path)
             guard real.hasPrefix(folder + "/") else { return note(name(real), ImportFile.linkedOut) }
             guard seen.count < Self.fileLimit, seen.insert(real).inserted else { return }
-            guard let text = ImportFile.text(real) else {
+            guard let text = ImportFile.text(real), text.utf8.count <= Self.maxBytes else {
                 return skipped.append(SkippedItem(name(real), "couldn't be read"))
             }
             for entry in ImportKitty.parse(text) {
