@@ -656,6 +656,7 @@ enum SelfTest {
         await ragColorChecks(c, proj: proj)
         await envValueChecks(c, proj: proj)
         await importChecks(c, proj: proj)
+        await importUndoGuardChecks()
         await behaviourSettingsChecks(c, proj: proj)
         await singleClickChecks(c, proj: proj, tab: inProject)
         await safetyChecks(c, proj: proj)

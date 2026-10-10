@@ -1,0 +1,126 @@
+import Foundation
+import Testing
+@testable import NextTermCore
+
+/// Undo Import's snapshot: an Apply that changes nothing keeps the earlier Undo, and Undo can name what was
+/// changed by hand since. Only a test suite of UserDefaults is used, never Next Term's own.
+@Suite struct ImportUndoTests {
+    typealias Value = ImportSnapshot.Value
+
+    func withDefaults(_ body: (UserDefaults) throws -> Void) throws {
+        let name = "nextterm-import-undo-tests-\(getpid())-\(UUID().uuidString.prefix(6))"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        try body(defaults)
+    }
+
+    func bindings(_ pairs: [(String, KeyChord?)]) -> Data {
+        var overrides: [String: KeyChord?] = [:]
+        for (id, chord) in pairs { overrides.updateValue(chord, forKey: id) }
+        return KeyBindings(overrides: overrides).encoded()
+    }
+
+    @Test func readsEachKindOfValue() throws {
+        try withDefaults { defaults in
+            defaults.set(true, forKey: "softWrap")
+            defaults.set(15.0, forKey: "fontSize")
+            defaults.set(3_000, forKey: "terminalScrollback")
+            defaults.set("vsCode", forKey: "keymapPreset")
+            defaults.set(["*.log"], forKey: "hiddenFilePatterns")
+            defaults.set(Data([1, 2]), forKey: "terminalPalette")
+            let keys = ["softWrap", "fontSize", "terminalScrollback", "keymapPreset", "hiddenFilePatterns", "terminalPalette", "editorFontFamily"]
+            let values = ImportSnapshot.values(of: keys, in: defaults)
+            #expect(values == ["softWrap": .bool(true), "fontSize": .double(15), "terminalScrollback": .double(3_000),
+                               "keymapPreset": .string("vsCode"), "hiddenFilePatterns": .strings(["*.log"]), "terminalPalette": .data(Data([1, 2]))])
+        }
+    }
+
+    /// The same saved shortcuts with their keys in the given order.
+    func reordered(_ data: Data, reversed: Bool) throws -> Data {
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let sortedKeys = object.keys.sorted()
+        let keys = reversed ? Array(sortedKeys.reversed()) : sortedKeys
+        var members: [String] = []
+        for key in keys {
+            let value = try JSONSerialization.data(withJSONObject: object[key] ?? NSNull(), options: [.fragmentsAllowed, .sortedKeys])
+            members.append("\"\(key)\":" + String(decoding: value, as: UTF8.self))
+        }
+        return Data(("{" + members.joined(separator: ",") + "}").utf8)
+    }
+
+    @Test func anApplyThatChangesNothingMakesNoSnapshot() throws {
+        let before: [String: Value] = ["fontSize": .double(14), "softWrap": .bool(true)]
+        #expect(ImportSnapshot.applied(keys: ["fontSize", "softWrap", "recentProjects"], before: before, after: before,
+                                       source: "Cursor", summary: "2 settings") == nil)
+        // The same shortcuts saved in another order are the same shortcuts.
+        let one = bindings([("goToFile:", KeyChord(key: "p", command: true, option: true)), ("goToLine:", nil), ("saveDocument:", KeyChord(key: "s", command: true))])
+        let sorted = try reordered(one, reversed: false), other = try reordered(one, reversed: true)
+        #expect(sorted != other) // one of them is in another order than `one`
+        #expect(KeyBindings.decode(other) == KeyBindings.decode(one) && KeyBindings.decode(one).overrides.count == 3)
+        #expect(ImportSnapshot.same("keyBindings", .data(one), .data(sorted)) && ImportSnapshot.same("keyBindings", .data(one), .data(other)))
+        #expect(ImportSnapshot.applied(keys: ["keyBindings"], before: ["keyBindings": .data(one)], after: ["keyBindings": .data(other)],
+                                       source: "Cursor", summary: "") == nil)
+        #expect(!ImportSnapshot.same("keyBindings", .data(one), .data(bindings([("goToLine:", nil)]))))
+        #expect(!ImportSnapshot.same("terminalPalette", .data(Data([1])), .data(Data([2]))))
+    }
+
+    @Test func aSnapshotHoldsOnlyWhatChanged() throws {
+        let before: [String: Value] = ["fontSize": .double(14), "softWrap": .bool(true)]
+        let after: [String: Value] = ["fontSize": .double(16), "softWrap": .bool(true), "editorFontFamily": .string("Menlo")]
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let snapshot = try #require(ImportSnapshot.applied(keys: ["fontSize", "softWrap", "editorFontFamily"], before: before, after: after,
+                                                           source: "Cursor", summary: "3 settings", date: date))
+        #expect(snapshot.touched == ["fontSize", "editorFontFamily"])
+        #expect(snapshot.before == ["fontSize": .double(14)]) // the font had none before
+        #expect(snapshot.after == ["fontSize": .double(16), "editorFontFamily": .string("Menlo")])
+        #expect(snapshot.source == "Cursor" && snapshot.summary == "3 settings" && snapshot.date == date)
+        #expect(snapshot.id?.isEmpty == false)
+        let next = try #require(ImportSnapshot.applied(keys: ["fontSize"], before: before, after: after, source: "Zed", summary: ""))
+        #expect(next.id != snapshot.id)
+    }
+
+    @Test func undoNamesWhatChangedSinceTheImport() throws {
+        let snapshot = ImportSnapshot(source: "Cursor", summary: "", before: ["fontSize": .double(14)],
+                                      touched: ["fontSize", "terminalPalette", "customTerminalPalette", "editorFontFamily"],
+                                      after: ["fontSize": .double(16), "terminalPalette": .data(Data([1])), "customTerminalPalette": .data(Data([1])),
+                                              "editorFontFamily": .string("Menlo")])
+        let unchanged: [String: Value] = ["fontSize": .double(16), "terminalPalette": .data(Data([1])),
+                                           "customTerminalPalette": .data(Data([1])), "editorFontFamily": .string("Menlo")]
+        #expect(snapshot.changedSince(unchanged).isEmpty)
+        var current = unchanged
+        current["fontSize"] = .double(18)
+        current["terminalPalette"] = .data(Data([2]))
+        current["customTerminalPalette"] = .data(Data([2]))
+        current["editorFontFamily"] = nil // back to Next Term's font
+        let changed = snapshot.changedSince(current)
+        #expect(changed == ["fontSize", "terminalPalette", "customTerminalPalette", "editorFontFamily"])
+        #expect(ImportSnapshot.titles(of: changed) == ["Font size", "Terminal colours", "Editor font"])
+        // A snapshot from before 0.11 has no values after, so it can't say.
+        let old = ImportSnapshot(source: "Cursor", summary: "", before: [:], touched: ["fontSize"], after: nil)
+        #expect(old.changedSince(current).isEmpty)
+    }
+
+    @Test func snapshotsSavedBeforeStillRead() throws {
+        // As 0.10 saved one: no `after`, no `id`.
+        let saved = #"{"date":800000000,"source":"Cursor","summary":"2 settings","before":{"fontSize":{"double":{"_0":14}},"#
+            + #""softWrap":{"bool":{"_0":true}}},"touched":["fontSize","softWrap","editorFontFamily"]}"#
+        let snapshot = try JSONDecoder().decode(ImportSnapshot.self, from: Data(saved.utf8))
+        #expect(snapshot.before == ["fontSize": .double(14), "softWrap": .bool(true)])
+        #expect(snapshot.touched == ["fontSize", "softWrap", "editorFontFamily"] && snapshot.after == nil && snapshot.id == nil)
+        // And a new one comes back as it was.
+        let new = ImportSnapshot(source: "Zed", summary: "1 setting", before: ["keyBindings": .data(Data([7]))], touched: ["keyBindings"],
+                                 after: ["keyBindings": .data(Data([8]))])
+        #expect(try JSONDecoder().decode(ImportSnapshot.self, from: JSONEncoder().encode(new)) == new)
+    }
+
+    @Test func everyImportedSettingHasATitle() {
+        let settings: [ImportedSetting] = [
+            .fontSize(13), .editorLineHeight(1.2), .softWrap(true), .optionAsMeta(true), .terminalPosition("bottom"), .sidebarSide("left"),
+            .editorFontFamily("Menlo"), .terminalFontFamily("Menlo"), .terminalPalette(TerminalPalette(name: "x")), .terminalScrollback(1_000),
+            .terminalStartFolder("project"), .terminalCursorShape("bar"), .terminalCursorBlink(true), .trimTrailingWhitespace(true),
+            .insertFinalNewline(true), .hiddenFiles([]),
+        ]
+        let keys = settings.flatMap(\.keys) + ["keymapPreset", "keyBindings", "recentProjects"]
+        for key in keys { #expect(ImportSnapshot.title(of: key) != key, "\(key)") }
+    }
+}

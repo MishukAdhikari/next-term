@@ -58,20 +58,8 @@ struct ImportChoice {
 final class ImportCoordinator {
     static let shared = ImportCoordinator()
 
-    struct Snapshot: Codable {
-        let date: Date
-        let source: String
-        let summary: String
-        /// UserDefaults keys the import touched → their values before (missing: there was none).
-        let before: [String: Value]
-        let touched: [String]
-
-        enum Value: Codable, Equatable {
-            case double(Double), bool(Bool), string(String), strings([String])
-            /// The saved shortcuts, byte for byte (`keyBindings`).
-            case data(Data)
-        }
-    }
+    /// UserDefaults keys the import changed, their values before and just after (NextTermCore/ImportUndo.swift).
+    typealias Snapshot = ImportSnapshot
 
     private static let snapshotKey = "importSnapshot"
     static let changed = Notification.Name("NextTermImportChanged")
@@ -94,24 +82,19 @@ final class ImportCoordinator {
             + choice.settings.count + choice.shortcuts.count + (choice.recentProjects.isEmpty ? 0 : 1)
     }
 
-    func apply(_ choice: ImportChoice, plan: ImportPlan, from source: String) {
+    /// Applies what was ticked and remembers it for Undo. An Apply that changes nothing (every value was
+    /// already so) returns nil and keeps the Undo of the import before it.
+    @discardableResult
+    func apply(_ choice: ImportChoice, plan: ImportPlan, from source: String) -> Snapshot? {
         let defaults = UserDefaults.standard
         var keys: [String] = []
         if choice.usePreset { keys.append("keymapPreset") }
         keys += choice.settings.flatMap(\.setting.keys)
         if !choice.shortcuts.isEmpty { keys.append("keyBindings") }
         if !choice.recentProjects.isEmpty { keys.append("recentProjects") }
-        var before: [String: Snapshot.Value] = [:]
-        for key in Set(keys) {
-            switch defaults.object(forKey: key) {
-            case let value as Bool where ImportedSetting.boolKeys.contains(key): before[key] = .bool(value)
-            case let value as Data: before[key] = .data(value)
-            case let value as Double: before[key] = .double(value)
-            case let value as String: before[key] = .string(value)
-            case let value as [String]: before[key] = .strings(value)
-            default: break
-            }
-        }
+        var unique: [String] = []
+        for key in keys where !unique.contains(key) { unique.append(key) }
+        let before = Snapshot.values(of: unique, in: defaults)
         let app = AppDelegate.shared!
         if choice.usePreset { KeyboardShortcuts.shared.preset = plan.preset }
         // The user's own shortcuts go on top of the preset, as their own changes.
@@ -123,7 +106,28 @@ final class ImportCoordinator {
         if !choice.shortcuts.isEmpty { parts.append("\(choice.shortcuts.count) of your shortcut\(choice.shortcuts.count == 1 ? "" : "s")") }
         if !choice.settings.isEmpty { parts.append("\(choice.settings.count) setting\(choice.settings.count == 1 ? "" : "s")") }
         if !added.isEmpty { parts.append("\(added.count) project\(added.count == 1 ? "" : "s")") }
-        last = Snapshot(date: Date(), source: source, summary: parts.joined(separator: ", "), before: before, touched: Array(Set(keys)))
+        let after = Snapshot.values(of: unique, in: defaults)
+        guard let snapshot = Snapshot.applied(keys: unique, before: before, after: after, source: source,
+                                              summary: parts.joined(separator: ", ")) else { return nil }
+        last = snapshot
+        return snapshot
+    }
+
+    /// The settings the last import changed that hold something else now: changed by hand since, so Undo
+    /// puts them back too. Named as Settings names them.
+    func changedSinceImport() -> [String] {
+        guard let snapshot = last else { return [] }
+        let current = Snapshot.values(of: snapshot.touched, in: UserDefaults.standard)
+        return Snapshot.titles(of: snapshot.changedSince(current))
+    }
+
+    /// What the Undo Import alert says, naming what was changed since the import.
+    static func undoMessage(changedSince: [String]) -> String {
+        let base = "The shortcuts, settings and recent projects it changed go back to what they were before."
+        guard !changedSince.isEmpty else { return base }
+        let list = ListFormatter.localizedString(byJoining: changedSince)
+        return base + " You changed \(changedSince.count == 1 ? "this" : "these") since the import, and Undo puts "
+            + "\(changedSince.count == 1 ? "it" : "them") back too: \(list)."
     }
 
     /// Puts every key the last import touched back as it was.
@@ -820,7 +824,7 @@ final class ImportSettingsView: NSView {
     @objc private func undo() {
         let alert = NSAlert()
         alert.messageText = "Undo the import?"
-        alert.informativeText = "The shortcuts, settings and recent projects it changed go back to what they were before."
+        alert.informativeText = ImportCoordinator.undoMessage(changedSince: ImportCoordinator.shared.changedSinceImport())
         alert.addButton(withTitle: "Undo Import")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
