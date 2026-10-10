@@ -500,16 +500,12 @@ extension AgentEvidence {
             nameSession(&evidence, typed: typed?.arguments, argv: argv, children: input.childSessionIDs)
         }
         let expanded = input.expandedLine.flatMap { $0.isEmpty ? nil : $0 }
-        evidence.ranAsTyped = typed?.plain == true && (expanded == nil || expanded == input.typedLine)
-        let options = agent.options(in: argv ?? typed?.arguments ?? [])
-        evidence.flags = options.carried
-        evidence.leftOff = options.leftOff
-        evidence.flagsAllowed = argv != nil && options.allowed
         // The launch as a put-back line replays it (U2, KTD7): argv's options, the typed word that passes them on, and
         // the permission options the typed line or its alias expansion showed. The expansion is read here only.
         evidence.options = argv.flatMap(agent.launchOptions(in:))
         evidence.confirmed = input.typedLine.map { agent.confirmedOptions(inLine: expanded ?? $0) } ?? []
         evidence.launcher = launcher(of: agent, typed: input.typedLine, expanded: expanded, argv: argv, options: evidence.options)
+        evidence.ranAsTyped = ranAsTyped(agent, typed: input.typedLine, expanded: expanded, launcher: evidence.launcher)
         if let leader {
             evidence.sessionFolder = evidence.sessionFolder ?? leader.directory
             evidence.startedAt = leader.startedAt
@@ -554,8 +550,9 @@ extension AgentEvidence {
     /// command, with no prefix or wrapper before it, that is an alias whose expansion's last command runs the agent with
     /// argv's own arguments, or a word typed with arguments that argv ends with. A function typed alone shows neither.
     /// The words typed after it must read alone as they do at the end of argv: an alias ending in an option that takes a
-    /// value (`claude --model`) leaves that value to the typed words, which a replay would split. Nil when argv's options
-    /// are not known, as the launcher replays the last of them.
+    /// value (`claude --model`) leaves that value to the typed words, which a replay would split. Its own words hold no
+    /// form or one-shot option (`alias cc='claude --continue'`), which a replay would bring back beside the resume form.
+    /// Nil when argv's options are not known, as the launcher replays the last of them.
     static func launcher(of agent: RestoreAgent, typed: String?, expanded: String?, argv: [String]?,
                          options: [SessionSnapshot.LaunchOption]?) -> SessionSnapshot.Launcher? {
         guard let typed, let argv, options != nil, let last = CommandClassifier.segments(typed).last else { return nil }
@@ -569,9 +566,31 @@ extension AgentEvidence {
             return nil
         }
         let cli = agent.cli
-        let apart = cli.read(Array(argv.dropLast(rest.count))).pieces + cli.read(rest).pieces
-        guard apart == cli.read(argv).pieces, let typedOptions = agent.launchOptions(in: rest) else { return nil }
+        let own = cli.read(Array(argv.dropLast(rest.count))).pieces
+        let replays = own.allSatisfy { (piece: AgentCLI.Piece) -> Bool in
+            guard case .known(_, _, let option) = piece else { return true }
+            return option.kind != .form && option.kind != .oneShot
+        }
+        guard replays, own + cli.read(rest).pieces == cli.read(argv).pieces, let typedOptions = agent.launchOptions(in: rest) else {
+            return nil
+        }
         return SessionSnapshot.Launcher(word: word, typed: typedOptions.count)
+    }
+
+    /// The typed line ran the agent as typed (KTD5): its command's first word is the agent's program, with no assignment
+    /// or wrapper before it and no alias in between; or that word is an alias (`launcher`, which passes argv's own
+    /// arguments on) whose expansion changed nothing else of the line and runs the agent's program, with its options,
+    /// first. A function, which the shell expands as itself, shows neither; nor does an alias that sets a variable, wraps
+    /// the agent, or runs anything before it.
+    static func ranAsTyped(_ agent: RestoreAgent, typed: String?, expanded: String?, launcher: SessionSnapshot.Launcher?) -> Bool {
+        guard let typed else { return false }
+        guard let expanded, expanded != typed else { return agent.arguments(inLine: typed)?.plain == true }
+        let before = CommandClassifier.segments(typed)
+        let after = CommandClassifier.segments(expanded)
+        guard launcher != nil, let last = after.last, before.count == after.count, before.dropLast() == after.dropLast() else {
+            return false
+        }
+        return agent.arguments(inLine: last)?.plain == true
     }
 
     /// The store an agent that resumes by itself keeps, by its real path (a link to it, such as a dotfiles folder,

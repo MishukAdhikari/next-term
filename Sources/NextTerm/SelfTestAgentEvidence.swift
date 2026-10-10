@@ -48,13 +48,13 @@ extension SelfTest {
         check(exact?.agent == .claude && exact?.source == .sessionFile && exact?.sessionID == evidenceClaudeID,
               "evidence: Claude's session file for the tab's own process and start time gives an exact id", String(describing: exact))
         check(exact?.sessionFolder == project && exact?.executable == bin + "/claude" && exact?.ranAsTyped == true
-              && exact?.flagsAllowed == true && exact?.startedAt != nil,
+              && exact?.launch.allowed == true && exact?.startedAt != nil,
               "evidence: it records the session's folder, the path that ran, and that the line ran as typed", String(describing: exact))
         check(exact?.store == home + "/.claude", "evidence: it records the store the session file was read in", exact?.store ?? "none")
         let guessed = capture(started: start.addingTimeInterval(-3600))
         check(guessed?.agent == .claude && guessed?.source == .guess && guessed?.sessionID == nil,
               "evidence: the same file for another start of that pid is a guess", String(describing: guessed))
-        let line = RestoreAgent.claude.putBackLine(id: exact?.sessionID, folder: exact?.sessionFolder)
+        let line = exact?.putBack(id: exact?.sessionID, folder: exact?.sessionFolder)?.line
         check(line == "claude --resume \(evidenceClaudeID)", "evidence: its put-back line is the resume form alone", line ?? "none")
     }
 }

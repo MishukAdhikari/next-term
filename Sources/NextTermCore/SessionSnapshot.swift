@@ -349,21 +349,15 @@ extension SessionSnapshot {
         public var routingMatchesShell: Bool
         /// No auto-continue variable was set for the agent when captured.
         public var autoContinueOff: Bool
-        /// The typed line ran as typed: its alias-expanded form was the same line. Compared in memory: the
-        /// expanded line is not saved.
+        /// The typed line ran as typed (KTD5): its command's first word was the agent's program, or an alias whose
+        /// expansion is the agent's program and options, with no assignment, wrapper or function in between. Compared in
+        /// memory: the expanded line is not saved.
         public var ranAsTyped: Bool
-        /// The options an automatic resume carries, as words (`--model`, `opus`): only ones its agent allows, with
-        /// values within their pattern (RestoreAgent.options(in:)).
-        public var flags: [String]
-        /// The names of the options it ran with that a resume leaves off (a permission bypass, a settings file),
-        /// for its note: names only, never a value.
-        public var leftOff: [String]
-        /// Every option it ran with may be carried by an automatic resume: none left off, and none it could not name.
-        public var flagsAllowed: Bool
         /// The options it ran with, from its argv in order, each with its values as argv gave them (U2). Never a prompt
         /// word, a form or a one-shot option. A restore reads them again with the running build's table, which says what
-        /// a line and a resume carry (KTD20). Nil when not known: no argv, a file from before they were kept, or a list
-        /// that could not be kept whole (`LaunchOption.kept`).
+        /// a line keeps, what a resume carries and what is left off (`launch`, KTD20). Nil when not known: no argv, a file
+        /// from before they were kept, or a list that could not be kept whole (`LaunchOption.kept`); then a resume carries
+        /// none, and none run by itself.
         public var options: [LaunchOption]?
         /// The word typed to start it, when it passes its arguments on (KTD7): a put-back line replays it.
         public var launcher: Launcher?
@@ -377,8 +371,8 @@ extension SessionSnapshot {
         public init(agent: Agent, sessionID: String? = nil, source: IDSource = .guess, sessionFolder: String? = nil, store: String? = nil,
                     executable: String? = nil, interpreter: String? = nil, script: String? = nil, startedAt: Date? = nil,
                     sessionDate: Date? = nil, routingMatchesShell: Bool = false, autoContinueOff: Bool = false,
-                    ranAsTyped: Bool = false, flags: [String] = [], leftOff: [String] = [], flagsAllowed: Bool = false,
-                    options: [LaunchOption]? = nil, launcher: Launcher? = nil, confirmed: [LaunchOption] = [], version: String? = nil) {
+                    ranAsTyped: Bool = false, options: [LaunchOption]? = nil, launcher: Launcher? = nil, confirmed: [LaunchOption] = [],
+                    version: String? = nil) {
             self.agent = agent
             self.sessionID = sessionID
             self.source = source
@@ -392,9 +386,6 @@ extension SessionSnapshot {
             self.routingMatchesShell = routingMatchesShell
             self.autoContinueOff = autoContinueOff
             self.ranAsTyped = ranAsTyped
-            self.flags = flags
-            self.leftOff = leftOff
-            self.flagsAllowed = flagsAllowed
             self.options = options
             self.launcher = launcher
             self.confirmed = confirmed
@@ -574,8 +565,9 @@ extension SessionSnapshot {
     public enum Action: String, CaseIterable, Sendable {
         /// The agent's own resume, once the shell is ready.
         case resume
-        /// An agent's resume command on the prompt line, unrun: its resume form with the session id, or its program
-        /// alone, with no prompt words, options or environment prefix (KTD7). Never rebuilt from the line that started it.
+        /// An agent's resume command on the prompt line, unrun: the user's launch (the launcher replayed, or the program and
+        /// argv's options) with the resume form and the session id, never a prompt word, a form or a one-shot option
+        /// (KTD7). Built from the agent's record, never from the line that started it.
         case onTheLine
         /// Any other command on the prompt line, unrun.
         case typeIn
@@ -1003,16 +995,7 @@ extension SessionSnapshot.Evidence {
         fixed.executable = SnapshotText.plainPath(executable, max: limits.path)
         fixed.interpreter = SnapshotText.plainPath(interpreter, max: limits.path)
         fixed.script = SnapshotText.plainPath(script, max: limits.path)
-        // A word or a name that breaks its rule drops its whole list: a resume never carries part of what ran.
-        let words = flags.compactMap { SnapshotText.token($0, max: 64, extra: "._:/=-[]") }
-        if words.count != flags.count || flags.count > Self.mostOptions {
-            fixed.flags = []
-            fixed.flagsAllowed = false
-        }
-        if leftOff.count > Self.mostOptions || !leftOff.allSatisfy(RestoreAgent.isOptionName) {
-            fixed.leftOff = []
-            fixed.flagsAllowed = false
-        }
+        // An option that breaks its rule drops its whole list: a line or a resume never carries part of what ran.
         fixed.options = options.flatMap(SessionSnapshot.LaunchOption.kept)
         fixed.confirmed = SessionSnapshot.LaunchOption.kept(confirmed) ?? []
         // The launcher replays the last of the options: with none known, or fewer than it names, it replays nothing.
@@ -1024,7 +1007,7 @@ extension SessionSnapshot.Evidence {
         return fixed
     }
 
-    /// The most option words, and option names, a record holds.
+    /// The most options a record holds, and the most words each holds.
     static let mostOptions = 16
 }
 
@@ -1476,7 +1459,7 @@ extension SessionSnapshot.Command: Codable {
 extension SessionSnapshot.Evidence: Codable {
     private enum Keys: String, CodingKey {
         case agent, sessionID, source, sessionFolder, store, executable, interpreter, script, startedAt, sessionDate
-        case routingMatchesShell, autoContinueOff, ranAsTyped, flags, leftOff, flagsAllowed
+        case routingMatchesShell, autoContinueOff, ranAsTyped
         case options, launcher, confirmed, version
     }
 
@@ -1494,15 +1477,6 @@ extension SessionSnapshot.Evidence: Codable {
         routingMatchesShell = c.flag(.routingMatchesShell)
         autoContinueOff = c.flag(.autoContinueOff)
         ranAsTyped = c.flag(.ranAsTyped)
-        flagsAllowed = c.flag(.flagsAllowed)
-        // A list that does not read whole is not taken in part, and then a resume could not carry what ran.
-        for key in [Keys.flags, .leftOff] where c.contains(key) {
-            guard let words = c.strings(key, max: Self.mostOptions, budget: decoder.snapshotBudget) else {
-                flagsAllowed = false
-                continue
-            }
-            if key == .flags { flags = words } else { leftOff = words }
-        }
         // Added after schema 1 shipped: a file without them reads as having none.
         if c.contains(.options) { options = c.launchOptions(.options, budget: decoder.snapshotBudget) }
         confirmed = c.launchOptions(.confirmed, budget: decoder.snapshotBudget) ?? []
@@ -1525,9 +1499,6 @@ extension SessionSnapshot.Evidence: Codable {
         try c.encode(routingMatchesShell, forKey: .routingMatchesShell)
         try c.encode(autoContinueOff, forKey: .autoContinueOff)
         try c.encode(ranAsTyped, forKey: .ranAsTyped)
-        if !flags.isEmpty { try c.encode(flags, forKey: .flags) }
-        if !leftOff.isEmpty { try c.encode(leftOff, forKey: .leftOff) }
-        try c.encode(flagsAllowed, forKey: .flagsAllowed)
         try c.encodeIfPresent(options, forKey: .options)
         try c.encodeIfPresent(launcher, forKey: .launcher)
         if !confirmed.isEmpty { try c.encode(confirmed, forKey: .confirmed) }

@@ -121,7 +121,7 @@ import Testing
         let link = "/Users/x/.local/bin/claude"
         var evidence = Evidence(agent: .claude, sessionID: s, source: .sessionFile, sessionFolder: folder, store: "/Users/x/.claude",
                                 executable: link, startedAt: start, routingMatchesShell: true, autoContinueOff: true, ranAsTyped: true)
-        evidence.flagsAllowed = true
+        evidence.options = []
         let binary = FileFacts(realPath: "/Users/x/.local/share/claude/2.1.280", owner: user, mode: 0o755, isRegular: true, linksFollowed: [link])
         let files: [String: FileFacts] = [
             link: binary,
@@ -243,18 +243,6 @@ import Testing
         }
     }
 
-    @Test func aBypassFlagPutsTheResumeOnTheLineWithoutIt() {
-        let (base, facts) = exactClaude()
-        var evidence = base
-        evidence.leftOff = ["--dangerously-skip-permissions"]
-        evidence.flagsAllowed = false
-        let result = plan(pane(1, typed("claude --dangerously-skip-permissions"), agent: evidence), world: world(facts: facts))
-        #expect(result.outcome == .agentOnTheLine && result.line == "claude --resume \(s)")
-        let expected = "claude --resume \(s) is back on the line, not run. Press Return to resume Claude Code session \(s), or edit it first. "
-            + "Left off: --dangerously-skip-permissions."
-        #expect(text(result) == expected)
-    }
-
     @Test func aWorldWritableFolderGoesOnTheLine() {
         var (evidence, facts) = exactClaude()
         facts.files[folder] = FileFacts(realPath: folder, owner: geteuid(), mode: 0o777, isDirectory: true)
@@ -352,9 +340,9 @@ import Testing
 
     @Test func whenTheTabSelectedLastCannotResumeNoneDoes() {
         let (evidence, facts) = exactClaude()
+        // A permission option argv alone shows: on the line.
         var bypass = evidence
-        bypass.leftOff = ["--dangerously-skip-permissions"]
-        bypass.flagsAllowed = false
+        bypass.options = [SessionSnapshot.LaunchOption(["--dangerously-skip-permissions"])]
         let older = pane(1, typed("claude"), agent: evidence, selected: 10)
         let newer = pane(2, typed("claude --dangerously-skip-permissions"), agent: bypass, selected: 20)
         let plans = plan([older, newer], world: world(facts: facts))
@@ -367,6 +355,185 @@ import Testing
         let shouting = plan([older, pane(3, typed("claude"), agent: capitals, selected: 20)], world: world(facts: facts))
         expectOutcomes(shouting, .agentOnTheLine, .resume)
         #expect(text(shouting[0]).hasSuffix("Another tab resumed this session."))
+    }
+
+    // MARK: the user's launch, back (AE15, AE23-AE30)
+
+    /// `/usr/bin/env` with Claude Code's auto-continue variables unset, and the path the fixtures record.
+    var claudeRuns: String {
+        let unset = RestoreAgent.claude.autoContinueVariables.map { "-u " + $0 }.joined(separator: " ")
+        return "/usr/bin/env \(unset) /Users/x/.local/bin/claude"
+    }
+
+    /// What capture makes of a launch: `argv` run as the tab's verified leader from `executable`, typed as `typed`, and
+    /// expanded to `expanded` when the typed word was an alias. Nothing it reads is on this Mac.
+    func captured(_ argv: [String], typed: String, expanded: String? = nil, executable: String = "/Users/x/.local/bin/claude",
+                  environment: [String: String] = [:]) throws -> Evidence {
+        let leader = AgentProcess(pid: 7, startedAt: start, executable: executable, arguments: argv, environment: environment,
+                                  directory: folder)
+        let input = AgentEvidence.Capture(leader: leader, verified: true, typedLine: typed, expandedLine: expanded, home: "/Users/x")
+        return try #require(AgentEvidence.capture(input), "\(argv)")
+    }
+
+    /// The same, as Claude Code with the exact id `S` from its own session file, and facts on which every other check
+    /// passes: what the restore's gate then makes of the launch's options and the line it was typed as.
+    func launched(_ argv: [String], typed line: String, expanded: String? = nil,
+                  environment: [String: String] = [:]) throws -> (Pane, RestorePlanner.World) {
+        let (exact, facts) = exactClaude()
+        var evidence = try captured(argv, typed: line, expanded: expanded, environment: environment)
+        evidence.sessionID = exact.sessionID
+        evidence.source = exact.source
+        evidence.store = exact.store
+        evidence.routingMatchesShell = true
+        return (pane(1, typed(line), agent: evidence), world(facts: facts))
+    }
+
+    /// The text a put-back line's note starts with.
+    func back(_ line: String, _ agent: String = "Claude Code", _ id: String = RestorePlannerTests.s) -> String {
+        "\(line) is back on the line, not run. Press Return to resume \(agent) session \(id), or edit it first."
+    }
+
+    /// AE15: a permission option typed with the agent comes back on an update restore, and the note names it. After a
+    /// crash, the launch goes back on the line.
+    @Test func ae15APermissionOptionTypedWithTheAgentComesBack() throws {
+        let (claude, world) = try launched(["claude", "--dangerously-skip-permissions"], typed: "claude --dangerously-skip-permissions")
+        let update = plan(claude, world: world)
+        #expect(update.outcome == .resume && update.line == claudeRuns + " --resume \(s) --dangerously-skip-permissions")
+        #expect(text(update) == "Resumed Claude Code session \(s) with --dangerously-skip-permissions.")
+        let waiting = update.note.shownBeforeShell() ?? ""
+        #expect(waiting == "Claude Code session \(s) resumes with --dangerously-skip-permissions \(RestoreNote.onceReady).")
+        let crash = plan(claude, kind: .crash, world: world)
+        #expect(crash.outcome == .agentOnTheLine && crash.line == "claude --dangerously-skip-permissions --resume \(s)")
+        #expect(text(crash) == back("claude --dangerously-skip-permissions --resume \(s)"))
+    }
+
+    /// AE23, AE24: an alias whose expansion is the agent and a permission option resumes with it on an update restore,
+    /// or a quit restore with the quit consent. After a crash, or a quit without the consent, the alias is replayed.
+    @Test func ae23AndAe24AnAliasResumesWithItsOptionOrIsReplayed() throws {
+        let (claude, world) = try launched(["claude", "--dangerously-skip-permissions"], typed: "claude-auto-danger",
+                                           expanded: "claude --dangerously-skip-permissions")
+        for (kind, consent) in [(SessionSnapshot.RestoreKind.update, false), (.quit, true)] {
+            let resumed = plan(claude, kind: kind, quitConsent: consent, world: world)
+            #expect(resumed.outcome == .resume && resumed.line == claudeRuns + " --resume \(s) --dangerously-skip-permissions", "\(kind)")
+            #expect(text(resumed) == "Resumed Claude Code session \(s) with --dangerously-skip-permissions.", "\(kind)")
+        }
+        for (kind, consent) in [(SessionSnapshot.RestoreKind.crash, false), (.quit, false)] {
+            let put = plan(claude, kind: kind, quitConsent: consent, world: world)
+            #expect(put.outcome == .agentOnTheLine && put.line == "claude-auto-danger --resume \(s)", "\(kind)")
+            #expect(text(put) == back("claude-auto-danger --resume \(s)"), "\(kind)")
+        }
+    }
+
+    /// AE25: a function's option shows in argv alone, which can't confirm it: its launch is rebuilt from argv and goes on
+    /// the line on every restore.
+    @Test func ae25AFunctionsOptionGoesOnTheLineOnEveryRestore() throws {
+        let (claude, world) = try launched(["claude", "--dangerously-skip-permissions"], typed: "claude-auto-danger")
+        for (kind, consent) in [(SessionSnapshot.RestoreKind.update, false), (.quit, true), (.quit, false), (.crash, false)] {
+            let put = plan(claude, kind: kind, quitConsent: consent, world: world)
+            #expect(put.outcome == .agentOnTheLine && put.line == "claude --dangerously-skip-permissions --resume \(s)", "\(kind)")
+            #expect(text(put) == back("claude --dangerously-skip-permissions --resume \(s)"), "\(kind)")
+        }
+        // Expanded by the shell as itself, a function shows the same.
+        let (same, sameWorld) = try launched(["claude", "--dangerously-skip-permissions"], typed: "claude-auto-danger",
+                                             expanded: "claude-auto-danger")
+        #expect(plan(same, world: sameWorld).line == "claude --dangerously-skip-permissions --resume \(s)")
+    }
+
+    /// AE26: plain options within their patterns and a confirmed permission option are carried; the prompt never is.
+    @Test func ae26OptionsComeBackAndThePromptNever() throws {
+        let argv = ["claude", "--model", "opus[1m]", "--permission-mode", "bypassPermissions", "fix the tests"]
+        let typed = "claude --model 'opus[1m]' --permission-mode bypassPermissions \"fix the tests\""
+        let (claude, world) = try launched(argv, typed: typed)
+        let update = plan(claude, world: world)
+        let command = claudeRuns + " --resume \(s) --model 'opus[1m]' --permission-mode bypassPermissions"
+        #expect(update.outcome == .resume && update.line == command)
+        #expect(text(update) == "Resumed Claude Code session \(s) with --permission-mode bypassPermissions.")
+        let crash = plan(claude, kind: .crash, world: world)
+        #expect(crash.line == "claude --model 'opus[1m]' --permission-mode bypassPermissions --resume \(s)")
+        for result in [update, crash] {
+            #expect(!(result.line ?? "").contains("fix the tests") && !text(result).contains("fix the tests"))
+        }
+    }
+
+    /// AE27: an alias that sets a variable fails the gate on that prefix, and is replayed, so the session is looked for in
+    /// the store the alias names.
+    @Test func ae27AnAliasThatSetsAVariableIsReplayed() throws {
+        let (claude, world) = try launched(["claude"], typed: "cw", expanded: "CLAUDE_CONFIG_DIR=/Users/x/.claude-work claude",
+                                           environment: ["CLAUDE_CONFIG_DIR": "/Users/x/.claude-work"])
+        let failed: [ResumeCheck] = {
+            guard let evidence = claude.agent, case .onTheLine(let failed) = evidence.gate(exactClaude().1) else { return [] }
+            return failed
+        }()
+        #expect(failed.contains(.typedLine))
+        let update = plan(claude, world: world)
+        #expect(update.outcome == .agentOnTheLine && update.line == "cw --resume \(s)")
+        #expect(text(update) == back("cw --resume \(s)"))
+    }
+
+    /// AE28: a code-loading option never runs by itself, and comes back on the line on every restore.
+    @Test func ae28ACodeLoadingOptionGoesOnTheLine() throws {
+        let (claude, world) = try launched(["claude", "--mcp-config", "./mcp.json"], typed: "claude --mcp-config ./mcp.json")
+        for (kind, consent) in [(SessionSnapshot.RestoreKind.update, false), (.quit, true), (.crash, false)] {
+            let put = plan(claude, kind: kind, quitConsent: consent, world: world)
+            #expect(put.outcome == .agentOnTheLine && put.line == "claude --mcp-config ./mcp.json --resume \(s)", "\(kind)")
+        }
+    }
+
+    /// AE29: Codex resumes with `--yolo` after its resume form; Gemini CLI's and Copilot CLI's launches go on the line,
+    /// and Copilot's `-r` is dropped, never left off.
+    @Test func ae29CodexResumesAndGeminiAndCopilotGoOnTheLine() throws {
+        let user = geteuid()
+        var codex = try captured(["codex", "--yolo"], typed: "codex --yolo", executable: "/opt/homebrew/bin/codex")
+        codex.sessionID = s
+        codex.source = .openRollout
+        codex.store = "/Users/x/.codex"
+        codex.routingMatchesShell = true
+        let files: [String: FileFacts] = [
+            "/opt/homebrew/bin/codex": FileFacts(realPath: "/opt/homebrew/Caskroom/codex/0.154.0/codex", owner: 0, mode: 0o755, isRegular: true),
+            folder: FileFacts(realPath: folder, owner: user, mode: 0o755, isDirectory: true),
+            "/Users/x/.codex": FileFacts(realPath: "/Users/x/.codex", owner: user, mode: 0o700, isDirectory: true),
+        ]
+        let facts = ResumeFacts(user: user, files: files, outside: [folder], temporaryFolders: ["/private/tmp"], sessionAvailable: true,
+                                projectConfigChanged: false, settingsAutoContinue: false)
+        let resumed = plan(pane(1, typed("codex --yolo"), agent: codex), world: world(facts: facts))
+        #expect(resumed.outcome == .resume && resumed.line == "/usr/bin/env /opt/homebrew/bin/codex resume \(s) -C \(folder) --yolo")
+        #expect(text(resumed) == "Resumed Codex session \(s) with --yolo.")
+
+        let lookups = Lookups()
+        lookups.sessions = [session(.gemini, g, at: 30, updated: 90)]
+        let gemini = try captured(["gemini", "--approval-mode=yolo"], typed: "gemini --approval-mode=yolo", executable: "/opt/homebrew/bin/gemini")
+        let guessed = plan(pane(1, typed("gemini --approval-mode=yolo"), agent: gemini), world: world(lookups: lookups))
+        #expect(guessed.outcome == .agentOnTheLine && guessed.line == "gemini --approval-mode=yolo --resume \(g)")
+        #expect(text(guessed).hasPrefix(back("gemini --approval-mode=yolo --resume \(g)", "Gemini CLI", g)))
+
+        let copilot = try captured(["copilot", "-r", s, "--allow-all"], typed: "copilot -r \(s) --allow-all",
+                                   executable: "/opt/homebrew/bin/copilot")
+        let put = plan(pane(1, typed("copilot -r \(s) --allow-all"), agent: copilot), world: world())
+        #expect(put.outcome == .agentOnTheLine && put.line == "copilot --allow-all --resume=\(s)")
+        #expect(text(put) == back("copilot --allow-all --resume=\(s)", "Copilot CLI"))
+    }
+
+    /// AE30: an option the table does not know, followed by a word that may be a prompt's, is left off with that word and
+    /// named; joined to its value by `=`, it is kept.
+    @Test func ae30AnUnknownOptionIsKeptOnlyWithAPlainValue() throws {
+        let (unclear, world) = try launched(["claude", "--newflag", "value"], typed: "claude --newflag value")
+        let left = plan(unclear, world: world)
+        #expect(left.outcome == .agentOnTheLine && left.line == "claude --resume \(s)")
+        #expect(text(left) == back("claude --resume \(s)") + " Left off: --newflag (Next Term can't tell its value from a prompt).")
+        let (joined, joinedWorld) = try launched(["claude", "--newflag=value"], typed: "claude --newflag=value")
+        let kept = plan(joined, world: joinedWorld)
+        #expect(kept.outcome == .agentOnTheLine && kept.line == "claude --newflag=value --resume \(s)")
+        #expect(text(kept) == back("claude --newflag=value --resume \(s)"))
+        // Two named at once, in a note with no session named.
+        var two = unclear
+        two.agent?.options = [SessionSnapshot.LaunchOption(["--newflag"], unclear: true), SessionSnapshot.LaunchOption(["--other"], unclear: true)]
+        two.agent?.sessionID = nil
+        two.agent?.launcher = nil
+        let none = plan(two, kind: .crash, world: world)
+        #expect(none.line == "claude")
+        let said = "claude is back on the line, not run. No Claude Code session could be named, so Return starts a new one. "
+            + "Left off: --newflag, --other (Next Term can't tell their values from a prompt)."
+        #expect(text(none) == said)
     }
 
     // MARK: agents put back on the line

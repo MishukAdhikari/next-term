@@ -5,34 +5,60 @@ import Foundation
 // agent with a resume form gets (KTD7); and, for Claude Code, Codex and Qwen Code alone, the options a resume may carry
 // and the gate an automatic resume must pass (KTD5).
 //
-// A put-back line is the resume form with the id and nothing else: no prompt words, no options, no environment
-// prefix. An automatic resume runs the recorded absolute path through `/usr/bin/env -u <auto-continue variables>`,
-// with only options its agent allows. Both are one plain line, quoted with ShellQuote.
+// A put-back line is the user's own launch with the resume form and the id: the launcher replayed with the options typed
+// after it, or the program and argv's options, never a prompt word, a form or a one-shot option. An automatic resume runs
+// the recorded absolute path through `/usr/bin/env -u <auto-continue variables>`, with the resume form, the plain options
+// and the permission options the typed line confirmed. Both are one plain line, quoted with ShellQuote.
 
 /// The agents a restore knows: SessionSnapshot.Agent, which maps to AgentKind where the session list knows the
 /// agent too, so AgentKind's exhaustive switches stay as they are.
 public typealias RestoreAgent = SessionSnapshot.Agent
 
-/// What capture made of an agent's options.
-public struct AgentOptions: Equatable, Sendable {
-    /// The options an automatic resume carries, as words: `--model`, `opus`.
-    public var carried: [String]
-    /// The names of the rest, for a note. Never a value.
+/// An agent's launch options as a restore reads them, with the running build's table (KTD5, KTD7, KTD20).
+public struct LaunchReading: Equatable, Sendable {
+    /// The words a put-back line keeps, in order: every option but a form, a one-shot option, or one whose value the
+    /// table can't tell from a prompt word.
+    public var line: [String]
+    /// The plain options an automatic resume carries, as words, in order.
+    public var plain: [String]
+    /// The permission options it carries, each as its words, in order: argv and the typed line both show them.
+    public var permissions: [[String]]
+    /// The options left off the line, by name: the table can't tell their value from a prompt word.
     public var leftOff: [String]
-    /// Nothing was left off, so an automatic resume runs as the agent ran.
+    /// An automatic resume may carry every option: each plain one within its pattern, each permission one within its
+    /// pattern and shown by the typed line too. A code-loading option, one the table does not know, or options not known
+    /// at all send the agent to the line.
     public var allowed: Bool
 
-    public init(carried: [String], leftOff: [String], allowed: Bool) {
-        self.carried = carried
+    public init(line: [String] = [], plain: [String] = [], permissions: [[String]] = [], leftOff: [String] = [], allowed: Bool = true) {
+        self.line = line
+        self.plain = plain
+        self.permissions = permissions
         self.leftOff = leftOff
         self.allowed = allowed
     }
 
+    /// What an automatic resume carries after the resume form: the plain options, then the permission options.
+    public var carried: [String] { plain + permissions.flatMap { $0 } }
+
     mutating func leaveOff(_ name: String) {
         allowed = false
-        if RestoreAgent.isOptionName(name), !leftOff.contains(name), leftOff.count < SessionSnapshot.Evidence.mostOptions {
-            leftOff.append(name)
-        }
+        if !leftOff.contains(name) { leftOff.append(name) }
+    }
+}
+
+/// An agent's put-back line (KTD7), with what its note says of it.
+public struct PutBack: Equatable, Sendable {
+    public var line: String
+    /// It holds the resume form with the session's id.
+    public var namesSession: Bool
+    /// The options it leaves off, by name: the table can't tell their value from a prompt word.
+    public var leftOff: [String]
+
+    public init(line: String, namesSession: Bool, leftOff: [String]) {
+        self.line = line
+        self.namesSession = namesSession
+        self.leftOff = leftOff
     }
 }
 
@@ -220,52 +246,16 @@ extension SessionSnapshot.Agent {
 
     // MARK: the put-back line
 
-    /// The line put back on the prompt, unrun (R6): the resume form with `id`, or the program alone when there is no
-    /// id or it fails the agent's pattern. Nil for an agent with no resume form (R7).
+    /// The resume form with `id` alone: the put-back line of a launch with no options (Evidence.putBack). The program
+    /// alone when there is no id or it fails the agent's pattern; nil for an agent with no resume form (R7).
     public func putBackLine(id: String?, folder: String? = nil) -> String? {
-        guard hasResumeForm, let program else { return nil }
-        guard let id, isSessionID(id) else { return program }
-        let forms = [resumeWords(id: id, folder: folder), resumeWords(id: id, folder: nil)].compactMap { $0 }
-        for words in forms {
-            let line = ([program] + words).map(ShellQuote.quote).joined(separator: " ")
-            if SessionSnapshot.Command.problem(with: line) == nil { return line }
-        }
-        return program
+        SessionSnapshot.Evidence(agent: self, options: []).putBack(id: id, folder: folder)?.line
     }
 }
 
 // MARK: - Options
 
 extension SessionSnapshot.Agent {
-    /// What capture keeps of the agent's own arguments (after its program), read with its table: the plain options an
-    /// automatic resume may carry, with values within their patterns; the names of the rest; and whether anything was
-    /// left off. Prompt words and forms are neither: a resume never re-sends a prompt (R8), and forms its own. Only
-    /// Claude Code, Codex and Qwen Code carry any, as only they resume by themselves.
-    public func options(in arguments: [String]) -> AgentOptions {
-        var options = AgentOptions(carried: [], leftOff: [], allowed: true)
-        for piece in cli.read(arguments).pieces {
-            switch piece {
-            case .word:
-                continue
-            case .unknown(let name, _):
-                options.leaveOff(name)
-            case .known(let name, let values, let option):
-                if option.kind == .form { continue }
-                if resumesAutomatically, option.kind == .plain, option.carries(values) {
-                    options.carried += [name] + values
-                } else {
-                    options.leaveOff(name)
-                }
-            }
-        }
-        let most = SessionSnapshot.Evidence.mostOptions
-        if options.carried.count > most || !CommandSecrets.mayKeep(options.carried.joined(separator: " ")) {
-            options.carried = []
-            options.allowed = false
-        }
-        return options
-    }
-
     /// The options in the agent's own arguments (after its program) as a file keeps them (U2): in order, each with its
     /// values as the arguments gave them. Prompt words, forms and one-shot options are none of them, as a resume never
     /// sends a prompt again (R8) and names its own session. An option the table does not know keeps a value `=` joins
@@ -298,11 +288,58 @@ extension SessionSnapshot.Agent {
         return options.filter { cli.options[$0.name]?.kind == .permission }
     }
 
-    /// `flags` are exactly what this agent's resume may carry.
-    func carries(_ flags: [String]) -> Bool {
-        guard !flags.isEmpty else { return true }
-        let read = options(in: flags)
-        return read.allowed && read.carried == flags
+    /// `options` (argv's, as a record keeps them) read with the running build's table (KTD20): what a put-back line
+    /// keeps, what an automatic resume carries, and what is left off. A form or a one-shot option is dropped. An option
+    /// whose value capture could not tell from a prompt word is left off and named, unless the table now knows it takes
+    /// none. `confirmed` holds the permission options the nonce-verified typed or alias-expanded line showed: a permission
+    /// option is carried only when argv and that line both show it, as a process can rewrite its own argv (KTD5).
+    public func reading(_ options: [SessionSnapshot.LaunchOption], confirmed: [SessionSnapshot.LaunchOption]) -> LaunchReading {
+        var reading = LaunchReading()
+        var shown: [[String]] = confirmed.filter { cli.options[$0.name]?.kind == .permission }.map(\.words)
+        for option in options {
+            let read = cli.read(option.words)
+            guard let first = read.pieces.first else { continue }
+            switch first {
+            case .known(let name, let values, let known):
+                if known.kind == .form || known.kind == .oneShot { continue }
+                // Its words read as this option and its values alone, as capture's table read them.
+                let whole = read.pieces.count == 1
+                if option.unclear, known.values != .none || !whole {
+                    reading.leaveOff(name)
+                    continue
+                }
+                reading.line += option.words
+                guard whole, known.carries(values) else {
+                    reading.allowed = false
+                    continue
+                }
+                switch known.kind {
+                case .plain:
+                    reading.plain += option.words
+                case .permission:
+                    if let index = shown.firstIndex(of: option.words) {
+                        shown.remove(at: index)
+                        reading.permissions.append(option.words)
+                    } else {
+                        reading.allowed = false
+                    }
+                case .codeLoading, .form, .oneShot:
+                    reading.allowed = false
+                }
+            case .unknown(let name, _):
+                if option.unclear {
+                    reading.leaveOff(name)
+                } else {
+                    reading.line += option.words
+                    reading.allowed = false
+                }
+            case .word:
+                reading.allowed = false
+            }
+        }
+        // The typed line showed a permission option argv does not: they disagree, so nothing runs by itself.
+        if !shown.isEmpty { reading.allowed = false }
+        return reading
     }
 
     // MARK: environment and config
@@ -354,9 +391,11 @@ public enum ResumeCheck: String, CaseIterable, Sendable {
     case sessionFile
     /// No id, or not in the agent's pattern.
     case idPattern
-    /// An option was left off, or one carried is not the agent's to carry.
+    /// An option an automatic resume may not carry: a code-loading one, one the table does not know or whose value it
+    /// can't tell, a value outside its pattern, or a permission option argv and the typed line do not both show; or the
+    /// options are not known.
     case flags
-    /// An environment prefix, a wrapper or an alias: the line did not run as typed.
+    /// An environment prefix, a wrapper, a function, or an alias that holds one: the line did not run as typed.
     case typedLine
     /// Its provider or config variables differed from the shell's.
     case routing
@@ -457,7 +496,7 @@ extension SessionSnapshot.Evidence {
         if !agent.resumesAutomatically { failed.append(.automatic) }
         if agent.fileSource == nil || source != agent.fileSource { failed.append(.sessionFile) }
         if !(sessionID.map(agent.isSessionID) ?? false) { failed.append(.idPattern) }
-        if !flagsAllowed || !agent.carries(flags) { failed.append(.flags) }
+        if !launch.allowed { failed.append(.flags) }
         if !ranAsTyped { failed.append(.typedLine) }
         if !routingMatchesShell { failed.append(.routing) }
         if !autoContinueOff || facts.settingsAutoContinue { failed.append(.autoContinue) }
@@ -528,17 +567,62 @@ extension SessionSnapshot.Evidence {
     }
 
     /// The automatic resume (KTD5): `/usr/bin/env -u <auto-continue variables>`, the recorded absolute path (a
-    /// script agent's interpreter and script), the resume form with the id, and the options it may carry. Nil when
-    /// any of it is missing or not one plain line, or the code recorded is not the agent (`codeIsTheAgent`). It holds no
-    /// prompt words. Only the gate hands it out (`.resume`).
+    /// script agent's interpreter and script), the resume form with the id, the plain options and the permission options
+    /// the typed line confirmed (`launch`). Nil when any of it is missing or not one plain line, an option may not be
+    /// carried, or the code recorded is not the agent (`codeIsTheAgent`). It holds no prompt words. Only the gate hands it
+    /// out (`.resume`).
     var resumeCommand: String? {
-        guard agent.resumesAutomatically, let id = sessionID, agent.isSessionID(id), agent.carries(flags),
+        let launch = self.launch
+        guard agent.resumesAutomatically, let id = sessionID, agent.isSessionID(id), launch.allowed,
               SnapshotText.plainPath(sessionFolder, max: SessionSnapshot.Limits.standard.path) != nil, codeIsTheAgent,
               let paths = codePaths, let words = agent.resumeWords(id: id, folder: sessionFolder) else { return nil }
         let limit = SessionSnapshot.Limits.standard.path
         guard paths.allSatisfy({ SnapshotText.plainPath($0, max: limit) != nil }) else { return nil }
         let unset = agent.autoContinueVariables.flatMap { ["-u", $0] }
-        let line = (["/usr/bin/env"] + unset + paths + words + flags).map(ShellQuote.quote).joined(separator: " ")
+        let line = (["/usr/bin/env"] + unset + paths + words + launch.carried).map(ShellQuote.quote).joined(separator: " ")
         return SessionSnapshot.Command.problem(with: line) == nil ? line : nil
+    }
+}
+
+// MARK: - The put-back line
+
+extension SessionSnapshot.Evidence {
+    /// Its options read with the running build's table (KTD20). Options not known keep nothing and carry nothing.
+    public var launch: LaunchReading {
+        guard let options else { return LaunchReading(allowed: false) }
+        return agent.reading(options, confirmed: confirmed)
+    }
+
+    /// The line put back on the prompt, unrun (R6, KTD7): the user's launch with the resume form and `id`. A launcher
+    /// that passes its arguments on is replayed with the options typed after it, and brings its own back itself (an
+    /// environment prefix too); otherwise the line is rebuilt from the program and argv's options. Kiro's and Goose's
+    /// options belong to a subcommand that a launcher may hold or not, which nothing shows, so theirs is always rebuilt.
+    /// With no id, or one outside the agent's pattern, the launch goes back without the resume form. Nil for an agent with
+    /// no resume form (R7).
+    public func putBack(id: String?, folder: String? = nil) -> PutBack? {
+        guard agent.hasResumeForm, let program = agent.program else { return nil }
+        let cli = agent.cli
+        let options = self.options ?? []
+        let replayed = launcher.flatMap { (launcher: SessionSnapshot.Launcher) -> SessionSnapshot.Launcher? in
+            cli.subcommand.isEmpty && (0...options.count).contains(launcher.typed) ? launcher : nil
+        }
+        let kept = agent.reading(replayed.map { Array(options.suffix($0.typed)) } ?? options, confirmed: [])
+        let start = replayed.map { [$0.word] } ?? [program]
+        let launch = start + (kept.line.isEmpty ? [] : cli.subcommand) + kept.line
+        var candidates: [(words: [String], namesSession: Bool)] = []
+        if let id, agent.isSessionID(id) {
+            for place in [folder, nil] {
+                guard let resume = cli.resumeWords(id: id, folder: place) else { continue }
+                candidates.append((start + cli.subcommand + kept.line + resume, true))
+            }
+        }
+        candidates.append((launch, false))
+        for candidate in candidates {
+            let line = candidate.words.map(ShellQuote.quote).joined(separator: " ")
+            if SessionSnapshot.Command.problem(with: line) == nil {
+                return PutBack(line: line, namesSession: candidate.namesSession, leftOff: kept.leftOff)
+            }
+        }
+        return PutBack(line: program, namesSession: false, leftOff: [])
     }
 }

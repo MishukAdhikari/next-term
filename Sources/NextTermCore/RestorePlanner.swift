@@ -12,8 +12,9 @@ import Foundation
 // - agy and Aider get a note on how to resume them;
 // - Claude Code, Codex and Qwen Code resume by themselves only on an update restore, or a quit restore with the quit
 //   consent (R30), still running from a line that passed its checks, with an exact id from their own session file and
-//   the gate passing (KTD5), and only in the tab selected last of those that held the session (R5); every other
-//   agent's resume command goes on the line, unrun (R6), in the folder its session ran in;
+//   the gate passing (KTD5), and only in the tab selected last of those that held the session (R5), carrying the
+//   permission options the typed line confirmed, which their note names; every other agent's resume command (the
+//   user's launch with the resume form, KTD7) goes on the line, unrun (R6), in the folder its session ran in;
 // - a command still running goes back on the line, unrun, when it was typed whole in the system /bin/zsh (R9);
 //   any other gets a note;
 // - an idle tab gets its folder back, and a note with its last command.
@@ -360,7 +361,8 @@ public enum RestorePlanner {
         if pane.remote == nil { note.agent = pane.agent?.agent }
         note.line = decision.noteLine
         note.session = decision.session
-        note.leftOff = decision.noteLine == nil ? [] : pane.agent?.leftOff ?? []
+        note.leftOff = decision.noteLine == nil ? [] : decision.leftOff
+        note.permissions = decision.permissions
         note.interrupted = pane.interrupted
         note.afterQuit = input.kind == .quit
         note.sharedSession = input.sharedSession && decision.noteLine != nil
@@ -444,6 +446,10 @@ public enum RestorePlanner {
         var notPutBack: NotPutBack?
         /// Where an agent's resume or line runs: its session's folder.
         var folder: String?
+        /// The options an agent's line leaves off, by name: the table can't tell their value from a prompt word.
+        var leftOff: [String] = []
+        /// The permission options an automatic resume carries, each as its words.
+        var permissions: [String] = []
     }
 
     private static func decide(_ input: PaneInput) -> Decision {
@@ -463,18 +469,25 @@ public enum RestorePlanner {
     }
 
     private static func decide(agent evidence: SessionSnapshot.Evidence, _ input: PaneInput, integrated: Bool) -> Decision {
-        let agent = evidence.agent
-        guard let line = agent.putBackLine(id: input.session?.id, folder: evidence.sessionFolder) else {
+        // The user's launch with the resume form (KTD7): the launcher replayed, or the program and argv's options.
+        guard let putBack = evidence.putBack(id: input.session?.id, folder: evidence.sessionFolder) else {
             return Decision(outcome: .agentHint)
         }
+        let line = putBack.line
         // The note names the session the line names, and none when the line has no id.
-        let session = line == agent.program ? nil : input.session
+        let session = putBack.namesSession ? input.session : nil
         // Most agents find a session by the folder they run in, so the line waits in the session's own.
-        guard integrated else { return Decision(outcome: .agentNote, noteLine: line, session: session, folder: input.sessionFolder) }
-        if let command = resumeCommand(input, evidence: evidence, session: session) {
-            return Decision(outcome: .resume, line: command, noteLine: line, session: session, folder: evidence.sessionFolder)
+        guard integrated else {
+            return Decision(outcome: .agentNote, noteLine: line, session: session, folder: input.sessionFolder, leftOff: putBack.leftOff)
         }
-        return Decision(outcome: .agentOnTheLine, line: line, noteLine: line, session: session, folder: input.sessionFolder)
+        if let command = resumeCommand(input, evidence: evidence, session: session) {
+            // Its note names each permission option it carries, so a bypass is never silent (R5).
+            let permissions = evidence.launch.permissions.map { (words: [String]) -> String in words.joined(separator: " ") }
+            return Decision(outcome: .resume, line: command, noteLine: line, session: session, folder: evidence.sessionFolder,
+                            leftOff: putBack.leftOff, permissions: permissions)
+        }
+        return Decision(outcome: .agentOnTheLine, line: line, noteLine: line, session: session, folder: input.sessionFolder,
+                        leftOff: putBack.leftOff)
     }
 
     /// The command an automatic resume runs, when it may run: an update restore or a consented quit restore, the gate
@@ -702,12 +715,15 @@ public struct RestoreNote: Equatable, Sendable {
     public var outcome: RestoreOutcome
     /// The agent in a local tab.
     public var agent: RestoreAgent?
-    /// An agent's put-back line: its resume form with the id, or its program alone. Never the command a resume runs.
+    /// An agent's put-back line: the user's launch with the resume form and the id, or without them when no id is
+    /// known. Never the command a resume runs.
     public var line: String?
     /// The session the line names.
     public var session: NamedSession?
-    /// The options a resume leaves off, by name only.
+    /// The options the line leaves off, by name only: the table can't tell their value from a prompt word.
     public var leftOff: [String] = []
+    /// The permission options an automatic resume carried, each as its words: named, so a bypass is never silent (R5).
+    public var permissions: [String] = []
     /// The restart cut the agent's turn off.
     public var interrupted = false
     /// The restart was a quit under "Resume where I left off", not an update.
@@ -824,7 +840,8 @@ public struct RestoreNote: Equatable, Sendable {
             return ["\(command ?? "A command") was running. It was not put back: \(Self.typedFirst)."]
         case .resume where !safeMode:
             let id = session?.id ?? ""
-            var said = [waiting ? "\(name) session \(id) resumes \(Self.onceReady)." : "Resumed \(name) session \(id)."]
+            let with = permissions.isEmpty ? "" : " with " + permissions.joined(separator: ", ")
+            var said = [waiting ? "\(name) session \(id) resumes\(with) \(Self.onceReady)." : "Resumed \(name) session \(id)\(with)."]
             if interrupted {
                 let by = afterQuit ? "the quit" : "the update"
                 said.append("Its last turn was cut off by \(by) and \(waiting ? "does not continue" : "did not continue").")
@@ -912,7 +929,12 @@ public struct RestoreNote: Equatable, Sendable {
         return [safeMode ? "Another tab held this session too." : "Another tab resumed this session."]
     }
 
-    private var leftOffText: [String] { leftOff.isEmpty ? [] : ["Left off: \(leftOff.joined(separator: ", "))."] }
+    /// The options a line leaves off, and why: only ones whose value the table can't tell from a prompt word (KTD7).
+    private var leftOffText: [String] {
+        guard !leftOff.isEmpty else { return [] }
+        let values = leftOff.count == 1 ? "its value" : "their values"
+        return ["Left off: \(leftOff.joined(separator: ", ")) (Next Term can't tell \(values) from a prompt)."]
+    }
 
     private var lastCommand: String? {
         guard let command else { return nil }

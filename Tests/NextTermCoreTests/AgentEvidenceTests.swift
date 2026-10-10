@@ -506,14 +506,22 @@ import Testing
 
     // MARK: the facts beside the id
 
+    /// What a restore reads of the options capture records: argv's, with the permission options the typed line confirmed.
     @Test func optionsAreRecordedFromArgv() throws {
         let home = try makeHome().home
         defer { try? FileManager.default.removeItem(atPath: home) }
         let argv = ["claude", "--dangerously-skip-permissions", "--model", "opus", "fix the login bug"]
         let evidence = try #require(capture(try process(argv), typed: argv.map(ShellQuote.quote).joined(separator: " "), home: home))
-        #expect(evidence.flags == ["--model", "opus"] && evidence.leftOff == ["--dangerously-skip-permissions"] && !evidence.flagsAllowed)
-        let plain = try #require(capture(try process(["claude", "--model", "opus"]), typed: "claude --model opus", home: home))
-        #expect(plain.flags == ["--model", "opus"] && plain.leftOff.isEmpty && plain.flagsAllowed)
+        let launch = LaunchReading(line: ["--dangerously-skip-permissions", "--model", "opus"], plain: ["--model", "opus"],
+                                   permissions: [["--dangerously-skip-permissions"]], leftOff: [], allowed: true)
+        #expect(evidence.launch == launch)
+        #expect(evidence.launch.carried == ["--model", "opus", "--dangerously-skip-permissions"])
+        // The same argv under a function, typed alone: argv alone can't confirm the permission option.
+        let function = try #require(capture(try process(argv), typed: "claude-auto-danger", home: home))
+        #expect(function.launch.permissions.isEmpty && !function.launch.allowed)
+        // Without argv, nothing is known of them, and nothing may be carried.
+        let blind = try #require(capture(nil, typed: "claude --model opus", home: home))
+        #expect(blind.options == nil && blind.launch == LaunchReading(allowed: false))
     }
 
     // MARK: the launch
@@ -639,6 +647,11 @@ import Testing
         #expect(try launcher(danger, typed: "cl", expanded: "claude --dangerously-skip-permissions; echo done") == nil)
         #expect(try launcher(danger, typed: "cl", expanded: "claude --dangerously-skip-permissions | tee log") == nil)
         #expect(try launcher(danger, typed: "cl", expanded: "claude --verbose") == nil)
+        // An alias that holds a form or a one-shot option: a replay would bring it back beside the resume form.
+        #expect(try launcher(["claude", "--continue"], typed: "cc", expanded: "claude --continue") == nil)
+        let codex = try #require(capture(try process(["codex", "resume", "--last"], executable: "/opt/homebrew/bin/codex"),
+                                         typed: "cr --last", expanded: "codex resume --last", home: home))
+        #expect(codex.launcher == nil)
         // Argv that does not end with what was typed, or an alias that splits an option from its value.
         #expect(try launcher(danger, typed: "cad --model opus") == nil)
         #expect(try launcher(["claude", "--model", "opus"], typed: "cm opus", expanded: "claude --model opus") == nil)
@@ -710,23 +723,41 @@ import Testing
         #expect(RestoreAgent.codex.cli.version(at: ["/opt/homebrew/Caskroom/claude-code/2.1.280/claude"]) == nil)
     }
 
-    @Test func anEnvPrefixOrAnAliasDidNotRunAsTyped() throws {
+    /// KTD5: the line ran as typed when the agent's program is its command's first word, or an alias whose expansion is
+    /// the agent's program and options; never with an assignment, a wrapper or a function in between.
+    @Test func anEnvPrefixAWrapperOrAFunctionDidNotRunAsTyped() throws {
         let home = try makeHome().home
         defer { try? FileManager.default.removeItem(atPath: home) }
-        let claude = try process(["claude"])
-        func ran(_ typed: String?, expanded: String? = nil) -> Bool {
-            AgentEvidence.capture(AgentEvidence.Capture(leader: claude, verified: true, typedLine: typed, expandedLine: expanded,
-                                                        home: home))?.ranAsTyped ?? false
+        func ran(_ typed: String?, expanded: String? = nil, argv: [String] = ["claude"]) throws -> Bool {
+            let leader = try process(argv)
+            return AgentEvidence.capture(AgentEvidence.Capture(leader: leader, verified: true, typedLine: typed, expandedLine: expanded,
+                                                               home: home))?.ranAsTyped ?? false
         }
-        #expect(ran("claude"))
-        #expect(ran("cd ~/app && claude"))
-        #expect(!ran("CLAUDE_CONFIG_DIR=/Users/x/other claude"))
-        #expect(!ran("env ANTHROPIC_BASE_URL=https://example.com claude"))
-        #expect(!ran("sudo claude"))
-        #expect(!ran("cl", expanded: "claude --dangerously-skip-permissions"))
-        #expect(ran("claude", expanded: "claude"))
-        #expect(!ran("make"))
-        #expect(!ran(nil))
+        #expect(try ran("claude"))
+        #expect(try ran("cd ~/app && claude"))
+        #expect(try ran("claude", expanded: "claude"))
+        #expect(try !ran("CLAUDE_CONFIG_DIR=/Users/x/other claude"))
+        #expect(try !ran("env ANTHROPIC_BASE_URL=https://example.com claude"))
+        #expect(try !ran("sudo claude"))
+        #expect(try !ran("make"))
+        #expect(try !ran(nil))
+        // AE23: an alias whose expansion is the agent and its options, typed alone or with more.
+        let danger = ["claude", "--dangerously-skip-permissions"]
+        #expect(try ran("claude-auto-danger", expanded: "claude --dangerously-skip-permissions", argv: danger))
+        #expect(try ran("cad --model opus", expanded: "claude --dangerously-skip-permissions --model opus", argv: danger + ["--model", "opus"]))
+        #expect(try ran("claude", expanded: "claude --dangerously-skip-permissions", argv: danger))
+        #expect(try ran("cd ~/app && cad", expanded: "cd ~/app && claude --dangerously-skip-permissions", argv: danger))
+        // AE25, AE27: a function (which the shell expands as itself), an alias that sets a variable, wraps the agent or
+        // runs anything else, or an expansion that is not what ran.
+        #expect(try !ran("claude-auto-danger", argv: danger))
+        #expect(try !ran("claude-auto-danger", expanded: "claude-auto-danger", argv: danger))
+        #expect(try !ran("cw", expanded: "CLAUDE_CONFIG_DIR=/Users/x/.claude-work claude"))
+        #expect(try !ran("cw", expanded: "nice claude"))
+        #expect(try !ran("cw", expanded: "cd ~/work && claude"))
+        #expect(try !ran("cw", expanded: "claude; echo done"))
+        #expect(try !ran("cl", expanded: "claude --dangerously-skip-permissions"))
+        #expect(try !ran("FOO=1 cad", expanded: "FOO=1 claude --dangerously-skip-permissions", argv: danger))
+        #expect(try !ran("cd ~/app && cad", expanded: "cd ~/work && claude --dangerously-skip-permissions", argv: danger))
         // Another config folder given on the line: on the line, whatever its session file says.
         let (project, start) = (home + "/Code/app", try ownStart())
         try write(json(["pid": Int(getpid()), "sessionId": uuid, "cwd": project, "procStart": AgentEvidence.procStartText(start)]),
@@ -771,8 +802,7 @@ import Testing
         #expect(try evidence([:], shell: [:]).routingMatchesShell)
         let continues = try evidence([:], environment: ["CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "1"], shell: [:])
         #expect(!continues.autoContinueOff && continues.routingMatchesShell)
-        var gated = continues
-        gated.flagsAllowed = true
+        let gated = continues
         let facts = ResumeFacts(sessionAvailable: true, projectConfigChanged: false, settingsAutoContinue: false)
         guard case .onTheLine(let failed) = gated.gate(facts) else {
             Issue.record("resumed with auto-continue set")
@@ -1096,9 +1126,8 @@ import Testing
             try fm.createDirectory(atPath: folder, withIntermediateDirectories: true)
             try fm.createSymbolicLink(atPath: folder + "/claude", withDestinationPath: binary)
             let leader = try process(["claude"], executable: binary, directory: project, environment: ["PATH": folder + ":/usr/bin"])
-            var evidence = try #require(capture(leader, typed: "claude", home: home, shell: [:]))
-            #expect(evidence.executable == folder + "/claude" && evidence.source == .sessionFile)
-            evidence.flagsAllowed = true
+            let evidence = try #require(capture(leader, typed: "claude", home: home, shell: [:]))
+            #expect(evidence.executable == folder + "/claude" && evidence.source == .sessionFile && evidence.options == [])
             var facts = ResumeFacts.read(for: evidence, projects: [project], tabFolder: project, sessionAvailable: true, home: home)
             facts.temporaryFolders = [] // the test's home is in one
             facts.projectConfigChanged = false
@@ -1127,16 +1156,16 @@ import Testing
         #expect(evidence.agent == .claude)
         #expect(evidence.interpreter == "/opt/homebrew/Cellar/node/24/bin/node" && evidence.executable == evidence.interpreter)
         #expect(evidence.script == package + "/cli.js")
-        #expect(evidence.flags == ["--model", "opus"] && evidence.flagsAllowed && evidence.ranAsTyped)
+        #expect(evidence.options == [SessionSnapshot.LaunchOption(["--model", "opus"])] && evidence.launch.allowed && evidence.ranAsTyped)
     }
 
     // MARK: the record
 
     @Test func theNewFactsSaveAndReadBack() throws {
         var evidence = Evidence(agent: .opencode, sessionID: "ses_6a3f2b9c1d", source: .typedAndArgv, sessionFolder: "/Users/x/app")
-        evidence.flags = ["--model", "opus"]
-        evidence.leftOff = ["--yolo", "--settings"]
-        evidence.flagsAllowed = true
+        evidence.options = [SessionSnapshot.LaunchOption(["--model", "opus"]), SessionSnapshot.LaunchOption(["--yolo"])]
+        evidence.confirmed = [SessionSnapshot.LaunchOption(["--yolo"])]
+        evidence.launcher = SessionSnapshot.Launcher(word: "oc", typed: 1)
         var pane = SessionSnapshot.Pane(id: UUID())
         pane.agent = evidence
         let group = SessionSnapshot.Group(root: .pane(pane), focused: pane.id)
@@ -1144,14 +1173,13 @@ import Testing
                                        windows: [.init(groups: [group])])
         let read = try SessionSnapshot.decode(try snapshot.encoded())
         #expect(read.panes.first?.agent == evidence)
-        // What a file cannot hold: a flag word or a name outside its pattern drops the list and the fact with it.
+        // What a file cannot hold: an option outside its rules drops the list, and the launcher that replays it.
         var odd = evidence
-        odd.flags = ["--model", "a b"]
-        odd.leftOff = ["--yolo", "-\u{202E}x"]
+        odd.options = [SessionSnapshot.LaunchOption(["--model", "a\u{202E}b"])]
         pane.agent = odd
         let mended = SessionSnapshot(header: snapshot.header, windows: [.init(groups: [.init(root: .pane(pane), focused: pane.id)])])
         let back = try SessionSnapshot.decode(try mended.encoded()).panes.first?.agent
-        #expect(back?.flags == [] && back?.leftOff == [] && back?.flagsAllowed == false)
+        #expect(back?.options == nil && back?.launcher == nil && back?.launch.allowed == false)
         #expect(back?.sessionID == "ses_6a3f2b9c1d")
         // The store an automatic agent used is kept, so the restore checks and reads that one; one that is not a plain
         // absolute path is dropped.

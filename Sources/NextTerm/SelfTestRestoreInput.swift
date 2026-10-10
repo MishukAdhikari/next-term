@@ -58,7 +58,7 @@ extension SelfTest {
             var evidence = SessionSnapshot.Evidence(agent: .claude, sessionID: id, source: .sessionFile, sessionFolder: project,
                                                     store: store, executable: standIn, startedAt: Date(), routingMatchesShell: true,
                                                     autoContinueOff: true, ranAsTyped: true)
-            evidence.flagsAllowed = true
+            evidence.options = []
             return evidence
         }
         let session = UUID().uuidString.lowercased()

@@ -140,17 +140,18 @@ import Testing
 
     var claudeBinary: Evidence {
         Evidence(agent: .claude, sessionID: uuid, source: .sessionFile, sessionFolder: "/Users/x/app",
-                 executable: "/Users/x/.local/bin/claude")
+                 executable: "/Users/x/.local/bin/claude", options: [])
     }
 
     var claudeScript: Evidence {
         Evidence(agent: .claude, sessionID: uuid, source: .sessionFile, sessionFolder: "/Users/x/app",
                  executable: "/opt/homebrew/bin/node", interpreter: "/opt/homebrew/bin/node",
-                 script: "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js")
+                 script: "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js", options: [])
     }
 
     var codexBinary: Evidence {
-        Evidence(agent: .codex, sessionID: uuid, source: .openRollout, sessionFolder: "/Users/x/app", executable: "/opt/homebrew/bin/codex")
+        Evidence(agent: .codex, sessionID: uuid, source: .openRollout, sessionFolder: "/Users/x/app", executable: "/opt/homebrew/bin/codex",
+                 options: [])
     }
 
     @Test func theResumeRunsTheRecordedPathWithAutoContinueUnset() {
@@ -164,46 +165,251 @@ import Testing
         spaced.executable = "/Users/x/My Tools/claude"
         #expect(spaced.resumeCommand == "/usr/bin/env \(unset) '/Users/x/My Tools/claude' --resume \(uuid)")
         var carried = claudeBinary
-        carried.flags = ["--model", "opus"]
+        carried.options = [SessionSnapshot.LaunchOption(["--model", "opus"])]
         #expect(carried.resumeCommand?.hasSuffix("--resume \(uuid) --model opus") == true)
+        var unknown = claudeBinary
+        unknown.options = nil
+        #expect(unknown.resumeCommand == nil)
         var noPath = claudeBinary
         noPath.executable = nil
         #expect(noPath.resumeCommand == nil)
     }
 
-    // MARK: options
+    // MARK: the user's launch, put back (KTD7)
 
-    @Test func promptWordsAndTheResumeFormAreNeverLeftOff() {
-        let claude = RestoreAgent.claude.options(in: ["fix the login bug", "--model", "opus", "--resume", uuid, "--verbose"])
-        #expect(claude == AgentOptions(carried: ["--model", "opus", "--verbose"], leftOff: [], allowed: true))
-        let codex = RestoreAgent.codex.options(in: ["resume", uuid, "-C", "/Users/x/app", "-m", "gpt-5"])
-        #expect(codex == AgentOptions(carried: ["-m", "gpt-5"], leftOff: [], allowed: true))
-        let qwen = RestoreAgent.qwen.options(in: ["--model=qwen3-coder", "-r", uuid, "explain this"])
-        #expect(qwen == AgentOptions(carried: ["--model", "qwen3-coder"], leftOff: [], allowed: true))
-        #expect(RestoreAgent.claude.options(in: ["--", "--dangerously-skip-permissions"]).allowed)
+    typealias Launcher = SessionSnapshot.Launcher
+    typealias LaunchOption = SessionSnapshot.LaunchOption
+
+    /// Evidence of `agent` run with `options` as argv gave them (the ones at `unclear` followed by a word that may be a
+    /// prompt's), started by `launcher` when one is given.
+    func launch(_ agent: RestoreAgent, _ options: [[String]], launcher: Launcher? = nil, unclear: Set<Int> = []) -> Evidence {
+        var evidence = Evidence(agent: agent)
+        evidence.options = options.enumerated().map { (index: Int, words: [String]) -> LaunchOption in
+            LaunchOption(words, unclear: unclear.contains(index))
+        }
+        evidence.launcher = launcher
+        return evidence
     }
 
-    @Test func everyPermissionAndCodeLoadingOptionIsLeftOff() {
+    /// AE29: with no launcher to replay, the line is rebuilt from argv: the program, the subcommand its options belong
+    /// to, argv's options in order, then the resume form. With no id, or one outside its pattern, the same launch
+    /// without the resume form.
+    @Test func aLineIsRebuiltFromArgvsOptionsBeforeTheResumeForm() {
+        let cases: [(RestoreAgent, [String], String)] = [
+            (.claude, ["--dangerously-skip-permissions"], "claude --dangerously-skip-permissions --resume \(uuid)"),
+            (.codex, ["--yolo"], "codex --yolo resume \(uuid) -C /Users/x/app"),
+            (.qwen, ["-y"], "qwen -y --resume \(uuid)"),
+            (.copilot, ["--allow-all"], "copilot --allow-all --resume=\(uuid)"),
+            (.gemini, ["--approval-mode=yolo"], "gemini --approval-mode=yolo --resume \(uuid)"),
+            (.cursor, ["-f"], "cursor-agent -f --resume s-42_a.b"),
+            (.opencode, ["--auto"], "opencode --auto -s ses_6a3f2b9c1d"),
+            (.amp, ["--dangerously-allow-all"], "amp --dangerously-allow-all threads continue T-\(uuid)"),
+            (.junie, ["--brave"], "junie --brave --session-id s-42_a.b --resume"),
+            (.commandCode, ["--yolo"], "command-code --yolo --resume s-42_a.b"),
+            (.kiro, ["--trust-all-tools"], "kiro-cli chat --trust-all-tools --resume-id s-42_a.b"),
+            (.goose, ["--debug"], "goose session --debug --resume --session-id s-42_a.b"),
+        ]
+        let withForm: [RestoreAgent] = RestoreAgent.allCases.filter(\.hasResumeForm)
+        #expect(cases.map(\.0) == withForm)
+        for (agent, option, line) in cases {
+            let evidence = launch(agent, [option])
+            let found = evidence.putBack(id: Self.sampleID(agent), folder: "/Users/x/app")
+            #expect(found == PutBack(line: line, namesSession: true, leftOff: []), "\(agent)")
+            let bare = ([agent.program ?? ""] + agent.cli.subcommand + option).joined(separator: " ")
+            #expect(evidence.putBack(id: nil) == PutBack(line: bare, namesSession: false, leftOff: []), "\(agent)")
+            #expect(evidence.putBack(id: "x; rm -rf ~")?.line == bare, "\(agent)")
+            // Options not known, or none: the resume form alone.
+            #expect(launch(agent, []).putBack(id: Self.sampleID(agent), folder: "/Users/x/app")?.line == agent.putBackLine(
+                id: Self.sampleID(agent), folder: "/Users/x/app"), "\(agent)")
+            #expect(Evidence(agent: agent).putBack(id: nil)?.line == agent.program, "\(agent)")
+        }
+        for agent in [RestoreAgent.agy, .aider, .unknown] {
+            #expect(launch(agent, [["--yes-always"]]).putBack(id: uuid) == nil, "\(agent)")
+        }
+    }
+
+    /// AE24, AE27: a launcher that passes its arguments on is replayed with the options typed after it, and brings its
+    /// own options and any variable it sets back itself. Kiro's and Goose's options belong to a subcommand a launcher may
+    /// hold or not, which nothing shows, so theirs is rebuilt from argv.
+    @Test func aLauncherIsReplayedWithTheOptionsTypedAfterIt() {
+        for agent in RestoreAgent.allCases where agent.hasResumeForm {
+            let id = Self.sampleID(agent)
+            let replayed = launch(agent, [["--verbose"]], launcher: Launcher(word: "my-agent", typed: 0))
+            let form: [String] = agent.cli.resumeWords(id: id, folder: "/Users/x/app") ?? []
+            let line: [String]
+            if agent.cli.subcommand.isEmpty {
+                line = ["my-agent"] + form
+                #expect(replayed.putBack(id: nil)?.line == "my-agent", "\(agent)")
+            } else {
+                line = [agent.program ?? ""] + agent.cli.subcommand + ["--verbose"] + form
+            }
+            let found = replayed.putBack(id: id, folder: "/Users/x/app")
+            #expect(found == PutBack(line: line.joined(separator: " "), namesSession: true, leftOff: []), "\(agent)")
+        }
+        let cad = launch(.claude, [["--dangerously-skip-permissions"], ["--model", "opus[1m]"]], launcher: Launcher(word: "cad", typed: 1))
+        #expect(cad.putBack(id: uuid)?.line == "cad --model 'opus[1m]' --resume \(uuid)")
+        #expect(cad.putBack(id: nil)?.line == "cad --model 'opus[1m]'")
+        let path = launch(.codex, [["--yolo"]], launcher: Launcher(word: "/Users/x/bin/cx", typed: 0))
+        #expect(path.putBack(id: uuid, folder: "/Users/x/app")?.line == "/Users/x/bin/cx resume \(uuid) -C /Users/x/app")
+        // The agent's own program typed with its options is a launcher too, and replays as the rebuild would.
+        let typed = launch(.copilot, [["--allow-all"]], launcher: Launcher(word: "copilot", typed: 1))
+        #expect(typed.putBack(id: uuid) == PutBack(line: "copilot --allow-all --resume=\(uuid)", namesSession: true, leftOff: []))
+    }
+
+    /// KTD7, AE30: an option the table does not know is kept with its value when that is plain (joined by `=`, or none
+    /// before another option or the end). One followed by a word that may be a prompt's is left off with that word, and
+    /// its note names it.
+    @Test func anUnknownOptionIsKeptOnlyWhenItsValueIsPlain() {
+        let unclear = launch(.claude, [["--newflag"], ["--model", "opus"]], unclear: [0])
+        let left = PutBack(line: "claude --model opus --resume \(uuid)", namesSession: true, leftOff: ["--newflag"])
+        #expect(unclear.putBack(id: uuid) == left)
+        #expect(unclear.putBack(id: nil) == PutBack(line: "claude --model opus", namesSession: false, leftOff: ["--newflag"]))
+        let joined = launch(.claude, [["--newflag=value"]])
+        #expect(joined.putBack(id: uuid) == PutBack(line: "claude --newflag=value --resume \(uuid)", namesSession: true, leftOff: []))
+        let alone = launch(.claude, [["--newflag"], ["--verbose"], ["--other"]])
+        #expect(alone.putBack(id: uuid)?.line == "claude --newflag --verbose --other --resume \(uuid)")
+        // A launcher brings its own back: only an unclear option typed after it is left off, and each is named once.
+        let typedAfter = launch(.claude, [["--newflag"], ["--other"], ["--other"]], launcher: Launcher(word: "cad", typed: 2),
+                                unclear: [0, 1, 2])
+        #expect(typedAfter.putBack(id: uuid) == PutBack(line: "cad --resume \(uuid)", namesSession: true, leftOff: ["--other"]))
+        // The table of the build that restores reads the record again: an option it knows to take no value is plain.
+        let known = launch(.claude, [["--verbose"]], unclear: [0])
+        #expect(known.putBack(id: uuid) == PutBack(line: "claude --verbose --resume \(uuid)", namesSession: true, leftOff: []))
+        let valued = launch(.claude, [["--model"]], unclear: [0])
+        #expect(valued.putBack(id: uuid) == PutBack(line: "claude --resume \(uuid)", namesSession: true, leftOff: ["--model"]))
+    }
+
+    /// R8: a form, a one-shot option or an old resume form never reaches a line, whatever the record holds, as the table
+    /// of the build that restores reads it again.
+    @Test func formsAndOneShotOptionsNeverReachALine() {
+        let claude = launch(.claude, [["--resume", uuid], ["--continue"], ["-p"], ["--fork-session"], ["--model", "opus"]])
+        #expect(claude.putBack(id: uuid)?.line == "claude --model opus --resume \(uuid)")
+        let codex = launch(.codex, [["--last"], ["-C", "/Users/x/old"], ["--yolo"]])
+        #expect(codex.putBack(id: uuid, folder: "/Users/x/app")?.line == "codex --yolo resume \(uuid) -C /Users/x/app")
+        let qwen = launch(.qwen, [["-p", "fix it"], ["-y"]])
+        #expect(qwen.putBack(id: uuid)?.line == "qwen -y --resume \(uuid)")
+    }
+
+    /// Capture keeps argv's options without its prompt words, and a line rebuilt from them holds none.
+    @Test func promptWordsNeverReachALine() throws {
+        let launches: [(RestoreAgent, [String], String)] = [
+            (.claude, ["fix the login bug", "--model", "opus", "--resume", uuid, "--verbose"], "claude --model opus --verbose --resume \(uuid)"),
+            (.codex, ["resume", uuid, "-C", "/Users/x/app", "-m", "gpt-5"], "codex -m gpt-5 resume \(uuid) -C /Users/x/app"),
+            (.qwen, ["--model=qwen3-coder", "-r", uuid, "explain this"], "qwen --model=qwen3-coder --resume \(uuid)"),
+            (.gemini, ["--yolo", "-m", "gemini-3", "--resume", uuid, "fix it"], "gemini --yolo -m gemini-3 --resume \(uuid)"),
+            (.claude, ["--", "--dangerously-skip-permissions"], "claude --resume \(uuid)"),
+        ]
+        for (agent, arguments, line) in launches {
+            var evidence = Evidence(agent: agent)
+            evidence.options = try #require(agent.launchOptions(in: arguments))
+            #expect(evidence.putBack(id: uuid, folder: "/Users/x/app")?.line == line, "\(arguments)")
+        }
+    }
+
+    // MARK: what an automatic resume carries (KTD5)
+
+    /// `name`'s words with values its pattern takes.
+    static func words(_ name: String, _ option: AgentCLI.Option) -> [String] {
+        switch option.values {
+        case .none: return [name]
+        case .one: return [name, "value"]
+        case .many: return [name, "Edit", "Bash(git *)"]
+        }
+    }
+
+    /// AE15, AE23, AE25, AE26: a permission option is carried only when argv and the typed or alias-expanded line both
+    /// show it, after the plain options. Argv alone or the typed line alone gives "on the line".
+    @Test func aPermissionOptionIsCarriedOnlyWhenArgvAndTheTypedLineBothShowIt() throws {
         for agent in Self.automatic {
-            let permission = agent.cli.names(.permission)
-            let code = agent.cli.names(.codeLoading)
-            #expect(!permission.isEmpty && !code.isEmpty)
-            for option in permission + code {
-                for arguments in [[option], [option, "value"], [option + "=value"]] {
-                    let options = agent.options(in: arguments)
-                    #expect(!options.allowed && options.leftOff == [option], "\(agent) \(arguments)")
+            for name in agent.cli.names(.permission) {
+                let option = try #require(agent.cli.options[name])
+                var forms = [Self.words(name, option)]
+                if option.values == .one { forms.append([name + "=value"]) }
+                for words in forms {
                     let (base, facts) = passing(agent)
                     var evidence = base
-                    evidence.set(options)
-                    #expect(evidence.gate(facts) == .onTheLine([.flags]), "\(agent) \(arguments)")
+                    evidence.options = [LaunchOption(words)]
+                    evidence.confirmed = [LaunchOption(words)]
+                    guard case .resume(let command) = evidence.gate(facts) else {
+                        Issue.record("\(agent) did not resume with \(words)")
+                        continue
+                    }
+                    let carried = words.map(ShellQuote.quote).joined(separator: " ")
+                    #expect(command.hasSuffix(" " + carried), "\(command)")
+                    #expect(evidence.launch.permissions == [words], "\(agent) \(words)")
+                    evidence.confirmed = []
+                    #expect(evidence.gate(facts) == .onTheLine([.flags]), "argv alone: \(agent) \(words)")
+                    evidence.options = []
+                    evidence.confirmed = [LaunchOption(words)]
+                    #expect(evidence.gate(facts) == .onTheLine([.flags]), "the typed line alone: \(agent) \(words)")
+                    // Both, with a guessed id: on the line.
+                    evidence.options = [LaunchOption(words)]
+                    evidence.source = .guess
+                    #expect(evidence.gate(facts) == .onTheLine([.sessionFile]), "a guess: \(agent) \(words)")
                 }
             }
+            // A value its pattern does not take, on both lines, is not carried.
+            if let mode = agent.cli.names(.permission).first(where: { agent.cli.options[$0]?.values == .one }) {
+                let (base, facts) = passing(agent)
+                var evidence = base
+                evidence.options = [LaunchOption([mode, "plan;id"])]
+                evidence.confirmed = evidence.options ?? []
+                #expect(evidence.gate(facts) == .onTheLine([.flags]), "\(agent) \(mode)")
+            }
         }
-        #expect(RestoreAgent.codex.options(in: ["exec", "fix it"]) == AgentOptions(carried: [], leftOff: ["exec"], allowed: false))
-        let mode: [String] = RestoreAgent.claude.options(in: ["--permission-mode", "plan"]).leftOff
-        #expect(mode == ["--permission-mode"])
-        let print: [String] = RestoreAgent.claude.options(in: ["-p", "hi"]).leftOff
-        #expect(print == ["-p"])
+        // Plain options first, then permission options, each in argv's order.
+        let (base, facts) = passing(.claude)
+        var claude = base
+        claude.options = [LaunchOption(["--permission-mode", "bypassPermissions"]), LaunchOption(["--model", "opus[1m]"]),
+                          LaunchOption(["--dangerously-skip-permissions"])]
+        claude.confirmed = [LaunchOption(["--dangerously-skip-permissions"]), LaunchOption(["--permission-mode", "bypassPermissions"])]
+        let suffix = "--resume \(uuid) --model 'opus[1m]' --permission-mode bypassPermissions --dangerously-skip-permissions"
+        #expect(claude.resumeCommand?.hasSuffix(suffix) == true, "\(claude.resumeCommand ?? "none")")
+        #expect(claude.gate(facts) == .resume(claude.resumeCommand ?? "none"))
+        // The same option twice needs the typed line to show it twice.
+        claude.options = [LaunchOption(["--dangerously-skip-permissions"]), LaunchOption(["--dangerously-skip-permissions"])]
+        claude.confirmed = [LaunchOption(["--dangerously-skip-permissions"])]
+        #expect(claude.gate(facts) == .onTheLine([.flags]))
+    }
+
+    /// AE28, AE30: a code-loading option, an option the table does not know, or one whose value may be a prompt's, gives
+    /// "on the line", whatever the typed line shows; so do options not known. The line carries them back.
+    @Test func codeLoadingAndUnknownOptionsGoOnTheLine() throws {
+        for agent in Self.automatic {
+            let (base, facts) = passing(agent)
+            for name in agent.cli.names(.codeLoading) {
+                let words = Self.words(name, try #require(agent.cli.options[name]))
+                var evidence = base
+                evidence.options = [LaunchOption(words)]
+                evidence.confirmed = [LaunchOption(words)]
+                #expect(evidence.gate(facts) == .onTheLine([.flags]), "\(agent) \(words)")
+                #expect(evidence.putBack(id: Self.sampleID(agent))?.line.contains(words.map(ShellQuote.quote).joined(separator: " ")) == true)
+            }
+            for (options, unclear) in [([["--newflag=value"]], Set<Int>()), ([["--newflag"]], [0]), ([["--newflag"]], [])] {
+                var evidence = launch(agent, options, unclear: unclear)
+                evidence.sessionID = base.sessionID
+                evidence.source = base.source
+                evidence.sessionFolder = base.sessionFolder
+                evidence.store = base.store
+                evidence.executable = base.executable
+                evidence.startedAt = base.startedAt
+                evidence.routingMatchesShell = true
+                evidence.autoContinueOff = true
+                evidence.ranAsTyped = true
+                #expect(evidence.gate(facts) == .onTheLine([.flags]), "\(agent) \(options)")
+            }
+            var unknown = base
+            unknown.options = nil
+            #expect(unknown.gate(facts) == .onTheLine([.flags]), "\(agent)")
+        }
+        // Forms are dropped, not carried: no resume holds `--continue` or `--last`.
+        let (codexBase, facts) = passing(.codex)
+        var codex = codexBase
+        codex.options = [LaunchOption(["--last"]), LaunchOption(["-m", "gpt-5"])]
+        #expect(codex.gate(facts) == .resume("/usr/bin/env /Users/x/.local/bin/codex resume \(uuid) -C /Users/x/app -m gpt-5"))
+        var claude = passing(.claude).0
+        claude.options = [LaunchOption(["--continue"])]
+        #expect(claude.resumeCommand?.contains("--continue") == false)
     }
 
     @Test func aModelIsCarriedOnlyWithinItsPattern() {
@@ -212,44 +418,41 @@ import Testing
             let flag = models[agent.rawValue]!
             let (base, facts) = passing(agent)
             var evidence = base
-            evidence.set(agent.options(in: [flag, "x"]))
+            evidence.options = [LaunchOption([flag, "x"])]
             guard case .resume(let command) = evidence.gate(facts) else {
                 Issue.record("\(agent) did not resume with \(flag) x")
                 continue
             }
             #expect(command.hasSuffix(" \(flag) x"))
             // A context size in brackets is part of a model's name, quoted on the line.
-            evidence.set(agent.options(in: [flag, "opus[1m]"]))
+            evidence.options = [LaunchOption([flag, "opus[1m]"])]
             guard case .resume(let sized) = evidence.gate(facts) else {
                 Issue.record("\(agent) did not resume with \(flag) opus[1m]")
                 continue
             }
             #expect(sized.hasSuffix(" \(flag) 'opus[1m]'"))
             for value in ["opus;rm", "a b", String(repeating: "a", count: 65), "op$(id)", "[1m]"] {
-                let options = agent.options(in: [flag, value])
-                #expect(!options.allowed && options.leftOff == [flag] && options.carried.isEmpty, "\(agent) \(value)")
-                evidence.set(options)
-                #expect(evidence.gate(facts) == .onTheLine([.flags]))
+                evidence.options = [LaunchOption([flag, value])]
+                #expect(evidence.gate(facts) == .onTheLine([.flags]), "\(agent) \(value)")
+                #expect(evidence.putBack(id: Self.sampleID(agent))?.line.contains(ShellQuote.quote(value)) == true, "\(agent) \(value)")
             }
-            #expect(!agent.options(in: [flag]).allowed)
-            let dashed: [String] = agent.options(in: [flag, "-x"]).leftOff
-            #expect(dashed == [flag, "-x"])
+            evidence.options = [LaunchOption([flag])]
+            #expect(evidence.gate(facts) == .onTheLine([.flags]))
         }
     }
 
-    @Test func otherAgentsCarryNothingAndNameWhatTheyLeaveOff() {
-        let gemini = RestoreAgent.gemini.options(in: ["--yolo", "-m", "gemini-3", "--resume", uuid, "fix it"])
-        #expect(gemini == AgentOptions(carried: [], leftOff: ["--yolo", "-m"], allowed: false))
-        #expect(RestoreAgent.copilot.options(in: ["--resume=\(uuid)"]) == AgentOptions(carried: [], leftOff: [], allowed: true))
-        #expect(RestoreAgent.goose.options(in: ["session", "--resume", "--session-id", "s1", "--debug"]).leftOff == ["--debug"])
-    }
-
-    @Test func aLeftOffOptionIsNamedNeverItsValue() {
-        let options = RestoreAgent.claude.options(in: ["--api-key=sk-ant-api03-abcdefghijklmnop", "--token", "ghp_abcdefghijklmnopqrstuvwxyz"])
-        #expect(options.leftOff == ["--api-key", "--token"] && !options.allowed)
-        #expect(!options.leftOff.joined().contains("sk-ant") && !options.carried.joined().contains("ghp_"))
-        let odd = RestoreAgent.claude.options(in: ["--na me", "-\u{202E}x", "--ghp_abcdefghijklmnopqrstuvwxyz0123"])
-        #expect(odd.leftOff.isEmpty && !odd.allowed)
+    /// Other agents never resume by themselves, and their line carries their options all the same.
+    @Test func otherAgentsKeepTheirOptionsOnTheLine() {
+        let (base, facts) = passing(.gemini)
+        var gemini = base
+        gemini.options = [LaunchOption(["--yolo"]), LaunchOption(["-m", "gemini-3"])]
+        gemini.confirmed = [LaunchOption(["--yolo"])]
+        guard case .onTheLine(let failed) = gemini.gate(facts) else {
+            Issue.record("Gemini CLI resumed")
+            return
+        }
+        #expect(failed.contains(.automatic))
+        #expect(gemini.putBack(id: uuid)?.line == "gemini --yolo -m gemini-3 --resume \(uuid)")
     }
 
     // MARK: the gate
@@ -264,7 +467,7 @@ import Testing
         var evidence = Evidence(agent: agent, sessionID: Self.sampleID(agent), source: source, sessionFolder: "/Users/x/app", store: store,
                                 executable: "/Users/x/.local/bin/\(program)", startedAt: Date(timeIntervalSince1970: 1_790_000_000),
                                 routingMatchesShell: true, autoContinueOff: true, ranAsTyped: true)
-        evidence.flagsAllowed = true
+        evidence.options = []
         let link = "/Users/x/.local/bin/\(program)"
         let binary = FileFacts(realPath: "/Users/x/.local/share/\(program)/2.1.280", owner: user, mode: 0o755, isRegular: true,
                                linksFollowed: [link])
@@ -327,9 +530,12 @@ import Testing
         let cases: [(String, ResumeCheck, Change)] = [
             ("a bad id", .idPattern, { e, _ in e.sessionID = "abc; id" }),
             ("no id", .idPattern, { e, _ in e.sessionID = nil }),
-            ("flags not allowed", .flags, { e, _ in e.flagsAllowed = false }),
-            ("a carried flag the agent does not allow", .flags, { e, _ in e.flags = ["--settings", "x.json"] }),
-            ("an alias or an env prefix", .typedLine, { e, _ in e.ranAsTyped = false }),
+            ("options not known", .flags, { e, _ in e.options = nil }),
+            ("a settings file", .flags, { e, _ in e.options = [SessionSnapshot.LaunchOption(["--settings", "x.json"])] }),
+            ("a permission option argv alone shows", .flags, { e, _ in
+                e.options = [SessionSnapshot.LaunchOption(["--dangerously-skip-permissions"])]
+            }),
+            ("a function, a wrapper or an env prefix", .typedLine, { e, _ in e.ranAsTyped = false }),
             ("another provider", .routing, { e, _ in e.routingMatchesShell = false }),
             ("auto-continue in the environment", .autoContinue, { e, _ in e.autoContinueOff = false }),
             ("auto-continue in settings", .autoContinue, { _, f in f.settingsAutoContinue = true }),
@@ -567,7 +773,8 @@ import Testing
                                     executable: mixed(script ? "/opt/homebrew/bin/node" : binary, 5),
                                     interpreter: script ? mixed("/opt/homebrew/bin/node", 5) : nil,
                                     script: script ? mixed("/opt/homebrew/lib/node_modules/" + package, 5) : nil)
-            evidence.flags = automatic == .codex ? ["-m", mixed("gpt-5", 3)] : ["--model", mixed("opus", 3)]
+            let model = automatic == .codex ? ["-m", mixed("gpt-5", 3)] : ["--model", mixed("opus", 3)]
+            evidence.options = [SessionSnapshot.LaunchOption(model)]
             let command = evidence.resumeCommand
             lines.append(command)
             if command != nil { built.commands += 1 }
@@ -593,14 +800,5 @@ struct SeededRandom {
         z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
         z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
         return z ^ (z >> 31)
-    }
-}
-
-extension SessionSnapshot.Evidence {
-    /// What capture records of an agent's options.
-    mutating func set(_ options: AgentOptions) {
-        flags = options.carried
-        leftOff = options.leftOff
-        flagsAllowed = options.allowed
     }
 }

@@ -134,7 +134,7 @@ import Testing
             let reading = agent.cli.read(words)
             #expect(reading.session == id, "\(agent)")
             #expect(Self.leftOver(reading).isEmpty, "\(agent) \(Self.describe(reading))")
-            #expect(agent.options(in: words) == AgentOptions(carried: [], leftOff: [], allowed: true), "\(agent)")
+            #expect(agent.launchOptions(in: words) == [], "\(agent)")
         }
     }
 
@@ -202,26 +202,28 @@ import Testing
                 let reading = agent.cli.read(words + ["fix it"])
                 #expect(reading.session == id, "\(agent) \(words)")
                 #expect(agent.resumedID(in: words) == id, "\(agent) \(words)")
-                #expect(agent.options(in: words + ["fix it"]) == AgentOptions(carried: [], leftOff: [], allowed: true), "\(agent) \(words)")
+                #expect(agent.launchOptions(in: words + ["fix it"]) == [], "\(agent) \(words)")
             }
         }
-        let copilot = RestoreAgent.copilot.options(in: ["-r", uuid, "--allow-all"])
-        #expect(copilot == AgentOptions(carried: [], leftOff: ["--allow-all"], allowed: false))
+        // AE29: Copilot's `-r` is dropped, never left off, and `--allow-all` comes back on the line.
+        var copilot = SessionSnapshot.Evidence(agent: .copilot)
+        copilot.options = RestoreAgent.copilot.launchOptions(in: ["-r", uuid, "--allow-all"])
+        #expect(copilot.options == [SessionSnapshot.LaunchOption(["--allow-all"])])
+        #expect(copilot.putBack(id: uuid) == PutBack(line: "copilot --allow-all --resume=\(uuid)", namesSession: true, leftOff: []))
     }
 
     /// `opus[1m]` is a model: carried by an automatic resume, quoted, and kept through the snapshot's repair.
     @Test func aModelWithAContextSizeIsCarried() {
-        let claude = RestoreAgent.claude.options(in: ["--model", "opus[1m]"])
-        #expect(claude == AgentOptions(carried: ["--model", "opus[1m]"], leftOff: [], allowed: true))
-        let codex = RestoreAgent.codex.options(in: ["-m=gpt-5[1m]"])
-        #expect(codex.carried == ["-m", "gpt-5[1m]"])
+        let options = RestoreAgent.claude.launchOptions(in: ["--model", "opus[1m]"])
         var evidence = SessionSnapshot.Evidence(agent: .claude, sessionID: uuid, source: .sessionFile, sessionFolder: "/Users/x/app",
-                                                executable: "/Users/x/.local/bin/claude")
-        evidence.flags = claude.carried
-        evidence.flagsAllowed = true
+                                                executable: "/Users/x/.local/bin/claude", options: options)
+        #expect(evidence.launch.plain == ["--model", "opus[1m]"] && evidence.launch.allowed)
         #expect(evidence.resumeCommand?.hasSuffix("--resume \(uuid) --model 'opus[1m]'") == true)
         let repaired = evidence.repaired(limits: .standard)
-        #expect(repaired.flags == ["--model", "opus[1m]"] && repaired.flagsAllowed)
+        #expect(repaired.options == options && repaired.launch.allowed)
+        evidence.agent = .codex
+        evidence.options = RestoreAgent.codex.launchOptions(in: ["-m=gpt-5[1m]"])
+        #expect(evidence.launch.plain == ["-m=gpt-5[1m]"] && evidence.launch.allowed)
     }
 
     /// Cursor runs as `cursor-agent`, or as `agent` only from its own install; Command Code as `command-code`, or as
@@ -270,6 +272,125 @@ import Testing
         let theirs = AgentProcess(pid: 43, startedAt: nil, executable: "/usr/local/bin/cmd", arguments: ["cmd", "--help"])
         #expect(RestoreAgent(process: theirs) == .unknown)
         #expect(RestoreAgent(line: "cmd --resume s1") == .unknown)
+    }
+
+    // MARK: no prompt word ever reaches a line
+
+    /// R8, KTD7: random prompt words, quoted any way and mixed with each agent's options (known, unknown, forms and
+    /// one-shot options, whose value is a prompt), typed as the agent or through an alias, never reach a put-back line
+    /// or a resume command. Capture keeps argv's options alone, and the restore reads them again with the table. A
+    /// prompt word goes only where the agent too reads one: never where an option still takes values.
+    @Test func noPromptWordEverReachesALineOrAResume() throws {
+        var random = SeededRandom(seed: 0x9F0_3C7)
+        func pick(_ count: Int) -> Int { Int(random.next() % UInt64(count)) }
+        let pool: [Character] = Array("abc XYZ 019 ;'\"$`\\*?(){}[]<>|&!#~=-_.,:/\u{00E9}\u{202E}\u{200B}\u{1F600}")
+        // Every prompt word starts with a mark no option, value, path or variable name holds.
+        var marks = 0
+        func prompt() -> String {
+            marks += 1
+            return "Xyzzy\(marks)" + String((0..<pick(12)).map { _ in pool[pick(pool.count)] })
+        }
+        /// A word as a person types it: bare when plain, else in single or double quotes, or with each odd character
+        /// escaped. Only this test's reader (AgentKind.words) reads it back, so each form is one it reads.
+        func typed(_ word: String) -> String {
+            func alphanumeric(_ character: Character) -> Bool { character.isASCII && (character.isLetter || character.isNumber) }
+            let plain: Bool = !word.isEmpty && word.allSatisfy { (character: Character) -> Bool in
+                alphanumeric(character) || "-_./=:@%+,".contains(character)
+            }
+            switch pick(3) {
+            case 0:
+                return plain ? word : ShellQuote.quote(word)
+            case 1:
+                let inside: [String] = word.map { (character: Character) -> String in
+                    "\"\\$`".contains(character) ? "\\" + String(character) : String(character)
+                }
+                return "\"" + inside.joined() + "\""
+            default:
+                let escaped: [String] = word.map { (character: Character) -> String in
+                    alphanumeric(character) ? String(character) : "\\" + String(character)
+                }
+                return escaped.joined()
+            }
+        }
+        let agents: [RestoreAgent] = RestoreAgent.allCases.filter(\.hasResumeForm)
+        var built = (lines: 0, replayed: 0, kept: 0, commands: 0, leftOff: 0)
+        for round in 0..<1500 {
+            let agent = agents[round % agents.count]
+            let cli = agent.cli
+            let program = try #require(agent.program)
+            let id = RestoreAgentsTests.sampleID(agent)
+            let names: [String] = cli.groups.flatMap(\.names).filter { $0.hasPrefix("-") }
+            var arguments: [String] = []
+            // A subcommand first, now and then: Codex's `exec`, Kiro's `chat`.
+            let commands: [String] = cli.groups.flatMap(\.names).filter { !$0.hasPrefix("-") }
+            if !commands.isEmpty, pick(4) == 0 {
+                let command = commands[pick(commands.count)]
+                arguments.append(command)
+                if cli.options[command]?.values != AgentCLI.Values.none { arguments.append(cli.options[command]?.namesSession == true ? id : prompt()) }
+            }
+            var takesMore = false
+            for _ in 0..<pick(7) {
+                switch pick(takesMore ? 3 : 4) {
+                case 0 where !names.isEmpty:
+                    let name = names[pick(names.count)]
+                    let option = try #require(cli.options[name])
+                    // A session form's value is an id; a one-shot option's is the prompt; the rest take plain values.
+                    let value = option.namesSession ? id : option.kind == .oneShot ? prompt() : "v\(pick(9))"
+                    switch option.values {
+                    case .none:
+                        arguments.append(name)
+                    case .one:
+                        arguments += pick(2) == 0 ? [name + "=" + value] : [name, value]
+                    case .many:
+                        arguments += [name] + (0...pick(2)).map { "v\($0)" }
+                    }
+                    takesMore = option.values == .many
+                case 1:
+                    let name = "--zq\(pick(5))"
+                    arguments.append(pick(2) == 0 ? name + "=v\(pick(9))" : name)
+                    takesMore = false
+                case 2:
+                    arguments.append("-" + "abc".map(String.init)[pick(3)] + "q")
+                    takesMore = false
+                default:
+                    arguments.append(prompt())
+                    takesMore = false
+                }
+            }
+            if !takesMore, pick(5) == 0 { arguments += ["--", prompt(), "--zq9"] }
+            // Typed as the agent itself, or through an alias that holds some of the agent's own options.
+            let own: [String] = names.filter { (name: String) -> Bool in
+                guard let option = cli.options[name] else { return false }
+                return option.values == .none && (option.kind == .plain || option.kind == .permission)
+            }
+            let aliasOptions: [String] = pick(2) == 0 ? [] : Array(own.prefix(2))
+            let argv = [program] + aliasOptions + arguments
+            let rest = arguments.map(typed).joined(separator: " ")
+            let line = aliasOptions.isEmpty ? program + " " + rest : "ag " + rest
+            let expanded = aliasOptions.isEmpty ? nil : ([program] + aliasOptions).joined(separator: " ") + " " + rest
+            let leader = AgentProcess(pid: 7, startedAt: Date(timeIntervalSince1970: 1_790_000_000), executable: "/opt/homebrew/bin/" + program,
+                                      arguments: argv)
+            let input = AgentEvidence.Capture(leader: leader, verified: true, typedLine: line, expandedLine: expanded, home: "/Users/x")
+            var evidence = try #require(AgentEvidence.capture(input), "\(argv)")
+            #expect(evidence.agent == agent, "\(argv)")
+            evidence.sessionID = id
+            evidence.source = agent.fileSource ?? .typedAndArgv
+            evidence.sessionFolder = "/Users/x/app"
+            let put = try #require(evidence.putBack(id: id, folder: "/Users/x/app"), "\(argv)")
+            let command = evidence.resumeCommand
+            for text in [put.line, command ?? ""] + put.leftOff {
+                #expect(!text.contains("Xyzzy"), "\(argv) gave \(text)")
+                #expect(SessionSnapshot.Command.problem(with: text) == nil, "\(text)")
+            }
+            built.lines += 1
+            if evidence.launcher != nil { built.replayed += 1 }
+            if evidence.options?.isEmpty == false { built.kept += 1 }
+            if command != nil { built.commands += 1 }
+            if !put.leftOff.isEmpty { built.leftOff += 1 }
+        }
+        // Enough of each kind ran: replayed launchers, kept options, resume commands, and options left off.
+        let enough: Bool = built.replayed >= 300 && built.kept >= 600 && built.commands >= 30 && built.leftOff >= 100
+        #expect(enough, "\(built)")
     }
 
     // MARK: drift: what keeps its own words until 0.12 agrees with the table
