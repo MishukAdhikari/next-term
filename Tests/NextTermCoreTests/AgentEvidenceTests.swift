@@ -36,19 +36,26 @@ import Testing
         return Date(timeIntervalSince1970: Double(info.pbi_start_tvsec) + Double(info.pbi_start_tvusec) / 1_000_000)
     }
 
+    /// Routing variables' values as capture digests them: only the allowlist's, a value the secret detector masks refused.
+    func digested(_ values: [String: String]) -> [String: String] {
+        values.reduce(into: [:]) { (digests: inout [String: String], entry: (key: String, value: String)) in
+            digests[entry.key] = AgentEvidence.routingDigest(of: entry.key, entry.value)
+        }
+    }
+
     /// This process, described as an agent run with `arguments` in `directory`. `routing` holds values, digested here
     /// as capture reads them.
     func process(_ arguments: [String], executable: String = "/Users/x/.local/share/claude/versions/2.1.280",
                  directory: String? = nil, environment: [String: String] = [:], openFiles: [String] = [],
                  routing: [String: String] = [:]) throws -> AgentProcess {
         AgentProcess(pid: getpid(), startedAt: try ownStart(), executable: executable, arguments: arguments, environment: environment,
-                     directory: directory, openFiles: openFiles, routing: routing.mapValues(AgentEvidence.routingDigest))
+                     directory: directory, openFiles: openFiles, routing: digested(routing))
     }
 
     /// `shell`: the login shell's routing variables, as values (digested here); nil when the login shell is not known.
     func capture(_ leader: AgentProcess?, typed: String? = nil, home: String, children: [String] = [],
                  shell: [String: String]? = nil) -> Evidence? {
-        let routing = shell?.mapValues(AgentEvidence.routingDigest)
+        let routing = shell.map(digested)
         let input = AgentEvidence.Capture(leader: leader, verified: true, childSessionIDs: children, typedLine: typed,
                                           shellRouting: routing, home: home)
         return AgentEvidence.capture(input)
@@ -79,15 +86,15 @@ import Testing
         #expect(try #require(ProcessArguments.parse(many, keeping: [])).arguments.count == 20)
     }
 
-    /// KTD5: routing values are compared as digests made in memory. The record keeps a digest of each, never the value.
+    /// KTD5: routing values are compared as digests made in memory. The record keeps a digest of each, never the value,
+    /// and a key in its environment not even that.
     @Test func procArgsDigestRoutingVariablesAndKeepNoValue() throws {
-        let bytes = procArgs(argc: 1, ["/opt/homebrew/bin/codex", "codex", "PATH=/usr/bin", "OPENAI_API_KEY=sk-proj-abcdef123456", "",
-                                       "executable_path=/opt/homebrew/bin/codex"])
-        let parsed = try #require(ProcessArguments.parse(bytes, keeping: ["PATH"], digesting: ["OPENAI_API_KEY", "PATH"]))
+        let bytes = procArgs(argc: 1, ["/opt/homebrew/bin/codex", "codex", "PATH=/usr/bin", "OPENAI_API_KEY=sk-proj-abcdef123456",
+                                       "OPENAI_BASE_URL=https://b.example.com", "", "executable_path=/opt/homebrew/bin/codex"])
+        let parsed = try #require(ProcessArguments.parse(bytes, keeping: ["PATH"], digesting: AgentEvidence.routingKeys))
         #expect(parsed.environment == ["PATH": "/usr/bin"])
-        let digests = ["OPENAI_API_KEY": AgentEvidence.routingDigest("sk-proj-abcdef123456"), "PATH": AgentEvidence.routingDigest("/usr/bin")]
-        #expect(parsed.routing == digests)
-        #expect(!String(describing: parsed).contains("sk-proj"))
+        #expect(parsed.routing == ["OPENAI_BASE_URL": AgentEvidence.routingDigest("https://b.example.com")])
+        #expect(!String(describing: parsed).contains("sk-proj") && !String(describing: parsed).contains("b.example"))
         #expect(AgentEvidence.routingDigest("a") == AgentEvidence.routingDigest("a"))
         #expect(AgentEvidence.routingDigest("a") != AgentEvidence.routingDigest("b") && AgentEvidence.routingDigest("a") != "a")
     }
@@ -95,9 +102,9 @@ import Testing
     /// The login shell's environment as `/usr/bin/env` lists it: only the routing variables, each as a digest.
     @Test func theLoginShellsRoutingIsReadAsDigests() {
         let listing = "PATH=/usr/bin:/bin\nOPENAI_API_KEY=sk-proj-abc\nHOME=/Users/x\nANTHROPIC_BASE_URL=https://a.example.com\n"
-            + "GITHUB_TOKEN=ghp_abc\nnot a variable\n=x\n"
+            + "GITHUB_TOKEN=ghp_abc\nAWS_PROFILE=work\nnot a variable\n=x\n"
         let digests = AgentEvidence.routingDigests(environmentListing: listing)
-        let expected = ["OPENAI_API_KEY": AgentEvidence.routingDigest("sk-proj-abc"),
+        let expected = ["AWS_PROFILE": AgentEvidence.routingDigest("work"),
                         "ANTHROPIC_BASE_URL": AgentEvidence.routingDigest("https://a.example.com")]
         #expect(digests == expected)
         #expect(AgentEvidence.routingDigests(environmentListing: "").isEmpty)
@@ -542,8 +549,9 @@ import Testing
     }
 
     /// KTD5: the agent's routing variables are compared with the login shell's, the environment a restored tab starts
-    /// with. A key .zshrc exports reaches both, so it matches; one set only in the tab, or only in the login shell,
-    /// does not; a login shell not read yet matches nothing.
+    /// with. A variable .zshrc exports reaches both, so it matches; one set only in the tab, or only in the login shell,
+    /// does not; a login shell not read yet matches nothing. Keys are not compared, and a value the secret detector
+    /// masks matches nothing, even the same value in the login shell.
     @Test func routingIsComparedWithTheLoginShellAndAutoContinueIsSeen() throws {
         let home = try makeHome().home
         defer { try? FileManager.default.removeItem(atPath: home) }
@@ -552,12 +560,15 @@ import Testing
             let agent = try process(argv, environment: environment, routing: routing)
             return try #require(capture(agent, typed: argv.joined(separator: " "), home: home, shell: shell))
         }
-        let exported = ["ANTHROPIC_API_KEY": "sk-ant-api03-abc", "AWS_PROFILE": "work"]
-        let same = try evidence(exported, shell: exported.merging(["OPENAI_API_KEY": "sk-proj-x"]) { $1 })
+        let exported = ["ANTHROPIC_BASE_URL": "https://a.example.com", "AWS_PROFILE": "work"]
+        let same = try evidence(exported, shell: exported.merging(["OPENAI_BASE_URL": "https://b.example.com"]) { $1 })
         #expect(same.routingMatchesShell && same.autoContinueOff)
-        let codexKey = ["OPENAI_API_KEY": "sk-proj-x"]
-        #expect(try evidence(codexKey, shell: codexKey, argv: ["codex"]).routingMatchesShell)
-        #expect(!(try evidence(codexKey, shell: ["OPENAI_API_KEY": "sk-proj-y"], argv: ["codex"])).routingMatchesShell)
+        let codexHome = ["CODEX_HOME": "/Users/x/.codex-work"]
+        #expect(try evidence(codexHome, shell: codexHome, argv: ["codex"]).routingMatchesShell)
+        #expect(!(try evidence(codexHome, shell: ["CODEX_HOME": "/Users/x/.codex"], argv: ["codex"])).routingMatchesShell)
+        #expect(try evidence(["OPENAI_API_KEY": "sk-proj-x"], shell: ["OPENAI_API_KEY": "sk-proj-y"], argv: ["codex"]).routingMatchesShell)
+        let proxy = ["HTTPS_PROXY": "http://me:hunter2@proxy.example.com:8080"]
+        #expect(!(try evidence(proxy, shell: proxy)).routingMatchesShell)
         let other = ["ANTHROPIC_BASE_URL": "https://b.example.com"]
         #expect(!(try evidence(other, shell: ["ANTHROPIC_BASE_URL": "https://a.example.com"])).routingMatchesShell)
         #expect(!(try evidence(["CLAUDE_CONFIG_DIR": "/Users/x/other"], shell: [:])).routingMatchesShell)
@@ -576,9 +587,9 @@ import Testing
         #expect(failed.contains(.autoContinue))
         // Values are kept only for the search path, the stores and the auto-continue variables; routing ones only as digests.
         #expect(AgentEvidence.environmentKeys.isSuperset(of: RestoreAgent.claude.autoContinueVariables + ["PATH", "CLAUDE_CONFIG_DIR"]))
-        #expect(AgentEvidence.routingKeys.isSuperset(of: RestoreAgent.allCases.flatMap(\.routingVariables)))
+        #expect(AgentEvidence.routingKeys == Set(RestoreAgent.allCases.flatMap(\.routingVariables)))
         for key in ["GITHUB_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_AUTH_TOKEN"] {
-            #expect(!AgentEvidence.environmentKeys.contains(key), "\(key)")
+            #expect(!AgentEvidence.environmentKeys.contains(key) && !AgentEvidence.routingKeys.contains(key), "\(key)")
         }
     }
 

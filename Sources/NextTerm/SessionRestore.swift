@@ -78,6 +78,8 @@ final class SessionRestore {
         DispatchQueue.global(qos: .utility).async { SessionFiles.sweepSiblings(in: parent, keeping: kept) }
         guard let files = taken else { return .notRun }
         self.files = files
+        // The key routing digests are made with (KTD5) is kept here: read, or made, at the first digest.
+        AgentEvidence.keepRoutingKey(in: files)
         let names: [String] = (try? files.names()) ?? []
         let version = Updater.shared.current?.description ?? ""
         let read = SessionLaunch.read(files, version: version, resumesAtLaunch: settings.opens == .lastProjects)

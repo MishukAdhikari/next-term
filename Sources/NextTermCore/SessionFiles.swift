@@ -5,7 +5,7 @@ import Darwin
 #endif
 
 /// The sessions folder: where one copy of the app keeps what an update relaunch or a crash reads back (the session
-/// snapshot, the update marker, scrollback, the install script's result), as
+/// snapshot, the update marker, scrollback, the install script's result, the routing key), as
 /// `Application Support/Next Term/sessions-<key>.noindex`, the key naming the app's path.
 ///
 /// What it guarantees:

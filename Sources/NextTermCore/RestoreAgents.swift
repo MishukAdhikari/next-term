@@ -423,17 +423,17 @@ extension SessionSnapshot.Agent {
 
     // MARK: environment and config
 
-    /// Variables that send it to another provider, account or store. A resume needs the shell's to match (KTD5).
+    /// Variables that send it to another provider, account or store. A resume needs the shell's to match (KTD5). Only
+    /// base URLs, config folders, and model and provider selectors: they are compared as digests, and a key, token or
+    /// header variable is never digested (AgentEvidence.mayDigest).
     public var routingVariables: [String] {
         switch self {
         case .claude:
-            return ["ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL", "ANTHROPIC_CUSTOM_HEADERS",
-                    "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
-                    "ANTHROPIC_VERTEX_PROJECT_ID", "CLOUD_ML_REGION", "AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION", "HTTPS_PROXY"]
-        case .codex:
-            return ["CODEX_HOME", "OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_ORGANIZATION", "OPENAI_PROJECT", "AZURE_OPENAI_API_KEY",
-                    "HTTPS_PROXY"]
-        case .qwen: return ["OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_MODEL", "DASHSCOPE_API_KEY", "HTTPS_PROXY"]
+            return ["ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+                    "CLAUDE_CODE_USE_FOUNDRY", "ANTHROPIC_VERTEX_PROJECT_ID", "CLOUD_ML_REGION", "AWS_PROFILE", "AWS_REGION",
+                    "AWS_DEFAULT_REGION", "HTTPS_PROXY"]
+        case .codex: return ["CODEX_HOME", "OPENAI_BASE_URL", "OPENAI_ORGANIZATION", "OPENAI_PROJECT", "HTTPS_PROXY"]
+        case .qwen: return ["OPENAI_BASE_URL", "OPENAI_MODEL", "HTTPS_PROXY"]
         default: return []
         }
     }

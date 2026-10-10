@@ -1,4 +1,3 @@
-import CryptoKit
 import Darwin
 import Foundation
 
@@ -16,14 +15,15 @@ import Foundation
 // MARK: - The kernel's view
 
 /// A process's KERN_PROCARGS2 record: the executable path it was started with, its whole argv, and the variables of
-/// its environment that were asked for: by value, or as a digest only. Nothing else of the environment is kept, and a
-/// record that does not read is nil, never its bytes.
+/// its environment that were asked for: by value, or as a digest only (AgentEvidence.routingDigest(of:_:)). Nothing else
+/// of the environment is kept, and a record that does not read is nil, never its bytes.
 public struct ProcessArguments: Equatable, Sendable {
     public var executable: String
     public var arguments: [String]
     /// The variables of `keeping`, by value.
     public var environment: [String: String]
-    /// The variables of `digesting`, each as AgentEvidence.routingDigest of its value: compared, never kept.
+    /// The variables of `digesting` on the routing allowlist, each as AgentEvidence.routingDigest(of:_:) gives it:
+    /// compared, never kept.
     public var routing: [String: String]
 
     /// More arguments than this is not a record the kernel wrote.
@@ -49,7 +49,7 @@ public struct ProcessArguments: Equatable, Sendable {
             let key = String(entry[..<equals])
             let value = String(entry[entry.index(after: equals)...])
             if keys.contains(key) { environment[key] = value }
-            if secret.contains(key) { routing[key] = AgentEvidence.routingDigest(value) }
+            if secret.contains(key) { routing[key] = AgentEvidence.routingDigest(of: key, value) }
         }
         return ProcessArguments(executable: executable, arguments: arguments, environment: environment, routing: routing)
     }
@@ -272,28 +272,73 @@ public enum AgentEvidence {
         return keys
     }()
 
-    /// What can send an agent to another provider, account or store: read only as digests (KTD5).
-    public static let routingKeys: Set<String> = Set(RestoreAgent.allCases.flatMap(\.routingVariables))
+    /// What can send an agent to another provider, account or store, read only as digests (KTD5): the allowlist of base
+    /// URLs, config folders, and model and provider selectors (RestoreAgent.routingVariables). A name that looks like a
+    /// secret's never is on it, even listed there.
+    public static let routingKeys: Set<String> = {
+        let listed = RestoreAgent.allCases.flatMap(\.routingVariables)
+        return Set(listed.filter(mayDigest(name:)))
+    }()
 
-    /// A key made for this launch and never saved: a digest names no value outside this process.
-    private static let digestKey: Data = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
+    /// The key digests are made with: the sessions folder's once the app names it (`keepRoutingKey(in:)`).
+    static let routingKey = RoutingKey.Current()
 
-    /// A routing variable's value as it is compared: a keyed digest held in memory only (KTD5).
-    public static func routingDigest(_ value: String) -> String {
-        let code = HMAC<SHA256>.authenticationCode(for: Data(value.utf8), using: SymmetricKey(data: digestKey))
-        return Data(code).base64EncodedString()
+    /// Names the sessions folder this process holds as where the routing key is kept, read or made at the first digest.
+    /// The app calls it at launch, as soon as it has taken the folder.
+    public static func keepRoutingKey(in files: SessionFiles) {
+        routingKey.keep(in: files)
+    }
+
+    /// What a routing variable reads as when its value may not be digested. It matches nothing, not even itself
+    /// (`routingMatches`), so the agent's resume goes on the line.
+    public static let refusedDigest = "refused"
+
+    /// Whether a variable named `name` may be digested at all: never a key, token, secret, password or credential
+    /// (`*_KEY`, `*_TOKEN`, `*_SECRET` among them), nor an auth, header or cookie variable, nor a name the secret
+    /// detectors take for a secret's (CommandSecrets, MCPRedaction).
+    public static func mayDigest(name: String) -> Bool {
+        let upper = name.uppercased()
+        let words = ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PASSPHRASE", "CREDENTIAL", "AUTH", "HEADER", "COOKIE",
+                     "_PWD", "_PASS"]
+        if words.contains(where: { (word: String) -> Bool in upper.contains(word) }) { return false }
+        let lower = name.lowercased()
+        let secret = CommandSecrets.found(CommandSecrets.secretName, in: lower)
+        let password = CommandSecrets.found(CommandSecrets.passwordName, in: lower)
+        return !secret && !password && !MCPRedaction.isSecretName(name)
+    }
+
+    /// A routing variable as it is compared (KTD5): nil off the allowlist (`routingKeys`), `refusedDigest` for a value
+    /// the secret detector would mask (a password or token in a URL, a key-shaped or long random run), else its keyed
+    /// digest, held in memory only.
+    public static func routingDigest(of name: String, _ value: String) -> String? {
+        guard routingKeys.contains(name) else { return nil }
+        guard CommandSecrets.mayKeep(name + "=" + value) else { return refusedDigest }
+        return routingDigest(value)
+    }
+
+    /// `value`'s digest under the routing key, whatever it is: `routingDigest(of:_:)` decides what is digested.
+    static func routingDigest(_ value: String) -> String {
+        routingKey.key.digest(value)
+    }
+
+    /// Whether two routing variables' digests match: both unset, or the same digest of a value that was not refused.
+    public static func routingMatches(_ one: String?, _ other: String?) -> Bool {
+        one == other && one != refusedDigest
     }
 
     /// The routing variables in `/usr/bin/env`'s listing of an environment (the login shell's), as digests. A value
-    /// holding a newline is cut there, and a variable listed twice matches nothing: either way its resume goes on the
-    /// line, never the wrong way.
+    /// holding a newline is cut there, and a variable listed twice is refused: either way its resume goes on the line,
+    /// never the wrong way.
     public static func routingDigests(environmentListing listing: String) -> [String: String] {
         var digests: [String: String] = [:]
         for line in listing.split(separator: "\n") {
             guard let equals = line.firstIndex(of: "="), equals != line.startIndex else { continue }
             let key = String(line[..<equals])
-            guard routingKeys.contains(key) else { continue }
-            digests[key] = digests[key] == nil ? routingDigest(String(line[line.index(after: equals)...])) : ""
+            guard digests[key] == nil else {
+                digests[key] = refusedDigest
+                continue
+            }
+            digests[key] = routingDigest(of: key, String(line[line.index(after: equals)...]))
         }
         return digests
     }
@@ -465,7 +510,9 @@ extension AgentEvidence {
             evidence.startedAt = leader.startedAt
             record(code(of: leader), in: &evidence)
             evidence.routingMatchesShell = input.shellRouting.map { shell in
-                candidates.allSatisfy { process in agent.routingVariables.allSatisfy { process.routing[$0] == shell[$0] } }
+                candidates.allSatisfy { process in
+                    agent.routingVariables.allSatisfy { AgentEvidence.routingMatches(process.routing[$0], shell[$0]) }
+                }
             } ?? false
             evidence.autoContinueOff = candidates.allSatisfy { process in
                 agent.autoContinueVariables.allSatisfy { process.environment[$0] == nil }
