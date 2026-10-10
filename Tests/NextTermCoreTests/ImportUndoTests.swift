@@ -119,6 +119,33 @@ import Testing
         #expect(try JSONDecoder().decode(ImportSnapshot.self, from: JSONEncoder().encode(new)) == new)
     }
 
+    /// Opening a project reorders and extends the recent projects: that is not a change since the import, and Undo
+    /// takes back only the folders the import added, keeping the ones opened since.
+    @Test func recentProjectsAreTakenBackNotPutBack() throws {
+        let before: [String] = ["/p/own-1", "/p/own-2"]
+        let after: [String] = before + ["/p/imported-1", "/p/imported-2"]
+        let snapshot = try #require(ImportSnapshot.applied(keys: ["recentProjects", "fontSize"],
+                                                          before: ["recentProjects": .strings(before), "fontSize": .double(13)],
+                                                          after: ["recentProjects": .strings(after), "fontSize": .double(15)],
+                                                          source: "Zed", summary: "2 projects, 1 setting"))
+        // Since the import, a project was opened (it goes first) and one imported project was opened again.
+        let current: [String] = ["/p/new", "/p/imported-2", "/p/own-1", "/p/own-2", "/p/imported-1"]
+        let changed = snapshot.changedSince(["recentProjects": .strings(current), "fontSize": .double(15)])
+        #expect(changed.isEmpty)
+        #expect(snapshot.changedSince(["recentProjects": .strings(current), "fontSize": .double(16)]) == ["fontSize"])
+        let undone: [String] = snapshot.recentProjectsAfterUndo(current: current)
+        let expected: [String] = ["/p/new", "/p/own-1", "/p/own-2"]
+        #expect(undone == expected)
+        // A project the user removed since stays removed.
+        let removed: [String] = snapshot.recentProjectsAfterUndo(current: ["/p/own-2", "/p/imported-1"])
+        let left: [String] = ["/p/own-2"]
+        #expect(removed == left)
+        // A snapshot saved before `after` existed puts the list back as it was.
+        let older = ImportSnapshot(id: nil, source: "Zed", summary: "", before: ["recentProjects": .strings(before)],
+                                   touched: ["recentProjects"], after: nil)
+        #expect(older.recentProjectsAfterUndo(current: current) == before)
+    }
+
     @Test func everyImportedSettingHasATitle() {
         let settings: [ImportedSetting] = [
             .fontSize(13), .terminalFontSize(13), .editorLineHeight(1.2), .softWrap(true), .optionAsMeta(true), .terminalPosition("bottom"), .sidebarSide("left"),

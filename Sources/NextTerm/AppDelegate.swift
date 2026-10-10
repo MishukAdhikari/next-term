@@ -809,7 +809,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return added
     }
 
-    /// Undo of an import: the list exactly as it was.
+    /// Sets the list as given (Undo of an import gives today’s list less what the import added).
     func setRecentProjects(_ paths: [String]) {
         recent = RecentProjects(paths)
     }

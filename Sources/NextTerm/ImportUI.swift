@@ -165,7 +165,8 @@ final class ImportCoordinator {
                 else { UserDefaults.standard.removeObject(forKey: key) }
                 KeyboardShortcuts.shared.apply()
             case "recentProjects":
-                if case .strings(let paths)? = value { app.setRecentProjects(paths) } else { app.setRecentProjects([]) }
+                // Only the folders the import added go: projects opened since stay.
+                app.setRecentProjects(snapshot.recentProjectsAfterUndo(current: UserDefaults.standard.stringArray(forKey: key) ?? []))
             default:
                 app.restoreSetting(key, to: value)
             }

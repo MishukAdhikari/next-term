@@ -37,5 +37,32 @@ extension SelfTest {
         coordinator.undo()
         check(app.fontSize == sizeBefore && coordinator.last == nil, "Undo Import puts it back all the same",
               "\(app.fontSize) vs \(sizeBefore)")
+        importUndoRecentsChecks(app: app, coordinator: coordinator)
+    }
+
+    /// Recent projects: a project opened after the import is not "changed since", and Undo takes back only the
+    /// folders the import added, keeping it.
+    static func importUndoRecentsChecks(app: AppDelegate, coordinator: ImportCoordinator) {
+        let saved = UserDefaults.standard.stringArray(forKey: "recentProjects") ?? []
+        let base = canonicalPath(FileManager.default.temporaryDirectory.path) + "/nt-selftest-recents-" + String(UUID().uuidString.prefix(8))
+        let imported = base + "/imported", opened = base + "/opened"
+        for folder in [imported, opened] { try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true) }
+        defer {
+            app.setRecentProjects(saved)
+            try? FileManager.default.removeItem(atPath: base)
+        }
+        app.setRecentProjects(Array(saved.prefix(3))) // room for the imported one
+        let kept = Array(saved.prefix(3))
+        let choice = ImportChoice(usePreset: false, settings: [], recentProjects: [imported])
+        let snapshot = coordinator.apply(choice, plan: ImportPlan(preset: .nextTerm), from: "Self-test editor")
+        // As opening a project does: it goes first.
+        app.setRecentProjects([opened] + (UserDefaults.standard.stringArray(forKey: "recentProjects") ?? []))
+        check(snapshot != nil && coordinator.changedSinceImport().isEmpty,
+              "opening a project after an import is not named as a change since the import",
+              coordinator.changedSinceImport().joined(separator: ", "))
+        coordinator.undo()
+        let now = UserDefaults.standard.stringArray(forKey: "recentProjects") ?? []
+        check(now == [opened] + kept, "Undo Import takes back the imported project and keeps the one opened since",
+              now.joined(separator: ", "))
     }
 }

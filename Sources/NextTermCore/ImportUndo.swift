@@ -82,10 +82,25 @@ public struct ImportSnapshot: Codable, Equatable, Sendable {
     }
 
     /// The keys this import changed that hold something else now (`current`: their values today), changed by
-    /// hand or by another import since. Empty for a snapshot without `after`.
+    /// hand or by another import since. Empty for a snapshot without `after`. Recent projects are never among them:
+    /// opening a project changes that list, and Undo only takes back the folders the import added
+    /// (`recentProjectsAfterUndo`), so nothing done since is put back.
     public func changedSince(_ current: [String: Value]) -> [String] {
         guard let after else { return [] }
-        return touched.filter { !Self.same($0, after[$0], current[$0]) }
+        return touched.filter { $0 != Self.recentsKey && !Self.same($0, after[$0], current[$0]) }
+    }
+
+    static let recentsKey = "recentProjects"
+
+    /// The recent projects after Undo: the list as it is now (`current`), less the folders this import added, so
+    /// the projects opened since stay. A snapshot from before `after` existed puts back the list as it was.
+    public func recentProjectsAfterUndo(current: [String]) -> [String] {
+        var before: [String] = []
+        if case .strings(let paths)? = self.before[Self.recentsKey] { before = paths }
+        guard let after else { return before }
+        guard case .strings(let imported)? = after[Self.recentsKey] else { return current }
+        let added = Set(imported).subtracting(before)
+        return current.filter { !added.contains($0) }
     }
 
     /// How a key is named to the user ("Font size"): the names Settings and the preview use.
