@@ -221,7 +221,13 @@ enum LoginShell {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: program)
         process.arguments = arguments
-        process.environment = TerminalEnvironment.clean(ProcessInfo.processInfo.environment)
+        var environment = TerminalEnvironment.clean(ProcessInfo.processInfo.environment)
+        #if DEBUG
+        // The relaunch harness's tabs read its own zsh config, not the user's (SelfTestRestore.prepareShells): so does the
+        // login shell their agents' routing is compared with.
+        if let own = SelfTestRestore.harness?.zdotdir.path { environment["ZDOTDIR"] = own }
+        #endif
+        process.environment = environment
         process.standardInput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         // A file, not a pipe: a background job the shell starts can keep a pipe open forever.
