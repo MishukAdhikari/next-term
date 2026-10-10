@@ -296,16 +296,24 @@ import Testing
     /// import rows. In the sources, only these files may name it (ImportJetBrains.swift matches the IDEs' built-in
     /// keymap of that name, from before the importer).
     @Test func namedOnlyInItsImporter() throws {
-        let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Sources")
-        let allowed: Set<String> = ["ImportSublimeText.swift", "ImportModel.swift", "ImportUI.swift", "ImportJetBrains.swift"]
+        let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        // The tests too: only this importer's own tests, and two from before it that check another app's keymap of
+        // that name is never shown.
+        let allowed: Set<String> = ["ImportSublimeText.swift", "ImportModel.swift", "ImportUI.swift", "ImportJetBrains.swift",
+                                    "ImportSublimeTextTests.swift", "ImportJetBrainsTests.swift", "ImportZedITermTests.swift"]
         var naming: [String] = []
-        let walker = fm.enumerator(atPath: sources.path)
-        while let relative = walker?.nextObject() as? String {
-            guard relative.hasSuffix(".swift") else { continue }
-            let text = try String(contentsOf: sources.appendingPathComponent(relative), encoding: .utf8)
-            if text.range(of: "sublime", options: .caseInsensitive) != nil { naming.append((relative as NSString).lastPathComponent) }
+        for folder in ["Sources", "Tests"] {
+            let root = package.appendingPathComponent(folder)
+            let walker = fm.enumerator(atPath: root.path)
+            while let relative = walker?.nextObject() as? String {
+                guard relative.hasSuffix(".swift") else { continue }
+                let text = try String(contentsOf: root.appendingPathComponent(relative), encoding: .utf8)
+                if text.range(of: "sublime", options: .caseInsensitive) != nil { naming.append((relative as NSString).lastPathComponent) }
+            }
         }
         #expect(!naming.isEmpty && naming.allSatisfy(allowed.contains), "\(naming)")
+        #expect(ImportSourceKind.sublimeText.family == .editors)
+        let brings: [ImportContent] = [.shortcuts, .settings, .fonts, .projects]
+        #expect(ImportSourceKind.sublimeText.canBring == brings)
     }
 }

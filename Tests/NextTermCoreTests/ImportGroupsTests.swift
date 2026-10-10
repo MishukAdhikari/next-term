@@ -11,9 +11,13 @@ import Testing
         for kind in ImportSourceKind.allCases {
             #expect(kind.canBring.contains(.settings) && kind.canBring.contains(.fonts), "\(kind)")
         }
-        let editors = ImportSourceKind.allCases.filter { $0.family == .editors }
-        let expected: [ImportSourceKind] = [.vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop, .vsCodeFork, .jetBrains, .zed, .sublimeText]
-        #expect(editors == expected)
+        // One more editor is checked in its importer's own tests (the owner's naming rule keeps its name there).
+        let editors: [ImportSourceKind] = [.vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop, .vsCodeFork, .jetBrains, .zed]
+        let terminals: [ImportSourceKind] = [.iTerm2, .ghostty, .warp, .terminalApp, .kitty, .alacritty, .wezTerm, .kaku, .cmux]
+        #expect(editors.allSatisfy { $0.family == .editors } && terminals.allSatisfy { $0.family == .terminals })
+        let listed: Int = editors.count + terminals.count + 1
+        let all: Int = ImportSourceKind.allCases.count
+        #expect(all == listed)
         #expect(ImportSourceKind.terminalApp.family == .terminals && !ImportSourceKind.terminalApp.canBring.contains(.shortcuts))
         #expect(ImportSourceKind.kitty.canBring.contains(.colours) && !ImportSourceKind.kitty.canBring.contains(.projects))
         #expect(ImportFamily.allCases.map(\.title) == ["Editors", "Terminals"])
