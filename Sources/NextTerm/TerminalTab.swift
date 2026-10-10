@@ -69,6 +69,67 @@ final class NextTermView: LocalProcessTerminalView {
         send(txt: getTerminal().bracketedPasteMode ? "\u{1b}[200~" + lines + "\u{1b}[201~" : lines)
     }
 
+    // MARK: drawing only what can be seen
+
+    /// SwiftTerm marks what changed through setNeedsDisplay(_:) and needsDisplay (its own override of the first is
+    /// `#if false`). While nobody can see the window (NSWindow.canBeSeen), or before the view is in one, the gate
+    /// drops those marks and remembers them; the whole terminal is drawn once when it can be seen again. The output
+    /// is still parsed meanwhile: only the drawing waits.
+    private var drawGate = DrawGate(visible: false)
+    private var visibilityObservers: [NSObjectProtocol] = []
+
+    override func setNeedsDisplay(_ invalidRect: NSRect) {
+        guard mayDraw() else { return }
+        super.setNeedsDisplay(invalidRect)
+    }
+
+    override var needsDisplay: Bool {
+        get { super.needsDisplay }
+        set {
+            if newValue, !mayDraw() { return }
+            super.needsDisplay = newValue
+        }
+    }
+
+    /// Asked at each mark, so a window seen again draws its next change even before its notification comes.
+    private func mayDraw() -> Bool {
+        drawIfSeenAgain()
+        return drawGate.invalidate()
+    }
+
+    /// Draws all of the terminal if it can be seen again after changes it did not draw. On every visibility
+    /// notification, and from the window's ticker in case one never comes (a self-test run's window ordered in).
+    func drawIfSeenAgain() {
+        let seen = window?.canBeSeen ?? false
+        guard seen != drawGate.visible else { return }
+        if drawGate.setVisible(seen) { super.needsDisplay = true }
+    }
+
+    /// Changes dropped while the terminal could not be seen, for the self-test.
+    var undrawnChanges: Int { drawGate.dropped }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        visibilityObservers.forEach(NotificationCenter.default.removeObserver)
+        visibilityObservers = []
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let window {
+            visibilityObservers = NSWindow.visibilityNotifications.map { name, ofApp in
+                NotificationCenter.default.addObserver(forName: name, object: ofApp ? NSApp : window, queue: .main) { [weak self] _ in
+                    self?.drawIfSeenAgain()
+                }
+            }
+        }
+        drawIfSeenAgain()
+    }
+
+    deinit {
+        visibilityObservers.forEach(NotificationCenter.default.removeObserver)
+    }
+
     override func bell(source: Terminal) {
         onBell?()
         if beepAllowed { super.bell(source: source) }

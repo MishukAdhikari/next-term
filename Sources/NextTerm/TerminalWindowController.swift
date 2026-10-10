@@ -726,6 +726,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let now = TerminalTab.now
         refreshVisibility()
         for tab in tabs {
+            tab.view.drawIfSeenAgain()
             if tickCount % 2 == 0 { tab.pollForeground(); tab.pollServing() } // every 0.5 s
             tab.pollAgentScreen()
             tab.status.tick(at: now)

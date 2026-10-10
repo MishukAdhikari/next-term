@@ -34,16 +34,11 @@ final class GitMonitor {
             observers.forEach(NotificationCenter.default.removeObserver)
             observers = []
             if let window {
-                // Occlusion covers them all; minimizing and hiding are observed too, for a self-test run (see canBeSeen).
-                let windowNames: [Notification.Name] = [NSWindow.didChangeOcclusionStateNotification, NSWindow.didMiniaturizeNotification,
-                                                         NSWindow.didDeminiaturizeNotification]
-                let appNames: [Notification.Name] = [NSApplication.didHideNotification, NSApplication.didUnhideNotification]
-                let observe = { (name: Notification.Name, object: AnyObject?) in
-                    NotificationCenter.default.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
+                observers = NSWindow.visibilityNotifications.map { name, ofApp in
+                    NotificationCenter.default.addObserver(forName: name, object: ofApp ? NSApp : window, queue: .main) { [weak self] _ in
                         self?.windowVisibilityChanged()
                     }
                 }
-                observers = windowNames.map { observe($0, window) } + appNames.map { observe($0, NSApp) }
             }
             windowVisibilityChanged()
         }
@@ -55,13 +50,9 @@ final class GitMonitor {
         observers.forEach(NotificationCenter.default.removeObserver)
     }
 
-    /// Whether anyone can see the window: not when it is minimized, the app hidden, the window covered by
-    /// others or on another Space, or the screen locked or asleep. In a self-test run, whether it is on
-    /// screen at all: the run takes half an hour, and a check must not fail because the Mac locked meanwhile.
+    /// Whether anyone can see the window (NSWindow.canBeSeen); no window counts as seen.
     static func canBeSeen(_ window: NSWindow?) -> Bool {
-        guard let window else { return true }
-        if SelfTest.isRequested { return window.isVisible && !window.isMiniaturized }
-        return window.occlusionState.contains(.visible)
+        window?.canBeSeen ?? true
     }
 
     private func windowVisibilityChanged() {
