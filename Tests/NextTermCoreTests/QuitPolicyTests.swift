@@ -258,6 +258,60 @@ import Testing
         #expect(!silent.quitConsent && silent.settings(from: chosen(.lastProjects)) == nil)
     }
 
+    /// The user changes the resume box while a quit dialog shows, then presses a button: the answer is the box as the user
+    /// left it, on every dialog that carries it, never how it started (R29, R30).
+    @Test func eachDialogReadsItsBoxOnlyAfterThePress() {
+        let questions: [QuitQuestion] = [saveChanges(true), saveChanges(false), busy(true), busy(false), plain(true), plain(false)]
+        for question in questions {
+            let start = question.resumeCheckbox ?? false
+            var presses: [QuitPress] = [.goOn]
+            if case .saveChanges = question { presses.append(.save) }
+            for press in presses {
+                let dialog = AnsweredDialog(box: start, toggles: true, press: press)
+                var asking = QuitAsking()
+                #expect(asking.ask(question, on: dialog) == press)
+                #expect(!dialog.readBeforePress, "\(question)")
+                // Unchecked by the user: Welcome and no consent. Checked by the user: Resume and the consent.
+                #expect(asking.answer?.resume == !start, "\(question) \(press)")
+                #expect(asking.quitConsent == !start, "\(question) \(press)")
+                let opens: LaunchOpens = start ? .welcome : .lastProjects
+                #expect(asking.settings(from: chosen(start ? .lastProjects : .welcome))?.opens == opens, "\(question) \(press)")
+            }
+        }
+    }
+
+    /// The review's case: "At launch" reads Resume, one file is unsaved and nothing is busy, so the save-changes alert
+    /// carries the box, checked. The user unchecks it and presses Don’t Save, or Save: Welcome, and no consent.
+    @Test func uncheckingTheBoxOnTheSaveChangesAlertGivesNoConsent() {
+        expectQuestions(input(unsaved: 1, opens: .lastProjects), saveChanges(true))
+        for press in [QuitPress.goOn, .save] {
+            var asking = QuitAsking()
+            asking.ask(saveChanges(true), on: AnsweredDialog(box: true, toggles: true, press: press))
+            #expect(!asking.quitConsent && asking.settings(from: chosen(.lastProjects)) == chosen(.welcome))
+        }
+        // Left as it was, the box answers as it started.
+        var kept = QuitAsking()
+        kept.ask(saveChanges(true), on: AnsweredDialog(box: true, toggles: false, press: .goOn))
+        #expect(kept.quitConsent && kept.settings(from: chosen(.lastProjects)) == chosen(.lastProjects))
+    }
+
+    @Test func aDialogCancelledAfterTheBoxChangedAnswersNothing() {
+        for question in [saveChanges(true), busy(false), plain(true)] {
+            let dialog = AnsweredDialog(box: question.resumeCheckbox ?? false, toggles: true, press: .cancel)
+            var asking = QuitAsking()
+            #expect(asking.ask(question, on: dialog) == .cancel)
+            #expect(asking.cancelled && !asking.quitConsent && asking.settings(from: chosen(.welcome)) == nil, "\(question)")
+        }
+        // A dialog that carries no box answers nothing about resuming, whatever it holds; Don’t ask again counts only on
+        // the plain dialog.
+        var noBox = QuitAsking()
+        noBox.ask(saveChanges(nil), on: AnsweredDialog(box: true, toggles: false, press: .goOn))
+        #expect(noBox.answer == nil && !noBox.quitConsent)
+        var plainQuit = QuitAsking()
+        plainQuit.ask(plain(false), on: AnsweredDialog(box: false, toggles: true, dontAskAgain: true, press: .goOn))
+        #expect(plainQuit.answer == .quit(resume: true, dontAskAgain: true))
+    }
+
     @Test func whenNoTabIsBusyAnyMoreThePlainDialogAsksInstead() {
         // AE22, raced: the save-changes alert showed without the box, which "Quitting stops…" was to carry; Claude finished
         // its turn under it. The question is still asked once, on the plain dialog.
@@ -418,6 +472,8 @@ import Testing
         #expect(QuitPromptButton.quit.answer(resume: true, dontAskAgain: false) == .quit(resume: true, dontAskAgain: false))
         #expect(QuitPromptButton.quit.answer(resume: false, dontAskAgain: true) == .quit(resume: false, dontAskAgain: true))
         #expect(QuitPromptButton.cancel.answer(resume: true, dontAskAgain: true) == nil)
+        // As the quit asks: Quit lets it go on, Cancel cancels it.
+        #expect(QuitPromptButton.quit.press == .goOn && QuitPromptButton.cancel.press == .cancel)
         #expect(QuitPromptButton.cancel.answer(resume: false, dontAskAgain: false) == nil)
     }
 
@@ -464,5 +520,39 @@ import Testing
         #expect(QuitPolicy.projectList(five) == "“a”, “b”, “c”, “d” and 1 more")
         let alike: [String] = ["/Users/x/work/app", "/Users/x/home/app"]
         #expect(QuitPolicy.projectList(alike) == "“work/app” and “home/app”")
+    }
+}
+
+/// A quit dialog a made-up user answers: while it shows, they flip its resume box (`toggles`), then press `press`. It
+/// notes a box read before the press, which would record how the box started rather than the answer.
+final class AnsweredDialog: QuitDialog {
+    private var box: Bool
+    private let toggles: Bool
+    private let suppression: Bool
+    private let press: QuitPress
+    private var shown = false
+    private(set) var readBeforePress = false
+
+    init(box: Bool, toggles: Bool, dontAskAgain: Bool = false, press: QuitPress) {
+        self.box = box
+        self.toggles = toggles
+        self.suppression = dontAskAgain
+        self.press = press
+    }
+
+    func run() -> QuitPress {
+        shown = true
+        if toggles { box.toggle() }
+        return press
+    }
+
+    var resumeBox: Bool? {
+        if !shown { readBeforePress = true }
+        return box
+    }
+
+    var dontAskAgain: Bool {
+        if !shown { readBeforePress = true }
+        return suppression
     }
 }

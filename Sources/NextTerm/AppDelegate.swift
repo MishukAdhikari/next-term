@@ -695,14 +695,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             case .saveChanges(let checkbox):
                 let alert = Self.saveBeforeQuittingAlert(dirty.map(\.name))
                 let box = checkbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
-                let resume: Bool? = box.map { $0.state == .on }
-                switch alert.runModal() {
-                case .alertFirstButtonReturn:
-                    asking.reply(.goOn(resume: resume, dontAskAgain: false), to: question)
+                // Save, Cancel, Don’t Save, as they were added. The box is read once a button is pressed (QuitAsking.ask).
+                let dialog = QuitAlertDialog(alert, presses: [.save, .cancel, .goOn], box: box)
+                switch asking.ask(question, on: dialog) {
+                case .save:
                     guard controllers.allSatisfy({ $0.editorArea.saveAll() }) else { return nil }
-                case .alertThirdButtonReturn:
-                    asking.reply(.goOn(resume: resume, dontAskAgain: false), to: question)
-                default:
+                case .goOn:
+                    break
+                case .cancel:
                     return nil
                 }
             case .busy:
@@ -731,8 +731,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         case .busy(let checkbox):
             let alert = Self.quitStopsAlert(busy)
             let box = checkbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
-            guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-            asking.reply(.goOn(resume: box.map { $0.state == .on }, dontAskAgain: false), to: .busy(resumeCheckbox: checkbox))
+            let dialog = QuitAlertDialog(alert, presses: [.goOn, .cancel], box: box)
+            guard asking.ask(.busy(resumeCheckbox: checkbox), on: dialog) == .goOn else { return nil }
         case .quit(let checkbox):
             guard askPlain(checked: checkbox, projects: projects, into: &asking) else { return nil }
         case .saveChanges, .updateSheet, nil:
@@ -745,10 +745,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// The plain quit dialog, "Quit Next Term?", its answer put into `asking`. False when it was cancelled.
     private func askPlain(checked: Bool, projects: [String], into asking: inout QuitAsking) -> Bool {
         let prompt = QuitReopenPrompt(projects: projects, checked: checked)
-        guard let answer = prompt.run() else { return false }
-        let dontAskAgain = prompt.alert.suppressionButton?.state == .on
-        asking.reply(.goOn(resume: answer.resume, dontAskAgain: dontAskAgain), to: .quit(resumeCheckbox: checked))
-        return true
+        return asking.ask(.quit(resumeCheckbox: checked), on: prompt.dialog) == .goOn
     }
 
     /// Why this quit happens: the plain self-test, the reason the relaunch harness sets, a valid update consent (the update

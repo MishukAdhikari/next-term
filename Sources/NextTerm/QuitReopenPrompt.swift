@@ -27,8 +27,11 @@ final class QuitReopenPrompt {
         alert.suppressionButton?.title = "Don’t ask again"
     }
 
-    /// Shows it and waits: the answer, or nil when the quit is cancelled.
-    func run() -> QuitAnswer? { answer(for: alert.runModal()) }
+    /// The dialog as the quit asks it (`QuitAsking.ask`): Quit or Cancel, then the box and "Don’t ask again" as the user
+    /// left them.
+    var dialog: QuitAlertDialog {
+        QuitAlertDialog(alert, presses: buttons.map(\.press), box: checkbox)
+    }
 
     /// The answer of the button pressed, read from the button: Quit with the box's state and "Don’t ask again". Nil for
     /// "Cancel" (⎋, ⌘.), whatever is checked.
@@ -65,4 +68,29 @@ final class QuitReopenPrompt {
               let why = event.attributeDescriptor(forKeyword: kAEQuitReason) else { return nil }
         return why.typeCodeValue != 0 ? why.typeCodeValue : why.enumCodeValue
     }
+}
+
+/// A quit question's alert as `QuitAsking.ask` asks it: each button, in the order it was added, a press; the resume box
+/// on it, when it carries one, and "Don’t ask again" when it shows one. The boxes are read only once `runModal` has
+/// returned, so the answer is the box as the user left it, never as it started.
+final class QuitAlertDialog: QuitDialog {
+    let alert: NSAlert
+    private let presses: [QuitPress]
+    private let box: NSButton?
+
+    init(_ alert: NSAlert, presses: [QuitPress], box: NSButton?) {
+        self.alert = alert
+        self.presses = presses
+        self.box = box
+    }
+
+    /// Shows the alert and waits: the press of the button that ended it, Cancel for any other way it ended.
+    func run() -> QuitPress {
+        let index = alert.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+        return presses.indices.contains(index) ? presses[index] : .cancel
+    }
+
+    var resumeBox: Bool? { box.map { (box: NSButton) -> Bool in box.state == .on } }
+
+    var dontAskAgain: Bool { alert.showsSuppressionButton && alert.suppressionButton?.state == .on }
 }

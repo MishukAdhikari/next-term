@@ -87,6 +87,15 @@ public enum QuitQuestion: Equatable, Sendable {
     /// The plan the update consent covers got worse: this quit is cancelled, the consent cleared, and the update sheet
     /// shows again.
     case updateSheet
+
+    /// Where its resume checkbox starts; nil when it carries none.
+    public var resumeCheckbox: Bool? {
+        switch self {
+        case .saveChanges(let checkbox), .busy(let checkbox): return checkbox
+        case .quit(let checkbox): return checkbox
+        case .updateSheet: return nil
+        }
+    }
 }
 
 /// How a quit whose questions were answered ends (QuitPolicy.ending).
@@ -226,6 +235,49 @@ public struct QuitAsking: Equatable, Sendable {
     }
 }
 
+/// A button pressed on a quit question's dialog.
+public enum QuitPress: Equatable, Sendable {
+    /// A button that lets the quit go on: "Quit" on the plain dialog or the busy alert, "Don’t Save" on the save-changes
+    /// alert.
+    case goOn
+    /// "Save" (or "Save All") on the save-changes alert: the quit goes on once every file is saved.
+    case save
+    /// "Cancel", ⎋ or ⌘.
+    case cancel
+}
+
+/// A quit question's dialog as the quit asks it (`QuitAsking.ask`): shown until the user presses a button, and only then
+/// read for its boxes, which the user may change while it shows.
+public protocol QuitDialog: AnyObject {
+    /// Shows the dialog and waits for a press.
+    func run() -> QuitPress
+    /// The resume box as it is now; nil when the dialog has none.
+    var resumeBox: Bool? { get }
+    /// "Don’t ask again" as it is now; false when the dialog has none.
+    var dontAskAgain: Bool { get }
+}
+
+extension QuitAsking {
+    /// Asks `question` on `dialog`, and records the press with the boxes as the user left them, read once the press has
+    /// come: a box read as the dialog opens records how it started, not the user's answer (R29, R30). A dialog's box
+    /// counts only on a question that carries one. Returns the press: a Save still saves every file, and one that fails
+    /// cancels the quit (`reply(.cancel, to:)`).
+    @discardableResult
+    public mutating func ask(_ question: QuitQuestion, on dialog: some QuitDialog) -> QuitPress {
+        let press = dialog.run()
+        switch press {
+        case .cancel:
+            reply(.cancel, to: question)
+        case .goOn, .save:
+            let resume: Bool? = question.resumeCheckbox == nil ? nil : dialog.resumeBox
+            let dontAskAgain: Bool
+            if case .quit = question { dontAskAgain = dialog.dontAskAgain } else { dontAskAgain = false }
+            reply(.goOn(resume: resume, dontAskAgain: dontAskAgain), to: question)
+        }
+        return press
+    }
+}
+
 /// A button of the plain quit dialog, "Quit Next Term?" (`QuitPolicy.promptTitle`).
 public enum QuitPromptButton: CaseIterable, Sendable {
     case quit, cancel
@@ -234,6 +286,14 @@ public enum QuitPromptButton: CaseIterable, Sendable {
         switch self {
         case .quit: return "Quit"
         case .cancel: return "Cancel"
+        }
+    }
+
+    /// The press it is, as the quit asks (`QuitAsking.ask`).
+    public var press: QuitPress {
+        switch self {
+        case .quit: return .goOn
+        case .cancel: return .cancel
         }
     }
 
