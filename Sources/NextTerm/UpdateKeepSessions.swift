@@ -480,13 +480,28 @@ enum UpdatePlanning {
 /// What the restart would cut off: operations the update waits for, and decisions only the user can make that the
 /// restart drops. The sheet lists the open decisions, always; the update quit answers each one with a definite no. Agent
 /// diff proposals are read from each editor area as they are, without editing it; the agents' approval panels
-/// (AgentApprovalWindow: a skill to install or remove, an MCP write) are read from the open windows, without editing them.
+/// (AgentApprovalWindow: a skill to install or remove, an MCP write) register as they open and are let go as they close.
 @MainActor
-final class UpdateHolds {
+final class UpdateHolds: NSObject {
     static let shared = UpdateHolds()
 
     private var decisions: [(id: UUID, title: String, cancel: () -> Void)] = []
     private var operations: [UUID: String] = [:]
+    private var panels = OpenPanels<AgentApprovalWindow>()
+
+    /// An approval panel opens (AgentApprovalWindow's `present`): until it closes, the sheet lists it while it asks, the
+    /// update quit waits for it once its approved change is under way, and declines it otherwise.
+    func register(_ panel: AgentApprovalWindow) {
+        guard let window = panel.window, panels.register(panel) else { return }
+        NotificationCenter.default.addObserver(self, selector: #selector(panelWillClose(_:)), name: NSWindow.willCloseNotification,
+                                               object: window)
+    }
+
+    @objc private func panelWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: window)
+        for panel in panels.all where panel.window === window { panels.unregister(panel) }
+    }
 
     /// A decision open now (an agent's approval request): listed on the sheet, and answered "no" at the update quit.
     /// `close` it once it is answered.
@@ -515,7 +530,7 @@ final class UpdateHolds {
     /// The operations the update waits for, now: each registered one, and each approved change an approval panel shows
     /// under way.
     var running: [String] {
-        let approved: [String] = approvalPanels.filter { Self.committed($0) }.map { Self.title($0) }
+        let approved: [String] = panels.all.filter { Self.committed($0) }.map { Self.title($0) }
         return Array(operations.values) + approved
     }
 
@@ -529,7 +544,7 @@ final class UpdateHolds {
                 lines.append(TerminalText.oneLine("\(proposal.author)’s proposed change to \(pane.path)"))
             }
         }
-        let asking: [String] = approvalPanels.filter { !Self.committed($0) }.map { Self.title($0) }
+        let asking: [String] = panels.all.filter { !Self.committed($0) }.map { Self.title($0) }
         return lines + asking + decisions.map { TerminalText.oneLine($0.title) }
     }
 
@@ -539,14 +554,7 @@ final class UpdateHolds {
         let open = decisions
         decisions = []
         for decision in open { decision.cancel() }
-        for panel in approvalPanels where !Self.committed(panel) { panel.close() }
-    }
-
-    /// The agents' approval panels shown now.
-    private var approvalPanels: [AgentApprovalWindow] {
-        NSApp.windows.compactMap { (window: NSWindow) -> AgentApprovalWindow? in
-            window.isVisible ? window.windowController as? AgentApprovalWindow : nil
-        }
+        for panel in panels.all where !Self.committed(panel) { panel.close() }
     }
 
     /// Its approved change has started and can't be stopped: the panel holds Decline (`setCommitted`).

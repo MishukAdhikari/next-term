@@ -531,3 +531,34 @@ public enum UpdateQuitRefusal: Equatable, Sendable {
     /// The staged update is another version than the consent's, or none.
     case otherVersion
 }
+
+/// The agents' approval panels open now, as the update sees them (UpdateHolds): each one registered as it opens and let go
+/// as it closes, held once and in the order it opened. Held weakly, so a panel let go of without closing is left out.
+public struct OpenPanels<Panel: AnyObject> {
+    private struct Entry {
+        weak var panel: Panel?
+    }
+
+    private var entries: [Entry] = []
+
+    public init() {}
+
+    /// A panel opens. False when it is held already.
+    @discardableResult
+    public mutating func register(_ panel: Panel) -> Bool {
+        entries.removeAll { $0.panel == nil }
+        guard !entries.contains(where: { $0.panel === panel }) else { return false }
+        entries.append(Entry(panel: panel))
+        return true
+    }
+
+    /// A panel closes.
+    public mutating func unregister(_ panel: Panel) {
+        entries.removeAll { $0.panel == nil || $0.panel === panel }
+    }
+
+    /// The panels open now, in the order they opened.
+    public var all: [Panel] {
+        entries.compactMap(\.panel)
+    }
+}

@@ -417,6 +417,28 @@ struct UpdateFixture {
         #expect(tab?.indent == 1)
     }
 
+    @Test func anApprovalPanelIsHeldFromItsOpeningToItsCloseOnceAndInOrder() {
+        final class Panel {}
+        var panels = OpenPanels<Panel>()
+        let first = Panel()
+        let second = Panel()
+        let opened = panels.register(first) && panels.register(second)
+        let again = panels.register(first)
+        #expect(opened && !again, "a panel presented again is held once")
+        #expect(panels.all.count == 2 && panels.all.first === first && panels.all.last === second)
+        panels.unregister(first)
+        #expect(panels.all.count == 1 && panels.all.first === second)
+        let reopened = panels.register(first)
+        #expect(reopened && panels.all.last === first, "a panel closed, then presented again, is held again")
+        panels.unregister(first)
+        panels.unregister(first)
+        do {
+            let gone = Panel()
+            panels.register(gone)
+        }
+        #expect(panels.all.count == 1 && panels.all.first === second, "a panel let go of is not held")
+    }
+
     @Test func itNeverStartsOverASheetAModalWindowOrAQuitsQuestion() {
         #expect(UpdateFlow.mayStart(sheetAttached: false, modalWindow: false, askingToQuit: false))
         #expect(!UpdateFlow.mayStart(sheetAttached: true, modalWindow: false, askingToQuit: false))
