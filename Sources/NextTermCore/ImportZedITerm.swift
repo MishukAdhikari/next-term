@@ -438,7 +438,8 @@ public enum ImportITerm2 {
         var plan = ImportPlan(preset: app.preset)
         guard app.kind == .iTerm2 else { return plan }
         let path = app.configPath.isEmpty ? preferencesPath(home: home) : app.configPath
-        guard let data = ImportFile.data(path), let preferences = Preferences(data) else {
+        let dynamic = dynamicProfiles(home: home)
+        guard let data = ImportFile.data(path), let preferences = Preferences(data, dynamic: dynamic.profiles) else {
             plan.skipped.append(SkippedItem((path as NSString).lastPathComponent, "couldn't be read, so no settings came over"))
             plan.skipped.append(paneKeys)
             return plan
@@ -454,6 +455,8 @@ public enum ImportITerm2 {
         } else {
             plan.skipped.append(SkippedItem("profiles", "iTerm2 has no saved profile yet, so no settings came over"))
         }
+        plan.skipped += dynamic.skipped
+        if let note = preferences.customFolder { plan.skipped.append(note) }
         if preferences.globalKeyMappings > 0 {
             let count = preferences.globalKeyMappings
             plan.skipped.append(SkippedItem("iTerm2 key mappings (\(count))", "terminal key mappings aren't brought over"))
@@ -491,19 +494,30 @@ public enum ImportITerm2 {
         /// "Cursor Type": 0 underline, 1 vertical bar, 2 box (`ITAddressBookMgr.h`); "Blinking Cursor".
         var cursorType: Int?
         var blinkingCursor: Bool?
+        /// The default profile is a dynamic one, merged over its parent.
+        var dynamic = false
     }
 
     struct Preferences: Equatable {
         var profile: Profile?
         /// How many entries `GlobalKeyMap` has (counted, never read).
         var globalKeyMappings = 0
+        /// A note when iTerm2 loads its settings from a custom folder or URL.
+        var customFolder: SkippedItem?
 
-        init?(_ data: Data) {
+        /// `dynamic`: the dynamic profiles, in load order (`dynamicProfiles`).
+        init?(_ data: Data, dynamic: [[String: Any]] = []) {
             guard let root = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any] else {
                 return nil
             }
             globalKeyMappings = (root["GlobalKeyMap"] as? [String: Any])?.count ?? 0
-            profile = ImportITerm2.defaultProfile(root).map(ImportITerm2.profile)
+            customFolder = ImportITerm2.customFolderNote(root)
+            let found = ImportITerm2.defaultProfile(root, dynamic: dynamic)
+            profile = found.map { values, isDynamic in
+                var profile = ImportITerm2.profile(values)
+                profile.dynamic = isDynamic
+                return profile
+            }
         }
     }
 
@@ -514,11 +528,17 @@ public enum ImportITerm2 {
     /// The colours read, by palette slot: the 16 ANSI colours, then text, background, cursor and selection.
     static let colourKeys = (0...15).map { "Ansi \($0) Color" } + ["Foreground Color", "Background Color", "Cursor Color", "Selection Color"]
 
-    /// The profile `Default Bookmark Guid` names in `New Bookmarks`, else the first one.
-    static func defaultProfile(_ root: [String: Any]) -> [String: Any]? {
+    /// The profile `Default Bookmark Guid` names: in `New Bookmarks`, else among the dynamic profiles (each merged
+    /// over its parent), else the first regular one. True when it is a dynamic one.
+    static func defaultProfile(_ root: [String: Any], dynamic: [[String: Any]] = []) -> (values: [String: Any], dynamic: Bool)? {
         let profiles = (root["New Bookmarks"] as? [Any])?.compactMap { $0 as? [String: Any] } ?? []
         let guid = root["Default Bookmark Guid"] as? String
-        return profiles.first { guid != nil && $0["Guid"] as? String == guid } ?? profiles.first
+        if let match = profiles.first(where: { guid != nil && $0["Guid"] as? String == guid }) { return (match, false) }
+        if let guid, !dynamic.isEmpty {
+            let merged = mergedDynamic(dynamic, regular: profiles, defaultProfile: profiles.first ?? [:])
+            if let profile = merged[guid] { return (profile, true) }
+        }
+        return profiles.first.map { ($0, false) }
     }
 
     static func profile(_ values: [String: Any]) -> Profile {
@@ -629,7 +649,8 @@ public enum ImportITerm2 {
     static func coloursRow(_ palette: TerminalPalette, profile: Profile) -> PlannedSetting? {
         var notes: [String] = []
         if profile.otherColourSpace { notes.append("colours in Display P3 or a calibrated space are read as sRGB, so a few may look slightly different") }
-        let source = "the default profile's colours" + (profile.darkVariants ? " (its Dark Mode ones)" : "")
+        var source = "the default profile's colours" + (profile.darkVariants ? " (its Dark Mode ones)" : "")
+        if profile.dynamic { source += ", from its dynamic profile" }
         return ImportColours.row(palette, source: source, note: notes.isEmpty ? nil : notes.joined(separator: "; "))
     }
 
