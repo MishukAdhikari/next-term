@@ -70,7 +70,8 @@ import Testing
         #expect(app.name == "Sublime Text 3" && app.configPath.hasSuffix("/Sublime Text 3"))
         #expect(app.appPath == nil && app.appRemoved, "Build 4200 keeps its data in the newer folder")
         let plan = ImportSublimeText.plan(for: app, home: home, fonts: testFonts)
-        #expect(plan.settings.map(\.setting) == [.fontSize(15), .trimTrailingWhitespace(true)])
+        let expected: [ImportedSetting] = [.fontSize(15), .trimTrailingWhitespace(true)]
+        #expect(plan.settings.map(\.setting) == expected)
         #expect(plan.settings.last?.ticked == true, "Sublime Text 3 trims every line, as Next Term does")
     }
 
@@ -122,7 +123,8 @@ import Testing
         try write("{ \"trim_trailing_white_space_on_save\": false, \"preview_on_click\": false, \"ignored_packages\": [\"Vintage\"] }",
                   to: home + Self.user + "/Preferences.sublime-settings")
         let off = try importPlan(home)
-        #expect(off.settings.map(\.setting) == [.sidebarSingleClick(false), .trimTrailingWhitespace(false)])
+        let offRows: [ImportedSetting] = [.sidebarSingleClick(false), .trimTrailingWhitespace(false)]
+        #expect(off.settings.map(\.setting) == offRows)
         #expect(reasons(off)["Vim keys (Vintage)"] == nil)
     }
 
