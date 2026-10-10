@@ -1094,11 +1094,15 @@ enum SelfTest {
               welcome.shownSessionTitles.joined(separator: " | ") + " — listed \(welcome.shownProjects.contains(project)), selected \(welcome.selectedProject ?? "none"), direct \(direct.sessions.map(\.title)) \(direct.problems), home \(SessionStore.home)")
         check(welcome.shownSessionTitles.first == "Fix the login redirect loop", "newest first, with the agent's own title")
         welcomeReturnKeyChecks(welcome, project: project)
+        let searched = await welcomeSessionSearchChecks(welcome, project: project)
         await pause(0.3)
         await screenshot(welcomeWindow, suffix: "welcome")
-        welcome.resumeSelected()
+        // Return in the sessions search, where it is Resume's (Open Project has it everywhere else); without the
+        // keys (the app not in front), the button's own action.
+        if searched { pressAppKey(welcomeWindow, "\r", code: 36) } else { welcome.resumeSelected() }
         // In a new tab, or in the project window's untouched first tab when it is in that folder already.
         let resumed = await wait(10) { app.controllers.flatMap(\.tabs).contains { $0.screenTail(10).contains("claude --resume s1") } }
+        if searched { check(resumed, "Return in the sessions search resumes the session selected there") }
         let tab = app.controllers.flatMap(\.tabs).first { $0.screenTail(10).contains("claude --resume s1") }
         check(resumed && tab.map { canonicalPath($0.directory) == project } == true,
               "Resume runs `claude --resume <id>` in a new tab in the session's folder", tab?.screenTail(4).joined(separator: " | ") ?? "no tab")
