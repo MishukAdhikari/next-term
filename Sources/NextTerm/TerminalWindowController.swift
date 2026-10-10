@@ -910,7 +910,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if let valid = validateTabCommand(item) { return valid } // TabMenus.swift
         let gitActions: [Selector] = [#selector(showBranches(_:)), #selector(gitFetch(_:)), #selector(gitUpdate(_:)), #selector(gitCommit(_:)),
                                       #selector(gitPush(_:)), #selector(gitNewBranch(_:))]
-        if let action = item.action, gitActions.contains(action) { return gitFolder != nil }
+        // Off while a sheet is over the window (the commit sheet, a question one of them asked): a key pressed twice, or
+        // held, asks nothing twice.
+        if let action = item.action, gitActions.contains(action) { return gitFolder != nil && window?.attachedSheet == nil }
         if item.action == #selector(showGitLog(_:)) { return gitLogRoot != nil }
         if item.action == #selector(showGitDiff(_:)) { return gitDiffRoot != nil }
         if item.action == #selector(closeProject(_:)) { return project != nil }
