@@ -61,4 +61,19 @@ enum ImportFixtures {
         #expect(!ImportFixtures.secrets(in: settings).isEmpty)
         #expect(ImportFixtures.plantedSecrets.allSatisfy(SecretGuard.looksSecret))
     }
+
+    /// Each terminal's fixture plants both fake secrets somewhere, so its tests' "none comes out" checks mean something.
+    @Test func terminalFixturesPlantTheirSecrets() throws {
+        for name in ["Alacritty", "kitty", "WezTerm", "cmux", "iTerm2"] {
+            let folder = ImportFixtures.root.appendingPathComponent(name).path
+            var text = ""
+            let walker = FileManager.default.enumerator(atPath: folder)
+            while let relative = walker?.nextObject() as? String {
+                let path = (folder as NSString).appendingPathComponent(relative)
+                if isRegularFile(path), let contents = try? String(contentsOfFile: path, encoding: .utf8) { text += contents }
+            }
+            let found: [String] = ImportFixtures.secrets(in: text)
+            #expect(found == ImportFixtures.plantedSecrets, "\(name)")
+        }
+    }
 }

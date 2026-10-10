@@ -25,7 +25,8 @@ import Testing
         #expect(scan.fields["enable_tab_bar"] == .bool(false))
         #expect(scan.fields["color_scheme"] == .string("Batman"))
         #expect(scan.fields["colors"]?["background"] == .string("#222222"))
-        #expect(scan.fields["colors"]?["ansi"]?.items?.count == 2)
+        let ansi: Int? = scan.fields["colors"]?["ansi"]?.items?.count
+        #expect(ansi == 2)
         #expect(scan.fields["scrollback_lines"] == .number(16))
         #expect(scan.fields["font"] == .call("wezterm.font", [.string("Fira Code"), .table(items: [], fields: ["weight": .string("Bold")])]))
         let key = scan.fields["keys"]?.items?.first

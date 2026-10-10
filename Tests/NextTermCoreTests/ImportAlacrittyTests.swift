@@ -135,7 +135,8 @@ import Testing
     @Test func anInvalidConfigBringsNothing() throws {
         let plan = try plan(config: "[font]\nsize = 12\n[font]\nsize = 13\n")
         #expect(plan.settings.isEmpty)
-        #expect(plan.skipped == [SkippedItem("alacritty.toml", "not valid TOML (line 3), so Alacritty doesn't read it either; no settings came over")])
+        let expected = [SkippedItem("alacritty.toml", "not valid TOML (line 3), so Alacritty doesn't read it either; no settings came over")]
+        #expect(plan.skipped == expected)
     }
 
     @Test func anOldYAMLConfigIsNamed() throws {

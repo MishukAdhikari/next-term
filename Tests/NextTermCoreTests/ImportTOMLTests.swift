@@ -88,7 +88,8 @@ import Testing
         #expect(value["multi"] == .string("one two"))
         #expect(value["raw"] == .string("C:\\path\\"))
         #expect(value["list"] == .array([.integer(1), .integer(2), .integer(3)]))
-        #expect(value["nested"]?.array?.count == 2)
+        let nested: Int? = value["nested"]?.array?.count
+        #expect(nested == 2)
         #expect(value["inline", "b", "c"] == .string("x"))
     }
 
@@ -132,7 +133,8 @@ import Testing
         #expect(parse("a = " + ok) != nil)
         // A very long line of numbers is fine, and quick.
         let many = "a = [" + (0..<20_000).map(String.init).joined(separator: ",") + "]"
-        #expect(parse(many)?["a"]?.array?.count == 20_000)
+        let count: Int? = parse(many)?["a"]?.array?.count
+        #expect(count == 20_000)
     }
 
     @Test func byteOrderMarkAndLineEndings() throws {

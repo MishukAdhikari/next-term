@@ -116,7 +116,8 @@ import Testing
         defer { remove(home) }
         try "{ \"shortcuts\": ".write(toFile: home + "/.config/cmux/cmux.json", atomically: true, encoding: .utf8)
         let plan = try plan(home)
-        #expect(plan.shortcuts.map(\.command) == ["splitDown:"])
+        let commands: [String] = plan.shortcuts.map(\.command)
+        #expect(commands == ["splitDown:"])
         #expect(reasons(plan)["cmux.json"] == "couldn't be read, so cmux's own shortcuts didn't come over")
         #expect(plan.settings.contains { $0.setting == .terminalFontSize(14) })
     }
