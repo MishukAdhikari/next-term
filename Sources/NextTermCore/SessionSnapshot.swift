@@ -65,6 +65,10 @@ extension SessionSnapshot {
         /// lets agents resume once. Its only form on disk; never in a file a crash or another quit left.
         public var resumeConsent: UUID?
 
+        /// The quit its scrollback files are named for: an update quit's marker, or else the launch that wrote it. The
+        /// restore reads them by the same id (`RestoreDecision.scrollbackQuit`).
+        public var scrollbackQuit: UUID { awaitingMarker ?? launchID }
+
         /// The highest generation: no save reaches it (one every 2 seconds would take half a billion years), and every JSON
         /// reader holds it exactly. Only a planted or damaged file holds more, and decoding refuses it.
         public static let maxGeneration = 9_007_199_254_740_991

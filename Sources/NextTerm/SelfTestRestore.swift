@@ -481,7 +481,7 @@ enum SelfTestRestore {
 
     /// What the update quit left, as this launch found it before it wrote anything: with the sheet's box checked, the whole
     /// session, unclean and waiting for the marker, with no consent id, the marker beside it, nothing else left behind, the
-    /// scrollback named for its session, read by this launch's update restore and removed, and the install's result, naming
+    /// scrollback named for its marker, read by this launch's update restore and removed, and the install's result, naming
     /// the marker, taken once. The secret typed before the quit is in no file the install left or
     /// the sessions folder holds now, in the harness's defaults, in the unified log or in the report; the quit's own files,
     /// its scrollback among them, were searched as it wrote them (`quitSaved`).
@@ -499,11 +499,12 @@ enum SelfTestRestore {
             name.hasPrefix(".") || name.hasSuffix(SessionFiles.previousSuffix)
         }
         check(lingering.isEmpty, "the quit left no previous file or temporary file", "\(lingering)")
-        let launch = header?.launchID
-        let quitScrollback = names.filter { (name: String) -> Bool in ScrollbackText.parseFileName(name)?.quit == launch }
+        // An update quit names its scrollback for its marker, as the update restore reads it.
+        let quit = header?.scrollbackQuit
+        let quitScrollback = names.filter { (name: String) -> Bool in quit != nil && ScrollbackText.parseFileName(name)?.quit == quit }
         let left = ((try? files.names()) ?? []).filter { (name: String) -> Bool in name.hasPrefix(ScrollbackText.filePrefix) }
         check(!quitScrollback.isEmpty && left.isEmpty,
-              "the quit saved scrollback named for its session, and this launch's update restore read it and removed it",
+              "the quit saved scrollback named for its marker, and this launch's update restore read it and removed it",
               "saved \(quitScrollback.count), left \(left)")
         let result = found?.installResult
         let resultLeft = ((try? files.names()) ?? []).contains(InstallResult.fileName)
@@ -525,6 +526,14 @@ enum SelfTestRestore {
               "the secret typed before the quit is in no session file, in the harness's defaults, in the unified log or in the report",
               "\(holding)")
     }
+
+    /// `text` with every blank left out.
+    static func whole(_ text: String) -> String { text.replacingOccurrences(of: " ", with: "") }
+
+    /// A tab's last 400 rows joined, with every blank left out: in a pane as narrow as the split's at 0.3 (about 28
+    /// columns in the harness's window) a divider or a canary wraps over rows, and a row before a wrap loses its trailing
+    /// blank, so a line looked for in rows joined by newlines would never be found, nor ever wrongly found.
+    static func shownWhole(_ tab: TerminalTab?) -> String { whole(tab?.screenTail(400).joined() ?? "") }
 
     /// The update restore (plan 003's U10), as the after-update launch built it: every tab with the id it had, both windows,
     /// the split at 0.3, the scrollback above its divider, `sleep 600` (running at the quit) back on the prompt line and not
@@ -555,13 +564,14 @@ enum SelfTestRestore {
         let line = first.liveTail(6).last { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? ""
         check(applied && line.contains("sleep 600") && !first.status.running,
               "sleep 600, running at the quit, waits on the prompt line and does not run", "applied \(applied), line “\(line)”")
-        let shown = first.screenTail(400).joined(separator: "\n")
-        check(first.restoreDivider != nil && shown.contains(ScrollbackText.SavedAt.update.divider),
-              "the project tab shows the scrollback saved at the update, above its divider")
+        let shown = shownWhole(first)
+        check(first.restoreDivider != nil && shown.contains(whole(ScrollbackText.SavedAt.update.divider)),
+              "the project tab shows the scrollback saved at the update, above its divider",
+              "divider \(first.restoreDivider != nil), \(first.view.getTerminal().cols) columns")
         let secret = (try? String(contentsOf: harness.canary, encoding: .utf8)) ?? ""
         let noted = second.screenTail(40).joined(separator: "\n")
-        let screens = app.controllers.flatMap(\.tabs).map { (tab: TerminalTab) -> String in tab.screenTail(400).joined(separator: "\n") }
-        let leaked = !secret.isEmpty && screens.contains { (screen: String) -> Bool in screen.contains(secret) }
+        let screens = app.controllers.flatMap(\.tabs).map { (tab: TerminalTab) -> String in shownWhole(tab) }
+        let leaked = !secret.isEmpty && screens.contains { (screen: String) -> Bool in screen.contains(whole(secret)) }
         check(noted.contains("was not kept") && !secret.isEmpty && !leaked,
               "the split pane whose last line held a secret says it was not kept, and no tab shows the secret", "leaked \(leaked)")
         let tabs: [TerminalTab] = app.controllers.flatMap(\.tabs)

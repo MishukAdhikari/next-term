@@ -594,10 +594,11 @@ extension SelfTestRestore {
               "tabs \(window?.groups.count ?? 0), dividers \(fractions)")
         let plain = (try? String(contentsOf: quitPlainFile(harness), encoding: .utf8)) ?? ""
         _ = await SelfTest.wait(10) { splitPane?.status.integrated == true }
-        let shown = splitPane?.screenTail(400).joined(separator: "\n") ?? ""
+        let shown = shownWhole(splitPane)
         if let savedAt {
-            check(splitPane?.restoreDivider != nil && shown.contains(savedAt.divider) && !plain.isEmpty && shown.contains(plain),
-                  "\(label): the split pane shows the scrollback saved at the quit, its line above the divider")
+            check(splitPane?.restoreDivider != nil && shown.contains(whole(savedAt.divider)) && !plain.isEmpty && shown.contains(plain),
+                  "\(label): the split pane shows the scrollback saved at the quit, its line above the divider",
+                  "divider \(splitPane?.restoreDivider != nil), line \(shown.contains(plain)), \(splitPane?.view.getTerminal().cols ?? 0) columns")
         } else {
             let none = restored.allSatisfy { $0.restoreDivider == nil }
             check(none && !plain.isEmpty && !shown.contains(plain), "\(label): no tab shows scrollback")

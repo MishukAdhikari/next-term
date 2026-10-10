@@ -427,6 +427,11 @@ import Testing
         #expect(ScrollbackText.holdsSecret(typed: "mysql -u root \\\n-pS3cret"))
         #expect(!ScrollbackText.holdsSecret(typed: "npm run dev"))
         #expect(!ScrollbackText.holdsSecret(typed: "ls \\\n-la", expanded: "ls -G \\\n-la"))
+        // The self-test's command over three rows: a name with a secret word holds a secret, while a 24-character value
+        // under a plain name holds none (a run is looked at from 32 characters on).
+        let pad = String(repeating: "y", count: 196)
+        #expect(ScrollbackText.holdsSecret(typed: ": \(pad); export NT_SELFTEST_LONG_TOKEN=Hs3Vd6Kc1Mn8Tb4Xr9Lw2Zq7; echo x"))
+        #expect(!ScrollbackText.holdsSecret(typed: ": \(pad); export NT_SELFTEST_LONG=Hs3Vd6Kc1Mn8Tb4Xr9Lw2Zq7; echo x"))
     }
 
     // MARK: files

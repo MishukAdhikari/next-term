@@ -28,8 +28,15 @@ extension SelfTest {
         _ = await wait(20) { tab.status.integrated }
         let terminal = tab.view.getTerminal()
 
-        /// Runs `line` in the tab and waits for it to finish.
+        /// Waits for the shell's line editor to take the line: it switches bracketed paste on as it starts reading one,
+        /// after the integration's end mark and the rest of precmd. A line typed before that is echoed by the tty on its
+        /// own, a copy without the prompt that the command's echo record does not cover, and is masked rather than blank.
+        func atPrompt() async {
+            _ = await wait(5) { terminal.bracketedPasteMode && !tab.status.running }
+        }
+        /// Runs `line` in the tab once its prompt is up, and waits for it to finish.
         func run(_ line: String, seconds: Double = 5) async {
+            await atPrompt()
             let before = tab.status.commandsStarted
             tab.view.send(txt: line + "\r")
             _ = await wait(seconds) { tab.status.commandsStarted > before && !tab.status.running }
@@ -58,6 +65,7 @@ extension SelfTest {
 
         // A shell without the integration: a secret on a PS2 row is masked, the row keeps its prompt.
         let secret = "s3cret-\(getpid())"
+        await atPrompt()
         tab.view.send(txt: "/bin/bash --norc --noprofile\r")
         _ = await wait(5) { tab.status.running }
         await pause(1)
@@ -73,15 +81,19 @@ extension SelfTest {
               lines.suffix(6).joined(separator: " | "))
 
         // A command that held a secret, wrapped over three rows or more: its line is blank there, then behind the alternate
-        // screen too, where it is found over its rows by what it showed.
+        // screen too, where it is found over its rows by what it showed. Its name holds a secret word: a value this short
+        // under a plain name is no secret.
         let longSecret = "Hs3Vd6Kc1Mn8Tb4Xr9Lw2Zq7"
         let longPad = String(repeating: "y", count: terminal.cols * 2)
-        await run(": \(longPad); export NT_SELFTEST_LONG=\(longSecret); echo long-\(canary)")
-        check(!SessionScrollback.capture(tab).text().contains("NT_SELFTEST_LONG"), "scrollback: a secret command over three rows is blank")
+        await run(": \(longPad); export NT_SELFTEST_LONG_TOKEN=\(longSecret); echo long-\(canary)")
+        let longText = SessionScrollback.capture(tab).text()
+        check(!longText.contains("NT_SELFTEST_LONG") && !longText.contains(longSecret),
+              "scrollback: a secret command over three rows is blank", longText.components(separatedBy: "\r\n").suffix(5).joined(separator: " | "))
 
         // The alternate screen in front: the normal buffer behind it is read as text, and masked by the lines its rows
-        // probably were.
-        tab.view.send(txt: "printf '\\e[?1049halt-only'; sleep 3; printf '\\e[?1049l'\r")
+        // probably were. What it prints there is "alt-only", which the line typed does not hold.
+        await atPrompt()
+        tab.view.send(txt: "printf '\\e[?1049h%s-%s' alt only; sleep 3; printf '\\e[?1049l'\r")
         if await wait(3, { terminal.isCurrentBufferAlternate }) {
             let behind = SessionScrollback.capture(tab)
             let behindText = behind.text()
@@ -100,6 +112,7 @@ extension SelfTest {
         _ = await wait(6) { !terminal.isCurrentBufferAlternate && !tab.status.running }
 
         // An agent's pane keeps only what came before its command.
+        await atPrompt()
         tab.view.send(txt: home + "/bin/claude 60\r")
         if await wait(10, { tab.status.running && tab.status.kind == .agent }) {
             let agentText = SessionScrollback.capture(tab).text()

@@ -267,7 +267,7 @@ public final class SessionWriter: @unchecked Sendable {
         var quit = QuitSave(stateWritten: true, awaitedMarker: header.awaitingMarker, resumeConsent: header.resumeConsent)
         removeLeftovers()
         if intent.savesSession {
-            quit.scrollback = saveScrollback(scrollback, quit: header.awaitingMarker ?? launchID, deadline: deadline, clock: clock)
+            quit.scrollback = saveScrollback(scrollback, quit: header.scrollbackQuit, deadline: deadline, clock: clock)
         }
         if case .update(true, let from, let to) = intent, let id = header.awaitingMarker {
             quit.markerWritten = writeMarker(id: id, from: from, to: to, uptime: uptime)

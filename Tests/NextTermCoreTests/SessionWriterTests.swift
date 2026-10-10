@@ -357,8 +357,14 @@ import Testing
         #expect(quit.resumeConsent == consent)
         #expect(saved.header.awaitingMarker == nil && saved.header.pendingToVersion == nil)
         // Named for the snapshot's launch id, as the next launch's quit restore reads them.
+        #expect(saved.header.scrollbackQuit == id(900))
         let expected: [String] = [ScrollbackText.fileName(quit: id(900), id: id(701)), ScrollbackText.fileName(quit: id(900), id: id(702))]
         #expect(try scrollbackNames(files) == expected.sorted())
+        let facts = RestoreFacts(lockTaken: true, header: saved.header, windows: saved.windows.count, attempts: RestoreAttempts(count: 1),
+                                 attemptsWritten: true, uptime: 5_060, bootSession: Self.boot, version: "0.11.0", resumesAtLaunch: true)
+        let decision = LaunchDecision.restoring(facts)
+        #expect(decision.kind == .restore(.quit))
+        #expect(decision.scrollbackQuit == saved.header.scrollbackQuit)
         let taken = ScrollbackText.take(Set(ids(701)), quit: id(900), from: files)
         #expect(taken == [id(701): "pane 1 said hello\r\n"])
         #expect(!(try names(files)).contains(stateName + SessionFiles.previousSuffix))
@@ -403,7 +409,8 @@ import Testing
         let marker = try #require(try marker(files))
         #expect(marker == UpdateMarker(id: awaited, launchID: id(900), fromVersion: "0.11.0", toVersion: "0.11.1", bootSession: Self.boot,
                                        uptime: 5_000))
-        // Named for the marker, as the update restore reads them.
+        // Named for the marker, as the update restore reads them: the quit the header names for its scrollback.
+        #expect(saved.header.scrollbackQuit == awaited)
         let expected: [String] = [ScrollbackText.fileName(quit: awaited, id: id(701)), ScrollbackText.fileName(quit: awaited, id: id(702))]
         #expect(try scrollbackNames(files) == expected.sorted())
         #expect(try attempts(files) == RestoreAttempts())
@@ -416,6 +423,7 @@ import Testing
         #expect(decision.marker == .valid)
         #expect(decision.kind == .restore(.update))
         #expect(decision.scrollback == .read)
+        #expect(decision.scrollbackQuit == saved.header.scrollbackQuit)
     }
 
     @Test func aFailedFinalWriteLeavesNoMarkerAndNoScrollback() throws {
