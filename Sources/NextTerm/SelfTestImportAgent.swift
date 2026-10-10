@@ -5,9 +5,9 @@ import NextTermCore
 /// caller): listing parses nothing, a preview has the window's rows, and apply_import's ask is the import window
 /// itself, with the agent's rows ticked and a banner, where nothing changes before the user's click. Cancel, Decline
 /// and Stop Asking, no answer in time (pending), a stale plan, an up-to-date plan, the user's own window (busy), a
-/// stale Undo and Undo's ask each do what they say. The app is made up (the detectors and planner are swapped, so
-/// nothing on this Mac is read) and no key is typed: the clicks are the buttons' own, so these run whether or not
-/// the app is in front. Every setting, the shortcut set, the last import and the tools' state are put back.
+/// stale Undo, Undo's ask and a named file outside the open projects each do what they say. The app is made up (the
+/// detectors and planner are swapped, so nothing on this Mac is read) and no key is typed: the clicks are the
+/// buttons' own, so these run whether or not the app is in front. Every setting, the shortcut set, the last import and the tools' state are put back.
 extension SelfTest {
     static func importAgentChecks() async {
         guard let app = AppDelegate.shared else { return note("import tools for agents: skipped, no app") }
@@ -200,6 +200,23 @@ extension SelfTest {
         check(grantAsks && grantUnchanged && granted.text.contains("declined"),
               "import tools: under a grant the import window still asks, and nothing changes before a click", granted.text)
         MCPImportControl.declined = []
+
+        // AE9: a file an agent names follows read_file's rules, checked before anything is read: refused outside the
+        // open projects (a settings file of the test's own, in a temp folder), or when its name says it holds secrets
+        // (a made-up path); and format is required with path.
+        let scratch = NSTemporaryDirectory() + "nt-import-agent-" + UUID().uuidString
+        try? FileManager.default.createDirectory(atPath: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: scratch) }
+        FileManager.default.createFile(atPath: scratch + "/settings.json", contents: Data(#"{"editor.fontSize": 20}"#.utf8))
+        let outside = await importToolCall("preview_import", ["path": scratch + "/settings.json", "format": "vscode-settings"])
+        let secretFile = await importToolCall("preview_import", ["path": "/nonexistent/nt-agent-editor/.env", "format": "vscode-settings"])
+        let noFormat = await importToolCall("preview_import", ["path": "/nonexistent/nt-agent-editor/settings.json"])
+        let outsideRefused = outside.isError && outside.text.contains("outside the projects open")
+        let secretRefused = secretFile.isError && secretFile.text.hasPrefix("Not read:")
+        let formatAsked = noFormat.isError && noFormat.text.contains("Give format")
+        check(outsideRefused && secretRefused && formatAsked,
+              "import tools: a named file outside the open projects, or one that holds secrets, is refused; path needs format",
+              [outside.text, secretFile.text, noFormat.text].joined(separator: "\n"))
 
         // Local only: the remote door is refused, whatever its grant.
         var remote = MCPServer.CallResult(text: "", isError: false)
