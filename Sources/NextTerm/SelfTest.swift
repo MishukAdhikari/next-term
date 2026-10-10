@@ -645,6 +645,7 @@ enum SelfTest {
         await updateWaitChecks()
         await platformLinkChecks(c)
         await branchChecks(c, proj: proj)
+        await gitAndViewKeyChecks(c, proj: proj)
         await gitLogChecks(c, proj: proj)
         await gitLogPagingChecks(c)
         await gitLeftoverChecks(c)
@@ -1239,6 +1240,13 @@ enum SelfTest {
         window.showPreview(for: DetectedApp(kind: .vsCode, name: "VS Code", configPath: "/tmp", lastUsed: Date()), plan: plan)
         await pause(0.4)
         if let previewWindow = window.window { await screenshot(previewWindow, suffix: "import") }
+        // ⌥⌘P is Push…'s: the row waits unticked and says so; ticked, it moves the key from Push… (and Undo gives it back).
+        let goToFileRow = window.shortcutRow(for: "goToFile:")
+        let namesPush = goToFileRow?.note?.contains("⌥⌘P is Push…’s here; tick to move it") == true
+        let countedWithout = "Apply \(KeymapPreset.vsCode.overrides.count + 5) Changes"
+        check(goToFileRow?.ticked == false && namesPush && window.applyTitle == countedWithout,
+              "a key of yours another command has waits unticked, naming the command", "\(goToFileRow?.note ?? "no row") | \(window.applyTitle)")
+        window.tickShortcutForTest("goToFile:")
         check(window.applyTitle == "Apply \(KeymapPreset.vsCode.overrides.count + 6) Changes", "the preview counts what is ticked", window.applyTitle)
         func swatches(in view: NSView?) -> [PaletteSwatches] {
             guard let view else { return [] }
@@ -1261,6 +1269,8 @@ enum SelfTest {
               && shortcuts.chord(for: "goToLine:") == KeyChord(key: "l", command: true, control: true),
               "your own shortcut comes over on top of the preset, and the Control key doesn't",
               "\(shortcuts.chord(for: "goToFile:")?.display ?? "none") \(shortcuts.chord(for: "goToLine:")?.display ?? "none")")
+        check(shortcuts.chord(for: "gitPush:") == nil && item("gitPush:")?.keyEquivalent == "", "and Push… is left without ⌥⌘P",
+              shortcuts.chord(for: "gitPush:")?.display ?? "none")
         check(ImportCoordinator.shared.last?.source == "VS Code", "the import is remembered for Undo")
         ImportCoordinator.shared.undo()
         check(app.fontSize == before.0 && app.softWrap == before.1 && shortcuts.preset == before.3 && app.recentProjects == before.2,
@@ -1274,6 +1284,8 @@ enum SelfTest {
               && item("goToFile:")?.keyEquivalentModifierMask == .command,
               "Undo Import gives Go to File its old shortcut back, and your other changes stay",
               shortcuts.chord(for: "goToFile:")?.display ?? "none")
+        check(item("gitPush:")?.keyEquivalent == "p" && item("gitPush:")?.keyEquivalentModifierMask == [.command, .option],
+              "and gives Push… ⌥⌘P back", shortcuts.chord(for: "gitPush:")?.display ?? "none")
         shortcuts.bindings = savedBindings
         shortcuts.preset = savedPreset
         app.setRecentProjects(fullList)

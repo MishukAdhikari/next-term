@@ -891,14 +891,16 @@ import Testing
 
     @Test func keybindingsSettledUnderTheVSCodeKeys() throws {
         let plan = ImportPlan(preset: .vsCode, shortcuts: try keybindings().shortcuts)
-            .settlingShortcuts(current: ImportShortcutsTests.current(.vsCode))
+            .settlingShortcuts(current: ImportShortcutsTests.current(.vsCode), titles: ["showBranches:": "Branches…"]) // the menu's title, as the app gives it
         func row(_ id: String) -> PlannedShortcut? { plan.shortcuts.first { $0.command == id } }
         // ⌘T is New Tab's, ⇧⌘D Split Down's: both left for the user to choose.
         #expect(row("goToFile:")?.ticked == false && row("goToFile:")?.note?.hasPrefix("⌘T is New Tab’s here") == true)
         #expect(row("splitRight:")?.ticked == false && row("splitRight:")?.note?.hasPrefix("⇧⌘D is Split Down’s here") == true)
         // Show Next Tab is ⇧⌘] already, so there is nothing to bring over.
         #expect(row("showNextTab:") == nil)
-        #expect(row("closeTab:")?.ticked == true && row("toggleProjectSidebar:")?.ticked == true && row("toggleComment:")?.ticked == true)
+        #expect(row("closeTab:")?.ticked == true && row("toggleComment:")?.ticked == true)
+        // ⌥⌘B is Git › Branches… here.
+        #expect(row("toggleProjectSidebar:")?.ticked == false && row("toggleProjectSidebar:")?.note?.hasPrefix("⌥⌘B is Branches…’s here") == true)
         #expect(row("goToLine:")?.ticked == false && row("toggleTerminalCollapsed:")?.ticked == false)
         // ⌘D is free under the VS Code keys (Split Right is ⌘\ there, Duplicate Line has none), so it comes over.
         #expect(row("duplicateLine:")?.ticked == true && row("duplicateLine:")?.note == nil)

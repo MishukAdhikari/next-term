@@ -533,6 +533,14 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
     /// For the self-test: tick state and apply.
     var applyTitle: String { applyButton?.title ?? "" }
     func applyForTest() { applyChosen() }
+    /// For the self-test: a shortcut row's note and tick, and ticking it as a click does.
+    func shortcutRow(for command: String) -> (note: String?, ticked: Bool)? {
+        shortcutBoxes.first { $0.1.command == command }.map { ($0.1.note, $0.0.state == .on) }
+    }
+    func tickShortcutForTest(_ command: String) {
+        shortcutBoxes.first { $0.1.command == command }?.0.state = .on
+        recount()
+    }
 
     // MARK: layout
 

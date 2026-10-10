@@ -14,6 +14,11 @@ struct GitActions {
     var model: BranchModel? { popup.model }
     var root: String { model?.root ?? "" }
 
+    /// A sheet is over the window. The Git menu's commands are off while one is, but a key pressed twice, or held,
+    /// passes that check before the first press's question is up (each reads the branches first, and Push… its
+    /// outgoing commits): where such a press would ask, it asks nothing while a sheet is up, so no second question waits.
+    var sheetIsUp: Bool { window?.attachedSheet != nil }
+
     func run(_ title: String, _ steps: [[String]], activity: GitWriter.Activity? = nil, then: @escaping (GitWriter.Result) -> Void) {
         let popup = self.popup
         let controller = self.controller
@@ -266,6 +271,7 @@ struct GitActions {
     // MARK: branches
 
     func askNewBranch(base: BranchRef?) {
+        guard !sheetIsUp else { return }
         let existing = Set(model?.locals.map(\.name) ?? [])
         let from = base.map { "From “\($0.name)”." } ?? "From what’s checked out now" + (model?.current.map { " (\($0))" } ?? "") + "."
         GitPrompt.text("New Branch", info: from + " Next Term switches to it.", placeholder: "feat/my-change", button: "Create", over: window,
@@ -433,6 +439,7 @@ struct GitActions {
     private func bringUp(_ fresh: BranchRef) {
         guard let upstream = fresh.upstream else { return }
         if fresh.ahead == 0 { return integrate("Update \(fresh.name)", BranchCommand.fastForward, activity: .pulling) }
+        guard !sheetIsUp else { return } // a second Update Project's, under the first's question
         GitPrompt.ask("“\(fresh.name)” and “\(upstream)” have both changed",
                       info: "\(fresh.ahead) commit\(fresh.ahead == 1 ? "" : "s") here, \(fresh.behind) there. Rebase puts yours on top of theirs; Merge joins them with a merge commit.",
                       buttons: ["Rebase", "Merge", "Cancel"], over: window) { choice in
@@ -541,6 +548,7 @@ struct GitActions {
     }
 
     func push(branch: BranchRef? = nil) {
+        guard !sheetIsUp else { return }
         guard let ref = branch ?? model?.currentRef, !ref.isRemote else {
             return GitPrompt.ask("Not on a branch", info: "HEAD is detached: New Branch… first.", buttons: ["OK"], over: window) { _ in }
         }
@@ -557,6 +565,7 @@ struct GitActions {
             let publishing = ref.upstream == nil || ref.upstreamGone || target != upstreamName
             let range = publishing ? [ref.name, "--not", "--remotes"] : ["\(remote)/\(target)..\(ref.name)"]
             run("Outgoing commits", [["log", "--format=%h %s", "--max-count=10"] + range]) { log in
+                guard !sheetIsUp else { return } // a second press's, under the first's question
                 let commits = log.output.trimmingCharacters(in: .whitespacesAndNewlines)
                 let title = publishing ? "Publish “\(ref.name)” to \(remote)/\(target)?" : "Push “\(ref.name)” to \(remote)/\(target)?"
                 GitPrompt.ask(title, info: commits.isEmpty ? "Nothing new to send; \(publishing ? "it creates the branch there." : "it’s up to date.")" : commits,

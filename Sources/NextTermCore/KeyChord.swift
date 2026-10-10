@@ -198,8 +198,19 @@ public struct KeyBindings: Equatable, Sendable {
     }
 
     /// "⌘D is Duplicate Line while the editor has the keyboard, Split Right everywhere else": which of the commands
-    /// `ids` on one key has it where, the parts' first.
+    /// `ids` on one key has it where, the parts' first. Commands of one name are named once: "⌘R is Fetch while the
+    /// branch popup is open and everywhere else".
     public static func sharingNote(_ chord: KeyChord, _ ids: [String], title: (String) -> String) -> String {
+        if let first = ids.first, ids.count > 1, ids.allSatisfy({ title($0) == title(first) }) {
+            let parts = ids.compactMap { id -> Part? in
+                if case .part(let part) = scope(of: id) { return part }
+                return nil
+            }.sorted { $0.rawValue < $1.rawValue }
+            let places = parts.map(\.whileActive) + (parts.count < ids.count ? ["everywhere else"] : [])
+            let listed = places.count < 3 ? places.joined(separator: " and ")
+                : places.dropLast().joined(separator: ", ") + " and " + (places.last ?? "")
+            return "\(chord.display) is \(title(first)) " + listed
+        }
         func part(_ id: String) -> Part? {
             if case .part(let part) = scope(of: id) { return part }
             return nil
@@ -210,12 +221,13 @@ public struct KeyBindings: Equatable, Sendable {
         return "\(chord.display) is " + phrases.joined(separator: ", ")
     }
 
-    /// Whether `id`, a command outside the menus still on its default key `chord`, gives that key up: you gave it yourself
-    /// to another command it can't share it with (before it was this command's default, or by an import then). Settings
-    /// never lets two such commands have one key, and the one you chose keeps it. `isCommand`: whether an id is a command
-    /// still (a saved change can outlive its command).
+    /// Whether `id`, a command still on its default key `chord`, gives that key up: you gave it yourself to another
+    /// command it can't share it with (before it was this command's default, by an import then, or under another set of
+    /// keys). Settings never lets two such commands have one key, and the one you chose keeps it: a menu command's new
+    /// default as much as a key outside the menus. `isCommand`: whether an id is a command still (a saved change can
+    /// outlive its command).
     public func givesWay(_ id: String, _ chord: KeyChord, isCommand: (String) -> Bool) -> Bool {
-        guard overrides[id] == nil, case .part = Self.scope(of: id) else { return false }
+        guard overrides[id] == nil else { return false }
         return overrides.contains { other, key in
             key == chord && other != id && Self.isUsable(chord, for: other) && !Self.canShareKey(id, other) && isCommand(other)
         }

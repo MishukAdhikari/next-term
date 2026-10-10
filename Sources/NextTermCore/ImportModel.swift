@@ -44,6 +44,7 @@ public enum KeymapPreset: String, CaseIterable, Codable, Sendable {
                 "deleteLine:": cmd("\u{8}"),       // ⌘⌫, in the editor only (the sidebar's ⌘⌫ still trashes)
                 "indentSelection:": none,          // ⌘] and ⌘[ are Forward and Back there; ⇥ and ⇧⇥ indent
                 "outdentSelection:": none,
+                "gitFetch:": KeyChord(key: "f", command: true, option: true), // ⌘R is Replace there; ⌥⌘F is free once Replace moves
             ]
         }
     }

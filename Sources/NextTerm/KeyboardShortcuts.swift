@@ -195,9 +195,9 @@ final class KeyboardShortcuts {
                         option: flags.contains(.option), control: flags.contains(.control))
     }
 
-    /// A command's shortcut now (a saved one that can't be typed counts as the default, as in `apply`). A key outside the
-    /// menus still at its default has none while you gave that key to a command it can't share it with
-    /// (KeyBindings.givesWay): the menus, the parts' own handlers and Settings all read it here.
+    /// A command's shortcut now (a saved one that can't be typed counts as the default, as in `apply`). A command still
+    /// at its default key has none while you gave that key to a command it can't share it with (KeyBindings.givesWay):
+    /// the menus, the parts' own handlers and Settings all read it here.
     func chord(for id: String) -> KeyChord? {
         let bindings = self.bindings
         let base = baseChord(for: id)
@@ -228,7 +228,9 @@ final class KeyboardShortcuts {
     }
 
     /// Lays the preset and the user's shortcuts over the menus. A saved shortcut that could not be typed
-    /// (no ⌘ or ⌃, or hand-edited preferences) is ignored rather than taking keys from typing.
+    /// (no ⌘ or ⌃, or hand-edited preferences) is ignored rather than taking keys from typing. A default you gave
+    /// to another command yourself stays that command's alone (KeyBindings.givesWay), so a key a version makes a
+    /// menu command's default never lands on a second item.
     func apply() {
         let bindings = self.bindings
         let preset = self.preset
@@ -238,6 +240,7 @@ final class KeyboardShortcuts {
             let base = preset.chord(for: command.id, default: command.defaultChord)
             var chord = bindings.chord(for: command.id, default: base)
             if let saved = chord, !KeyBindings.isUsable(saved, for: command.id) { chord = base }
+            if let kept = chord, bindings.givesWay(command.id, kept, isCommand: isCommand) { chord = nil }
             chords.append((item, chord))
         }
         // Every key comes off before any goes on: AppKit leaves a menu item without its key when another
@@ -275,7 +278,7 @@ final class KeyboardShortcuts {
     }
 
     /// Every command's shortcut as it would be under `preset`, the user's own changes on top (a saved one
-    /// that can't be typed counts as the preset's, as in `apply`; a key outside the menus can give way, as in `chord(for:)`).
+    /// that can't be typed counts as the preset's, as in `apply`; a default can give way, as in `chord(for:)`).
     func chords(under preset: KeymapPreset) -> [String: KeyChord?] {
         let bindings = self.bindings
         var chords: [String: KeyChord?] = [:]
