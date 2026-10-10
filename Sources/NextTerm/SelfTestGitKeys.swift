@@ -98,7 +98,8 @@ extension SelfTest {
 
     /// In the project's repository, given a remote of its own: ⌘R fetches, ⌥⌘U updates (up to date, so nothing changes),
     /// ⇧⌘C opens the commit sheet, ⌥⌘P asks before it pushes and ⇧⌘B asks for a name; each sheet is cancelled. While a
-    /// sheet is up, the Git commands are off, so a key pressed again asks nothing more.
+    /// sheet is up, the Git commands are off, so a key pressed again asks nothing more; pressed twice before the first
+    /// question is up, ⌥⌘P and ⇧⌘B ask once.
     private static func gitKeyPresses(_ c: TerminalWindowController, window: NSWindow, proj: URL) async {
         guard let git = GitRunner.locateGit() else { return }
         @discardableResult func run(_ dir: String, _ args: String...) -> String { gitOutput(git, dir, args) }
@@ -164,19 +165,28 @@ extension SelfTest {
         }
         try? FileManager.default.removeItem(at: file)
 
-        // ⌥⌘P: Push… asks first; Cancel sends nothing.
+        // ⌥⌘P: Push… asks first; Cancel sends nothing. Pressed twice before its question is up (both presses pass the
+        // menu's check, as no sheet is up yet), it asks once.
         _ = await wait(5) { window.attachedSheet == nil }
+        pressKey(window, "p", code: 35, [.command, .option])
         pressKey(window, "p", code: 35, [.command, .option])
         let asked = await wait(10) { sheetText().contains("Push “\(start)” to keys/\(start)?") }
         check(asked, "git keys: ⌥⌘P asks before it pushes", sheetText())
         if asked { _ = await press("Cancel") }
+        let askedTwice = await wait(2) { window.attachedSheet != nil }
+        check(!askedTwice, "git keys: ⌥⌘P pressed twice, quickly, asks once", sheetText())
+        if askedTwice { _ = await press("Cancel") }
 
-        // ⇧⌘B: New Branch… asks for the name; Cancel leaves the branch as it was.
+        // ⇧⌘B: New Branch… asks for the name, once for two quick presses; Cancel leaves the branch as it was.
         _ = await wait(5) { window.attachedSheet == nil }
+        pressKey(window, "B", code: 11, [.command, .shift])
         pressKey(window, "B", code: 11, [.command, .shift])
         let named = await wait(10) { sheetText().contains("Next Term switches to it.") }
         check(named, "git keys: ⇧⌘B asks for the new branch's name", sheetText())
         if named { _ = await press("Cancel") }
+        let namedTwice = await wait(2) { window.attachedSheet != nil }
+        check(!namedTwice, "git keys: ⇧⌘B pressed twice, quickly, asks once", sheetText())
+        if namedTwice { _ = await press("Cancel") }
         _ = await wait(5) { window.attachedSheet == nil }
         check(run(repo, "rev-parse", "--abbrev-ref", "HEAD") == start, "git keys: and Cancel leaves the branch as it was")
     }
