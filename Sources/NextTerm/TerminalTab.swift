@@ -650,6 +650,10 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     var restoreNote: String?
     /// The user put something in this tab (`userInput`): an action the restore has not applied yet is theirs to drop (KTD6).
     private(set) var touchedByUser = false
+    /// The integration's command marks, a command starting or ending, each as it is read and before the status takes it:
+    /// the screen then holds what came before the mark and nothing after it. The restore's start watch reads them
+    /// (StartWatcher, KTD6). Nothing may be fed into the terminal from here, as its parser is still reading.
+    var onCommandMark: ((ShellIntegration.Event) -> Void)?
 
     /// The user put something in this tab: a key, a paste or a drop (`NextTermView.onKeyboard`), or text Next Term types
     /// at their word, such as Insert Path or a suggested command. A restored action not applied yet is dropped, and one
@@ -934,6 +938,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         case .completion(let message):
             return completion.handle(message)
         case .commandStarted(let line, let expanded):
+            onCommandMark?(event)
             completion.disarm()
             programTitle = nil
             // Its output starts below the line the command was typed on.
@@ -943,6 +948,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             // Gemini or Qwen starting (or installed since launch): their IDE switch on, for the next start too.
             if ["gemini", "gemini-cli", "qwen", "qwen-code"].contains(status.program) { AppDelegate.shared.enableAgentIDEModes() }
         case .commandFinished(let code):
+            onCommandMark?(event)
             programTitle = nil
             runningEcho = nil
             status.commandFinished(exitCode: code, at: Self.now)

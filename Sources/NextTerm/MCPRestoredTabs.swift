@@ -9,13 +9,17 @@ import NextTermCore
 /// line the restore put back and the user has not typed there: that rule plugs into MCPInputLine, the refusal each tool
 /// that acts on a tab asks, so no tool can run, edit or close away a put-back line. The gate (`refusal`) holds back every
 /// tool but those that read in safe mode, and new work outside the waited tabs while an update waits for them; while it
-/// waits, each tab says whether it is waited for (`update_wait`).
+/// waits, each tab says whether it is waited for (`update_wait`). An automatic resume reads as one only once its start
+/// watch settles it (StartWatcher, KTD6): a start that failed reads as its resume command on the line, with the agent's
+/// error.
 enum MCPRestoredTabs {
     /// Each restored tab's plan, by the id it came back with, until its details end.
     private static var plans: [UUID: PanePlan] = [:]
     /// How many commands had started at a restored tab's prompt when the user first put something in it (`typedByUser`):
     /// a resume ran only when its command started before that (MCPRestored.outcome).
     private static var beforeInput: [UUID: Int] = [:]
+    /// What the start watch told of a restored tab's own resume, by its id, once the restore pressed its Return.
+    private static var starts: [UUID: StartWatch.Report] = [:]
     /// The put-back rule, added to MCPInputLine's once.
     private static let rule: Void = {
         MCPInputLine.rules.append { (tab: TerminalTab) -> String? in MCPRestoredTabs.inputRefusal(tab) }
@@ -25,6 +29,13 @@ enum MCPRestoredTabs {
     static func restored(_ panes: [RestoredPane]) {
         _ = rule
         for pane in panes { plans[pane.tab.id] = pane.plan }
+    }
+
+    /// The restore pressed an automatic resume's Return in the tab, and its start watch began (`watching`) or settled
+    /// (RestoreActions): MCP reads the resume from its verdict.
+    static func started(_ tab: TerminalTab, _ report: StartWatch.Report) {
+        guard plans[tab.id] != nil else { return }
+        starts[tab.id] = report
     }
 
     /// The user put something in the tab (MCPControl.typedByUser): of the commands started at its prompt, those before
@@ -39,12 +50,13 @@ enum MCPRestoredTabs {
         guard let plan = plans[tab.id], let record = tab.restoredRecord else { return nil }
         let typed = beforeInput[tab.id] ?? (tab.touchedByUser ? 0 : nil)
         let since = MCPRestored.Since(commands: tab.status.commandsAtPrompt, beforeInput: typed)
-        guard let details = MCPRestored(plan: plan, record: record, since: since) else {
+        guard let details = MCPRestored(plan: plan, record: record, since: since, start: starts[tab.id]) else {
             // Over for good once the count only grows: with the integration reported in, or on a server. A local shell's
             // count can still drop as its integration first reports in, taking back what its startup ran.
             if tab.remote != nil || tab.status.integrated {
                 plans[tab.id] = nil
                 beforeInput[tab.id] = nil
+                starts[tab.id] = nil
             }
             return nil
         }

@@ -170,7 +170,8 @@ extension MCPServer {
 /// A restored tab's `restored` details, which list_tabs, read_tab and wait_for_tab give (R24): why it came back, what the
 /// restore does or did to it, its state before the restart, whether the restart cut its work off, and a one-line note.
 /// They last until the first command the user or MCP starts in the tab after the restore: the shell's first prompt starts
-/// none, and the restore's own resume is not one of theirs.
+/// none, and the restore's own resume is not one of theirs. An automatic resume reads "resume" only once the start watch
+/// settles it (KTD6, KTD17): a start that failed reads as the agent's resume command on the line, with its error.
 public struct MCPRestored: Equatable, Sendable {
     /// An update, a quit under "Resume where I left off", a crash, or safe mode.
     public var reason: SessionSnapshot.RestoreKind
@@ -186,9 +187,13 @@ public struct MCPRestored: Equatable, Sendable {
     public var note: String?
     /// The line the restore put back is still on the prompt, unrun, and the user has not typed in the tab since.
     public var lineHeld: Bool
+    /// What the start watch told of the restore's own resume: nil when the restore pressed no Return, `watching` until
+    /// it settles.
+    public var start: StartWatch.Report?
 
     public init(reason: SessionSnapshot.RestoreKind, outcome: RestoreOutcome?, action: SessionSnapshot.ActionState,
-                stateBefore: SessionSnapshot.PriorState, interrupted: Bool, note: String?, lineHeld: Bool) {
+                stateBefore: SessionSnapshot.PriorState, interrupted: Bool, note: String?, lineHeld: Bool,
+                start: StartWatch.Report? = nil) {
         self.reason = reason
         self.outcome = outcome
         self.action = action
@@ -196,6 +201,7 @@ public struct MCPRestored: Equatable, Sendable {
         self.interrupted = interrupted
         self.note = note
         self.lineHeld = lineHeld
+        self.start = start
     }
 
     /// What has happened in a restored tab since the restore, as its details read it.
@@ -214,51 +220,57 @@ public struct MCPRestored: Equatable, Sendable {
     }
 
     /// A restored tab's details now, from its plan, the record it was restored from (its pending action, its state before
-    /// and whether its work was cut off) and what has happened in it since; nil once they have ended.
-    public init?(plan: PanePlan, record: SessionSnapshot.Pane, since: Since) {
+    /// and whether its work was cut off), what has happened in it since, and what the start watch told of the restore's
+    /// own resume; nil once they have ended. A start the watch settled is told by its own note, when it showed one.
+    public init?(plan: PanePlan, record: SessionSnapshot.Pane, since: Since, start: StartWatch.Report? = nil) {
         guard let pending = record.pending else { return nil }
-        let outcome = Self.outcome(planned: plan.outcome, action: pending.state, since: since)
+        let outcome = Self.outcome(planned: plan.outcome, action: pending.state, start: start?.verdict)
         var note = plan.note
         let text: String?
         if let outcome {
             note.outcome = outcome
-            text = pending.state == .pending ? nil : note.text()
+            text = pending.state == .pending ? nil : start?.note ?? note.text()
         } else {
             text = note.cancelledText()
         }
         let typed = since.beforeInput != nil
         let held = record.remote == nil
-            && Self.lineHeld(action: pending.action, state: pending.state, userTyped: typed, commandsRun: since.commands)
+            && Self.lineHeld(action: pending.action, state: pending.state, userTyped: typed, commandsRun: since.commands, start: start)
         self.init(reason: plan.reason, outcome: outcome, action: pending.state, stateBefore: record.stateBefore,
-                  interrupted: record.interrupted, note: text, lineHeld: held)
+                  interrupted: record.interrupted, note: text, lineHeld: held, start: start)
         guard shows(commands: since.commands) else { return nil }
     }
 
     /// What the restore did, as it turned out. An action that types, cancelled because something reached the line before
-    /// the shell was ready, typed nothing: no agent resumed and no line waits (nil). An automatic resume whose action was
-    /// applied ran only when a command started at the tab's prompt before the user put anything there: nothing else can
-    /// start one sooner, as input over MCP is refused while the line is the restore's. Otherwise its session was taken by
-    /// another process since, or the user typed over it before its Return, and the agent's resume command is on the line
-    /// instead, unrun.
-    public static func outcome(planned: RestoreOutcome, action: SessionSnapshot.ActionState, since: Since) -> RestoreOutcome? {
+    /// the shell was ready, typed nothing: no agent resumed and no line waits (nil). An automatic resume stays pending
+    /// until the start watch settles it (`start`, KTD6), and then reads as a resume unless it failed at start, which put
+    /// its plain resume form back on the line. Applied with no verdict, the restore pressed no Return: its session was
+    /// taken by another process since, or the user typed over it first, and the agent's resume command is on the line
+    /// instead, unrun. A command that started meanwhile does not make it a resume.
+    public static func outcome(planned: RestoreOutcome, action: SessionSnapshot.ActionState,
+                               start: StartWatch.Verdict? = nil) -> RestoreOutcome? {
         if action == .cancelled && planned.action.types { return nil }
         guard planned == .resume, action == .applied else { return planned }
-        return (since.beforeInput ?? since.commands) >= 1 ? .resume : .agentOnTheLine
+        guard let start, start.settled, !start.failed else { return .agentOnTheLine }
+        return .resume
     }
 
-    /// Whether they still show, with `commands` started at the tab's prompt since it started. An automatic resume that ran
-    /// is the restore's own command, so the next one is the first after it.
+    /// Whether they still show, with `commands` started at the tab's prompt since it started. An automatic resume whose
+    /// Return the restore pressed ran the restore's own command, so the next one is the first after it.
     public func shows(commands: Int) -> Bool {
-        let own = outcome == .resume && action == .applied ? 1 : 0
+        let own = start != nil || (outcome == .resume && action == .applied) ? 1 : 0
         return commands <= own
     }
 
     /// Whether the line an applied action typed is still the restore's, not the user's (R25): the action typed a line, and
-    /// since then the user has not typed in the tab and nothing has run there. A resume that ran started its command; one
-    /// whose session another process had taken was put back instead.
+    /// since then the user has not typed in the tab and nothing has run there. A resume whose Return the restore pressed
+    /// (`start`) ran its command: the line is the restore's only when the watch put the plain resume form back, until a
+    /// command runs after it. One whose session another process had taken was put back instead.
     public static func lineHeld(action: SessionSnapshot.Action, state: SessionSnapshot.ActionState, userTyped: Bool,
-                                commandsRun: Int) -> Bool {
-        action.types && state == .applied && !userTyped && commandsRun == 0
+                                commandsRun: Int, start: StartWatch.Report? = nil) -> Bool {
+        guard action.types, state == .applied, !userTyped else { return false }
+        guard let start else { return commandsRun == 0 }
+        return start.lineBack && commandsRun <= 1
     }
 
     /// As MCP gives them, under "restored".
@@ -278,6 +290,10 @@ public struct MCPRestored: Equatable, Sendable {
     /// Why input into the tab is refused, or nil (R25): its action waits for the shell, or its prompt holds the line the
     /// restore put back. Either is not the user's own line, and no tool can run, edit or clear it.
     public var inputRefusal: String? {
+        if outcome?.action.types == true && action == .pending, start != nil {
+            return "That tab is being restored after Next Term restarted: its agent's resume just ran, and Next Term watches for a "
+                + "few seconds that it starts. Nothing was typed: try again in a few seconds."
+        }
         if outcome?.action.types == true && action == .pending {
             return "That tab is being restored after Next Term restarted, and what the restore types there waits for its shell. "
                 + "Nothing was typed: try again in a few seconds."

@@ -225,21 +225,22 @@ import Testing
         return (plan, record)
     }
 
-    /// R24: an automatic resume ran only when its command started before the user put anything in the tab. One put on the
-    /// line instead (its session taken since, or typed over before its Return) says so, its line held until the user
-    /// types, and the user's first command after it ends its details.
+    /// R24: an automatic resume ran only when the restore pressed its Return, and the start watch says how it went. One
+    /// put on the line instead (its session taken since, or typed over before its Return) says so, its line held until the
+    /// user types, and the user's first command after it ends its details.
     @Test func aResumeThatDidNotRunSaysItsLineIsOnThePromptAndEndsAtTheUsersFirstCommand() throws {
         let (resume, record) = plan(.resume)
-        func details(_ commands: Int, beforeInput: Int?) -> MCPRestored? {
-            MCPRestored(plan: resume, record: record, since: MCPRestored.Since(commands: commands, beforeInput: beforeInput))
+        func details(_ commands: Int, beforeInput: Int?, _ start: StartWatch.Report? = nil) -> MCPRestored? {
+            MCPRestored(plan: resume, record: record, since: MCPRestored.Since(commands: commands, beforeInput: beforeInput), start: start)
         }
-        // Ran: its command started with the tab untouched. It stays a resume through the user's typing into the agent,
-        // until the next command.
-        let ran = try #require(details(1, beforeInput: nil))
+        // Ran, and the watch saw it start. It stays a resume through the user's typing into the agent, until the next
+        // command.
+        let started = StartWatch.Report(verdict: .resumed)
+        let ran = try #require(details(1, beforeInput: nil, started))
         #expect(ran.outcome == .resume && ran.fields["outcome"] as? String == "resume" && !ran.lineHeld)
         #expect(ran.note?.hasPrefix("Resumed Claude Code session S.") == true)
-        #expect(details(1, beforeInput: 1)?.outcome == .resume)
-        #expect(details(2, beforeInput: 1) == nil)
+        #expect(details(1, beforeInput: 1, started)?.outcome == .resume)
+        #expect(details(2, beforeInput: 1, started) == nil)
         // Put back: nothing ran, so the line is on the prompt, the restore's until the user types there.
         let back = try #require(details(0, beforeInput: nil))
         #expect(back.outcome == .agentOnTheLine && back.fields["outcome"] as? String == "agent_on_the_line" && back.lineHeld)
@@ -258,6 +259,59 @@ import Testing
         let (_, waiting) = plan(.resume, state: .pending)
         let pending = try #require(MCPRestored(plan: resume, record: waiting, since: MCPRestored.Since(commands: 0, beforeInput: nil)))
         #expect(pending.outcome == .resume && pending.note == nil && pending.inputRefusal?.contains("being restored") == true)
+    }
+
+    /// R26, KTD17, AE31: an automatic resume reads "resume" only once the start watch settles it. While it watches, the
+    /// action is pending: no note, input refused, and the resume's own command, started, does not end the details. A
+    /// command started before the verdict does not make it a resume. A failed start reads as on the line, with the agent's
+    /// error, its plain resume form held until the user types; a new session, or an agent the user stopped, as a resume.
+    @Test func aResumeReadsResumeOnlyAfterTheStartWatch() throws {
+        let (resume, record) = plan(.resume)
+        let (_, waiting) = plan(.resume, state: .pending)
+        func details(_ record: SessionSnapshot.Pane, _ commands: Int, beforeInput: Int? = nil,
+                     _ start: StartWatch.Report?) -> MCPRestored? {
+            MCPRestored(plan: resume, record: record, since: MCPRestored.Since(commands: commands, beforeInput: beforeInput), start: start)
+        }
+        // Watching: its command started, and the action waits for the verdict.
+        let watching = try #require(details(waiting, 1, StartWatch.Report(verdict: .watching)))
+        #expect(watching.action == .pending && watching.fields["action"] as? String == "pending" && watching.note == nil)
+        #expect(watching.fields["note"] == nil && !watching.lineHeld)
+        #expect(watching.inputRefusal?.contains("being restored") == true && watching.inputRefusal?.contains("starts") == true)
+        // A command started, the action applied, and no verdict: the restore pressed no Return, so that command is not
+        // its resume but the first after the restore, which ends the details.
+        #expect(details(record, 1, nil) == nil)
+        // Resumed: still running at 5 s, or its session file named the session.
+        let resumed = try #require(details(record, 1, StartWatch.Report(verdict: .resumed)))
+        #expect(resumed.outcome == .resume && resumed.note?.hasPrefix("Resumed Claude Code session S.") == true && !resumed.lineHeld)
+        // Failed at start: on the line, with the agent's error, held until the user types.
+        let error = "claude exited at once (status 1): “error: unknown option '--permission-mode'”. The plain resume is back on the line. "
+            + "Left off: --permission-mode."
+        let failed = StartWatch.Report(verdict: .failedAtStart(status: 1), note: error, lineBack: true)
+        let back = try #require(details(record, 1, failed))
+        #expect(back.outcome == .agentOnTheLine && back.fields["outcome"] as? String == "agent_on_the_line")
+        #expect(back.note == error && back.fields["note"] as? String == error)
+        #expect(back.lineHeld && back.fields["line_held"] as? Bool == true && back.inputRefusal?.contains("put back") == true)
+        #expect(details(record, 1, beforeInput: 1, failed)?.lineHeld == false)
+        // The user runs the plain form: their first command after the restore's ends the details.
+        #expect(details(record, 2, beforeInput: 1, failed) == nil)
+        // A failure with no line put back (the user typed first, or the tab had its fallback): the note alone.
+        let noted = try #require(details(record, 1, StartWatch.Report(verdict: .failedAtStart(status: 1), note: "claude exited at once (status 1).")))
+        #expect(noted.outcome == .agentOnTheLine && !noted.lineHeld && noted.note == "claude exited at once (status 1).")
+        // A new session: the agent runs, in another session, and the note says so.
+        let other = "Claude Code started a new session instead of resuming session S."
+        let new = try #require(details(record, 1, StartWatch.Report(verdict: .newSession("1f2e3d4c-5b6a-4978-8695-a4b3c2d1e0f9"), note: other)))
+        #expect(new.outcome == .resume && new.note == other && !new.lineHeld)
+        // Stopped by the user, or ended with status 0: it ran, and stays as it is.
+        #expect(details(record, 1, StartWatch.Report(verdict: .leftAsIs))?.outcome == .resume)
+        // The rule alone.
+        #expect(MCPRestored.outcome(planned: .resume, action: .pending, start: .watching) == .resume)
+        #expect(MCPRestored.outcome(planned: .resume, action: .applied, start: .resumed) == .resume)
+        #expect(MCPRestored.outcome(planned: .resume, action: .applied, start: .failedAtStart(status: 1)) == .agentOnTheLine)
+        #expect(MCPRestored.outcome(planned: .resume, action: .applied, start: .watching) == .agentOnTheLine)
+        #expect(MCPRestored.outcome(planned: .resume, action: .applied, start: nil) == .agentOnTheLine)
+        // Its own command counts: the next one ends the details, whatever the verdict.
+        #expect(details(waiting, 2, StartWatch.Report(verdict: .watching)) == nil)
+        #expect(details(record, 2, StartWatch.Report(verdict: .resumed)) == nil)
     }
 
     /// R24: an action that types was cancelled when something reached the tab's line before its shell was ready, so the
@@ -295,15 +349,14 @@ import Testing
         let quit = try #require(MCPRestored(plan: quitPlan, record: quitRecord, since: MCPRestored.Since(commands: 0, beforeInput: 0)))
         #expect(quit.fields["reason"] as? String == "quit" && quit.note?.contains("cut off by the quit") == true)
         // An outcome whose action types nothing keeps its own, whatever its state.
-        #expect(MCPRestored.outcome(planned: .idle, action: .cancelled, since: MCPRestored.Since(commands: 0, beforeInput: 0)) == .idle)
-        #expect(MCPRestored.outcome(planned: .reattach, action: .cancelled, since: MCPRestored.Since(commands: 0, beforeInput: 0)) == .reattach)
+        #expect(MCPRestored.outcome(planned: .idle, action: .cancelled) == .idle)
+        #expect(MCPRestored.outcome(planned: .reattach, action: .cancelled) == .reattach)
         // Every action that types, cancelled, did nothing; applied, it did what it says.
-        let none = MCPRestored.Since(commands: 0, beforeInput: nil)
         for planned in [RestoreOutcome.resume, .agentOnTheLine, .commandOnTheLine] {
-            #expect(MCPRestored.outcome(planned: planned, action: .cancelled, since: none) == nil, "\(planned)")
+            #expect(MCPRestored.outcome(planned: planned, action: .cancelled) == nil, "\(planned)")
         }
-        #expect(MCPRestored.outcome(planned: .agentOnTheLine, action: .applied, since: none) == .agentOnTheLine)
-        #expect(MCPRestored.outcome(planned: .commandOnTheLine, action: .applied, since: none) == .commandOnTheLine)
+        #expect(MCPRestored.outcome(planned: .agentOnTheLine, action: .applied) == .agentOnTheLine)
+        #expect(MCPRestored.outcome(planned: .commandOnTheLine, action: .applied) == .commandOnTheLine)
     }
 
     /// R24 on a server: a remote tab has no shell integration, so what it counts comes from what the host reports in
