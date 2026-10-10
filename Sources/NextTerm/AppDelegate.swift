@@ -1316,9 +1316,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         view.addItem(withTitle: "Terminal Position", action: nil, keyEquivalent: "").submenu = positions
         item(view, "Show Changes", #selector(TerminalWindowController.showChanges(_:)), "g", [.command, .option])
-        item(view, "Unified Diffs", #selector(DiffLayoutMenu.toggleUnifiedDiffs(_:)), "", target: DiffLayoutMenu.shared) // checked: one column
-        item(view, "Annotate with Git Blame", #selector(toggleBlameAnnotations(_:)), "", target: self)
-        item(view, "Current Line Blame", #selector(toggleCurrentLineBlame(_:)), "", target: self)
+        // ⌃⌘ as Git Diff's ⌃⌘G: U for Unified. The blame toggles are A for Annotate (Xcode's Authors key) and L for Line.
+        item(view, "Unified Diffs", #selector(DiffLayoutMenu.toggleUnifiedDiffs(_:)), "u", [.command, .control], target: DiffLayoutMenu.shared) // checked: one column
+        item(view, "Annotate with Git Blame", #selector(toggleBlameAnnotations(_:)), "a", [.command, .shift, .control], target: self)
+        item(view, "Current Line Blame", #selector(toggleCurrentLineBlame(_:)), "l", [.command, .shift, .control], target: self)
         view.addItem(.separator())
         item(view, "Soft Wrap", #selector(toggleSoftWrap(_:)), "", target: self)
         item(view, "Hide .env Values", #selector(TerminalWindowController.toggleEnvValues(_:)), "") // checked: the file in front
@@ -1354,11 +1355,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let git = submenu(main, "Git")
         item(git, "Branches…", #selector(TerminalWindowController.showBranches(_:)), "b", [.command, .option])
         git.addItem(.separator())
-        item(git, "Fetch", #selector(TerminalWindowController.gitFetch(_:)), "")
-        item(git, "Update Project", #selector(TerminalWindowController.gitUpdate(_:)), "")
-        item(git, "Commit…", #selector(TerminalWindowController.gitCommit(_:)), "")
-        item(git, "Push…", #selector(TerminalWindowController.gitPush(_:)), "")
-        item(git, "New Branch…", #selector(TerminalWindowController.gitNewBranch(_:)), "")
+        // Fetch is ⌘R, as in the branch popup (the same fetch of every remote). Update Project can change files without
+        // asking (it fast-forwards), so it takes three keys, U for Update. Commit… is Tower's and Sourcetree's ⇧⌘C, New Branch… Fork's
+        // and Sourcetree's ⇧⌘B; Push… is ⌥⌘P, P beside Branches… and Git Log (⇧⌘P is Push in some apps, Pull or the
+        // command palette in others).
+        item(git, "Fetch", #selector(TerminalWindowController.gitFetch(_:)), "r")
+        item(git, "Update Project", #selector(TerminalWindowController.gitUpdate(_:)), "u", [.command, .option])
+        item(git, "Commit…", #selector(TerminalWindowController.gitCommit(_:)), "c", [.command, .shift])
+        item(git, "Push…", #selector(TerminalWindowController.gitPush(_:)), "p", [.command, .option])
+        item(git, "New Branch…", #selector(TerminalWindowController.gitNewBranch(_:)), "b", [.command, .shift])
         git.addItem(.separator())
         item(git, "Git Log", #selector(TerminalWindowController.showGitLog(_:)), "l", [.command, .option])
         item(git, "Git Diff", #selector(TerminalWindowController.showGitDiff(_:)), "g", [.command, .control])

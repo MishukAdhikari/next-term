@@ -155,6 +155,7 @@ extension LineNumberRuler: NSViewToolTipOwner {
         let menu = NSMenu()
         let toggle = menu.addItem(withTitle: "Annotate with Git Blame", action: #selector(AppDelegate.toggleBlameAnnotations(_:)), keyEquivalent: "")
         toggle.target = AppDelegate.shared
+        KeyboardShortcuts.show("toggleBlameAnnotations:", on: toggle) // its key, as View › Annotate with Git Blame has it
         if showsBlame, point.x < blameWidth, let line = line(at: point), let blame = blameSource?(), let commit = blame.commit(at: line) {
             menu.addItem(.separator())
             let show = menu.addItem(withTitle: "Show Commit \(commit.shortSHA)", action: #selector(showBlameCommit(_:)), keyEquivalent: "")
