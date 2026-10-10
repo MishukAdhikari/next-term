@@ -10,32 +10,14 @@ import Testing
     }
 
     /// Next Term's menu shortcuts as `AppDelegate.buildMenu` sets them (nil: none), for settling rows the
-    /// way the app does.
+    /// way the app does: MenuKeys, which the self-test checks against the menus as built, and the menu
+    /// commands that have no key.
     static let menuDefaults: [String: KeyChord?] = {
-        var map: [String: KeyChord?] = [
-            "showSettings:": cmd(","), "hide:": cmd("h"), "hideOtherApplications:": cmd("h", option: true), "terminate:": cmd("q"),
-            "newTab:": cmd("t"), "newWindow:": cmd("n"), "openProjectPanel:": cmd("o"), "goToFile:": cmd("p"),
-            "resumeSession:": cmd("o", option: true), "closeProject:": nil, "saveDocument:": cmd("s"),
-            "saveAllDocuments:": cmd("s", option: true), "splitRight:": cmd("d"), "splitDown:": cmd("d", shift: true),
-            "renameTab:": cmd("r", option: true), "closeTab:": cmd("w"), "performClose:": cmd("w", shift: true),
-            "undo:": cmd("z"), "redo:": cmd("z", shift: true), "cut:": cmd("x"), "copy:": cmd("c"), "paste:": cmd("v"), "selectAll:": cmd("a"),
-            "performFindPanelAction:#1": cmd("f"), "replaceInFile:": cmd("f", option: true), "performFindPanelAction:#2": cmd("g"),
-            "performFindPanelAction:#3": cmd("g", shift: true), "performFindPanelAction:#7": cmd("e"),
-            "findInFiles:": cmd("f", shift: true), "replaceInFiles:": cmd("r", shift: true), "sendToAgent:": cmd("k", option: true),
-            "goToLine:": cmd("l"), "toggleComment:": cmd("/"), "indentSelection:": cmd("]"), "outdentSelection:": cmd("["),
-            "duplicateLine:": cmd("d"), "deleteLine:": cmd("k", shift: true), "moveLineUp:": cmd("\u{F700}", control: true),
-            "moveLineDown:": cmd("\u{F701}", control: true), "copyPathWithLine:": nil,
-            "clearBuffer:": cmd("k"), "toggleProjectSidebar:": cmd("b"), "toggleEditorFocus:": KeyChord(key: "`", control: true),
-            "toggleTerminalCollapsed:": cmd("j"), "revealInSidebar:": nil, "showChanges:": cmd("g", option: true),
-            "toggleSoftWrap:": nil, "toggleSidebarSide:": nil, "increaseFontSize:": cmd("+"), "decreaseFontSize:": cmd("-"),
-            "resetFontSize:": cmd("0"), "toggleFullScreen:": cmd("f", control: true), "performMiniaturize:": cmd("m"),
-            "showNextTab:": cmd("]", shift: true), "showPreviousTab:": cmd("[", shift: true),
-            "selectPaneLeft:": cmd("\u{F702}", option: true), "selectPaneRight:": cmd("\u{F703}", option: true),
-            "selectPaneAbove:": cmd("\u{F700}", option: true), "selectPaneBelow:": cmd("\u{F701}", option: true),
-            "selectNextPane:": cmd("]", option: true), "selectPreviousPane:": cmd("[", option: true),
-            "toggleZoomPane:": cmd("\r", shift: true), "equalizePanes:": nil,
-        ]
-        for n in 1...9 { map["selectTabByNumber:#\(n)"] = .some(cmd("\(n)")) }
+        var map: [String: KeyChord?] = MenuKeys.defaults.mapValues { $0 }
+        for id in ["closeProject:", "copyPathWithLine:", "revealInSidebar:", "toggleSoftWrap:", "toggleSidebarSide:", "equalizePanes:",
+                   "closeOtherTabs:", "closeTabsToTheRight:", "revealInFinder:", "copyFilePath:", "copyRelativeFilePath:"] {
+            map[id] = .some(nil)
+        }
         return map
     }()
 
@@ -158,6 +140,19 @@ import Testing
         #expect(only?.note == "⌘T is New Tab’s here; tick to move it (New Tab is left without a shortcut)")
         // The app's own keys (⌘H, ⌘Q) count as well.
         #expect(settled([row("goToFile:", Self.cmd("h"))]).shortcuts.first?.ticked == false)
+    }
+
+    @Test func theGitAndViewMenuKeysAreTaken() {
+        // ⌥⌘P → Go to File (another editor's key for it): Push… has ⌥⌘P, so the row is left unticked, naming it.
+        let push = ImportPlan(preset: .nextTerm, shortcuts: [row("goToFile:", Self.cmd("p", option: true))])
+            .settlingShortcuts(current: Self.current(), titles: ["gitPush:": "Push…"]).shortcuts.first
+        #expect(push?.ticked == false && push?.allowed == true)
+        #expect(push?.note == "⌥⌘P is Push…’s here; tick to move it (Push… is left without a shortcut)")
+        // Fetch's ⌘R, Update Project's ⌥⌘U, Commit…'s ⇧⌘C, New Branch…'s ⇧⌘B and View's ⌃⌘U, ⌃⇧⌘A and ⌃⇧⌘L as well.
+        for chord in [Self.cmd("r"), Self.cmd("u", option: true), Self.cmd("c", shift: true), Self.cmd("b", shift: true),
+                      Self.cmd("u", control: true), Self.cmd("a", shift: true, control: true), Self.cmd("l", shift: true, control: true)] {
+            #expect(settled([row("goToFile:", chord)]).shortcuts.first?.ticked == false, "\(chord.display)")
+        }
     }
 
     @Test func aKeyTheOtherPartHasIsShared() {
