@@ -10,8 +10,8 @@ import Foundation
 /// unchanged: `feedable` writes each newline as CR LF instead.
 ///
 /// It keeps text from starting a sequence, not from joining one already open: fed while the terminal is inside one
-/// (the shell's own output split across reads), it becomes part of it. Feed it only between sequences, as before the
-/// restored shell has printed anything.
+/// (the shell's own output split across reads), it becomes part of it. Feed it only between sequences: before the
+/// restored shell has printed anything, or once `SequenceWatch` says what it printed left the terminal between them.
 public enum TerminalText {
     /// `text` with only printable characters, newlines and tabs. A C1 control is one scalar however it came (UTF-8
     /// carries U+009B as C2 9B), so it goes too.
@@ -60,6 +60,104 @@ public enum TerminalText {
         case 0x09, 0x0A: return true
         case 0x00...0x1F, 0x7F...0x9F: return false
         default: return true
+        }
+    }
+
+    /// Where a terminal's parser stands in what the program in it printed, for text fed after the shell started (a
+    /// restore's note): between sequences, or inside one, which fed text would join. It follows SwiftTerm's parser, read
+    /// by read, and where that parser could still be inside a string it reads as inside: an OSC or APC string (a title, a
+    /// clipboard write, the integration's channel) ends only at BEL, CAN or ESC; a DCS, SOS or PM string only at SUB or
+    /// ESC. A CSI or ESC sequence ends at its final byte or SUB, and an 8-bit control inside one starts another or ends
+    /// it, as SwiftTerm's table has it. Printed text keeps 8-bit bytes as text, and a character cut across reads counts
+    /// as inside.
+    public struct SequenceWatch: Equatable, Sendable {
+        enum State: Equatable, Sendable {
+            case ground, escape, escapeIntermediate, csi
+            /// OSC or APC.
+            case osc
+            /// DCS, SOS or PM.
+            case string
+        }
+
+        private(set) var state = State.ground
+        /// The UTF-8 continuation bytes the last character printed still owes.
+        private var owed = 0
+
+        public init() {}
+
+        /// Text fed now shows as text after what was printed, and joins nothing.
+        public var isBetweenSequences: Bool { state == .ground && owed == 0 }
+
+        /// Reads what the program printed, in the pieces the terminal parsed it in.
+        public mutating func read<Bytes: Sequence>(_ bytes: Bytes) where Bytes.Element == UInt8 {
+            for byte in bytes { step(byte) }
+        }
+
+        mutating func step(_ byte: UInt8) {
+            if byte == 0x1B {
+                state = .escape
+                owed = 0
+                return
+            }
+            switch state {
+            case .ground:
+                printed(byte)
+            case .osc:
+                if byte == 0x07 || byte == 0x18 { state = .ground }
+            case .string:
+                if byte == 0x1A { state = .ground }
+            case .escape, .escapeIntermediate, .csi:
+                state = Self.next(after: state, byte)
+            }
+        }
+
+        /// A byte printed: a C0 control, ASCII, or a byte of a UTF-8 character, whose continuation bytes are counted.
+        private mutating func printed(_ byte: UInt8) {
+            if owed > 0, (0x80...0xBF).contains(byte) {
+                owed -= 1
+                return
+            }
+            switch byte {
+            case 0xC2...0xDF: owed = 1
+            case 0xE0...0xEF: owed = 2
+            case 0xF0...0xF4: owed = 3
+            default: owed = 0
+            }
+        }
+
+        /// The state after `byte` inside a CSI or ESC sequence.
+        private static func next(after state: State, _ byte: UInt8) -> State {
+            switch byte {
+            case 0x1A: return .ground
+            case 0x80...0x9F: return eightBit(byte)
+            case 0xA0...0xFF: return state == .csi ? .csi : .ground
+            default: break
+            }
+            switch state {
+            case .escape:
+                switch byte {
+                case 0x20...0x2F: return .escapeIntermediate
+                case 0x5B: return .csi
+                case 0x5D, 0x5F: return .osc
+                case 0x50, 0x58, 0x5E: return .string
+                case 0x30...0x7E: return .ground
+                default: return .escape
+                }
+            case .escapeIntermediate:
+                return (0x30...0x7E).contains(byte) ? .ground : .escapeIntermediate
+            default:
+                return (0x40...0x7E).contains(byte) ? .ground : .csi
+            }
+        }
+
+        /// An 8-bit control inside a sequence: CSI, OSC, APC, DCS, SOS and PM start one; the rest end it.
+        private static func eightBit(_ byte: UInt8) -> State {
+            switch byte {
+            case 0x9B: return .csi
+            case 0x9D, 0x9F: return .osc
+            case 0x90, 0x98, 0x9E: return .string
+            default: return .ground
+            }
         }
     }
 }

@@ -80,6 +80,48 @@ import Testing
         #expect(crs == lfs && lfs == breaks)
         #expect(Self.isPrintable(fed.replacingOccurrences(of: "\r\n", with: "\n")))
     }
+
+    // MARK: between sequences
+
+    /// What the shell printed, read in pieces as the terminal reads them: whether each piece leaves it between sequences.
+    func between(_ pieces: [[UInt8]]) -> [Bool] {
+        var watch = TerminalText.SequenceWatch()
+        return pieces.map { (piece: [UInt8]) -> Bool in
+            watch.read(piece)
+            return watch.isBetweenSequences
+        }
+    }
+
+    func bytes(_ text: String) -> [UInt8] { Array(text.utf8) }
+
+    /// Text fed after the shell started joins any sequence its output left open (a title, a clipboard write, the
+    /// integration's own channel), so a note waits until the output is between sequences, as SwiftTerm's parser reads
+    /// it: a CSI or ESC sequence ends at its final byte, an OSC or APC string at BEL, CAN or ESC, and a DCS, SOS or PM
+    /// string only at SUB or ESC.
+    @Test func aWatchKnowsWhenTheOutputIsBetweenSequences() {
+        #expect(TerminalText.SequenceWatch().isBetweenSequences)
+        #expect(between([bytes("% ls\r\n"), bytes("\u{1B}[1;32mok\u{1B}[0m\r\n")]) == [true, true])
+        // An OSC string split across reads: a title, the integration's channel, ended by BEL or by ST (ESC and a backslash).
+        #expect(between([bytes("\u{1B}]0;~/app"), bytes(" — zsh"), bytes("\u{07}")]) == [false, false, true])
+        #expect(between([bytes("\u{1B}]6973;6f1e;cmd;bHM="), bytes("\u{1B}"), bytes("\\")]) == [false, false, true])
+        #expect(between([bytes("\u{1B}]52;c;aGVs"), [0x18]]) == [false, true])
+        #expect(between([bytes("\u{1B}_Gf=24;"), bytes("AAAA\u{07}")]) == [false, true])
+        // A title holding a character whose UTF-8 bytes look like 8-bit controls stays open until its own end.
+        #expect(between([bytes("\u{1B}]2;Ŝ"), [0x9C], bytes("x\u{07}")]) == [false, false, true])
+        // A CSI or ESC sequence cut short, and ended.
+        #expect(between([bytes("\u{1B}[3"), bytes("8;5;2"), bytes("08m")]) == [false, false, true])
+        #expect(between([bytes("\u{1B}"), bytes("(B")]) == [false, true])
+        #expect(between([bytes("\u{1B}[?2004"), [0x1A]]) == [false, true])
+        // DCS, SOS and PM go on through BEL and CAN, as SwiftTerm reads them.
+        #expect(between([bytes("\u{1B}P$qm"), [0x07], [0x18], bytes("\u{1B}\\")]) == [false, false, false, true])
+        #expect(between([bytes("\u{1B}^note"), [0x1A]]) == [false, true])
+        // 8-bit introducers inside a sequence start another, as SwiftTerm's table has them; printed text keeps them as text.
+        #expect(between([bytes("\u{1B}["), [0x9D], bytes("0;t"), [0x07]]) == [false, false, false, true])
+        #expect(between([[0x9B, 0x9D, 0x90]]) == [true])
+        // A character cut across reads.
+        #expect(between([[0xE2, 0x9C], [0x93], [0xF0, 0x9F, 0x8E], [0x89]]) == [false, true, false, true])
+        #expect(between([[0xC3], bytes("\r\n")]) == [false, true])
+    }
 }
 
 /// The scrollback an update quit saves (R4, KTD9): rows joined where the terminal wrapped them and where a shell went

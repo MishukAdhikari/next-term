@@ -9,8 +9,8 @@ import NextTermCore
 /// nothing else reached (`RestoreLayout.LineWatch`): the user putting anything in the tab first (`TerminalTab.userInput`:
 /// a key, a paste, a drop, Insert Path, a suggested command), or any text written into its shell, cancels it, and once a
 /// resume is typed, withholds its Return. A shell not ready in time, or a session a process took since, gets a note that
-/// says so. Until each action is applied its tab's record is saved as it was restored, so a restore that stops part-way
-/// loses nothing.
+/// says so, fed once what the shell printed is between sequences. Until each action is applied its tab's record is saved
+/// as it was restored, so a restore that stops part-way loses nothing.
 ///
 /// In safe mode nothing waits for a shell: each tab shows what it held, until Keep As Is drops every action or Try Again
 /// applies them, once.
@@ -50,6 +50,8 @@ final class RestoreActions {
             let types = action.types
             let line = RestoreLayout.LineWatch(writes: pane.tab.view.inputWrites)
             let entry = Waiting(tab: pane.tab, plan: pane.plan, since: now, line: line)
+            // From the shell's first byte, which comes in a later turn: a note after it starts waits to be between sequences.
+            if local { pane.tab.view.watchSequences() }
             if types && local && pane.plan.line != nil {
                 waiting.append(entry)
             } else if !(safeMode && local) {
@@ -171,14 +173,16 @@ final class RestoreActions {
     }
 
     /// A note after the shell started, on a line of its own: what happened is not what the tab said before it started.
+    /// It is fed once what the shell printed is between sequences, so it never joins one the output left open.
     private static func note(_ text: String, in tab: TerminalTab) {
-        tab.view.feed(text: "\r\n" + RestoreLayout.noteLine(text))
+        tab.view.feedBetweenSequences("\r\n" + RestoreLayout.noteLine(text))
     }
 
-    /// The pane's action moves on (applied, cancelled by the user, dropped), and its record with it.
+    /// The pane's action moves on (applied, cancelled by the user, dropped), and its record with it. No note follows.
     private func settle(_ tab: TerminalTab, _ event: SessionSnapshot.PendingAction.Event) {
         let next = tab.restoredRecord?.pending?.after(event)
         tab.restoredRecord?.pending = next
+        tab.view.endSequenceWatch()
     }
 
     private func finished() {

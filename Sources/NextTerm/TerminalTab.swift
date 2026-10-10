@@ -26,6 +26,13 @@ final class NextTermView: LocalProcessTerminalView {
     private(set) var inputWrites = 0
     /// The terminal is answering a program's question (where the cursor is, its colours, focus), which is not input.
     private var answering = false
+    /// The shell has printed something.
+    private var hasOutput = false
+    /// What the shell printed, watched from its first byte while a restore may feed a note into the tab
+    /// (`watchSequences`), the notes waiting for it to be between sequences, and whether the watch ends once they are fed.
+    private var sequences: TerminalText.SequenceWatch?
+    private var waitingNotes: [String] = []
+    private var watchEnds = false
 
     /// A key Clear Buffer shares with a command for everywhere (⌘K, Commit… under the JetBrains set) is Clear
     /// Buffer's here, before the menus, while this terminal has the keyboard (KeyboardShortcuts.terminalKeys).
@@ -37,8 +44,42 @@ final class NextTermView: LocalProcessTerminalView {
     }
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
+        hasOutput = true
         super.dataReceived(slice: slice) // parse first: OSC marks in this chunk update the status
+        if sequences != nil { watched(slice) }
         onOutput?()
+    }
+
+    /// Starts watching what the shell prints, so a note can be fed between sequences (`feedBetweenSequences`). Only
+    /// before the shell has printed anything: a watch started later could not tell where its output stands.
+    func watchSequences() {
+        guard !hasOutput, sequences == nil else { return }
+        sequences = TerminalText.SequenceWatch()
+        watchEnds = false
+    }
+
+    /// No more notes will be fed: the watch stops once those waiting are fed.
+    func endSequenceWatch() {
+        watchEnds = true
+        if waitingNotes.isEmpty { sequences = nil }
+    }
+
+    /// Feeds `text`, ready to feed (no sequence of its own left open), once what the shell printed is between sequences
+    /// (TerminalText.SequenceWatch): now, or after the first read that leaves it there. Text fed inside one would join
+    /// it. Unwatched, now.
+    func feedBetweenSequences(_ text: String) {
+        guard let sequences, !sequences.isBetweenSequences else { return feed(text: text) }
+        waitingNotes.append(text)
+    }
+
+    /// A read the terminal parsed, followed by the watch; the notes waiting are fed once it ends between sequences.
+    private func watched(_ slice: ArraySlice<UInt8>) {
+        sequences?.read(slice)
+        guard sequences?.isBetweenSequences == true, !waitingNotes.isEmpty || watchEnds else { return }
+        let notes = waitingNotes
+        waitingNotes = []
+        for note in notes { feed(text: note) }
+        if watchEnds { sequences = nil }
     }
 
     override func send(source: Terminal, data: ArraySlice<UInt8>) {
