@@ -30,7 +30,7 @@ enum ImportSources {
     nonisolated(unsafe) static var detectors: [() -> [DetectedApp]] = [
         { ImportVSCode.detect() }, { ImportJetBrains.detect() }, { ImportZed.detect() }, { ImportITerm2.detect() },
         { ImportGhostty.detect() }, { ImportWarp.detect() }, { ImportTerminalApp.detect() }, { ImportKitty.detect() },
-        { ImportAlacritty.detect() },
+        { ImportAlacritty.detect() }, { ImportWezTerm.detect() },
     ]
     nonisolated(unsafe) static var planner: (DetectedApp, Bool) -> ImportPlan? = { app, usKeyboard in
         switch app.kind {
@@ -44,6 +44,7 @@ enum ImportSources {
         case .terminalApp: return ImportTerminalApp.plan(for: app, usKeyboard: usKeyboard)
         case .kitty: return ImportKitty.plan(for: app, usKeyboard: usKeyboard)
         case .alacritty: return ImportAlacritty.plan(for: app, usKeyboard: usKeyboard)
+        case .wezTerm, .kaku: return ImportWezTerm.plan(for: app, usKeyboard: usKeyboard)
         }
     }
 
