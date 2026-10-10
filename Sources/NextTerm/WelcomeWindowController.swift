@@ -314,8 +314,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     private func applySearch() {
         let previous = current
-        let words = search.stringValue.lowercased().split(separator: " ")
-        projects = words.isEmpty ? allProjects : allProjects.filter { path in words.allSatisfy { path.lowercased().contains($0) } }
+        let words = SearchWords(search.stringValue)
+        projects = words.isEmpty ? allProjects : allProjects.filter(words.matches)
         projectsTable.reloadData()
         let row = previous.flatMap { projects.firstIndex(of: $0) } ?? (projects.isEmpty ? -1 : 0)
         if row >= 0 { projectsTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }

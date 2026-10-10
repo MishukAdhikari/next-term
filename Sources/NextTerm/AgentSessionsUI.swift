@@ -256,11 +256,7 @@ final class SessionsPanelController: NSObject, NSTextFieldDelegate, NSTableViewD
     }
 
     private func filter() {
-        let words = field.stringValue.lowercased().split(separator: " ")
-        rows = words.isEmpty ? all : all.filter { session in
-            let haystack = (session.title + " " + session.agent.name + " " + (session.gitBranch ?? "")).lowercased()
-            return words.allSatisfy { haystack.contains($0) }
-        }
+        rows = AgentSessions.matching(all, field.stringValue)
         table.reloadData()
         if !rows.isEmpty { table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
         let name = (project as NSString).lastPathComponent
