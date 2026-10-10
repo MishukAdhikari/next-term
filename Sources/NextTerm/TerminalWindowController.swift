@@ -2038,7 +2038,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         ticker?.invalidate()
         ticker = nil
         sidebar.stopWatching()
-        for tab in tabs { tab.terminate() }
+        _ = TerminalTab.terminate(tabs, finishLater: true)
         groups.removeAll()
         editorArea.closeAll()
         finder.close()

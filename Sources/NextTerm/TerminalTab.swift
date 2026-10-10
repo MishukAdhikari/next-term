@@ -445,26 +445,71 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         execWatcher = watcher
     }
 
-    /// Ends the shell and everything it started.
-    func terminate() {
+    /// Ends the shell and what runs in front of it: the program and what it started outside its group or the
+    /// terminal (an agent's dev server), as TabProcessTree decides from `snapshot` (taken here if nil). Those
+    /// that outlive the hangup get SIGTERM after a second: here off the main thread, or, with `finishLater`
+    /// false, by the caller, who gets them back (Quit waits once for all its tabs).
+    @discardableResult
+    func terminate(snapshot: [ProcessRecord]? = nil, finishLater: Bool = true) -> [ProcessRecord] {
         execWatcher?.cancel()
         execWatcher = nil
         reconnectWork?.cancel()
         reconnectWork = nil
         MCPControl.forget(self)
-        guard !exited else { return }
-        exited = true
-        RemoteConnection.doneConnecting(self)
+        guard !exited else { return [] }
         // A disconnected remote tab's ssh has exited and was reaped: its pid may be another process's now,
         // so neither SwiftTerm (SIGTERM) nor we (SIGHUP) signal it, as for a shell that already exited.
         let gone = disconnected || waitingForConnection
         let pid = gone ? 0 : view.process.shellPid
+        // Before any signal: closing the pty hangs the shell up, and then its terminal is gone.
+        let plan = gone ? HangupPlan.none : hangupPlan(snapshot)
+        exited = true
+        RemoteConnection.doneConnecting(self)
         if !gone { view.terminate() }
         // Interactive shells ignore SIGTERM; SIGHUP makes them exit and hang up their jobs.
         if pid > 0 {
             kill(pid, SIGHUP)
             Self.reap(pid)
         }
+        TabHangup.send(plan)
+        guard finishLater else { return plan.stoppable }
+        TabHangup.finishLater(plan.stoppable)
+        return []
+    }
+
+    /// Closes these tabs (a window's, or every tab at Quit) from one snapshot of the processes, taken before any
+    /// signal and only if a program runs in front of one of them. Returns what is left to wait for.
+    static func terminate(_ tabs: [TerminalTab], finishLater: Bool) -> [ProcessRecord] {
+        let snapshot = tabs.contains(where: \.hasProgramInFront) ? ProcessSnapshot.take() : nil
+        return tabs.flatMap { $0.terminate(snapshot: snapshot, finishLater: finishLater) }
+    }
+
+    /// The pty's foreground process group (tcgetpgrp), 0 if unknown.
+    private var foregroundGroup: pid_t {
+        let fd = view.process.childfd
+        guard fd >= 0 else { return 0 }
+        return max(0, tcgetpgrp(fd))
+    }
+
+    /// A program, not the shell, is in front of this tab on this Mac.
+    private var hasProgramInFront: Bool {
+        guard remote == nil, !exited else { return false }
+        let group = foregroundGroup
+        return group > 0 && group != view.process.shellPid
+    }
+
+    /// What closing this tab hangs up besides the shell (none for a tab on a server, or at the prompt).
+    func hangupPlan(_ snapshot: [ProcessRecord]? = nil) -> HangupPlan {
+        guard hasProgramInFront, let snapshot = snapshot ?? ProcessSnapshot.take() else { return .none }
+        let group = foregroundGroup
+        // An interactive shell in front (`bash`, `nix develop`) is at its own prompt: its jobs are its business.
+        let shells = snapshot.filter { record in
+            guard record.group == group, ProcessInspector.shells.contains(record.name) else { return false }
+            let arguments = ProcessInspector.commandLine(of: record.pid)?.arguments ?? []
+            return TabProcessTree.isInteractiveShell(name: record.name, arguments: arguments)
+        }
+        return TabProcessTree.plan(snapshot: snapshot, shell: view.process.shellPid, foregroundGroup: group,
+                                   remote: remote != nil, interactiveShells: Set(shells.map(\.pid)))
     }
 
     /// SwiftTerm stops watching the shell once we terminate it, so collect its exit status here;
