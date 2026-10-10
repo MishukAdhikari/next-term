@@ -1,5 +1,6 @@
 import AppKit
 import NextTermCore
+import SwiftTerm
 
 /// The restore's build and its actions in one process (plan 003's U10), as the launch hook runs them, on made-up crash
 /// snapshots: the windows, tabs and splits come back with their ids and divider positions, and a tab whose id an open tab
@@ -16,16 +17,20 @@ extension SelfTest {
         let escaped = home + "/red\u{1B}[31mfolder"
         let resumed = home + "/resumed"
         let standIn = home + "/bin/claude"
-        try? fm.createDirectory(atPath: escaped, withIntermediateDirectories: true)
-        try? fm.createDirectory(atPath: home + "/bin", withIntermediateDirectories: true)
+        let zdotdir = home + "/zdot"
+        for folder in [escaped, home + "/bin", zdotdir] { try? fm.createDirectory(atPath: folder, withIntermediateDirectories: true) }
         let script = "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \(ShellQuote.quote(resumed))\n"
         let made = fm.createFile(atPath: standIn, contents: Data(script.utf8), attributes: [.posixPermissions: 0o755])
+        // The shells' own zsh config, as the other restore checks give theirs: a short prompt, and the history in this
+        // check's folder, so the user's prompt, plugins and history file stay out of it.
+        let zshrc = "HISTFILE=\(ShellQuote.quote(home + "/history"))\nPROMPT='%1~ %# '\n"
+        let configured = (try? zshrc.write(toFile: zdotdir + "/.zshrc", atomically: true, encoding: .utf8)) != nil
         var opened: [TerminalWindowController] = []
         defer {
             for controller in opened { controller.window?.close() }
             try? fm.removeItem(atPath: home)
         }
-        guard made else { return check(false, "the restore's stand-in agent is written") }
+        guard made && configured else { return check(false, "the restore's stand-in agent and zsh config are written") }
 
         func typed(_ line: String, running: Bool = true, exit: Int32? = nil) -> SessionSnapshot.Command {
             SessionSnapshot.Command(line: line, check: .kept, source: .integration, running: running, exitCode: exit)
@@ -37,9 +42,6 @@ extension SelfTest {
         }
         func group(_ pane: SessionSnapshot.Pane) -> SessionSnapshot.Group {
             SessionSnapshot.Group(root: .pane(pane), focused: pane.id)
-        }
-        func bottomLine(_ tab: TerminalTab) -> String {
-            tab.liveTail(4).last { (line: String) -> Bool in !line.trimmingCharacters(in: .whitespaces).isEmpty } ?? ""
         }
 
         // One project window: a split at 0.3 (a dev server running, an idle pane), Claude Code, a build the user will
@@ -68,7 +70,9 @@ extension SelfTest {
             planned.plans[index].outcome = .resume
             planned.plans[index].line = ShellQuote.quote(standIn) + " --resume " + session
         }
+        TerminalTab.testUserZDOTDIR = zdotdir
         let built = RestoreBuild.build(snapshot, planned: planned, scrollback: [:], savedAt: nil)
+        TerminalTab.testUserZDOTDIR = nil
         opened = built.windows
         var byPane: [UUID: TerminalTab] = [:]
         for restored in built.panes { byPane[restored.plan.pane] = restored.tab }
@@ -98,7 +102,7 @@ extension SelfTest {
 
         if let tab = byPane[dev.id] {
             await pause(0.5)
-            let line = bottomLine(tab)
+            let line = lastLine(tab)
             let back = line.contains("npm run dev") && !line.contains("back on the line")
             check(tab.restoredRecord?.pending?.state == .applied && back && tab.status.command.isEmpty,
                   "npm run dev, running before the restart, waits on the prompt line and does not run", "line “\(line)”")
@@ -109,7 +113,7 @@ extension SelfTest {
         check(ran && runs == ["--resume " + session],
               "a resume runs the stand-in at its absolute path once its shell is ready, and once", "\(runs)")
         if let tab = byPane[touched.id] {
-            let line = bottomLine(tab)
+            let line = lastLine(tab)
             check(tab.restoredRecord?.pending?.state == .cancelled && !line.hasSuffix("npm run build") && tab.status.command.isEmpty,
                   "a key pressed in a tab before its shell is ready cancels its action, and nothing is typed",
                   "\(String(describing: tab.restoredRecord?.pending?.state)), line “\(line)”")
@@ -132,7 +136,9 @@ extension SelfTest {
         let held = pane(UUID(), proj.path, typed("npm test"))
         let safeSnapshot = SessionSnapshot(header: header, windows: [SessionSnapshot.Window(groups: [group(held)])])
         let safePlanned = RestorePlanning.plan(safeSnapshot, kind: .crash, safeMode: true, quitConsent: false)
+        TerminalTab.testUserZDOTDIR = zdotdir
         let safeBuilt = RestoreBuild.build(safeSnapshot, planned: safePlanned, scrollback: [:], savedAt: nil)
+        TerminalTab.testUserZDOTDIR = nil
         opened += safeBuilt.windows
         guard let tab = safeBuilt.panes.first?.tab else { return check(false, "safe mode builds its window") }
         let safe = RestoreActions(panes: safeBuilt.panes, safeMode: true)
@@ -140,15 +146,34 @@ extension SelfTest {
         _ = await wait(20) { tab.status.integrated }
         await pause(1)
         let noted = tab.screenTail(20).joined().contains("Nothing ran, because the last two restores did not finish.")
-        let waited = safe.isWaiting && tab.restoredRecord?.pending?.state == .pending && !bottomLine(tab).hasSuffix("npm test")
+        let waited = safe.isWaiting && tab.restoredRecord?.pending?.state == .pending && !lastLine(tab).hasSuffix("npm test")
         check(noted && waited, "safe mode shows what a tab held, types nothing, and keeps its action pending",
-              "noted \(noted), waiting \(safe.isWaiting), line “\(bottomLine(tab))”")
+              "noted \(noted), waiting \(safe.isWaiting), line “\(lastLine(tab))”")
         safe.tryAgain()
         let applied = await wait(10) { tab.restoredRecord?.pending?.state == .applied }
         await pause(0.5)
-        let line = bottomLine(tab)
+        let line = lastLine(tab)
         let back = line.contains("npm test") && !line.contains("was running")
         check(applied && !safe.isWaiting && back && tab.status.command.isEmpty,
               "Try Again puts what the tab held back on the line, once, and runs nothing", "line “\(line)”")
+    }
+
+    /// A tab's last line with text, its wrapped rows joined: a line put back at the prompt of a narrow pane reads whole,
+    /// where the screen's last row holds only its end. Lines of blanks below it are passed over.
+    static func lastLine(_ tab: TerminalTab) -> String {
+        let terminal = tab.view.getTerminal()
+        guard var end = tab.lastTextRow() else { return "" }
+        let top = max(terminal.buffer.totalLinesTrimmed, end - terminal.rows)
+        while end >= top {
+            var start = end
+            while start > top, terminal.getScrollInvariantLine(row: start)?.isWrapped == true { start -= 1 }
+            // Every row of the line but its last wraps on, so the blanks it ends with are the line's own.
+            let text = (start...end).map { (row: Int) -> String in
+                terminal.getScrollInvariantLine(row: row)?.translateToString(trimRight: row == end, skipNullCellsFollowingWide: true) ?? ""
+            }.joined()
+            if !text.trimmingCharacters(in: .whitespaces).isEmpty { return text }
+            end = start - 1
+        }
+        return ""
     }
 }

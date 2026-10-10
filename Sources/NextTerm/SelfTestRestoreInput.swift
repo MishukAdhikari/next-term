@@ -13,6 +13,11 @@ import NextTermCore
 extension SelfTest {
     static func restoreInputChecks(proj: URL) async {
         guard let app = AppDelegate.shared else { return }
+        // The windows the checks before closed leave app.controllers a main-queue turn later (AppDelegate.windowClosed):
+        // the window count below starts once they have gone.
+        _ = await wait(2) {
+            app.controllers.allSatisfy { (controller: TerminalWindowController) -> Bool in controller.window?.isVisible == true }
+        }
         let fm = FileManager.default
         let home = canonicalPath(NSTemporaryDirectory()) + "/nt-restore-input-\(getpid())"
         try? fm.removeItem(atPath: home)
@@ -149,9 +154,6 @@ extension SelfTest {
         await pause(1)
 
         func state(_ pane: SessionSnapshot.Pane) -> SessionSnapshot.ActionState? { byPane[pane.id]?.restoredRecord?.pending?.state }
-        func bottomLine(_ tab: TerminalTab) -> String {
-            tab.liveTail(4).last { (line: String) -> Bool in !line.trimmingCharacters(in: .whitespaces).isEmpty } ?? ""
-        }
         /// The tab's screen with every blank left out, so a sentence wrapped across rows still reads whole.
         func shown(_ tab: TerminalTab) -> String {
             tab.screenTail(40).joined().replacingOccurrences(of: " ", with: "")
@@ -161,7 +163,7 @@ extension SelfTest {
                                                                      (suggest, "a suggested command")]
         for (pane, input) in inputs {
             guard let tab = byPane[pane.id], let line = pane.command?.line else { continue }
-            let bottom = bottomLine(tab)
+            let bottom = lastLine(tab)
             let promise = line.replacingOccurrences(of: " ", with: "") + "goesbackontheline,notrun,oncetheshellisready,unlessyoutypefirst"
             let said = shown(tab).contains(promise)
             let cancelled = state(pane) == .cancelled
@@ -171,19 +173,19 @@ extension SelfTest {
                   "\(String(describing: state(pane))), line “\(bottom)”, said \(said)")
         }
         if let tab = byPane[insert.id] {
-            let bottom = bottomLine(tab)
+            let bottom = lastLine(tab)
             check(bottom.contains("deploy.sh") && !bottom.contains("npm run deploy") && tab.status.command.isEmpty,
                   "the path Insert Path typed stays on the line alone, not run", "line “\(bottom)”")
         }
         if let tab = byPane[flagless.id] {
-            let bottom = bottomLine(tab)
+            let bottom = lastLine(tab)
             let cancelled = state(flagless) == .cancelled && !tab.touchedByUser
             check(cancelled && bottom.contains("echo flagless") && !bottom.contains("npm run build") && tab.status.command.isEmpty,
                   "text typed into a tab without the user's flag cancels its action too: nothing restored is typed after it",
                   "\(String(describing: state(flagless))), line “\(bottom)”")
         }
         if let tab = byPane[query.id] {
-            let bottom = bottomLine(tab)
+            let bottom = lastLine(tab)
             let untouched = !queriedFirst && !tab.touchedByUser
             let back = state(query) == .applied && bottom.contains("npm run watch") && tab.status.command.isEmpty
             check(untouched && back,
@@ -214,7 +216,7 @@ extension SelfTest {
 
         // A session a process took since: its resume command on the line, unrun, and the tab says why.
         if let tab = byPane[took.id] {
-            let bottom = bottomLine(tab)
+            let bottom = lastLine(tab)
             let why = shown(tab).contains("ClaudeCodesession\(tookSession)didnotresume,becauseanotherprocesshasitopen.")
             let runs = (try? String(contentsOfFile: resumed, encoding: .utf8)) ?? ""
             let back = state(took) == .applied && bottom.hasSuffix("claude --resume " + tookSession)
