@@ -386,6 +386,27 @@ import Testing
         #expect(empty == ImportPlan(preset: .nextTerm))
     }
 
+    /// A named file's size is checked before it is read (a huge file is never loaded), and only a plain file is read.
+    @Test func aNamedFileIsCheckedBeforeItIsRead() throws {
+        let root = canonicalPath(fm.temporaryDirectory.path) + "/nt-mcpimport-" + String(UUID().uuidString.prefix(8))
+        try fm.createDirectory(atPath: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(atPath: root) }
+        func named(_ name: String) -> ProjectFile { ProjectFile(root: root, path: root + "/" + name) }
+        try #"{ "editor.fontSize": 14 }"#.write(toFile: root + "/settings.json", atomically: true, encoding: .utf8)
+        #expect(try MCPImport.read(named("settings.json")).get().contains("fontSize"))
+        // A sparse 256 MB file: refused by its size, at once, without reading it.
+        fm.createFile(atPath: root + "/huge.json", contents: nil)
+        let handle = try #require(FileHandle(forWritingAtPath: root + "/huge.json"))
+        try handle.truncate(atOffset: 256 << 20)
+        try handle.close()
+        let started = Date()
+        #expect(throws: MCPToolError.self) { try MCPImport.read(named("huge.json")).get() }
+        #expect(Date().timeIntervalSince(started) < 5)
+        // A pipe would block a read forever: refused before it is opened.
+        #expect(mkfifo(root + "/pipe.json", 0o600) == 0)
+        #expect(throws: MCPToolError.self) { try MCPImport.read(named("pipe.json")).get() }
+    }
+
     @Test func theCursorFixturePlantsItsSecrets() throws {
         let folder = ImportFixtures.root.appendingPathComponent("Cursor").path
         var text = ""

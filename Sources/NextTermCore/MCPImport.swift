@@ -440,14 +440,22 @@ public enum MCPImport {
         }
     }
 
-    /// A named file's text: at most 4 MB, text only.
+    /// A named file's text: at most 4 MB, text only. The size is checked before anything is read, as read_file
+    /// does, and no more than the limit is ever read (the file may grow meanwhile).
     public static func read(_ file: ProjectFile) -> Result<String, MCPToolError> {
+        let tooBig = MCPToolError("\(file.relative) is over 4 MB; settings files are smaller.")
         var info = stat()
-        guard stat(file.path, &info) == 0, let data = FileManager.default.contents(atPath: file.path) else {
+        guard stat(file.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else {
             return .failure(MCPToolError("Could not read \(file.relative)."))
         }
-        guard info.st_size <= maxFileBytes else { return .failure(MCPToolError("\(file.relative) is over 4 MB; settings files are smaller.")) }
-        guard let decoded = TextFile.decode(data) else { return .failure(MCPToolError("\(file.relative) is not a text file.")) }
+        guard info.st_size <= maxFileBytes else { return .failure(tooBig) }
+        guard let handle = FileHandle(forReadingAtPath: file.path) else { return .failure(MCPToolError("Could not read \(file.relative).")) }
+        defer { try? handle.close() }
+        guard let read = try? handle.read(upToCount: maxFileBytes + 1) else {
+            return .failure(MCPToolError("Could not read \(file.relative)."))
+        }
+        guard read.count <= maxFileBytes else { return .failure(tooBig) }
+        guard let decoded = TextFile.decode(read) else { return .failure(MCPToolError("\(file.relative) is not a text file.")) }
         return .success(decoded.text)
     }
 
