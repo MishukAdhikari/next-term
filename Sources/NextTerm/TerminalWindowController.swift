@@ -507,7 +507,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             return
         }
         // Asked about saving: that sheet said what closing stops.
-        guard !saveAsked, let warning = tab.closeWarning, let window else {
+        guard !saveAsked, let note = tab.closeNote, let window else {
             remove(tab, saveAsked: saveAsked)
             return
         }
@@ -515,7 +515,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Close “\(tab.title)”?"
-        alert.informativeText = "Closing the \(isPane ? "pane" : "tab") stops \(warning)."
+        alert.informativeText = CloseText.text(lead: "Closing the \(isPane ? "pane" : "tab") stops", notes: [note])
         alert.addButton(withTitle: isPane ? "Close Pane" : "Close Tab")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in
@@ -609,12 +609,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// tab whose shell ended by itself (`exit`, Ctrl-D). One that failed stays as it was, with its reason.
     private func askToSave(closing: [TerminalTab], kept: String = "", then close: @escaping () -> Void) {
         guard let window, !askingToSave else { return }
-        let busy = closing.filter { $0.closeWarning != nil }
+        let busy = closing.filter { $0.closeNote != nil }
         var note = "Closing the window’s last tab closes the window."
         if closing.allSatisfy(\.exited) {
             note = "The shell in the window’s last tab has ended, so the window closes."
         } else if !busy.isEmpty {
-            note = "Closing the window’s last tab closes the window and stops " + Self.stopList(busy)
+            note = Self.stopText("Closing the window’s last tab closes the window and stops", busy, otherwise: note)
         }
         let alert = saveAlert(editorArea.dirtyDocuments, note: note)
         if !kept.isEmpty { alert.informativeText += "\n\n" + kept }
@@ -662,8 +662,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return quoted.dropLast().joined(separator: ", ") + " and " + last
     }
 
-    /// Tabs whose closing would stop a program or a job.
-    var busyTabs: [TerminalTab] { tabs.filter { $0.closeWarning != nil } }
+    /// Tabs whose closing would stop a program or a job, or leave one running that the user may expect to stop.
+    var busyTabs: [TerminalTab] { tabs.filter { $0.closeNote != nil } }
 
     /// What keeps running on servers after `tabs` close (kept tmux tabs with a program in front), for the
     /// close alerts: "“claude” on web-1 (tmux session nt-app-1a2b3c)". Empty: nothing.
@@ -676,12 +676,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return "Still running after closing, on the host: " + kept.joined(separator: "; ") + ". Reopen from File › New Remote Tab…"
     }
 
-    /// "“vim notes.md” (suspended); “npm run dev” (running); and more in 2 other tabs." The same ending
-    /// for every alert that stops tabs.
-    static func stopList(_ busy: [TerminalTab]) -> String {
-        let listed = busy.prefix(4).compactMap(\.closeWarning).joined(separator: "; ")
-        let rest = busy.count - 4
-        return listed + (rest > 0 ? "; and more in \(rest) other tab\(rest == 1 ? "" : "s")." : ".")
+    /// "<lead> “vim notes.md” (suspended); “claude” (running), “next-server” (started by “claude”); and more in 2
+    /// other tabs." then what keeps running ("“python3 serve.py” keeps running: it ignores hangups."). The same text
+    /// for every alert that stops tabs, from the plans their hangup follows. `otherwise`: the first sentence when
+    /// nothing stops.
+    static func stopText(_ lead: String, _ busy: [TerminalTab], otherwise: String = "") -> String {
+        CloseText.text(lead: lead, notes: busy.compactMap(\.closeNote), otherwise: otherwise)
     }
     var unseenTabCount: Int { tabs.filter { $0.status.unseen != nil }.count }
 
@@ -884,7 +884,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     var isPristine: Bool {
         // A remote tab is never unused: commands there are seen only now and then, and its session matters.
         guard project == nil, groups.count == 1, tabs.count == 1, let tab = tabs.first, tab.remote == nil else { return false }
-        return tab.status.command.isEmpty && !tab.status.running && tab.closeWarning == nil
+        return tab.status.command.isEmpty && !tab.status.running && tab.closeNote == nil
     }
 
     /// Turns this window into `path`'s project: a fresh tab in the project, the old tabs closed.
@@ -2019,7 +2019,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Close this window?"
-        alert.informativeText = [busy.isEmpty ? "" : "Closing it stops " + Self.stopList(busy), kept].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        alert.informativeText = [busy.isEmpty ? "" : Self.stopText("Closing it stops", busy), kept].filter { !$0.isEmpty }.joined(separator: "\n\n")
         alert.addButton(withTitle: "Close Window")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: sender) { [weak self] response in
@@ -2070,7 +2070,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         guard group.isSplit else { return requestClose(group.focused) }
         // The tab's × closes all its panes, asking once if that stops anything (or, as the window's last
         // tab with files unsaved, whether to save them: the window closes too).
-        let busy = group.panes.filter { $0.closeWarning != nil }
+        let busy = group.panes.filter { $0.closeNote != nil }
         let kept = Self.keptList(group.panes)
         if closesWindow(group.panes), !editorArea.dirtyDocuments.isEmpty {
             return askToSave(closing: group.panes, kept: kept) { [weak self] in group.panes.forEach { self?.remove($0, saveAsked: true) } }
@@ -2079,7 +2079,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Close this tab and its \(group.panes.count) panes?"
-        alert.informativeText = [busy.isEmpty ? "" : "Closing it stops " + Self.stopList(busy), kept].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        alert.informativeText = [busy.isEmpty ? "" : Self.stopText("Closing it stops", busy), kept].filter { !$0.isEmpty }.joined(separator: "\n\n")
         alert.addButton(withTitle: "Close Tab")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in

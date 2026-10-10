@@ -512,6 +512,12 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
                                    remote: remote != nil, interactiveShells: Set(shells.map(\.pid)))
     }
 
+    /// A process as the close alerts name it: from its command line ("next-server", "claude"), not the kernel's
+    /// short name ("node").
+    static func displayName(_ record: ProcessRecord) -> String {
+        TabProcessTree.displayName(command: record.name, arguments: ProcessInspector.commandLine(of: record.pid)?.arguments ?? [])
+    }
+
     /// SwiftTerm stops watching the shell once we terminate it, so collect its exit status here;
     /// otherwise every closed tab leaves a zombie until the app quits.
     private static func reap(_ pid: pid_t) {
@@ -660,9 +666,10 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         if before.0 != status.state || before.1 != status.question { delegate?.tabDidChange(self) }
     }
 
-    /// Why closing this tab would lose something, or nil. Running programs, and jobs left in the
-    /// background or suspended with Ctrl-Z (a stopped vim with unsaved changes).
-    var closeWarning: String? {
+    /// What closing this tab would stop, and what it would leave running, or nil: nothing to say. The program in
+    /// front and what it started outside the terminal (an agent's dev server), from the same TabProcessTree plan
+    /// the hangup follows; jobs left in the background or suspended with Ctrl-Z (a stopped vim with unsaved changes).
+    var closeNote: CloseNote? {
         guard !exited else { return nil }
         if let remote {
             // tmux and herdr keep the session on the host: closing the tab only detaches (keptNote says so).
@@ -673,25 +680,36 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
                 if line.hasSuffix(")"), let open = line.range(of: " (", options: .backwards) { return "“\(line[..<open.lowerBound])”" + line[open.lowerBound...] }
                 return "“\(line)”"
             }
-            return items.isEmpty ? nil : items.joined(separator: ", ") + " on \(remote.host.name)"
+            return items.isEmpty ? nil : CloseNote(stops: [items.joined(separator: ", ") + " on \(remote.host.name)"])
         }
-        var items: [String] = []
-        if status.running { items.append(status.program.isEmpty ? "a running process" : "“\(runningName)” (running)") }
+        var note = CloseNote()
+        if status.running {
+            let program = status.program.isEmpty ? nil : "“\(runningName)”"
+            note = TabProcessTree.closeNote(hangupPlan().named(Self.displayName), running: true, program: program)
+        }
         if status.integrated {
             if status.jobs > 0 {
                 // "vim notes.md (suspended)" -> “vim notes.md” (suspended): the state is not part of the command.
-                items += status.jobSummary.split(separator: "\n").map { line -> String in
+                let jobs = status.jobSummary.split(separator: "\n").map { line -> String in
                     if line.hasSuffix(")"), let open = line.range(of: " (", options: .backwards) {
                         return "“\(line[..<open.lowerBound])”" + line[open.lowerBound...]
                     }
                     return "“\(line)”"
                 }
-                if items.isEmpty { items.append("\(status.jobs) background job\(status.jobs == 1 ? "" : "s")") }
+                note.stops += jobs
+                if note.isEmpty { note.stops.append("\(status.jobs) background job\(status.jobs == 1 ? "" : "s")") }
             }
         } else if !status.running {
-            items += ProcessInspector.childProcessNames(of: view.process.shellPid).map { "“\($0)”" }
+            note.stops += ProcessInspector.childProcessNames(of: view.process.shellPid).map { "“\($0)”" }
         }
-        return items.isEmpty ? nil : items.joined(separator: ", ")
+        return note.isEmpty ? nil : note
+    }
+
+    /// What closing this tab stops, as a phrase ("“claude” (running), “next-server” (started by “claude”)"), or
+    /// nil if it stops nothing.
+    var closeWarning: String? {
+        guard let stops = closeNote?.stops, !stops.isEmpty else { return nil }
+        return stops.joined(separator: ", ")
     }
 
     /// What runs in front, as the close alerts name it: the program with its arguments as they were typed ("npm run

@@ -676,7 +676,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Quit Next Term?"
-        alert.informativeText = "Quitting stops " + TerminalWindowController.stopList(busy)
+        alert.informativeText = TerminalWindowController.stopText("Quitting stops", busy)
         alert.addButton(withTitle: "Quit")
         alert.addButton(withTitle: "Cancel")
         return alert
@@ -890,7 +890,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = target.project == nil ? "Replace the tabs in this window?" : "Replace the project in this window?"
-            alert.informativeText = "This stops " + TerminalWindowController.stopList(busy)
+            alert.informativeText = TerminalWindowController.stopText("This stops", busy)
             alert.addButton(withTitle: "Replace")
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
