@@ -61,7 +61,8 @@ import Testing
     @Test func nestedSplitsInBothDirectionsRoundTripExactly() throws {
         var agentPane = pane(2)
         agentPane.userTitle = "reviewer"
-        agentPane.command = Snapshot.Command(line: "claude --model opus", check: .kept, source: .integration, running: true)
+        // An agent's line is written as its program alone (`anAgentsPromptWordsNeverReachTheFile`).
+        agentPane.command = Snapshot.Command(line: "claude", check: .kept, source: .integration, running: true)
         agentPane.stateBefore = .working
         agentPane.interrupted = true
         agentPane.agent = Snapshot.Evidence(agent: .claude, sessionID: "0d9c8b7a-6f5e-4d3c-8b2a-1f0e9d8c7b6a", source: .sessionFile,
@@ -567,6 +568,32 @@ import Testing
         #expect(unicode.line == "echo 'héllo ✓'")
     }
 
+    /// An agent's typed line holds its prompt words, and nothing reads them back: its put-back line and its resume come
+    /// from its evidence. The file keeps the line's checks and state, and the agent's program alone (R8), rewritten as
+    /// often as the session is saved.
+    @Test func anAgentsPromptWordsNeverReachTheFile() throws {
+        var claude = pane(1)
+        claude.command = Snapshot.Command(line: #"claude "the staging db password is Tr0ub4dor""#, check: .kept, source: .integration,
+                                          running: true)
+        claude.agent = Snapshot.Evidence(agent: .claude, sessionID: "5e4d3c2b-1a09-4f8e-9d7c-6b5a4f3e2d1c", source: .sessionFile)
+        var unknown = pane(2)
+        unknown.command = Snapshot.Command(line: "kimi fix the Tr0ub4dor login", check: .kept, source: .integration, running: true)
+        unknown.agent = Snapshot.Evidence(agent: .unknown)
+        var shell = pane(3)
+        shell.command = Snapshot.Command(line: "npm run dev", check: .kept, source: .integration, running: true)
+        let children: [Node] = [.pane(claude), .pane(unknown), .pane(shell)]
+        let tab = Group(root: .split(Split(vertical: true, children: children)), focused: id(1))
+        let data = try Snapshot(header: header(), windows: [Window(groups: [tab])]).encoded()
+        #expect(!String(decoding: data, as: UTF8.self).contains("Tr0ub4dor"))
+        let panes = try Snapshot.decode(data).panes
+        try #require(panes.count == 3)
+        #expect(panes[0].command == Snapshot.Command(line: "claude", check: .kept, source: .integration, running: true))
+        #expect(panes[1].command == Snapshot.Command(line: nil, check: .kept, source: .integration, running: true))
+        #expect(panes[2].command?.line == "npm run dev")
+        // The pane in memory keeps what was typed: only the file leaves it out.
+        #expect(claude.command?.line?.contains("Tr0ub4dor") == true)
+    }
+
     @Test func encodingWritesNoEnvironmentValuesAndNoExpandedLine() throws {
         var status = TabStatus()
         status.commandStarted("gl", expanded: "git pull --rebase canary-expanded-line", at: 1)
@@ -574,10 +601,13 @@ import Testing
         agentPane.command = Snapshot.Command(status: status, check: .kept)
         agentPane.agent = Snapshot.Evidence(agent: .copilot, sessionID: "a1b2c3", source: .childEnvironment,
                                             routingMatchesShell: true, autoContinueOff: true)
-        let data = try Snapshot(header: header(), windows: [Window(groups: [Group(root: .pane(agentPane), focused: id(1))])]).encoded()
+        var commandPane = pane(2)
+        commandPane.command = Snapshot.Command(status: status, check: .kept)
+        let tab = Group(root: .split(Split(vertical: true, children: [.pane(agentPane), .pane(commandPane)])), focused: id(1))
+        let data = try Snapshot(header: header(), windows: [Window(groups: [tab])]).encoded()
         let text = String(decoding: data, as: UTF8.self)
-        #expect(agentPane.command?.line == "gl")
-        #expect(agentPane.command?.source == .integration)
+        #expect(commandPane.command?.line == "gl")
+        #expect(commandPane.command?.source == .integration)
         #expect(text.contains(#""gl""#))
         #expect(!text.contains("canary-expanded-line"))
 

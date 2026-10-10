@@ -248,7 +248,8 @@ extension SessionSnapshot {
         /// Lines this long or longer are not put back.
         public static let longest = 4096
 
-        /// The line as typed (never its alias-expanded form); nil unless `check` is `.kept`.
+        /// The line as typed (never its alias-expanded form); nil unless `check` is `.kept`. A file keeps an agent's
+        /// program alone (`programOnly`).
         public private(set) var line: String?
         public private(set) var check: LineCheck
         /// Whether the shell integration reported it typed, with its quoting, or it was polled.
@@ -277,6 +278,16 @@ extension SessionSnapshot {
             let line: String? = status.command.isEmpty ? nil : status.command
             let source: LineSource = status.integrated ? .integration : .polled
             self.init(line: line, check: check, source: source, running: status.running, exitCode: status.exitCode)
+        }
+
+        /// The line as a file keeps it for a pane that runs `agent`: its checks and state as they are, and the agent's
+        /// program alone in place of the words typed, which hold its prompt (R8). Nothing reads them back: the put-back
+        /// line and the automatic resume come from the agent's evidence, and the gate asks only that a kept line was
+        /// typed. An agent the matrix does not know keeps no line.
+        public func programOnly(of agent: Agent) -> Command {
+            var kept = self
+            if line != nil { kept.line = agent.program }
+            return kept
         }
 
         /// Why a line could not be put back as it ran: more than one line, too long, or holding control,
@@ -1288,7 +1299,11 @@ extension SessionSnapshot.Pane: Codable {
                 try c.encode(remote, forKey: .remote)
             }
         }
-        try c.encodeIfPresent(command, forKey: .command)
+        // An agent's typed line holds its prompt words: the file keeps its program alone (`Command.programOnly`).
+        let written: SessionSnapshot.Command? = agent.flatMap { (evidence: SessionSnapshot.Evidence) -> SessionSnapshot.Command? in
+            command?.programOnly(of: evidence.agent)
+        } ?? command
+        try c.encodeIfPresent(written, forKey: .command)
         try c.encode(stateBefore.rawValue, forKey: .stateBefore)
         try c.encode(interrupted, forKey: .interrupted)
         try c.encode(Millis.of(lastSelected), forKey: .lastSelected)

@@ -166,6 +166,21 @@ import Testing
         #expect(result.listLine == "Claude Code resumes")
     }
 
+    /// An agent's typed line holds its prompt words, which the file never keeps: read back, the pane holds the agent's
+    /// program alone, and it still resumes, from its evidence (R8).
+    @Test func anAgentReadBackWithItsProgramAloneStillResumes() throws {
+        let (evidence, facts) = exactClaude()
+        let claude = pane(1, typed("claude \"the staging db password is Tr0ub4dor\""), agent: evidence)
+        let groups = [SessionSnapshot.Group(root: .pane(claude), focused: claude.id)]
+        let header = SessionSnapshot.Header(launchID: id(900), generation: 1, clean: false, savedAt: start)
+        let data = try SessionSnapshot(header: header, windows: [SessionSnapshot.Window(project: folder, groups: groups)]).encoded()
+        #expect(!String(decoding: data, as: UTF8.self).contains("Tr0ub4dor"))
+        let read = try #require(try SessionSnapshot.decode(data).panes.first)
+        #expect(read.command?.line == "claude" && read.command?.check == .kept)
+        let result = plan(read, world: world(facts: facts))
+        #expect(result.outcome == .resume && result.line == evidence.resumeCommand)
+    }
+
     @Test func anIDExactOnlyThroughTheTypedLineGoesOnTheLine() {
         let (base, facts) = exactClaude()
         var evidence = base
