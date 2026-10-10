@@ -95,10 +95,16 @@ final class ImportCoordinator {
         }
     }
 
-    /// How many things an import would change.
+    /// How many things an import would change, as an agent's preview counts them (MCPImport.changes): a ticked
+    /// setting Next Term already has changes nothing, so it isn't counted.
     static func count(_ choice: ImportChoice, plan: ImportPlan) -> Int {
-        (choice.usePreset && plan.preset != KeyboardShortcuts.shared.preset ? plan.preset.overrides.count : 0)
-            + choice.settings.count + choice.shortcuts.count + (choice.recentProjects.isEmpty ? 0 : 1)
+        let preset = choice.usePreset && plan.preset != KeyboardShortcuts.shared.preset ? plan.preset.overrides.count : 0
+        return preset + changing(choice.settings).count + choice.shortcuts.count + (choice.recentProjects.isEmpty ? 0 : 1)
+    }
+
+    /// The ticked settings that would change something.
+    static func changing(_ settings: [PlannedSetting]) -> [PlannedSetting] {
+        settings.filter { !ImportCurrent.has($0.setting) }
     }
 
     /// Applies what was ticked and remembers it for Undo. An Apply that changes nothing (every value was
@@ -114,6 +120,7 @@ final class ImportCoordinator {
         var unique: [String] = []
         for key in keys where !unique.contains(key) { unique.append(key) }
         let before = Snapshot.values(of: unique, in: defaults)
+        let settingsChanging = Self.changing(choice.settings).count
         let app = AppDelegate.shared!
         if choice.usePreset { KeyboardShortcuts.shared.preset = plan.preset }
         // The user's own shortcuts go on top of the preset, as their own changes.
@@ -123,7 +130,7 @@ final class ImportCoordinator {
         var parts: [String] = []
         if choice.usePreset { parts.append("\(plan.preset.name) shortcuts") }
         if !choice.shortcuts.isEmpty { parts.append("\(choice.shortcuts.count) of your shortcut\(choice.shortcuts.count == 1 ? "" : "s")") }
-        if !choice.settings.isEmpty { parts.append("\(choice.settings.count) setting\(choice.settings.count == 1 ? "" : "s")") }
+        if settingsChanging > 0 { parts.append("\(settingsChanging) setting\(settingsChanging == 1 ? "" : "s")") }
         if !added.isEmpty { parts.append("\(added.count) project\(added.count == 1 ? "" : "s")") }
         let after = Snapshot.values(of: unique, in: defaults)
         guard let snapshot = Snapshot.applied(keys: unique, before: before, after: after, source: source,
@@ -432,8 +439,9 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
             list.orientation = .vertical
             list.alignment = .leading
             list.spacing = 8
-            // Open when one of them is chosen (every app found is not used lately).
-            let open = stale.contains { radios[$0 + 1] === selected }
+            // Open when every app found is not used lately (the first run chooses Keep, and folded they would look
+            // like nothing was found), or when one of them is chosen.
+            let open = stale.count == apps.count || stale.contains { radios[$0 + 1] === selected }
             disclosure.state = open ? .on : .off
             list.isHidden = !open
             staleList = list

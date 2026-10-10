@@ -56,6 +56,13 @@ extension SelfTest {
         await pause(0.3)
         check(window.chosenTitle == "NT Stale IDE 2024.1" && window.staleListIsOpen,
               "with only apps not used lately, their list is open and the newest chosen", window.chosenTitle ?? "none")
+        window.window?.close()
+
+        // The first run chooses Keep Next Term's shortcuts; the apps not used lately are still shown, not folded away.
+        window.showChooser(firstRun: true, completion: nil)
+        await pause(0.3)
+        check(window.chosenTitle == "Keep Next Term’s shortcuts" && window.staleListIsOpen,
+              "on the first run, with only apps not used lately, their list is open and Keep is chosen", window.chosenTitle ?? "none")
     }
 
     /// The chooser's disclosure button (the apps not used lately).

@@ -1232,7 +1232,10 @@ enum SelfTest {
         window.showPreview(for: DetectedApp(kind: .vsCode, name: "VS Code", configPath: "/tmp", lastUsed: Date()), plan: plan)
         await pause(0.4)
         if let previewWindow = window.window { await screenshot(previewWindow, suffix: "import") }
-        check(window.applyTitle == "Apply \(KeymapPreset.vsCode.overrides.count + 6) Changes", "the preview counts what is ticked", window.applyTitle)
+        // A ticked setting Next Term already has (the font, if it is Menlo here) changes nothing and isn't counted.
+        let alreadySet = plan.settings.filter { $0.ticked && ImportCurrent.has($0.setting) }.count
+        check(window.applyTitle == "Apply \(KeymapPreset.vsCode.overrides.count + 6 - alreadySet) Changes", "the preview counts what is ticked",
+              window.applyTitle)
         func swatches(in view: NSView?) -> [PaletteSwatches] {
             guard let view else { return [] }
             return (view as? PaletteSwatches).map { [$0] } ?? view.subviews.flatMap { swatches(in: $0) }
