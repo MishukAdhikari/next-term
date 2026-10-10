@@ -207,10 +207,8 @@ public enum ImportGhostty {
             plan.skipped.append(SkippedItem("font-size", "not a font size Next Term can use"))
             return
         }
-        var notes = ["sets the editor too: Next Term has one size for both"]
-        if size.rounded() < 8 || size.rounded() > 32 { notes.insert("Next Term's sizes go from 8 to 32", at: 0) }
-        plan.settings.append(PlannedSetting(.fontSize(clamping: size), source: "font-size \(ImportITerm2.formatted(size))",
-                                            note: notes.joined(separator: "; ")))
+        let note = size.rounded() < 8 || size.rounded() > 32 ? "Next Term's sizes go from 8 to 32" : nil
+        plan.settings.append(PlannedSetting(.terminalFontSize(clamping: size), source: "font-size \(ImportITerm2.formatted(size))", note: note))
     }
 
     /// `macos-option-as-alt`: true or false for both keys, or one side only (offered unticked: Next Term can't

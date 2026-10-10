@@ -56,10 +56,9 @@ public enum ImportWarp {
         }
         if let raw = scan.values[size] {
             if let value = TOML.number(raw), value > 0 {
-                var notes = ["sets the editor too: Next Term has one size for both"]
-                if value.rounded() < 8 || value.rounded() > 32 { notes.insert("Next Term's sizes go from 8 to 32", at: 0) }
-                plan.settings.append(PlannedSetting(.fontSize(clamping: value), source: "font_size \(ImportITerm2.formatted(value))",
-                                                    note: notes.joined(separator: "; ")))
+                let note = value.rounded() < 8 || value.rounded() > 32 ? "Next Term's sizes go from 8 to 32" : nil
+                plan.settings.append(PlannedSetting(.terminalFontSize(clamping: value), source: "font_size \(ImportITerm2.formatted(value))",
+                                                    note: note))
             } else {
                 plan.skipped.append(SkippedItem("font_size", "not a font size Next Term can use"))
             }

@@ -361,7 +361,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     private func makeTab(directory: String?, remote: RemoteTab? = nil) -> TerminalTab {
-        let tab = TerminalTab(directory: directory, fontSize: AppDelegate.shared.fontSize, remote: remote)
+        let tab = TerminalTab(directory: directory, fontSize: AppDelegate.shared.terminalFontSize, remote: remote)
         tab.delegate = self
         // ⌘-click on "src/a.ts:42" in the output opens the editor there.
         tab.view.openFile = { [weak self] url, line, column in self?.openFile(url, line: line, column: column) }
@@ -1823,8 +1823,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         addTab(directory: directory)
     }
 
-    func applyFontSize(_ size: CGFloat) {
-        for tab in tabs { tab.view.font = Theme.terminalFont(size: size) }
+    /// The editor's size in the editors, and the terminals' size (their own, else the editor's) in the terminals.
+    func applyFontSizes() {
+        let font = Theme.terminalFont(size: AppDelegate.shared.terminalFontSize)
+        for tab in tabs { tab.view.font = font }
         editorArea.applyFont()
     }
 

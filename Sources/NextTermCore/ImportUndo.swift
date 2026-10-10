@@ -95,6 +95,7 @@ public struct ImportSnapshot: Codable, Equatable, Sendable {
         case "keyBindings": return "Your shortcuts"
         case "recentProjects": return "Recent projects"
         case "fontSize": return "Font size"
+        case "terminalFontSize": return "Terminal font size"
         case "editorLineHeight": return "Line height"
         case "softWrap": return "Wrap long lines"
         case "optionAsMeta": return "Option as Meta"

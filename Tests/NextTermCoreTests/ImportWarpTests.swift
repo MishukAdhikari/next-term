@@ -105,7 +105,7 @@ import Testing
         let palette = TerminalPalette(name: "Warp colours", ansi: ansi, foreground: 0x839496, background: 0x002B36, cursor: 0x268BD2)
         #expect(plan.settings == [
             PlannedSetting(.terminalFontFamily("JetBrains Mono"), source: "font_name JetBrains Mono"),
-            PlannedSetting(.fontSize(14), source: "font_size 14", note: "sets the editor too: Next Term has one size for both"),
+            PlannedSetting(.terminalFontSize(14), source: "font_size 14"),
             PlannedSetting(.optionAsMeta(true), source: "extra_meta_keys left_alt, right_alt"),
             PlannedSetting(.terminalPalette(palette), source: "theme my_theme.yaml", note: "7 of 20 colours; the others stay Next Term's"),
         ])

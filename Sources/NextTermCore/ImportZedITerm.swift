@@ -153,19 +153,16 @@ public enum ImportZed {
         }
         let terminal = nested("terminal")
 
-        // Font size: one for both here, the buffer's first.
+        // The buffer's size is the editor's; the terminal's own, when set (Zed's terminal uses the buffer's without).
         let bufferSize = value("buffer_font_size", in: members).map(ImportVSCode.number)
         let terminalSize = value("font_size", in: terminal).map(ImportVSCode.number)
         if case .some(.none) = bufferSize { skipped.append(SkippedItem("buffer_font_size", notRecognised)) }
         if case .some(.none) = terminalSize { skipped.append(SkippedItem("terminal.font_size", notRecognised)) }
         if let size = bufferSize ?? nil, size > 0 {
             settings.append(fontSizeRow(size, source: "buffer_font_size", note: nil))
-            if let other = terminalSize ?? nil, other.rounded() != size.rounded() {
-                skipped.append(SkippedItem("terminal.font_size \(ImportVSCode.format(other))",
-                                           "Next Term uses one size for the editor and the terminal, so the buffer's \(ImportVSCode.format(size)) is used"))
-            }
-        } else if let size = terminalSize ?? nil, size > 0 {
-            settings.append(fontSizeRow(size, source: "terminal.font_size", note: "sets the editor too: Next Term has one size for both"))
+        }
+        if let size = terminalSize ?? nil, size > 0 {
+            settings.append(fontSizeRow(size, source: "terminal.font_size", note: nil, terminal: true))
         }
 
         if let raw = value("buffer_line_height", in: members) {
@@ -300,11 +297,12 @@ public enum ImportZed {
         }
     }
 
-    static func fontSizeRow(_ size: Double, source: String, note: String?) -> PlannedSetting {
+    /// The editor's size, or with `terminal` the terminal's own.
+    static func fontSizeRow(_ size: Double, source: String, note: String?, terminal: Bool = false) -> PlannedSetting {
         var notes = [note].compactMap { $0 }
         if size.rounded() < 8 || size.rounded() > 32 { notes.insert("Next Term's sizes go from 8 to 32", at: 0) }
-        return PlannedSetting(.fontSize(clamping: size), source: "\(source) \(ImportVSCode.format(size))",
-                              note: notes.isEmpty ? nil : notes.joined(separator: "; "))
+        let setting = terminal ? ImportedSetting.terminalFontSize(clamping: size) : .fontSize(clamping: size)
+        return PlannedSetting(setting, source: "\(source) \(ImportVSCode.format(size))", note: notes.isEmpty ? nil : notes.joined(separator: "; "))
     }
 
     // MARK: reporting the rest
@@ -572,12 +570,12 @@ public enum ImportITerm2 {
             skipped.append(SkippedItem("Normal Font", "the size couldn't be read"))
             return nil
         }
-        let setting = ImportedSetting.fontSize(clamping: size)
-        var notes = ["sets the editor too: Next Term has one size for both"]
-        if case .fontSize(let clamped) = setting, size < 8 || size > 32 {
-            notes.insert("iTerm2 has \(formatted(size)); Next Term's sizes go from 8 to 32, so \(formatted(clamped))", at: 0)
+        let setting = ImportedSetting.terminalFontSize(clamping: size)
+        var note: String?
+        if case .terminalFontSize(let clamped) = setting, size < 8 || size > 32 {
+            note = "iTerm2 has \(formatted(size)); Next Term's sizes go from 8 to 32, so \(formatted(clamped))"
         }
-        return PlannedSetting(setting, source: "Normal Font " + font, note: notes.joined(separator: "; "))
+        return PlannedSetting(setting, source: "Normal Font " + font, note: note)
     }
 
     /// Option as Meta when either Option key sends Meta or Esc+: ticked only when both do and the keyboard

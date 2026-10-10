@@ -59,7 +59,7 @@ import Testing
         #expect(plan.settings == [
             PlannedSetting(.terminalFontFamily("JetBrains Mono"), source: "font-family Operator Mono, JetBrains Mono",
                            note: "the first font in the list that this Mac has"),
-            PlannedSetting(.fontSize(15), source: "font-size 14.5", note: "sets the editor too: Next Term has one size for both"),
+            PlannedSetting(.terminalFontSize(15), source: "font-size 14.5"),
             PlannedSetting(.optionAsMeta(true), source: "macos-option-as-alt true"),
         ])
         #expect(plan.skipped == [SkippedItem("Terminal font “Operator Mono”", "not installed on this Mac")])
@@ -330,7 +330,7 @@ import Testing
             #expect(!shown.contains(value), "\(value) reached the plan")
         }
         // The include inside Ghostty's folder is read (and a loop of includes stops).
-        #expect(plan.settings.map(\.setting) == [.fontSize(16)])
+        #expect(plan.settings.map(\.setting) == [.terminalFontSize(16)])
         #expect(reasons(plan)["command"] == "never imported: runs commands or can hold secrets")
         #expect(reasons(plan)["env"] == "never imported: runs commands or can hold secrets")
         #expect(reasons(plan)["working-directory"] == "the folder isn't on this Mac")
@@ -362,27 +362,27 @@ import Testing
     @Test func includesComeAfterGhosttysOwnFiles() throws {
         let later = try plan(files: [xdg: "config-file = local.conf\nfont-size = 10", "/.config/ghostty/local.conf": "font-size = 14",
                                      appSupport: "font-size = 12"])
-        #expect(later.settings.map(\.setting) == [.fontSize(14)])
+        #expect(later.settings.map(\.setting) == [.terminalFontSize(14)])
 
         let breadthFirst = try plan(files: [
             xdg: "config-file = a.conf\nconfig-file = b.conf",
             "/.config/ghostty/a.conf": "config-file = c.conf", "/.config/ghostty/b.conf": "font-size = 15",
             "/.config/ghostty/c.conf": "font-size = 17",
         ])
-        #expect(breadthFirst.settings.map(\.setting) == [.fontSize(17)])
+        #expect(breadthFirst.settings.map(\.setting) == [.terminalFontSize(17)])
     }
 
     @Test func includePaths() throws {
         // `~/` is the home folder.
         let tilde = try plan(files: [xdg: "config-file = ~/.config/ghostty/local.conf", "/.config/ghostty/local.conf": "font-size = 14"])
-        #expect(tilde.settings.map(\.setting) == [.fontSize(14)])
+        #expect(tilde.settings.map(\.setting) == [.terminalFontSize(14)])
         #expect(tilde.skipped.isEmpty)
 
         // A symlinked config (stow, chezmoi): an include is relative to where the config was opened from.
         let linked = try plan(files: ["/dotfiles/ghostty/config": "config-file = theme.conf", "/.config/ghostty/theme.conf": "font-size = 18",
                                       "/dotfiles/ghostty/theme.conf": "font-size = 20"],
                               links: [xdg: "/dotfiles/ghostty/config"])
-        #expect(linked.settings.map(\.setting) == [.fontSize(18)])
+        #expect(linked.settings.map(\.setting) == [.terminalFontSize(18)])
         #expect(linked.skipped.isEmpty)
 
         // A missing include is reported unless it is marked optional.

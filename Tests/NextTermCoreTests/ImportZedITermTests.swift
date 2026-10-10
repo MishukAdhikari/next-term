@@ -159,6 +159,7 @@ import Testing
         // The settings Next Term has too come over; the font isn't installed.
         #expect(plan.settings == [
             PlannedSetting(.fontSize(15), source: "buffer_font_size 15"),
+            PlannedSetting(.terminalFontSize(13), source: "terminal.font_size 13"),
             PlannedSetting(.editorLineHeight(1.4), source: "buffer_line_height 1.7"),
             PlannedSetting(.softWrap(true), source: "soft_wrap editor_width"),
             PlannedSetting(.optionAsMeta(true), source: "terminal.option_as_meta true"),
@@ -171,7 +172,6 @@ import Testing
         let expected: [String: String] = [
             "vim_mode": "Next Term has no Vim mode",
             "Editor font “Berkeley Mono”": "not installed on this Mac",
-            "terminal.font_size 13": "Next Term uses one size for the editor and the terminal, so the buffer's 15 is used",
             "ui_font_size": "Next Term's window text follows macOS",
             "theme": "colour themes come later",
             "terminal.shell": "never imported: can hold secrets",
@@ -212,10 +212,9 @@ import Testing
         let column = try plan(#"{"soft_wrap": "preferred_line_length"}"#)
         #expect(column.settings.map(\.setting) == [.softWrap(true)])
         #expect(reasons(column)["soft_wrap preferred_line_length"] == "Next Term wraps at the window edge; a wrap column isn't supported")
-        // The terminal's size alone sets the one size.
+        // The terminal's size is the terminal's own.
         let terminalSize = try plan(#"{"terminal": {"font_size": 40}}"#).settings
-        #expect(terminalSize == [PlannedSetting(.fontSize(32), source: "terminal.font_size 40",
-                                                note: "Next Term's sizes go from 8 to 32; sets the editor too: Next Term has one size for both")])
+        #expect(terminalSize == [PlannedSetting(.terminalFontSize(32), source: "terminal.font_size 40", note: "Next Term's sizes go from 8 to 32")])
         // Option as Meta waits for a tick off a U.S. layout.
         #expect(try plan(#"{"terminal": {"option_as_meta": true}}"#, usKeyboard: false).settings.first?.ticked == false)
 
@@ -489,8 +488,7 @@ import Testing
             let plan = try iTermPlan(root, format: format)
             #expect(plan.preset == .nextTerm)
             #expect(plan.settings == [
-                PlannedSetting(.fontSize(14), source: "Normal Font JetBrainsMono-Regular 14",
-                               note: "sets the editor too: Next Term has one size for both"),
+                PlannedSetting(.terminalFontSize(14), source: "Normal Font JetBrainsMono-Regular 14"),
                 PlannedSetting(.terminalFontFamily("JetBrains Mono"), source: "Normal Font JetBrainsMono-Regular"),
                 PlannedSetting(.optionAsMeta(true), source: "Option Key Sends Esc+, Right Option Key Sends Esc+"),
                 PlannedSetting(.terminalPalette(fixtureColours), source: "the default profile's colours",
@@ -507,7 +505,7 @@ import Testing
         for guid in [nil, "gone"] as [String?] {
             let plan = try iTermPlan(preferences([profile(guid: "A", font: "Menlo 11"), profile(guid: "B", font: "Monaco 15")],
                                                  defaultGuid: guid))
-            #expect(plan.settings.first?.setting == .fontSize(11))
+            #expect(plan.settings.first?.setting == .terminalFontSize(11))
         }
     }
 
@@ -518,16 +516,16 @@ import Testing
             profile.normalFont = font
             return (ImportITerm2.fontSize(profile, skipped: &skipped), skipped)
         }
-        #expect(plan("Monaco 12").0?.setting == .fontSize(12))
-        #expect(plan("SFMono-Regular 13.5").0?.setting == .fontSize(14))
-        #expect(plan("Menlo-Regular 11.0").0?.setting == .fontSize(11))
+        #expect(plan("Monaco 12").0?.setting == .terminalFontSize(12))
+        #expect(plan("SFMono-Regular 13.5").0?.setting == .terminalFontSize(14))
+        #expect(plan("Menlo-Regular 11.0").0?.setting == .terminalFontSize(11))
         #expect(plan("Fira Code Retina 16").1.isEmpty) // the font itself: iTermFontFamily
 
         let big = plan("Menlo 40")
-        #expect(big.0?.setting == .fontSize(32))
-        #expect(big.0?.note == "iTerm2 has 40; Next Term's sizes go from 8 to 32, so 32; sets the editor too: Next Term has one size for both")
+        #expect(big.0?.setting == .terminalFontSize(32))
+        #expect(big.0?.note == "iTerm2 has 40; Next Term's sizes go from 8 to 32, so 32")
         #expect(big.0?.ticked == true)
-        #expect(plan("Menlo 6.5").0?.setting == .fontSize(8))
+        #expect(plan("Menlo 6.5").0?.setting == .terminalFontSize(8))
 
         // No size, or no font at all: no row.
         #expect(plan("Monaco").0 == nil)
@@ -740,7 +738,7 @@ import Testing
 
         // Profiles that aren't dictionaries are passed over.
         _ = try writePlist(preferences([], defaultGuid: "B", extra: ["New Bookmarks": ["junk", 3, profile(guid: "B", font: "Monaco 13")] as [Any]]), home: home)
-        #expect(ImportITerm2.plan(for: app, home: home).settings.first?.setting == .fontSize(13))
+        #expect(ImportITerm2.plan(for: app, home: home).settings.first?.setting == .terminalFontSize(13))
 
         // Not a plist, a plist that isn't a dictionary, an empty file, a missing file.
         for contents in [Data("not a plist".utf8), try PropertyListSerialization.data(fromPropertyList: ["a"], format: .binary, options: 0), Data()] {

@@ -658,6 +658,7 @@ enum SelfTest {
         await importChecks(c, proj: proj)
         await importUndoGuardChecks()
         await importForkChecks()
+        await importTerminalSizeChecks(c)
         await behaviourSettingsChecks(c, proj: proj)
         await singleClickChecks(c, proj: proj, tab: inProject)
         await safetyChecks(c, proj: proj)

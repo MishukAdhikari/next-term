@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// When a notification last played its sound: tabs finishing together make one sound, not one each.
     var lastSoundAt = Date.distantPast
 
+    /// The editor's font size, which terminals use too while they have no size of their own.
     var fontSize: CGFloat {
         get {
             let saved = UserDefaults.standard.double(forKey: "fontSize")
@@ -21,6 +22,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         set { UserDefaults.standard.set(Double(newValue), forKey: "fontSize") }
     }
+
+    /// The terminal's own font size (Settings › Terminal), or nil while terminals use the editor's: saved only
+    /// once it is set, so nothing changes for anyone until then.
+    var terminalOwnFontSize: CGFloat? {
+        get {
+            let saved = UserDefaults.standard.double(forKey: "terminalFontSize")
+            return saved > 0 ? CGFloat(saved) : nil
+        }
+        set {
+            if let newValue { UserDefaults.standard.set(Double(newValue), forKey: "terminalFontSize") }
+            else { UserDefaults.standard.removeObject(forKey: "terminalFontSize") }
+        }
+    }
+
+    /// The size terminals use: their own, else the editor's.
+    var terminalFontSize: CGFloat { terminalOwnFontSize ?? fontSize }
 
     var sidebarVisible: Bool {
         get { UserDefaults.standard.object(forKey: "sidebarVisible") as? Bool ?? true }
@@ -1050,14 +1067,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     // MARK: font size
 
-    @objc func increaseFontSize(_ sender: Any?) { setFontSize(fontSize + 1) }
-    @objc func decreaseFontSize(_ sender: Any?) { setFontSize(fontSize - 1) }
-    @objc func resetFontSize(_ sender: Any?) { setFontSize(Theme.defaultFontSize) }
+    // ⌘+, ⌘- and ⌘0 change the size of what has the keyboard: a terminal's own size while a terminal has the
+    // keyboard and a size of its own, else the editor's (which terminals without their own follow).
+    @objc func increaseFontSize(_ sender: Any?) { changeFontSize(by: 1) }
+    @objc func decreaseFontSize(_ sender: Any?) { changeFontSize(by: -1) }
+    @objc func resetFontSize(_ sender: Any?) { changeFontSize(by: nil) }
 
+    /// nil: back to the default size.
+    private func changeFontSize(by step: CGFloat?) {
+        if let own = terminalOwnFontSize, NSApp.keyWindow?.firstResponder is NextTermView {
+            setTerminalFontSize(step.map { own + $0 } ?? Theme.defaultFontSize)
+        } else {
+            setFontSize(step.map { fontSize + $0 } ?? Theme.defaultFontSize)
+        }
+    }
+
+    /// The editor's size, in every editor, and in every terminal that has no size of its own.
     func setFontSize(_ size: CGFloat) {
-        let clamped = min(max(size, Theme.fontSizeRange.lowerBound), Theme.fontSizeRange.upperBound)
-        fontSize = clamped
-        controllers.forEach { $0.applyFontSize(clamped) }
+        fontSize = Self.clampedFontSize(size)
+        controllers.forEach { $0.applyFontSizes() }
+    }
+
+    /// The terminal's own size in every terminal (nil: terminals use the editor's size again).
+    func setTerminalFontSize(_ size: CGFloat?) {
+        terminalOwnFontSize = size.map(Self.clampedFontSize)
+        controllers.forEach { $0.applyFontSizes() }
+    }
+
+    static func clampedFontSize(_ size: CGFloat) -> CGFloat {
+        min(max(size, Theme.fontSizeRange.lowerBound), Theme.fontSizeRange.upperBound)
     }
 
     // MARK: dock badge and notifications

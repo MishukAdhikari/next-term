@@ -233,10 +233,8 @@ public enum ImportJetBrains {
 
     static func addSettings(config: String, usKeyboard: Bool, fonts: FontCatalog = .system, to plan: inout ImportPlan) {
         let font = editorFont(config: config)
-        var editorSize: Double?
         if let text = font.size {
             if let size = number(text) {
-                editorSize = size
                 plan.settings.append(fontSizeRow(size, source: "\(font.file) \(font.sizeKey) \(clean(text))"))
             } else {
                 plan.skipped.append(SkippedItem("\(font.file) \(font.sizeKey)", "not a font size Next Term can use"))
@@ -263,7 +261,7 @@ public enum ImportJetBrains {
         let editor = options(component(read(config, "options/editor.xml", keep: editorKeys), "EditorSettings"), keep: editorKeys)
         addSoftWrap(editor, to: &plan)
         addCleanUp(editor, to: &plan)
-        addTerminal(config: config, usKeyboard: usKeyboard, editorSize: editorSize, fonts: fonts, to: &plan)
+        addTerminal(config: config, usKeyboard: usKeyboard, fonts: fonts, to: &plan)
         addRedacted(editor, file: "options/editor.xml", to: &plan)
 
         if let scheme = activeScheme(config: config) {
@@ -386,7 +384,7 @@ public enum ImportJetBrains {
         }
     }
 
-    static func addTerminal(config: String, usKeyboard: Bool, editorSize: Double?, fonts: FontCatalog = .system, to plan: inout ImportPlan) {
+    static func addTerminal(config: String, usKeyboard: Bool, fonts: FontCatalog = .system, to plan: inout ImportPlan) {
         let terminalKeys: Set<String> = ["useOptionAsMetaKey"]
         let terminal = options(component(read(config, "options/terminal.xml", keep: terminalKeys), "TerminalOptionsProvider"),
                                keep: terminalKeys)
@@ -411,12 +409,7 @@ public enum ImportJetBrains {
         let sizeKey = font.values["FONT_SIZE"] != nil ? "FONT_SIZE" : "FONT_SIZE_2D"
         if let text = font.values[sizeKey] {
             if let size = number(text) {
-                if editorSize == nil {
-                    plan.settings.append(fontSizeRow(size, source: "options/terminal-font.xml \(sizeKey) \(clean(text))"))
-                } else if let editorSize, editorSize.rounded() != size.rounded() {
-                    plan.skipped.append(SkippedItem("Terminal font size \(clean(text))",
-                        "Next Term uses one size for the editor and the terminal, so the editor's \(clean(String(editorSize))) is used"))
-                }
+                plan.settings.append(fontSizeRow(size, source: "options/terminal-font.xml \(sizeKey) \(clean(text))", terminal: true))
             } else {
                 plan.skipped.append(SkippedItem("options/terminal-font.xml \(sizeKey)", "not a font size Next Term can use"))
             }
@@ -491,9 +484,11 @@ public enum ImportJetBrains {
         }
     }
 
-    static func fontSizeRow(_ size: Double, source: String) -> PlannedSetting {
+    /// The editor's size, or with `terminal` the terminal's own.
+    static func fontSizeRow(_ size: Double, source: String, terminal: Bool = false) -> PlannedSetting {
         let inRange = (8...32).contains(size.rounded())
-        return PlannedSetting(.fontSize(clamping: size), source: source, note: inRange ? nil : "Next Term's sizes go from 8 to 32")
+        let setting = terminal ? ImportedSetting.terminalFontSize(clamping: size) : .fontSize(clamping: size)
+        return PlannedSetting(setting, source: source, note: inRange ? nil : "Next Term's sizes go from 8 to 32")
     }
 
     /// A positive, finite number ("14", "13.5", "1.2"); nil for anything else ("nan", "-1", "big").

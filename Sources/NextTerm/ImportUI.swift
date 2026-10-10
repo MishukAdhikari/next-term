@@ -162,6 +162,7 @@ extension AppDelegate {
     func applyImported(_ setting: ImportedSetting) {
         switch setting {
         case .fontSize(let size): setFontSize(CGFloat(size))
+        case .terminalFontSize(let size): setTerminalFontSize(CGFloat(size))
         case .editorLineHeight(let factor): editorLineHeight = CGFloat(factor)
         case .softWrap(let on): if softWrap != on { toggleSoftWrap(nil) }
         case .optionAsMeta(let on): if Preferences.optionAsMeta != on { toggleOptionAsMeta(nil) }
@@ -192,7 +193,9 @@ extension AppDelegate {
     func restoreSetting(_ key: String, to value: ImportCoordinator.Snapshot.Value?) {
         switch (key, value) {
         case ("fontSize", .double(let size)?): setFontSize(CGFloat(size))
-        case ("fontSize", nil): resetFontSize(nil)
+        case ("fontSize", nil): setFontSize(Theme.defaultFontSize)
+        case ("terminalFontSize", .double(let size)?): setTerminalFontSize(CGFloat(size))
+        case ("terminalFontSize", nil): setTerminalFontSize(nil)
         case ("editorLineHeight", .double(let factor)?): editorLineHeight = CGFloat(factor)
         case ("editorLineHeight", nil): editorLineHeight = 1.35
         case ("softWrap", .bool(let on)?): applyImported(.softWrap(on))
@@ -684,7 +687,8 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
     static func describe(_ setting: ImportedSetting) -> String {
         let app = AppDelegate.shared!
         switch setting {
-        case .fontSize(let size): return "Font size \(Int(app.fontSize)) → \(Int(size)) pt"
+        case .fontSize(let size): return "Editor font size \(Int(app.fontSize)) → \(Int(size)) pt"
+        case .terminalFontSize(let size): return "Terminal font size \(Int(app.terminalFontSize)) → \(Int(size)) pt"
         case .editorLineHeight(let factor): return String(format: "Line height %.2f× → %.2f×", app.editorLineHeight, factor)
         case .softWrap(let on): return on ? "Wrap long lines" : "Don’t wrap long lines"
         case .optionAsMeta(let on): return on ? "Use Option as Meta in the terminal" : "Option types special characters"

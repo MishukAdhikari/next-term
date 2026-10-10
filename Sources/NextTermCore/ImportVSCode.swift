@@ -168,7 +168,7 @@ public enum ImportVSCode {
                              home: String = NSHomeDirectory()) -> SettingsResult {
         var result = SettingsResult()
         let font = fontSize(file)
-        result.settings += [font.setting].compactMap { $0 }
+        result.settings += font.settings
         result.skipped += font.skipped
         let line = lineHeight(file)
         result.settings += [line.setting].compactMap { $0 }
@@ -383,35 +383,31 @@ public enum ImportVSCode {
     }
 
     /// editor.fontSize and window.zoomLevel: round(size × 1.2^zoom), VS Code's defaults (12, zoom 0) for the
-    /// unset one, imported only if one of them is set. terminal.integrated.fontSize stands in for an unset
-    /// editor size (zoomed the same way, since the zoom scales the whole window); when both are set and
-    /// differ, the editor's wins and the difference is reported (one size is shared today).
-    static func fontSize(_ file: SettingsFile) -> Row {
-        var skipped: [SkippedItem] = []
-        let editor = size(file, "editor.fontSize", skipped: &skipped)
-        let terminal = size(file, "terminal.integrated.fontSize", skipped: &skipped)
+    /// unset one, imported only if one of them is set. terminal.integrated.fontSize is the terminal's own size,
+    /// zoomed the same way (the zoom scales the whole window); while it is unset, VS Code's terminal uses the
+    /// editor's size, as Next Term's does until it is given one of its own.
+    static func fontSize(_ file: SettingsFile) -> SettingsResult {
+        var result = SettingsResult()
+        let editor = size(file, "editor.fontSize", skipped: &result.skipped)
+        let terminal = size(file, "terminal.integrated.fontSize", skipped: &result.skipped)
         var zoom: Double?
         if file.has("window.zoomLevel") {
             zoom = number(file.value("window.zoomLevel"))
-            if zoom == nil { skipped.append(SkippedItem("window.zoomLevel", notRecognised)) }
-        }
-        if let editor, let terminal, editor != terminal {
-            skipped.append(SkippedItem("terminal.integrated.fontSize", "one font size for editor and terminal today; the editor's size is used"))
+            if zoom == nil { result.skipped.append(SkippedItem("window.zoomLevel", notRecognised)) }
         }
         let factor = pow(1.2, zoom ?? 0)
         let zoomed = zoom.map { " at window.zoomLevel \(format($0))" } ?? ""
-        let row: PlannedSetting
         if let editor {
-            row = PlannedSetting(.fontSize(clamping: editor * factor), source: "editor.fontSize \(format(editor))" + zoomed)
-        } else if let terminal {
-            row = PlannedSetting(.fontSize(clamping: terminal * factor), source: "terminal.integrated.fontSize \(format(terminal))" + zoomed)
+            result.settings.append(PlannedSetting(.fontSize(clamping: editor * factor), source: "editor.fontSize \(format(editor))" + zoomed))
         } else if let zoom {
-            row = PlannedSetting(.fontSize(clamping: defaultFontSize * factor),
-                                 source: "window.zoomLevel \(format(zoom)) with the default editor.fontSize \(format(defaultFontSize))")
-        } else {
-            return (nil, skipped)
+            result.settings.append(PlannedSetting(.fontSize(clamping: defaultFontSize * factor),
+                                                  source: "window.zoomLevel \(format(zoom)) with the default editor.fontSize \(format(defaultFontSize))"))
         }
-        return (row, skipped)
+        if let terminal {
+            result.settings.append(PlannedSetting(.terminalFontSize(clamping: terminal * factor),
+                                                  source: "terminal.integrated.fontSize \(format(terminal))" + zoomed))
+        }
+        return result
     }
 
     /// VS Code's editor font size on macOS when editor.fontSize is unset.

@@ -104,7 +104,8 @@ public struct DetectedApp: Equatable, Sendable {
 
 /// A Next Term setting an import can set, already clamped to Next Term's range.
 public enum ImportedSetting: Equatable, Sendable {
-    case fontSize(Double)          // 8–32 points, shared by editor and terminal
+    case fontSize(Double)          // 8–32 points: the editor's, and the terminal's while it has no size of its own
+    case terminalFontSize(Double)  // 8–32 points: the terminal's own size
     case editorLineHeight(Double)  // 1.0–2.0, multiple of the font's own line height, steps of 0.05
     case softWrap(Bool)
     case optionAsMeta(Bool)
@@ -125,6 +126,7 @@ public enum ImportedSetting: Equatable, Sendable {
     public var key: String {
         switch self {
         case .fontSize: return "fontSize"
+        case .terminalFontSize: return "terminalFontSize"
         case .editorLineHeight: return "editorLineHeight"
         case .softWrap: return "softWrap"
         case .optionAsMeta: return "optionAsMeta"
@@ -154,6 +156,10 @@ public enum ImportedSetting: Equatable, Sendable {
     }
 
     public static func fontSize(clamping value: Double) -> ImportedSetting { .fontSize(min(32, max(8, value.rounded()))) }
+
+    public static func terminalFontSize(clamping value: Double) -> ImportedSetting {
+        .terminalFontSize(min(32, max(8, value.rounded())))
+    }
 
     public static func lineHeight(clamping factor: Double) -> ImportedSetting {
         .editorLineHeight(min(2.0, max(1.0, (factor * 20).rounded() / 20)))

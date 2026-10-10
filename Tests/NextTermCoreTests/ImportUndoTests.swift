@@ -121,7 +121,7 @@ import Testing
 
     @Test func everyImportedSettingHasATitle() {
         let settings: [ImportedSetting] = [
-            .fontSize(13), .editorLineHeight(1.2), .softWrap(true), .optionAsMeta(true), .terminalPosition("bottom"), .sidebarSide("left"),
+            .fontSize(13), .terminalFontSize(13), .editorLineHeight(1.2), .softWrap(true), .optionAsMeta(true), .terminalPosition("bottom"), .sidebarSide("left"),
             .editorFontFamily("Menlo"), .terminalFontFamily("Menlo"), .terminalPalette(TerminalPalette(name: "x")), .terminalScrollback(1_000),
             .terminalStartFolder("project"), .terminalCursorShape("bar"), .terminalCursorBlink(true), .trimTrailingWhitespace(true),
             .insertFinalNewline(true), .hiddenFiles([]),

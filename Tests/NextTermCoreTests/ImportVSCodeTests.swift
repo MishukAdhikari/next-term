@@ -172,17 +172,23 @@ import Testing
         #expect(flag.settings.isEmpty && flag.skipped == [SkippedItem("editor.fontSize", "value not recognised")])
     }
 
-    @Test func terminalFontSizeOnlyWithoutAnEditorSize() throws {
+    @Test func terminalFontSizeIsTheTerminalsOwn() throws {
         let alone = try settings(#"{"terminal.integrated.fontSize": 15}"#)
-        #expect(alone.settings == [PlannedSetting(.fontSize(15), source: "terminal.integrated.fontSize 15")])
+        #expect(alone.settings == [PlannedSetting(.terminalFontSize(15), source: "terminal.integrated.fontSize 15")])
         let zoomed = try settings(#"{"terminal.integrated.fontSize": 15, "window.zoomLevel": 1}"#)
-        #expect(zoomed.settings == [PlannedSetting(.fontSize(18), source: "terminal.integrated.fontSize 15 at window.zoomLevel 1")])
+        let zoomedRows = [PlannedSetting(.fontSize(14), source: "window.zoomLevel 1 with the default editor.fontSize 12"),
+                          PlannedSetting(.terminalFontSize(18), source: "terminal.integrated.fontSize 15 at window.zoomLevel 1")]
+        #expect(zoomed.settings == zoomedRows)
 
         let differ = try settings(#"{"editor.fontSize": 14, "terminal.integrated.fontSize": 16}"#)
-        #expect(differ.settings == [PlannedSetting(.fontSize(14), source: "editor.fontSize 14")])
-        #expect(differ.skipped == [SkippedItem("terminal.integrated.fontSize", "one font size for editor and terminal today; the editor's size is used")])
+        let differRows = [PlannedSetting(.fontSize(14), source: "editor.fontSize 14"),
+                          PlannedSetting(.terminalFontSize(16), source: "terminal.integrated.fontSize 16")]
+        #expect(differ.settings == differRows)
+        #expect(differ.skipped.isEmpty)
         let same = try settings(#"{"editor.fontSize": 14, "terminal.integrated.fontSize": 14}"#)
-        #expect(same.settings.count == 1 && same.skipped.isEmpty)
+        #expect(same.settings.map(\.setting) == [.fontSize(14), .terminalFontSize(14)] && same.skipped.isEmpty)
+        let big = try settings(#"{"terminal.integrated.fontSize": 50}"#)
+        #expect(big.settings.map(\.setting) == [.terminalFontSize(32)])
     }
 
     // MARK: line height

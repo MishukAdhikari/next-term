@@ -628,20 +628,19 @@ import Testing
         #expect(plan.settings == [PlannedSetting(.optionAsMeta(false), source: "options/terminal.xml useOptionAsMetaKey false")])
     }
 
-    @Test func terminalFontSizeOnlyWhenTheEditorHasNone() throws {
+    @Test func terminalFontSizeIsTheTerminalsOwn() throws {
         let terminal = component("TerminalFontOptions", [("VERSION", "1"), ("FONT_FAMILY", "MesloLGS NF"), ("FONT_SIZE", "15.0")])
         var plan = try self.plan(["options/terminal-font.xml": terminal])
-        #expect(plan.settings == [PlannedSetting(.fontSize(15), source: "options/terminal-font.xml FONT_SIZE 15")])
+        #expect(plan.settings == [PlannedSetting(.terminalFontSize(15), source: "options/terminal-font.xml FONT_SIZE 15")])
         #expect(plan.skipped == [SkippedItem("Terminal font “MesloLGS NF”", "not installed on this Mac")])
 
         plan = try self.plan(["options/terminal-font.xml": terminal, "options/editor-font.xml": component("DefaultFont", [("FONT_SIZE", "14")])])
-        #expect(plan.settings.map(\.setting) == [.fontSize(14)])
-        #expect(plan.skipped.first == SkippedItem("Terminal font size 15",
-            "Next Term uses one size for the editor and the terminal, so the editor's 14 is used"))
+        #expect(plan.settings.map(\.setting) == [.fontSize(14), .terminalFontSize(15)])
+        #expect(plan.skipped == [SkippedItem("Terminal font “MesloLGS NF”", "not installed on this Mac")])
 
-        plan = try self.plan(["options/terminal-font.xml": component("TerminalFontOptions", [("FONT_SIZE", "14")]),
-                         "options/editor-font.xml": component("DefaultFont", [("FONT_SIZE", "14")])])
-        #expect(plan.settings.map(\.setting) == [.fontSize(14)] && plan.skipped.isEmpty)
+        plan = try self.plan(["options/terminal-font.xml": component("TerminalFontOptions", [("FONT_SIZE", "40")])])
+        #expect(plan.settings == [PlannedSetting(.terminalFontSize(32), source: "options/terminal-font.xml FONT_SIZE 40",
+                                                 note: "Next Term's sizes go from 8 to 32")])
     }
 
     // MARK: Safety
