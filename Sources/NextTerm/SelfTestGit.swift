@@ -172,6 +172,18 @@ extension SelfTest {
         }
         GitToast.dismiss()
 
+        // A notice for work begun before an Undo came up (a Fetch whose branches were still being read when a delete queued
+        // behind it finished) leaves that Undo up; one for work begun since takes its place.
+        let begun = GitToast.count
+        GitToast.show("Deleted feat/later (was 1234567)", in: window, button: "Undo") {}
+        GitToast.show("Fetched: up to date", in: window, begun: begun)
+        let kept = GitToast.text
+        GitToast.show("Fetched: up to date", in: window, begun: GitToast.count)
+        check(kept == "Deleted feat/later (was 1234567)" && GitToast.text == "Fetched: up to date",
+              "a notice for work begun before an Undo came up leaves that Undo up, and one begun since replaces it",
+              "\(kept ?? "no notice"), then \(GitToast.text ?? "no notice")")
+        GitToast.dismiss()
+
         // Update a branch that isn't checked out: forward from its upstream; diverged, it says so and changes nothing.
         let newer = theirsPush("feat/u", "theirs 1")
         if let actions = await actions(), let u = c.branchPopup.model?.local("feat/u") {
