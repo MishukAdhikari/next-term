@@ -111,7 +111,7 @@ import Testing
         try modified(cursor, now)
         try modified(devin, now.addingTimeInterval(-2 * 86400))
 
-        let found = ImportVSCode.detect(home: home)
+        let found = ImportVSCode.detect(home: home, applications: [home + "/Applications"])
         #expect(found.map(\.kind) == [.cursor, .vsCode, .devinDesktop])
         #expect(found.map(\.name) == ["Cursor", "VS Code", "Devin Desktop"])
         #expect(found.map(\.configPath) == [cursor, code, devin])
@@ -125,7 +125,7 @@ import Testing
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
         let windsurf = try user(home, "Windsurf")
-        let found = ImportVSCode.detect(home: home)
+        let found = ImportVSCode.detect(home: home, applications: [home + "/Applications"])
         #expect(found == [DetectedApp(kind: .devinDesktop, name: "Windsurf", configPath: windsurf, lastUsed: found.first?.lastUsed)])
         #expect(found.first?.lastUsed != nil)
     }
@@ -135,13 +135,13 @@ import Testing
         defer { try? FileManager.default.removeItem(atPath: home) }
         _ = try user(home, "Code - Insiders")
         _ = try user(home, "VSCodium")
-        #expect(Set(ImportVSCode.detect(home: home).map(\.name)) == ["VS Code Insiders", "VSCodium"])
+        #expect(Set(ImportVSCode.detect(home: home, applications: [home + "/Applications"]).map(\.name)) == ["VS Code Insiders", "VSCodium"])
     }
 
     @Test func nothingInstalled() throws {
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
-        #expect(ImportVSCode.detect(home: home).isEmpty)
+        #expect(ImportVSCode.detect(home: home, applications: [home + "/Applications"]).isEmpty)
     }
 
     // MARK: font size
@@ -1055,8 +1055,8 @@ import Testing
         try write(#"{"editor.fontSize": 15, "editor.wordWrap": "off"}"#, to: user + "/settings.json")
         let project = try folder(home + "/proj")
         try stateDB(user + "/globalStorage/state.vscdb", entries: [["folderUri": uri(project)]], close: true)
-        let found = try #require(ImportVSCode.detect(home: home).first)
-        let plan = ImportVSCode.plan(for: found, home: home, usKeyboard: false)
+        let found = try #require(ImportVSCode.detect(home: home, applications: [home + "/Applications"]).first)
+        let plan = ImportVSCode.plan(for: found, home: home, usKeyboard: false, applications: [home + "/Applications"])
         #expect(plan.preset == .vsCode)
         #expect(plan.settings.map(\.setting) == [.fontSize(15), .softWrap(false)])
         #expect(plan.recentProjects == [project])

@@ -60,12 +60,14 @@ public enum KeymapPreset: String, CaseIterable, Codable, Sendable {
 
 /// The apps an import can read.
 public enum ImportSourceKind: String, CaseIterable, Codable, Sendable {
-    case vsCode, vsCodeInsiders, vsCodium, cursor, devinDesktop, jetBrains, zed, iTerm2, ghostty, warp, terminalApp
+    /// `vsCodeFork`: any other editor built on VS Code (Trae, Kiro, Antigravity, Positron, one found by its
+    /// product.json…), named by its app.
+    case vsCode, vsCodeInsiders, vsCodium, cursor, devinDesktop, vsCodeFork, jetBrains, zed, iTerm2, ghostty, warp, terminalApp
 
     /// The preset that fits people coming from it.
     public var preset: KeymapPreset {
         switch self {
-        case .vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop: return .vsCode
+        case .vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop, .vsCodeFork: return .vsCode
         case .jetBrains: return .jetBrains
         case .zed, .iTerm2, .ghostty, .warp, .terminalApp: return .nextTerm
         }
@@ -82,13 +84,21 @@ public struct DetectedApp: Equatable, Sendable {
     public let lastUsed: Date?
     /// The keymap the app itself uses (a JetBrains keymap or Zed's base_keymap can point elsewhere).
     public var preset: KeymapPreset
+    /// The app bundle found for it, when an importer looks (nil: not found, so the app may have been removed
+    /// while its settings stayed).
+    public var appPath: String?
+    /// The app's version, when its bundle says it ("1.105.1").
+    public var version: String?
 
-    public init(kind: ImportSourceKind, name: String, configPath: String, lastUsed: Date?, preset: KeymapPreset? = nil) {
+    public init(kind: ImportSourceKind, name: String, configPath: String, lastUsed: Date?, preset: KeymapPreset? = nil,
+                appPath: String? = nil, version: String? = nil) {
         self.kind = kind
         self.name = name
         self.configPath = configPath
         self.lastUsed = lastUsed
         self.preset = preset ?? kind.preset
+        self.appPath = appPath
+        self.version = version
     }
 }
 

@@ -27,7 +27,8 @@ enum ImportSources {
     ]
     nonisolated(unsafe) static var planner: (DetectedApp, Bool) -> ImportPlan? = { app, usKeyboard in
         switch app.kind {
-        case .vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop: return ImportVSCode.plan(for: app, usKeyboard: usKeyboard)
+        case .vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop, .vsCodeFork:
+            return ImportVSCode.plan(for: app, usKeyboard: usKeyboard)
         case .jetBrains: return ImportJetBrains.plan(for: app, usKeyboard: usKeyboard)
         case .zed: return ImportZed.plan(for: app, usKeyboard: usKeyboard)
         case .iTerm2: return ImportITerm2.plan(for: app, usKeyboard: usKeyboard)
