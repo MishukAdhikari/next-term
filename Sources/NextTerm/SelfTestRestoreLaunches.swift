@@ -71,6 +71,10 @@ extension SelfTestRestore {
         try? Data(plain.utf8).write(to: quitPlainFile(harness))
         splitTab.view.send(txt: "echo \(plain)\r")
         _ = await SelfTest.wait(5) { splitTab.status.command == "echo \(plain)" && !splitTab.status.running }
+        // The login shell's routing variables, which capture compares the agent's with, read before the agent starts (the
+        // launch hook started the probe): a capture before then takes the routing as not matching, and the first save
+        // holding the session, which the check below reads, would be one.
+        let probed = await SelfTest.wait(10) { LoginShell.routing != nil }
         claudeTab.view.send(txt: "claude\r")
         let named = await nameClaudeSession(harness, in: claudeTab, id: id)
         let saved = await savedClaude(files, tab: claudeTab, id: id)
@@ -78,13 +82,11 @@ extension SelfTestRestore {
         check(started && named && standIn,
               "AE17: the stand-in Claude Code runs in the project's first tab, and capture reads its session from its own file",
               "shells \(started), named \(named), evidence \(String(describing: saved))")
-        // The login shell's routing variables, which capture compares the agent's with, are read by now.
-        _ = await SelfTest.wait(10) { LoginShell.routing != nil }
-        if let saved = await savedClaude(files, tab: claudeTab, id: id) {
+        if let saved {
             let failed = gateFailures(harness, evidence: saved)
             check(failed.isEmpty, "AE17: the stand-in passes every resume check but its session's, which it holds open until the quit",
-                  "failed: \(failed.map(\.rawValue)); “routing” fails when this Mac's login shell sets a provider variable the "
-                      + "harness's own shells do not, such as ANTHROPIC_BASE_URL, AWS_PROFILE or HTTPS_PROXY")
+                  "failed: \(failed.map(\.rawValue)), login shell read \(probed); “routing” fails when the login shell (the harness's "
+                      + "zsh config, as its tabs read) was not read in time, or sets a provider variable the tabs do not")
         }
 
         // ⌘Q: Claude Code runs, so "Quitting stops…" asks, with the resume box unchecked under Welcome. Checked, then Quit.

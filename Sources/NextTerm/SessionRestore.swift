@@ -80,6 +80,9 @@ final class SessionRestore {
         self.files = files
         // The key routing digests are made with (KTD5) is kept here: read, or made, at the first digest.
         AgentEvidence.keepRoutingKey(in: files)
+        // The login shell's routing, which every capture of an agent compares with, read from now on (with that key): a
+        // capture before it has run takes the routing as not matching.
+        LoginShell.warmUp()
         let names: [String] = (try? files.names()) ?? []
         let version = Updater.shared.current?.description ?? ""
         let read = SessionLaunch.read(files, version: version, resumesAtLaunch: settings.opens == .lastProjects)
