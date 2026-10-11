@@ -19,11 +19,15 @@ public enum RemoteAccessHTTP {
     /// body itself. Over it: 413, so a body cut into one-byte chunks cannot cost six times its size.
     public static let maximumChunkFraming = 64 * 1024
     /// The most a connection's buffer holds: one whole request at every limit (head, body, framing, trailers).
-    /// More than that while a request waits for its answer is a client sending too much; the door closes.
+    /// More than that while a request waits for its answer is a client sending too much: the bytes past it are
+    /// dropped, what arrived whole still comes out, and then the door answers 413 and closes.
     public static let maximumBuffer = maximumHead + maximumBody + maximumChunkFraming + maximumHead
 
     /// Seconds a client has to send a request's head once it has begun. Enforced by the door.
     public static let headerDeadline: TimeInterval = 10
+    /// Seconds a request's body has to arrive once its head is whole: 1 MB in 30 seconds is about 35 KB a second.
+    /// Enforced by the door, so a body that trickles in cannot hold a connection.
+    public static let bodyDeadline: TimeInterval = 30
     /// Seconds a connection may sit between requests. Enforced by the door, and only between requests: never
     /// while a request waits for its answer.
     public static let idleDeadline: TimeInterval = 30
@@ -34,7 +38,12 @@ public enum RemoteAccessHTTP {
 
     // MARK: requests
 
-    public struct Header: Equatable, Sendable {
+    public struct Header: Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible,
+        CustomReflectable {
+        /// Headers whose values never show in a description or a mirror, so a careless log line cannot leak a
+        /// token (R39).
+        public static let hiddenNames: Set<String> = ["authorization", "proxy-authorization", "cookie"]
+
         public var name: String
         public var value: String
 
@@ -42,9 +51,19 @@ public enum RemoteAccessHTTP {
             self.name = name
             self.value = value
         }
+
+        /// The value, or "(hidden)" for a header `hiddenNames` lists.
+        var shownValue: String {
+            Self.hiddenNames.contains(name.lowercased()) ? "(hidden)" : value
+        }
+
+        public var description: String { "\(name): \(shownValue)" }
+        public var debugDescription: String { description }
+        public var customMirror: Mirror { Mirror(self, children: ["name": name, "value": shownValue]) }
     }
 
-    public struct Request: Equatable, Sendable {
+    public struct Request: Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible,
+        CustomReflectable {
         public var method: String
         /// The request target as sent: always starts with "/".
         public var target: String
@@ -86,22 +105,53 @@ public enum RemoteAccessHTTP {
         }
 
         /// Whether the Accept header names `text/event-stream` with a weight above zero (KTD11). Wildcards do
-        /// not count: a tool call answers as a stream only when the client names it.
+        /// not count, and neither does a weight that is not a qvalue: a tool call answers as a stream only when
+        /// the client names it plainly.
         public var acceptsEventStream: Bool {
             let ranges = values("accept").flatMap { $0.split(separator: ",") }
             return ranges.contains { range in
                 let parts = range.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
                 guard parts.first == "text/event-stream" else { return false }
-                let weights = parts.dropFirst().filter { $0.hasPrefix("q=") }
-                guard let weight = weights.first.flatMap({ Double($0.dropFirst(2)) }) else { return true }
-                return weight > 0
+                let weights = parts.dropFirst().compactMap(Self.weight)
+                guard let weight = weights.first else { return true }
+                guard let thousandths = RemoteAccessHTTP.qvalue(weight) else { return false }
+                return thousandths > 0
             }
+        }
+
+        /// A parameter's value when its name is "q", spaces around the name allowed.
+        private static func weight(_ parameter: String) -> Substring? {
+            guard let equals = parameter.firstIndex(of: "=") else { return nil }
+            let name = parameter[..<equals].trimmingCharacters(in: .whitespaces)
+            return name == "q" ? parameter[parameter.index(after: equals)...] : nil
         }
 
         /// The forwarding headers, for the audit log only.
         public var forwarded: Forwarded {
             Forwarded(forwardedFor: header("x-forwarded-for"), connectingIP: header("cf-connecting-ip"),
                       ray: header("cf-ray"))
+        }
+
+        /// For a log line: the method, the path, the headers as `Header` shows them, and the body's size. The
+        /// query and the body never show, since either may hold a token or a code (R39).
+        public var description: String {
+            let lines = headers.map(\.description).joined(separator: ", ")
+            return "\(method) \(shownTarget) \(version) [\(lines)] body: \(body.count) bytes"
+        }
+
+        public var debugDescription: String { description }
+
+        public var customMirror: Mirror {
+            let children: KeyValuePairs<String, Any> = [
+                "method": method, "target": shownTarget, "version": version, "headers": headers,
+                "bodySize": body.count,
+            ]
+            return Mirror(self, children: children)
+        }
+
+        /// The path, with "?…" in place of a query.
+        private var shownTarget: String {
+            query == nil ? path : path + "?…"
         }
     }
 
@@ -123,7 +173,7 @@ public enum RemoteAccessHTTP {
     }
 
     /// Why a request could not be read. The door answers `refusal(_:host:)` and closes.
-    public struct Failure: Equatable, Sendable, Error {
+    public struct Failure: Equatable, Sendable, Error, CustomStringConvertible, CustomDebugStringConvertible {
         /// 400 (malformed), 413 (body too large) or 431 (head too large).
         public var status: Int
         /// The request's head, with no body, when it was read whole before the failure.
@@ -133,31 +183,48 @@ public enum RemoteAccessHTTP {
             self.status = status
             self.request = request
         }
+
+        /// The status, then the head as `Request` shows it, when there is one.
+        public var description: String {
+            guard let request else { return "\(status)" }
+            return "\(status) \(request)"
+        }
+
+        public var debugDescription: String { description }
     }
 
     public enum Parsed: Equatable, Sendable {
         /// Not all of the next request has arrived.
         case needMore
+        /// The next request's head, whole, before any of its body is read. Check it now (and the door reads its
+        /// token), so a refusal goes out and the connection closes before the body arrives. Every request comes
+        /// out this way first, with a body or not, and then as `request`.
+        case head(Request)
         /// The next request, whole. Ask for the one after it only once this one is answered.
         case request(Request)
         /// The bytes are not a request this door reads. Every later call gives the same failure.
         case failure(Failure)
     }
 
-    /// Where a connection's next request stands, for the door's deadlines.
+    /// Where a connection stands, for the door's deadlines.
     public enum Phase: Equatable, Sendable {
         /// No byte of the next request yet: the idle deadline applies.
         case idle
         /// Its head has begun: the header deadline applies.
         case head
-        /// Its head is whole and its body is still arriving.
+        /// Its head was handed out and its body is still arriving: the body deadline applies.
         case body
+        /// A request was handed out whole and the door has not asked for the next one, so it waits for its
+        /// answer: no deadline applies, whatever is buffered behind it.
+        case answering
     }
 
     // MARK: the parser
 
-    /// Feed it bytes with `append`, then call `next` for the next whole request. Requests come out one at a
-    /// time, in order: a pipelined request waits in the buffer until the door asks for it.
+    /// Feed it bytes with `append`, then call `next`. Each request comes out twice: first its head, as soon as it
+    /// is whole, so the door can refuse it before reading the body; then whole. Requests come out one at a time,
+    /// in order: a pipelined request waits in the buffer until the door asks for it, and asking means the one
+    /// before it was answered.
     public struct Parser: Sendable {
         private enum Stage: Sendable {
             case head
@@ -178,33 +245,46 @@ public enum RemoteAccessHTTP {
         private var body: [UInt8] = []
         private var framing = 0
         private var trailerStart = 0
+        /// A request was handed out whole, and `next` has not been called since.
+        private var answering = false
+        /// Bytes past `maximumBuffer` were dropped.
+        private var overflowed = false
 
         public init() {}
 
         public var phase: Phase {
+            if answering { return .answering }
             switch stage {
             case .head: return buffer.isEmpty ? .idle : .head
             default: return .body
             }
         }
 
-        /// Adds bytes that arrived. False when the buffer would pass `maximumBuffer`: the bytes are dropped, every
-        /// later `next` fails with 413, and the door closes the connection.
+        /// Adds bytes that arrived. False when the buffer would pass `maximumBuffer`: the bytes past it are
+        /// dropped, now and later, and the door stops reading. `next` still hands out what arrived whole, then
+        /// fails with 413, carrying the head that was cut short when it was read.
         public mutating func append(_ data: Data) -> Bool {
             guard failed == nil else { return true }
-            guard buffer.count + data.count <= RemoteAccessHTTP.maximumBuffer else {
-                failed = Failure(status: 413)
-                return false
+            guard !overflowed else { return false }
+            let room = RemoteAccessHTTP.maximumBuffer - buffer.count
+            guard data.count > room else {
+                buffer.append(contentsOf: data)
+                return true
             }
-            buffer.append(contentsOf: data)
-            return true
+            buffer.append(contentsOf: data.prefix(room))
+            overflowed = true
+            return false
         }
 
+        /// The next head, request or failure. Calling it after a request means that request was answered.
         public mutating func next() -> Parsed {
             if let failed { return .failure(failed) }
+            answering = false
             do {
-                guard let request = try step() else { return .needMore }
-                return .request(request)
+                let parsed = try step()
+                if parsed == .needMore, overflowed { throw tooLarge() }
+                if case .request = parsed { answering = true }
+                return parsed
             } catch let failure as Failure {
                 failed = failure
                 return .failure(failure)
@@ -217,26 +297,29 @@ public enum RemoteAccessHTTP {
 
         // MARK: stages
 
-        private mutating func step() throws -> Request? {
+        private mutating func step() throws -> Parsed {
             while true {
                 switch stage {
                 case .head:
-                    guard try readHeadLine() else { return nil }
+                    guard try readHeadLine() else { return .needMore }
+                    // Past the blank line the head is whole: it goes out before any of the body is read.
+                    if case .head = stage { continue }
+                    if let request { return .head(request) }
                 case .length(let length):
-                    guard buffer.count - cursor >= length else { return nil }
+                    guard buffer.count - cursor >= length else { return .needMore }
                     body = Array(buffer[cursor..<(cursor + length)])
                     cursor += length
                     return finish()
                 case .chunkSize:
-                    guard try readChunkSize() else { return nil }
+                    guard try readChunkSize() else { return .needMore }
                 case .chunkData(let size):
-                    guard buffer.count - cursor >= size + 2 else { return nil }
+                    guard buffer.count - cursor >= size + 2 else { return .needMore }
                     guard buffer[cursor + size] == 13, buffer[cursor + size + 1] == 10 else { throw bad() }
                     body.append(contentsOf: buffer[cursor..<(cursor + size)])
                     cursor += size + 2
                     stage = .chunkSize
                 case .trailers:
-                    guard try readTrailerLine() else { return nil }
+                    guard try readTrailerLine() else { return .needMore }
                     if case .head = stage { return finish() }
                 }
             }
@@ -263,16 +346,22 @@ public enum RemoteAccessHTTP {
             return true
         }
 
-        /// The head is whole: pick the body's framing from it.
+        /// Headers a request carries once at most: a second one could be read either way.
+        private static let singleHeaders = ["host", "authorization", "content-type", "mcp-protocol-version"]
+
+        /// The head is whole: pick the body's framing from it. A failure here carries the head, so the checks
+        /// still answer first.
         private mutating func startBody(of request: Request) throws {
-            let hosts = request.values("host")
-            guard hosts.count <= 1 else { throw bad() }
+            let malformed = Failure(status: 400, request: request)
+            for name in Self.singleHeaders where request.values(name).count > 1 {
+                throw malformed
+            }
             let lengths = request.values("content-length")
             let codings = request.values("transfer-encoding")
             if !codings.isEmpty {
-                guard lengths.isEmpty, request.version == "HTTP/1.1" else { throw bad() }
+                guard lengths.isEmpty, request.version == "HTTP/1.1" else { throw malformed }
                 let coding = codings.joined(separator: ",").trimmingCharacters(in: .whitespaces)
-                guard coding.lowercased() == "chunked" else { throw bad() }
+                guard coding.lowercased() == "chunked" else { throw malformed }
                 stage = .chunkSize
                 return
             }
@@ -334,8 +423,8 @@ public enum RemoteAccessHTTP {
         }
 
         /// The request is whole: hand it out and keep what follows it.
-        private mutating func finish() -> Request? {
-            guard var request else { return nil }
+        private mutating func finish() -> Parsed {
+            guard var request else { return .needMore }
             request.body = Data(body)
             buffer.removeFirst(cursor)
             stage = .head
@@ -345,7 +434,7 @@ public enum RemoteAccessHTTP {
             body = []
             framing = 0
             trailerStart = 0
-            return request
+            return .request(request)
         }
 
         // MARK: lines
@@ -523,7 +612,8 @@ public enum RemoteAccessHTTP {
         return .route(route)
     }
 
-    /// Whether a Host value names the saved hostname: both lowercased, an optional ":443" dropped, then equal.
+    /// Whether a Host value names the saved hostname: ASCII letters lowercased in both, an optional ":443"
+    /// dropped, then the same bytes. Nothing else is folded, so no Unicode case or form makes another name match.
     /// Loopback, another port, a trailing dot and every other value fail.
     public static func hostMatches(_ value: String?, host: String?) -> Bool {
         guard let value, let host else { return false }
@@ -531,9 +621,30 @@ public enum RemoteAccessHTTP {
         return !wanted.isEmpty && normalizedHost(value) == wanted
     }
 
-    private static func normalizedHost(_ value: String) -> String {
-        let lower = value.lowercased()
-        return lower.hasSuffix(":443") ? String(lower.dropLast(4)) : lower
+    private static func normalizedHost(_ value: String) -> [UInt8] {
+        var bytes = value.utf8.map { byte -> UInt8 in
+            (65...90).contains(byte) ? byte + 32 : byte
+        }
+        if bytes.count >= 4, bytes.suffix(4).elementsEqual(":443".utf8) {
+            bytes.removeLast(4)
+        }
+        return bytes
+    }
+
+    /// An RFC 9110 qvalue in thousandths: "0" or "1", then at most three decimals, never above 1. Nil for
+    /// anything else, spaces, signs and exponents included.
+    private static func qvalue(_ text: Substring) -> Int? {
+        let parts = text.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
+        let whole = parts[0]
+        let decimals = parts.count > 1 ? Array(parts[1].utf8) : []
+        guard whole == "0" || whole == "1", decimals.count <= 3 else { return nil }
+        guard decimals.allSatisfy({ (48...57).contains($0) }) else { return nil }
+        var thousandths = whole == "1" ? 1000 : 0
+        for (place, digit) in decimals.enumerated() {
+            let scale = [100, 10, 1][place]
+            thousandths += Int(digit - 48) * scale
+        }
+        return thousandths <= 1000 ? thousandths : nil
     }
 
     // MARK: answers

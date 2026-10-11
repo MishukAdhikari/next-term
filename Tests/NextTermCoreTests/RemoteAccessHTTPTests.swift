@@ -11,11 +11,20 @@ import Testing
 
     func bytes(_ text: String) -> Data { Data(text.utf8) }
 
-    /// The whole input fed at once.
+    /// The whole input fed at once, past the head that comes out before each request.
     func parse(_ data: Data) -> HTTP.Parsed {
         var parser = HTTP.Parser()
         _ = parser.append(data)
-        return parser.next()
+        return nextPastHead(&parser)
+    }
+
+    /// The parser's next answer that is not a head.
+    func nextPastHead(_ parser: inout HTTP.Parser) -> HTTP.Parsed {
+        var parsed = parser.next()
+        while case .head = parsed {
+            parsed = parser.next()
+        }
+        return parsed
     }
 
     func parse(_ text: String) -> HTTP.Parsed { parse(bytes(text)) }
@@ -100,20 +109,30 @@ import Testing
         var parser = HTTP.Parser()
         let accepted = parser.append(bytes(first + second + "GET /"))
         #expect(accepted)
+        guard case .head(let oneHead) = parser.next() else { Issue.record("no first head"); return }
+        #expect(oneHead.path == "/mcp")
+        #expect(oneHead.body.isEmpty)
         guard case .request(let one) = parser.next() else { Issue.record("no first request"); return }
         #expect(one.path == "/mcp")
         #expect(one.body == bytes("one"))
+        // The first waits for its answer: no deadline runs, whatever is buffered behind it.
+        #expect(parser.phase == .answering)
+        guard case .head(let twoHead) = parser.next() else { Issue.record("no second head"); return }
+        #expect(twoHead.path == "/oauth/token")
         guard case .request(let two) = parser.next() else { Issue.record("no second request"); return }
         #expect(two.path == "/oauth/token")
         #expect(two.body == bytes("two"))
+        #expect(parser.phase == .answering)
         // The third has only begun.
         #expect(parser.next() == .needMore)
         #expect(parser.phase == .head)
     }
 
-    @Test func oneByteAtATimeGivesTheSameRequestAndThePhasesInTurn() throws {
+    @Test func oneByteAtATimeGivesTheHeadAtItsBlankLineThenTheRequestAndThePhasesInTurn() throws {
         let text = "POST /mcp HTTP/1.1\r\nHost: mcp.example.com\r\nContent-Length: 4\r\n\r\nbody"
         let whole = try request(text)
+        var head = whole
+        head.body = Data()
         var parser = HTTP.Parser()
         #expect(parser.phase == .idle)
         let data = bytes(text)
@@ -121,15 +140,69 @@ import Testing
         for (index, byte) in data.enumerated() {
             _ = parser.append(Data([byte]))
             let parsed = parser.next()
-            if index < data.count - 1 {
+            if index < headEnd - 1 {
                 #expect(parsed == .needMore)
-                #expect(parser.phase == (index < headEnd - 1 ? .head : .body), "after byte \(index)")
+                #expect(parser.phase == .head, "after byte \(index)")
+            } else if index == headEnd - 1 {
+                #expect(parsed == .head(head))
+                #expect(parser.phase == .body)
+            } else if index < data.count - 1 {
+                #expect(parsed == .needMore)
+                #expect(parser.phase == .body, "after byte \(index)")
             } else {
                 #expect(parsed == .request(whole))
+                #expect(parser.phase == .answering)
             }
         }
-        #expect(parser.phase == .idle)
         #expect(parser.next() == .needMore)
+        #expect(parser.phase == .idle)
+    }
+
+    @Test func noDeadlineRunsWhileARequestWaitsForItsAnswerWhateverIsBufferedBehindIt() {
+        let empty = "POST /mcp HTTP/1.1\r\nHost: mcp.example.com\r\nContent-Length: 0\r\n\r\n"
+        var parser = HTTP.Parser()
+        _ = parser.append(bytes(empty + empty))
+        guard case .request = nextPastHead(&parser) else { Issue.record("no first request"); return }
+        #expect(parser.phase == .answering)
+        _ = parser.append(bytes("POST /mcp"))
+        #expect(parser.phase == .answering)
+        // Asking for the next one means the first was answered.
+        guard case .request = nextPastHead(&parser) else { Issue.record("no second request"); return }
+        #expect(parser.phase == .answering)
+        #expect(parser.next() == .needMore)
+        #expect(parser.phase == .head)
+    }
+
+    // MARK: the head before its body
+
+    @Test func theHeadComesOutBeforeItsBodySoAWrongHostIsRefusedBeforeAnyOfIt() {
+        let head = "POST /mcp HTTP/1.1\r\nHost: evil.example\r\nOrigin: https://evil.example\r\n"
+            + "Content-Length: \(HTTP.maximumBody)\r\n\r\n"
+        var parser = HTTP.Parser()
+        _ = parser.append(bytes(head))
+        guard case .head(let request) = parser.next() else { Issue.record("no head"); return }
+        #expect(request.body.isEmpty)
+        #expect(HTTP.check(request, host: host) == .refused(status: 421, allow: []))
+        // While the body arrives, its own deadline runs; the head never comes out twice.
+        #expect(HTTP.bodyDeadline == 30)
+        #expect(parser.phase == .body)
+        for _ in 0..<100 {
+            _ = parser.append(Data([0x61]))
+            #expect(parser.next() == .needMore)
+            #expect(parser.phase == .body)
+        }
+    }
+
+    @Test func aFramingFailureCarriesItsHeadSoTheChecksStillAnswerFirst() {
+        let both = "Content-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n"
+        let wrong = parse("POST /mcp HTTP/1.1\r\nHost: evil.example\r\n" + both)
+        guard case .failure(let wrongFailure) = wrong else { Issue.record("no failure"); return }
+        #expect(wrongFailure.status == 400)
+        #expect(wrongFailure.request?.path == "/mcp")
+        #expect(HTTP.refusal(wrongFailure, host: host) == HTTP.refusal(status: 421))
+        let right = parse("POST /mcp HTTP/1.1\r\nHost: mcp.example.com\r\n" + both)
+        guard case .failure(let rightFailure) = right else { Issue.record("no failure"); return }
+        #expect(HTTP.refusal(rightFailure, host: host) == HTTP.refusal(status: 400))
     }
 
     @Test func theTargetSplitsIntoAPathAndAQuery() throws {
@@ -147,8 +220,11 @@ import Testing
         _ = parser.append(bytes("GET /.well-known/oauth-authorization-server HTTP/1.1\r\nHost: mcp.example.com\r\n"))
         #expect(parser.next() == .needMore)
         _ = parser.append(bytes("\r\n"))
+        guard case .head = parser.next() else { Issue.record("no head"); return }
         guard case .request(let request) = parser.next() else { Issue.record("no request"); return }
         #expect(request.body.isEmpty)
+        #expect(parser.phase == .answering)
+        #expect(parser.next() == .needMore)
         #expect(parser.phase == .idle)
     }
 
@@ -196,6 +272,15 @@ import Testing
         #expect(try !accepts("*/*"))
         #expect(try !accepts("text/event-streams"))
         #expect(try !accepts(nil))
+        // A weight that is not an RFC 9110 qvalue is not a yes.
+        for weight in ["junk", "", "inf", "nan", "1e0", "2", "1.5", "1.001", "0.0001", ".5", "+1", "-1", " 1", "0x1"] {
+            #expect(try !accepts("text/event-stream;q=\(weight)"), "q=\(weight)")
+        }
+        #expect(try !accepts("text/event-stream; q = 0.5"))
+        #expect(try accepts("text/event-stream;q=0.001"))
+        #expect(try accepts("text/event-stream;q=1."))
+        #expect(try accepts("text/event-stream;Q=1.000"))
+        #expect(try accepts("text/event-stream;charset=utf-8;q=0.5"))
     }
 
     // MARK: the head's limit
@@ -235,7 +320,7 @@ import Testing
         while offset < exact.count {
             let end = min(offset + 1000, exact.count)
             _ = parser.append(exact.subdata(in: offset..<end))
-            parsed = parser.next()
+            parsed = nextPastHead(&parser)
             offset = end
         }
         guard case .request = parsed else { Issue.record("got \(parsed)"); return }
@@ -379,6 +464,16 @@ import Testing
         }
     }
 
+    @Test func aRepeatedAuthorizationContentTypeOrProtocolVersionGives400() {
+        for name in ["Authorization", "Content-Type", "MCP-Protocol-Version"] {
+            let line = "\(name): same\r\n"
+            let text = "POST /mcp HTTP/1.1\r\nHost: mcp.example.com\r\n" + line + line.lowercased() + "\r\n"
+            guard case .failure(let failure) = parse(text) else { Issue.record("\(name) twice was read"); continue }
+            #expect(failure.status == 400, "\(name)")
+            #expect(HTTP.refusal(failure, host: host) == HTTP.refusal(status: 400), "\(name)")
+        }
+    }
+
     @Test func aHeaderValueThatIsNotUTF8Gives400() {
         let data = bytes("POST /mcp HTTP/1.1\r\nHost: mcp.example.com\r\nX-A: ") + Data([0xFF, 0xFE]) + bytes("\r\n\r\n")
         #expect(status(parse(data)) == 400)
@@ -413,6 +508,45 @@ import Testing
         // A whole request at every limit fits.
         let largest = HTTP.maximumHead * 2 + HTTP.maximumBody + HTTP.maximumChunkFraming
         #expect(HTTP.maximumBuffer >= largest)
+    }
+
+    @Test func anOverflowInOneAppendStillReadsTheHeadSoAnMCPWriteGetsTheJSONRPCError() {
+        let length = 1_200_000
+        var parser = HTTP.Parser()
+        let accepted = parser.append(post(contentLength: length, body: Data(repeating: 0x61, count: length)))
+        #expect(!accepted)
+        guard case .failure(let failure) = parser.next() else { Issue.record("no failure"); return }
+        #expect(failure.status == 413)
+        #expect(failure.request?.path == "/mcp")
+        #expect(text(HTTP.refusal(failure, host: host)).contains(HTTP.bodyLimitMessage))
+    }
+
+    @Test func aRequestAlreadyWholeComesOutBeforeAnOverflowFails() {
+        var parser = HTTP.Parser()
+        let fits = parser.append(post(contentLength: 2, body: bytes("{}")))
+        let overflows = parser.append(Data(repeating: 0x61, count: HTTP.maximumBuffer))
+        #expect(fits && !overflows)
+        guard case .request(let request) = nextPastHead(&parser) else {
+            Issue.record("the whole POST was lost"); return
+        }
+        #expect(request.body == bytes("{}"))
+        guard case .failure = parser.next() else { Issue.record("no failure after it"); return }
+
+        // A 1 MB request whole, then a second cut short by the limit: the first comes out, then the second's head,
+        // then 413 with that head, so the write gets the JSON-RPC error.
+        var cut = HTTP.Parser()
+        let full = Data(repeating: 0x62, count: HTTP.maximumBody)
+        let firstFits = cut.append(post(contentLength: full.count, body: full))
+        let secondOverflows = cut.append(post(contentLength: full.count, body: full))
+        let laterDropped = cut.append(Data([0x63]))
+        #expect(firstFits && !secondOverflows && !laterDropped)
+        guard case .request(let first) = nextPastHead(&cut) else { Issue.record("no first request"); return }
+        #expect(first.body == full)
+        guard case .head(let secondHead) = cut.next() else { Issue.record("no second head"); return }
+        guard case .failure(let failure) = cut.next() else { Issue.record("no failure"); return }
+        #expect(failure.status == 413)
+        #expect(failure.request == secondHead)
+        #expect(text(HTTP.refusal(failure, host: host)).contains(HTTP.bodyLimitMessage))
     }
 
     // MARK: the checks, in order
@@ -539,6 +673,48 @@ import Testing
         #expect(request.forwarded.forwardedFor?.count == HTTP.Forwarded.maximumLength)
         #expect(request.forwarded.connectingIP == nil)
         #expect(request.forwarded.ray == nil)
+    }
+
+    @Test func theHostCompareIsByteForByteWithOnlyASCIILowercased() {
+        // The Kelvin sign lowercases to "k" by Unicode's rules, and "e" with a combining accent equals "é" as a
+        // String: neither is the saved name's bytes.
+        #expect(!HTTP.hostMatches("mcp.wor\u{212A}.dev", host: "mcp.work.dev"))
+        #expect(!HTTP.hostMatches("cafe\u{301}.example", host: "caf\u{E9}.example"))
+        #expect(!HTTP.hostMatches("CAF\u{C9}.example", host: "caf\u{E9}.example"))
+        #expect(HTTP.hostMatches("CAF\u{E9}.EXAMPLE:443", host: "caf\u{E9}.example"))
+        #expect(HTTP.hostMatches("MCP.WORK.DEV", host: "mcp.work.dev"))
+        let kelvin = "POST /mcp HTTP/1.1\r\nHost: mcp.wor\u{212A}.dev\r\n\r\n"
+        guard case .request(let request) = parse(kelvin) else { Issue.record("no request"); return }
+        #expect(HTTP.check(request, host: "mcp.work.dev") == .refused(status: 421, allow: []))
+    }
+
+    @Test func aDescriptionNeverHoldsTheAuthorizationTheQueryOrTheBody() {
+        let secret = "ntat_SECRET"
+        let body = "grant_type=refresh_token&refresh_token=\(secret)"
+        let text = "POST /oauth/token?access_token=\(secret) HTTP/1.1\r\nHost: mcp.example.com\r\n"
+            + "Authorization: Bearer \(secret)\r\nproxy-authorization: Basic \(secret)\r\nCookie: s=\(secret)\r\n"
+            + "Content-Length: \(body.utf8.count)\r\n\r\n" + body
+        var parser = HTTP.Parser()
+        _ = parser.append(bytes(text))
+        guard case .head(let head) = parser.next() else { Issue.record("no head"); return }
+        guard case .request(let request) = parser.next() else { Issue.record("no request"); return }
+        let failure = HTTP.Failure(status: 413, request: request)
+        var dumped = ""
+        dump(request, to: &dumped)
+        dump(failure, to: &dumped)
+        let described = [
+            "\(request)", String(reflecting: request), "\(failure)", String(reflecting: failure),
+            "\(HTTP.Parsed.head(head))", "\(HTTP.Parsed.request(request))", "\(HTTP.Parsed.failure(failure))",
+            "\(request.headers)", String(reflecting: request.headers), dumped,
+        ]
+        for description in described {
+            #expect(!description.contains(secret), "\(description)")
+        }
+        // What is safe to log stays.
+        #expect("\(request)".contains("POST /oauth/token"))
+        #expect("\(request)".contains("Host: mcp.example.com"))
+        #expect("\(request)".contains("Authorization"))
+        #expect("\(failure)".contains("413"))
     }
 
     @Test func aRightForwardedHostWithAWrongHostStillGives421() {
@@ -676,7 +852,7 @@ import Testing
             _ = parser.append(data.subdata(in: offset..<(offset + size)))
             offset += size
             var parsed = parser.next()
-            while case .request = parsed {
+            while isRead(parsed) {
                 results.append(parsed)
                 parsed = parser.next()
             }
@@ -697,8 +873,16 @@ import Testing
         while true {
             let parsed = parser.next()
             results.append(parsed)
-            if case .request = parsed { continue }
+            if isRead(parsed) { continue }
             return results
+        }
+    }
+
+    /// A head or a request: something read, with more to ask for.
+    func isRead(_ parsed: HTTP.Parsed) -> Bool {
+        switch parsed {
+        case .head, .request: return true
+        case .needMore, .failure: return false
         }
     }
 
@@ -706,6 +890,8 @@ import Testing
         switch parsed {
         case .needMore:
             return true
+        case .head(let request):
+            return request.body.isEmpty && request.target.utf8.count < HTTP.maximumHead
         case .failure(let failure):
             return [400, 413, 431].contains(failure.status)
         case .request(let request):
@@ -724,7 +910,7 @@ import Testing
                 break
             case .failure(let failure):
                 #expect((400..<500).contains(failure.status), "round \(round)")
-            case .request:
+            case .head, .request:
                 Issue.record("random bytes made a request in round \(round)")
             }
         }
