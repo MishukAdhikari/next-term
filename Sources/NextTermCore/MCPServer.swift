@@ -183,8 +183,11 @@ public enum MCPServer {
 
     public static func tool(named name: String) -> Tool? { tools.first { $0.name == name } }
 
-    static func listing() -> [[String: Any]] {
-        tools.map { tool in
+    static func listing() -> [[String: Any]] { listing(of: tools) }
+
+    /// The `tools/list` entries for these tools (the remote door lists only what a connection's options admit).
+    static func listing(of offered: [Tool]) -> [[String: Any]] {
+        offered.map { tool in
             [
                 "name": tool.name,
                 "title": tool.title,
@@ -218,6 +221,14 @@ public enum MCPServer {
     /// Answers one JSON-RPC message (nil for notifications). `call` runs a tool; it may block.
     public static func respond(to message: [String: Any], version: String,
                                call: (_ name: String, _ arguments: [String: Any]) -> CallResult) -> [String: Any]? {
+        respond(to: message, version: version, tools: tools, instructions: instructions, listChanged: false, call: call)
+    }
+
+    /// The same, offering only `offered` with these instructions: a name outside `offered` is an unknown tool
+    /// and never reaches `call`. The remote door passes a connection's tools and `listChanged: true`.
+    public static func respond(to message: [String: Any], version: String, tools offered: [Tool],
+                               instructions text: String, listChanged: Bool,
+                               call: (_ name: String, _ arguments: [String: Any]) -> CallResult) -> [String: Any]? {
         guard let method = message["method"] as? String else { return nil } // a response to us: none expected
         guard let id = message["id"], !(id is NSNull) else { return nil } // a notification
         func result(_ value: Any) -> [String: Any] { ["jsonrpc": "2.0", "id": id, "result": value] }
@@ -230,16 +241,16 @@ public enum MCPServer {
             let asked = params["protocolVersion"] as? String ?? ""
             return result([
                 "protocolVersion": supportedVersions.contains(asked) ? asked : supportedVersions[0],
-                "capabilities": ["tools": ["listChanged": false]],
+                "capabilities": ["tools": ["listChanged": listChanged]],
                 "serverInfo": ["name": name, "title": "Next Term", "version": version],
-                "instructions": instructions,
+                "instructions": text,
             ])
         case "ping":
             return result([String: Any]())
         case "tools/list":
-            return result(["tools": listing()])
+            return result(["tools": listing(of: offered)])
         case "tools/call":
-            guard let name = params["name"] as? String, tool(named: name) != nil else {
+            guard let name = params["name"] as? String, offered.contains(where: { $0.name == name }) else {
                 return error(-32602, "Unknown tool: \(params["name"] as? String ?? "")")
             }
             let outcome = call(name, params["arguments"] as? [String: Any] ?? [:])
